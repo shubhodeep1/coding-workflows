@@ -331,7 +331,10 @@ jobs:
               ".github/ai/write_guards.v1.json"
             ],
             "required_files": [
-              "scripts/templates/slot_manifest.schema.json"
+              "scripts/templates/slot_manifest.schema.json",
+              "unattended_system_instructions.md",
+              "ai_pipeline.md",
+              "agents.md"
             ],
             "optional_copy_files": [
               "workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
@@ -416,6 +419,8 @@ jobs:
               "prompts/mode-validate-diagnose.txt",
               "prompts/mode-validate-discover.txt",
               "prompts/mode-validate-fix-harness.txt",
+              "prompts/mode-validate-self-heal.txt",
+              "prompts/mode-validate-self-heal-continuation.txt",
               "prompts/_prelude_common.txt",
               "prompts/_prelude_common_large.txt",
               "prompts/_prelude_common_xl.txt",
@@ -427,21 +432,15 @@ jobs:
               "prompts/_templates/mode-validate-diagnose.txt",
               "prompts/_templates/mode-validate-discover.txt",
               "prompts/_templates/mode-validate-fix-harness.txt",
+              "prompts/_templates/mode-validate-self-heal.txt",
+              "prompts/_templates/mode-validate-self-heal-continuation.txt",
+              "prompts/contracts/mode-validate-self-heal.yml",
+              "prompts/contracts/mode-validate-self-heal-continuation.yml",
               "prompts/references/output-contract.txt",
               "prompts/references/verification-loop.txt",
               "prompts/references/validate-output-contract.txt"
             ],
-            "optional_preserve_files_after_prompts": [
-              "prompts/mode-validate-self-heal.txt",
-              "prompts/mode-validate-self-heal-continuation.txt",
-              "prompts/_templates/mode-validate-self-heal.txt",
-              "prompts/_templates/mode-validate-self-heal-continuation.txt",
-              "prompts/contracts/mode-validate-self-heal-continuation.yml"
-            ],
-            "required_root_files_if_missing": [
-              "unattended_system_instructions.md",
-              "ai_pipeline.md"
-            ],
+            "optional_preserve_files_after_prompts": [],
             "optional_root_files_if_missing": [
               ".github/ai/label_contract.v1.json"
             ]

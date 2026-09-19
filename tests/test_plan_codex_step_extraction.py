@@ -203,6 +203,7 @@ esac
 			"PLANNING_CONTEXT_FILE": str(runtime_dir / "planning_context.txt"),
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"RUNTIME_DIR": str(runtime_dir),
+			"SUPPORT_PROMPTS_DIR": str(prompts_dir),
 			"TOOL_CALL_BUDGET": "40",
 		}
 	)

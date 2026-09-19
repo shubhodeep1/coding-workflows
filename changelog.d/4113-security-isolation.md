@@ -1,2 +1,2 @@
 <!-- changelog: security -->
-- **Isolate workflow model writers and immutable support.** Implementation and validation agents now run under dedicated least-privilege identities, while workflow helper bundles, including orchestrate and orchestrate-poll, fail closed on missing or checkout-shadowed transitive dependencies.
+- **Isolate workflow model writers and immutable support.** Implementation and validation agents now run under dedicated least-privilege identities. Workflow support bundles, including orchestrate and orchestrate-poll, fail closed on missing or checkout-shadowed helper, instruction, and meta-prompt dependencies, while checkout documentation is treated as untrusted context.

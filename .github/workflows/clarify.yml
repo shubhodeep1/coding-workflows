@@ -261,7 +261,19 @@ jobs:
           clarify_immutable_support_root="${RUNNER_TEMP}/clarify-immutable-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           printf '%s\n' "${_fetched_scripts[@]}" | jq -Rsc '
             split("\n") | map(select(length > 0) | "scripts/" + .)
-            | {required_scripts: ., executable_files: .}
+            | {
+                required_scripts: .,
+                executable_files: .,
+                required_prompts: [
+                  "prompts/header.txt",
+                  "prompts/_identity_recall.txt"
+                ],
+                required_files: [
+                  "unattended_system_instructions.md",
+                  "ai_pipeline.md",
+                  "agents.md"
+                ]
+              }
           ' > "${clarify_immutable_support_manifest}"
           WORKFLOW_SUPPORT_REF="${SCRIPT_REF}" bash ".codex-workflow-src/scripts/stage_workflow_support.sh" immutable-bundle \
             --manifest "${clarify_immutable_support_manifest}" \
@@ -294,44 +306,6 @@ jobs:
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
-
-          for f in unattended_system_instructions.md ai_pipeline.md; do
-            if [ ! -f "${f}" ]; then
-              src=".codex-workflow-src/${f}"
-              if [ ! -f "${src}" ]; then
-                echo "::error::Failed to stage required file ${f}"
-                exit 1
-              fi
-              install -m 0644 "${src}" "${f}"
-            fi
-          done
-
-          # Stage prompts/header.txt so the prompt-assembly step's
-          # `render_prompt.sh prompts/header.txt` invocation resolves a
-          # working-tree file. render_prompt.sh checks the bare path before
-          # delegating to render_prompt.py, so the fragment must land in
-          # ./prompts/ alongside the staged scripts/. header.txt carries
-          # only the {{REPO_LEARNINGS}} placeholder (resolved from the
-          # REPO_LEARNINGS env var at render time) and has no contract, so
-          # staging the single file is sufficient. The `if [ ! -f ]` guard
-          # preserves the self-repo's own checked-in copy.
-          mkdir -p prompts
-          if [ ! -f prompts/header.txt ]; then
-            src=".codex-workflow-src/prompts/header.txt"
-            if [ ! -f "${src}" ]; then
-              echo "::error::Failed to stage required file prompts/header.txt"
-              exit 1
-            fi
-            install -m 0644 "${src}" prompts/header.txt
-          fi
-          if [ ! -f prompts/_identity_recall.txt ]; then
-            src=".codex-workflow-src/prompts/_identity_recall.txt"
-            if [ ! -f "${src}" ]; then
-              echo "::error::Failed to stage required file prompts/_identity_recall.txt"
-              exit 1
-            fi
-            install -m 0644 "${src}" prompts/_identity_recall.txt
-          fi
 
       - name: Create runtime workspace
         run: |
@@ -915,7 +889,7 @@ jobs:
             echo
             bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"
             echo
-            REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" prompts/header.txt
+            REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/header.txt"
             echo
             echo "=== AI MEMORY CONTEXT ==="
             cat "${RUNTIME_DIR}/memory_context.txt"

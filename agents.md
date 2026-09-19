@@ -388,6 +388,9 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   phases stage their model, state, memory, prompt, and GitHub helpers through
   this bundle; `orchestrate_poll_process.sh` resolves nested executable calls
   from that immutable root rather than from the integration-branch checkout.
+  Model system instructions, pipeline instructions, and phase meta-prompts are
+  part of the same immutable manifest. Consumer `agents.md` / `README.md`
+  content is prefixed and fenced as untrusted repository context when included.
 - Implement and syntax-repair writers use
   `model_provider_broker_prepare_isolated_writer`, a runner-owned
   `codex_stall_guard.sh` supervisor around the dedicated-UID Codex launcher,

@@ -372,7 +372,7 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 	echo
 	echo "=== SELF-HEAL TASK ==="
 	echo
-	SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash "${SELF_HEAL_SCRIPT_DIR}/render_prompt.sh" prompts/mode-validate-self-heal.txt
+	SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash "${SELF_HEAL_SCRIPT_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/mode-validate-self-heal.txt"
 	echo
 	echo "=== SELF-HEAL ATTEMPT ==="
 	echo "attempt_number: $((SELF_HEAL_ATTEMPT + 1))"

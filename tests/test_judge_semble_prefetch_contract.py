@@ -256,13 +256,14 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in workspace_block
     assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in workspace_block
 
-    # build_semble_wrapper.sh added once the BM25 wrapper was extracted to a
-    # shared script (semble 0.1.3 lacks index/query CLI). Same optional-asset
-    # loop so consumer wrappers without it still fail-soft.
-    assert "for f in install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do" in stage_block
+    # The poller consumes Semble helpers from immutable support, so all three
+    # assets are part of the required helper closure rather than an optional
+    # checkout-local fallback.
+    required_loop = stage_block.split("_fetched_scripts=()", 1)[1].split("; do", 1)[0]
+    for helper in ("install_semble.sh", "build_semble_wrapper.sh", "semble_helpers.sh"):
+        assert helper in required_loop
     assert '_fetched_scripts+=("${f}")' in stage_block
-    assert "Optional Semble support script ${f} is unavailable" in stage_block
-    assert "legacy path remains active" in stage_block
+    assert "Optional Semble support script ${f} is unavailable" not in stage_block
 
     assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in setup_block
     assert "uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78" in setup_block

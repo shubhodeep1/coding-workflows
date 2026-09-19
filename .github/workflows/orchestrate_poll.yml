@@ -309,7 +309,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh emit_event.sh emit_event.py pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py targeted_file_context.py write_codex_config.sh codex_helpers.sh model_provider_broker.py codex_heartbeat.sh security_audit.sh sync_contract_list_union.py verify_integration_fingerprints.py validate_editor_audit.sh worktree_registry.sh worktree_gc.sh; do
+          for f in gh_helpers.sh emit_event.sh emit_event.py pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py targeted_file_context.py write_codex_config.sh codex_helpers.sh model_provider_broker.py codex_heartbeat.sh security_audit.sh sync_contract_list_union.py verify_integration_fingerprints.py validate_editor_audit.sh worktree_registry.sh worktree_gc.sh install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
@@ -341,16 +341,6 @@ jobs:
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional render_prompt.py backend unavailable on ${SCRIPT_REF}; render_prompt.sh shim (if present) resolves it elsewhere or the bundled bash renderer is used."
-              continue
-            fi
-            install -m 0755 "${src}" "scripts/${f}"
-            _fetched_scripts+=("${f}")
-          done
-
-          for f in install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do
-            src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ]; then
-              echo "::warning::Optional Semble support script ${f} is unavailable on ${SCRIPT_REF} in the checked-out support sources; legacy path remains active."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
@@ -470,7 +460,10 @@ jobs:
                   "scripts/security_audit_fp_exclusions.json",
                   "scripts/sync_contract_list_union.requirements.txt",
                   ".github/ai/orchestrate_schema.v1.json",
-                  ".github/ai/label_contract.v1.json"
+                  ".github/ai/label_contract.v1.json",
+                  "unattended_system_instructions.md",
+                  "ai_pipeline.md",
+                  "agents.md"
                 ],
                 model_catalog_path: "scripts/codex_model_catalog.json"
               }
@@ -495,17 +488,6 @@ jobs:
               printf '%s\n' "${_fetched_scripts[@]}" .gitignore
             } > scripts/.gitignore
           fi
-
-          for f in unattended_system_instructions.md ai_pipeline.md; do
-            if [ ! -f "${f}" ]; then
-              src=".codex-workflow-src/${f}"
-              if [ ! -f "${src}" ]; then
-                echo "::error::Failed to stage required file ${f}"
-                exit 1
-              fi
-              install -m 0644 "${src}" "${f}"
-            fi
-          done
 
 
       - name: Prepare isolated contract-list union Python

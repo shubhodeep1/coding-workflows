@@ -33,11 +33,10 @@ STAGED_REQUIRED_VALIDATE_PROMPTS = (
 	"prompts/mode-validate-diagnose.txt",
 	"prompts/mode-validate-discover.txt",
 	"prompts/mode-validate-fix-harness.txt",
-)
-OPTIONAL_PRESERVED_VALIDATE_PROMPTS = (
 	"prompts/mode-validate-self-heal.txt",
 	"prompts/mode-validate-self-heal-continuation.txt",
 )
+OPTIONAL_PRESERVED_VALIDATE_PROMPTS: tuple[str, ...] = ()
 REQUIRED_VALIDATE_ASSEMBLY_ASSETS = (
 	"prompts/_prelude_common.txt",
 	"prompts/_prelude_common_large.txt",
@@ -49,11 +48,12 @@ REQUIRED_VALIDATE_ASSEMBLY_ASSETS = (
 	"prompts/_templates/mode-validate-diagnose.txt",
 	"prompts/_templates/mode-validate-discover.txt",
 	"prompts/_templates/mode-validate-fix-harness.txt",
-)
-OPTIONAL_VALIDATE_ASSEMBLY_ASSETS = (
 	"prompts/_templates/mode-validate-self-heal.txt",
 	"prompts/_templates/mode-validate-self-heal-continuation.txt",
+	"prompts/contracts/mode-validate-self-heal.yml",
+	"prompts/contracts/mode-validate-self-heal-continuation.yml",
 )
+OPTIONAL_VALIDATE_ASSEMBLY_ASSETS: tuple[str, ...] = ()
 STAGED_VALIDATE_WORKSPACE_PROMPTS = STAGED_REQUIRED_VALIDATE_PROMPTS + OPTIONAL_PRESERVED_VALIDATE_PROMPTS
 RENDER_PROMPT_MODULE_NAME = "_validate_semble_render_prompt"
 REFERENCE_PATH_RE = re.compile(r"(?P<path>[^\s'\"]*/prompts/references/[^\s:'\"]+\.txt)")
@@ -200,6 +200,7 @@ def test_validate_manifest_stages_prompt_assembly_assets() -> None:
 	for repo_path in OPTIONAL_VALIDATE_ASSEMBLY_ASSETS:
 		assert repo_path in optional_preserve, repo_path
 		assert (REPO_ROOT / repo_path).is_file(), repo_path
+	assert optional_preserve == []
 
 
 def test_validate_prompts_include_serena_placeholder() -> None:
@@ -361,7 +362,7 @@ def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 	assert 'if semble_query_block "${query_text}" "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" "Validate Self-Heal Context"; then' in text
 	assert 'self_heal_semble_query="$(build_self_heal_semble_query || true)"' in text
 	assert 'self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"' in text
-	assert 'SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash "${SELF_HEAL_SCRIPT_DIR}/render_prompt.sh" prompts/mode-validate-self-heal.txt' in text
+	assert 'SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash "${SELF_HEAL_SCRIPT_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/mode-validate-self-heal.txt"' in text
 	assert 'CURRENT VALIDATION PROMPT FILES (raw on-disk contents with any prior self-heal patches already applied)' in text
 	assert 'cat "prompts/${_target}"' in text
 	assert 'bash scripts/render_prompt.sh "prompts/${_target}"' not in text

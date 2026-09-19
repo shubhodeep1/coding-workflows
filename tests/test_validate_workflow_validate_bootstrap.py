@@ -274,6 +274,11 @@ def test_validate_support_manifest_requires_memory_and_event_dependencies() -> N
 		'"scripts/setup_serena.sh"',
 		'"scripts/ledger_emit_substate.sh"',
 		'"scripts/templates/slot_manifest.schema.json"',
+		'"unattended_system_instructions.md"',
+		'"ai_pipeline.md"',
+		'"prompts/mode-validate-self-heal.txt"',
+		'"prompts/mode-validate-self-heal-continuation.txt"',
+		'"prompts/contracts/mode-validate-self-heal.yml"',
 	):
 		assert required_path in wf
 	validate_process = (REPO_ROOT / "scripts" / "validate_process.sh").read_text(encoding="utf-8")
@@ -281,6 +286,10 @@ def test_validate_support_manifest_requires_memory_and_event_dependencies() -> N
 	assert 'source "${_validate_script_dir}/gh_helpers.sh"' in validate_process
 	assert 'source "${_validate_script_dir}/tg_helpers.sh"' in validate_process
 	assert 'bash "${_validate_script_dir}/self_heal_validation.sh"' in validate_process
+	assert 'candidate="${VALIDATE_SUPPORT_ROOT}/${repo_path}"' in validate_process
+	assert 'cat "${VALIDATE_SUPPORT_ROOT}/unattended_system_instructions.md"' in validate_process
+	assert 'exec bash "${VALIDATION_TRUSTED_DRIVER}" "$@"' in validate_process
+	assert "exec bash scripts/validate_driver.sh" not in validate_process
 	assert "source scripts/gh_helpers.sh" not in validate_process
 
 

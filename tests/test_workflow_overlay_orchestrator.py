@@ -27,7 +27,7 @@ LOADER_ENV_SNIPPET = '--github-env "${GITHUB_ENV}"'
 WORKFLOW_EXPECTATIONS = {
 	"orchestrate.yml": 'bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-orchestrate.txt"',
 	"orchestrate_poll.yml": 'bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_poll_process.sh"',
-	"orchestrate_clarify_respond.yml": 'bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" prompts/mode-clarify-respond.txt',
+	"orchestrate_clarify_respond.yml": 'bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-clarify-respond.txt"',
 }
 
 ORCHESTRATE_PROMPT_ASSETS = (
@@ -101,6 +101,17 @@ def test_orchestrator_runtime_helpers_reject_checkout_relative_execution() -> No
 	poller_text = _read(REPO_ROOT / "scripts" / "orchestrate_poll_process.sh")
 	assert 'ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-' in poller_text
 	assert 'source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' in poller_text
+	assert 'cat "${ORCHESTRATE_POLL_SUPPORT_ROOT_DIR}/unattended_system_instructions.md"' in poller_text
+	assert "cat unattended_system_instructions.md" not in poller_text
+
+
+def test_orchestrator_model_instructions_are_immutable() -> None:
+	for workflow_name in ("orchestrate.yml", "orchestrate_poll.yml", "orchestrate_clarify_respond.yml"):
+		workflow_text = _read(WORKFLOWS_DIR / workflow_name)
+		for required_path in ("unattended_system_instructions.md", "ai_pipeline.md", "agents.md"):
+			assert f'"{required_path}"' in workflow_text, workflow_name
+		assert "cat unattended_system_instructions.md" not in workflow_text, workflow_name
+		assert "cat ai_pipeline.md" not in workflow_text, workflow_name
 
 
 def main() -> int:
@@ -108,6 +119,7 @@ def main() -> int:
 	test_orchestrator_wrapper_templates_match_reusable_workflow_targets()
 	test_orchestrate_workflow_stages_prompt_assembly_assets()
 	test_orchestrator_runtime_helpers_reject_checkout_relative_execution()
+	test_orchestrator_model_instructions_are_immutable()
 	return 0
 
 

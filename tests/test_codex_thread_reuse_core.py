@@ -556,6 +556,8 @@ def test_validate_process_contains_thread_reuse_wiring() -> None:
 	assert 'CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true"' in text
 	assert 'bash "${CODEX_THREAD_REUSE_HELPER}" direct-run' in text
 	assert "prompts/mode-validate-self-heal-continuation.txt" in text
+	assert 'candidate="${VALIDATE_SUPPORT_ROOT}/${repo_path}"' in text
+	assert '"${repo_path}" \\' not in text
 	assert "=== SELF-HEAL TASK ===" in text
 	assert "=== SELF-HEAL ATTEMPT ===" in text
 	assert 'PATH="${heal_path}" \\' in text

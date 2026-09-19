@@ -966,6 +966,11 @@ jobs:
                   "prompts/mode-implement-diagnose.txt",
                   "prompts/mode-implement-diagnose-continuation.txt"
                 ],
+                required_files: [
+                  "unattended_system_instructions.md",
+                  "ai_pipeline.md",
+                  "agents.md"
+                ],
                 model_catalog_path: "scripts/codex_model_catalog.json"
               }
           ' > "${implement_immutable_support_manifest}"
@@ -995,20 +1000,6 @@ jobs:
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
-
-          for f in unattended_system_instructions.md ai_pipeline.md; do
-            if [ ! -f "${f}" ]; then
-              src=".codex-workflow-src/${f}"
-              if [ ! -f "${src}" ]; then
-                echo "::error::Failed to stage required file ${f}"
-                exit 1
-              fi
-              install -m 0644 "${src}" "${f}"
-              if [ "${is_self_repo}" = "false" ]; then
-                echo "${f}" >> "${FETCHED_MANIFEST}"
-              fi
-            fi
-          done
 
           mkdir -p prompts prompts/contracts prompts/_templates
           if [ ! -f prompts/mode-implement-diagnose.txt ]; then
@@ -1082,10 +1073,6 @@ jobs:
               echo "prompts/${prompt_assembly_asset}" >> "${FETCHED_MANIFEST}"
             fi
           done
-
-          if [ -f .codex-workflow-src/agents.md ]; then
-            install -m 0644 .codex-workflow-src/agents.md "${RUNTIME_DIR}/agents_canonical.md"
-          fi
 
       - name: Probe Codex thread-reuse support
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1699,7 +1686,7 @@ jobs:
           set -euo pipefail
           # See scripts/build_static_context.sh for trimming rationale and
           # prompt-prefix caching motivation. The implement phase additionally
-          # includes "${RUNTIME_DIR}/agents_canonical.md" if present.
+          # reads canonical instructions from the immutable support root.
           bash "${SUPPORT_SCRIPTS_DIR}/build_static_context.sh" implement ./pre_assembled_static.txt
 
       - name: Retrieve implementation memory context

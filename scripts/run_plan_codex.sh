@@ -239,7 +239,7 @@ EOF
   echo
   bash "${_run_plan_scripts_dir}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"
   echo
-  REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash "${_run_plan_scripts_dir}/render_prompt.sh" prompts/header.txt
+  REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash "${_run_plan_scripts_dir}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/header.txt"
   echo
   echo "=== AI MEMORY CONTEXT ==="
   cat "${RUNTIME_DIR}/memory_context.txt"
