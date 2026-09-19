@@ -166,6 +166,7 @@ changelog.d/3902-secure-workflow-shell-inputs.md
 changelog.d/3903-changelog-only-notification.md
 changelog.d/3906-stall-recovery-human-gated-latch.md
 changelog.d/3909-deterministic-manifest-conflict-resolution.md
+changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
 changelog.d/3928-security-pass-delta-reaudit.md
 changelog.d/3928-security-pass-exhaustion-findings.md
 changelog.d/3928-security-pass-fix-reissue.md

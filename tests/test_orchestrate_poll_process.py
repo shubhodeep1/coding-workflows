@@ -467,6 +467,19 @@ def _security_audit_findings_payload(findings: list[dict] | None = None) -> dict
 	}
 
 
+def _security_audit_additive_payload(
+	*,
+	findings: list[dict] | None = None,
+	advisory_findings: list[dict] | None = None,
+	verified_fixed_finding_ids: list[str] | None = None,
+) -> dict:
+	payload = _security_audit_findings_payload(findings)
+	payload["advisory_findings"] = list(advisory_findings or [])
+	payload["verified_fixed_finding_ids"] = list(verified_fixed_finding_ids or [])
+	payload["counts"]["advisory"] = len(payload["advisory_findings"])
+	return payload
+
+
 def _security_pass_test_finding() -> dict:
 	return {
 		"finding_id": "SEC-TEST-1",
@@ -869,6 +882,7 @@ def _run_poller(
 			).stdout.strip(),
 		}
 		integration_head_sha = sandbox_sha_aliases["__integration_head__"]
+		default_head_sha = sandbox_sha_aliases["__default_head__"]
 		integration_tree_sha = subprocess.run(
 			["git", "-C", str(sandbox), "rev-parse", f"{integration_head_sha}^{{tree}}"],
 			check=True,
@@ -911,6 +925,37 @@ def _run_poller(
 		fix_tree_sha = _fix_git("write-tree")
 		sandbox_sha_aliases["__advanced_integration_head_with_fix__"] = _fix_git(
 			"commit-tree", fix_tree_sha, "-p", integration_head_sha, "-m", "security fix",
+		)
+
+		# Histories for clean-pass rebinding tests. The clean sync merge combines
+		# one default-only file with the integration-only sentinel, so its combined
+		# diff is empty. The evil merge additionally rewrites the sentinel, producing
+		# a combined-diff hunk that must force a real re-audit.
+		default_tree_sha = _fix_git("rev-parse", f"{default_head_sha}^{{tree}}")
+		_fix_git("read-tree", default_tree_sha)
+		default_sync_blob = _fix_git("hash-object", "-w", "--stdin", stdin="default sync marker\n")
+		_fix_git("update-index", "--add", "--cacheinfo", f"100644,{default_sync_blob},default_sync_marker.txt")
+		advanced_default_tree_sha = _fix_git("write-tree")
+		sandbox_sha_aliases["__advanced_default_head__"] = _fix_git(
+			"commit-tree", advanced_default_tree_sha, "-p", default_head_sha, "-m", "advance default",
+		)
+		_fix_git("read-tree", integration_tree_sha)
+		_fix_git("update-index", "--add", "--cacheinfo", f"100644,{default_sync_blob},default_sync_marker.txt")
+		clean_sync_tree_sha = _fix_git("write-tree")
+		sandbox_sha_aliases["__clean_sync_merge__"] = _fix_git(
+			"commit-tree", clean_sync_tree_sha,
+			"-p", integration_head_sha,
+			"-p", sandbox_sha_aliases["__advanced_default_head__"],
+			"-m", "clean sync merge",
+		)
+		evil_sync_blob = _fix_git("hash-object", "-w", "--stdin", stdin="integration-branch-only-symbol\nevil-resolution\n")
+		_fix_git("update-index", "--add", "--cacheinfo", f"100644,{evil_sync_blob},.orchestrator_judge_context_sentinel.txt")
+		evil_sync_tree_sha = _fix_git("write-tree")
+		sandbox_sha_aliases["__evil_sync_merge__"] = _fix_git(
+			"commit-tree", evil_sync_tree_sha,
+			"-p", integration_head_sha,
+			"-p", sandbox_sha_aliases["__advanced_default_head__"],
+			"-m", "evil sync merge",
 		)
 
 		def _resolve_sandbox_sha_alias(raw_sha: str) -> str:
@@ -1022,6 +1067,8 @@ def _run_poller(
 				"    json.loads(Path(os.environ['SECURITY_AUDIT_FIX_CYCLE_DIFFS']).read_text(encoding='utf-8'))\n"
 				"    if os.environ.get('SECURITY_AUDIT_FIX_CYCLE_DIFFS') else None\n"
 				"  ),\n"
+				"  'line_ownership': os.environ.get('SECURITY_AUDIT_LINE_OWNERSHIP'),\n"
+				"  'ownership_context_lines': os.environ.get('SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES'),\n"
 				"  'confidence_gate': os.environ.get('SECURITY_AUDIT_CONFIDENCE_GATE'),\n"
 				"  'model': os.environ.get('WORKFLOW_EDITOR_MODEL'),\n"
 				"  'tracking_body': json.loads(Path(os.environ['GH_MOCK_STORE']).read_text(encoding='utf-8'))['issues']['192']['body'],\n"
@@ -1748,6 +1795,10 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 			i += 2
 			continue
 		i += 1
+	if title.startswith('[security-pass] Advisory:') and __import__('os').environ.get('MOCK_SECURITY_PASS_ADVISORY_CREATE_FAIL') == 'true':
+		save()
+		print('forced advisory create failure', file=sys.stderr)
+		sys.exit(1)
 	next_num = store.get('next_issue_number', 900)
 	store['next_issue_number'] = next_num + 1
 	store['issues'][str(next_num)] = {'labels': list(labels), 'comments': [], 'body': body, 'closed': False, 'title': title}
@@ -4114,6 +4165,306 @@ def test_security_pass_head_advance_after_clean_pass_reaudits_only_the_delta() -
 	assert latest_state["security_pass_status"] == "blocked"
 	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
 	assert [finding["finding_id"] for finding in latest_state["security_pass_reported_findings"]] == ["SEC-TEST-1"]
+
+
+def _passed_security_state_for_rebind() -> dict:
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 2,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "__integration_head__",
+			"security_pass_last_audited_sha": "__integration_head__",
+		}
+	)
+	return state
+
+
+def test_security_pass_clean_sync_merge_rebinds_without_model_run() -> None:
+	result = _run_poller(
+		state=_passed_security_state_for_rebind(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		branch_ref_shas={
+			"main": "__advanced_default_head__",
+			"orchestrator/project-192": "__clean_sync_merge__",
+		},
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert result["security_audit_capture"] is None
+	assert result["latest_state"]["security_pass_status"] == "passed"
+	assert result["latest_state"]["security_pass_cycle"] == 2
+	assert result["latest_state"]["security_pass_head_sha"] == result["latest_state"]["security_pass_last_audited_sha"]
+	assert "SECURITY_PASS_REBOUND tracking_issue=192" in combined_log
+	assert "reason=no_new_project_lines" in combined_log
+	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" not in combined_log
+
+
+def test_security_pass_evil_merge_and_non_merge_commit_fall_through_to_audit() -> None:
+	for integration_head, default_head in (
+		("__evil_sync_merge__", "__advanced_default_head__"),
+		("__advanced_integration_head__", "__default_head__"),
+	):
+		result = _run_poller(
+			state=_passed_security_state_for_rebind(),
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload(),
+			issue_labels={10: ["ai:merged"]},
+			existing_branches=["main", "orchestrator/project-192"],
+			branch_ref_shas={
+				"main": default_head,
+				"orchestrator/project-192": integration_head,
+			},
+		)
+
+		combined_log = result["stdout"] + result["stderr"]
+		assert result["security_audit_capture"] is not None, integration_head
+		assert "SECURITY_PASS_REBOUND" not in combined_log, integration_head
+		assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log, integration_head
+
+
+def test_security_pass_ownership_controls_reach_engine_and_invalid_values_fall_back() -> None:
+	state = _base_state(status="security-pass")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"SECURITY_PASS_LINE_OWNERSHIP": "invalid",
+			"SECURITY_PASS_OWNERSHIP_CONTEXT_LINES": "-1",
+			"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "invalid",
+		},
+	)
+
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert capture["line_ownership"] == "project-lines"
+	assert capture["ownership_context_lines"] == "3"
+	assert "ownership=project-lines context=3" in combined_log
+	assert "SECURITY_PASS_LINE_OWNERSHIP must be project-lines or file" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_CAP must be a non-negative integer" in combined_log
+
+
+def test_security_pass_file_ownership_mode_is_forwarded_unchanged() -> None:
+	state = _base_state(status="security-pass")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_LINE_OWNERSHIP": "file"},
+	)
+
+	assert result["security_audit_capture"]["line_ownership"] == "file"
+	assert result["latest_state"]["security_pass_status"] == "blocked"
+	assert "ownership=file context=3" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_optional_engine_fields_are_strict_when_present() -> None:
+	invalid_payloads = []
+	payload = _security_audit_additive_payload()
+	payload["advisory_findings"] = None
+	invalid_payloads.append(payload)
+	payload = _security_audit_additive_payload()
+	payload["verified_fixed_finding_ids"] = [""]
+	invalid_payloads.append(payload)
+	payload = _security_audit_additive_payload(advisory_findings=[_security_pass_test_finding()])
+	payload["counts"]["advisory"] = 0
+	invalid_payloads.append(payload)
+
+	for payload in invalid_payloads:
+		state = _base_state(status="security-pass")
+		state["integration_branch"] = "orchestrator/project-192"
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=payload,
+			issue_labels={10: ["ai:merged"]},
+			existing_branches=["main", "orchestrator/project-192"],
+		)
+		assert result["latest_state"]["security_pass_status"] == "failed"
+		assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_advisory_only_result_passes_and_files_immediate_followup() -> None:
+	state = _base_state(status="security-pass")
+	state["integration_branch"] = "orchestrator/project-192"
+	advisory = _security_pass_test_finding()
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_additive_payload(
+			advisory_findings=[advisory],
+			verified_fixed_finding_ids=["SEC-FIXED"],
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_cycle"] == 0
+	assert latest_state["security_pass_reported_findings"] == []
+	assert latest_state["security_pass_advisory_backlog"] == []
+	waiver = latest_state["security_pass_waived_findings"][0]
+	assert waiver["source"] == "preexisting"
+	assert waiver["waived_by"] == "line-ownership"
+	assert waiver["issue"] == 900
+	assert latest_state["security_pass_followups_merge_checked"] == [900]
+	assert "SECURITY_PASS_VERIFIED_FIXED tracking_issue=192 ids=SEC-FIXED" in combined_log
+	assert "SECURITY_PASS_ADVISORY_ROUTED tracking_issue=192" in combined_log
+	assert "SECURITY_PASS_CLEAN" in combined_log
+	assert len(result["created_issues"]) == 1
+	body = result["issues"]["900"]["body"]
+	assert "older than the project's merge-base" in body
+	assert "routed as an advisory by line ownership, not accepted by a judge" in body
+	assert "### Mitigation policy" in body
+	assert "Refs #192" in body
+	assert any(
+		"1 finding(s) on pre-existing code were routed as non-blocking `ai:security` follow-ups: #900 (0 still queued)." in comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+	)
+
+
+def test_security_pass_advisory_cap_zero_and_create_failure_leave_nonblocking_backlog() -> None:
+	for env_overrides in (
+		{"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "0"},
+		{"MOCK_SECURITY_PASS_ADVISORY_CREATE_FAIL": "true"},
+	):
+		state = _base_state(status="security-pass")
+		state["integration_branch"] = "orchestrator/project-192"
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=_security_audit_additive_payload(advisory_findings=[_security_pass_test_finding()]),
+			issue_labels={10: ["ai:merged"]},
+			existing_branches=["main", "orchestrator/project-192"],
+			env_overrides=env_overrides,
+		)
+		assert result["latest_state"]["security_pass_status"] == "passed"
+		assert len(result["latest_state"]["security_pass_advisory_backlog"]) == 1
+		assert result.get("created_issues", []) == []
+
+
+def test_security_pass_blocking_comment_names_routed_advisory_followup() -> None:
+	state = _base_state(status="security-pass")
+	state["integration_branch"] = "orchestrator/project-192"
+	blocking = _security_pass_second_test_finding()
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_additive_payload(
+			findings=[blocking],
+			advisory_findings=[_security_pass_test_finding()],
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["security_pass_status"] == "blocked"
+	blocked_comment = next(
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## 🔒 Project security pass blocked")
+	)
+	assert "1 finding(s) on pre-existing code were routed as non-blocking `ai:security` follow-ups: #900 (0 still queued)." in blocked_comment
+
+
+def test_security_pass_advisory_backlog_files_oldest_first_with_one_tick_cap() -> None:
+	backlog = []
+	for finding_id in ("ADVISORY-OLD", "ADVISORY-NEW"):
+		row = _security_pass_test_finding()
+		row["finding_id"] = finding_id
+		row["audited_head_sha"] = "a" * 40
+		backlog.append(row)
+	state = _passed_security_state_for_rebind()
+	state["security_pass_advisory_backlog"] = backlog
+	state["security_pass_waived_findings"] = [
+		{
+			"finding_id": row["finding_id"],
+			"file": row["file"],
+			"line": row["line"],
+			"owasp_or_stride_category": row["owasp_or_stride_category"],
+			"severity": row["severity"],
+			"justification": "Pre-existing code.",
+			"source": "preexisting",
+			"waived_by": "line-ownership",
+			"waived_at_cycle": 0,
+			"issue": None,
+		}
+		for row in backlog
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "1"},
+	)
+
+	assert len(result["created_issues"]) == 1
+	assert "ADVISORY-OLD" in result["created_issues"][0]["title"]
+	assert [row["finding_id"] for row in result["latest_state"]["security_pass_advisory_backlog"]] == ["ADVISORY-NEW"]
+
+
+def test_security_pass_advisory_backlog_normalization_is_safe_and_bounded() -> None:
+	valid_rows = []
+	for index in range(105):
+		row = _security_pass_test_finding()
+		row["finding_id"] = f"ADVISORY-{index:03d}"
+		row["audited_head_sha"] = "a" * 40
+		valid_rows.append(row)
+	unsafe_row = {**valid_rows[0], "finding_id": "UNSAFE", "file": "../escape.py"}
+	state = _passed_security_state_for_rebind()
+	state["security_pass_head_sha"] = "__integration_head__"
+	state["security_pass_last_audited_sha"] = "__integration_head__"
+	state["security_pass_advisory_backlog"] = [unsafe_row, *valid_rows]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "0"},
+	)
+
+	backlog = result["latest_state"]["security_pass_advisory_backlog"]
+	assert len(backlog) == 100
+	assert backlog[0]["finding_id"] == "ADVISORY-005"
+	assert backlog[-1]["finding_id"] == "ADVISORY-104"
+	assert all(row["finding_id"] != "UNSAFE" for row in backlog)
 
 
 def test_security_pass_unusable_last_audited_sha_falls_back_to_full_range() -> None:
