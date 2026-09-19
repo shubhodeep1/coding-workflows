@@ -4741,8 +4741,8 @@ security_pass_rebind_if_no_new_project_lines() {
     [ -n "${commit_line}" ] || return 1
     commit_sha="${commit_line%% *}"
     parents_line="$(git rev-list --parents -n 1 "${commit_sha}" 2>/dev/null)" || return 1
-    # commit plus at least two parents => at least three whitespace-separated fields.
-    if [ "$(printf '%s\n' "${parents_line}" | awk '{print NF}')" -lt 3 ]; then
+    # Only the ordinary two-parent sync-merge shape is safe to inspect with --cc.
+    if [ "$(printf '%s\n' "${parents_line}" | awk '{print NF}')" -ne 3 ]; then
       return 1
     fi
     if ! git show --format= --cc --no-ext-diff --no-textconv "${commit_sha}" > "${combined_diff_file}" 2>/dev/null; then
@@ -5650,12 +5650,15 @@ PY
 # bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
 # severity, justification, source, waived_by, waived_at_cycle, issue}.
 security_pass_record_waivers() {
-  local waivers_json="$1"
-  if ! jq --argjson waivers "${waivers_json}" '
-    (.security_pass_waived_findings // []) as $existing
-    | ($waivers | map(.finding_id)) as $ids
+  local waivers_json="$1" waivers_file
+  waivers_file="${RUNTIME_DIR}/security_pass_waivers_${TRACKING_NUM}.json"
+  printf '%s\n' "${waivers_json}" > "${waivers_file}"
+  if ! jq --slurpfile waivers "${waivers_file}" '
+    ($waivers[0] // []) as $waiver_rows
+    | (.security_pass_waived_findings // []) as $existing
+    | ($waiver_rows | map(.finding_id)) as $ids
     | .security_pass_waived_findings = (
-        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waivers) | .[-100:]
+        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waiver_rows) | .[-100:]
       )
     | .security_pass_reported_findings = (
         [(.security_pass_reported_findings // [])[] | select((.finding_id | IN($ids[])) | not)]
@@ -5850,7 +5853,7 @@ security_pass_file_advisory_findings() {
   local integration_branch="$1"
   local head_sha="$2"
   local attempted_this_tick remaining_cap pending_json row_json finding_json finding_id audited_head_sha justification
-  local queued_count routed_count filed_issues
+  local queued_count routed_count filed_count=0 filed_issues
 
   attempted_this_tick="${SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK:-0}"
   [[ "${attempted_this_tick}" =~ ^[0-9]+$ ]] || attempted_this_tick=0
@@ -5870,6 +5873,7 @@ security_pass_file_advisory_findings() {
     justification="The cited line predates this project's merge-base and already exists on the default branch; routed as a non-blocking advisory by line ownership."
     create_security_pass_advisory_followup "${finding_json}" "${integration_branch}" "${audited_head_sha}" "${justification}" "preexisting"
     if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+      filed_count=$((filed_count + 1))
       SECURITY_PASS_ADVISORY_FILED_ISSUES="${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}${SECURITY_PASS_ADVISORY_FILED_ISSUES:+, }#${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
       security_pass_mark_followup_merge_checked "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" || \
         echo "::warning::Could not record pre-existing-code advisory follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER} as merge-checked on tracking issue #${TRACKING_NUM}."
@@ -5886,6 +5890,9 @@ security_pass_file_advisory_findings() {
   [[ "${queued_count}" =~ ^[0-9]+$ ]] || queued_count=0
   routed_count="${SECURITY_PASS_ADVISORY_ROUTED_COUNT:-0}"
   [[ "${routed_count}" =~ ^[0-9]+$ ]] || routed_count=0
+  if [ "${routed_count}" -eq 0 ]; then
+    routed_count="${filed_count}"
+  fi
   filed_issues="${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}"
   if [ "${routed_count}" -gt 0 ]; then
     SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX=" ${routed_count} finding(s) on pre-existing code were routed as non-blocking \`ai:security\` follow-ups: ${filed_issues:-none filed this tick} (${queued_count} still queued)."
@@ -6480,7 +6487,7 @@ run_security_pass_inline() {
   local verified_analysis_sha="${4:-}"
   local verified_recheck_refspec="${5:-}"
   local prior_security_status current_integration_ref current_head_sha current_default_ref merge_base_sha
-  local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model
+  local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model security_pass_advisory_backlog_file
   local required_security_asset
 
   prior_security_status="$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
@@ -6873,11 +6880,13 @@ run_security_pass_inline() {
     security_pass_advisory_backlog="$(jq -c --arg head_sha "${current_head_sha}" '
       [(.advisory_findings // [])[] | . + {audited_head_sha: $head_sha}]
     ' "${findings_file}")"
-    if ! jq --argjson backlog "${security_pass_advisory_backlog}" '
-      ($backlog | map(.finding_id)) as $ids
+    security_pass_advisory_backlog_file="${RUNTIME_DIR}/security_pass_advisory_backlog_${TRACKING_NUM}.json"
+    printf '%s\n' "${security_pass_advisory_backlog}" > "${security_pass_advisory_backlog_file}"
+    if ! jq --slurpfile backlog "${security_pass_advisory_backlog_file}" '
+      (($backlog[0] // []) | map(.finding_id)) as $ids
       | .security_pass_advisory_backlog = (
           [(.security_pass_advisory_backlog // [])[] | select((.finding_id | IN($ids[])) | not)]
-          + $backlog
+          + ($backlog[0] // [])
         )
       | .security_pass_advisory_backlog = .security_pass_advisory_backlog[-100:]
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
@@ -16872,6 +16881,12 @@ The active security-pass fix cycle continues; the waivers apply from its next re
   fi
 
   if [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
+    security_pass_file_advisory_findings \
+      "${INTEGRATION_BRANCH_TRACKING}" \
+      "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
+    fi
     SECURITY_FIX_ISSUES_JSON="$(jq -c '.security_pass_active_fix_issues // []' "${STATE_FILE}" 2>/dev/null || echo '[]')"
     SECURITY_FIX_ISSUE="$(printf '%s' "${SECURITY_FIX_ISSUES_JSON}" | jq -r '.[0] // empty' 2>/dev/null || echo '')"
     if ! [[ "${SECURITY_FIX_ISSUE}" =~ ^[0-9]+$ ]]; then

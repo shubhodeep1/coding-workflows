@@ -948,6 +948,13 @@ def _run_poller(
 			"-p", sandbox_sha_aliases["__advanced_default_head__"],
 			"-m", "clean sync merge",
 		)
+		sandbox_sha_aliases["__octopus_sync_merge__"] = _fix_git(
+			"commit-tree", clean_sync_tree_sha,
+			"-p", integration_head_sha,
+			"-p", sandbox_sha_aliases["__advanced_default_head__"],
+			"-p", default_head_sha,
+			"-m", "octopus sync merge",
+		)
 		evil_sync_blob = _fix_git("hash-object", "-w", "--stdin", stdin="integration-branch-only-symbol\nevil-resolution\n")
 		_fix_git("update-index", "--add", "--cacheinfo", f"100644,{evil_sync_blob},.orchestrator_judge_context_sentinel.txt")
 		evil_sync_tree_sha = _fix_git("write-tree")
@@ -4210,6 +4217,7 @@ def test_security_pass_clean_sync_merge_rebinds_without_model_run() -> None:
 def test_security_pass_evil_merge_and_non_merge_commit_fall_through_to_audit() -> None:
 	for integration_head, default_head in (
 		("__evil_sync_merge__", "__advanced_default_head__"),
+		("__octopus_sync_merge__", "__advanced_default_head__"),
 		("__advanced_integration_head__", "__default_head__"),
 	):
 		result = _run_poller(
@@ -4434,6 +4442,44 @@ def test_security_pass_advisory_backlog_files_oldest_first_with_one_tick_cap() -
 
 	assert len(result["created_issues"]) == 1
 	assert "ADVISORY-OLD" in result["created_issues"][0]["title"]
+	assert [row["finding_id"] for row in result["latest_state"]["security_pass_advisory_backlog"]] == ["ADVISORY-NEW"]
+	assert any(
+		"1 finding(s) on pre-existing code were routed as non-blocking `ai:security` follow-ups: #900 (1 still queued)." in comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+	)
+
+
+def test_security_pass_advisory_backlog_drains_while_fix_issue_is_in_progress() -> None:
+	backlog = []
+	for finding_id in ("ADVISORY-OLD", "ADVISORY-NEW"):
+		row = _security_pass_test_finding()
+		row["finding_id"] = finding_id
+		row["audited_head_sha"] = "a" * 40
+		backlog.append(row)
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_advisory_backlog": backlog,
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"], 900: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "1"},
+	)
+
+	assert result["latest_state"]["status"] == "security-pass-fixing"
+	assert len(result["created_issues"]) == 1
+	assert "ADVISORY-OLD" in result["created_issues"][0]["title"]
+	assert result["latest_state"]["security_pass_followups_merge_checked"] == [900]
 	assert [row["finding_id"] for row in result["latest_state"]["security_pass_advisory_backlog"]] == ["ADVISORY-NEW"]
 
 
