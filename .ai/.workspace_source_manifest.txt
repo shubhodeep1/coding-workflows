@@ -181,6 +181,7 @@ changelog.d/3963-reissue-preserve-baseline-default-true.md
 changelog.d/3965-review-ledger-cache-stable-path.md
 changelog.d/3965-security-pass-cycle-budget-reset.md
 changelog.d/3965-security-pass-fix-successor-adoption.md
+changelog.d/3965-security-pass-loop-convergence.md
 changelog.d/3965-security-pass-no-human-input-paths.md
 changelog.d/3967-plan-blocker-prompt-routing.md
 changelog.d/3972-blocked-already-satisfied-noop.md
@@ -229,6 +230,7 @@ changelog.d/orchestrator-security-pass-phase-3-dark-launch.md
 changelog.d/orchestrator-security-pass-phase-4-default-on.md
 changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
+changelog.d/security-audit-concurrency-deadlock.md
 changelog.d/seed-repo-command.md
 changelog.d/slash-commands-session-model.md
 changelog.d/stall-recovery-dead-end-fixes.md

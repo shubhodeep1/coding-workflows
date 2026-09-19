@@ -27,6 +27,7 @@ Rules:
 - Do not propose speculative findings. Omit anything you cannot support from the checked-out code.
 - Do not invent file paths, line numbers, exploit chains, or runtime behavior.
 - Every finding must cite one concrete repository file and one concrete line number.
+- Cite the line where the defect lives. The runtime routes findings by line ownership; a finding attributed to the wrong line is routed wrongly.
 - If no high-quality findings are supported, return `[]`.
 
 Mitigation policy:
