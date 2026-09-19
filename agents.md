@@ -396,9 +396,16 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   `codex_stall_guard.sh` supervisor around the dedicated-UID Codex launcher,
   and `model_provider_broker_finish_isolated_writer`. The model UID cannot
   access runner command files, immutable support, or Git metadata; repair write
-  ACLs are limited to the validated allow-list. Validation and self-heal model
-  calls use the same runner-supervised separate-UID read-only path, while
-  trusted runner code owns output application and repository/GitHub mutations.
+  ACLs are limited to the validated allow-list. After the process group stops,
+  trusted cleanup reclaims workspace ownership and denies the model UID on new
+  paths before restoring captured ACLs, so model-created files cannot bypass a
+  later repair allow-list. Validation and self-heal model calls use the same
+  runner-supervised separate-UID read-only path, while trusted runner code owns
+  output application and repository/GitHub mutations.
+- Issue-phase integration-ref resolution executes the SHA-pinned canonical
+  resolver before checkout. A successful empty result means no integration
+  metadata exists and permits the default branch; resolver staging, helper,
+  API, and declared-branch failures stop the phase instead of falling back.
 - `scripts/model_provider_broker.py` is the bounded loopback-only credential
   boundary for issue-derived analysis, orchestrator polling, implementation and
   repair, validation, check-failure triage, security audits, source and consumer

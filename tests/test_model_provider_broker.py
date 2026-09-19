@@ -1155,6 +1155,15 @@ def test_isolated_writer_environment_omits_runner_commands_and_credentials() -> 
 	assert 'OPENROUTER_API_KEY="${MODEL_PROVIDER_BROKER_TOKEN}"' in exec_block
 	assert "writer_isolation_verify_process_group_stopped" in helper_text
 	assert 'MODEL_PROVIDER_BROKER_DEFER_ACCESS_RESTORE="true"' in helper_text
+	finish_block = helper_text.split("model_provider_broker_finish_isolated_writer()", 1)[1].split(
+		"model_provider_broker_exec_sanitized()", 1
+	)[0]
+	verify_index = finish_block.index("writer_isolation_verify_process_group_stopped")
+	reclaim_index = finish_block.index('sudo -n chown -R "${runner_uid_gid}" "${isolated_workspace}"')
+	stop_index = finish_block.index("model_provider_broker_stop")
+	assert verify_index < reclaim_index < stop_index
+	assert 'setfacl -R -m "u:${isolation_user}:---" "${isolated_workspace}"' in finish_block
+	assert 'setfacl -m "d:u:${isolation_user}:---"' in finish_block
 
 
 def test_broker_rejections_file_is_optional(tmp_path: Path) -> None:

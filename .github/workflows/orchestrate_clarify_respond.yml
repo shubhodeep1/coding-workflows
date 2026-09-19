@@ -161,19 +161,17 @@ jobs:
           git -C "${resolver_stage_primary}" remote add origin "${resolver_repo_url}"
           if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>"${resolver_clone_log}" \
             || ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
-            echo "::warning::Failed to stage canonical integration resolver at immutable ref ${resolver_ref}; falling back to default branch."
+            echo "::error::Failed to stage canonical integration resolver at immutable ref ${resolver_ref}."
             if [ -s "${resolver_clone_log}" ]; then
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
             fi
-            echo "ref=" >> "$GITHUB_OUTPUT"
-            exit 0
+            exit 1
           fi
           resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
 
           if [ ! -f "${resolver_script}" ]; then
-            echo "::warning::Canonical integration resolver script not found in staged source; falling back to default branch."
-            echo "ref=" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::error::Canonical integration resolver script not found in staged source."
+            exit 1
           fi
 
           chmod +x "${resolver_script}"
@@ -185,8 +183,8 @@ jobs:
           })"; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::Canonical integration resolver failed; falling back to default branch."
-            echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "::error::Canonical integration resolver failed."
+            exit 1
           fi
 
       - name: Checkout repository

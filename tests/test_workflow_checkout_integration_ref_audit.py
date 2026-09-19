@@ -167,6 +167,13 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		assert 'resolver_ref="${WORKFLOW_DEFINITION_SHA,,}"' in resolver_block
 		assert 'git -C "${resolver_stage_primary}" init --quiet' in resolver_block
 		assert 'fetch --quiet --depth 1 origin "${resolver_ref}"' in resolver_block
+		assert "Failed to stage canonical integration resolver at immutable ref ${resolver_ref}." in resolver_block
+		assert "Canonical integration resolver script not found in staged source." in resolver_block
+		assert "Canonical integration resolver failed." in resolver_block
+		assert "Failed to stage canonical integration resolver at immutable ref ${resolver_ref}; falling back to default branch." not in resolver_block
+		assert "Canonical integration resolver script not found in staged source; falling back to default branch." not in resolver_block
+		assert "Canonical integration resolver failed; falling back to default branch." not in resolver_block
+		assert resolver_block.count('echo "ref=" >> "$GITHUB_OUTPUT"') == 1
 		assert resolver_idx != -1 and checkout_ref_idx != -1 and resolver_idx < checkout_ref_idx, (
 			f"{workflow_name} must resolve integration ref before refctx-bound checkout"
 		)

@@ -648,6 +648,7 @@ model_provider_broker_finish_isolated_writer()
 {
 	local isolation_user="${MODEL_PROVIDER_BROKER_ISOLATION_USER:-}" cleanup_rc=0 process_group_safe="true"
 	local process_group_file="${MODEL_PROVIDER_BROKER_ISOLATED_PROCESS_GROUP_FILE:-}"
+	local isolated_workspace="${MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE:-}" runner_uid_gid=""
 	if [ "${MODEL_PROVIDER_BROKER_ISOLATED_WRITER_LAUNCHED:-false}" = "true" ]; then
 		if [ -z "${process_group_file}" ] || [ ! -s "${process_group_file}" ] \
 			|| ! command -v writer_isolation_verify_process_group_stopped >/dev/null 2>&1 \
@@ -659,6 +660,14 @@ model_provider_broker_finish_isolated_writer()
 	fi
 	if [ "${process_group_safe}" != "true" ]; then
 		export MODEL_PROVIDER_BROKER_DEFER_ACCESS_RESTORE="true"
+	elif [ -n "${isolated_workspace}" ] && [ -d "${isolated_workspace}" ]; then
+		# Files created by the model are owned by its UID, so ACL changes alone
+		# cannot constrain a later allow-listed repair run. Reclaim ownership and
+		# leave explicit deny ACLs on new paths before restoring captured ACLs.
+		runner_uid_gid="$(id -u):$(id -g)"
+		sudo -n chown -R "${runner_uid_gid}" "${isolated_workspace}" || cleanup_rc=1
+		sudo -n setfacl -R -m "u:${isolation_user}:---" "${isolated_workspace}" || cleanup_rc=1
+		sudo -n find "${isolated_workspace}" -type d -exec setfacl -m "d:u:${isolation_user}:---" {} + || cleanup_rc=1
 	fi
 	model_provider_broker_stop || cleanup_rc=1
 	unset MODEL_PROVIDER_BROKER_DEFER_ACCESS_RESTORE
