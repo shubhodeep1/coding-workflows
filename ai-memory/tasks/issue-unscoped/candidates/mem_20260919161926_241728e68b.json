@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/auto_release_stable.sh:line ~140 active_count filter, line ~145 promote_active_count filter | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `AUTO_RELEASE_STABLE_BRANCH` is passed directly into the jq filters without validating that it is a non-empty branch name, so a SHA or empty value can silently miss blocking runs or fail to detect real blockers.\n  WHY: The script defaults the variable to `stable` but does not reject an explicitly supplied invalid value, potentially opening a release race window.\n- scripts/auto_release_stable.sh:lines 23-24 | confidence=5\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The header comment documents \"2 workflow-runs lists\" per run, but the script performs 3 workflow-runs list calls.\n  WHY: No runtime failure occurs, but the stale comment understates the GitHub API-call cost by one call per tick for operator rate-limit accounting.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/auto_release_stable.sh:line ~140 active_count filter, line ~145 promote_active_count filter | confidence=2\n  PROBLEM: The `--arg branch \"${AUTO_RELEASE_STABLE_BRANCH}\"` and `--arg json` style passes the env var directly into a jq filter. If `AUTO_RELEASE_STABLE_BRANCH` is ever set to a non-branch ref (e.g., a SHA or empty string), the filter would either silently miss all runs (race window opens) or fail to detect real blockers.\n  WHY: The script silently defaults the env var to \"stable\" earlier, but does not reject empty values when the user explicitly sets them.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/auto_release_stable.sh:lines 23-24 | severity=NIT | confidence=5\n  PROBLEM: The header comment documents \"2 workflow-runs lists\" per run, but the script performs 3 workflow-runs list calls.\n  WHY: No runtime failure \u2014 the script behaves correctly. The stale comment misstates the per-run GitHub API-call budget that operators use for rate-limit accounting (\u00a715 hygiene), understating the cost by one API call per tick.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "cf821907e97da3948421be29aaabb5390ef5a4678ca04bc39a954b4bb12e2ba5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4134,
+    "run_id": "35451215839",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35451215839",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919161926_241728e68b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4134,
+    "run_id": "35451215839"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-19T16:19:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
