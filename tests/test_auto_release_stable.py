@@ -138,7 +138,7 @@ def test_tag_lookup_failure_fails_closed() -> None:
 
 
 def test_in_flight_gate_run_skips() -> None:
-	runs = [{"status": "in_progress", "conclusion": None, "head_sha": TIP, "created_at": "2026-09-19T00:00:00Z"}]
+	runs = [{"status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T00:00:00Z"}]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs))
 	assert proc.returncode == 0, proc.stderr
@@ -146,13 +146,31 @@ def test_in_flight_gate_run_skips() -> None:
 	assert not state.get("dispatches")
 
 
+def test_in_flight_gate_only_run_on_main_does_not_block() -> None:
+	runs = [{"status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "main", "created_at": "2026-09-19T00:00:00Z"}]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs))
+	assert proc.returncode == 0, proc.stderr
+	assert "release_in_flight" not in proc.stdout
+	assert len(state["dispatches"]) == 1
+
+
 def test_in_flight_promotion_run_skips() -> None:
-	promote_runs = [{"status": "in_progress", "conclusion": None, "head_sha": TIP, "created_at": "2026-09-19T00:00:00Z"}]
+	promote_runs = [{"event": "workflow_dispatch", "status": "in_progress", "conclusion": None, "head_sha": TIP, "created_at": "2026-09-19T00:00:00Z"}]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, promote_runs=promote_runs))
 	assert proc.returncode == 0, proc.stderr
 	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
 	assert not state.get("dispatches")
+
+
+def test_in_flight_scheduled_promote_cycle_does_not_block() -> None:
+	promote_runs = [{"event": "schedule", "status": "in_progress", "conclusion": None, "head_sha": TIP, "created_at": "2026-09-19T00:00:00Z"}]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, promote_runs=promote_runs))
+	assert proc.returncode == 0, proc.stderr
+	assert "release_in_flight" not in proc.stdout
+	assert len(state["dispatches"]) == 1
 
 
 def test_in_flight_legacy_mark_stable_run_skips() -> None:
