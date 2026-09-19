@@ -47,6 +47,8 @@ if args[:1] == ["api"]:
         respond({"status": state.get("compare_status", "ahead"), "ahead_by": 1, "behind_by": 0})
     if "/actions/workflows/promote-main-to-stable.yml/runs" in path:
         respond({"workflow_runs": state.get("promote_runs", [])})
+    if "/actions/workflows/mark-stable.yml/runs" in path:
+        respond({"workflow_runs": state.get("legacy_runs", [])})
     if "/actions/workflows/" in path and "/runs" in path:
         respond({"workflow_runs": state.get("runs", [])})
     save(); sys.stderr.write("unexpected api path " + path + "\n"); sys.exit(1)
@@ -148,6 +150,15 @@ def test_in_flight_promotion_run_skips() -> None:
 	promote_runs = [{"status": "in_progress", "conclusion": None, "head_sha": TIP, "created_at": "2026-09-19T00:00:00Z"}]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, promote_runs=promote_runs))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("dispatches")
+
+
+def test_in_flight_legacy_mark_stable_run_skips() -> None:
+	legacy_runs = [{"status": "in_progress", "conclusion": None, "head_sha": TIP, "created_at": "2026-09-19T00:00:00Z"}]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, legacy_runs=legacy_runs))
 	assert proc.returncode == 0, proc.stderr
 	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
 	assert not state.get("dispatches")

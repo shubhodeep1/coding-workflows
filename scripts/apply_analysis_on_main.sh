@@ -84,6 +84,10 @@ APPLY_ANALYSIS_DOC_GLOB="${APPLY_ANALYSIS_DOC_GLOB:-analysis/workflow-optimizati
 APPLY_ANALYSIS_REPORT_PATH="${APPLY_ANALYSIS_REPORT_PATH:-analysis/recommendation-processing-report.md}"
 APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE="${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE:-internal-orchestrate.yml}"
 APPLY_ANALYSIS_TRACKING_LABEL="${APPLY_ANALYSIS_TRACKING_LABEL:-ai:comprehensive-test-pending}"
+# Same setting the poller uses for its marker parser: comment authors whose
+# author_association is listed (plus github-actions[bot]) may vouch that a
+# doc was dispatched before. Anyone else's comment is ignored.
+COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
 GITHUB_REF_NAME="${GITHUB_REF_NAME:-main}"
 GITHUB_SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
 GITHUB_SHA="${GITHUB_SHA:-}"
@@ -154,23 +158,58 @@ open_tracking_issue_numbers()
 		| jq -c '[.[] | select(has("pull_request") | not) | .number] | sort'
 }
 
+# trusted_marker_comment_present <issue-number> <marker-line>
+# 0 when the issue carries a comment containing <marker-line> as a whole
+# line, posted by github-actions[bot] or an author whose author_association
+# is in COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS; 1 when only
+# untrusted (or no) comments carry it; 2 when the comments could not be read.
+trusted_marker_comment_present()
+{
+	local issue_number="$1"
+	local marker_line="$2"
+	local found
+	if ! found="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" 2>/dev/null \
+		| jq -r --arg line "${marker_line}" --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
+			($trusted | split(",") | map(ascii_upcase | gsub("^\\s+|\\s+$"; ""))) as $ok
+			| [.[]? | select(((.body // "") | split("\n") | index($line)) != null)
+				| select((.user.login // "") == "github-actions[bot]" or (((.author_association // "") | ascii_upcase) as $a | $ok | index($a)) != null)]
+			| length')"; then
+		return 2
+	fi
+	[[ "${found}" =~ ^[0-9]+$ ]] || return 2
+	[ "${found}" -gt 0 ] && return 0
+	return 1
+}
+
 # doc_dispatched_before <path>
-# 0 when a tracking issue (open or closed) carries this doc's marker, 1 when
-# none does, 2 when the search itself failed.
+# 0 when a tracking issue (open or closed) carries this doc's marker in a
+# comment from a trusted author, 1 when none does, 2 when the lookup failed.
+# The search only finds candidates (it matches any comment body); the
+# author check on each candidate is what makes the answer trustworthy, so a
+# stray comment cannot make the dispatcher skip a doc forever.
 doc_dispatched_before()
 {
 	local doc_path="$1"
-	local query total
-	query="repo:${GITHUB_REPOSITORY} is:issue label:ai:orchestrator-tracking in:comments \"${APPLY_ANALYSIS_SOURCE_DOC_MARKER}: ${doc_path}\""
-	if ! total="$(gh_retry gh api -X GET search/issues -f "q=${query}" -f per_page=1 2>/dev/null | jq -r '.total_count // empty')"; then
+	local marker_line="${APPLY_ANALYSIS_SOURCE_DOC_MARKER}: ${doc_path}"
+	local query numbers issue_number rc
+	query="repo:${GITHUB_REPOSITORY} is:issue label:ai:orchestrator-tracking in:comments \"${marker_line}\""
+	if ! numbers="$(gh_retry gh api -X GET search/issues -f "q=${query}" -f per_page=20 2>/dev/null | jq -r '.items[]?.number | select(. != null)')"; then
 		return 2
 	fi
-	if ! [[ "${total}" =~ ^[0-9]+$ ]]; then
-		return 2
-	fi
-	if [ "${total}" -gt 0 ]; then
-		return 0
-	fi
+	[ -n "${numbers}" ] || return 1
+	while IFS= read -r issue_number; do
+		[[ "${issue_number}" =~ ^[0-9]+$ ]] || continue
+		# No set -e toggling here: the caller runs this under its own
+		# set +e window and re-enabling errexit inside it would abort the
+		# script on the return 1 below.
+		if trusted_marker_comment_present "${issue_number}" "${marker_line}"; then
+			return 0
+		else
+			rc=$?
+		fi
+		[ "${rc}" -eq 2 ] && return 2
+		echo "::warning::Tracking issue #${issue_number} carries the marker for ${doc_path} only in a comment from an untrusted author; ignoring it." >&2
+	done <<< "${numbers}"
 	return 1
 }
 

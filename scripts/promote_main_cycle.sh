@@ -69,6 +69,9 @@ PROMOTE_CYCLE_TRACKING_LABEL="${PROMOTE_CYCLE_TRACKING_LABEL:-ai:comprehensive-t
 APPLY_ANALYSIS_DISPATCHER="${APPLY_ANALYSIS_DISPATCHER:-${SCRIPT_DIR}/apply_analysis_on_main.sh}"
 GITHUB_RUN_ID="${GITHUB_RUN_ID:-0}"
 CYCLE_BASELINE_MARKER="apply-analysis-cycle-baseline-sha"
+# Same setting the poller and the dispatcher use: only marker comments from
+# github-actions[bot] or these author_associations are cycle state.
+COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
 
 for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 	if [ -z "${!required_env:-}" ]; then
@@ -197,22 +200,33 @@ resolve_tag_commit()
 
 # last_cycle_baseline_sha: the baseline SHA recorded by the most recent
 # cycle (any outcome), or empty. Exit 2 when the search failed.
+# The search matches any comment body, so each candidate issue's comments
+# are re-read and only a marker posted by github-actions[bot] or a trusted
+# author_association counts; a stray comment cannot fake a completed cycle.
 last_cycle_baseline_sha()
 {
-	local query issue_number
+	local query numbers issue_number sha
 	query="repo:${GITHUB_REPOSITORY} is:issue label:ai:orchestrator-tracking in:comments \"${CYCLE_BASELINE_MARKER}:\""
-	if ! issue_number="$(gh_retry gh api -X GET search/issues -f "q=${query}" -f sort=created -f order=desc -f per_page=1 2>/dev/null | jq -r '.items[0].number // empty')"; then
+	if ! numbers="$(gh_retry gh api -X GET search/issues -f "q=${query}" -f sort=created -f order=desc -f per_page=10 2>/dev/null | jq -r '.items[]?.number | select(. != null)')"; then
 		return 2
 	fi
-	if [ -z "${issue_number}" ]; then
-		return 0
-	fi
-	local sha
-	if ! sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" \
-		| jq -r --arg m "${CYCLE_BASELINE_MARKER}" '[.[] | .body // "" | capture("(?m)^" + $m + ": (?<sha>[0-9a-f]{40})")? | .sha] | last // empty')"; then
-		return 2
-	fi
-	printf '%s\n' "${sha}"
+	[ -n "${numbers}" ] || return 0
+	while IFS= read -r issue_number; do
+		[[ "${issue_number}" =~ ^[0-9]+$ ]] || continue
+		if ! sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" \
+			| jq -r --arg m "${CYCLE_BASELINE_MARKER}" --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
+				($trusted | split(",") | map(ascii_upcase | gsub("^\\s+|\\s+$"; ""))) as $ok
+				| [.[]? | select((.user.login // "") == "github-actions[bot]" or (((.author_association // "") | ascii_upcase) as $a | $ok | index($a)) != null)
+					| .body // "" | capture("(?m)^" + $m + ": (?<sha>[0-9a-f]{40})")? | .sha] | last // empty')"; then
+			return 2
+		fi
+		if [ -n "${sha}" ]; then
+			printf '%s\n' "${sha}"
+			return 0
+		fi
+		echo "::warning::Tracking issue #${issue_number} matched the cycle-baseline marker only in comments from untrusted authors; ignoring it." >&2
+	done <<< "${numbers}"
+	return 0
 }
 
 # require_code_changes <base_sha> <head_sha> <skip_reason>

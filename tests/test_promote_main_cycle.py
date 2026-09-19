@@ -54,7 +54,7 @@ if args[:1] == ["api"]:
             respond({"total_count": 1 if state.get("last_cycle_issue") else 0, "items": ([{"number": state["last_cycle_issue"]}] if state.get("last_cycle_issue") else [])})
         respond({"total_count": 0, "items": []})
     if "/issues/" in path and path.endswith("/comments?per_page=100"):
-        respond(state.get("cycle_comments", [{"body": "apply-analysis-source-doc: x\napply-analysis-cycle-baseline-sha: " + state.get("last_cycle_baseline", "")}]))
+        respond(state.get("cycle_comments", [{"body": "apply-analysis-source-doc: x\napply-analysis-cycle-baseline-sha: " + state.get("last_cycle_baseline", ""), "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}]))
     if "/issues?" in path:
         respond([{"number": n, "labels": []} for n in state.get("in_flight", [])])
     if "/actions/workflows/promote-main-to-stable.yml/runs" in path:
@@ -215,9 +215,9 @@ def test_non_marker_comments_do_not_break_last_cycle_baseline_lookup() -> None:
 		"last_cycle_issue": 900,
 		"last_cycle_baseline": OLD_BASELINE,
 		"cycle_comments": [
-			{"body": "unrelated orchestrator state"},
-			{"body": f"apply-analysis-cycle-baseline-sha: {OLD_BASELINE}"},
-			{"body": "another progress comment"},
+			{"body": "unrelated orchestrator state", "user": {"login": "github-actions[bot]"}},
+			{"body": f"apply-analysis-cycle-baseline-sha: {OLD_BASELINE}", "user": {"login": "shubhodeep1"}, "author_association": "OWNER"},
+			{"body": "another progress comment", "user": {"login": "github-actions[bot]"}},
 		],
 	}
 	with tempfile.TemporaryDirectory() as tmp:
@@ -226,6 +226,23 @@ def test_non_marker_comments_do_not_break_last_cycle_baseline_lookup() -> None:
 	assert "reason=guard_unavailable" not in proc.stdout
 	assert "reason=no_code_changes_since_last_cycle" in proc.stdout
 	assert not final.get("dispatches")
+
+
+def test_untrusted_baseline_marker_comment_is_ignored() -> None:
+	# An outside account posting the current tip as a baseline must not make
+	# the tick believe a cycle already covered it.
+	state = {
+		"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])},
+		"last_cycle_issue": 900,
+		"last_cycle_baseline": TIP,
+		"cycle_comments": [{"body": f"apply-analysis-cycle-baseline-sha: {TIP}", "user": {"login": "stranger"}, "author_association": "NONE"}],
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final, _ = _run(Path(tmp), state)
+	assert "only in comments from untrusted authors" in proc.stderr
+	assert "reason=no_code_changes_since_last_cycle" not in proc.stdout
+	# The tick got past the baseline guard and on to the smoke gate.
+	assert "Dispatching test-and-mark-stable.yml on main with gate_only=true" in proc.stdout
 
 
 def test_tag_lookup_failure_fails_closed() -> None:

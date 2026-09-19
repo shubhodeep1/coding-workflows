@@ -43,7 +43,12 @@ if args[:1] == ["api"]:
                 total = count
         if state.get("search_fails"):
             save(); sys.stderr.write("search failed\n"); sys.exit(1)
-        respond({"total_count": total, "items": []})
+        respond({"total_count": total, "items": [{"number": 700 + i} for i in range(total)]})
+    if path.startswith("repos/") and "/issues/" in path and path.endswith("/comments?per_page=100"):
+        # Marker comments on a candidate issue. Trusted (bot-authored) unless
+        # the test supplies its own rows.
+        default_body = "\n".join("apply-analysis-source-doc: " + m for m in state.get("search_hits", {}))
+        respond(state.get("issue_comments", [{"body": default_body, "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}]))
     if "/actions/workflows/" in path and "/runs" in path:
         respond({"workflow_runs": state.get("orchestrate_runs", [])})
     if path.startswith("repos/") and "/issues?" in path:
@@ -197,6 +202,22 @@ def test_dispatches_oldest_unprocessed_doc_bound_by_label_and_marker_inputs() ->
 	assert "role=verifying" in final["github_output"]
 
 
+def test_untrusted_marker_comment_does_not_mark_a_doc_as_dispatched() -> None:
+	docs = ["analysis/workflow-optimization-2026-08-30.md", "analysis/workflow-optimization-2026-09-01.md"]
+	state = {
+		"open_tracking": [],
+		"search_hits": {"analysis/workflow-optimization-2026-08-30.md": 1},
+		# The only comment carrying the marker comes from an outside account.
+		"issue_comments": [{"body": "apply-analysis-source-doc: analysis/workflow-optimization-2026-08-30.md", "user": {"login": "stranger"}, "author_association": "NONE"}],
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "only in a comment from an untrusted author" in proc.stderr
+	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
 def test_in_flight_guard_can_exclude_the_completing_proving_issue() -> None:
 	docs = ["analysis/workflow-optimization-2026-08-30.md"]
 	with tempfile.TemporaryDirectory() as tmp:
@@ -329,12 +350,22 @@ def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
 
 
 def test_release_job_is_serialised_and_refuses_a_stale_tip() -> None:
-	gate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8"))
-	release = gate["jobs"]["release"]
-	assert release["concurrency"] == {"group": "stable-release-${{ github.repository }}", "cancel-in-progress": False}
-	tag_step = next(step for step in release["steps"] if step.get("name") == "Tag version and update stable pointer")
-	assert tag_step["env"]["SOURCE_BRANCH"] == "${{ needs.source.outputs.branch }}"
-	run = tag_step["run"]
-	assert 'git ls-remote origin "refs/heads/${SOURCE_BRANCH}"' in run
-	assert "RELEASE_STALE_TIP" in run
-	assert run.index("RELEASE_STALE_TIP") < run.index('git tag -a "$VERSION"')
+	# Every stable-tag writer: the release gate and the legacy manual path.
+	for workflow in ("test-and-mark-stable.yml", "mark-stable.yml"):
+		gate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8"))
+		release = gate["jobs"]["release"]
+		assert release["concurrency"] == {"group": "stable-release-${{ github.repository }}", "cancel-in-progress": False}, workflow
+		checkout = next(step for step in release["steps"] if step.get("name") == "Checkout source branch")
+		assert checkout["with"]["ref"] == "${{ github.sha }}", workflow
+		record = next(step for step in release["steps"] if step.get("name") == "Record the tested commit")
+		assert "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" in record["run"], workflow
+		changelog = next(step for step in release["steps"] if step.get("name") == "Assemble changelog fragments")
+		assert "git rebase" not in changelog["run"], workflow
+		assert "RELEASE_STALE_TIP" in changelog["run"], workflow
+		assert 'git reset --hard "${RELEASE_TESTED_SHA}"' in changelog["run"], workflow
+		tag_step = next(step for step in release["steps"] if step.get("name") == "Tag version and update stable pointer")
+		assert tag_step["env"]["SOURCE_BRANCH"] == "${{ needs.source.outputs.branch }}", workflow
+		run = tag_step["run"]
+		assert 'git ls-remote origin "refs/heads/${SOURCE_BRANCH}"' in run, workflow
+		assert "RELEASE_UNTESTED_HEAD" in run and "RELEASE_STALE_TIP" in run, workflow
+		assert run.index("RELEASE_STALE_TIP") < run.index('git tag -a "$VERSION"'), workflow

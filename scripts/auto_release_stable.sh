@@ -144,6 +144,10 @@ active_count="$(printf '%s' "${runs_json}" | jq -r '[.workflow_runs[]? | select(
 promote_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/promote-main-to-stable.yml/runs?per_page=30")"
 promote_active_count="$(printf '%s' "${promote_runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
 active_count=$((active_count + promote_active_count))
+# The legacy manual release path (mark-stable.yml) also writes refs/tags/stable.
+legacy_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/mark-stable.yml/runs?per_page=30")"
+legacy_active_count="$(printf '%s' "${legacy_runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+active_count=$((active_count + legacy_active_count))
 if [ "${active_count}" -gt 0 ]; then
 	skip_release release_in_flight "active_runs=${active_count}"
 fi
