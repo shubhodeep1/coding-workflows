@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-09-19T11:55:48Z",
+  "issue_number": 4140,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=README.md:74-2298; cited_path=README.md; files_touched=.ai/.workspace_source_manifest.txt, changelog.d/security-pass-line-ownership-engine.md, prompts/_templates/mode-security-audit.txt, prompts/mode-security-audit.txt, scripts/security_audit.sh, tests/test_security_audit_workflow_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 4141,
+  "record_id": "lesson_20260919115548_f11b2a4f52",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "README.md",
+    ".ai/.workspace_source_manifest.txt",
+    "changelog.d/security-pass-line-ownership-engine.md",
+    "prompts/_templates/mode-security-audit.txt",
+    "prompts/mode-security-audit.txt",
+    "scripts/security_audit.sh",
+    "tests/test_security_audit_workflow_contract.py"
+  ]
+}
