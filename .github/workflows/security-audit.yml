@@ -19,8 +19,16 @@ permissions:
   contents: read
   issues: write
 
+# The consumer wrapper (workflow-templates/ai-security-audit.yml) already
+# serialises runs under `security-audit-<repo>`. A called workflow that
+# declares the SAME group as its caller deadlocks: the caller holds the
+# group while this workflow waits for it, and GitHub cancels the run at
+# startup with zero jobs ("Canceling since a deadlock was detected for
+# concurrency group ... between a top level workflow and 'security-audit'").
+# Keep a distinct group so this repo's own scheduled runs stay serialised
+# without contending with a wrapper's group.
 concurrency:
-  group: security-audit-${{ github.repository }}
+  group: security-audit-reusable-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
