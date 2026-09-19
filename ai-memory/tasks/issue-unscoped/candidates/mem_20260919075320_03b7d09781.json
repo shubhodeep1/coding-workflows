@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:14420-14478 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The staged-support latch release sweep selects the last trusted comment containing the staged-support marker and releases `ai:needs-human` without verifying that the current latch was set by the staged-support handler.\n  WHY: After a staged-support latch is manually cleared without a release marker, a later unrelated escalation can re-add `ai:needs-human`, but the stale staged-support marker causes the sweep to remove the unrelated human gate and post `/approved`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:14420-14433, 14434-14478 | severity=MAJOR | confidence=4\n  PROBLEM: The staged-support latch sweep selects the LAST trusted comment in history that matches the staged-support marker, then only checks for release markers after that index. It never verifies the current `ai:needs-human` label was set by the staged-support handler.\n  WHY: On a poll tick, an old staged-support latch comment can cause the sweep to remove an unrelated `ai:needs-human` label and post `/approved` after implementation-failed deferral escalation re-adds the label; the mixed-history case is untested.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh:14420-14451 (latch_idx selection and the already_released skip check inside release_staged_support_needs_human_latches); competing latch writers at 5113-5117, 12953-12965, 15331-15347, 20203-20247 | severity=MAJOR | confidence=4\n  PROBLEM: latch_idx is the index of the LAST trusted comment that carries the staged-support latch marker, but the sweep never verifies that the CURRENT ai:needs-human latch was set by the staged-support handler.\n  WHY: After manual clearing and unrelated re-latching through deferral escalation, stall-judge escalation, or a human re-adding the label, the stale staged-support marker causes the sweep to remove the human gate, add `ai:awaiting-approval`, and post `/approved`; the mixed-history case is untested.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:14420-14451 (latch_idx selection and release decision) | severity=MAJOR | confidence=4\n  PROBLEM: The staged-support latch release sweep selects the LAST trusted comment containing the staged-support marker, then releases the latch when no release marker follows it. It does not verify that the CURRENT `ai:needs-human` label was set by the staged-support handler.\n  WHY: A later unrelated escalation can re-add `ai:needs-human` after the original staged-support latch is cleared, but the stale marker causes the sweep to remove the human gate; the mixed-history case is untested.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "55a614160ab1a23dc8252fa5613fc99ced9c848cbf39b96c071c78d053f2e2d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4133,
+    "run_id": "35427027351",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35427027351",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919075320_03b7d09781",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4133,
+    "run_id": "35427027351"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-19T07:53:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
