@@ -790,6 +790,7 @@ def test_security_audit_filters_findings_and_caps_followups() -> None:
 	assert "ai:security" in followup_create_args
 	assert "high-finding-one" in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "high-finding-two" in "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "- Advisory findings: 0" in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "low-confidence-finding" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "excluded-finding" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "invalid-path" not in "\n".join(final_state.get("issue_comment_bodies", []))
@@ -1482,6 +1483,16 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 		repo_dir, first_sha, second_sha, head_sha = _git_fixture_repo_three_commits(tmp_path)
 		output_path = tmp_path / "findings.json"
 		waived_findings_path = tmp_path / "waived-findings.json"
+		prior_findings_path = tmp_path / "prior-findings.json"
+		prior_findings_path.write_text(
+			json.dumps(
+				[
+					{"finding_id": "waived-exact", "file": "file_b.py", "line": 1},
+					{"finding_id": "missing-prior", "file": "file_c.py", "line": 1},
+				]
+			),
+			encoding="utf-8",
+		)
 		waived_findings_path.write_text(
 			json.dumps(
 				[
@@ -1525,6 +1536,7 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
 				"SECURITY_AUDIT_DIFF_BASE": first_sha,
 				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_PRIOR_FINDINGS": str(prior_findings_path),
 				"SECURITY_AUDIT_WAIVED_FINDINGS": str(waived_findings_path),
 			},
 		)
@@ -1532,6 +1544,7 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
 	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot"]
+	assert payload["verified_fixed_finding_ids"] == ["missing-prior"]
 	assert payload["counts"]["kept"] == 1
 	assert payload["counts"]["suppressed_waived"] == 3
 	assert "waived-findings=3 (line window 40)" in proc.stdout
