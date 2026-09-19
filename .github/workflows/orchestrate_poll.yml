@@ -787,6 +787,17 @@ jobs:
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
         run: bash scripts/orchestrate_poll_process.sh
 
+      - name: Release staged-support latches without active projects
+        if: steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
+          STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
+        run: bash scripts/orchestrate_poll_process.sh
+
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
 

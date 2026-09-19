@@ -13787,7 +13787,7 @@ _fetch_candidate_issue_details_graphql() {
           number
           state
           labels(first: 50) { nodes { name } }
-          comments(last: 100) { nodes { databaseId body createdAt } }
+          comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
             nodes {
               ... on CrossReferencedEvent {
@@ -13841,7 +13841,9 @@ _fetch_candidate_issue_details_graphql() {
             comments: [(.value.comments.nodes // [])[]? | {
               id: .databaseId,
               body: .body,
-              created_at: .createdAt
+              created_at: .createdAt,
+              author_association: (.authorAssociation // ""),
+              user: {login: (.author.login // "")}
             }],
             linked_pr: (
               [
@@ -14604,7 +14606,11 @@ release_staged_support_needs_human_latches() {
   for ((latched_idx=0; latched_idx<latched_count; latched_idx++)); do
     issue_num="$(printf '%s' "${latched_issues}" | jq -r ".[${latched_idx}].number // empty" 2>/dev/null || true)"
     [[ "${issue_num}" =~ ^[0-9]+$ ]] || continue
-    issue_labels_json="$(printf '%s' "${latched_issues}" | jq -c ".[${latched_idx}].labels // [] | map(if type == \"object\" then (.name // \"\") else . end)" 2>/dev/null || echo '[]')"
+    if ! issue_labels_json="$(printf '%s' "${latched_issues}" | jq -c ".[${latched_idx}].labels // [] | map(if type == \"object\" then (.name // \"\") else . end)" 2>/dev/null)" \
+      || ! printf '%s' "${issue_labels_json}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+      echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=labels_unavailable"
+      continue
+    fi
     if printf '%s' "${issue_labels_json}" | jq -e 'index("ai:destructive-blocked") != null or index("ai:scope-blocked") != null' >/dev/null 2>&1; then
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=other_human_gated_latch_present"
       continue
@@ -14686,6 +14692,7 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
       else
         echo "::warning::Could not restore ai:needs-human on #${issue_num} after the /approved comment failed; operator attention is required."
         echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=approval_comment_failed_compensation_failed"
+        tg_notify_issue "${issue_num}" "CRITICAL: staged-support latch release was only partially applied. The /approved comment and ai:needs-human restoration both failed; ai:awaiting-approval remains, but standalone stall recovery will not auto-approve while the staged-support latch marker is unresolved." "CRITICAL"
       fi
       continue
     fi
@@ -14828,6 +14835,30 @@ PY
     ) || _standalone_phase_resolve_rc=$?
     if [ -z "${phase}" ]; then
       echo "::warning::[standalone-stall] could not resolve phase for issue #${issue_num} (read rc=${_standalone_phase_resolve_rc}); skipping this candidate for this cycle." >&2
+      continue
+    fi
+
+    # A failed staged-support release can leave ai:awaiting-approval behind if
+    # both the /approved POST and the compensating label edit fail.  The
+    # original latch comment is the durable record: never let generic stall
+    # recovery auto-approve until a trusted release comment follows it.
+    if [ "${phase}" = "ai:awaiting-approval" ] && printf '%s' "${comments_json}" | jq -e '
+      ([to_entries[]
+        | select(
+            ((.value.user.login // "" | test("\\[bot\\]$")) or
+             ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))) and
+            ((.value.body // "") | (
+              contains("<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->") or
+              startswith("🚨 **Staged-support restore failed; implementation halted.**")))
+          )] | last // null) as $latch
+      | $latch != null
+      and (any(to_entries[];
+        .key > $latch.key and
+        (((.value.user.login // "" | test("\\[bot\\]$")) or
+          ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))) and
+         ((.value.body // "") | contains("<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict")))) | not)
+    ' >/dev/null 2>&1; then
+      echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_release_incomplete phase=${phase} action=none"
       continue
     fi
 
@@ -16466,6 +16497,11 @@ fi
 # Sanitize MAX_VALIDATE_CYCLES
 if ! [[ "${MAX_VALIDATE_CYCLES:-3}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES:-3}" -lt 1 ]; then
   MAX_VALIDATE_CYCLES="3"
+fi
+
+if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then
+  release_staged_support_needs_human_latches
+  exit 0
 fi
 
 # ---------------------------------------------------------------

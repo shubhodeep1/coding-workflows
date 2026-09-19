@@ -123,6 +123,20 @@ def test_security_pass_recovery_log_prefixes_are_registered() -> None:
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
 
 
+def test_staged_support_latch_sweep_runs_without_tracking_issues() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	step_start = wf.index("- name: Release staged-support latches without active projects")
+	step_end = wf.index("- name: Run worktree registry GC", step_start)
+	step = wf[step_start:step_end]
+	assert "steps.find_tracking.outputs.has_work != 'true'" in step
+	assert "github.repository == 'shubhodeep1/coding-workflows'" in step
+	assert 'STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"' in step
+	assert "run: bash scripts/orchestrate_poll_process.sh" in step
+	assert 'if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then' in poller
+	assert "release_staged_support_needs_human_latches\n  exit 0" in poller
+
+
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "worktree_registry.sh" in wf
@@ -143,6 +157,7 @@ def main() -> int:
 	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
 	test_security_pass_dark_launch_env_and_assets_are_wired()
 	test_security_pass_recovery_log_prefixes_are_registered()
+	test_staged_support_latch_sweep_runs_without_tracking_issues()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	return 0
 

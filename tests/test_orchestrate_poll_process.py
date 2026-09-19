@@ -713,6 +713,7 @@ def _run_poller(
 	fail_issue_comment_post_for: list[int] | None = None,
 	fail_issue_get_for: list[int] | None = None,
 	fail_issue_edit_for: list[int] | None = None,
+	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
 	fail_issue_close_for: list[int] | None = None,
 	fail_branch_ref_after: dict[str, int] | None = None,
 	fail_branch_ref_not_found_after: dict[str, int] | None = None,
@@ -800,6 +801,7 @@ def _run_poller(
 	fail_issue_comment_post_for = fail_issue_comment_post_for or []
 	fail_issue_get_for = fail_issue_get_for or []
 	fail_issue_edit_for = fail_issue_edit_for or []
+	fail_issue_edit_on_calls = fail_issue_edit_on_calls or {}
 	fail_issue_close_for = fail_issue_close_for or []
 	fail_branch_ref_after = fail_branch_ref_after or {}
 	fail_branch_ref_not_found_after = fail_branch_ref_not_found_after or {}
@@ -1147,6 +1149,7 @@ def _run_poller(
 			"fail_issue_comment_post_for": [int(x) for x in fail_issue_comment_post_for],
 			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
 			"fail_issue_edit_for": [int(x) for x in fail_issue_edit_for],
+			"fail_issue_edit_on_calls": {str(k): [int(call) for call in calls] for k, calls in fail_issue_edit_on_calls.items()},
 			"fail_issue_close_for": [int(x) for x in fail_issue_close_for],
 			"fail_branch_ref_after": {str(k): int(v) for k, v in fail_branch_ref_after.items()},
 			"fail_branch_ref_not_found_after": {str(k): int(v) for k, v in fail_branch_ref_not_found_after.items()},
@@ -1663,7 +1666,10 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'edit':
 	num = args[2]
-	if int(num) in set(store.get('fail_issue_edit_for', [])):
+	issue_edit_call_counts = store.setdefault('issue_edit_call_counts', {})
+	issue_edit_call_count = int(issue_edit_call_counts.get(num, 0)) + 1
+	issue_edit_call_counts[num] = issue_edit_call_count
+	if int(num) in set(store.get('fail_issue_edit_for', [])) or issue_edit_call_count in set(store.get('fail_issue_edit_on_calls', {}).get(num, [])):
 		save()
 		print('forced issue edit failure', file=sys.stderr)
 		sys.exit(1)
@@ -1816,6 +1822,8 @@ if args[0] == 'api':
 						'databaseId': int(comment.get('id', 0) or 0),
 						'body': str(comment.get('body', '')),
 						'createdAt': '2026-01-01T00:00:00Z',
+						'authorAssociation': str(comment.get('author_association', '')),
+						'author': {'login': str((comment.get('user') or {}).get('login', ''))},
 					})
 				issue_payload['comments'] = {'nodes': comment_nodes}
 			if 'timelineItems(' in query:
@@ -2720,6 +2728,11 @@ for jq_argument in "$@"; do
 	if [ "${MOCK_SECURITY_PASS_AUTO_RESET_STATE_READ_FAIL:-false}" = "true" ] \
 		&& [ "${jq_argument}" = '.security_pass_failed_engine_sha // ""' ]; then
 		exit 1
+	fi
+	if [ "${MOCK_STAGED_SUPPORT_LABEL_EXTRACTION_FAIL:-false}" = "true" ]; then
+		case "${jq_argument}" in
+			*'.labels // [] | map('*) exit 1 ;;
+		esac
 	fi
 	done
 exec "${REAL_JQ_BIN}" "$@"
@@ -4740,6 +4753,7 @@ def _run_latch_release_tick(
 	env_overrides: dict[str, str],
 	issue_events: list[dict] | None = None,
 	fail_issue_comment_post_for: list[int] | None = None,
+	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
 	fail_needs_human_issue_list: bool = False,
 ) -> dict:
 	state = _base_state(status="in_progress")
@@ -4763,6 +4777,7 @@ def _run_latch_release_tick(
 		issue_events={700: list(issue_events)},
 		mock_gh_issue_list_label_filter=True,
 		fail_issue_comment_post_for=fail_issue_comment_post_for,
+		fail_issue_edit_on_calls=fail_issue_edit_on_calls,
 		fail_needs_human_issue_list=fail_needs_human_issue_list,
 		env_overrides=latch_env_overrides,
 	)
@@ -4838,6 +4853,24 @@ def test_staged_support_needs_human_latch_released_once_per_engine() -> None:
 	assert "ai:needs-human" not in relatched_newer_engine["issues"]["700"]["labels"]
 	assert "ai:awaiting-approval" in relatched_newer_engine["issues"]["700"]["labels"]
 	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={newer_engine_sha}" in relatched_newer_engine["stdout"] + relatched_newer_engine["stderr"]
+
+
+def test_staged_support_latch_sweep_only_mode_releases_without_tracking_work() -> None:
+	engine_sha = "c" * 40
+	result = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={
+			"ORCHESTRATE_ENGINE_SHA": engine_sha,
+			"STAGED_SUPPORT_LATCH_SWEEP_ONLY": "true",
+		},
+	)
+
+	assert "ai:needs-human" not in result["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" in result["issues"]["700"]["labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" in combined_log
+	assert "Standalone issue stall recovery" not in combined_log
 
 
 def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
@@ -4993,6 +5026,18 @@ def test_staged_support_latch_release_is_source_only_and_compensates_comment_fai
 	assert "ai:needs-human" in list_failed["issues"]["700"]["labels"]
 	assert "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=issue_list_unavailable" in list_failed["stdout"] + list_failed["stderr"]
 
+	labels_unavailable = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={
+			"ORCHESTRATE_ENGINE_SHA": engine_sha,
+			"MOCK_STAGED_SUPPORT_LABEL_EXTRACTION_FAIL": "true",
+		},
+	)
+	assert "ai:needs-human" in labels_unavailable["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" not in labels_unavailable["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=labels_unavailable" in labels_unavailable["stdout"] + labels_unavailable["stderr"]
+
 	comment_failed = _run_latch_release_tick(
 		issue_labels=["ai:needs-human"],
 		issue_comments=[_staged_support_latch_comment()],
@@ -5005,6 +5050,29 @@ def test_staged_support_latch_release_is_source_only_and_compensates_comment_fai
 	combined_log = comment_failed["stdout"] + comment_failed["stderr"]
 	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=approval_comment_failed_latch_restored" in combined_log
 	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" not in combined_log
+
+	double_failure = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+		fail_issue_comment_post_for=[700],
+		fail_issue_edit_on_calls={700: [2]},
+	)
+	double_failure_labels = double_failure["issues"]["700"]["labels"]
+	assert "ai:needs-human" not in double_failure_labels
+	assert "ai:awaiting-approval" in double_failure_labels
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=approval_comment_failed_compensation_failed" in (
+		double_failure["stdout"] + double_failure["stderr"]
+	)
+
+	half_released = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	half_released_log = half_released["stdout"] + half_released["stderr"]
+	assert "STALL_SKIP issue=700 reason=staged_support_latch_release_incomplete phase=ai:awaiting-approval action=none" in half_released_log
+	assert not any(comment["body"].startswith("/approved") for comment in half_released["issues"]["700"]["comments"])
 
 
 def test_security_pass_cycle_exhaustion_drops_oversized_findings_table_by_bytes() -> None:
