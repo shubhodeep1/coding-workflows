@@ -738,6 +738,13 @@ jobs:
           CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
           MAX_RECOVERY_ATTEMPTS: ${{ vars.MAX_RECOVERY_ATTEMPTS || '3' }}
           JUDGE_REPEAT_FINGERPRINT_MAX: ${{ vars.JUDGE_REPEAT_FINGERPRINT_MAX || '2' }}
+          # Byte budgets for the PR diffs embedded in the wave judge prompt
+          # (per PR, and shared across the whole prompt). codex rejects any
+          # prompt over 1,048,576 characters before the model runs; the
+          # legacy 500-line cap alone let two committed-`dist` refresh PRs
+          # push the prompt to ~1.28 M characters (run 35425771769).
+          JUDGE_PR_DIFF_MAX_BYTES: ${{ vars.JUDGE_PR_DIFF_MAX_BYTES || '65536' }}
+          JUDGE_PR_DIFFS_TOTAL_MAX_BYTES: ${{ vars.JUDGE_PR_DIFFS_TOTAL_MAX_BYTES || '524288' }}
           # Recovery-budget accounting: false (default) charges MAX_RECOVERY_ATTEMPTS
           # only on a repeat of an already-seen judge-failure fingerprint; true
           # restores the legacy every-failed-verdict accounting.
