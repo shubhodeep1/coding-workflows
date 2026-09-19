@@ -18686,9 +18686,33 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         fi
       fi
 
-      # Collect full PR context for the judge
-      PR_DIFF="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
-        -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
+      # Collect full PR context for the judge. Apply the same byte cap as the
+      # wave judge because minified single-line diffs defeat the line cap used
+      # when this prompt is rendered below.
+      _rb_pr_diff_tmp="$(mktemp)"
+      _rb_pr_diff_capped_tmp="$(mktemp)"
+      if gh_retry_to_file "${_rb_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
+        -H 'Accept: application/vnd.github.diff'; then
+        head -n 1000 "${_rb_pr_diff_tmp}" > "${_rb_pr_diff_capped_tmp}" 2>/dev/null || printf '%s' '(diff unavailable)' > "${_rb_pr_diff_capped_tmp}"
+        _rb_pr_diff_bytes="$(wc -c < "${_rb_pr_diff_capped_tmp}" 2>/dev/null | tr -cd '0-9' || true)"
+        [[ "${_rb_pr_diff_bytes}" =~ ^[0-9]+$ ]] || _rb_pr_diff_bytes=0
+        if [ "${_rb_pr_diff_bytes}" -gt "${JUDGE_PR_DIFF_MAX_BYTES}" ]; then
+          if _judge_truncate_pr_diff_file "${_rb_pr_diff_capped_tmp}" "${JUDGE_PR_DIFF_MAX_BYTES}"; then
+            PR_DIFF="[NOTE: PR diff is ${_rb_pr_diff_bytes} bytes after the 1000-line cap; truncated to a prefix within ${JUDGE_PR_DIFF_MAX_BYTES} bytes to fit codex stdin (1 MB cap). Read the PR's files directly for the elided tail if needed.]
+$(cat "${_rb_pr_diff_capped_tmp}")"
+          else
+            echo "::warning::Failed to truncate PR #${RB_PR} diff for review-blocked judge; eliding ${_rb_pr_diff_bytes} bytes instead of embedding an over-budget payload." >&2
+            PR_DIFF="[NOTE: PR diff elided because byte truncation failed; ${_rb_pr_diff_bytes} bytes omitted. Read the PR's files directly if this diff matters to the verdict.]"
+          fi
+        else
+          PR_DIFF="$(cat "${_rb_pr_diff_capped_tmp}")"
+        fi
+      else
+        echo "::warning::Failed to fetch PR #${RB_PR} diff for review-blocked judge; falling back to '(diff unavailable)'." >&2
+        PR_DIFF="(diff unavailable)"
+      fi
+      rm -f "${_rb_pr_diff_tmp}" "${_rb_pr_diff_capped_tmp}"
+      unset _rb_pr_diff_tmp _rb_pr_diff_capped_tmp _rb_pr_diff_bytes
       RB_PRELOADED_META="$(echo "${_rb_pr_json}" | jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo '{}')"
       if type gh_pr_with_all_comments >/dev/null 2>&1; then
         RB_PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
@@ -18950,7 +18974,7 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo
         echo "=== PR #${RB_PR} DIFF ==="
         echo
-        head -1000 <<< "${PR_DIFF}"
+        printf '%s\n' "${PR_DIFF}"
         echo
         echo "=== PR #${RB_PR} COMMENTS (editor summaries, reviewer findings) ==="
         echo
@@ -18997,18 +19021,27 @@ ${FOLLOWUP_BLOCK_REASON}"
 
       # Run the judge
       RB_JUDGE_SUCCESS=false
-      for attempt in 1 2; do
-        echo "  Review-blocked judge attempt ${attempt}/2..."
-        sanitize_codex_prompt_file "${RB_JUDGE_PROMPT_FILE}"
-        cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
-        if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
-          RB_JUDGE_SUCCESS=true
-          break
-        fi
-        if [ "${attempt}" -lt 2 ]; then
-          sleep 10
-        fi
-      done
+      sanitize_codex_prompt_file "${RB_JUDGE_PROMPT_FILE}"
+      RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
+      [[ "${RB_JUDGE_PROMPT_BYTES}" =~ ^[0-9]+$ ]] || RB_JUDGE_PROMPT_BYTES=0
+      RB_JUDGE_PROMPT_CHARS="$(LC_ALL=C.UTF-8 wc -m < "${RB_JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
+      [[ "${RB_JUDGE_PROMPT_CHARS}" =~ ^[0-9]+$ ]] || RB_JUDGE_PROMPT_CHARS="${RB_JUDGE_PROMPT_BYTES}"
+      echo "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (${RB_JUDGE_PROMPT_CHARS} characters; codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES})."
+      if [ "${RB_JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then
+        echo "::error::Review-blocked judge prompt for issue #${rb_issue} exceeds codex's 1048576-character stdin cap; skipping 2 attempts that would fail before the model runs."
+      else
+        for attempt in 1 2; do
+          echo "  Review-blocked judge attempt ${attempt}/2..."
+          cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+          if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
+            RB_JUDGE_SUCCESS=true
+            break
+          fi
+          if [ "${attempt}" -lt 2 ]; then
+            sleep 10
+          fi
+        done
+      fi
 
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
         echo "::warning::Review-blocked judge failed for issue #${rb_issue}"

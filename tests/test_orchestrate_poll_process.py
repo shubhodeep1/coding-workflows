@@ -2176,6 +2176,9 @@ if args[0] == 'api':
 		if pr is None:
 			print('{}')
 			sys.exit(0)
+		if any('application/vnd.github.diff' in arg for arg in args) and 'diff' in pr:
+			print(pr.get('diff', ''), end='')
+			sys.exit(0)
 		if method == 'PATCH':
 			payload = {}
 			if input_file:
@@ -3275,6 +3278,10 @@ sys.exit(proc.returncode)
 		result["stderr"] = proc.stderr
 		judge_prompt_path = runtime_dir / "judge_prompt.txt"
 		result["judge_prompt"] = judge_prompt_path.read_text(encoding="utf-8") if judge_prompt_path.exists() else ""
+		result["rb_judge_prompts"] = {
+			path.stem.removeprefix("rb_judge_prompt_"): path.read_text(encoding="utf-8")
+			for path in runtime_dir.glob("rb_judge_prompt_*.txt")
+		}
 		result["security_audit_capture"] = (
 			json.loads(security_audit_capture.read_text(encoding="utf-8"))
 			if security_audit_capture.exists()
@@ -7906,6 +7913,71 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 		pr.get("headRefName", "").startswith("fix/10-followup-") and pr.get("baseRefName") == "main"
 		for pr in followup_prs
 	)
+
+
+def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	huge_line = "rb-bundle-" + ("x" * 5000)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 77},
+		prs=[{
+			"number": 77,
+			"state": "open",
+			"merged": False,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "ordinary PR body",
+			"diff": huge_line,
+		}],
+		codex_json={
+			"action": "fix",
+			"justification": "apply fixes",
+			"fix_description": "none",
+			"remaining_issues_summary": "none",
+		},
+		env_overrides={"JUDGE_PR_DIFF_MAX_BYTES": "2000"},
+	)
+	prompt = result["rb_judge_prompts"]["10"]
+	assert "[NOTE: PR diff is " in prompt
+	assert "after the 1000-line cap; truncated to a prefix within 2000 bytes" in prompt
+	assert "x" * 2001 not in prompt
+	assert "Review-blocked judge prompt size: " in result["stdout"]
+	assert "JUDGE_PR_DIFF_MAX_BYTES=2000" in result["stdout"]
+
+
+def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_bodies={10: "oversized-review-blocked-body-" + ("x" * 1_048_576)},
+		issue_linked_prs={10: 77},
+		prs=[{
+			"number": 77,
+			"state": "open",
+			"merged": False,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	stdout = result["stdout"]
+	assert "Review-blocked judge prompt for issue #10 exceeds codex's 1048576-character stdin cap; skipping 2 attempts" in stdout
+	assert "Review-blocked judge attempt " not in stdout
+	assert "::warning::Review-blocked judge failed for issue #10" in stdout
 
 
 def test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable():

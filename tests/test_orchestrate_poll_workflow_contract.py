@@ -36,6 +36,9 @@ def test_judge_pr_diff_byte_budgets_are_declared_and_consumed() -> None:
 	assert 'JUDGE_PROMPT_CHARS="$(LC_ALL=C.UTF-8 wc -m' in poller
 	assert "Judge prompt size: ${JUDGE_PROMPT_BYTES} bytes (${JUDGE_PROMPT_CHARS} characters; codex stdin cap: 1048576 characters" in poller
 	assert 'if [ "${JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then' in poller
+	assert "after the 1000-line cap; truncated to a prefix within ${JUDGE_PR_DIFF_MAX_BYTES} bytes" in poller
+	assert "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (${RB_JUDGE_PROMPT_CHARS} characters" in poller
+	assert 'if [ "${RB_JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then' in poller
 
 
 def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
