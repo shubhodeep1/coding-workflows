@@ -96,6 +96,38 @@ def _tree_digest(root: Path) -> str:
 	return hasher.hexdigest()
 
 
+def test_strict_support_import_validates_provenance_before_execution() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-memory-strict-import-") as temp_dir:
+		temp_root = Path(temp_dir)
+		immutable_support_dir = temp_root / "immutable-support"
+		untrusted_checkout_dir = temp_root / "checkout"
+		untrusted_marker_path = temp_root / "untrusted-executed"
+		strict_module_name = "_ai_memory_strict_import_probe"
+		immutable_support_dir.mkdir()
+		untrusted_checkout_dir.mkdir()
+		(immutable_support_dir / f"{strict_module_name}.py").write_text(
+			'SOURCE = "immutable"\n',
+			encoding="utf-8",
+		)
+		(untrusted_checkout_dir / f"{strict_module_name}.py").write_text(
+			f'from pathlib import Path\nPath({str(untrusted_marker_path)!r}).write_text("executed", encoding="utf-8")\nSOURCE = "untrusted"\n',
+			encoding="utf-8",
+		)
+
+		sys.path.insert(0, str(untrusted_checkout_dir))
+		try:
+			with _temporary_env(
+				AI_MEMORY_STRICT_IMMUTABLE_SUPPORT="true",
+				SUPPORT_SCRIPTS_DIR=str(immutable_support_dir),
+			):
+				loaded_module = ai_memory_lib._import_support_module(strict_module_name)
+			assert loaded_module.SOURCE == "immutable"
+			assert not untrusted_marker_path.exists()
+		finally:
+			sys.path.remove(str(untrusted_checkout_dir))
+			sys.modules.pop(strict_module_name, None)
+
+
 @contextlib.contextmanager
 def _stub_ai_memory_cli_branch():
 	with tempfile.TemporaryDirectory(prefix="ai-memory-cli-store-") as store_dir:
