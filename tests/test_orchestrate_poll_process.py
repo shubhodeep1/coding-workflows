@@ -4413,6 +4413,376 @@ def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 	assert result["git_fetch_calls"]["refs/heads/main:refs/remotes/origin/main"] >= 1
 
 
+
+def _security_pass_failed_state_for_auto_reset(failed_engine_sha: str | None) -> dict:
+	"""Terminal ai:security-pass-failed state as an older engine left it."""
+	state = _base_state(status="failed")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "failed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "old-head",
+			"security_pass_last_audited_sha": "old-head",
+			"security_pass_reported_findings": [
+				{"cycle": 3, "finding_id": "SEC-OLD", "file": "scripts/example.py", "line": 1},
+			],
+		}
+	)
+	if failed_engine_sha is not None:
+		state["security_pass_failed_engine_sha"] = failed_engine_sha
+	return state
+
+
+def _run_failed_project_tick(state: dict, env_overrides: dict[str, str], tracking_comments: list | None = None) -> dict:
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:security-pass-failed"],
+		tracking_comments=tracking_comments or [],
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		capture_telegram_calls=True,
+		env_overrides=env_overrides,
+	)
+
+
+def test_security_pass_terminal_failure_records_engine_sha() -> None:
+	"""Exhaustion records the engine commit that parked the project.
+
+	The record is what lets a later engine tell "this engine already failed
+	the project" from "an older engine failed it" (binance-blessings#249 was
+	parked twice by engines with a 3-cycle budget and no exhaustion judge).
+	"""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		env_overrides={
+			"SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED": "false",
+			"ORCHESTRATE_ENGINE_SHA": "A" * 40,
+		},
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_failed_engine_sha"] == "a" * 40
+	assert result["latest_state"]["security_pass_auto_reset_engine_shas"] == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"ORCHESTRATOR_ENGINE_SHA sha={'a' * 40} source=env" in combined_log
+	exhaustion_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ❌ Project security pass exhausted")
+	]
+	assert len(exhaustion_comments) == 1
+	assert "SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE" in exhaustion_comments[0]
+
+
+def test_security_pass_failed_project_auto_resets_once_on_newer_engine() -> None:
+	"""A parked project is reset like /re-security-pass when the engine changes.
+
+	Regression for binance-blessings#249: both exhaustions ran on stable pins
+	without the delta re-audit and the exhaustion judge; the fixed engine
+	reached the consumer hours later and the poller logged "Project already
+	failed, skipping." every tick until a human commented /re-security-pass.
+	"""
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(state, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "in_progress"
+	assert latest_state["security_pass_cycle"] == 0
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_head_sha"] != "old-head"
+	assert latest_state["security_pass_reported_findings"] == []
+	assert latest_state["security_pass_auto_reset_engine_shas"] == ["b" * 40]
+	# The failing engine stays on record so a second failure on the new engine
+	# overwrites it and the same_engine guard holds from then on.
+	assert latest_state["security_pass_failed_engine_sha"] == "a" * 40
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_AUTO_RESET tracking_issue=192 engine_sha={'b' * 40} failed_engine_sha={'a' * 40}" in combined_log
+	# Full restart, exactly like the manual reset: no delta from the failed head.
+	capture = result["security_audit_capture"]
+	assert not capture["diff_since"]
+	assert capture["prior_findings"] is None
+	assert "mode=full reason=no_prior_audit" in combined_log
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	tracking_comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert any(body.startswith(f"<!-- security-pass-auto-reset:{'b' * 40} -->") for body in tracking_comment_bodies)
+	assert not any("re-security-pass-dedup:" in body for body in tracking_comment_bodies)
+	assert any(
+		notification["issue"] == "192"
+		and notification["level"] == "WARNING"
+		and "security pass reset automatically" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
+
+
+def test_security_pass_failed_legacy_state_without_engine_record_auto_resets() -> None:
+	"""State written before the engine record existed counts as a different engine."""
+	state = _security_pass_failed_state_for_auto_reset(None)
+	result = _run_failed_project_tick(state, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "in_progress"
+	assert latest_state["security_pass_auto_reset_engine_shas"] == ["b" * 40]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_AUTO_RESET tracking_issue=192 engine_sha={'b' * 40} failed_engine_sha=unknown" in combined_log
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+
+
+def test_security_pass_failed_project_stays_parked_on_same_engine() -> None:
+	"""The engine that parked the project never re-runs the pass on its own."""
+	state = _security_pass_failed_state_for_auto_reset("b" * 40)
+	result = _run_failed_project_tick(state, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_auto_reset_engine_shas"] == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=192 reason=same_engine engine_sha={'b' * 40}" in combined_log
+	assert "SECURITY_PASS_AUTO_RESET tracking_issue=192" not in combined_log
+	assert "Project already failed, skipping." in combined_log
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert not any("security-pass-auto-reset:" in comment["body"] for comment in result["issues"]["192"]["comments"])
+	assert result["security_audit_capture"] is None
+
+
+def test_security_pass_failed_project_auto_reset_fires_once_per_engine() -> None:
+	"""An engine that already reset the project once does not reset it again."""
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	state["security_pass_auto_reset_engine_shas"] = ["b" * 40]
+	result = _run_failed_project_tick(state, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_auto_reset_engine_shas"] == ["b" * 40]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=192 reason=already_reset_on_engine engine_sha={'b' * 40}" in combined_log
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result["security_audit_capture"] is None
+
+
+def test_security_pass_failed_project_auto_reset_kill_switch_and_unresolved_engine() -> None:
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+
+	disabled = _run_failed_project_tick(
+		state,
+		{"ORCHESTRATE_ENGINE_SHA": "b" * 40, "SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE": "false"},
+	)
+	assert disabled["latest_state"]["status"] == "failed"
+	assert disabled["tracking_labels"] == ["ai:security-pass-failed"]
+	assert "SECURITY_PASS_AUTO_RESET" not in disabled["stdout"] + disabled["stderr"]
+	assert disabled["security_audit_capture"] is None
+
+	# No ORCHESTRATE_ENGINE_SHA and no .codex-workflow-src checkout in the
+	# sandbox: the engine is unknown, so the legacy dead end stays in force
+	# rather than guessing from the consumer's own HEAD.
+	unresolved = _run_failed_project_tick(state, {})
+	assert unresolved["latest_state"]["status"] == "failed"
+	assert unresolved["tracking_labels"] == ["ai:security-pass-failed"]
+	combined_log = unresolved["stdout"] + unresolved["stderr"]
+	assert "ORCHESTRATOR_ENGINE_SHA sha=unknown source=unresolved" in combined_log
+	assert "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=192 reason=engine_unresolved" in combined_log
+	assert unresolved["security_audit_capture"] is None
+
+
+def test_manual_re_security_pass_takes_precedence_over_engine_auto_reset() -> None:
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(
+		state,
+		{"ORCHESTRATE_ENGINE_SHA": "b" * 40},
+		tracking_comments=["/re-security-pass retry after manual remediation"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "in_progress"
+	assert latest_state["security_pass_auto_reset_engine_shas"] == []
+	tracking_comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert any("re-security-pass-dedup:" in body for body in tracking_comment_bodies)
+	assert not any("security-pass-auto-reset:" in body for body in tracking_comment_bodies)
+	assert "SECURITY_PASS_AUTO_RESET tracking_issue=192" not in result["stdout"] + result["stderr"]
+
+
+def _staged_support_latch_comment() -> str:
+	return (
+		"🚨 **Staged-support restore failed; implementation halted.**\n\n"
+		"- Workflow run: https://github.com/owner/repo/actions/runs/35072286584\n\n"
+		"The commit was **not** created and **not** pushed. This issue is confirmed labeled `ai:needs-human`; "
+		"autonomous recovery is paused until a human removes the label. The listed support-ref copies could not "
+		"be safely reconciled with this branch:\n\n```\nscripts/codex_helpers.sh\n```\n\n"
+		"Apply the editor's intended changes against the branch versions, then remove `ai:needs-human` before redispatching.\n"
+	)
+
+
+def _staged_support_release_comment(engine_sha: str) -> str:
+	return (
+		"/approved\n\n"
+		f"<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict engine={engine_sha} -->\n"
+		"_Orchestrator: released the `ai:needs-human` latch that the staged-support restore failure set._"
+	)
+
+
+def _run_latch_release_tick(
+	*,
+	issue_labels: list[str],
+	issue_comments: list[str],
+	env_overrides: dict[str, str],
+) -> dict:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: list(issue_labels)},
+		issue_comments={700: list(issue_comments)},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides=env_overrides,
+	)
+
+
+def test_staged_support_needs_human_latch_released_once_per_engine() -> None:
+	"""Regression for coding-workflows#4113 (project #3965 fix cycle 7).
+
+	implement.yml's staged-support rejection handler latched ai:needs-human
+	and removed ai:implementing in run 35072286584.  PR #4119 removed the
+	cause, but the latch outlived it: the poller skipped the issue and a human
+	/approved was refused with ``reason=wrong_phase`` (run 35349975875).
+	"""
+	engine_sha = "c" * 40
+	first = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	labels = first["issues"]["700"]["labels"]
+	assert "ai:needs-human" not in labels
+	assert "ai:awaiting-approval" in labels
+	assert "ai:orchestrator-managed" in labels
+	release_comments = [
+		comment["body"]
+		for comment in first["issues"]["700"]["comments"]
+		if comment["body"].startswith("/approved")
+	]
+	assert len(release_comments) == 1
+	assert f"<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict engine={engine_sha} -->" in release_comments[0]
+	combined_log = first["stdout"] + first["stderr"]
+	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" in combined_log
+
+	# The same engine never releases the same issue twice: a release marker
+	# after the latch comment (or for this engine anywhere) parks it for a human.
+	second = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=[_staged_support_latch_comment(), _staged_support_release_comment(engine_sha)],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in second["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" not in second["issues"]["700"]["labels"]
+	assert f"STAGED_SUPPORT_LATCH_SKIP issue=700 reason=already_released engine_sha={engine_sha}" in second["stdout"] + second["stderr"]
+	assert not any(
+		comment["body"].startswith("/approved") and engine_sha in comment["body"] and comment["id"] != second["issues"]["700"]["comments"][1]["id"]
+		for comment in second["issues"]["700"]["comments"]
+	)
+
+	relatched_same_engine = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=[
+			_staged_support_latch_comment(),
+			_staged_support_release_comment(engine_sha),
+			_staged_support_latch_comment(),
+		],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in relatched_same_engine["issues"]["700"]["labels"]
+	assert f"STAGED_SUPPORT_LATCH_SKIP issue=700 reason=already_released engine_sha={engine_sha}" in relatched_same_engine["stdout"] + relatched_same_engine["stderr"]
+
+	# A newer engine gets one release of its own for a latch set after the
+	# previous release.
+	newer_engine_sha = "d" * 40
+	relatched_newer_engine = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=[
+			_staged_support_latch_comment(),
+			_staged_support_release_comment(engine_sha),
+			_staged_support_latch_comment(),
+		],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": newer_engine_sha},
+	)
+	assert "ai:needs-human" not in relatched_newer_engine["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" in relatched_newer_engine["issues"]["700"]["labels"]
+	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={newer_engine_sha}" in relatched_newer_engine["stdout"] + relatched_newer_engine["stderr"]
+
+
+def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
+	engine_sha = "c" * 40
+
+	# The marker the handler now writes is matched on its own, without the header.
+	marker_only = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=["<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\nhalted"],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" not in marker_only["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" in marker_only["issues"]["700"]["labels"]
+
+	# Every other ai:needs-human reason stays human-cleared.
+	other_reason = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=["## Post-Codex implementation-failed deferral escalated\n\nEscalating to `ai:needs-human` for manual review."],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in other_reason["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" not in other_reason["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=no_staged_support_latch_comment" in other_reason["stdout"] + other_reason["stderr"]
+	assert not any(comment["body"].startswith("/approved") for comment in other_reason["issues"]["700"]["comments"])
+
+	# A second human-gated latch on the same issue means a human still owns it.
+	scope_latched = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:scope-blocked"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in scope_latched["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=other_human_gated_latch_present" in scope_latched["stdout"] + scope_latched["stderr"]
+
+	# Kill switch and an unresolved engine both leave the latch in place.
+	disabled = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha, "STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED": "false"},
+	)
+	assert "ai:needs-human" in disabled["issues"]["700"]["labels"]
+	assert "Staged-support latch release disabled by STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED=false" in disabled["stdout"] + disabled["stderr"]
+
+	unresolved = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={},
+	)
+	assert "ai:needs-human" in unresolved["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=engine_unresolved" in unresolved["stdout"] + unresolved["stderr"]
+
+
 def test_security_pass_cycle_exhaustion_drops_oversized_findings_table_by_bytes() -> None:
 	"""The exhaustion comment budgets the findings table in bytes, not characters.
 

@@ -1341,6 +1341,72 @@ else
   SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED="false"
 fi
 
+# Engine-aware auto reset of ai:security-pass-failed.  The terminal state used
+# to be a dead end that only a human `/re-security-pass` could leave, even when
+# the reason the project parked was the engine itself: binance-blessings#249
+# exhausted twice (2026-09-08, 2026-09-18) on stable pins 431d537 and 3c2d8ec,
+# engines with a 3-cycle budget, full re-audits with no findings memory, and no
+# exhaustion judge, and the fixed engine reached that consumer hours after the
+# second exhaustion while every tick logged "Project already failed,
+# skipping."  With the switch on, a parked project whose recorded failing
+# engine (`security_pass_failed_engine_sha`) differs from the engine running
+# the tick is reset exactly like `/re-security-pass`, once per engine commit
+# (`security_pass_auto_reset_engine_shas`).  `false` restores the dead end.
+if is_truthy "${SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE:-true}"; then
+  SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE="true"
+else
+  SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE="false"
+fi
+
+# Auto release of the ai:needs-human latch that implement.yml's staged-support
+# rejection handler sets on IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT.  The
+# cause (a 3-way re-base of editor edits onto branch helpers) is gone since
+# `scripts/implement_staged_support_workspace.sh` restores support helpers to
+# the branch version before the editor runs, but the latch outlived the fix:
+# #4113 (project #3965 fix cycle 7) stayed `ai:needs-human` and even a human
+# `/approved` was refused (`reason=wrong_phase`) because the handler had also
+# removed the phase label.  `false` keeps every latch strictly human-cleared.
+if is_truthy "${STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED:-true}"; then
+  STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED="true"
+else
+  STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED="false"
+fi
+
+# resolve_orchestrator_engine_sha
+#
+# Resolve the commit of shubhodeep1/coding-workflows whose scripts this poll
+# tick runs (the "engine") into ORCHESTRATOR_ENGINE_SHA, or leave it empty
+# when it cannot be determined.  Resolution order: ORCHESTRATE_ENGINE_SHA
+# (explicit override; the test harness uses it), then the HEAD of the
+# `.codex-workflow-src` support checkout that orchestrate_poll.yml stages
+# every run from (SCRIPT_REF `stable` in consumer repos, the triggering commit
+# in this repository).  Runs once at startup in the parent shell so the
+# memo survives; callers read ORCHESTRATOR_ENGINE_SHA.  No GitHub API calls.
+# An empty result disables every engine-aware path (they log `reason=engine_unresolved`
+# and keep the legacy behaviour) rather than guessing from the consumer's
+# own HEAD, which would change on every consumer commit.
+ORCHESTRATOR_ENGINE_SHA=""
+resolve_orchestrator_engine_sha() {
+  local candidate source
+  candidate="${ORCHESTRATE_ENGINE_SHA:-}"
+  source="env"
+  if ! [[ "${candidate}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+    candidate=""
+    if [ -d .codex-workflow-src ]; then
+      candidate="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)"
+      source="support_checkout"
+    fi
+  fi
+  if [[ "${candidate}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+    ORCHESTRATOR_ENGINE_SHA="$(printf '%s' "${candidate}" | tr '[:upper:]' '[:lower:]')"
+    echo "ORCHESTRATOR_ENGINE_SHA sha=${ORCHESTRATOR_ENGINE_SHA} source=${source}"
+  else
+    ORCHESTRATOR_ENGINE_SHA=""
+    echo "ORCHESTRATOR_ENGINE_SHA sha=unknown source=unresolved"
+  fi
+}
+resolve_orchestrator_engine_sha
+
 if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
   ALLOW_WORKFLOW_EDITS="true"
 else
@@ -4566,6 +4632,19 @@ ensure_security_pass_state_fields() {
         ))
         | .[-3:]
       else [] end
+    )
+    | .security_pass_failed_engine_sha = (
+      if (.security_pass_failed_engine_sha | type) == "string"
+        and (.security_pass_failed_engine_sha | test("^[0-9a-fA-F]{7,40}$"))
+      then (.security_pass_failed_engine_sha | ascii_downcase) else "" end
+    )
+    | .security_pass_auto_reset_engine_shas = (
+      if (.security_pass_auto_reset_engine_shas | type) == "array" then
+        [.security_pass_auto_reset_engine_shas[]
+          | select(type == "string" and test("^[0-9a-fA-F]{7,40}$"))
+          | ascii_downcase]
+        | .[-20:]
+      else [] end
     )' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
@@ -4723,11 +4802,12 @@ security_pass_terminal_failure() {
       echo "::warning::Remaining security-pass findings table for tracking issue #${TRACKING_NUM} exceeds the comment budget; the exhaustion comment will carry the count only."
     fi
   fi
-  jq --arg head_sha "${integration_head_sha}" '
+  jq --arg head_sha "${integration_head_sha}" --arg engine_sha "${ORCHESTRATOR_ENGINE_SHA}" '
     .status = "failed"
     | .security_pass_status = "failed"
     | .security_pass_head_sha = $head_sha
     | .security_pass_active_fix_issues = []
+    | .security_pass_failed_engine_sha = $engine_sha
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
@@ -4736,7 +4816,7 @@ security_pass_terminal_failure() {
 
 The security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s).
 
-Manual intervention is required. After addressing the findings, comment \`/re-security-pass\` to reset the bounded fix loop. To accept a finding as a known risk instead, comment \`/security-pass-waive <finding_id> [<finding_id> ...]\`; the loop then resets with that finding excluded.${exhausted_findings_table:+
+Manual intervention is required. After addressing the findings, comment \`/re-security-pass\` to reset the bounded fix loop. To accept a finding as a known risk instead, comment \`/security-pass-waive <finding_id> [<finding_id> ...]\`; the loop then resets with that finding excluded. The poller also resets the loop once on its own when a newer workflow engine polls this project (\`SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE\`).${exhausted_findings_table:+
 
 ### Remaining blocking findings (integration head \`${integration_head_sha}\`)
 
@@ -4863,11 +4943,12 @@ security_pass_closed_fix_failure() {
   local issue_number="$1"
 
   echo "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr tracking_issue=${TRACKING_NUM} issue=${issue_number}"
-  jq '
+  jq --arg engine_sha "${ORCHESTRATOR_ENGINE_SHA}" '
     .status = "failed"
     | .security_pass_status = "failed"
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
+    | .security_pass_failed_engine_sha = $engine_sha
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
@@ -4895,11 +4976,12 @@ security_pass_fix_reissue_exhausted() {
     -c "Closing: implementation failed again after ${reissue_count} re-issue(s) (MAX_SECURITY_PASS_FIX_REISSUES=${MAX_SECURITY_PASS_FIX_REISSUES}). The project security pass is now failed; address the findings manually, then comment \`/re-security-pass\` on the tracking issue." 2>/dev/null; then
     echo "::warning::Could not close exhausted security-pass fix issue #${issue_number}; terminalizing the project after removing it from managed-issue reuse."
   fi
-  if jq '
+  if jq --arg engine_sha "${ORCHESTRATOR_ENGINE_SHA}" '
     .status = "failed"
     | .security_pass_status = "failed"
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
+    | .security_pass_failed_engine_sha = $engine_sha
     | del(.security_pass_fix_reissue_count)
     | del(.security_pass_fix_defer)
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
@@ -14247,6 +14329,118 @@ _reconcile_merged_pr_issue() {
   fi
 }
 
+# release_staged_support_needs_human_latches
+#
+# Release the ai:needs-human latch that implement.yml's staged-support
+# rejection handler (scripts/implement_handle_guard_block.sh) sets on
+# IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT, once the engine running this tick
+# no longer produces that conflict.  The handler removes ai:implementing as
+# well, so the issue sits with no phase label: stall recovery skips
+# ai:needs-human by design and implement.yml refuses even a human `/approved`
+# with `reason=wrong_phase` (#4113, run 35349975875).  A human had to remove
+# the label, restore ai:awaiting-approval, and approve again by hand.
+#
+# Scope is deliberately narrow: only latches whose latest latch comment is
+# the staged-support one (marker `<!-- ai:needs-human-latch
+# reason=staged_support_rebase_conflict -->`, or the pre-marker header
+# `🚨 **Staged-support restore failed; implementation halted.**`) are
+# released, and only when the engine carries
+# scripts/implement_staged_support_workspace.sh (the fix, PR #4119).  Every
+# other ai:needs-human reason stays human-cleared.  Each release posts a
+# `<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict
+# engine=<sha> -->` marker; an issue is released at most once per engine and
+# never while a release marker already follows its latest latch comment, so a
+# latch that recurs on the same engine stays parked for a human.  An issue
+# that also carries ai:destructive-blocked or ai:scope-blocked is left alone.
+#
+# API calls (§15): one `gh issue list --label ai:needs-human` per tick; per
+# latched issue one paginated comments read, one label edit, and one comment
+# write.  Consumer repos never set the staged-support ledger, so there the
+# list is normally empty and the sweep costs the single list call.  Every
+# read failure skips that issue for the tick (fail open); a kill switch
+# (STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED=false) and an unresolved engine
+# both skip the sweep entirely.
+release_staged_support_needs_human_latches() {
+  if [ "${STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED}" != "true" ]; then
+    echo "Staged-support latch release disabled by STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED=${STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED}."
+    return 0
+  fi
+
+  echo ""
+  echo "========================================"
+  echo "Staged-support needs-human latch release"
+  echo "========================================"
+
+  if [ -z "${ORCHESTRATOR_ENGINE_SHA}" ]; then
+    echo "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=engine_unresolved"
+    return 0
+  fi
+  if [ ! -f scripts/implement_staged_support_workspace.sh ] \
+    && [ ! -f .codex-workflow-src/scripts/implement_staged_support_workspace.sh ]; then
+    echo "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=engine_lacks_editor_workspace_restore engine_sha=${ORCHESTRATOR_ENGINE_SHA}"
+    return 0
+  fi
+
+  local latched_issues latched_count latched_idx issue_num issue_labels_json
+  local comments_json latch_idx release_marker release_body
+  latched_issues="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label "ai:needs-human" --json number,labels --limit 200 2>/dev/null || echo '[]')"
+  latched_count="$(printf '%s' "${latched_issues}" | jq 'length' 2>/dev/null || echo 0)"
+  [[ "${latched_count}" =~ ^[0-9]+$ ]] || latched_count=0
+  echo "Found ${latched_count} open issue(s) with ai:needs-human."
+  release_marker="<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict engine=${ORCHESTRATOR_ENGINE_SHA} -->"
+
+  for ((latched_idx=0; latched_idx<latched_count; latched_idx++)); do
+    issue_num="$(printf '%s' "${latched_issues}" | jq -r ".[${latched_idx}].number // empty" 2>/dev/null || true)"
+    [[ "${issue_num}" =~ ^[0-9]+$ ]] || continue
+    issue_labels_json="$(printf '%s' "${latched_issues}" | jq -c ".[${latched_idx}].labels // [] | map(if type == \"object\" then (.name // \"\") else . end)" 2>/dev/null || echo '[]')"
+    if printf '%s' "${issue_labels_json}" | jq -e 'index("ai:destructive-blocked") != null or index("ai:scope-blocked") != null' >/dev/null 2>&1; then
+      echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=other_human_gated_latch_present"
+      continue
+    fi
+    if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+      echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=comments_unavailable"
+      continue
+    fi
+    latch_idx="$(printf '%s' "${comments_json}" | jq -r '
+      [to_entries[]
+        | select((.value.body // "") | (
+            contains("<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->")
+            or startswith("🚨 **Staged-support restore failed; implementation halted.**")
+          ))
+        | .key]
+      | last // -1' 2>/dev/null || echo -1)"
+    if ! [[ "${latch_idx}" =~ ^[0-9]+$ ]]; then
+      echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=no_staged_support_latch_comment"
+      continue
+    fi
+    if printf '%s' "${comments_json}" | jq -e --argjson latch_idx "${latch_idx}" --arg marker "${release_marker}" '
+        any(to_entries[];
+          (.key > $latch_idx
+            and ((.value.body // "") | contains("<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict")))
+          or ((.value.body // "") | contains($marker)))
+      ' >/dev/null 2>&1; then
+      echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=already_released engine_sha=${ORCHESTRATOR_ENGINE_SHA}"
+      continue
+    fi
+
+    ensure_label_exists "ai:awaiting-approval"
+    if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+      --remove-label "ai:needs-human" --add-label "ai:awaiting-approval" >/dev/null 2>&1; then
+      echo "::warning::Could not release the ai:needs-human latch on #${issue_num}; leaving it for the next tick."
+      continue
+    fi
+    release_body="/approved
+
+${release_marker}
+_Orchestrator: released the \`ai:needs-human\` latch that the staged-support restore failure set. The workflow engine now running (\`${ORCHESTRATOR_ENGINE_SHA}\`) restores support helpers to the branch version before the editor runs and commits the editor's own edits as plain branch edits, so the re-base conflict that halted this issue no longer occurs. Re-approving automatically so implementation resumes without a human; if it halts again on this engine the latch stays for a human._"
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${release_body}" >/dev/null 2>&1; then
+      echo "::warning::Released the ai:needs-human latch on #${issue_num} but the /approved comment failed; stall recovery re-approves on its ladder."
+    fi
+    echo "STAGED_SUPPORT_LATCH_RELEASED issue=${issue_num} engine_sha=${ORCHESTRATOR_ENGINE_SHA}"
+    tg_notify_issue "${issue_num}" "Released the ai:needs-human latch on issue #${issue_num}: the staged-support re-base conflict that halted it is fixed in workflow engine ${ORCHESTRATOR_ENGINE_SHA}. Re-approved for implementation." "WARNING"
+  done
+}
+
 run_standalone_stall_recovery() {
   if [ "${ENABLE_STANDALONE_STALL_RECOVERY}" != "true" ]; then
     echo "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=${ENABLE_STANDALONE_STALL_RECOVERY}."
@@ -17133,6 +17327,69 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
 
 The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-running the mandatory current-head audit."
       tg_notify "/re-security-pass: project #${TRACKING_NUM} security-pass state reset; re-running the audit." "WARNING"
+      if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
+        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+      fi
+      ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
+      continue
+    fi
+  fi
+
+  # ---------------------------------------------------------------
+  # Engine-aware auto reset from security-pass exhaustion
+  # ---------------------------------------------------------------
+  # Runs only when no /re-security-pass comment claimed the tick above.  A
+  # project parked by an older engine (binance-blessings#249: pins 431d537
+  # and 3c2d8ec, 3-cycle budget, no delta re-audit, no exhaustion judge) is
+  # reset exactly like /re-security-pass, once per engine commit: the engine
+  # that parked it is recorded by every terminal path
+  # (security_pass_failed_engine_sha; a legacy state without the record
+  # counts as a different engine), and every engine that already fired the
+  # reset is remembered in security_pass_auto_reset_engine_shas, so the same
+  # engine failing the project again never loops.
+  if [ "${PROJECT_STATUS}" = "failed" ] && has_label "${TRACKING_LABELS}" "ai:security-pass-failed" \
+    && [ "${SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE}" = "true" ]; then
+    SP_AUTO_RESET_ENGINE_SHA="${ORCHESTRATOR_ENGINE_SHA}"
+    SP_AUTO_RESET_FAILED_ENGINE_SHA="$(jq -r '.security_pass_failed_engine_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+    if [ -z "${SP_AUTO_RESET_ENGINE_SHA}" ]; then
+      echo "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=${TRACKING_NUM} reason=engine_unresolved"
+    elif [ "${SP_AUTO_RESET_ENGINE_SHA}" = "${SP_AUTO_RESET_FAILED_ENGINE_SHA}" ]; then
+      echo "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=${TRACKING_NUM} reason=same_engine engine_sha=${SP_AUTO_RESET_ENGINE_SHA}"
+    elif jq -e --arg engine_sha "${SP_AUTO_RESET_ENGINE_SHA}" '
+        ((.security_pass_auto_reset_engine_shas // []) | index($engine_sha)) != null
+      ' "${STATE_FILE}" >/dev/null 2>&1; then
+      echo "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=${TRACKING_NUM} reason=already_reset_on_engine engine_sha=${SP_AUTO_RESET_ENGINE_SHA}"
+    else
+      echo "SECURITY_PASS_AUTO_RESET tracking_issue=${TRACKING_NUM} engine_sha=${SP_AUTO_RESET_ENGINE_SHA} failed_engine_sha=${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}"
+      # Same full restart as /re-security-pass: the next audit covers the
+      # whole range on the new engine rather than a delta from the failed
+      # head.  The failing engine stays recorded for the comment below and
+      # for the same_engine guard should this engine fail the project too.
+      jq --arg engine_sha "${SP_AUTO_RESET_ENGINE_SHA}" '
+        .status = "security-pass"
+        | .security_pass_cycle = 0
+        | .security_pass_judge_rounds = 0
+        | .security_pass_status = "pending"
+        | .security_pass_active_fix_issues = []
+        | .security_pass_head_sha = ""
+        | .security_pass_last_audited_sha = ""
+        | .security_pass_reported_findings = []
+        | .security_pass_fix_touched_files = []
+        | .security_pass_auto_reset_engine_shas = (
+            (((.security_pass_auto_reset_engine_shas // []) | map(select(. != $engine_sha))) + [$engine_sha]) | .[-20:]
+          )
+        | del(.security_pass_fix_reissue_count)
+        | del(.security_pass_fix_defer)
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      reconcile_tracking_body_after_security_pass_transition
+      post_state_comment || true
+      set_tracking_phase_label "ai:security-pass"
+      post_tracking_comment "<!-- security-pass-auto-reset:${SP_AUTO_RESET_ENGINE_SHA} -->
+
+## 🔁 Project security pass reset (newer workflow engine)
+
+The security pass that parked this project ran on workflow engine \`${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}\`; this poll runs on \`${SP_AUTO_RESET_ENGINE_SHA}\`. The bounded fix loop is reset once for the new engine and the mandatory current-head audit re-runs. Comment \`/re-security-pass\` to reset it again by hand, or set \`SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE=false\` to keep exhausted projects parked."
+      tg_notify "Project #${TRACKING_NUM} security pass reset automatically: workflow engine ${SP_AUTO_RESET_ENGINE_SHA} replaced ${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}; re-running the audit." "WARNING"
       if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
         DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
       fi
@@ -21495,6 +21752,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 done
 
 run_standalone_stall_recovery
+
+release_staged_support_needs_human_latches
 
 close_merged_issues_sweep
 

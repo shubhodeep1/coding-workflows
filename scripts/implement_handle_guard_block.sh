@@ -36,6 +36,10 @@ if [ -n "${SSB_REASON:-}" ]; then
     echo "::warning::Could not verify ai:needs-human on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown."
   fi
   {
+    # Machine-readable latch reason: the orchestrator poller's
+    # release_staged_support_needs_human_latches sweep matches this marker
+    # (and the header line below for comments posted before it existed).
+    echo "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->"
     echo "🚨 **Staged-support restore failed; implementation halted.**"
     echo
     echo "- Workflow run: ${RUN_URL}"
