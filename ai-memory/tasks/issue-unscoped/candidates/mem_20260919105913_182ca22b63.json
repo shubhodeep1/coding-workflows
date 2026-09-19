@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh: review-blocked prompt-size log block around line 19029 (Review-blocked judge prompt size log) | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The inline review-blocked judge path logs byte/char counts but lacks the equivalent 950,000-character early warning used by the wave judge.\n  WHY: A large review-blocked prompt goes directly from no warning to the hard 1 MB skip, while the README says the limit warns above 950,000 characters.\n- scripts/orchestrate_poll_process.sh: _judge_truncate_pr_diff_file around line 232 (head -c fallback branch) | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `head -c` fallback can leave an invalid UTF-8 trailing byte when truncation splits a multibyte character.\n  WHY: The Python path removes trailing continuation bytes, but the fallback does not and the documented later sanitization may not cover the already-moved file.\n- scripts/orchestrate_poll_process.sh: RB prompt assembly around line 18974-18977 (PR diff section in RB prompt) | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The README does not document that the wave judge also applies a 500-line cap before the byte cap.\n  WHY: Without documenting the combined limits, operators may misunderstand how `JUDGE_PR_DIFFS_TOTAL_MAX_BYTES` bounds wave-judge prompt size.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh\n  Location: review-blocked prompt-size log block around line 19029 (Review-blocked judge prompt size log)\n  Issue: The wave judge path emits a `::warning::` above 950,000 characters (line ~20900) so future regressions are visible before they cross the hard 1 MB cap. The new inline review-blocked judge path logs the byte/char counts at line 19029 but has no equivalent 950K early-warning \u2014 it only fires the `::error::` and skips attempts at 1,048,576 characters. The README row for `JUDGE_PR_DIFFS_TOTAL_MAX_BYTES` says \"warns above 950,000 characters\", which currently only matches the wave path; a single huge review-blocked prompt goes from \"no log line\" straight to the hard skip with no operator-visible warning beforehand.\n  Suggested minimal fix: mirror the wave-judge 950,000-character warning (`echo \"::warning::Review-blocked judge prompt for issue #${rb_issue} is ${RB_JUDGE_PROMPT_CHARS} characters ... close to or over codex's 1 MB stdin cap.\"`) immediately after the existing size log, gated by the same `> 950000` check the wave judge uses.\n  Estimated lines changed: 3-5\n  HARDENING_RISK_SCORE: 2\n- scripts/orchestrate_poll_process.sh\n  Location: _judge_truncate_pr_diff_file around line 232 (head -c fallback branch)\n  Issue: The `head -c` fallback path returns 0 unconditionally when the command writes any output, even if `max_bytes` truncated the file mid-multibyte-character and the trailing byte is invalid UTF-8. The function comment says `sanitize_codex_prompt_file` strips an invalid trailing byte later, but `head -c` followed by `mv -f` on an already-1000-line-capped diff that contains multibyte chars would still let a partial code point through. The python3 path explicitly walks back the trailing continuation bytes (lines 224-227); the head -c fallback does not. Today this only matters in the rare \"python3 missing\" case, so it is defense-in-depth rather than a known runtime hit, but the two truncation paths now diverge on UTF-8 safety.\n  Suggested minimal fix: tighten the head -c fallback to call the same python3 walker first and only fall back to raw head -c when python3 is genuinely absent, or document explicitly that the head -c path is allowed to produce invalid UTF-8 because `sanitize_codex_prompt_file` is responsible for cleanup.\n  Estimated lines changed: 2-4\n  HARDENING_RISK_SCORE: 2\n- scripts/orchestrate_poll_process.sh\n  Location: RB prompt assembly around line 18974-18977 (PR diff section in RB prompt)\n  Issue: The inline review-blocked judge prompt now uses `printf '%s\\n' \"${PR_DIFF}\"` (last run diff), removing the previous `head -1000 <<<` line cap. The wave judge still applies `head -n 500` before the byte cap, and the review-blocked path still applies `head -n 1000` before its byte cap, so the byte cap is the binding constraint for both. However, if the project-side JUDGE_PR_DIFF_MAX_BYTES is bumped very high (or set above the prompt's static-context budget) without raising the wave judge's 500-line cap, the prompt can still grow past the 1 MB cap from line count alone \u2014 the README mentions 524288 / 65536 defaults but not the relationship between the byte cap and the wave-only 500-line cap. This is more of an operator-facing note than a defect.\n  Suggested minimal fix: note in the `JUDGE_PR_DIFFS_TOTAL_MAX_BYTES` README row that the wave judge also has a 500-line cap (`head -n 500`) ahead of the byte cap, so a wave judge prompt is bounded by both `min(500_lines, JUDGE_PR_DIFF_MAX_BYTES_per_pr, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES)` in bytes.\n  Estimated lines changed: 1-2 (README only)\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "ef50f1776e8b376177ccaf6b21f839f9ed1c5a573f887d1a3a8638eaef2931b4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4138,
+    "run_id": "35435808798",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35435808798",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919105913_182ca22b63",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4138,
+    "run_id": "35435808798"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-19T10:59:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
