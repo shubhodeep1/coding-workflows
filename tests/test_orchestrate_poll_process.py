@@ -15942,8 +15942,8 @@ def test_branch_rebuild_replay_configures_git_identity():
 def test_worktree_registry_is_wired_around_poller_worktree_lifecycles():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert "worktree_registry_enabled()" in script
-	assert 'bash scripts/worktree_registry.sh register' in script
-	assert 'bash scripts/worktree_registry.sh deregister' in script
+	assert 'bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/worktree_registry.sh" register' in script
+	assert 'bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/worktree_registry.sh" deregister' in script
 	assert 'worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"' in script
 	assert 'worktree_registry_register "$(basename -- "${_ws}")" "${_ws}" "${int_sha}" "pr-${pr_num}" "orchestrate-poll"' in script
 	assert 'worktree_registry_register "$(basename -- "${_wh}")" "${_wh}" "${_tmp_branch}" "pr-${pr_num}" "orchestrate-poll"' in script
@@ -17659,7 +17659,7 @@ def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 		"poller must use the WAVE_GATE_BLOCKED flag to skip dispatch on violation"
 	)
 	# Verifier invocation with --ref against the integration branch.
-	assert "python3 scripts/verify_integration_fingerprints.py" in script
+	assert 'python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py"' in script
 	assert '--ref "${_gate_ref}"' in script, (
 		"wave-dispatch gate must run the verifier in --ref mode against the "
 		"integration branch HEAD (not the cwd working tree)"

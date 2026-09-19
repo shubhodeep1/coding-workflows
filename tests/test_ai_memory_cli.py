@@ -10,6 +10,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -94,6 +95,59 @@ def _tree_digest(root: Path) -> str:
 		hasher.update(path.read_bytes())
 		hasher.update(b"\0")
 	return hasher.hexdigest()
+
+
+def test_strict_support_import_validates_provenance_before_execution() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-memory-strict-import-") as temp_dir:
+		temp_root = Path(temp_dir)
+		immutable_support_dir = temp_root / "immutable-support"
+		untrusted_checkout_dir = temp_root / "checkout"
+		untrusted_marker_path = temp_root / "untrusted-executed"
+		strict_module_name = "_ai_memory_strict_import_probe"
+		immutable_support_dir.mkdir()
+		untrusted_checkout_dir.mkdir()
+		(immutable_support_dir / f"{strict_module_name}.py").write_text(
+			'SOURCE = "immutable"\n',
+			encoding="utf-8",
+		)
+		(untrusted_checkout_dir / f"{strict_module_name}.py").write_text(
+			f'from pathlib import Path\nPath({str(untrusted_marker_path)!r}).write_text("executed", encoding="utf-8")\nSOURCE = "untrusted"\n',
+			encoding="utf-8",
+		)
+
+		sys.path.insert(0, str(untrusted_checkout_dir))
+		try:
+			with _temporary_env(
+				AI_MEMORY_STRICT_IMMUTABLE_SUPPORT="true",
+				SUPPORT_SCRIPTS_DIR=str(immutable_support_dir),
+			):
+				loaded_module = ai_memory_lib._import_support_module(strict_module_name)
+			assert loaded_module.SOURCE == "immutable"
+			assert not untrusted_marker_path.exists()
+		finally:
+			sys.path.remove(str(untrusted_checkout_dir))
+			sys.modules.pop(strict_module_name, None)
+
+	strict_import_environment = os.environ.copy()
+	strict_import_environment.update(
+		AI_MEMORY_STRICT_IMMUTABLE_SUPPORT="true",
+		SUPPORT_SCRIPTS_DIR=str(REPO_ROOT / "scripts"),
+	)
+	strict_import_result = subprocess.run(
+		[
+			sys.executable,
+			"-I",
+			"-B",
+			"-c",
+			"import sys; sys.path.insert(0, sys.argv[1]); import ai_memory_lib",
+			str(REPO_ROOT / "scripts"),
+		],
+		env=strict_import_environment,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert strict_import_result.returncode == 0, strict_import_result.stderr
 
 
 @contextlib.contextmanager

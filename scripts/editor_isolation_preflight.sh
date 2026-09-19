@@ -323,6 +323,23 @@ editor_isolation_verify_process_group_stopped()
 	return 1
 }
 
+# Writer-generic aliases retain the historical editor_* API while allowing
+# implement and repair writers to share the authenticated process-group checks.
+writer_isolation_process_group_has_members()
+{
+	editor_isolation_process_group_has_members "$@"
+}
+
+writer_isolation_signal_process_group()
+{
+	editor_isolation_signal_process_group "$@"
+}
+
+writer_isolation_verify_process_group_stopped()
+{
+	editor_isolation_verify_process_group_stopped "$@"
+}
+
 # Resolve the support bundle root: SUPPORT_ROOT_DIR is exported by
 # stage_workflow_support.sh; fall back to the parent of SUPPORT_SCRIPTS_DIR.
 _editor_isolation_support_root()

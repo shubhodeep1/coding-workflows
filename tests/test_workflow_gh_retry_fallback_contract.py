@@ -14,8 +14,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 COMPREHENSIVE_RELEASE_GH_API_HELPER = REPO_ROOT / "scripts" / "comprehensive_test_and_release_gh_api.sh"
 DISPATCH_WATCH_HELPER = REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"
 SOURCE_LINE = 'source scripts/gh_helpers.sh 2>/dev/null || true'
+STRICT_SOURCE_LINE = 'source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"'
 FALLBACK_LINE = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }'
 SAFE_GH_JQ_LINE = 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {'
+
+
+def test_gh_helpers_strict_mode_forbids_checkout_local_event_fallback() -> None:
+	text = (REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8")
+	strict_index = text.index('GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false')
+	fallback_index = text.index('elif [ -f "scripts/emit_event.sh" ]')
+	assert strict_index < fallback_index
+	assert "gh_helpers.sh resolved outside immutable support directory" in text
+	assert "strict immutable-support mode requires sibling emit_event.sh" in text
+	assert "python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); from ai_memory_lib import make_record_id" in text
+	assert 'PYTHONPATH="${helper_dir}' not in text
 TARGET_STEPS = (
 	(".github/workflows/clarify.yml", "Fetch issue metadata"),
 	(".github/workflows/clarify.yml", "Fetch issue comments"),
@@ -41,6 +53,13 @@ BOOTSTRAPPED_GH_HELPER_WORKFLOWS = (
 	".github/workflows/cancel_on_pr_close.yml",
 	".github/workflows/orchestrate_poll.yml",
 )
+STRICT_IMMUTABLE_GH_HELPER_WORKFLOWS = {
+	".github/workflows/clarify.yml",
+	".github/workflows/orchestrate.yml",
+	".github/workflows/orchestrate_poll.yml",
+	".github/workflows/plan.yml",
+	".github/workflows/orchestrate_clarify_respond.yml",
+}
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -119,7 +138,10 @@ def _step_lines(relative_path: str, step_name: str) -> list[str]:
 def test_targeted_optional_source_blocks_define_local_gh_retry_fallback() -> None:
 	for relative_path, step_name in TARGET_STEPS:
 		lines = _step_lines(relative_path, step_name)
-		source_idx = next((i for i, line in enumerate(lines) if SOURCE_LINE in line), -1)
+		expected_source_line = (
+			STRICT_SOURCE_LINE if relative_path in STRICT_IMMUTABLE_GH_HELPER_WORKFLOWS else SOURCE_LINE
+		)
+		source_idx = next((i for i, line in enumerate(lines) if expected_source_line in line), -1)
 		fallback_idx = next((i for i, line in enumerate(lines) if FALLBACK_LINE in line), -1)
 		call_idx = next(
 			(
@@ -130,7 +152,7 @@ def test_targeted_optional_source_blocks_define_local_gh_retry_fallback() -> Non
 			-1,
 		)
 
-		assert source_idx != -1, f"{relative_path} :: {step_name} must keep optional gh_helpers sourcing"
+		assert source_idx != -1, f"{relative_path} :: {step_name} must source its configured gh_helpers path"
 		assert fallback_idx != -1, f"{relative_path} :: {step_name} must define the gh_retry fallback shim"
 		assert fallback_idx == source_idx + 1, (
 			f"{relative_path} :: {step_name} must place the gh_retry fallback immediately after the optional source"
@@ -153,7 +175,7 @@ def test_safe_fetch_steps_define_canonical_safe_gh_jq_fallback() -> None:
 	for relative_path, step_name in SAFE_FETCH_STEPS:
 		block = _step_block(_workflow_text(relative_path), step_name)
 
-		assert SOURCE_LINE in block
+		assert STRICT_SOURCE_LINE in block
 		assert FALLBACK_LINE in block
 		assert SAFE_GH_JQ_LINE in block
 		assert 'if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then' in block
@@ -183,12 +205,17 @@ def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallbac
 		assert "if [ ! -d .codex-workflow-src ]; then" in text, (
 			f"{relative_path} must fail if the workflow support checkout is unavailable"
 		)
-		assert 'src=".codex-workflow-src/scripts/gh_helpers.sh"' in text, (
-			f"{relative_path} must stage gh_helpers.sh from the workflow support checkout"
-		)
-		assert '::error::Missing required support script gh_helpers.sh' in text, (
-			f"{relative_path} must hard-fail when gh_helpers.sh cannot be staged"
-		)
+		if relative_path == ".github/workflows/orchestrate_poll.yml":
+			assert '"scripts/gh_helpers.sh"' in text
+			assert "immutable-bundle" in text
+			assert 'source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' in text
+		else:
+			assert 'src=".codex-workflow-src/scripts/gh_helpers.sh"' in text, (
+				f"{relative_path} must stage gh_helpers.sh from the workflow support checkout"
+			)
+			assert '::error::Missing required support script gh_helpers.sh' in text, (
+				f"{relative_path} must hard-fail when gh_helpers.sh cannot be staged"
+			)
 
 
 def test_dispatch_watcher_registration_poll_prefers_id_delta_and_uses_created_window_only_as_fallback() -> None:

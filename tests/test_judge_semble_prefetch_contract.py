@@ -256,22 +256,23 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in workspace_block
     assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in workspace_block
 
-    # build_semble_wrapper.sh added once the BM25 wrapper was extracted to a
-    # shared script (semble 0.1.3 lacks index/query CLI). Same optional-asset
-    # loop so consumer wrappers without it still fail-soft.
-    assert "for f in install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do" in stage_block
+    # The poller consumes Semble helpers from immutable support, so all three
+    # assets are part of the required helper closure rather than an optional
+    # checkout-local fallback.
+    required_loop = stage_block.split("_fetched_scripts=()", 1)[1].split("; do", 1)[0]
+    for helper in ("install_semble.sh", "build_semble_wrapper.sh", "semble_helpers.sh"):
+        assert helper in required_loop
     assert '_fetched_scripts+=("${f}")' in stage_block
-    assert "Optional Semble support script ${f} is unavailable" in stage_block
-    assert "legacy path remains active" in stage_block
+    assert "Optional Semble support script ${f} is unavailable" not in stage_block
 
     assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in setup_block
     assert "uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78" in setup_block
 
     assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in install_block
     assert 'echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"' in install_block
-    assert 'if [ ! -f scripts/install_semble.sh ]; then' in install_block
+    assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/install_semble.sh" ]; then' in install_block
     assert 'scripts/install_semble.sh missing from staged workflow support files' in install_block
-    assert 'if ! bash scripts/install_semble.sh; then' in install_block
+    assert 'if ! bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"; then' in install_block
     assert 'SEMBLE_BIN_PATH="$(command -v semble 2>/dev/null || true)"' in install_block
     assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
 
@@ -281,9 +282,9 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     # the shared BM25 wrapper builder owns the index build now and writes
     # SEMBLE_INDEX_AVAILABLE=true itself. Workflow stays fail-soft via its
     # outer `if [ -f scripts/build_semble_wrapper.sh ]` guard.
-    assert 'if [ -f scripts/build_semble_wrapper.sh ]; then' in index_block
+    assert 'if [ -f "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh" ]; then' in index_block
     assert 'SEMBLE_INDEX_PATH="${semble_index_path}" \\' in index_block
-    assert 'bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1' in index_block
+    assert 'bash "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh" > "${RUNTIME_DIR}/semble_index.log" 2>&1' in index_block
     assert '"${semble_bin}" index . --out "${semble_index_path}"' not in index_block
 
     assert workflow.find("- name: setup-uv") < workflow.find("- name: Process each tracking issue")
@@ -301,7 +302,7 @@ def test_live_judge_templates_expose_semble_placeholder() -> None:
 def test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges() -> None:
     text = _read(ORCHESTRATE_POLL_PROCESS)
 
-    assert 'if [ -f "scripts/semble_helpers.sh" ]; then' in text
+    assert 'if [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then' in text
     assert 'SEMBLE_HELPERS_AVAILABLE="false"' in text
     assert 'JUDGE_SEMBLE_MAX_CHUNKS="4"' in text
     assert 'append_judge_semble_query_text()' in text
@@ -321,9 +322,9 @@ def test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges() -> No
     assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"' in text
     assert 'JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${JUDGE_SEMBLE_QUERY_FILE}" "Judge Context")"' in text
     assert "printf '%s\\n' \"${judge_semble_prefetch}\"" in text
-    assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' in text
-    assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in text
-    assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in text
+    assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-stall-recovery.txt"' in text
+    assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"' in text
+    assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge.txt"' in text
     assert 'bash scripts/render_prompt.sh prompts/mode-orchestrate-poll-judge.txt' not in text
 
 

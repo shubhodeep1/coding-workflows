@@ -94,7 +94,7 @@ jobs:
 
           MEMORY_HELPERS_READY=1
           _fetched_scripts=()
-          for f in gh_helpers.sh label_helpers.sh memory_helpers.sh tg_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+          for f in gh_helpers.sh emit_event.sh emit_event.py label_helpers.sh memory_helpers.sh tg_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py memory_injection_patterns.py; do
             support_script=".codex-workflow-src/scripts/${f}"
             if [ ! -s "${support_script}" ]; then
               echo "::error::Missing or empty required support script ${f} in ${wf_source}@${SCRIPT_REF}"
@@ -107,6 +107,17 @@ jobs:
             fi
             _fetched_scripts+=("${f}")
           done
+          issue_status_immutable_support_manifest="${RUNNER_TEMP}/issue-status-immutable-support-manifest.json"
+          issue_status_immutable_support_root="${RUNNER_TEMP}/issue-status-immutable-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s\n' "${_fetched_scripts[@]}" | jq -Rsc '
+            split("\n") | map(select(length > 0) | "scripts/" + .)
+            | {required_scripts: ., executable_files: .}
+          ' > "${issue_status_immutable_support_manifest}"
+          WORKFLOW_SUPPORT_REF="${SCRIPT_REF}" bash ".codex-workflow-src/scripts/stage_workflow_support.sh" immutable-bundle \
+            --manifest "${issue_status_immutable_support_manifest}" \
+            --source-root ".codex-workflow-src" \
+            --destination-root "${issue_status_immutable_support_root}"
+          echo "PYTHONPATH=${issue_status_immutable_support_root}/scripts" >> "$GITHUB_ENV"
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -154,7 +165,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body || '' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           TRACKING_ISSUES=""
@@ -282,7 +293,7 @@ jobs:
             echo "::error::Missing required support script scripts/label_helpers.sh" >&2
             exit 1
           fi
-          source scripts/label_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
           if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
             set_issue_phase_label_resilient() {
               local issue_number="$1"
@@ -476,7 +487,7 @@ jobs:
             FINAL_STATE="closed"
           fi
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_ensure_branch
 
           while IFS= read -r issue_number; do
@@ -521,8 +532,8 @@ jobs:
             echo "::error::Trusted issue-status Telegram support is unavailable at ${SCRIPT_REF:-unknown}."
             exit 1
           fi
-          source scripts/gh_helpers.sh
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           if ! declare -F tg_send_msg >/dev/null 2>&1; then
             echo "::error::tg_send_msg is missing from trusted Telegram support at ${SCRIPT_REF:-unknown}."
             exit 1
@@ -593,7 +604,7 @@ jobs:
             exit 1
           fi
           export GITHUB_REPOSITORY="${REPOSITORY}"
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           if ! declare -F tg_cleanup_msgs >/dev/null 2>&1; then
             echo "::error::tg_cleanup_msgs is missing from trusted Telegram support at ${SCRIPT_REF:-unknown}."
             exit 1

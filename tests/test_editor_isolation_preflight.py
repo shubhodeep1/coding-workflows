@@ -49,6 +49,16 @@ HELPER = REPO_ROOT / "scripts" / "editor_isolation_preflight.sh"
 STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 EDITOR_SCRIPT = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 REVIEWERS_SCRIPT = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+
+
+def test_writer_generic_process_group_aliases_preserve_editor_contract() -> None:
+	text = HELPER.read_text(encoding="utf-8")
+	assert "writer_isolation_process_group_has_members()" in text
+	assert 'editor_isolation_process_group_has_members "$@"' in text
+	assert "writer_isolation_signal_process_group()" in text
+	assert 'editor_isolation_signal_process_group "$@"' in text
+	assert "writer_isolation_verify_process_group_stopped()" in text
+	assert 'editor_isolation_verify_process_group_stopped "$@"' in text
 ISOLATION_USER = "nobody"
 
 

@@ -307,17 +307,27 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	assert "GH_PAT:" not in resolver_step
 	implement_workflow = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
 	assert "model_provider_broker_prepare_codex_writer" in implement_workflow
-	assert "model_provider_broker_exec_sanitized bash scripts/codex_thread_reuse.sh direct-run" in implement_workflow
+	assert "model_provider_broker_prepare_isolated_writer nobody" in implement_workflow
+	assert 'CODEX_THREAD_REUSE_REAL_CODEX="${IMPLEMENT_ISOLATED_CODEX_LAUNCHER}"' in implement_workflow
+	assert '--process-group-file "${implement_process_group_file}"' in implement_workflow
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/codex_thread_reuse.sh" direct-run' in implement_workflow
+	assert "model_provider_broker_finish_isolated_writer && model_provider_broker_stop" not in implement_workflow
+	assert "writer_isolation_verify_process_group_stopped" in implement_workflow
 	assert "model_provider_broker_exec_unprivileged nobody codex" in implement_workflow
 	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in implement_workflow
 	assert "SCRIPT_REF=stable" not in implement_workflow
 	assert ".codex-workflow-src-main" not in implement_workflow
+	assert 'model_catalog_path: "scripts/codex_model_catalog.json"' in implement_workflow
+	assert 'source "${duplicate_notice_immutable_support_root}/scripts/tg_helpers.sh"' in implement_workflow
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"' not in implement_workflow.split("- name: Telegram duplicate PR notification", 1)[1].split("- name: Exit when existing PR is found", 1)[0]
 	validate_workflow = (REPO_ROOT / ".github/workflows/validate.yml").read_text(encoding="utf-8")
 	validate_process = (REPO_ROOT / "scripts/validate_process.sh").read_text(encoding="utf-8")
 	assert "WORKFLOW_SUPPORT_REF=\"${helper_ref}\"" in validate_workflow
 	assert '"scripts/model_provider_broker.py"' in validate_workflow
-	assert "model_provider_broker_prepare_codex_writer" in validate_process
-	assert "model_provider_broker_exec_sanitized" in validate_process
+	assert "model_provider_broker_prepare_codex_readonly nobody" in validate_process
+	assert 'CODEX_THREAD_REUSE_REAL_CODEX="${VALIDATE_ISOLATED_CODEX_LAUNCHER}"' in validate_process
+	assert 'validate_codex_argv=(bash "${CODEX_THREAD_REUSE_HELPER}" direct-run)' in validate_process
+	assert "--sandbox danger-full-access" not in validate_process
 	poller_workflow = (REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
 	poller_process = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	assert 'MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${WORKFLOW_EDITOR_MODEL:+,${WORKFLOW_EDITOR_MODEL}}" model_provider_broker_start' in poller_workflow
@@ -1118,6 +1128,42 @@ def test_broker_records_policy_rejections_to_file_and_stderr(tmp_path: Path) -> 
 		'MODEL_PROVIDER_BROKER_REJECT status=401 path=/api/v1/responses message="invalid broker token"',
 		'MODEL_PROVIDER_BROKER_REJECT status=404 path=/api/v1/responses message="path not allowed"',
 	]
+
+
+def test_isolated_writer_environment_omits_runner_commands_and_credentials() -> None:
+	helper_text = (REPO_ROOT / "scripts" / "codex_helpers.sh").read_text(encoding="utf-8")
+	prepare_block = helper_text.split("model_provider_broker_prepare_isolated_writer()", 1)[1].split(
+		"model_provider_broker_exec_isolated_writer()", 1
+	)[0]
+	exec_block = helper_text.split("model_provider_broker_unprivileged_argv_into()", 1)[1].split(
+		"model_provider_broker_exec_unprivileged()", 1
+	)[0]
+	assert "isolated writer requires a dedicated UID" in prepare_block
+	assert "GITHUB_ENV" in prepare_block
+	assert "GITHUB_WORKSPACE" in prepare_block
+	assert "SUPPORT_SCRIPTS_DIR" in prepare_block
+	for forbidden_name in (
+		"BASH_ENV=",
+		"GITHUB_ENV=",
+		"GITHUB_OUTPUT=",
+		"GH_TOKEN=",
+		"GH_PAT=",
+		"TG_BOT_SECRET=",
+		"ORCHESTRATOR_STATE_AUTH_KEYRING=",
+	):
+		assert forbidden_name not in exec_block
+	assert 'OPENROUTER_API_KEY="${MODEL_PROVIDER_BROKER_TOKEN}"' in exec_block
+	assert "writer_isolation_verify_process_group_stopped" in helper_text
+	assert 'MODEL_PROVIDER_BROKER_DEFER_ACCESS_RESTORE="true"' in helper_text
+	finish_block = helper_text.split("model_provider_broker_finish_isolated_writer()", 1)[1].split(
+		"model_provider_broker_exec_sanitized()", 1
+	)[0]
+	verify_index = finish_block.index("writer_isolation_verify_process_group_stopped")
+	reclaim_index = finish_block.index('sudo -n chown -R "${runner_uid_gid}" "${isolated_workspace}"')
+	stop_index = finish_block.index("model_provider_broker_stop")
+	assert verify_index < reclaim_index < stop_index
+	assert 'setfacl -R -m "u:${isolation_user}:---" "${isolated_workspace}"' in finish_block
+	assert 'setfacl -m "d:u:${isolation_user}:---"' in finish_block
 
 
 def test_broker_rejections_file_is_optional(tmp_path: Path) -> None:
