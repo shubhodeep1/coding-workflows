@@ -2613,7 +2613,99 @@ print(m.group(1) if m else "")
         fi
       fi
 
-      FULL_NEW_BODY="${NEW_ISSUE_BODY}
+      # Spot-fix allowlist: union the judge's cited files with the files the
+      # closed PR already changed.  implement.yml enforces `files_touched`
+      # as a hard commit allowlist, and a reissue that "continues from the
+      # closed PR head" legitimately re-touches everything that PR touched
+      # (contracts, README, changelog fragment, tests).  binance-blessings#294
+      # (reissue of #292 / PR #293) listed only the two cited .py files while
+      # its own body ordered updates to three db/contracts/*.yml files, the
+      # README and the changelog fragment; the scope guard rejected nine
+      # staged paths and latched ai:scope-blocked for a human.  PR files that
+      # no longer exist at the closed head (deleted by the PR) or fail the
+      # path validator are skipped, never a reason to fall back to redo.
+      # Fail-open: a failed file listing keeps the judge's files only.  One
+      # paginated `pulls/<n>/files` call (§15), spot-fix only.
+      if [ "${RB_EFFECTIVE_REISSUE_MODE}" = "spot-fix" ] && [ -n "${RB_BASELINE_BRANCH}" ] && [ "${#RB_REISSUE_FILES[@]}" -gt 0 ]; then
+        RB_PR_FILES_JUDGE_COUNT="${#RB_REISSUE_FILES[@]}"
+        RB_PR_FILES_ADDED=0
+        RB_PR_FILES_SKIPPED=0
+        if RB_PR_CHANGED_FILES_JSON="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" 2>/dev/null)" \
+          && RB_PR_CHANGED_FILES="$(printf '%s\n' "${RB_PR_CHANGED_FILES_JSON}" | jq -r '.[]? | .filename? | select(type == "string" and length > 0)' 2>/dev/null)"; then
+          declare -A RB_PR_FILE_SEEN=()
+          for RB_FILE in "${RB_REISSUE_FILES[@]}"; do
+            RB_PR_FILE_SEEN["${RB_FILE}"]="1"
+          done
+          while IFS= read -r RB_PR_FILE; do
+            [ -n "${RB_PR_FILE}" ] || continue
+            [ -z "${RB_PR_FILE_SEEN["${RB_PR_FILE}"]+x}" ] || continue
+            RB_PR_FILE_SEEN["${RB_PR_FILE}"]="1"
+            if ! _rb_valid_repo_relative_path "${RB_PR_FILE}" \
+              || ! git ls-tree -r --name-only "${RB_HEAD_SHA}" -- "${RB_PR_FILE}" 2>/dev/null | grep -Fx -- "${RB_PR_FILE}" >/dev/null 2>&1; then
+              RB_PR_FILES_SKIPPED=$((RB_PR_FILES_SKIPPED + 1))
+              continue
+            fi
+            RB_REISSUE_FILES+=("${RB_PR_FILE}")
+            RB_PR_FILES_ADDED=$((RB_PR_FILES_ADDED + 1))
+          done <<< "${RB_PR_CHANGED_FILES}"
+          unset RB_PR_FILE_SEEN
+          echo "REISSUE_FILES_TOUCHED_UNION pr=${PR_NUMBER} judge_files=${RB_PR_FILES_JUDGE_COUNT} pr_files_added=${RB_PR_FILES_ADDED} pr_files_skipped=${RB_PR_FILES_SKIPPED} total=${#RB_REISSUE_FILES[@]}"
+        else
+          echo "::warning::Could not list the changed files of PR #${PR_NUMBER}; the spot-fix files_touched allowlist carries only the judge's cited files."
+        fi
+      fi
+
+      # Carry the parent issue's orchestrator metadata into the reissue.  The
+      # poller's security-pass successor adoption
+      # (resolve_security_pass_fix_successor) matches the replacement on the
+      # exact `- Tracking issue: #<N>` and `- Local ID: \`<id>\`` lines, and
+      # plan.yml / implement.yml resolve the integration branch from
+      # `- Integration branch:`.  A reissue without them is invisible to the
+      # orchestrator: binance-blessings#249 was terminalized as
+      # `fix_issue_closed_without_merged_pr` at 13:42Z on 2026-09-19, three
+      # minutes after this judge reissued #292 as #294, and #294 itself was
+      # planned against main instead of orchestrator/project-249.  Source
+      # order matches the follow-up path above: the parent's own metadata
+      # block first, then the PR base when it is an orchestrator integration
+      # branch.  The block goes BEFORE the review-blocked footer because
+      # implement.yml's baseline resolver requires that footer to run to the
+      # end of the body.
+      RB_REISSUE_ORCH_METADATA_LINES=""
+      if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
+        RB_REISSUE_ORCH_METADATA_LINES="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+import re, sys
+body = sys.stdin.read()
+lines = body.splitlines()
+start = next((i for i, line in enumerate(lines) if re.match(r"^\s*\*\*Orchestrator metadata\*\*", line)), None)
+if start is None:
+    sys.exit(0)
+keep = []
+for line in lines[start + 1:]:
+    if line.strip() == "---":
+        break
+    if re.match(r"^- (Tracking issue|Integration branch|Local ID|Priority|Managed by):", line):
+        keep.append(line.rstrip())
+print("\n".join(keep))
+' 2>/dev/null || echo "")"
+      fi
+      if [ -z "${RB_REISSUE_ORCH_METADATA_LINES}" ] && [ -n "${PR_BASE_REF:-}" ] \
+        && [[ "${PR_BASE_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+        RB_REISSUE_ORCH_METADATA_LINES="- Tracking issue: #${BASH_REMATCH[1]}
+- Integration branch: \`${PR_BASE_REF}\`"
+      fi
+
+      FULL_NEW_BODY="${NEW_ISSUE_BODY}"
+      if [ -n "${RB_REISSUE_ORCH_METADATA_LINES}" ]; then
+        FULL_NEW_BODY="${FULL_NEW_BODY}
+
+---
+**Orchestrator metadata** (do not edit)
+${RB_REISSUE_ORCH_METADATA_LINES}"
+        echo "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=${FIRST_ISSUE:-none} lines=$(printf '%s\n' "${RB_REISSUE_ORCH_METADATA_LINES}" | grep -c .)"
+      else
+        echo "REISSUE_ORCHESTRATOR_METADATA_ABSENT parent=${FIRST_ISSUE:-none} pr_base=${PR_BASE_REF:-none}"
+      fi
+      FULL_NEW_BODY="${FULL_NEW_BODY}
 
 ---
 **Review-blocked reissue metadata**

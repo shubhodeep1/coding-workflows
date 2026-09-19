@@ -421,10 +421,17 @@ def _run_close_and_reissue(
 	pr_view_head_ref_oid: str | None = None,
 	precreate_baseline_branch: bool = False,
 	enable_xpg_echo: bool = False,
+	extra_env: dict[str, str] | None = None,
+	api_responses: dict[str, object] | None = None,
 ) -> dict:
 	"""Run the close_and_reissue branch with FIRST_ISSUE_LABELS_JSON
 	pre-seeded to ``parent_label_set`` and return the captured gh
-	mock state."""
+	mock state.
+
+	``extra_env`` adds or overrides harness environment variables (for
+	example ``FIRST_ISSUE_LINEAGE_BODY`` / ``PR_BASE_REF``);
+	``api_responses`` seeds the mock ``gh api`` substring-matched
+	responses (for example ``{"pulls/42/files": [...]}``)."""
 	branch = _extract_close_and_reissue_branch()
 
 	with tempfile.TemporaryDirectory(prefix="test_review_rb_judge_") as td:
@@ -451,6 +458,8 @@ def _run_close_and_reissue(
 				_git(["git", "branch", expected_baseline_branch], cwd=run_cwd)
 		elif pr_view_head_ref_oid is not None:
 			mock_state["pr_view_head_ref_oid"] = pr_view_head_ref_oid
+		if api_responses:
+			mock_state["api_responses"] = dict(api_responses)
 		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
 
 		labels_file = runtime_dir / "ensure_labels.txt"
@@ -496,6 +505,8 @@ def _run_close_and_reissue(
 			"GITHUB_RUN_ID": "777",
 			"GITHUB_RUN_ATTEMPT": "1",
 		}
+		if extra_env:
+			env.update({str(k): str(v) for k, v in extra_env.items()})
 		run_env = _sanitized_git_env(env)
 
 		proc = subprocess.run(
@@ -692,6 +703,167 @@ def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_c
 	assert state.get("_repo_status_after", "") == "", (
 		"git worktree preservation path must leave the caller checkout clean"
 	)
+
+
+def _parent_orchestrator_metadata_body() -> str:
+	return textwrap.dedent(
+		"""\
+		Refs #249
+
+		The mandatory project security pass found the following blocking issues.
+
+		---
+		**Orchestrator metadata** (do not edit)
+		- Tracking issue: #249
+		- Integration branch: `orchestrator/project-249`
+		- Local ID: `security-pass-fix-cycle-1`
+		- Priority: 1
+		- Managed by: AI Orchestrator
+		"""
+	)
+
+
+def test_close_and_reissue_carries_parent_orchestrator_metadata_before_reissue_footer() -> None:
+	"""Regression for binance-blessings#249 / #294 (2026-09-19).
+
+	The judge reissued security-pass fix issue #292 as #294 with only the
+	review-blocked footer.  resolve_security_pass_fix_successor matches a
+	replacement on the exact ``- Tracking issue: #<N>`` and
+	``- Local ID: `security-pass-fix-cycle-<K>` `` lines, so the poller saw
+	"#292 closed without a merged PR" and parked the project three minutes
+	later, and #294 was planned against main because it carried no
+	``- Integration branch:`` line either.
+	"""
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={"FIRST_ISSUE_LINEAGE_BODY": _parent_orchestrator_metadata_body()},
+	)
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	lines = body.split("\n")
+	for marker in (
+		"- Tracking issue: #249",
+		"- Integration branch: `orchestrator/project-249`",
+		"- Local ID: `security-pass-fix-cycle-1`",
+		"- Priority: 1",
+		"- Managed by: AI Orchestrator",
+	):
+		assert lines.count(marker) == 1, f"expected exactly one {marker!r} line in:\n{body}"
+	# The orchestrator block sits before the review-blocked footer: the
+	# implement.yml baseline resolver requires that footer to run to the
+	# end of the body, and the poller / resolver markers are line matches
+	# that do not care about position.
+	orch_idx = body.index("**Orchestrator metadata** (do not edit)")
+	footer_idx = body.index("**Review-blocked reissue metadata**")
+	assert orch_idx < footer_idx
+	assert body.rstrip().endswith("- Type: review-blocked-reissue")
+	assert "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=41 lines=5" in state["_stdout"]
+
+
+def test_close_and_reissue_derives_orchestrator_metadata_from_pr_base_when_parent_has_none() -> None:
+	derived = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={"FIRST_ISSUE_LINEAGE_BODY": "Plain body without metadata.", "PR_BASE_REF": "orchestrator/project-77"},
+	)
+	body = derived["issue_create_args"][0][derived["issue_create_args"][0].index("--body") + 1]
+	lines = body.split("\n")
+	assert lines.count("- Tracking issue: #77") == 1
+	assert lines.count("- Integration branch: `orchestrator/project-77`") == 1
+	assert "- Local ID:" not in body
+	assert "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=41 lines=2" in derived["_stdout"]
+
+	plain = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={"FIRST_ISSUE_LINEAGE_BODY": "Plain body without metadata.", "PR_BASE_REF": "main"},
+	)
+	plain_body = plain["issue_create_args"][0][plain["issue_create_args"][0].index("--body") + 1]
+	assert "**Orchestrator metadata**" not in plain_body
+	assert "- Tracking issue:" not in plain_body
+	assert "REISSUE_ORCHESTRATOR_METADATA_ABSENT parent=41 pr_base=main" in plain["_stdout"]
+
+
+def test_close_and_reissue_spot_fix_unions_closed_pr_files_into_files_touched() -> None:
+	"""Regression for binance-blessings#294 (run 35446715455).
+
+	The spot-fix allowlist held only the two files the judge cited while
+	the reissue body itself ordered contract, README and changelog updates
+	and the fix added tests; implement.yml's files_touched scope guard
+	rejected nine staged paths and latched ai:scope-blocked for a human.
+	The allowlist now unions the judge's files with the files the closed
+	PR changed, skipping paths that no longer exist at the closed head or
+	fail the path validator.
+	"""
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Approach is correct; only a small follow-up is needed.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+			],
+			"new_issue": {
+				"title": "Reissue: surgical follow-up",
+				"body": "Keep the prior implementation and patch only the grounded gaps.",
+			},
+		},
+		reissue_preserve_baseline_enabled="1",
+		repo_files={
+			"src/app.py": "print('hello')\n",
+			"README.md": "hello\n",
+			"db/contracts/example.yml": "collection: example\n",
+			"tests/test_app.py": "print('test')\n",
+		},
+		api_responses={
+			"pulls/42/files": [
+				{"filename": "src/app.py"},
+				{"filename": "db/contracts/example.yml"},
+				{"filename": "tests/test_app.py"},
+				{"filename": "removed_by_pr.py"},
+				{"filename": "../outside.py"},
+			],
+		},
+	)
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	footer = body[body.index("- files_touched:"):]
+	assert footer.rstrip() == textwrap.dedent(
+		"""\
+		- files_touched:
+		  - src/app.py
+		  - db/contracts/example.yml
+		  - tests/test_app.py"""
+	).rstrip(), footer
+	assert "removed_by_pr.py" not in body
+	assert "outside.py" not in body
+	assert "README.md" not in footer, "files the PR did not change stay out of the allowlist"
+	assert "REISSUE_FILES_TOUCHED_UNION pr=42 judge_files=1 pr_files_added=2 pr_files_skipped=2 total=3" in state["_stdout"]
+	assert any("pulls/42/files" in " ".join(call) for call in state.get("api_calls", [])), (
+		"spot-fix must list the closed PR's files exactly once"
+	)
+
+
+def test_close_and_reissue_spot_fix_keeps_judge_files_when_pr_file_listing_fails() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Approach is correct; only a small follow-up is needed.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+			],
+			"new_issue": {"title": "Reissue: surgical follow-up", "body": "Patch the gap."},
+		},
+		reissue_preserve_baseline_enabled="1",
+		repo_files={"src/app.py": "print('hello')\n", "tests/test_app.py": "print('test')\n"},
+		api_responses={"pulls/42/files": {"message": "boom"}},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	assert body.rstrip().endswith("- files_touched:\n  - src/app.py"), body
+	assert "REISSUE_FILES_TOUCHED_UNION pr=42 judge_files=1 pr_files_added=0 pr_files_skipped=0 total=1" in state["_stdout"]
 
 
 def test_close_and_reissue_spot_fix_lowercases_baseline_branch_sha_prefix() -> None:

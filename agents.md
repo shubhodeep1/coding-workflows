@@ -643,7 +643,17 @@ looks for the live successor by the durable `- Tracking issue: #<N>` and
 ``- Local ID: `security-pass-fix-cycle-<K>` `` body markers that survive
 re-issue, adopts it into `security_pass_active_fix_issues`, and logs
 `SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`. Both markers must match, so
-another project or another cycle is never adopted. An inconclusive lookup
+another project or another cycle is never adopted. The review-blocked judge's
+`close_and_reissue` replacement carries those markers as well:
+`scripts/review_rb_judge.sh` copies the parent's `**Orchestrator metadata**`
+lines (tracking issue, integration branch, local ID, priority, managed-by; the
+PR base supplies tracking issue and integration branch when the parent has
+none) into the reissue ahead of its review-blocked footer
+(`REISSUE_ORCHESTRATOR_METADATA_CARRIED` / `_ABSENT`), and its spot-fix
+`files_touched` allowlist unions the judge's cited files with the closed PR's
+changed files that still exist at its head (`REISSUE_FILES_TOUCHED_UNION`,
+fail-open on a failed `pulls/<n>/files` listing). Incident:
+binance-blessings#249 / #294, 2026-09-19. An inconclusive lookup
 (API or parse failure) retains `security-pass-fixing` for retry rather than
 reading a transient read failure as evidence of a failed fix.
 Setting `ENABLE_SECURITY_PASS=false` remains the immediate operator kill switch.
