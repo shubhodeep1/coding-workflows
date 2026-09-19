@@ -257,8 +257,10 @@ a new value, add it to the appropriate overrides file with a
   `/approved` with a `<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict
   engine=<sha> -->` marker, at most once per issue per engine commit (log keys
   `STAGED_SUPPORT_LATCH_RELEASED`, `STAGED_SUPPORT_LATCH_SKIP`,
-  `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`). A failed `/approved` write restores `ai:needs-human`;
-  consumer repositories and other latch reasons stay human-cleared.
+  `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`). The latest `ai:needs-human` label event must precede
+  the staged-support comment and have the same actor, so clearing that latch and later setting
+  another human gate cannot reuse the stale marker. A failed `/approved` write restores
+  `ai:needs-human`; consumer repositories and other latch reasons stay human-cleared.
 - The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,
   `check_failure_triage.yml`) either never commit from that checkout or run on

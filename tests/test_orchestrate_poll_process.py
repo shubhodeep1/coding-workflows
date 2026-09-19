@@ -4738,18 +4738,29 @@ def _run_latch_release_tick(
 	issue_labels: list[str],
 	issue_comments: list[str | dict],
 	env_overrides: dict[str, str],
+	issue_events: list[dict] | None = None,
 	fail_issue_comment_post_for: list[int] | None = None,
 	fail_needs_human_issue_list: bool = False,
 ) -> dict:
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "merged"
 	latch_env_overrides = {"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows", **env_overrides}
+	if issue_events is None:
+		issue_events = [
+			{
+				"event": "labeled",
+				"label": {"name": "ai:needs-human"},
+				"actor": {"login": "workflow-owner"},
+				"created_at": "2026-01-01T00:00:01Z",
+			},
+		]
 	return _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"], 700: list(issue_labels)},
 		issue_comments={700: list(issue_comments)},
+		issue_events={700: list(issue_events)},
 		mock_gh_issue_list_label_filter=True,
 		fail_issue_comment_post_for=fail_issue_comment_post_for,
 		fail_needs_human_issue_list=fail_needs_human_issue_list,
@@ -4838,11 +4849,22 @@ def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_al
 		issue_comments=[{
 			"body": "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\nhalted",
 			"author_association": "OWNER",
+			"user": {"login": "workflow-owner"},
 		}],
 		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
 	)
 	assert "ai:needs-human" not in marker_only["issues"]["700"]["labels"]
 	assert "ai:awaiting-approval" in marker_only["issues"]["700"]["labels"]
+
+	trusted_marker_spoof = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment("OWNER", "different-maintainer")],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in trusted_marker_spoof["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=current_latch_not_staged_support" in (
+		trusted_marker_spoof["stdout"] + trusted_marker_spoof["stderr"]
+	)
 
 	# Every other ai:needs-human reason stays human-cleared.
 	other_reason = _run_latch_release_tick(
@@ -4854,6 +4876,47 @@ def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_al
 	assert "ai:awaiting-approval" not in other_reason["issues"]["700"]["labels"]
 	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=no_staged_support_latch_comment" in other_reason["stdout"] + other_reason["stderr"]
 	assert not any(comment["body"].startswith("/approved") for comment in other_reason["issues"]["700"]["comments"])
+
+	# A stale staged-support marker cannot authorize release after that label
+	# instance was manually cleared and an unrelated path latched the issue.
+	mixed_history = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=[
+			_staged_support_latch_comment(),
+			{
+				"body": "## Post-Codex implementation-failed deferral escalated\n\nEscalating to `ai:needs-human` for manual review.",
+				"author_association": "OWNER",
+				"user": {"login": "workflow-owner"},
+			},
+		],
+		issue_events=[
+			{
+				"event": "labeled",
+				"label": {"name": "ai:needs-human"},
+				"actor": {"login": "workflow-owner"},
+				"created_at": "2026-01-01T00:00:01Z",
+			},
+			{
+				"event": "unlabeled",
+				"label": {"name": "ai:needs-human"},
+				"actor": {"login": "workflow-owner"},
+				"created_at": "2026-01-01T00:00:03Z",
+			},
+			{
+				"event": "labeled",
+				"label": {"name": "ai:needs-human"},
+				"actor": {"login": "workflow-owner"},
+				"created_at": "2026-01-01T00:00:04Z",
+			},
+		],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in mixed_history["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" not in mixed_history["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=current_latch_not_staged_support" in (
+		mixed_history["stdout"] + mixed_history["stderr"]
+	)
+	assert not any(comment["body"].startswith("/approved") for comment in mixed_history["issues"]["700"]["comments"])
 
 	# A second human-gated latch on the same issue means a human still owns it.
 	scope_latched = _run_latch_release_tick(

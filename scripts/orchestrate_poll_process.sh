@@ -14347,8 +14347,9 @@ _reconcile_merged_pr_issue() {
 # released, only in this source repository, only when the matching comment
 # came from a trusted repository actor or installed bot, and only when the
 # engine carries scripts/implement_staged_support_workspace.sh (the fix,
-# PR #4119).  Every
-# other ai:needs-human reason stays human-cleared.  Each release posts a
+# PR #4119).  The latest ai:needs-human label event must precede the marker
+# and have the same actor, binding the comment to the current latch instance.
+# Every other ai:needs-human reason stays human-cleared.  Each release posts a
 # `<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict
 # engine=<sha> -->` marker; an issue is released at most once per engine and
 # never while a release marker already follows its latest latch comment, so a
@@ -14356,9 +14357,10 @@ _reconcile_merged_pr_issue() {
 # that also carries ai:destructive-blocked or ai:scope-blocked is left alone.
 #
 # API calls (§15): in this source repository, one paginated `issues` REST read
-# per tick; per latched issue one paginated comments read, one label edit, and
-# one comment write.  The poller's existing issue caches do not carry comment
-# authorship or the historical release markers this sweep must verify.  Every
+# per tick; per latched issue one paginated comments read, one paginated events
+# read, one label edit, and one comment write.  The poller's existing issue
+# caches do not carry comment authorship, label-event provenance, or the
+# historical release markers this sweep must verify.  Every
 # read failure skips that issue for the tick (fail open); consumer
 # repositories, a kill switch
 # (STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED=false) and an unresolved engine
@@ -14389,7 +14391,8 @@ release_staged_support_needs_human_latches() {
   fi
 
   local latched_issues latched_count latched_idx issue_num issue_labels_json
-  local comments_json latch_idx release_marker release_body
+  local comments_json latch_record latch_idx latch_created_at latch_actor_login
+  local needs_human_events_json current_needs_human_event release_marker release_body
   if ! latched_issues="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai%3Aneeds-human&per_page=100" \
     | jq -s 'add // [] | map(select(.pull_request == null))' 2>/dev/null)"; then
     echo "::warning::Could not list open ai:needs-human issues for staged-support latch release; leaving all latches unchanged."
@@ -14417,7 +14420,7 @@ release_staged_support_needs_human_latches() {
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=comments_unavailable"
       continue
     fi
-    latch_idx="$(printf '%s' "${comments_json}" | jq -r '
+    latch_record="$(printf '%s' "${comments_json}" | jq -c '
       [to_entries[]
         | select(
             (
@@ -14429,10 +14432,32 @@ release_staged_support_needs_human_latches() {
               or startswith("🚨 **Staged-support restore failed; implementation halted.**")
             ))
           )
-        | .key]
-      | last // -1' 2>/dev/null || echo -1)"
+        | {idx: .key, created_at: (.value.created_at // ""), actor_login: (.value.user.login // "")}]
+      | last // null' 2>/dev/null || echo null)"
+    latch_idx="$(printf '%s' "${latch_record}" | jq -r '.idx // -1' 2>/dev/null || echo -1)"
+    latch_created_at="$(printf '%s' "${latch_record}" | jq -r '.created_at // ""' 2>/dev/null || true)"
+    latch_actor_login="$(printf '%s' "${latch_record}" | jq -r '.actor_login // ""' 2>/dev/null || true)"
     if ! [[ "${latch_idx}" =~ ^[0-9]+$ ]]; then
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=no_staged_support_latch_comment"
+      continue
+    fi
+    if ! needs_human_events_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/events?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+      echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=label_events_unavailable"
+      continue
+    fi
+    current_needs_human_event="$(printf '%s' "${needs_human_events_json}" | jq -c '
+      [.[]
+        | select((.event == "labeled" or .event == "unlabeled") and (.label.name // "") == "ai:needs-human")
+        | {event, created_at: (.created_at // ""), actor_login: (.actor.login // "")}]
+      | sort_by(.created_at)
+      | last // null' 2>/dev/null || echo null)"
+    if ! printf '%s' "${current_needs_human_event}" | jq -e \
+      --arg latch_created_at "${latch_created_at}" --arg latch_actor_login "${latch_actor_login}" '
+        .event == "labeled"
+        and (.created_at != "" and .created_at <= $latch_created_at)
+        and (.actor_login != "" and .actor_login == $latch_actor_login)
+      ' >/dev/null 2>&1; then
+      echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=current_latch_not_staged_support"
       continue
     fi
     if printf '%s' "${comments_json}" | jq -e --argjson latch_idx "${latch_idx}" --arg marker "${release_marker}" '
