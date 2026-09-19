@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md (stable log prefixes section): the `LOG_PREFIX.name=...` machine-readable list at the end of the \"Stable log prefixes (contractual)\" section | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The PR introduces four new contractual log prefixes (`SECURITY_PASS_AUTO_RESET`, `SECURITY_PASS_AUTO_RESET_SKIPPED`, `STAGED_SUPPORT_LATCH_RELEASED`, `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`) but does not register them in the `LOG_PREFIX.name=` list.\n  WHY: Workflow-log-analysis tooling that keys off the contractual prefix list will not classify or report occurrences of the new markers; the reviewer labels this NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- agents.md (stable log prefixes section)\n  Line or code reference: the `LOG_PREFIX.name=...` machine-readable list at the end of the \"Stable log prefixes (contractual)\" section\n  Problem: The PR introduces four new contractual log prefixes (`SECURITY_PASS_AUTO_RESET`, `SECURITY_PASS_AUTO_RESET_SKIPPED`, `STAGED_SUPPORT_LATCH_RELEASED`, `STAGED_SUPPORT_LATCH_RELEASED_SKIPPED`) \u2014 the README/agents.md prose and the new tests treat them as stable grep targets \u2014 but they are not registered in the `LOG_PREFIX.name=` list that the agents.md section declares is what workflow-log-analysis and API-hygiene reporting depend on. The existing `SECURITY_PASS_*` and `STAGED_SUPPORT_LATCH_*` siblings (e.g. `SECURITY_PASS_CLEAN`, `STAGED_SUPPORT_LATCH_RELEASED` peers) are registered there.\n  Why it fails at runtime: workflow-log-analysis tooling that keys off the contractual prefix list will not classify or report occurrences of the new markers, so the new auto-reset / latch-release behavior is invisible to the periodic audit reports that consume this list.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n\n- HARDENING_SUGGESTIONS:\n  File: scripts/orchestrate_poll_process.sh\n  Location: auto-reset state write (lines 17369-17386)\n  Issue: if the `jq` state rewrite fails, the `&&` short-circuits the `mv` but execution continues into `reconcile_tracking_body_after_security_pass_transition`, `set_tracking_phase_label \"ai:security-pass\"`, the reset comment, and `ensure_security_pass_before_completion` with the state file still saying `failed` \u2014 a half-reset where the label and comment claim a reset the state never recorded.\n  Suggested minimal fix: guard the post-reset steps on the jq success, e.g. `if jq ... > \"${STATE_FILE}.tmp\" && mv ...; then <reconcile/label/comment/audit/continue> else echo \"::warning::security-pass auto-reset state write failed; retrying next tick\"; fi` (~4 lines changed).\n  Estimated lines changed: 4\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "45b2dbddb1003b0c945624b86f67fe0f0c923c23cdc9b42fa7227577d41f4cc9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35417723738",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35417723738",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919033842_03e07ddc8f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35417723738"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-19T03:38:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
