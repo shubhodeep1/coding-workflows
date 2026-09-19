@@ -12733,9 +12733,62 @@ def test_judge_prompt_caps_embedded_pr_diffs_by_bytes():
 	assert "Judge context: PR #77 (issue #10) diff truncated from" in stdout
 	assert "Judge context: PR #79 (issue #12) diff elided — JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500 budget exhausted" in stdout
 	assert "Judge prompt size: " in stdout
-	assert "(codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=2000, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)." in stdout
+	assert "characters; codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=2000, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)." in stdout
 	assert "::warning::Judge prompt for #192" not in stdout
 	assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_judge_diff_truncation_failure_is_reported_to_caller():
+	"""The caller must be able to elide a diff when both truncators fail."""
+	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	block_start_index = poller_source_text.index("_judge_truncate_pr_diff_file()\n")
+	block_end_marker = "\n}\n\nextract_judge_json_with_status()"
+	block_end_index = poller_source_text.index(block_end_marker, block_start_index) + 3
+	function_source = poller_source_text[block_start_index:block_end_index]
+	with tempfile.TemporaryDirectory() as td:
+		test_root = Path(td)
+		fake_bin = test_root / "bin"
+		fake_bin.mkdir()
+		_write_exec(fake_bin / "python3", "#!/usr/bin/env bash\nexit 1\n")
+		_write_exec(fake_bin / "head", "#!/usr/bin/env bash\nexit 1\n")
+		diff_path = test_root / "pr.diff"
+		diff_path.write_bytes(b"x" * 100)
+		runner_path = test_root / "run.sh"
+		runner_path.write_text(
+			"#!/usr/bin/env bash\n"
+			f"{function_source}\n"
+			"_judge_truncate_pr_diff_file \"$1\" 10\n"
+			"printf '%s' \"$?\"\n",
+			encoding="utf-8",
+		)
+		proc = subprocess.run(
+			["bash", str(runner_path), str(diff_path)],
+			check=True,
+			capture_output=True,
+			text=True,
+			env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+		)
+		assert proc.stdout == "1"
+		assert diff_path.read_bytes() == b"x" * 100
+	assert 'if _judge_truncate_pr_diff_file "${_pr_diff_capped_tmp}" "${_pr_diff_allowance}"; then' in poller_source_text
+	assert "eliding ${_pr_diff_bytes} bytes instead of embedding an over-budget payload" in poller_source_text
+
+
+def test_judge_prompt_over_character_cap_skips_codex_attempts():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["project_body_snapshot"] = "oversized-project-body-" + ("x" * 1_048_576)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"]},
+	)
+	stdout = result["stdout"]
+	assert "exceeds codex's 1048576-character stdin cap; skipping 2 attempts" in stdout
+	assert "Judge attempt " not in stdout
+	assert "::error::Judge failed for tracking issue #192" in stdout
 
 
 def test_judge_prompt_keeps_small_pr_diffs_intact_under_default_byte_caps():

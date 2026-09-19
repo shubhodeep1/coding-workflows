@@ -202,6 +202,7 @@ worktree_registry_deregister() {
 # RB_JUDGE_PR_DIFF_MAX_BYTES truncation in scripts/review_rb_judge.sh.
 # Falls back to a raw `head -c` prefix when python3 is unavailable
 # (sanitize_codex_prompt_file strips an invalid trailing byte later).
+# Returns non-zero when neither truncation path can safely replace the file.
 # Input: path, positive integer byte cap. Issues no GitHub API calls.
 _judge_truncate_pr_diff_file()
 {
@@ -209,9 +210,9 @@ _judge_truncate_pr_diff_file()
 	local max_bytes="$2"
 	local truncated_tmp
 
-	[ -f "${diff_path}" ] || return 0
-	[[ "${max_bytes}" =~ ^[0-9]+$ ]] || return 0
-	truncated_tmp="$(mktemp)" || return 0
+	[ -f "${diff_path}" ] || return 1
+	[[ "${max_bytes}" =~ ^[1-9][0-9]*$ ]] || return 1
+	truncated_tmp="$(mktemp)" || return 1
 	if PYTHONDONTWRITEBYTECODE=1 python3 - "${diff_path}" "${max_bytes}" > "${truncated_tmp}" 2>/dev/null <<'PY'
 import sys
 
@@ -227,13 +228,12 @@ if cap > 0 and len(data) > cap:
 sys.stdout.buffer.write(data)
 PY
 	then
-		mv -f "${truncated_tmp}" "${diff_path}"
+		mv -f "${truncated_tmp}" "${diff_path}" && return 0
 	elif head -c "${max_bytes}" "${diff_path}" > "${truncated_tmp}" 2>/dev/null; then
-		mv -f "${truncated_tmp}" "${diff_path}"
-	else
-		rm -f "${truncated_tmp}"
+		mv -f "${truncated_tmp}" "${diff_path}" && return 0
 	fi
-	return 0
+	rm -f "${truncated_tmp}"
+	return 1
 }
 
 extract_judge_json_with_status() {
@@ -20683,11 +20683,15 @@ Manual intervention required." >/dev/null
             echo "Judge context: PR #${PR_NUM} (issue #${inum}) diff elided — JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES} budget exhausted (${_pr_diff_bytes} bytes omitted)."
             PR_DIFF="[NOTE: PR diff elided — the shared judge PR-diff budget (JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES} bytes) is exhausted; ${_pr_diff_bytes} bytes omitted. Read the PR's files directly if this diff matters to the verdict.]"
           else
-            _judge_truncate_pr_diff_file "${_pr_diff_capped_tmp}" "${_pr_diff_allowance}"
-            echo "Judge context: PR #${PR_NUM} (issue #${inum}) diff truncated from ${_pr_diff_bytes} to ${_pr_diff_allowance} bytes (JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES})."
-            PR_DIFF="[NOTE: PR diff is ${_pr_diff_bytes} bytes after the 500-line cap; truncated to a prefix within ${_pr_diff_allowance} bytes (JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}) to fit codex stdin (1 MB cap). Read the PR's files directly for the elided tail if needed.]
+            if _judge_truncate_pr_diff_file "${_pr_diff_capped_tmp}" "${_pr_diff_allowance}"; then
+              echo "Judge context: PR #${PR_NUM} (issue #${inum}) diff truncated from ${_pr_diff_bytes} to ${_pr_diff_allowance} bytes (JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES})."
+              PR_DIFF="[NOTE: PR diff is ${_pr_diff_bytes} bytes after the 500-line cap; truncated to a prefix within ${_pr_diff_allowance} bytes (JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}) to fit codex stdin (1 MB cap). Read the PR's files directly for the elided tail if needed.]
 $(cat "${_pr_diff_capped_tmp}")"
-            _judge_pr_diff_budget_left=$(( _judge_pr_diff_budget_left - _pr_diff_allowance ))
+              _judge_pr_diff_budget_left=$(( _judge_pr_diff_budget_left - _pr_diff_allowance ))
+            else
+              echo "::warning::Failed to truncate PR #${PR_NUM} diff for judge context (issue #${inum}); eliding ${_pr_diff_bytes} bytes instead of embedding an over-budget payload." >&2
+              PR_DIFF="[NOTE: PR diff elided because byte truncation failed; ${_pr_diff_bytes} bytes omitted. Read the PR's files directly if this diff matters to the verdict.]"
+            fi
           fi
           [ "${_judge_pr_diff_budget_left}" -ge 0 ] || _judge_pr_diff_budget_left=0
         else
@@ -20854,11 +20858,14 @@ ${PR_DIFF}
   # `Input exceeds the maximum length` on stderr (run 35425771769), so
   # log the size where the next regression is visible near the top of
   # the failing job instead of buried behind the echoed prompt.
+  sanitize_codex_prompt_file "${JUDGE_PROMPT_FILE}"
   JUDGE_PROMPT_BYTES="$(wc -c < "${JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
   [[ "${JUDGE_PROMPT_BYTES}" =~ ^[0-9]+$ ]] || JUDGE_PROMPT_BYTES=0
-  echo "Judge prompt size: ${JUDGE_PROMPT_BYTES} bytes (codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES})."
-  if [ "${JUDGE_PROMPT_BYTES}" -gt 950000 ]; then
-    echo "::warning::Judge prompt for #${TRACKING_NUM} is ${JUDGE_PROMPT_BYTES} bytes; close to or over codex's 1 MB stdin cap. Expect 'Input exceeds the maximum length' judge failures unless JUDGE_PR_DIFF_MAX_BYTES (current: ${JUDGE_PR_DIFF_MAX_BYTES}) / JUDGE_PR_DIFFS_TOTAL_MAX_BYTES (current: ${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}) or the static context (README/agents/system instructions) are tightened."
+  JUDGE_PROMPT_CHARS="$(LC_ALL=C.UTF-8 wc -m < "${JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
+  [[ "${JUDGE_PROMPT_CHARS}" =~ ^[0-9]+$ ]] || JUDGE_PROMPT_CHARS="${JUDGE_PROMPT_BYTES}"
+  echo "Judge prompt size: ${JUDGE_PROMPT_BYTES} bytes (${JUDGE_PROMPT_CHARS} characters; codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES})."
+  if [ "${JUDGE_PROMPT_CHARS}" -gt 950000 ]; then
+    echo "::warning::Judge prompt for #${TRACKING_NUM} is ${JUDGE_PROMPT_CHARS} characters (${JUDGE_PROMPT_BYTES} bytes); close to or over codex's 1 MB stdin cap. Expect 'Input exceeds the maximum length' judge failures unless JUDGE_PR_DIFF_MAX_BYTES (current: ${JUDGE_PR_DIFF_MAX_BYTES}) / JUDGE_PR_DIFFS_TOTAL_MAX_BYTES (current: ${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}) or the static context (README/agents/system instructions) are tightened."
   fi
 
   # Run judge via Codex
@@ -20871,6 +20878,10 @@ ${PR_DIFF}
     if [ "${judge_nag_attempt_limit}" -gt "${max_attempts}" ]; then
       max_attempts="${judge_nag_attempt_limit}"
     fi
+  fi
+  if [ "${JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then
+    echo "::error::Judge prompt for #${TRACKING_NUM} exceeds codex's 1048576-character stdin cap; skipping ${max_attempts} attempts that would fail before the model runs."
+    max_attempts=0
   fi
   for attempt in $(seq 1 "${max_attempts}"); do
     judge_attempt_prompt_file="${JUDGE_PROMPT_FILE}.attempt_${attempt}"
