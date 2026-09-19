@@ -122,7 +122,7 @@ def test_orchestrate_clarify_respond_gate_steps_emit_stable_telemetry() -> None:
 	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_metadata reason=not_orchestrator_managed outcome=skip issue=${ISSUE_NUMBER}" in metadata_block
 
 	parse_block = _step_block(ORCH_CLARIFY_RESPOND_WF, "Parse and post answer")
-	assert "bash scripts/orchestrate_parse_and_post_answer.sh" in parse_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_parse_and_post_answer.sh"' in parse_block
 
 	helper_text = _read(ORCH_PARSE_ANSWER_SCRIPT)
 	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=command_claim reason=already_processed outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}" in helper_text

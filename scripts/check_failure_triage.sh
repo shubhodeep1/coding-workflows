@@ -55,8 +55,13 @@ log()
 
 # --- Helpers (fail open if unavailable) ------------------------------------
 
-source scripts/gh_helpers.sh 2>/dev/null || true
-source scripts/codex_helpers.sh
+CHECK_TRIAGE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "${GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false}" = "true" ]; then
+	source "${CHECK_TRIAGE_SCRIPT_DIR}/gh_helpers.sh"
+else
+	source "${CHECK_TRIAGE_SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
+fi
+source "${CHECK_TRIAGE_SCRIPT_DIR}/codex_helpers.sh"
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 type gh_api_json_to_file >/dev/null 2>&1 || gh_api_json_to_file()
 {
@@ -78,7 +83,7 @@ type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq()
 	rm -f "${_safe_gh_jq_tmp}"
 	return 1
 }
-source scripts/tg_helpers.sh 2>/dev/null || true
+source "${CHECK_TRIAGE_SCRIPT_DIR}/tg_helpers.sh" 2>/dev/null || true
 type tg_send_msg >/dev/null 2>&1 || tg_send_msg() { :; }
 
 # --- Config ----------------------------------------------------------------

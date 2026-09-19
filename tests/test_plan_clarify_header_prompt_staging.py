@@ -56,7 +56,7 @@ HEADER_PROMPT = REPO_ROOT / "prompts" / "header.txt"
 
 # The bare-path render invocation that requires prompts/header.txt on disk.
 HEADER_RENDER_RE = re.compile(
-	r"\bbash\s+scripts/render_prompt\.sh\s+prompts/header\.txt\b"
+	r'\bbash\s+(?:scripts/render_prompt\.sh|"\$\{[A-Za-z0-9_]+\}/render_prompt\.sh")\s+prompts/header\.txt\b'
 )
 
 

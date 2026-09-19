@@ -241,7 +241,7 @@ model_provider_broker_start()
 
 model_provider_broker_stop()
 {
-	local broker_pid="" cleanup_rc=0
+	local broker_pid="" cleanup_rc=0 defer_access_restore="${MODEL_PROVIDER_BROKER_DEFER_ACCESS_RESTORE:-false}"
 	if [ -n "${MODEL_PROVIDER_BROKER_PID_FILE:-}" ] && [ -r "${MODEL_PROVIDER_BROKER_PID_FILE}" ]; then
 		broker_pid="$(cat "${MODEL_PROVIDER_BROKER_PID_FILE}")"
 	fi
@@ -272,18 +272,25 @@ model_provider_broker_stop()
 		fi
 		wait "${broker_pid}" 2>/dev/null || true
 	fi
-	if [ -s "${MODEL_PROVIDER_BROKER_ACL_BACKUP:-/nonexistent}" ] && command -v setfacl >/dev/null 2>&1; then
-		setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || cleanup_rc=1
+	if [ "${defer_access_restore}" != "true" ] \
+		&& [ -s "${MODEL_PROVIDER_BROKER_ACL_BACKUP:-/nonexistent}" ] \
+		&& command -v setfacl >/dev/null 2>&1; then
+		sudo -n setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || cleanup_rc=1
 	fi
 	[ -z "${MODEL_PROVIDER_BROKER_PID_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_PID_FILE}" || cleanup_rc=1
 	[ -z "${MODEL_PROVIDER_BROKER_READY_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_READY_FILE}" || cleanup_rc=1
 	[ -z "${MODEL_PROVIDER_BROKER_REJECTIONS_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_REJECTIONS_FILE}" || cleanup_rc=1
-	if [ -n "${MODEL_PROVIDER_BROKER_AGENT_HOME:-}" ] && [ -d "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] \
+	if [ "${defer_access_restore}" != "true" ] \
+		&& [ -n "${MODEL_PROVIDER_BROKER_AGENT_HOME:-}" ] && [ -d "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] \
 		&& [ "$(stat -c %u "${MODEL_PROVIDER_BROKER_AGENT_HOME}")" != "$(id -u)" ]; then
 		sudo -n chown -R "$(id -u):$(id -g)" "${MODEL_PROVIDER_BROKER_AGENT_HOME}" || cleanup_rc=1
 	fi
-	unset MODEL_PROVIDER_BROKER_BASE_URL MODEL_PROVIDER_BROKER_TOKEN MODEL_PROVIDER_BROKER_PID_FILE MODEL_PROVIDER_BROKER_READY_FILE MODEL_PROVIDER_BROKER_AGENT_HOME MODEL_PROVIDER_BROKER_ACL_BACKUP MODEL_PROVIDER_BROKER_ISOLATION_USER
-	unset MODEL_PROVIDER_BROKER_ACL_CAPTURED MODEL_PROVIDER_BROKER_REJECTIONS_FILE
+	unset MODEL_PROVIDER_BROKER_BASE_URL MODEL_PROVIDER_BROKER_TOKEN MODEL_PROVIDER_BROKER_PID_FILE MODEL_PROVIDER_BROKER_READY_FILE MODEL_PROVIDER_BROKER_REJECTIONS_FILE
+	if [ "${defer_access_restore}" != "true" ]; then
+		unset MODEL_PROVIDER_BROKER_AGENT_HOME MODEL_PROVIDER_BROKER_ACL_BACKUP MODEL_PROVIDER_BROKER_ISOLATION_USER
+		unset MODEL_PROVIDER_BROKER_ACL_CAPTURED MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE
+		unset MODEL_PROVIDER_BROKER_ISOLATED_PROCESS_GROUP_FILE MODEL_PROVIDER_BROKER_ISOLATED_WRITER_LAUNCHED
+	fi
 	return "${cleanup_rc}"
 }
 
@@ -468,6 +475,8 @@ model_provider_broker_prepare_codex_readonly()
 		--provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL:?broker base URL required}"
 	chmod 0700 "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
 	sudo -n chown -R "${isolation_user}" "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
+	sudo -n setfacl -R -m "u:$(id -u):rwX" "${MODEL_PROVIDER_BROKER_AGENT_HOME}" || return 1
+	sudo -n find "${MODEL_PROVIDER_BROKER_AGENT_HOME}" -type d -exec setfacl -m "d:u:$(id -u):rwX" {} + || return 1
 	MODEL_PROVIDER_BROKER_ACL_BACKUP="${MODEL_PROVIDER_BROKER_ACL_BACKUP:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/model-provider-broker-access.acl}"
 	if [ ! -e "${MODEL_PROVIDER_BROKER_ACL_BACKUP}" ]; then
 		: > "${MODEL_PROVIDER_BROKER_ACL_BACKUP}"
@@ -484,22 +493,25 @@ model_provider_broker_prepare_codex_readonly()
 		chmod -R go-rwx "${git_directory}"
 	fi
 	readonly_project_real="$(realpath -e -- "${project_path}")" || return 1
-	readonly_support_real="$(realpath -e -- "${SUPPORT_SCRIPTS_DIR:-${project_path}}" 2>/dev/null || true)"
+	readonly_support_real="$(realpath -e -- "${SUPPORT_ROOT_DIR:-${SUPPORT_SCRIPTS_DIR:-${project_path}}}" 2>/dev/null || true)"
 	for readonly_protected_path in \
 		"${GITHUB_ENV:+$(dirname -- "${GITHUB_ENV}")}" \
 		"${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/.git}" \
 		"${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/.codex-workflow-src}"; do
-		[ -n "${readonly_protected_path}" ] && [ -e "${readonly_protected_path}" ] || continue
+		if [ -z "${readonly_protected_path}" ] || [ ! -e "${readonly_protected_path}" ]; then
+			continue
+		fi
 		_model_provider_broker_capture_acl "${readonly_protected_path}" true
-		chmod -R go-rwx "${readonly_protected_path}" || return 1
-		setfacl -R -m "u:${isolation_user}:---" "${readonly_protected_path}" || return 1
+		if [ "${readonly_protected_path}" != "${readonly_support_real}" ]; then
+			chmod -R go-rwx "${readonly_protected_path}" || return 1
+		fi
+		sudo -n setfacl -R -m "u:${isolation_user}:---" "${readonly_protected_path}" || return 1
 	done
 	case "${readonly_support_real}" in
 		""|"${readonly_project_real}"|"${readonly_project_real}"/*) ;;
 		*)
 			_model_provider_broker_capture_acl "${readonly_support_real}" true
-			chmod -R go-rwx "${readonly_support_real}" || return 1
-			setfacl -R -m "u:${isolation_user}:---" "${readonly_support_real}" || return 1
+			sudo -n setfacl -R -m "u:${isolation_user}:---" "${readonly_support_real}" || return 1
 			;;
 	esac
 	codex_binary="$(command -v codex 2>/dev/null || true)"
@@ -564,19 +576,40 @@ model_provider_broker_prepare_isolated_writer()
 		"${GITHUB_ENV:+$(dirname -- "${GITHUB_ENV}")}" \
 		"${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/.git}" \
 		"${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/.codex-workflow-src}" \
-		"${SUPPORT_SCRIPTS_DIR:-}"; do
-		[ -n "${protected_path}" ] && [ -e "${protected_path}" ] || continue
+		"${SUPPORT_ROOT_DIR:-${SUPPORT_SCRIPTS_DIR:-}}"; do
+		if [ -z "${protected_path}" ] || [ ! -e "${protected_path}" ]; then
+			continue
+		fi
 		_model_provider_broker_capture_acl "${protected_path}" true
-		chmod -R go-rwx "${protected_path}" || return 1
-		setfacl -R -m "u:${isolation_user}:---" "${protected_path}" || return 1
+		if [ "${protected_path}" != "${SUPPORT_ROOT_DIR:-${SUPPORT_SCRIPTS_DIR:-}}" ]; then
+			chmod -R go-rwx "${protected_path}" || return 1
+		fi
+		sudo -n setfacl -R -m "u:${isolation_user}:---" "${protected_path}" || return 1
 	done
 	chmod 0700 "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
-	mkdir -p "${MODEL_PROVIDER_BROKER_AGENT_HOME}/thread-reuse"
 	sudo -n chown -R "${isolation_user}" "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
-	CODEX_THREAD_REUSE_RUNTIME_DIR="${MODEL_PROVIDER_BROKER_AGENT_HOME}/thread-reuse"
+	sudo -n setfacl -R -m "u:$(id -u):rwX" "${MODEL_PROVIDER_BROKER_AGENT_HOME}" || return 1
+	sudo -n find "${MODEL_PROVIDER_BROKER_AGENT_HOME}" -type d -exec setfacl -m "d:u:$(id -u):rwX" {} + || return 1
+	CODEX_THREAD_REUSE_RUNTIME_DIR="${RUNTIME_DIR:?RUNTIME_DIR is required}/isolated-writer-thread-reuse"
+	mkdir -p "${CODEX_THREAD_REUSE_RUNTIME_DIR}"
+	chmod 0700 "${CODEX_THREAD_REUSE_RUNTIME_DIR}"
 	MODEL_PROVIDER_BROKER_ISOLATION_USER="${isolation_user}"
 	MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE="${workspace_real}"
+	MODEL_PROVIDER_BROKER_ISOLATED_WRITER_LAUNCHED="false"
 	export CODEX_THREAD_REUSE_RUNTIME_DIR MODEL_PROVIDER_BROKER_ACL_BACKUP MODEL_PROVIDER_BROKER_ISOLATION_USER MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE
+	export MODEL_PROVIDER_BROKER_ISOLATED_WRITER_LAUNCHED
+}
+
+model_provider_broker_write_isolated_codex_launcher()
+{
+	local launcher_path="${1:?launcher path required}"
+	cat > "${launcher_path}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "${SUPPORT_SCRIPTS_DIR:?SUPPORT_SCRIPTS_DIR is required}/codex_helpers.sh"
+model_provider_broker_exec_unprivileged "${MODEL_PROVIDER_BROKER_ISOLATION_USER:?}" codex "$@"
+EOF
+	chmod 0500 "${launcher_path}"
 }
 
 model_provider_broker_exec_isolated_writer()
@@ -613,25 +646,25 @@ model_provider_broker_exec_isolated_writer()
 
 model_provider_broker_finish_isolated_writer()
 {
-	local isolation_user="${MODEL_PROVIDER_BROKER_ISOLATION_USER:-}" cleanup_rc=0 isolated_pid="" isolated_cwd=""
-	if [ -n "${isolation_user}" ]; then
-		while IFS= read -r isolated_pid; do
-			[ -n "${isolated_pid}" ] || continue
-			isolated_cwd="$(readlink -f -- "/proc/${isolated_pid}/cwd" 2>/dev/null || true)"
-			case "${isolated_cwd}" in
-				"${MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE}"|"${MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE}"/*)
-					echo "::error::isolated writer process ${isolated_pid} survived model execution" >&2
-					return 1
-					;;
-			esac
-		done < <(pgrep -u "${isolation_user}" 2>/dev/null || true)
+	local isolation_user="${MODEL_PROVIDER_BROKER_ISOLATION_USER:-}" cleanup_rc=0 process_group_safe="true"
+	local process_group_file="${MODEL_PROVIDER_BROKER_ISOLATED_PROCESS_GROUP_FILE:-}"
+	if [ "${MODEL_PROVIDER_BROKER_ISOLATED_WRITER_LAUNCHED:-false}" = "true" ]; then
+		if [ -z "${process_group_file}" ] || [ ! -s "${process_group_file}" ] \
+			|| ! command -v writer_isolation_verify_process_group_stopped >/dev/null 2>&1 \
+			|| ! writer_isolation_verify_process_group_stopped "${process_group_file}" "${isolation_user}"; then
+			echo "::error::isolated writer process group could not be verified stopped" >&2
+			process_group_safe="false"
+			cleanup_rc=1
+		fi
 	fi
-	if [ -s "${MODEL_PROVIDER_BROKER_ACL_BACKUP:-/nonexistent}" ]; then
-		sudo -n chown -R "$(id -u):$(id -g)" "${MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE}" || cleanup_rc=1
-		setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || cleanup_rc=1
-		: > "${MODEL_PROVIDER_BROKER_ACL_BACKUP}"
+	if [ "${process_group_safe}" != "true" ]; then
+		export MODEL_PROVIDER_BROKER_DEFER_ACCESS_RESTORE="true"
 	fi
-	unset MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE MODEL_PROVIDER_BROKER_ISOLATION_USER
+	model_provider_broker_stop || cleanup_rc=1
+	unset MODEL_PROVIDER_BROKER_DEFER_ACCESS_RESTORE
+	if [ "${process_group_safe}" = "true" ]; then
+		[ -z "${process_group_file}" ] || rm -f -- "${process_group_file}" || cleanup_rc=1
+	fi
 	return "${cleanup_rc}"
 }
 

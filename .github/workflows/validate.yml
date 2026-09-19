@@ -450,13 +450,12 @@ jobs:
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           WORKFLOW_SUPPORT_REF="${helper_ref}" bash "${helper_path}" validate --manifest "${manifest_path}"
-          {
-            echo "SUPPORT_ROOT_DIR=${GITHUB_WORKSPACE}"
-            echo "SUPPORT_SCRIPTS_DIR=${GITHUB_WORKSPACE}/scripts"
-            echo "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true"
-            echo "AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true"
-            echo "PYTHONPATH=${GITHUB_WORKSPACE}/scripts"
-          } >> "$GITHUB_ENV"
+          validate_immutable_support_root="${RUNNER_TEMP}/validate-immutable-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          WORKFLOW_SUPPORT_REF="${helper_ref}" bash "${helper_path}" immutable-bundle \
+            --manifest "${manifest_path}" \
+            --source-root "${helper_stage_dir}" \
+            --destination-root "${validate_immutable_support_root}"
+          echo "PYTHONPATH=${validate_immutable_support_root}/scripts" >> "$GITHUB_ENV"
       - name: Initialize workspace metadata
         id: workspace_meta
         env:

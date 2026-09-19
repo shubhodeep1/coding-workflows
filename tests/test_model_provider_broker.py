@@ -308,7 +308,11 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	implement_workflow = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
 	assert "model_provider_broker_prepare_codex_writer" in implement_workflow
 	assert "model_provider_broker_prepare_isolated_writer nobody" in implement_workflow
-	assert "model_provider_broker_exec_isolated_writer bash scripts/codex_thread_reuse.sh direct-run" in implement_workflow
+	assert 'CODEX_THREAD_REUSE_REAL_CODEX="${IMPLEMENT_ISOLATED_CODEX_LAUNCHER}"' in implement_workflow
+	assert '--process-group-file "${implement_process_group_file}"' in implement_workflow
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/codex_thread_reuse.sh" direct-run' in implement_workflow
+	assert "model_provider_broker_finish_isolated_writer && model_provider_broker_stop" not in implement_workflow
+	assert "writer_isolation_verify_process_group_stopped" in implement_workflow
 	assert "model_provider_broker_exec_unprivileged nobody codex" in implement_workflow
 	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in implement_workflow
 	assert "SCRIPT_REF=stable" not in implement_workflow
@@ -318,7 +322,8 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	assert "WORKFLOW_SUPPORT_REF=\"${helper_ref}\"" in validate_workflow
 	assert '"scripts/model_provider_broker.py"' in validate_workflow
 	assert "model_provider_broker_prepare_codex_readonly nobody" in validate_process
-	assert "model_provider_broker_unprivileged_argv_into validate_codex_argv nobody" in validate_process
+	assert 'CODEX_THREAD_REUSE_REAL_CODEX="${VALIDATE_ISOLATED_CODEX_LAUNCHER}"' in validate_process
+	assert 'validate_codex_argv=(bash "${CODEX_THREAD_REUSE_HELPER}" direct-run)' in validate_process
 	assert "--sandbox danger-full-access" not in validate_process
 	poller_workflow = (REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
 	poller_process = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
@@ -1145,6 +1150,8 @@ def test_isolated_writer_environment_omits_runner_commands_and_credentials() -> 
 	):
 		assert forbidden_name not in exec_block
 	assert 'OPENROUTER_API_KEY="${MODEL_PROVIDER_BROKER_TOKEN}"' in exec_block
+	assert "writer_isolation_verify_process_group_stopped" in helper_text
+	assert 'MODEL_PROVIDER_BROKER_DEFER_ACCESS_RESTORE="true"' in helper_text
 
 
 def test_broker_rejections_file_is_optional(tmp_path: Path) -> None:

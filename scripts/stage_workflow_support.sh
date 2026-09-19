@@ -394,11 +394,27 @@ stage_immutable_support_bundle()
 		[ -n "${repo_path}" ] || continue
 		required_paths+=("${repo_path}")
 		required_set["${repo_path}"]=1
-	done < <(jq -r '(.required_scripts // [])[], (.required_python_modules // [])[], (.required_prompts // [])[], (.required_files // [])[]' "${manifest_path}")
+	done < <(jq -r '
+		(.required_scripts // [])[],
+		(.required_python_modules // [])[],
+		(.required_prompts // [])[],
+		(.required_files // [])[],
+		(.required_remote_when_external_scripts // [])[],
+		(.optional_preserve_scripts_before_templates // [])[],
+		(.optional_preserve_scripts_after_schemas // [])[],
+		(.model_catalog_path // empty)
+	' "${manifest_path}")
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
 		executable_set["${repo_path}"]=1
-	done < <(jq -r '(.executable_files // [])[]' "${manifest_path}")
+	done < <(jq -r '
+		(.executable_files // [])[],
+		(.required_scripts // [])[],
+		(.required_python_modules // [])[],
+		(.required_remote_when_external_scripts // [])[],
+		(.optional_preserve_scripts_before_templates // [])[],
+		(.optional_preserve_scripts_after_schemas // [])[]
+	' "${manifest_path}")
 
 	if [ -n "${required_set[scripts/gh_helpers.sh]:-}" ]; then
 		for repo_path in scripts/emit_event.sh scripts/emit_event.py; do
@@ -450,8 +466,23 @@ stage_immutable_support_bundle()
 		install -m "${mode}" "${source_path}" "${target_path}"
 	done
 
+	if [ -e "${destination_root}" ]; then
+		echo "::error::Immutable support destination already exists: ${destination_root}." >&2
+		rm -rf -- "${temporary_root}"
+		return 1
+	fi
 	chmod -R go-w "${temporary_root}"
-	rm -rf -- "${destination_root}"
+	if [ "$(id -u)" -eq 0 ]; then
+		chown -R root:root "${temporary_root}"
+	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+		sudo -n chown -R root:root "${temporary_root}"
+	elif [ "${GITHUB_ACTIONS:-false}" != "true" ]; then
+		echo "::notice::Passwordless sudo is unavailable outside GitHub Actions; retaining current ownership for immutable-support validation."
+	else
+		echo "::error::Immutable support staging requires root ownership but passwordless sudo is unavailable." >&2
+		rm -rf -- "${temporary_root}"
+		return 1
+	fi
 	mv -- "${temporary_root}" "${destination_root}"
 	destination_real="$(realpath -e -- "${destination_root}")" || return 1
 	support_scripts_dir="${destination_real}/scripts"
@@ -1004,7 +1035,9 @@ main_validate()
 {
 	parse_args "$@"
 	if [ "${TARGET_NAME}" = "immutable-bundle" ]; then
-		[ -n "${SOURCE_ROOT}" ] && [ -n "${DESTINATION_ROOT}" ] || usage
+		if [ -z "${SOURCE_ROOT}" ] || [ -z "${DESTINATION_ROOT}" ]; then
+			usage
+		fi
 		stage_immutable_support_bundle "${MANIFEST_PATH}" "${SOURCE_ROOT}" "${DESTINATION_ROOT}"
 		return
 	fi

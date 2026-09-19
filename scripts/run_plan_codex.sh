@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 _run_plan_scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${_run_plan_scripts_dir}/gh_helpers.sh" 2>/dev/null || true
+if [ "${GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false}" = "true" ]; then
+	source "${_run_plan_scripts_dir}/gh_helpers.sh"
+else
+	source "${_run_plan_scripts_dir}/gh_helpers.sh" 2>/dev/null || true
+fi
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 source "${_run_plan_scripts_dir}/codex_helpers.sh"
 TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"
@@ -235,7 +239,7 @@ EOF
   echo
   bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
   echo
-  REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash scripts/render_prompt.sh prompts/header.txt
+  REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash "${_run_plan_scripts_dir}/render_prompt.sh" prompts/header.txt
   echo
   echo "=== AI MEMORY CONTEXT ==="
   cat "${RUNTIME_DIR}/memory_context.txt"

@@ -198,9 +198,12 @@ COMMAND = sys.argv[1:]
 
 
 def _isolated_user_from_command() -> str:
-	if len(COMMAND) < 5 or COMMAND[:3] != ["sudo", "-n", "-u"] or COMMAND[4] != "--":
-		return ""
-	candidate = COMMAND[3]
+	if len(COMMAND) >= 5 and COMMAND[:3] == ["sudo", "-n", "-u"] and COMMAND[4] == "--":
+		candidate = COMMAND[3]
+	else:
+		candidate = os.environ.get("MODEL_PROVIDER_BROKER_ISOLATION_USER", "")
+		if not candidate:
+			return ""
 	if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,254}\$?", candidate) is None:
 		return ""
 	try:

@@ -286,14 +286,6 @@ jobs:
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
-          {
-            echo "SUPPORT_ROOT_DIR=${GITHUB_WORKSPACE}"
-            echo "SUPPORT_SCRIPTS_DIR=${GITHUB_WORKSPACE}/scripts"
-            echo "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true"
-            echo "AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true"
-            echo "PYTHONPATH=${GITHUB_WORKSPACE}/scripts"
-          } >> "$GITHUB_ENV"
-
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
           # #3043 refactor.  main ships a self-contained bash render_prompt.sh
@@ -326,6 +318,18 @@ jobs:
           else
             echo "::warning::Codex model catalog not found at ${SCRIPT_REF}; apply_patch may not be registered for non-built-in models"
           fi
+
+          plan_immutable_support_manifest="${RUNNER_TEMP}/plan-immutable-support-manifest.json"
+          plan_immutable_support_root="${RUNNER_TEMP}/plan-immutable-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s\n' "${_fetched_scripts[@]}" | jq -Rsc '
+            split("\n") | map(select(length > 0) | "scripts/" + .)
+            | {required_scripts: ., executable_files: .}
+          ' > "${plan_immutable_support_manifest}"
+          WORKFLOW_SUPPORT_REF="${SCRIPT_REF}" bash ".codex-workflow-src/scripts/stage_workflow_support.sh" immutable-bundle \
+            --manifest "${plan_immutable_support_manifest}" \
+            --source-root ".codex-workflow-src" \
+            --destination-root "${plan_immutable_support_root}"
+          echo "PYTHONPATH=${plan_immutable_support_root}/scripts" >> "$GITHUB_ENV"
 
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -426,7 +430,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
 
@@ -465,7 +469,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           gh_retry gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" > "${ISSUE_COMMENTS_FILE}"
 
@@ -476,7 +480,7 @@ jobs:
           TRIGGER_COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           if ! printf '%s' "${TRIGGER_COMMENT_BODY}" | perl -0777 -ne 'exit((/^\s*\/answer\b/is) ? 0 : 1)'; then
             echo "Comment does not begin with /answer on first non-whitespace content. Skipping planning run."
             echo "AI_PHASE_GATE_V1 phase=plan gate=trigger_validation reason=invalid_trigger_body outcome=skip issue=${ISSUE_NUMBER}"
@@ -503,13 +507,13 @@ jobs:
             echo "Issue #${ISSUE_NUMBER} is already in ai:planning phase."
           elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:clarification") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is in ai:clarification phase; transitioning to ai:planning for /answer processing."
-            source scripts/label_helpers.sh
+            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
             ensure_label_exists "ai:planning" "${{ github.repository }}"
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --add-label 'ai:planning' --remove-label 'ai:clarification' >/dev/null 2>&1 || true
           elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:blocked") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is in ai:blocked phase; transitioning to ai:planning for /answer processing."
-            source scripts/label_helpers.sh
+            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
             ensure_label_exists "ai:planning" "${{ github.repository }}"
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --add-label 'ai:planning' --remove-label 'ai:blocked' >/dev/null 2>&1 || true
@@ -527,7 +531,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Use the issue timeline API to find PRs that are actually
           # cross-referenced to this issue (not just text matches).
@@ -587,7 +591,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --ensure-branch
 
           CHECK_RESULT="$(memory_processed_command_check \
@@ -659,7 +663,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           memory_record_run_event \
             --run-id "${{ github.run_id }}" \
@@ -678,7 +682,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           tg_cleanup_phase_msgs "${ISSUE_NUMBER}" "clarify"
 
       - name: Delete clarification question comments
@@ -687,7 +691,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Find clarification comments by HTML marker or legacy "Clarification required" prefix.
           # Trusted authors are "...[bot]" logins (GitHub Apps — installable only
@@ -853,7 +857,7 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          bash scripts/install_semble.sh
+          bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
 
       - name: Build semble index
         if: env.SKIP_PLAN != 'true' && env.SEMBLE_ENABLED == 'true'
@@ -869,7 +873,7 @@ jobs:
           # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false on any error and
           # exits 0; missing-script case is handled the same way.
           if [ -f scripts/build_semble_wrapper.sh ]; then
-            bash scripts/build_semble_wrapper.sh
+            bash "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"
           else
             echo "::notice::scripts/build_semble_wrapper.sh not staged; continuing without Semble index."
             echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
@@ -879,7 +883,7 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         run: |
           set -euo pipefail
-          source scripts/codex_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
           # Centralised in scripts/write_codex_config.sh — see that
           # script's header for the apply_patch / trust / elevation
           # rationale.
@@ -891,7 +895,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           if PROGRESS_COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="<!-- ai:plan-progress -->⏳ Planning in progress — assembling context and invoking model…" \
             --jq '.id' 2>/dev/null) && [ -n "${PROGRESS_COMMENT_ID}" ]; then
@@ -906,7 +910,7 @@ jobs:
           set -euo pipefail
           # See scripts/build_static_context.sh for trimming rationale and
           # prompt-prefix caching motivation.
-          bash scripts/build_static_context.sh plan ./pre_assembled_static.txt
+          bash "${SUPPORT_SCRIPTS_DIR}/build_static_context.sh" plan ./pre_assembled_static.txt
 
       - name: Retrieve memory context
         if: env.SKIP_PLAN != 'true'
@@ -916,7 +920,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --require memory_retrieve
 
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
@@ -997,7 +1001,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
         run: |
-          bash scripts/run_plan_codex.sh
+          bash "${SUPPORT_SCRIPTS_DIR}/run_plan_codex.sh"
 
       - name: Enforce plan write guard
         if: env.SKIP_PLAN != 'true'
@@ -1027,7 +1031,7 @@ jobs:
 
           # shellcheck source=/dev/null
           [ -f scripts/write_guard.sh ] || { echo "::error::write_guard.sh not found after fetch"; exit 1; }
-          source scripts/write_guard.sh
+          source "${SUPPORT_SCRIPTS_DIR}/write_guard.sh"
           PLAN_WRITE_GUARD_FILE="$(mktemp "${TMPDIR:-/tmp}/plan-write-guard.XXXXXX")"
 
           if [ -f "${PRE_PLAN_WRITE_GUARD_PATHS_FILE}" ] && [ -f "${POST_PLAN_WRITE_GUARD_PATHS_FILE}" ]; then
@@ -1255,10 +1259,10 @@ jobs:
           BLOCKED_REASON: ${{ steps.parse_plan.outputs.blocked_reason }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          source scripts/label_helpers.sh
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
 
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
             gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
@@ -1301,7 +1305,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           memory_processed_command_complete \
             --issue-number "${ISSUE_NUMBER}" \
@@ -1605,7 +1609,7 @@ jobs:
             echo "::error::Plan's 'Files likely to change' section lists template-owned paths (runtime-fetched scripts/ helpers, prompts/, ai-memory/, .github/prompts/, .github/scripts/) which are excluded from Codex commits in implement.yml. Changes to those paths belong in the coding-workflows repository."
             echo "Offending paths (from Files section):"
             cat "${TEMPLATE_PATH_BLOCKED_FILE}"
-            source scripts/gh_helpers.sh 2>/dev/null || true
+            source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
             type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
             # Clean up the progress comment so the failure comment (posted by
             # the existing "Comment on issue failure" handler) is the only
@@ -1630,13 +1634,13 @@ jobs:
           AUTO_ANSWER_ELIGIBLE: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_eligible }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Clean up progress comment — real output replaces it
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
             gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
           fi
-          source scripts/label_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
           # Strip absolute CI runner paths from Codex output
           sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
@@ -1691,7 +1695,7 @@ jobs:
           AUTO_ANSWER_MAPPING: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_mapping }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
@@ -1707,7 +1711,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           DETAILS="$(cat "${PLAN_COMMENT_FILE}" | head -c 10000)"
           memory_record_candidate \
@@ -1730,7 +1734,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           memory_processed_command_complete \
             --issue-number "${ISSUE_NUMBER}" \
@@ -1753,7 +1757,7 @@ jobs:
           AUTO_ANSWER_FAILURE_REASON: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_failure_reason }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Plan needs clarification for issue #${ISSUE_NUMBER}"
@@ -1784,13 +1788,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Clean up progress comment — real output replaces it
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
             gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
           fi
-          source scripts/label_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
           # Strip absolute CI runner paths from Codex output so comments show clean relative paths
           sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
           {
@@ -1827,7 +1831,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           DETAILS="$(cat "${PLAN_COMMENT_FILE}" | head -c 10000)"
           memory_record_candidate \
@@ -1850,7 +1854,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           memory_processed_command_complete \
             --issue-number "${ISSUE_NUMBER}" \
@@ -1867,7 +1871,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           # Fallback: if gh_helpers.sh failed to source, gh_retry would be
           # undefined and the next call would fail under `set -euo pipefail`.
           # Same pattern used by every other gh_retry caller in this file.
@@ -1927,7 +1931,7 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
@@ -1956,7 +1960,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           memory_record_run_event \
             --run-id "${{ github.run_id }}" \
@@ -1976,7 +1980,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           STATUS="failed"
           if [ "${{ job.status }}" = "cancelled" ]; then
@@ -1998,7 +2002,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           STATUS="error"
           MESSAGE="Planning failed for issue #${ISSUE_NUMBER}"
@@ -2022,7 +2026,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
             gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
@@ -2048,8 +2052,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          source scripts/label_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
           # Reuse the cached issue snapshot from the "Fetch issue
           # metadata" step when available — failure paths can run
           # before that step succeeded, so fall back to a fresh API
@@ -2075,7 +2079,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
@@ -2091,7 +2095,7 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."

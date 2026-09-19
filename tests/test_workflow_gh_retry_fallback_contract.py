@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 COMPREHENSIVE_RELEASE_GH_API_HELPER = REPO_ROOT / "scripts" / "comprehensive_test_and_release_gh_api.sh"
 DISPATCH_WATCH_HELPER = REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"
 SOURCE_LINE = 'source scripts/gh_helpers.sh 2>/dev/null || true'
+STRICT_SOURCE_LINE = 'source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"'
 FALLBACK_LINE = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }'
 SAFE_GH_JQ_LINE = 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {'
 
@@ -50,6 +51,11 @@ BOOTSTRAPPED_GH_HELPER_WORKFLOWS = (
 	".github/workflows/cancel_on_pr_close.yml",
 	".github/workflows/orchestrate_poll.yml",
 )
+STRICT_IMMUTABLE_GH_HELPER_WORKFLOWS = {
+	".github/workflows/clarify.yml",
+	".github/workflows/plan.yml",
+	".github/workflows/orchestrate_clarify_respond.yml",
+}
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -128,7 +134,10 @@ def _step_lines(relative_path: str, step_name: str) -> list[str]:
 def test_targeted_optional_source_blocks_define_local_gh_retry_fallback() -> None:
 	for relative_path, step_name in TARGET_STEPS:
 		lines = _step_lines(relative_path, step_name)
-		source_idx = next((i for i, line in enumerate(lines) if SOURCE_LINE in line), -1)
+		expected_source_line = (
+			STRICT_SOURCE_LINE if relative_path in STRICT_IMMUTABLE_GH_HELPER_WORKFLOWS else SOURCE_LINE
+		)
+		source_idx = next((i for i, line in enumerate(lines) if expected_source_line in line), -1)
 		fallback_idx = next((i for i, line in enumerate(lines) if FALLBACK_LINE in line), -1)
 		call_idx = next(
 			(
@@ -139,7 +148,7 @@ def test_targeted_optional_source_blocks_define_local_gh_retry_fallback() -> Non
 			-1,
 		)
 
-		assert source_idx != -1, f"{relative_path} :: {step_name} must keep optional gh_helpers sourcing"
+		assert source_idx != -1, f"{relative_path} :: {step_name} must source its configured gh_helpers path"
 		assert fallback_idx != -1, f"{relative_path} :: {step_name} must define the gh_retry fallback shim"
 		assert fallback_idx == source_idx + 1, (
 			f"{relative_path} :: {step_name} must place the gh_retry fallback immediately after the optional source"

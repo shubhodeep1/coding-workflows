@@ -269,13 +269,6 @@ jobs:
             install -m 0755 "${src}" "scripts/${f}"
             _fetched+=("${f}")
           done
-          {
-            echo "SUPPORT_ROOT_DIR=${GITHUB_WORKSPACE}"
-            echo "SUPPORT_SCRIPTS_DIR=${GITHUB_WORKSPACE}/scripts"
-            echo "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true"
-            echo "PYTHONPATH=${GITHUB_WORKSPACE}/scripts"
-          } >> "$GITHUB_ENV"
-
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
           if [ -f "${catalog_src}" ]; then
             install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
@@ -283,6 +276,18 @@ jobs:
           else
             echo "::warning::Codex model catalog not found; apply_patch may not be registered for non-built-in models"
           fi
+
+          triage_immutable_support_manifest="${RUNNER_TEMP}/triage-immutable-support-manifest.json"
+          triage_immutable_support_root="${RUNNER_TEMP}/triage-immutable-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s\n' "${_fetched[@]}" | jq -Rsc '
+            split("\n") | map(select(length > 0) | "scripts/" + .)
+            | {required_scripts: ., executable_files: .}
+          ' > "${triage_immutable_support_manifest}"
+          WORKFLOW_SUPPORT_REF="${SCRIPT_REF}" bash ".codex-workflow-src/scripts/stage_workflow_support.sh" immutable-bundle \
+            --manifest "${triage_immutable_support_manifest}" \
+            --source-root ".codex-workflow-src" \
+            --destination-root "${triage_immutable_support_root}"
+          echo "PYTHONPATH=${triage_immutable_support_root}/scripts" >> "$GITHUB_ENV"
 
           # Canonical repo-architecture facts for the diagnosis prompt.
           if [ -f ".codex-workflow-src/agents.md" ]; then
@@ -316,7 +321,7 @@ jobs:
       - name: Create Codex config
         run: |
           set -euo pipefail
-          source scripts/codex_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
           codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
 
       - name: Create runtime workspace
@@ -336,7 +341,7 @@ jobs:
           CHECK_TRIAGE_DETAILS_URL: ${{ inputs.details_url }}
         run: |
           set -euo pipefail
-          bash scripts/check_failure_triage.sh
+          bash "${SUPPORT_SCRIPTS_DIR}/check_failure_triage.sh"
 
       - name: Notify on triage workflow failure
         if: ${{ failure() }}
@@ -345,7 +350,7 @@ jobs:
           CHECK_NAME: ${{ inputs.check_name }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           type tg_send_msg >/dev/null 2>&1 || exit 0
           safe_check_name="${CHECK_NAME//$'\r'/ }"
           safe_check_name="${safe_check_name//$'\n'/ }"

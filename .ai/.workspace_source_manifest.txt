@@ -452,7 +452,6 @@ scripts/git_ref_health_check.sh
 scripts/implement_commit_changes.sh
 scripts/implement_diagnose_post_codex_failure.sh
 scripts/implement_handle_guard_block.sh
-scripts/implement_staged_support_workspace.sh
 scripts/install_semble.sh
 scripts/issue_attachment_bundle.py
 scripts/label_helpers.sh

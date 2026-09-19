@@ -2832,6 +2832,9 @@ export CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTI
 if [ -n "${CODEX_THREAD_REUSE_HELPER}" ]; then
   # shellcheck disable=SC1090
   source "${CODEX_THREAD_REUSE_HELPER}"
+else
+  echo "::error::codex_thread_reuse.sh is required for isolated validation launches" >&2
+  exit 1
 fi
 LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
@@ -2847,6 +2850,10 @@ CODEX_HELPERS_SCRIPTS_DIR="${_validate_script_dir}"
 export CODEX_HELPERS_SCRIPTS_DIR
 model_provider_broker_start
 model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
+VALIDATE_ISOLATED_CODEX_LAUNCHER="${RUNTIME_DIR}/validate-isolated-codex"
+model_provider_broker_write_isolated_codex_launcher "${VALIDATE_ISOLATED_CODEX_LAUNCHER}"
+CODEX_THREAD_REUSE_SESSION_ROOT="${MODEL_PROVIDER_BROKER_AGENT_HOME}/.codex/sessions"
+export CODEX_THREAD_REUSE_SESSION_ROOT
 
 emit_validate_substate() {
   local phase_name="$1"
@@ -2912,20 +2919,37 @@ run_validate_codex_attempt() {
   local output_file="$3"
   local log_file="$4"
   local status_file="$5"
+	local validate_reuse_enabled="false"
 	local -a validate_codex_argv=()
 
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
   fi
 
-	model_provider_broker_unprivileged_argv_into validate_codex_argv nobody \
-		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
-		--skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only || return $?
+	if validate_thread_reuse_enabled; then
+		validate_reuse_enabled="true"
+	fi
+	CODEX_THREAD_REUSE_ENABLED="${validate_reuse_enabled}"
+	CODEX_THREAD_REUSE_STATE_KEY="${phase_name}"
+	CODEX_THREAD_REUSE_PROMPT_FILE="${prompt_file}"
+	CODEX_THREAD_REUSE_OUTPUT_FILE="${output_file}"
+	CODEX_THREAD_REUSE_PHASE="${phase_name}"
+	CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}"
+	CODEX_THREAD_REUSE_SANDBOX="read-only"
+	CODEX_THREAD_REUSE_REAL_CODEX="${VALIDATE_ISOLATED_CODEX_LAUNCHER}"
+	CODEX_THREAD_REUSE_LOG_FILE="${log_file}"
+	CODEX_THREAD_REUSE_STATUS_FILE="${status_file}"
+	CODEX_THREAD_REUSE_STALL_GUARD_HELPER=""
+	CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true"
+	export CODEX_THREAD_REUSE_ENABLED CODEX_THREAD_REUSE_STATE_KEY CODEX_THREAD_REUSE_PROMPT_FILE
+	export CODEX_THREAD_REUSE_OUTPUT_FILE CODEX_THREAD_REUSE_PHASE CODEX_THREAD_REUSE_MODEL
+	export CODEX_THREAD_REUSE_SANDBOX CODEX_THREAD_REUSE_REAL_CODEX CODEX_THREAD_REUSE_LOG_FILE
+	export CODEX_THREAD_REUSE_STATUS_FILE CODEX_THREAD_REUSE_STALL_GUARD_HELPER CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK
+	validate_codex_argv=(bash "${CODEX_THREAD_REUSE_HELPER}" direct-run)
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     "${CODEX_STALL_GUARD_HELPER}" \
       --phase "${phase_name}" \
-      --stdout-file "${output_file}" \
       --status-file "${status_file}" \
       -- "${validate_codex_argv[@]}" < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
     return $?
@@ -2934,12 +2958,11 @@ run_validate_codex_attempt() {
   if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
     "${CODEX_HEARTBEAT_HELPER}" \
       --phase "${phase_name}" \
-      --stdout-file "${output_file}" \
       -- "${validate_codex_argv[@]}" < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
     return $?
   fi
 
-  "${validate_codex_argv[@]}" < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
+  "${validate_codex_argv[@]}" < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
 }
 
 export PATH="${HOME}/.local/bin:${PATH}"

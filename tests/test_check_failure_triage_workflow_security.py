@@ -284,6 +284,7 @@ class CheckFailureTriageWorkflowSecurityTests(unittest.TestCase):
 					"GITHUB_REPOSITORY": "owner/repo",
 					"GITHUB_RUN_ID": "123",
 					"PR_NUMBER": "17",
+					"SUPPORT_SCRIPTS_DIR": str(temp_path / "scripts"),
 					"TG_CAPTURE": str(capture_path),
 				}
 			)

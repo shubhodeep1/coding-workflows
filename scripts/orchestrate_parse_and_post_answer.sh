@@ -3,11 +3,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="${GITHUB_WORKSPACE:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 cd "${REPO_ROOT}"
 
-source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
+if [ "${GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false}" = "true" ]; then
+	source "${SCRIPT_DIR}/gh_helpers.sh"
+else
+	source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
+fi
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 require_env() {

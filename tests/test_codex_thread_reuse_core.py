@@ -538,7 +538,8 @@ def test_implement_workflow_contains_thread_reuse_wiring() -> None:
 	assert "mode-implement-repair-continuation.txt mode-implement-diagnose-continuation.txt mode-validate-self-heal-continuation.txt" in text
 	assert "mode-implement-repair-continuation.yml mode-implement-diagnose-continuation.yml mode-validate-self-heal-continuation.yml" in text
 	assert "name: Probe Codex thread-reuse support" in text
-	assert "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?" in text
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/codex_thread_reuse.sh" direct-run || cmd_rc=$?' in text
+	assert '--process-group-file "${implement_process_group_file}"' in text
 	assert 'CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ==="' in text
 	assert "codex_thread_reuse_install_wrapper" in text
 	assert "=== IMPLEMENT FAILURE DIAGNOSIS TASK ===" in text
