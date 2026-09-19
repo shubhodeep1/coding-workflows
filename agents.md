@@ -638,6 +638,33 @@ contain the broker module the findings cite, so the planner emitted
 `/security-pass-waive` path defers the same way. A create that fails keeps the
 row pending for the next merged-state tick; `create_security_pass_advisory_followup`
 clears `followup_pending` and drops the payload when it records the issue.
+Right before the deferred filer, the same merged-state sites call
+`security_pass_unblock_filed_advisory_followups`: each
+`security_pass_followup_issues` row whose issue is not in
+`security_pass_followups_merge_checked` costs one `gh api` GET, an open
+follow-up labelled `ai:blocked` gets one `/answer [auto-answered-by-poller]`
+comment (plan.yml moves ai:blocked to ai:planning on `/answer`), and every
+read issue is appended to `security_pass_followups_merge_checked` (deduped,
+last 100; `security_pass_mark_followup_merge_checked`) so it is never re-read
+(`SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED ... outcome=answered|not_blocked|closed`,
+`🔓 Security-pass advisory follow-ups re-planned` comment when any were
+answered). The filer records the issues it creates after the merge as checked
+at creation, and the completed-project finalizer re-enters both steps while
+pending waiver rows or unchecked follow-ups remain. The row shape of
+`security_pass_followup_issues` is unchanged. This is what un-parks advisories
+filed before the merge (#4090 / #4091) without a human.
+`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS` (default `2`, `0` = unbounded) bounds
+how many judge rounds may end in `keep_fixing`: `judge_round` beyond the cap
+puts `keep_fixing_available: false` and `max_keep_fixing_rounds` in the
+diagnostics, and after verdict normalization the poller rewrites every
+`keep_fixing` decision to `accept_with_followup` with the justification
+prefixed `[keep_fixing capped after <c> judge round(s); converted to advisory
+follow-up]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
+round=<r> cap=<c> converted=<n>`), so the accept-all path runs and the project
+completes with deferred advisories. `fail` verdicts are untouched; unlike
+`MAX_SECURITY_PASS_JUDGE_ROUNDS` this cap never terminalizes. Project #3965
+ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
+`keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
 (exact id, or same file and category within `SECURITY_AUDIT_WAIVER_LINE_WINDOW`,
@@ -828,6 +855,8 @@ and shipped:
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED`
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED`
 - `SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED`
+- `SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED`
+- `SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED`
 
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
@@ -963,6 +992,8 @@ LOG_PREFIX.name=SECURITY_PASS_WAIVED_SUPPRESSED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED
+LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED
+LOG_PREFIX.name=SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED
 LOG_PREFIX.name=SEMBLE_QUERY
 LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY

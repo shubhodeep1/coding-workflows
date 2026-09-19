@@ -1325,6 +1325,20 @@ if ! [[ "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_SECURITY_PASS_JUDGE_ROUNDS must be a non-negative integer; defaulting to 0 (unbounded)"
   MAX_SECURITY_PASS_JUDGE_ROUNDS="0"
 fi
+# MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS bounds how many judge rounds per project
+# may end in `keep_fixing`.  From the next round on, every keep_fixing
+# decision is converted to accept_with_followup (the finding becomes a
+# tracked, non-blocking advisory filed after the merge) so the loop converges
+# without a human; `fail` is untouched.  Project #3965 ran 7 fix cycles on a
+# 5-cycle budget because rounds 1 and 2 each granted "one more" cycle and
+# nothing bounded the sequence.  Unlike MAX_SECURITY_PASS_JUDGE_ROUNDS, which
+# terminalizes for a human, this cap keeps the project unattended.  0 =
+# unbounded (legacy behaviour).
+MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS="${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS:-2}"
+if ! [[ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS must be a non-negative integer; defaulting to 2"
+  MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS="2"
+fi
 
 # Advisory follow-ups for accepted (waived) findings are filed only after the
 # project's integration branch has merged into the default branch.  Filing
@@ -4539,6 +4553,14 @@ ensure_security_pass_state_fields() {
         | .[-100:]
       else [] end
     )
+    | .security_pass_followups_merge_checked = (
+      if (.security_pass_followups_merge_checked | type) == "array" then
+        .security_pass_followups_merge_checked
+        | map(select(type == "number" and floor == . and . > 0))
+        | unique
+        | .[-100:]
+      else [] end
+    )
     | .security_pass_judge_rounds = (
       if (.security_pass_judge_rounds | type) == "number"
         and (.security_pass_judge_rounds | floor) == .security_pass_judge_rounds
@@ -5684,6 +5706,9 @@ security_pass_file_deferred_advisory_followups() {
     if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
       filed_count=$((filed_count + 1))
       filed_lines="${filed_lines}"$'\n'"- \`$(printf '%s' "${row_json}" | jq -r '.finding_id')\` → #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+      # Filed after the merge, so it was never parked on it: no GET needed later.
+      security_pass_mark_followup_merge_checked "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" || \
+        echo "::warning::Could not record advisory follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER} as merge-checked on tracking issue #${TRACKING_NUM}; it costs one extra read on the next merged-state tick."
       # The create path clears the pending fields when it records a new
       # issue; when it returned an issue it already knew from
       # security_pass_followup_issues the row would stay pending forever, so
@@ -5712,6 +5737,112 @@ ${filed_lines}"
   return 0
 }
 
+# security_pass_unblock_filed_advisory_followups <integration_branch> <default_branch> <final_pr>
+#
+# Re-plan the `ai:security` advisory follow-ups that were filed BEFORE the
+# integration branch merged and got parked in `ai:blocked` by the planner
+# ("BLOCKED: PR #<final> is still open": #4090 / #4091 for project #3965,
+# filed at judge time; the same happens with
+# SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED=false).  Standalone stall recovery
+# skips ai:blocked issues by design, so without this step they wait for a
+# human `/answer` forever.  Called from every site that records
+# `final_merge_status = "merged"`, right before
+# security_pass_file_deferred_advisory_followups, so follow-ups filed by
+# that same tick are never examined (the filer also records them as checked).
+#
+# Input: every row of `security_pass_followup_issues` whose issue number is
+# not yet in `security_pass_followups_merge_checked`.  Per row: one `gh api`
+# GET reads the issue state and labels; an open issue carrying `ai:blocked`
+# gets one `/answer [auto-answered-by-poller]` comment
+# (`.github/workflows/plan.yml` moves ai:blocked -> ai:planning on `/answer`).
+# Answered, not-blocked and closed issues alike are then appended to
+# `security_pass_followups_merge_checked` (deduped, last 100 kept), so a
+# follow-up costs at most one GET (+ one POST when blocked) over the
+# project's lifetime, never per tick (§15).  The row shape of
+# `security_pass_followup_issues` is unchanged.  Audited calls: no earlier
+# call in the final-merge arms reads the follow-up issues' labels (the
+# deferred filer only creates issues) and the candidate-details GraphQL batch
+# is scoped to the stall-recovery candidate set, so this is the smallest call
+# that answers the question.  A failed GET or POST leaves the issue unchecked
+# for the next merged-state tick.  Fail-open, no git operations, returns 0
+# always.
+# Log: SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=<N>
+# finding=<id> issue=<M> final_pr=<PR|none> outcome=answered|not_blocked|closed
+security_pass_unblock_filed_advisory_followups() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr="${3:-}"
+  local rows_json row_count row_json row_issue row_finding issue_json issue_state
+  local answered_count=0 answered_lines="" answer_body outcome
+  rows_json="$(jq -c '
+    ((.security_pass_followups_merge_checked // []) | map(select(type == "number"))) as $checked
+    | [(.security_pass_followup_issues // [])[]
+        | select((.issue | type) == "number" and ((.issue as $row_issue | $checked | index($row_issue)) == null))]
+  ' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+  row_count="$(printf '%s' "${rows_json}" | jq -r 'length' 2>/dev/null || echo 0)"
+  [[ "${row_count}" =~ ^[0-9]+$ ]] || row_count=0
+  if [ "${row_count}" -eq 0 ]; then
+    return 0
+  fi
+  while IFS= read -r row_json; do
+    [ -n "${row_json}" ] || continue
+    row_issue="$(printf '%s' "${row_json}" | jq -r '.issue')"
+    row_finding="$(printf '%s' "${row_json}" | jq -r '.finding_id // ""')"
+    [[ "${row_issue}" =~ ^[0-9]+$ ]] || continue
+    issue_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${row_issue}" --jq '{state: .state, labels: [.labels[]?.name]}' 2>/dev/null || true)"
+    if [ -z "${issue_json}" ] || ! printf '%s' "${issue_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      echo "::warning::Could not read advisory follow-up #${row_issue} (finding ${row_finding}) for tracking issue #${TRACKING_NUM}; its ai:blocked check is retried on the next merged-state tick."
+      continue
+    fi
+    issue_state="$(printf '%s' "${issue_json}" | jq -r '.state // ""')"
+    outcome="closed"
+    if [ "${issue_state}" = "open" ]; then
+      outcome="not_blocked"
+      if printf '%s' "${issue_json}" | jq -e '(.labels // []) | index("ai:blocked") != null' >/dev/null 2>&1; then
+        answer_body="/answer [auto-answered-by-poller]
+
+_Security-pass advisory follow-up: \`${integration_branch}\` has merged into \`${default_branch}\`${final_pr:+ via PR #${final_pr}}, so the wait-for-merge blocker that parked this issue in \`ai:blocked\` no longer holds. Re-planning against the default branch._"
+        if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${row_issue}/comments" -f body="${answer_body}" >/dev/null 2>&1; then
+          echo "::warning::Could not post /answer on advisory follow-up #${row_issue} (finding ${row_finding}) for tracking issue #${TRACKING_NUM}; retried on the next merged-state tick."
+          continue
+        fi
+        outcome="answered"
+        answered_count=$((answered_count + 1))
+        answered_lines="${answered_lines}"$'\n'"- \`${row_finding}\` → #${row_issue}"
+      fi
+    fi
+    security_pass_mark_followup_merge_checked "${row_issue}" || \
+      echo "::warning::Could not record the ai:blocked check for advisory follow-up #${row_issue} on tracking issue #${TRACKING_NUM}; it is re-checked on the next merged-state tick."
+    echo "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=${TRACKING_NUM} finding=${row_finding} issue=${row_issue} final_pr=${final_pr:-none} outcome=${outcome}"
+  done < <(printf '%s' "${rows_json}" | jq -c '.[]')
+  if [ "${answered_count}" -gt 0 ]; then
+    post_tracking_comment "## 🔓 Security-pass advisory follow-ups re-planned
+
+\`${integration_branch}\` has merged into \`${default_branch}\`${final_pr:+ via PR #${final_pr}}. ${answered_count} advisory follow-up issue(s) filed before the merge had been parked in \`ai:blocked\` waiting for it; each received an automatic \`/answer\` and re-enters planning against the default branch:
+${answered_lines}"
+  fi
+  return 0
+}
+
+# security_pass_mark_followup_merge_checked <issue_number>
+#
+# Append <issue_number> to `security_pass_followups_merge_checked` (deduped,
+# last 100 kept) so security_pass_unblock_filed_advisory_followups never
+# reads that follow-up again.  Returns 1 when the state write fails.
+security_pass_mark_followup_merge_checked() {
+  local checked_issue="$1"
+  [[ "${checked_issue}" =~ ^[0-9]+$ ]] || return 1
+  if jq --argjson issue "${checked_issue}" '
+    .security_pass_followups_merge_checked = (
+      (((.security_pass_followups_merge_checked // []) | map(select(type == "number"))) + [$issue]) | unique | .[-100:]
+    )
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    return 0
+  fi
+  rm -f "${STATE_FILE}.tmp"
+  return 1
+}
+
 # security_pass_exhaustion_judge <head_sha> <merge_base_sha> <finding_count> <completed_cycles> <findings_file> <integration_branch> [<verified_analysis_ref>]
 #
 # Returns 0 when the judge produced an actionable verdict that this function
@@ -5734,6 +5865,7 @@ security_pass_exhaustion_judge() {
   local judge_json judge_success attempt effective_judge_model semble_query_file semble_prefetch static_file
   local accepted_count fixing_count failed_count decisions_table waivers_json fixing_findings_file
   local followup_issue followup_issues finding_json finding_id justification summary
+  local keep_fixing_capped keep_fixing_converted capped_suffix
 
   SECURITY_PASS_JUDGE_OUTCOME=""
   if [ "${SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED}" != "true" ]; then
@@ -5751,6 +5883,12 @@ security_pass_exhaustion_judge() {
     return 1
   fi
   judge_round=$((judge_rounds + 1))
+  # keep_fixing is available for the first MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS
+  # rounds; later rounds convert it to accept_with_followup (see below).
+  keep_fixing_capped="false"
+  if [ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" -gt 0 ] && [ "${judge_round}" -gt "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" ]; then
+    keep_fixing_capped="true"
+  fi
 
   # Diagnostics: everything the judge needs that is not in the checkout.
   # --slurpfile keeps the findings and state out of argv (MAX_ARG_STRLEN).
@@ -5763,6 +5901,8 @@ security_pass_exhaustion_judge() {
     --argjson max_cycles "${MAX_SECURITY_PASS_CYCLES}" \
     --argjson judge_round "${judge_round}" \
     --argjson max_judge_rounds "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" \
+    --argjson max_keep_fixing_rounds "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" \
+    --argjson keep_fixing_available "$([ "${keep_fixing_capped}" = "true" ] && echo false || echo true)" \
     --slurpfile audit "${findings_file}" \
     --slurpfile state "${STATE_FILE}" '
     {
@@ -5775,6 +5915,8 @@ security_pass_exhaustion_judge() {
       max_fix_cycles: $max_cycles,
       judge_round: $judge_round,
       max_judge_rounds: (if $max_judge_rounds == 0 then "unbounded" else $max_judge_rounds end),
+      max_keep_fixing_rounds: (if $max_keep_fixing_rounds == 0 then "unbounded" else $max_keep_fixing_rounds end),
+      keep_fixing_available: $keep_fixing_available,
       remaining_findings: ($audit[0].findings // []),
       reported_findings_history: ($state[0].security_pass_reported_findings // []),
       waived_findings: ($state[0].security_pass_waived_findings // []),
@@ -5883,6 +6025,32 @@ security_pass_exhaustion_judge() {
       }
   ' > "${verdict_file}" 2>/dev/null || { echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=verdict_normalize_failed"; return 1; }
   jq --argjson round "${judge_round}" '.security_pass_judge_rounds = $round' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  # Convergence backstop: once the judge has had MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS
+  # rounds that could grant another cycle, a keep_fixing decision is converted
+  # to accept_with_followup so the finding becomes a deferred advisory and the
+  # project completes unattended.  A project-wide `fail` verdict never reaches
+  # here with keep_fixing rows (mixed verdicts are rejected above).
+  keep_fixing_converted=0
+  capped_suffix=""
+  if [ "${keep_fixing_capped}" = "true" ]; then
+    keep_fixing_converted="$(jq -r '[.decisions[] | select(.action == "keep_fixing")] | length' "${verdict_file}")"
+    [[ "${keep_fixing_converted}" =~ ^[0-9]+$ ]] || keep_fixing_converted=0
+    if [ "${keep_fixing_converted}" -gt 0 ]; then
+      if ! jq --arg note "[keep_fixing capped after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} judge round(s); converted to advisory follow-up] " '
+        .decisions = [
+          .decisions[]
+          | if .action == "keep_fixing" then (.action = "accept_with_followup" | .justification = ($note + .justification)) else . end
+        ]
+      ' "${verdict_file}" > "${verdict_file}.tmp" || ! mv "${verdict_file}.tmp" "${verdict_file}"; then
+        rm -f "${verdict_file}.tmp"
+        echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=keep_fixing_cap_rewrite_failed round=${judge_round}"
+        return 1
+      fi
+      echo "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=${TRACKING_NUM} round=${judge_round} cap=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} converted=${keep_fixing_converted}"
+      capped_suffix=" ${keep_fixing_converted} of them were \`keep_fixing\` decisions converted to advisories because the keep_fixing round budget (\`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}\`) is spent."
+    fi
+  fi
 
   accepted_count="$(jq -r '[.decisions[] | select(.action == "accept_with_followup")] | length' "${verdict_file}")"
   fixing_count="$(jq -r '[.decisions[] | select(.action == "keep_fixing")] | length' "${verdict_file}")"
@@ -5994,7 +6162,7 @@ ${decisions_table}}"
   post_state_comment || true
   post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
 
-The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remained at integration head \`${head_sha}\`. The judge accepted every remaining finding as a known risk${followup_suffix}; the security pass is recorded clean at this head and completion continues. Comment \`/re-security-pass\` to re-run a full audit instead.
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remained at integration head \`${head_sha}\`. The judge accepted every remaining finding as a known risk${followup_suffix}; the security pass is recorded clean at this head and completion continues.${capped_suffix} Comment \`/re-security-pass\` to re-run a full audit instead.
 
 **Summary:** $(security_pass_prose "${summary}")
 ${decisions_table:+
@@ -9893,6 +10061,7 @@ finalize_integration_merge_if_needed() {
         jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 		mark_integration_branch_squash_fresh
+        security_pass_unblock_filed_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
         security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
         post_state_comment || true
         return 0
@@ -9941,6 +10110,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 	mark_integration_branch_squash_fresh
+    security_pass_unblock_filed_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     post_state_comment || true
     return 0
@@ -10032,6 +10202,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
        .integration_conflict_unresolved_ticks = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 	mark_integration_branch_squash_fresh
+    security_pass_unblock_filed_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     post_state_comment || true
     post_tracking_comment "## ✅ Final merge complete
@@ -10073,6 +10244,7 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 	mark_integration_branch_squash_fresh
+    security_pass_unblock_filed_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     post_state_comment || true
     return 0
@@ -16681,6 +16853,7 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
             echo "::warning::[external-finalize] failed to persist merged state for PR #${_orch_extfin_pr}; leaving final_merge_status pending."
             continue
           fi
+          security_pass_unblock_filed_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
           security_pass_file_deferred_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
           post_state_comment || true
           handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
@@ -16711,8 +16884,20 @@ The orchestrator detected that the integration PR was squash-merged outside the 
   # Retry advisory creation on every later merged-state tick. The transition
   # arms attempt filing immediately, but a transient create failure leaves the
   # waiver row pending and completed projects otherwise skip the finalizer.
+  # The same tick re-checks follow-ups not yet in
+  # security_pass_followups_merge_checked (a failed read or /answer post on
+  # the merge tick, or follow-ups filed before this check existed), so a
+  # parked advisory is never left waiting for a human.
   if [ "$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")" = "merged" ] \
-    && jq -e 'any((.security_pass_waived_findings // [])[]; (.followup_pending // false) == true and .issue == null and (.finding | type) == "object")' "${STATE_FILE}" >/dev/null 2>&1; then
+    && jq -e '
+      (((.security_pass_followups_merge_checked // []) | map(select(type == "number"))) as $checked
+      | any((.security_pass_waived_findings // [])[]; (.followup_pending // false) == true and .issue == null and (.finding | type) == "object")
+        or any((.security_pass_followup_issues // [])[]; (.issue | type) == "number" and ((.issue as $row_issue | $checked | index($row_issue)) == null)))
+    ' "${STATE_FILE}" >/dev/null 2>&1; then
+    security_pass_unblock_filed_advisory_followups \
+      "${INTEGRATION_BRANCH_TRACKING}" \
+      "${DEFAULT_BRANCH_TRACKING}" \
+      "$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
     security_pass_file_deferred_advisory_followups \
       "${INTEGRATION_BRANCH_TRACKING}" \
       "${DEFAULT_BRANCH_TRACKING}" \
