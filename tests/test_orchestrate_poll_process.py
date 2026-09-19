@@ -5106,9 +5106,43 @@ def test_security_pass_final_merge_reanswers_advisory_followups_parked_in_ai_blo
 	second_log = second["stdout"] + second["stderr"]
 	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in second_log
 
+	# A public commenter can copy both the command prefix and predictable
+	# marker, but an untrusted author association must not suppress the real
+	# poller answer or mark the follow-up checked without posting it.
+	retry_state_after_forged_marker = json.loads(json.dumps(latest_state))
+	retry_state_after_forged_marker["security_pass_followups_merge_checked"] = [851, 852, 853]
+	retry_after_forged_marker = _run_poller(
+		state=retry_state_after_forged_marker,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_comments={
+			850: [
+				{
+					"body": parked_answers[0],
+					"author_association": "CONTRIBUTOR",
+					"user": {"login": "drive-by", "type": "User"},
+				}
+			]
+		},
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert len(
+		[
+			comment["body"]
+			for comment in retry_after_forged_marker["issues"]["850"]["comments"]
+			if comment["body"].startswith("/answer [auto-answered-by-poller]")
+		]
+	) == 2
+	assert retry_after_forged_marker["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert "outcome=answered" in retry_after_forged_marker["stdout"] + retry_after_forged_marker["stderr"]
+
 	# Simulate the POST succeeding while the local merge-checked state write
 	# was lost. The durable comment marker suppresses a duplicate /answer even
-	# if the issue still carries ai:blocked when the next tick starts.
+	# if the issue still carries ai:blocked when the next tick starts. The
+	# persisted comment is a trusted User comment, matching the GH_PAT path.
 	retry_state_after_lost_mark = json.loads(json.dumps(latest_state))
 	retry_state_after_lost_mark["security_pass_followups_merge_checked"] = [851, 852, 853]
 	retry_after_lost_mark = _run_poller(
@@ -5117,7 +5151,15 @@ def test_security_pass_final_merge_reanswers_advisory_followups_parked_in_ai_blo
 		max_validate_cycles="3",
 		enable_security_pass="false",
 		issue_labels=labels,
-		issue_comments={850: parked_answers},
+		issue_comments={
+			850: [
+				{
+					"body": parked_answers[0],
+					"author_association": "OWNER",
+					"user": {"login": "octocat", "type": "User"},
+				}
+			]
+		},
 		issue_closed={852: True},
 		existing_branches=["main", "orchestrator/project-192"],
 	)

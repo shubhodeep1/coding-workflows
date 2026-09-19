@@ -5753,8 +5753,9 @@ ${filed_lines}"
 # Input: every row of `security_pass_followup_issues` whose issue number is
 # not yet in `security_pass_followups_merge_checked`.  Per row: one `gh api`
 # GET reads the issue state and labels; an open issue carrying `ai:blocked`
-# gets one paginated comments read and, when the durable unblock marker is
-# absent, one `/answer [auto-answered-by-poller]` comment
+# gets one paginated comments read and, when no trusted User comment carries
+# both the durable unblock marker and the poller's `/answer` prefix, one
+# `/answer [auto-answered-by-poller]` comment
 # (`.github/workflows/plan.yml` moves ai:blocked -> ai:planning on `/answer`).
 # Answered, not-blocked and closed issues alike are then appended to
 # `security_pass_followups_merge_checked` (deduped, last 100 kept), so a
@@ -5813,7 +5814,12 @@ security_pass_unblock_filed_advisory_followups() {
 _Security-pass advisory follow-up: \`${integration_branch}\` has merged into \`${default_branch}\`${final_pr:+ via PR #${final_pr}}, so the wait-for-merge blocker that parked this issue in \`ai:blocked\` no longer holds. Re-planning against the default branch._
 
 ${advisory_unblock_marker}"
-        if ! printf '%s' "${advisory_unblock_comments_json}" | jq -e --arg marker "${advisory_unblock_marker}" 'any(.[]; (.body // "") | contains($marker))' >/dev/null 2>&1; then
+        if ! printf '%s' "${advisory_unblock_comments_json}" | jq -e --arg marker "${advisory_unblock_marker}" '
+          any(.[];
+            (.user.type // "") == "User"
+            and ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+            and ((.body // "") | startswith("/answer [auto-answered-by-poller]") and contains($marker)))
+        ' >/dev/null 2>&1; then
           # Do not retry this non-idempotent mutation. If GitHub accepts the
           # comment but its response is lost, the marker reconciles it next tick.
           if ! gh api "repos/${GITHUB_REPOSITORY}/issues/${row_issue}/comments" -f body="${answer_body}" >/dev/null 2>&1; then

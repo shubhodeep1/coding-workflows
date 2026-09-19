@@ -643,8 +643,9 @@ Right before the deferred filer, the same merged-state sites call
 `security_pass_followup_issues` row whose issue is not in
 `security_pass_followups_merge_checked` costs one issue GET; an open follow-up
 labelled `ai:blocked` costs one paginated comments GET and gets one
-`/answer [auto-answered-by-poller]` comment when its durable unblock marker is
-absent (plan.yml moves ai:blocked to ai:planning on `/answer`). Every read
+`/answer [auto-answered-by-poller]` comment unless a trusted
+OWNER/MEMBER/COLLABORATOR User comment carries both that prefix and its durable
+unblock marker (plan.yml moves ai:blocked to ai:planning on `/answer`). Every read
 issue is appended to `security_pass_followups_merge_checked` (deduped,
 last 100; `security_pass_mark_followup_merge_checked`) so it is never re-read
 after a successful state write; failed state writes may repeat the reads, but
