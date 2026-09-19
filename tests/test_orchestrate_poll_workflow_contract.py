@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATE_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 ORCHESTRATE_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 ORCHESTRATE_POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+AGENTS_MD = REPO_ROOT / "agents.md"
 
 
 def _workflow(path: Path = ORCHESTRATE_POLL_WF) -> str:
@@ -107,6 +108,20 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 		assert asset in wf
 
 
+def test_security_pass_recovery_log_prefixes_are_registered() -> None:
+	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	for prefix in (
+		"SECURITY_PASS_AUTO_RESET",
+		"SECURITY_PASS_AUTO_RESET_SKIPPED",
+		"STAGED_SUPPORT_LATCH_RELEASED",
+		"STAGED_SUPPORT_LATCH_SKIP",
+		"STAGED_SUPPORT_LATCH_RELEASE_SKIPPED",
+		"ORCHESTRATOR_ENGINE_SHA",
+	):
+		assert f"- `{prefix}`" in agents_text
+		assert f"LOG_PREFIX.name={prefix}" in agents_text
+
+
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "worktree_registry.sh" in wf
@@ -126,6 +141,7 @@ def main() -> int:
 	test_nag_reminder_assets_and_judge_wiring_are_present()
 	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
 	test_security_pass_dark_launch_env_and_assets_are_wired()
+	test_security_pass_recovery_log_prefixes_are_registered()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	return 0
 

@@ -17340,7 +17340,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
       # A reset is a full restart of the bounded loop: the operator claims
       # to have addressed the exhaustion findings, so the next audit covers
       # the whole range again rather than a delta from the failed head.
-      jq '
+      if ! jq '
         .status = "security-pass"
         | .security_pass_cycle = 0
         | .security_pass_judge_rounds = 0
@@ -17352,7 +17352,11 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         | .security_pass_fix_touched_files = []
         | del(.security_pass_fix_reissue_count)
         | del(.security_pass_fix_defer)
-      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+		rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+		echo "::warning::Could not persist /re-security-pass reset state for project #${TRACKING_NUM}; leaving the terminal state and label unchanged for retry."
+		continue
+	  fi
       reconcile_tracking_body_after_security_pass_transition
       post_state_comment || true
       set_tracking_phase_label "ai:security-pass"
@@ -17385,8 +17389,11 @@ The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-runnin
   if [ "${PROJECT_STATUS}" = "failed" ] && has_label "${TRACKING_LABELS}" "ai:security-pass-failed" \
     && [ "${SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE}" = "true" ]; then
     SP_AUTO_RESET_ENGINE_SHA="${ORCHESTRATOR_ENGINE_SHA}"
-    SP_AUTO_RESET_FAILED_ENGINE_SHA="$(jq -r '.security_pass_failed_engine_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-    if [ -z "${SP_AUTO_RESET_ENGINE_SHA}" ]; then
+    if ! SP_AUTO_RESET_FAILED_ENGINE_SHA="$(jq -r '.security_pass_failed_engine_sha // ""' "${STATE_FILE}" 2>/dev/null)"; then
+	  echo "::warning::Could not read security-pass engine state for project #${TRACKING_NUM}; leaving the project parked for the next tick."
+	  echo "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=${TRACKING_NUM} reason=state_unreadable"
+	  continue
+    elif [ -z "${SP_AUTO_RESET_ENGINE_SHA}" ]; then
       echo "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=${TRACKING_NUM} reason=engine_unresolved"
     elif [ "${SP_AUTO_RESET_ENGINE_SHA}" = "${SP_AUTO_RESET_FAILED_ENGINE_SHA}" ]; then
       echo "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=${TRACKING_NUM} reason=same_engine engine_sha=${SP_AUTO_RESET_ENGINE_SHA}"
@@ -17395,12 +17402,11 @@ The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-runnin
       ' "${STATE_FILE}" >/dev/null 2>&1; then
       echo "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=${TRACKING_NUM} reason=already_reset_on_engine engine_sha=${SP_AUTO_RESET_ENGINE_SHA}"
     else
-      echo "SECURITY_PASS_AUTO_RESET tracking_issue=${TRACKING_NUM} engine_sha=${SP_AUTO_RESET_ENGINE_SHA} failed_engine_sha=${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}"
       # Same full restart as /re-security-pass: the next audit covers the
       # whole range on the new engine rather than a delta from the failed
       # head.  The failing engine stays recorded for the comment below and
       # for the same_engine guard should this engine fail the project too.
-      jq --arg engine_sha "${SP_AUTO_RESET_ENGINE_SHA}" '
+      if ! jq --arg engine_sha "${SP_AUTO_RESET_ENGINE_SHA}" '
         .status = "security-pass"
         | .security_pass_cycle = 0
         | .security_pass_judge_rounds = 0
@@ -17415,7 +17421,12 @@ The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-runnin
           )
         | del(.security_pass_fix_reissue_count)
         | del(.security_pass_fix_defer)
-      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+		rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+		echo "::warning::Could not persist the engine-aware security-pass reset for project #${TRACKING_NUM}; leaving the terminal state and label unchanged for retry."
+		continue
+	  fi
+      echo "SECURITY_PASS_AUTO_RESET tracking_issue=${TRACKING_NUM} engine_sha=${SP_AUTO_RESET_ENGINE_SHA} failed_engine_sha=${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}"
       reconcile_tracking_body_after_security_pass_transition
       post_state_comment || true
       set_tracking_phase_label "ai:security-pass"

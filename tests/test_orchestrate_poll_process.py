@@ -2707,13 +2707,21 @@ sys.exit(proc.returncode)
 		_write_exec(
 			bin_dir / "jq",
 r'''#!/usr/bin/env bash
-if [ "${MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL:-false}" = "true" ]; then
-	for jq_argument in "$@"; do
-		if [ "${jq_argument}" = "reissues" ]; then
-			exit 1
-		fi
+for jq_argument in "$@"; do
+	if [ "${MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL:-false}" = "true" ] \
+		&& [ "${jq_argument}" = "reissues" ]; then
+		exit 1
+	fi
+	if [ "${MOCK_SECURITY_PASS_RESET_STATE_PERSIST_FAIL:-false}" = "true" ]; then
+		case "${jq_argument}" in
+			*'.status = "security-pass"'*'.security_pass_cycle = 0'*'.security_pass_status = "pending"'*) exit 1 ;;
+		esac
+	fi
+	if [ "${MOCK_SECURITY_PASS_AUTO_RESET_STATE_READ_FAIL:-false}" = "true" ] \
+		&& [ "${jq_argument}" = '.security_pass_failed_engine_sha // ""' ]; then
+		exit 1
+	fi
 	done
-fi
 exec "${REAL_JQ_BIN}" "$@"
 ''',
 		)
@@ -4652,6 +4660,50 @@ def test_manual_re_security_pass_takes_precedence_over_engine_auto_reset() -> No
 	assert any("re-security-pass-dedup:" in body for body in tracking_comment_bodies)
 	assert not any("security-pass-auto-reset:" in body for body in tracking_comment_bodies)
 	assert "SECURITY_PASS_AUTO_RESET tracking_issue=192" not in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_reset_persistence_failure_keeps_project_parked() -> None:
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	reset_failure_env = {
+		"ORCHESTRATE_ENGINE_SHA": "b" * 40,
+		"MOCK_SECURITY_PASS_RESET_STATE_PERSIST_FAIL": "true",
+	}
+
+	auto_reset_failure = _run_failed_project_tick(state, reset_failure_env)
+	assert auto_reset_failure["latest_state"]["status"] == "failed"
+	assert auto_reset_failure["tracking_labels"] == ["ai:security-pass-failed"]
+	assert auto_reset_failure["security_audit_capture"] is None
+	assert "Could not persist the engine-aware security-pass reset" in auto_reset_failure["stdout"] + auto_reset_failure["stderr"]
+	assert not any("security-pass-auto-reset:" in comment["body"] for comment in auto_reset_failure["issues"]["192"]["comments"])
+
+	manual_reset_failure = _run_failed_project_tick(
+		state,
+		reset_failure_env,
+		tracking_comments=["/re-security-pass retry after manual remediation"],
+	)
+	assert manual_reset_failure["latest_state"]["status"] == "failed"
+	assert manual_reset_failure["tracking_labels"] == ["ai:security-pass-failed"]
+	assert manual_reset_failure["security_audit_capture"] is None
+	assert "Could not persist /re-security-pass reset state" in manual_reset_failure["stdout"] + manual_reset_failure["stderr"]
+	assert not any("re-security-pass-dedup:" in comment["body"] for comment in manual_reset_failure["issues"]["192"]["comments"])
+
+
+def test_security_pass_auto_reset_unreadable_state_keeps_project_parked() -> None:
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(
+		state,
+		{
+			"ORCHESTRATE_ENGINE_SHA": "b" * 40,
+			"MOCK_SECURITY_PASS_AUTO_RESET_STATE_READ_FAIL": "true",
+		},
+	)
+
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result["security_audit_capture"] is None
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=192 reason=state_unreadable" in combined_log
+	assert "SECURITY_PASS_AUTO_RESET tracking_issue=192" not in combined_log
 
 
 def _staged_support_latch_comment(author_association: str = "OWNER", user_login: str = "workflow-owner") -> dict:
