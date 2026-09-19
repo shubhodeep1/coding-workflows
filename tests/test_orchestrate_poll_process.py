@@ -5055,6 +5055,7 @@ def test_security_pass_final_merge_reanswers_advisory_followups_parked_in_ai_blo
 	assert len(parked_answers) == 1
 	assert f"`orchestrator/project-192` has merged into `main` via PR #{final_pr}" in parked_answers[0]
 	assert "parked this issue in `ai:blocked` no longer holds" in parked_answers[0]
+	assert "<!-- security-pass-advisory-unblock:192:850 -->" in parked_answers[0]
 	assert _answers(851) == []
 	assert _answers(852) == []
 	assert _answers(853) == []
@@ -5104,6 +5105,34 @@ def test_security_pass_final_merge_reanswers_advisory_followups_parked_in_ai_blo
 	)
 	second_log = second["stdout"] + second["stderr"]
 	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in second_log
+
+	# Simulate the POST succeeding while the local merge-checked state write
+	# was lost. The durable comment marker suppresses a duplicate /answer even
+	# if the issue still carries ai:blocked when the next tick starts.
+	retry_state_after_lost_mark = json.loads(json.dumps(latest_state))
+	retry_state_after_lost_mark["security_pass_followups_merge_checked"] = [851, 852, 853]
+	retry_after_lost_mark = _run_poller(
+		state=retry_state_after_lost_mark,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_comments={850: parked_answers},
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	retry_answer_comments = [
+		comment["body"]
+		for comment in retry_after_lost_mark["issues"]["850"]["comments"]
+		if comment["body"].startswith("/answer [auto-answered-by-poller]")
+	]
+	assert retry_answer_comments == parked_answers
+	assert retry_after_lost_mark["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert not any(
+		comment["body"].startswith("## 🔓 Security-pass advisory follow-ups re-planned")
+		for comment in retry_after_lost_mark["issues"]["192"]["comments"]
+	)
+	assert "outcome=answered" in retry_after_lost_mark["stdout"] + retry_after_lost_mark["stderr"]
 
 
 def test_security_pass_exhaustion_judge_fail_verdict_terminalizes_with_verdict_comment() -> None:

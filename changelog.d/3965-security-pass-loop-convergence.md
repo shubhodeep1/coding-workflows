@@ -7,7 +7,7 @@ Project #3965 finished its one-issue plan on 2026-09-03 and then spent sixteen d
 | --- | --- |
 | New repo variable | `MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS` (default `2`; `0` restores the unbounded loop) |
 | Judge rounds spent on #3965 before this shipped | 2, both `keep_fixing` (cycles 6 and 7 on a 5-cycle budget) |
-| API cost of the re-plan step | one GET per follow-up over the project's lifetime, plus one POST per `ai:blocked` follow-up |
+| API cost of a successful re-plan check | one issue GET per follow-up, plus one paginated comments GET and at most one POST per `ai:blocked` follow-up |
 | Issues this reproduces | #4090, #4091 (`ai:blocked`), #4113 (cycle 7 of #3965) |
 
 What this means for operators: a security-pass project that reaches the exhaustion judge a third time no longer gets a further fix cycle; its remaining findings become non-blocking advisories filed after the merge, and the project completes. Follow-ups that were already parked in `ai:blocked` re-enter planning when the integration branch lands on the default branch, with a `🔓 Security-pass advisory follow-ups re-planned` comment on the tracking issue. A human is still needed only for a project-wide `fail` verdict (`ai:security-pass-failed`), which the judge reserves for findings the automated pipeline cannot land.

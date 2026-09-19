@@ -5753,13 +5753,15 @@ ${filed_lines}"
 # Input: every row of `security_pass_followup_issues` whose issue number is
 # not yet in `security_pass_followups_merge_checked`.  Per row: one `gh api`
 # GET reads the issue state and labels; an open issue carrying `ai:blocked`
-# gets one `/answer [auto-answered-by-poller]` comment
+# gets one paginated comments read and, when the durable unblock marker is
+# absent, one `/answer [auto-answered-by-poller]` comment
 # (`.github/workflows/plan.yml` moves ai:blocked -> ai:planning on `/answer`).
 # Answered, not-blocked and closed issues alike are then appended to
 # `security_pass_followups_merge_checked` (deduped, last 100 kept), so a
-# follow-up costs at most one GET (+ one POST when blocked) over the
-# project's lifetime, never per tick (§15).  The row shape of
-# `security_pass_followup_issues` is unchanged.  Audited calls: no earlier
+# successful check costs one issue GET, plus one comments GET and at most one
+# POST when blocked (§15). A failed merge-checked state write may repeat the
+# reads, but the durable comment marker keeps the POST at most once. The row
+# shape of `security_pass_followup_issues` is unchanged.  Audited calls: no earlier
 # call in the final-merge arms reads the follow-up issues' labels (the
 # deferred filer only creates issues) and the candidate-details GraphQL batch
 # is scoped to the stall-recovery candidate set, so this is the smallest call
@@ -5773,7 +5775,7 @@ security_pass_unblock_filed_advisory_followups() {
   local default_branch="$2"
   local final_pr="${3:-}"
   local rows_json row_count row_json row_issue row_finding issue_json issue_state
-  local answered_count=0 answered_lines="" answer_body outcome
+  local answered_count=0 answered_lines="" answer_body outcome advisory_unblock_marker advisory_unblock_comments_json
   rows_json="$(jq -c '
     ((.security_pass_followups_merge_checked // []) | map(select(type == "number"))) as $checked
     | [(.security_pass_followup_issues // [])[]
@@ -5799,16 +5801,29 @@ security_pass_unblock_filed_advisory_followups() {
     if [ "${issue_state}" = "open" ]; then
       outcome="not_blocked"
       if printf '%s' "${issue_json}" | jq -e '(.labels // []) | index("ai:blocked") != null' >/dev/null 2>&1; then
-        answer_body="/answer [auto-answered-by-poller]
-
-_Security-pass advisory follow-up: \`${integration_branch}\` has merged into \`${default_branch}\`${final_pr:+ via PR #${final_pr}}, so the wait-for-merge blocker that parked this issue in \`ai:blocked\` no longer holds. Re-planning against the default branch._"
-        if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${row_issue}/comments" -f body="${answer_body}" >/dev/null 2>&1; then
-          echo "::warning::Could not post /answer on advisory follow-up #${row_issue} (finding ${row_finding}) for tracking issue #${TRACKING_NUM}; retried on the next merged-state tick."
+        advisory_unblock_marker="<!-- security-pass-advisory-unblock:${TRACKING_NUM}:${row_issue} -->"
+        # The issue GET above exposes only the comment count, not bodies; no
+        # existing final-merge call or cycle cache can confirm this marker.
+        if ! advisory_unblock_comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${row_issue}/comments?per_page=100" 2>/dev/null | jq -cs 'add // []')"; then
+          echo "::warning::Could not read comments for advisory follow-up #${row_issue} (finding ${row_finding}) on tracking issue #${TRACKING_NUM}; no duplicate /answer was posted and the check is retried on the next merged-state tick."
           continue
         fi
+        answer_body="/answer [auto-answered-by-poller]
+
+_Security-pass advisory follow-up: \`${integration_branch}\` has merged into \`${default_branch}\`${final_pr:+ via PR #${final_pr}}, so the wait-for-merge blocker that parked this issue in \`ai:blocked\` no longer holds. Re-planning against the default branch._
+
+${advisory_unblock_marker}"
+        if ! printf '%s' "${advisory_unblock_comments_json}" | jq -e --arg marker "${advisory_unblock_marker}" 'any(.[]; (.body // "") | contains($marker))' >/dev/null 2>&1; then
+          # Do not retry this non-idempotent mutation. If GitHub accepts the
+          # comment but its response is lost, the marker reconciles it next tick.
+          if ! gh api "repos/${GITHUB_REPOSITORY}/issues/${row_issue}/comments" -f body="${answer_body}" >/dev/null 2>&1; then
+            echo "::warning::Could not post /answer on advisory follow-up #${row_issue} (finding ${row_finding}) for tracking issue #${TRACKING_NUM}; retried on the next merged-state tick."
+            continue
+          fi
+          answered_count=$((answered_count + 1))
+          answered_lines="${answered_lines}"$'\n'"- \`${row_finding}\` → #${row_issue}"
+        fi
         outcome="answered"
-        answered_count=$((answered_count + 1))
-        answered_lines="${answered_lines}"$'\n'"- \`${row_finding}\` → #${row_issue}"
       fi
     fi
     security_pass_mark_followup_merge_checked "${row_issue}" || \

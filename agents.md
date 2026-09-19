@@ -641,11 +641,14 @@ clears `followup_pending` and drops the payload when it records the issue.
 Right before the deferred filer, the same merged-state sites call
 `security_pass_unblock_filed_advisory_followups`: each
 `security_pass_followup_issues` row whose issue is not in
-`security_pass_followups_merge_checked` costs one `gh api` GET, an open
-follow-up labelled `ai:blocked` gets one `/answer [auto-answered-by-poller]`
-comment (plan.yml moves ai:blocked to ai:planning on `/answer`), and every
-read issue is appended to `security_pass_followups_merge_checked` (deduped,
+`security_pass_followups_merge_checked` costs one issue GET; an open follow-up
+labelled `ai:blocked` costs one paginated comments GET and gets one
+`/answer [auto-answered-by-poller]` comment when its durable unblock marker is
+absent (plan.yml moves ai:blocked to ai:planning on `/answer`). Every read
+issue is appended to `security_pass_followups_merge_checked` (deduped,
 last 100; `security_pass_mark_followup_merge_checked`) so it is never re-read
+after a successful state write; failed state writes may repeat the reads, but
+the durable comment marker prevents a second `/answer` POST
 (`SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED ... outcome=answered|not_blocked|closed`,
 `🔓 Security-pass advisory follow-ups re-planned` comment when any were
 answered). The filer records the issues it creates after the merge as checked
