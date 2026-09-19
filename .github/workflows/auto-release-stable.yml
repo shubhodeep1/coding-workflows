@@ -23,8 +23,12 @@ permissions:
   contents: read
   actions: write
 
+# Shares the promote job's group so the check-then-dispatch here can never
+# interleave with a poller-driven promotion (which fast-forwards stable and
+# dispatches the same release gate): one of the two waits for the other, and
+# the later one then sees the in-flight gate run and skips.
 concurrency:
-  group: auto-release-stable-${{ github.repository }}
+  group: promote-main-to-stable
   cancel-in-progress: false
 
 jobs:

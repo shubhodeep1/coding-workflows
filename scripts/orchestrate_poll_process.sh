@@ -1369,6 +1369,18 @@ fi
 # Bot logins whose non-code commits may land on main during a cycle without
 # deferring the promotion (comma-separated).
 COMPREHENSIVE_CYCLE_BOT_LOGINS="${COMPREHENSIVE_CYCLE_BOT_LOGINS:-github-actions[bot]}"
+# Marker comments are trusted only from these author associations (the
+# orchestrator posts them with GH_PAT, i.e. as the repository owner) or from
+# github-actions[bot]; a marker from anyone else is ignored and reported.
+COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
+# Poll ticks a proving run's completion may retry a transient verifying-run
+# dispatch (another project in flight, orchestrator run in flight, guard
+# unavailable) before giving up.
+COMPREHENSIVE_VERIFICATION_RETRY_MAX="${COMPREHENSIVE_VERIFICATION_RETRY_MAX:-24}"
+if ! [[ "${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::COMPREHENSIVE_VERIFICATION_RETRY_MAX must be a non-negative integer; defaulting to 24"
+  COMPREHENSIVE_VERIFICATION_RETRY_MAX="24"
+fi
 
 # Advisory follow-ups for accepted (waived) findings are filed only after the
 # project's integration branch has merged into the default branch.  Filing
@@ -10439,17 +10451,55 @@ extract_comprehensive_release_metadata() {
 # ai:comprehensive-test-pending without a marker (legacy callback path).
 comprehensive_cycle_metadata_json() {
   local comments_json="$1"
-  printf '%s' "${comments_json}" | jq -c '
+  printf '%s' "${comments_json}" | jq -c --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
     def line($body; $key): (($body | capture("(?m)^" + $key + ": (?<v>[^\r\n]+)")? // {v: ""}) | .v | gsub("^\\s+|\\s+$"; ""));
-    ([ .[] | (.body // "") | select(test("(?m)^apply-analysis-source-doc: ")) ] | last // "") as $body
+    def is_marker: ((.body // "") | test("(?m)^apply-analysis-source-doc: "));
+    def trusted: (((.author_association // "") as $a | ($trusted | split(",") | map(gsub("^\\s+|\\s+$"; "")) | index($a)) != null)
+                  or ((.user.login // "") == "github-actions[bot]"));
+    ([ .[] | select(is_marker and trusted) | .body ] | last // "") as $body
+    | ([ .[] | select(is_marker and (trusted | not)) ] | length > 0) as $untrusted
     | {
         role: line($body; "apply-analysis-role"),
         doc: line($body; "apply-analysis-source-doc"),
         baseline_sha: line($body; "apply-analysis-cycle-baseline-sha"),
         smoke_sha: line($body; "apply-analysis-smoke-sha"),
         promote_sha: line($body; "apply-analysis-promote-sha"),
-        proving_merge_sha: line($body; "apply-analysis-proving-merge-sha")
-      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":""}'
+        proving_merge_sha: line($body; "apply-analysis-proving-merge-sha"),
+        untrusted_marker: $untrusted
+      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","untrusted_marker":false}'
+}
+
+# comprehensive_stable_tag_commit
+# Prints the commit the `stable` tag points at (dereferencing an annotated
+# tag), or "" when the tag cannot be resolved.
+comprehensive_stable_tag_commit() {
+  local ref_json object_type object_sha
+  ref_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable" 2>/dev/null || true)"
+  object_type="$(printf '%s' "${ref_json}" | jq -r '.object.type // empty' 2>/dev/null || true)"
+  object_sha="$(printf '%s' "${ref_json}" | jq -r '.object.sha // empty' 2>/dev/null || true)"
+  if [ "${object_type}" = "tag" ] && [[ "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" 2>/dev/null | jq -r '.object.sha // empty' 2>/dev/null || true
+  elif [ "${object_type}" = "commit" ]; then
+    printf '%s\n' "${object_sha}"
+  fi
+}
+
+# comprehensive_forward_merge_pr_verified <sha> <subject>
+# 0 when the commit is the merge commit of a merged PR whose head branch is
+# auto/forward-merge-stable-* (the forward-merge workflow's fallback PR);
+# the subject alone is never trusted. One PR read.
+comprehensive_forward_merge_pr_verified() {
+  local sha="$1"
+  local subject="$2"
+  local pr_number pr_json
+  pr_number="$(printf '%s' "${subject}" | sed -nE 's/^Merge pull request #([0-9]+) from [^/]+\/auto\/forward-merge-stable-.*/\1/p')"
+  [[ "${pr_number}" =~ ^[0-9]+$ ]] || return 1
+  pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" 2>/dev/null || true)"
+  [ -n "${pr_json}" ] || return 1
+  printf '%s' "${pr_json}" | jq -e --arg sha "${sha}" '
+    ((.merged == true) or (.merged_at != null))
+    and (((.head.ref // .headRefName // "") | test("^auto/forward-merge-stable-")))
+    and ((.merge_commit_sha // "") == $sha)' >/dev/null 2>&1
 }
 
 # comprehensive_cycle_is_code_path <path>
@@ -10497,7 +10547,8 @@ comprehensive_untested_commits_json() {
     allowed="false"
     if [ -n "${proving_merge_sha}" ] && [ "${sha}" = "${proving_merge_sha}" ]; then
       allowed="true"
-    elif printf '%s' "${message}" | grep -qE '^Merge pull request #[0-9]+ from [^/]+/auto/forward-merge-stable-'; then
+    elif printf '%s' "${message}" | grep -qE '^Merge pull request #[0-9]+ from [^/]+/auto/forward-merge-stable-' \
+      && comprehensive_forward_merge_pr_verified "${sha}" "${message}"; then
       allowed="true"
     elif printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${author}," \
       || printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${committer},"; then
@@ -10560,6 +10611,14 @@ dispatch_comprehensive_verification_run() {
     outcome="SKIPPED reason=$(printf '%s\n' "${dispatch_output}" | sed -n 's/^APPLY_ANALYSIS_SKIPPED reason=\([^ ]*\).*/\1/p' | tail -n 1)"
     [ "${outcome}" != "SKIPPED reason=" ] || outcome="SKIPPED reason=dispatcher_error"
   fi
+  # Transient outcomes are retried on later ticks (bounded by
+  # COMPREHENSIVE_VERIFICATION_RETRY_MAX in the caller); terminal ones
+  # (disabled, no_docs, all_docs_processed, dispatcher_missing) are not.
+  case "${outcome}" in
+    "SKIPPED reason=project_in_flight"*|"SKIPPED reason=orchestrate_run_in_flight"*|"SKIPPED reason=guard_unavailable"*|"SKIPPED reason=dispatcher_error"*)
+      outcome="RETRY ${outcome#SKIPPED }"
+      ;;
+  esac
   printf '%s\n' "${outcome}"
 }
 
@@ -10570,7 +10629,23 @@ dispatch_comprehensive_verification_run() {
 # fast-forward refused) or a completed test-and-mark-stable run on stable.
 comprehensive_promotion_release_outcome() {
   local dispatched_at="$1"
-  local since promote_state gate_state
+  local promote_sha="${2:-}"
+  local tag_before="${3:-}"
+  local since promote_state gate_state tag_now compare_status
+  # Ground truth first: the promotion succeeded when the stable tag moved
+  # since dispatch and now points at promote_sha or a descendant of it (the
+  # release job commits the changelog assembly on top before tagging). A
+  # concurrent unrelated release cannot satisfy this.
+  tag_now="$(comprehensive_stable_tag_commit)"
+  if [[ "${tag_now}" =~ ^[0-9a-f]{40}$ ]] && [ "${tag_now}" != "${tag_before}" ] && [[ "${promote_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    compare_status="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${promote_sha}...${tag_now}" --jq '.status // empty' 2>/dev/null || echo "")"
+    case "${compare_status}" in
+      identical|ahead)
+        echo "promoted"
+        return 0
+        ;;
+    esac
+  fi
   since="$(date -u -d "@${dispatched_at}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "${dispatched_at}" +%Y-%m-%dT%H:%M:%SZ)"
   promote_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}/runs?per_page=20" 2>/dev/null | jq -r --arg since "${since}" '[.workflow_runs[]? | select(.event == "workflow_dispatch" and .created_at >= $since)] | sort_by(.created_at) | last | ((.status // "") + " " + (.conclusion // ""))' 2>/dev/null || echo "")"
   case "${promote_state}" in
@@ -10581,7 +10656,7 @@ comprehensive_promotion_release_outcome() {
   esac
   gate_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml/runs?per_page=20" 2>/dev/null | jq -r --arg since "${since}" '[.workflow_runs[]? | select((.head_branch // "") == "stable" and .created_at >= $since)] | sort_by(.created_at) | last | ((.status // "") + " " + (.conclusion // ""))' 2>/dev/null || echo "")"
   case "${gate_state}" in
-    "completed success") echo "promoted" ;;
+    "completed success") echo "pending" ;;
     "completed "*) echo "failed" ;;
     *) echo "pending" ;;
   esac
@@ -10618,6 +10693,18 @@ comprehensive_promotion_gate_before_final_merge() {
       promote_sha="$(printf '%s' "${metadata_json}" | jq -r '.promote_sha')"
       smoke_sha="$(printf '%s' "${metadata_json}" | jq -r '.smoke_sha')"
       proving_merge_sha="$(printf '%s' "${metadata_json}" | jq -r '.proving_merge_sha')"
+      if [ "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" != "promote-main-to-stable.yml" ]; then
+        # Only the promote workflow accepts target_sha; any other release
+        # target cannot pin the promotion, so refuse rather than release
+        # whatever main is now.
+        jq --arg wf "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" '.comprehensive_promotion = {status: "failed", reason: ("pinned promotion requires promote-main-to-stable.yml, got " + $wf)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_workflow_not_pinnable workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}"
+        post_tracking_comment "## ❌ Promotion not possible
+
+\`COMPREHENSIVE_RELEASE_WORKFLOW_FILE\` is \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\`, which cannot promote a pinned commit (only promote-main-to-stable.yml takes \`target_sha\`). Nothing is promoted; the final merge proceeds."
+        tg_notify "Project #${TRACKING_NUM}: promotion skipped, ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} cannot pin target_sha." "CRITICAL"
+        return 0
+      fi
       if ! [[ "${promote_sha}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${smoke_sha}" =~ ^[0-9a-f]{40}$ ]]; then
         jq '.comprehensive_promotion = {status: "skipped", reason: "marker lacks promote_sha/smoke_sha"}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         echo "COMPREHENSIVE_PROMOTION_SKIPPED tracking_issue=${TRACKING_NUM} reason=missing_marker_shas"
@@ -10669,9 +10756,11 @@ Nothing is promoted. This project's final merge proceeds; the next daily promote
       fi
       local _dispatch_err
       _dispatch_err="$(mktemp)"
+      local tag_before
+      tag_before="$(comprehensive_stable_tag_commit)"
       if gh_retry gh workflow run "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" --ref "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" -f "target_sha=${promote_sha}" -f "dry_run=false" -f "skip_e2e=false" >/dev/null 2>"${_dispatch_err}"; then
         rm -f "${_dispatch_err}"
-        jq --arg promote "${promote_sha}" --argjson t "${now}" '.comprehensive_promotion = {status: "dispatched", promote_sha: $promote, dispatched_at: $t}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        jq --arg promote "${promote_sha}" --arg tag_before "${tag_before}" --argjson t "${now}" '.comprehensive_promotion = {status: "dispatched", promote_sha: $promote, dispatched_at: $t, tag_before: $tag_before}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment || true
         echo "COMPREHENSIVE_PROMOTION_DISPATCHED tracking_issue=${TRACKING_NUM} promote_sha=${promote_sha} workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}"
         post_tracking_comment "## 🚀 Promotion dispatched
@@ -10693,7 +10782,7 @@ Every commit between the smoke-tested commit \`${smoke_sha:0:7}\` and \`${promot
       dispatched_at="$(jq -r '.comprehensive_promotion.dispatched_at // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
       [[ "${dispatched_at}" =~ ^[0-9]+$ ]] || dispatched_at=0
       promote_sha="$(jq -r '.comprehensive_promotion.promote_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-      outcome="$(comprehensive_promotion_release_outcome "${dispatched_at}")"
+      outcome="$(comprehensive_promotion_release_outcome "${dispatched_at}" "${promote_sha}" "$(jq -r '.comprehensive_promotion.tag_before // ""' "${STATE_FILE}" 2>/dev/null || echo "")")"
       case "${outcome}" in
         promoted)
           jq '.comprehensive_promotion.status = "promoted"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -10778,8 +10867,20 @@ handle_comprehensive_release_callback_if_needed() {
     cycle_metadata_json="$(comprehensive_cycle_metadata_json "${comments_json}")"
     verification_outcome="$(dispatch_comprehensive_verification_run "${cycle_metadata_json}")"
     if [[ "${verification_outcome}" == RETRY* ]]; then
-      echo "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome}"
-      return 0
+      local verification_retries
+      verification_retries="$(jq -r '.comprehensive_release_callback.verification_retries // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+      [[ "${verification_retries}" =~ ^[0-9]+$ ]] || verification_retries=0
+      verification_retries=$((verification_retries + 1))
+      if [ "${verification_retries}" -le "${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" ]; then
+        jq --argjson n "${verification_retries}" '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {verification_retries: $n})' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        # Persist the counter now: the state file is rebuilt from the state
+        # comment on every tick, so an unposted increment would reset to 0.
+        post_state_comment || true
+        echo "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome} retry=${verification_retries}/${COMPREHENSIVE_VERIFICATION_RETRY_MAX}"
+        return 0
+      fi
+      verification_outcome="SKIPPED ${verification_outcome#RETRY } retries_exhausted=${COMPREHENSIVE_VERIFICATION_RETRY_MAX}"
     fi
     jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg outcome "${verification_outcome}" \
       '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "proving", verification: $outcome}' \
@@ -10801,6 +10902,18 @@ The proving run merged, but the verifying run could not be dispatched (${verific
         tg_notify "Project #${TRACKING_NUM} (proving) merged but the verifying run was not dispatched (${verification_outcome}); no promotion this cycle." "CRITICAL"
         ;;
     esac
+  elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_marker')" = "true" ]; then
+    # A marker comment from an untrusted author with no trusted one: never
+    # dispatch or promote on its say-so. Record and let a human look.
+    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "untrusted"}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "COMPREHENSIVE_MARKER_UNTRUSTED tracking_issue=${TRACKING_NUM}"
+    post_tracking_comment "## ⚠️ Untrusted apply-analysis marker
+
+This tracking issue carries \`ai:comprehensive-test-pending\` but its only apply-analysis marker comment was posted by an author outside \`${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}\`. The poller does not dispatch or promote on it. Nothing is promoted."
+    tg_notify "Project #${TRACKING_NUM}: apply-analysis marker from an untrusted author ignored; no verifying run, no promotion." "CRITICAL"
   elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.role')" = "verifying" ]; then
     # Promotion (or its deferral) already happened before this final merge;
     # the verifying run's own merge never promotes.

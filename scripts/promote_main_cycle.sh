@@ -315,6 +315,7 @@ smoke_sha="${main_tip}"
 deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_WAIT_SECS ))
 gate_run_id=""
 gate_conclusion=""
+gate_head_sha=""
 while [ "$(date +%s)" -lt "${deadline}" ]; do
 	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
 	runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue
@@ -323,9 +324,10 @@ while [ "$(date +%s)" -lt "${deadline}" ]; do
 		[ -n "${gate_run_id}" ] || continue
 		echo "Smoke gate run: ${gate_run_id}"
 	fi
-	run_state="$(printf '%s' "${runs_json}" | jq -r --argjson id "${gate_run_id}" '[.workflow_runs[]? | select(.id == $id)] | first | ((.status // "") + " " + (.conclusion // ""))')"
-	run_status="${run_state%% *}"
-	run_conclusion="${run_state#* }"
+	run_state="$(printf '%s' "${runs_json}" | jq -r --argjson id "${gate_run_id}" '[.workflow_runs[]? | select(.id == $id)] | first | ((.status // "") + " " + (.conclusion // "") + " " + (.head_sha // ""))')"
+	run_status="$(printf '%s' "${run_state}" | cut -d' ' -f1)"
+	run_conclusion="$(printf '%s' "${run_state}" | cut -d' ' -f2)"
+	gate_head_sha="$(printf '%s' "${run_state}" | cut -d' ' -f3)"
 	if [ "${run_status}" = "completed" ]; then
 		gate_conclusion="${run_conclusion}"
 		break
@@ -340,6 +342,15 @@ if [ -z "${gate_conclusion}" ]; then
 fi
 if [ "${gate_conclusion}" != "success" ]; then
 	fail_cycle smoke_gate_failed "run=${gate_run_id} conclusion=${gate_conclusion}"
+fi
+# The gate checked out whatever main was when its run started; that commit,
+# not the tip read before dispatch, is what was smoke-tested. Anything that
+# lands after it shows up as untested in the poller's quiescence check.
+if [[ "${gate_head_sha:-}" =~ ^[0-9a-f]{40}$ ]]; then
+	if [ "${gate_head_sha}" != "${main_tip}" ]; then
+		echo "::warning::main advanced from ${main_tip} to ${gate_head_sha} before the smoke gate started; recording the gate's head as the smoke-tested commit."
+	fi
+	smoke_sha="${gate_head_sha}"
 fi
 echo "Smoke gate passed on ${smoke_sha} (run ${gate_run_id})."
 

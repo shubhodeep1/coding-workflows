@@ -43,6 +43,8 @@ if args[:1] == ["api"]:
         respond({"object": {"type": "tag", "sha": state["tag_object"]}})
     if "/git/tags/" in path:
         respond({"object": {"type": "commit", "sha": state["tag_commit"]}})
+    if "/compare/" in path:
+        respond({"status": state.get("compare_status", "ahead"), "ahead_by": 1, "behind_by": 0})
     if "/actions/workflows/promote-main-to-stable.yml/runs" in path:
         respond({"workflow_runs": state.get("promote_runs", [])})
     if "/actions/workflows/" in path and "/runs" in path:
@@ -175,9 +177,25 @@ def test_workflow_contract() -> None:
 	wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 	assert wf["on"]["schedule"] == [{"cron": "0 */6 * * *"}]
 	assert "workflow_dispatch" in wf["on"]
-	assert wf["concurrency"]["group"] == "auto-release-stable-${{ github.repository }}"
+	assert wf["concurrency"]["group"] == "promote-main-to-stable", "must share the promote job's group so check-then-dispatch never interleaves with a promotion"
 	assert wf["concurrency"]["cancel-in-progress"] is False
 	assert wf["permissions"] == {"contents": "read", "actions": "write"}
 	run_step = next(s for s in wf["jobs"]["release-check"]["steps"] if "run" in s)
 	assert "bash scripts/auto_release_stable.sh" in run_step["run"]
 	assert run_step["env"]["AUTO_RELEASE_STABLE_ENABLED"] == "${{ vars.AUTO_RELEASE_STABLE_ENABLED || 'true' }}"
+
+
+def test_branch_behind_or_diverged_from_tag_fails_closed() -> None:
+	for status in ("behind", "diverged"):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, compare_status=status))
+		assert proc.returncode == 0, proc.stderr
+		assert f"AUTO_RELEASE_SKIPPED reason=branch_not_ahead sha={TIP} tag={'3' * 40} status={status}" in proc.stdout, status
+		assert not state.get("dispatches"), status
+
+
+def test_compare_identical_counts_as_up_to_date() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, compare_status="identical"))
+	assert "AUTO_RELEASE_SKIPPED reason=up_to_date" in proc.stdout
+	assert not state.get("dispatches")

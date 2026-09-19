@@ -134,8 +134,13 @@ def _compare(files: list[str], status: str = "ahead") -> dict:
 
 GATE_SUCCESS = [
 	[],
-	[{"id": 500, "status": "in_progress", "conclusion": None, "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
-	[{"id": 500, "status": "completed", "conclusion": "success", "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
+	[{"id": 500, "status": "in_progress", "conclusion": None, "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
+	[{"id": 500, "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
+]
+ADVANCED_TIP = "5" * 40
+GATE_SUCCESS_ON_ADVANCED_MAIN = [
+	[],
+	[{"id": 500, "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": ADVANCED_TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
 ]
 
 
@@ -302,3 +307,15 @@ def test_dispatcher_skip_after_gate_is_reported_as_skip() -> None:
 		proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS}, env={"STUB_DISPATCH_OUTCOME": "skipped"})
 	assert proc.returncode == 0, proc.stderr
 	assert "PROMOTE_CYCLE_SKIPPED reason=dispatcher:all_docs_processed smoke_run=500" in proc.stdout
+
+
+def test_smoke_sha_is_the_gate_runs_head_when_main_advanced_before_the_gate() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS_ON_ADVANCED_MAIN})
+		env_lines = env_out.read_text(encoding="utf-8").splitlines()
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "main advanced from " + TIP + " to " + ADVANCED_TIP in proc.stdout + proc.stderr
+	assert f"Smoke gate passed on {ADVANCED_TIP} (run 500)" in proc.stdout
+	assert f"APPLY_ANALYSIS_SMOKE_SHA={ADVANCED_TIP}" in env_lines
+	assert f"APPLY_ANALYSIS_CYCLE_BASELINE_SHA={TIP}" in env_lines
+	assert f"PROMOTE_CYCLE_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md baseline={TIP} smoke={ADVANCED_TIP}" in proc.stdout

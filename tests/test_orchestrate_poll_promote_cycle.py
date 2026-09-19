@@ -40,6 +40,15 @@ def _marker(role: str, **extra: str) -> str:
 	return "\n".join(lines)
 
 
+def _trusted(marker: str) -> dict:
+	"""The orchestrator posts the marker with GH_PAT, i.e. as the repository owner."""
+	return {"body": marker, "author_association": "OWNER", "user": {"login": "shubhodeep1"}}
+
+
+def _untrusted(marker: str) -> dict:
+	return {"body": marker, "author_association": "CONTRIBUTOR", "user": {"login": "drive-by"}}
+
+
 def _open_final_pr(number: int = 360) -> dict:
 	return {
 		"number": number,
@@ -80,7 +89,7 @@ def test_proving_run_completion_dispatches_verifying_run() -> None:
 			enable_validation="false",
 			max_validate_cycles="3",
 			tracking_labels=[LABEL],
-			tracking_comments=[_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA)],
+			tracking_comments=[_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))],
 			issue_labels={10: ["ai:merged"]},
 			prs=[dict(_open_final_pr(), merge_commit_sha=PROVING_MERGE_SHA)],
 			existing_branches=["main", "orchestrator/project-192"],
@@ -112,7 +121,7 @@ def test_proving_run_completion_reports_when_verifying_run_cannot_be_dispatched(
 			enable_validation="false",
 			max_validate_cycles="3",
 			tracking_labels=[LABEL],
-			tracking_comments=[_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA)],
+			tracking_comments=[_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))],
 			issue_labels={10: ["ai:merged"]},
 			prs=[_open_final_pr()],
 			existing_branches=["main", "orchestrator/project-192"],
@@ -133,21 +142,23 @@ def test_proving_run_retries_when_default_branch_ref_is_unavailable() -> None:
 			enable_validation="false",
 			max_validate_cycles="3",
 			tracking_labels=[LABEL],
-			tracking_comments=[_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA)],
+			tracking_comments=[_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))],
 			issue_labels={10: ["ai:merged"]},
 			prs=[_open_final_pr()],
 			existing_branches=["main", "orchestrator/project-192"],
 			env_overrides={"APPLY_ANALYSIS_DISPATCHER": str(stub)},
 		)
 		assert not env_out.exists()
-	assert "comprehensive_release_callback" not in result["latest_state"]
+	callback = result["latest_state"].get("comprehensive_release_callback", {})
+	assert callback.get("handled") is not True
+	assert callback.get("verification_retries") == 1
 	assert LABEL in result["tracking_labels"]
 	assert "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED" in result["stdout"]
 	assert "RETRY reason=default_branch_unavailable" in result["stdout"]
 
 
-def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None):
-	extra = {"compare_commits_detail": compare_commits}
+def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None, tag_commit: str = "9" * 40, untrusted_marker: bool = False, env_overrides: dict | None = None):
+	extra = {"compare_commits_detail": compare_commits, "tag_refs": {"stable": {"type": "tag", "sha": "8" * 40}}, "tag_objects": {"8" * 40: tag_commit}}
 	if commit_files:
 		extra["commit_files"] = commit_files
 	if runs_by_file:
@@ -158,18 +169,21 @@ def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: di
 		max_validate_cycles="3",
 		tracking_labels=[LABEL],
 		tracking_comments=[
-			_marker(
-				"verifying",
-				cycle_baseline_sha=BASELINE_SHA,
-				smoke_sha=SMOKE_SHA,
-				promote_sha=PROMOTE_SHA,
-				proving_merge_sha=PROVING_MERGE_SHA,
+			(untrusted_marker and _untrusted or _trusted)(
+				_marker(
+					"verifying",
+					cycle_baseline_sha=BASELINE_SHA,
+					smoke_sha=SMOKE_SHA,
+					promote_sha=PROMOTE_SHA,
+					proving_merge_sha=PROVING_MERGE_SHA,
+				)
 			)
 		],
 		issue_labels={10: ["ai:merged"]},
 		prs=prs or [_open_final_pr()],
 		existing_branches=["main", "orchestrator/project-192"],
 		mock_store_extra=extra,
+		env_overrides=env_overrides,
 	)
 
 
@@ -187,6 +201,7 @@ def test_verifying_ready_to_merge_promotes_pinned_sha_and_holds_merge() -> None:
 		_project_state(),
 		compare_commits=commits,
 		commit_files={BOT_SHA: ["analysis/validation-selftest-status.json", "docs/notes.md"]},
+		prs=[_open_final_pr(), {"number": 401, "state": "closed", "merged": True, "merged_at": "2026-09-18T00:00:00Z", "baseRefName": "main", "headRefName": "auto/forward-merge-stable-123-1", "merge_commit_sha": "1" * 40}],
 	)
 	promotion = result["latest_state"]["comprehensive_promotion"]
 	assert promotion["status"] == "dispatched", promotion
@@ -207,15 +222,18 @@ def test_verifying_hold_releases_after_successful_release_run() -> None:
 	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
 	first = _verifying_run(_project_state(), compare_commits=commits)
 	assert first["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+	assert first["latest_state"]["comprehensive_promotion"]["tag_before"] == "9" * 40
+	# A concurrent unrelated release run on stable is NOT enough: the tag has not moved.
 	runs = {
-		"promote-main-to-stable.yml": [
-			{"id": 1, "event": "workflow_dispatch", "status": "completed", "conclusion": "success", "head_branch": "main", "created_at": "2099-01-01T00:00:00Z"}
-		],
 		"test-and-mark-stable.yml": [
 			{"id": 2, "event": "workflow_dispatch", "status": "completed", "conclusion": "success", "head_branch": "stable", "created_at": "2099-01-01T00:10:00Z"}
 		],
 	}
-	second = _verifying_run(first["latest_state"], compare_commits=commits, runs_by_file=runs, prs=first["prs"])
+	still = _verifying_run(first["latest_state"], compare_commits=commits, runs_by_file=runs, prs=first["prs"])
+	assert still["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+	assert still["latest_state"]["final_merge_status"] != "merged"
+	# The stable tag now points at a descendant of promote_sha: promoted.
+	second = _verifying_run(still["latest_state"], compare_commits=commits, prs=first["prs"], tag_commit="7" * 40)
 	assert second["latest_state"]["comprehensive_promotion"]["status"] == "promoted"
 	assert second["latest_state"]["final_merge_status"] == "merged"
 	assert second["latest_state"]["status"] == "complete"
@@ -277,3 +295,68 @@ def test_legacy_label_without_marker_keeps_release_callback() -> None:
 	assert len(result["release_dispatches"]) == 1
 	assert result["release_dispatches"][0]["workflow"] == "promote-main-to-stable.yml"
 	assert "target_sha" not in result["release_dispatches"][0]
+
+
+def test_forward_merge_subject_without_matching_pr_counts_as_untested() -> None:
+	commits = [
+		_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1"),
+		_commit(HUMAN_SHA, "Merge pull request #402 from shubhodeep1/auto/forward-merge-stable-999-1", "shubhodeep1"),
+	]
+	# PR 402 exists but is an ordinary feature branch: the subject is spoofed.
+	spoof = {"number": 402, "state": "closed", "merged": True, "baseRefName": "main", "headRefName": "feature/not-a-forward-merge", "merge_commit_sha": HUMAN_SHA}
+	result = _verifying_run(_project_state(), compare_commits=commits, prs=[_open_final_pr(), spoof])
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "deferred"
+	assert result["release_dispatches"] == []
+
+
+def test_untrusted_marker_never_promotes_or_dispatches() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(_project_state(), compare_commits=commits, untrusted_marker=True)
+	assert "comprehensive_promotion" not in result["latest_state"]
+	assert result["release_dispatches"] == []
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["comprehensive_release_callback"]["role"] == "untrusted"
+	assert LABEL not in result["tracking_labels"]
+	assert "COMPREHENSIVE_MARKER_UNTRUSTED" in result["stdout"]
+
+
+def test_release_workflow_override_cannot_pin_and_fails_closed() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(
+		_project_state(),
+		compare_commits=commits,
+		env_overrides={"COMPREHENSIVE_RELEASE_WORKFLOW_FILE": "test-and-mark-stable.yml", "COMPREHENSIVE_RELEASE_WORKFLOW_REF": "stable"},
+	)
+	promotion = result["latest_state"]["comprehensive_promotion"]
+	assert promotion["status"] == "failed"
+	assert "cannot" in promotion["reason"] or "requires" in promotion["reason"]
+	assert result["release_dispatches"] == []
+	assert result["latest_state"]["final_merge_status"] == "merged"
+
+
+def test_transient_verifying_dispatch_outcome_is_retried_then_bounded() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		stub = Path(tmp) / "dispatcher_stub.sh"
+		stub.write_text("#!/usr/bin/env bash\necho 'APPLY_ANALYSIS_SKIPPED reason=orchestrate_run_in_flight workflow=internal-orchestrate.yml'\n", encoding="utf-8")
+		stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+		common = dict(
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_labels=[LABEL],
+			tracking_comments=[_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))],
+			issue_labels={10: ["ai:merged"]},
+			prs=[_open_final_pr()],
+			existing_branches=["main", "orchestrator/project-192"],
+			branch_ref_shas={"main": PROMOTE_SHA},
+		)
+		first = _run_poller(state=_project_state(), env_overrides={"APPLY_ANALYSIS_DISPATCHER": str(stub), "COMPREHENSIVE_VERIFICATION_RETRY_MAX": "1"}, **common)
+		assert first["latest_state"]["comprehensive_release_callback"].get("handled") is not True
+		assert first["latest_state"]["comprehensive_release_callback"]["verification_retries"] == 1
+		assert LABEL in first["tracking_labels"]
+		assert "retry=1/1" in first["stdout"]
+		second = _run_poller(state=first["latest_state"], env_overrides={"APPLY_ANALYSIS_DISPATCHER": str(stub), "COMPREHENSIVE_VERIFICATION_RETRY_MAX": "1"}, **dict(common, tracking_labels=first["tracking_labels"], prs=first["prs"]))
+		callback = second["latest_state"]["comprehensive_release_callback"]
+		assert callback["handled"] is True
+		assert callback["verification"].startswith("SKIPPED reason=orchestrate_run_in_flight")
+		assert "retries_exhausted=1" in callback["verification"]
+		assert LABEL not in second["tracking_labels"]

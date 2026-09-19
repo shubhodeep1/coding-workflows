@@ -12,6 +12,8 @@
 # Decision order (every exit is a logged, stable prefix):
 #   AUTO_RELEASE_SKIPPED reason=disabled          kill switch
 #   AUTO_RELEASE_SKIPPED reason=up_to_date        branch tip == tag commit
+#   AUTO_RELEASE_SKIPPED reason=branch_not_ahead   branch is behind or diverged
+#                                                 from the tag; fail closed
 #   AUTO_RELEASE_SKIPPED reason=release_in_flight the gate is queued/running
 #   AUTO_RELEASE_SKIPPED reason=last_gate_failed  the gate already failed or
 #                                                 was cancelled on this exact
@@ -118,6 +120,20 @@ fi
 
 if [ "${branch_tip}" = "${tag_commit}" ]; then
 	skip_release up_to_date "sha=${branch_tip}"
+fi
+if [[ "${tag_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+	# A differing tip only proves movement. Release only when the branch is
+	# strictly ahead of the tag commit; a rewound or diverged branch would
+	# retag consumers from history the release gate never validated.
+	compare_status="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/compare/${tag_commit}...${branch_tip}" | jq -r '.status // empty')"
+	case "${compare_status}" in
+		ahead) ;;
+		identical) skip_release up_to_date "sha=${branch_tip}" ;;
+		*)
+			echo "::warning::${AUTO_RELEASE_STABLE_BRANCH} (${branch_tip}) is '${compare_status:-unknown}' relative to the ${AUTO_RELEASE_STABLE_TAG} tag commit (${tag_commit}); refusing to release a rewound or diverged branch."
+			skip_release branch_not_ahead "sha=${branch_tip} tag=${tag_commit} status=${compare_status:-unknown}"
+			;;
+	esac
 fi
 
 runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${AUTO_RELEASE_STABLE_WORKFLOW_FILE}/runs?per_page=30")"

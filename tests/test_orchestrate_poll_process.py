@@ -2224,6 +2224,7 @@ if args[0] == 'api':
 				'mergeable_state': pr.get('mergeable_state', ''),
 				'merged': pr.get('merged', False),
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
+				'merge_commit_sha': pr.get('merge_commit_sha'),
 				'labels': [{'name': label} for label in pr.get('labels', [])],
 				'title': pr.get('title', ''),
 				'body': pr.get('body', ''),
@@ -2338,6 +2339,32 @@ if args[0] == 'api':
 		print(json.dumps({'ref': ref, 'object': {'sha': sha or 'mocksha'}}))
 		sys.exit(0)
 
+	m_tag_ref = re.search(r'/git/ref/tags/([^/]+)$', path)
+	if m_tag_ref:
+		tag_entry = (store.get('tag_refs') or {}).get(m_tag_ref.group(1))
+		if not tag_entry:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		payload = {'ref': 'refs/tags/' + m_tag_ref.group(1), 'object': {'type': tag_entry.get('type', 'commit'), 'sha': tag_entry['sha']}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
+	m_tag_obj = re.search(r'/git/tags/([0-9a-f]{40})$', path)
+	if m_tag_obj:
+		commit = (store.get('tag_objects') or {}).get(m_tag_obj.group(1))
+		if not commit:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		payload = {'object': {'type': 'commit', 'sha': commit}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
 	m = re.search(r'/git/ref/heads/(.+)$', path)
 	if m:
 		encoded_branch = m.group(1)
@@ -2460,6 +2487,8 @@ if args[0] == 'api':
 		else:
 			ahead_by = int(store.get('compare_ahead_by', 0))
 		compare_payload = {'ahead_by': ahead_by, 'behind_by': 0}
+		_range = path.split('/compare/', 1)[1]
+		compare_payload['status'] = (store.get('compare_status_by_range') or {}).get(_range) or ('identical' if ahead_by == 0 else 'ahead')
 		# Optional commit topology for the backpressure work-commit count:
 		# 'compare_commit_parent_counts' is a list of per-commit parent
 		# counts (1 = squash/regular commit, 2 = merge commit such as the
