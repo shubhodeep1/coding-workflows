@@ -474,6 +474,7 @@ stage_immutable_support_bundle()
 		return 1
 	fi
 	chmod -R go-w "${temporary_root}"
+	chmod 0555 "${temporary_root}"
 	if [ "$(id -u)" -eq 0 ]; then
 		chown -R root:root "${temporary_root}"
 	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
@@ -485,7 +486,6 @@ stage_immutable_support_bundle()
 		rm -rf -- "${temporary_root}"
 		return 1
 	fi
-	chmod 0555 "${temporary_root}"
 	mv -- "${temporary_root}" "${destination_root}"
 	destination_real="$(realpath -e -- "${destination_root}")" || return 1
 	support_scripts_dir="${destination_real}/scripts"

@@ -258,6 +258,8 @@ def test_immutable_support_bundle_enforces_dependency_closure_and_path_safety() 
 	assert "Immutable support dependency must be a regular non-symlink file" in helper
 	assert "Immutable support staging requires WORKFLOW_SUPPORT_REF to be a 40-character commit SHA" in helper
 	assert 'chmod 0555 "${temporary_root}"' in helper
+	assert helper.index('chmod 0555 "${temporary_root}"') < helper.index('chown -R root:root "${temporary_root}"')
+	assert helper.index('chmod 0555 "${temporary_root}"') < helper.index('sudo -n chown -R root:root "${temporary_root}"')
 	assert 'GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true' in helper
 	assert 'AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true' in helper
 
