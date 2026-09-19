@@ -2846,7 +2846,7 @@ done
 CODEX_HELPERS_SCRIPTS_DIR="${_validate_script_dir}"
 export CODEX_HELPERS_SCRIPTS_DIR
 model_provider_broker_start
-model_provider_broker_prepare_codex_writer "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
+model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
 
 emit_validate_substate() {
   local phase_name="$1"
@@ -2912,44 +2912,34 @@ run_validate_codex_attempt() {
   local output_file="$3"
   local log_file="$4"
   local status_file="$5"
+	local -a validate_codex_argv=()
 
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
   fi
 
-	if validate_thread_reuse_enabled; then
-		CODEX_THREAD_REUSE_STATE_KEY="${phase_name}" \
-		  CODEX_THREAD_REUSE_PROMPT_FILE="${prompt_file}" \
-		  CODEX_THREAD_REUSE_OUTPUT_FILE="${output_file}" \
-		  CODEX_THREAD_REUSE_PHASE="${phase_name}" \
-		  CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}" \
-		  CODEX_THREAD_REUSE_LOG_FILE="${log_file}" \
-		  CODEX_THREAD_REUSE_STATUS_FILE="${status_file}" \
-		  CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
-		  CODEX_THREAD_REUSE_HEARTBEAT_HELPER="${CODEX_HEARTBEAT_HELPER}" \
-		  CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true" \
-		  model_provider_broker_exec_sanitized bash "${CODEX_THREAD_REUSE_HELPER}" direct-run
-		return $?
-	fi
+	model_provider_broker_unprivileged_argv_into validate_codex_argv nobody \
+		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
+		--skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only || return $?
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-    model_provider_broker_exec_sanitized "${CODEX_STALL_GUARD_HELPER}" \
+    "${CODEX_STALL_GUARD_HELPER}" \
       --phase "${phase_name}" \
       --stdout-file "${output_file}" \
       --status-file "${status_file}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
+      -- "${validate_codex_argv[@]}" < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
     return $?
   fi
 
   if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    model_provider_broker_exec_sanitized "${CODEX_HEARTBEAT_HELPER}" \
+    "${CODEX_HEARTBEAT_HELPER}" \
       --phase "${phase_name}" \
       --stdout-file "${output_file}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
+      -- "${validate_codex_argv[@]}" < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
     return $?
   fi
 
-  model_provider_broker_exec_sanitized codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
+  "${validate_codex_argv[@]}" < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
 }
 
 export PATH="${HOME}/.local/bin:${PATH}"

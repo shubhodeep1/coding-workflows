@@ -133,7 +133,7 @@ def test_render_callers_stage_header_prompt() -> None:
 
 	plan_workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	plan_runner_text = PLAN_RUNNER.read_text(encoding="utf-8")
-	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in plan_workflow_text
+	assert "for f in gh_helpers.sh emit_event.sh emit_event.py run_plan_codex.sh render_prompt.sh" in plan_workflow_text
 	assert 'install -m 0644 "${src}" prompts/header.txt' in plan_workflow_text
 	assert 'src=".codex-workflow-src/prompts/header.txt"' in plan_workflow_text
 	assert '.codex-workflow-src-main/prompts/header.txt' not in plan_workflow_text

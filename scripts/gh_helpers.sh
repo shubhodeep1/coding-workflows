@@ -26,9 +26,20 @@ fi
 _GH_HELPERS_LOADED=1
 
 _GH_HELPERS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+if [ "${GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false}" = "true" ]; then
+	_GH_HELPERS_EXPECTED_DIR="$(realpath -e -- "${SUPPORT_SCRIPTS_DIR:?strict immutable-support mode requires SUPPORT_SCRIPTS_DIR}" 2>/dev/null || true)"
+	if [ -z "${_GH_HELPERS_EXPECTED_DIR}" ] || [ "${_GH_HELPERS_SCRIPT_DIR}" != "${_GH_HELPERS_EXPECTED_DIR}" ]; then
+		echo "::error::gh_helpers.sh resolved outside immutable support directory." >&2
+		return 1 2>/dev/null || exit 1
+	fi
+	unset _GH_HELPERS_EXPECTED_DIR
+fi
 if [ -f "${_GH_HELPERS_SCRIPT_DIR}/emit_event.sh" ]; then
 	# shellcheck disable=SC1091
 	source "${_GH_HELPERS_SCRIPT_DIR}/emit_event.sh"
+elif [ "${GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false}" = "true" ]; then
+	echo "::error::gh_helpers.sh strict immutable-support mode requires sibling emit_event.sh." >&2
+	return 1 2>/dev/null || exit 1
 elif [ -f "scripts/emit_event.sh" ]; then
 	# shellcheck disable=SC1091
 	source scripts/emit_event.sh

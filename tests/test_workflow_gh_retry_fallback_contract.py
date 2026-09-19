@@ -16,6 +16,15 @@ DISPATCH_WATCH_HELPER = REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run
 SOURCE_LINE = 'source scripts/gh_helpers.sh 2>/dev/null || true'
 FALLBACK_LINE = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }'
 SAFE_GH_JQ_LINE = 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {'
+
+
+def test_gh_helpers_strict_mode_forbids_checkout_local_event_fallback() -> None:
+	text = (REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8")
+	strict_index = text.index('GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false')
+	fallback_index = text.index('elif [ -f "scripts/emit_event.sh" ]')
+	assert strict_index < fallback_index
+	assert "gh_helpers.sh resolved outside immutable support directory" in text
+	assert "strict immutable-support mode requires sibling emit_event.sh" in text
 TARGET_STEPS = (
 	(".github/workflows/clarify.yml", "Fetch issue metadata"),
 	(".github/workflows/clarify.yml", "Fetch issue comments"),

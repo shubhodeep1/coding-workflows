@@ -299,6 +299,9 @@ jobs:
               "scripts/ai_memory_lib.py",
               "scripts/memory_injection_patterns.py",
               "scripts/openrouter_prompt_cache.py",
+              "scripts/semantic_cache.py",
+              "scripts/emit_event.sh",
+              "scripts/emit_event.py",
               "scripts/write_codex_config.sh",
               "scripts/codex_helpers.sh",
               "scripts/model_provider_broker.py",
@@ -404,9 +407,7 @@ jobs:
               "scripts/setup_serena.sh",
               "scripts/serena_stats_emit.py",
               "scripts/mcp_handshake_probe.py",
-              "scripts/transcript_archive.sh",
-              "scripts/emit_event.sh",
-              "scripts/emit_event.py"
+              "scripts/transcript_archive.sh"
             ],
             "serena_template_path": "scripts/templates/serena_project.yml.j2",
             "required_prompts": [
@@ -449,6 +450,13 @@ jobs:
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           WORKFLOW_SUPPORT_REF="${helper_ref}" bash "${helper_path}" validate --manifest "${manifest_path}"
+          {
+            echo "SUPPORT_ROOT_DIR=${GITHUB_WORKSPACE}"
+            echo "SUPPORT_SCRIPTS_DIR=${GITHUB_WORKSPACE}/scripts"
+            echo "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true"
+            echo "AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true"
+            echo "PYTHONPATH=${GITHUB_WORKSPACE}/scripts"
+          } >> "$GITHUB_ENV"
       - name: Initialize workspace metadata
         id: workspace_meta
         env:
@@ -612,7 +620,7 @@ jobs:
             exit 0
           fi
 
-          source scripts/gh_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 
           # Audit note: validate.yml's existing GitHub calls resolve the
           # integration branch and record memory events, but none expose the
@@ -658,7 +666,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --ensure-branch --require memory_record_run_event
 
           issue_number="${TRACKING_ISSUE}"
@@ -850,7 +858,7 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
-          bash scripts/validate_process.sh
+          bash "${SUPPORT_SCRIPTS_DIR}/validate_process.sh"
 
       - name: Run workspace after_run hook
         if: always() && steps.validate_run.outcome != 'skipped'
@@ -954,7 +962,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --require memory_record_candidate
 
           issue_number="${TRACKING_ISSUE}"
@@ -1074,7 +1082,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --require memory_record_run_event
 
           issue_number="${TRACKING_ISSUE}"
@@ -1135,7 +1143,7 @@ jobs:
             exit 0
           fi
 
-          bash scripts/orchestrate_force_tick.sh \
+          bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh" \
             --repo "${{ github.repository }}" \
             --tracking-issue "${TRACKING_ISSUE}" \
             --issue "${TRACKING_ISSUE}" \

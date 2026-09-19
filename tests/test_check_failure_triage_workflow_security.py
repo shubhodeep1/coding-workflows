@@ -21,6 +21,12 @@ def _workflow() -> dict:
 	return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
 
 
+def test_triage_stages_event_helpers_with_gh_helpers() -> None:
+	text = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "for f in gh_helpers.sh emit_event.sh emit_event.py" in text
+	assert "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true" in text
+
+
 def _step(job: dict, *, step_id: str | None = None, name: str | None = None) -> dict:
 	for candidate in job["steps"]:
 		if step_id is not None and candidate.get("id") == step_id:

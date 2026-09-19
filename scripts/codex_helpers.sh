@@ -451,6 +451,7 @@ model_provider_broker_prepare_codex_readonly()
 {
 	local isolation_user="${1:?isolation user required}" model="${2:?model required}" reasoning="${3:?reasoning required}"
 	local project_path="${4:-$(pwd)}" scripts_dir="" writer_path="" catalog_path="" codex_binary="" git_directory=""
+	local readonly_protected_path="" readonly_project_real="" readonly_support_real=""
 	scripts_dir="$(_codex_helpers_resolve_scripts_dir "${CODEX_HELPERS_SCRIPTS_DIR:-}")"
 	writer_path="${scripts_dir}/write_codex_config.sh"
 	catalog_path="${scripts_dir}/codex_model_catalog.json"
@@ -482,6 +483,25 @@ model_provider_broker_prepare_codex_readonly()
 		setfacl -R -b "${git_directory}"
 		chmod -R go-rwx "${git_directory}"
 	fi
+	readonly_project_real="$(realpath -e -- "${project_path}")" || return 1
+	readonly_support_real="$(realpath -e -- "${SUPPORT_SCRIPTS_DIR:-${project_path}}" 2>/dev/null || true)"
+	for readonly_protected_path in \
+		"${GITHUB_ENV:+$(dirname -- "${GITHUB_ENV}")}" \
+		"${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/.git}" \
+		"${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/.codex-workflow-src}"; do
+		[ -n "${readonly_protected_path}" ] && [ -e "${readonly_protected_path}" ] || continue
+		_model_provider_broker_capture_acl "${readonly_protected_path}" true
+		chmod -R go-rwx "${readonly_protected_path}" || return 1
+		setfacl -R -m "u:${isolation_user}:---" "${readonly_protected_path}" || return 1
+	done
+	case "${readonly_support_real}" in
+		""|"${readonly_project_real}"|"${readonly_project_real}"/*) ;;
+		*)
+			_model_provider_broker_capture_acl "${readonly_support_real}" true
+			chmod -R go-rwx "${readonly_support_real}" || return 1
+			setfacl -R -m "u:${isolation_user}:---" "${readonly_support_real}" || return 1
+			;;
+	esac
 	codex_binary="$(command -v codex 2>/dev/null || true)"
 	if [ -z "${codex_binary}" ]; then
 		echo "::error::codex executable is unavailable" >&2
@@ -490,6 +510,129 @@ model_provider_broker_prepare_codex_readonly()
 	model_provider_broker_grant_read_path "${codex_binary}" "${isolation_user}"
 	MODEL_PROVIDER_BROKER_ISOLATION_USER="${isolation_user}"
 	export CODEX_HOME MODEL_PROVIDER_BROKER_ISOLATION_USER
+}
+
+model_provider_broker_prepare_isolated_writer()
+{
+	local isolation_user="${1:?isolation user required}" workspace_path="${2:?workspace path required}"
+	local allow_list_path="${3:-}" workspace_real="" current_uid="" isolated_uid="" git_directory=""
+	local allowed_relative="" allowed_path="" protected_path=""
+	current_uid="$(id -u)"
+	isolated_uid="$(id -u -- "${isolation_user}" 2>/dev/null || true)"
+	if [ -z "${isolated_uid}" ] || [ "${isolated_uid}" = "${current_uid}" ]; then
+		echo "::error::isolated writer requires a dedicated UID" >&2
+		return 1
+	fi
+	workspace_real="$(realpath -e -- "${workspace_path}")" || return 1
+	[ -d "${workspace_real}" ] || return 1
+	if [ -e "${workspace_real}/.git" ]; then
+		echo "::error::isolated writer workspace must not contain .git" >&2
+		return 1
+	fi
+	if ! command -v getfacl >/dev/null 2>&1 || ! command -v setfacl >/dev/null 2>&1; then
+		echo "::error::getfacl/setfacl are required for isolated writer execution" >&2
+		return 1
+	fi
+	git_directory="$(git -C "${workspace_real}" rev-parse --absolute-git-dir 2>/dev/null || true)"
+	MODEL_PROVIDER_BROKER_ACL_BACKUP="${MODEL_PROVIDER_BROKER_ACL_BACKUP:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/model-provider-broker-access.acl}"
+	if [ ! -e "${MODEL_PROVIDER_BROKER_ACL_BACKUP}" ]; then
+		: > "${MODEL_PROVIDER_BROKER_ACL_BACKUP}"
+		chmod 0600 "${MODEL_PROVIDER_BROKER_ACL_BACKUP}"
+	fi
+	if [ -n "${git_directory}" ] && [ -e "${git_directory}" ]; then
+		_model_provider_broker_capture_acl "${git_directory}" true
+		chmod -R go-rwx "${git_directory}" || return 1
+		setfacl -R -x "u:${isolation_user}" "${git_directory}" 2>/dev/null || true
+	fi
+	_model_provider_broker_capture_acl "${workspace_real}" true
+	setfacl -R -m "u:${isolation_user}:rX" "${workspace_real}"
+	model_provider_broker_grant_read_path "${workspace_real}" "${isolation_user}"
+	if [ -n "${allow_list_path}" ]; then
+		[ -f "${allow_list_path}" ] || { echo "::error::isolated writer allow-list is missing" >&2; return 1; }
+		while IFS= read -r allowed_relative; do
+			[ -n "${allowed_relative}" ] || continue
+			case "${allowed_relative}" in /*|../*|*/../*|*/..) echo "::error::invalid isolated writer allow-list path" >&2; return 1 ;; esac
+			allowed_path="$(realpath -e -- "${workspace_real}/${allowed_relative}")" || return 1
+			case "${allowed_path}" in "${workspace_real}"/*) ;; *) return 1 ;; esac
+			setfacl -m "u:${isolation_user}:rw" "${allowed_path}"
+		done < "${allow_list_path}"
+	else
+		setfacl -R -m "u:${isolation_user}:rwX" "${workspace_real}"
+		find "${workspace_real}" -type d -exec setfacl -m "d:u:${isolation_user}:rwX" {} +
+	fi
+	for protected_path in \
+		"${GITHUB_ENV:+$(dirname -- "${GITHUB_ENV}")}" \
+		"${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/.git}" \
+		"${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/.codex-workflow-src}" \
+		"${SUPPORT_SCRIPTS_DIR:-}"; do
+		[ -n "${protected_path}" ] && [ -e "${protected_path}" ] || continue
+		_model_provider_broker_capture_acl "${protected_path}" true
+		chmod -R go-rwx "${protected_path}" || return 1
+		setfacl -R -m "u:${isolation_user}:---" "${protected_path}" || return 1
+	done
+	chmod 0700 "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
+	mkdir -p "${MODEL_PROVIDER_BROKER_AGENT_HOME}/thread-reuse"
+	sudo -n chown -R "${isolation_user}" "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
+	CODEX_THREAD_REUSE_RUNTIME_DIR="${MODEL_PROVIDER_BROKER_AGENT_HOME}/thread-reuse"
+	MODEL_PROVIDER_BROKER_ISOLATION_USER="${isolation_user}"
+	MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE="${workspace_real}"
+	export CODEX_THREAD_REUSE_RUNTIME_DIR MODEL_PROVIDER_BROKER_ACL_BACKUP MODEL_PROVIDER_BROKER_ISOLATION_USER MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE
+}
+
+model_provider_broker_exec_isolated_writer()
+{
+	local isolated_artifact="" artifact_mode="" runtime_real="" artifact_real="" artifact_parent=""
+	if [ -z "${MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE:-}" ]; then
+		echo "::error::isolated writer is not prepared" >&2
+		return 1
+	fi
+	runtime_real="$(realpath -e -- "${RUNTIME_DIR:?RUNTIME_DIR is required for isolated writer artifacts}")" || return 1
+	for isolated_artifact in \
+		"r:${CODEX_THREAD_REUSE_PROMPT_FILE:-}" \
+		"r:${CODEX_THREAD_REUSE_CONTINUATION_FILE:-}" \
+		"rw:${CODEX_THREAD_REUSE_OUTPUT_FILE:-}" \
+		"rw:${CODEX_THREAD_REUSE_LOG_FILE:-}" \
+		"rw:${CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE:-}" \
+		"rw:${CODEX_THREAD_REUSE_STATUS_FILE:-}"; do
+		artifact_mode="${isolated_artifact%%:*}"
+		isolated_artifact="${isolated_artifact#*:}"
+		[ -n "${isolated_artifact}" ] || continue
+		if [ "${artifact_mode}" = "rw" ] && [ ! -e "${isolated_artifact}" ]; then
+			: > "${isolated_artifact}" || return 1
+		fi
+		artifact_real="$(realpath -e -- "${isolated_artifact}")" || return 1
+		case "${artifact_real}" in "${runtime_real}"/*) ;; *) echo "::error::isolated writer artifact escapes RUNTIME_DIR" >&2; return 1 ;; esac
+		artifact_parent="$(dirname -- "${artifact_real}")"
+		_model_provider_broker_capture_acl "${artifact_parent}" false
+		setfacl -m "u:${MODEL_PROVIDER_BROKER_ISOLATION_USER}:x" "${artifact_parent}" || return 1
+		_model_provider_broker_capture_acl "${artifact_real}" false
+		setfacl -m "u:${MODEL_PROVIDER_BROKER_ISOLATION_USER}:${artifact_mode}" "${artifact_real}" || return 1
+	done
+	model_provider_broker_exec_unprivileged "${MODEL_PROVIDER_BROKER_ISOLATION_USER:?}" "$@"
+}
+
+model_provider_broker_finish_isolated_writer()
+{
+	local isolation_user="${MODEL_PROVIDER_BROKER_ISOLATION_USER:-}" cleanup_rc=0 isolated_pid="" isolated_cwd=""
+	if [ -n "${isolation_user}" ]; then
+		while IFS= read -r isolated_pid; do
+			[ -n "${isolated_pid}" ] || continue
+			isolated_cwd="$(readlink -f -- "/proc/${isolated_pid}/cwd" 2>/dev/null || true)"
+			case "${isolated_cwd}" in
+				"${MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE}"|"${MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE}"/*)
+					echo "::error::isolated writer process ${isolated_pid} survived model execution" >&2
+					return 1
+					;;
+			esac
+		done < <(pgrep -u "${isolation_user}" 2>/dev/null || true)
+	fi
+	if [ -s "${MODEL_PROVIDER_BROKER_ACL_BACKUP:-/nonexistent}" ]; then
+		sudo -n chown -R "$(id -u):$(id -g)" "${MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE}" || cleanup_rc=1
+		setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || cleanup_rc=1
+		: > "${MODEL_PROVIDER_BROKER_ACL_BACKUP}"
+	fi
+	unset MODEL_PROVIDER_BROKER_ISOLATED_WORKSPACE MODEL_PROVIDER_BROKER_ISOLATION_USER
+	return "${cleanup_rc}"
 }
 
 model_provider_broker_exec_sanitized()
@@ -603,6 +746,28 @@ model_provider_broker_unprivileged_argv_into()
 		LC_ALL="${LC_ALL:-C.UTF-8}"
 		NO_PROXY="127.0.0.1,localhost"
 		OPENROUTER_API_KEY="${MODEL_PROVIDER_BROKER_TOKEN}"
+		MODEL_PROVIDER_BROKER_BASE_URL="${MODEL_PROVIDER_BROKER_BASE_URL}"
+		MODEL_PROVIDER_BROKER_TOKEN="${MODEL_PROVIDER_BROKER_TOKEN}"
+		CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
+		CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-}"
+		CODEX_THREAD_REUSE_REAL_CODEX="${CODEX_THREAD_REUSE_REAL_CODEX:-}"
+		CODEX_THREAD_REUSE_WRAPPER_DIR="${CODEX_THREAD_REUSE_WRAPPER_DIR:-}"
+		CODEX_THREAD_REUSE_STATE_KEY="${CODEX_THREAD_REUSE_STATE_KEY:-}"
+		CODEX_THREAD_REUSE_PROMPT_FILE="${CODEX_THREAD_REUSE_PROMPT_FILE:-}"
+		CODEX_THREAD_REUSE_OUTPUT_FILE="${CODEX_THREAD_REUSE_OUTPUT_FILE:-}"
+		CODEX_THREAD_REUSE_PHASE="${CODEX_THREAD_REUSE_PHASE:-}"
+		CODEX_THREAD_REUSE_MODEL="${CODEX_THREAD_REUSE_MODEL:-}"
+		CODEX_THREAD_REUSE_LOG_FILE="${CODEX_THREAD_REUSE_LOG_FILE:-}"
+		CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE="${CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE:-}"
+		CODEX_THREAD_REUSE_STATUS_FILE="${CODEX_THREAD_REUSE_STATUS_FILE:-}"
+		CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_THREAD_REUSE_STALL_GUARD_HELPER:-}"
+		CODEX_THREAD_REUSE_HEARTBEAT_HELPER="${CODEX_THREAD_REUSE_HEARTBEAT_HELPER:-}"
+		CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="${CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK:-true}"
+		CODEX_THREAD_REUSE_TIMEOUT_SECS="${CODEX_THREAD_REUSE_TIMEOUT_SECS:-}"
+		CODEX_THREAD_REUSE_CONTINUATION_FILE="${CODEX_THREAD_REUSE_CONTINUATION_FILE:-}"
+		CODEX_THREAD_REUSE_TRANSFORM_MODE="${CODEX_THREAD_REUSE_TRANSFORM_MODE:-none}"
+		CODEX_THREAD_REUSE_MARKER_START="${CODEX_THREAD_REUSE_MARKER_START:-}"
+		CODEX_THREAD_REUSE_MARKER_END="${CODEX_THREAD_REUSE_MARKER_END:-}"
 		"$@"
 	)
 }

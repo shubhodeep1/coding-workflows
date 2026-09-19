@@ -94,7 +94,7 @@ jobs:
 
           MEMORY_HELPERS_READY=1
           _fetched_scripts=()
-          for f in gh_helpers.sh label_helpers.sh memory_helpers.sh tg_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+          for f in gh_helpers.sh emit_event.sh emit_event.py label_helpers.sh memory_helpers.sh tg_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py memory_injection_patterns.py; do
             support_script=".codex-workflow-src/scripts/${f}"
             if [ ! -s "${support_script}" ]; then
               echo "::error::Missing or empty required support script ${f} in ${wf_source}@${SCRIPT_REF}"
@@ -107,6 +107,13 @@ jobs:
             fi
             _fetched_scripts+=("${f}")
           done
+          {
+            echo "SUPPORT_ROOT_DIR=${GITHUB_WORKSPACE}"
+            echo "SUPPORT_SCRIPTS_DIR=${GITHUB_WORKSPACE}/scripts"
+            echo "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true"
+            echo "AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true"
+            echo "PYTHONPATH=${GITHUB_WORKSPACE}/scripts"
+          } >> "$GITHUB_ENV"
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {

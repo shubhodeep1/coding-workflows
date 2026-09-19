@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source scripts/gh_helpers.sh 2>/dev/null || true
+_run_plan_scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_run_plan_scripts_dir}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-source scripts/codex_helpers.sh
+source "${_run_plan_scripts_dir}/codex_helpers.sh"
 TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"
 
 PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-plan-inline.txt"

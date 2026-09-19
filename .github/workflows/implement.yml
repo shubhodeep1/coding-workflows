@@ -841,7 +841,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh model_provider_broker.py codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py; do
+          for f in gh_helpers.sh emit_event.sh emit_event.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh model_provider_broker.py codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
@@ -852,6 +852,13 @@ jobs:
             # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
             # see the persistence note above the loop.
           done
+          {
+            echo "SUPPORT_ROOT_DIR=${GITHUB_WORKSPACE}"
+            echo "SUPPORT_SCRIPTS_DIR=${GITHUB_WORKSPACE}/scripts"
+            echo "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true"
+            echo "AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true"
+            echo "PYTHONPATH=${GITHUB_WORKSPACE}/scripts"
+          } >> "$GITHUB_ENV"
 
           # The guard rejection handler runs after implement_commit_changes.sh,
           # whose fetched-manifest cleanup can remove repository support files.
@@ -878,16 +885,6 @@ jobs:
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional Serena support asset ${f} is unavailable on ${SCRIPT_REF}; Serena bootstrap remains disabled."
-              continue
-            fi
-            install -m 0755 "${src}" "scripts/${f}"
-            _fetched_scripts+=("${f}")
-          done
-
-          for f in emit_event.sh emit_event.py; do
-            src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ]; then
-              echo "::notice::Optional events mirror helper ${f} is unavailable on ${SCRIPT_REF}; stable text-prefix mirroring remains disabled."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
@@ -1259,7 +1256,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           issue_meta_matches_issue() {
@@ -1427,9 +1424,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
-          source scripts/label_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
           # Reuse the issue snapshot fetched in "Fetch issue metadata"
           # rather than re-hitting the API.  Falls back to a fresh API
           # call when the file is missing OR jq fails to parse it
@@ -1487,7 +1484,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --ensure-branch
 
           check_json="$(memory_processed_command_check \
@@ -1531,7 +1528,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           memory_record_run_event \
             --run-id "${{ github.run_id }}" \
@@ -1551,7 +1548,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           tg_cleanup_phase_msgs "${ISSUE_NUMBER}" "plan"
 
       - name: Extract implementation plan
@@ -1630,7 +1627,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          source scripts/codex_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
           # Centralised in scripts/write_codex_config.sh — wires the
           # apply_patch fix (model_catalog_json), the v0.113+ trust pre-
           # seed, and the elevated approval/sandbox combo at one place
@@ -1680,7 +1677,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --require memory_retrieve
 
           ISSUE_TITLE_JSON="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
@@ -1739,11 +1736,12 @@ jobs:
           # implementer immediately. Stripping invalid bytes before
           # piping is the cheapest insurance.
           # shellcheck source=/dev/null
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          source scripts/codex_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
           MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${MODEL_EDITOR_FALLBACK:+,${MODEL_EDITOR_FALLBACK}}" model_provider_broker_start
-          trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
           model_provider_broker_prepare_codex_writer "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
+          model_provider_broker_prepare_isolated_writer nobody "$(pwd)"
+          trap 'model_provider_broker_finish_isolated_writer && model_provider_broker_stop || { echo "::error::Isolated writer cleanup failed; refusing trusted follow-up." >&2; exit 1; }' EXIT
 
           # shellcheck source=/dev/null
           source scripts/transcript_archive.sh 2>/dev/null || true
@@ -2342,7 +2340,7 @@ jobs:
               CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
               CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
-              model_provider_broker_exec_sanitized bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
+              model_provider_broker_exec_isolated_writer bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3106,7 +3104,7 @@ jobs:
           if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
             CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
           fi
-          CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash scripts/validate_changed_files_syntax.sh
+          CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash "${SUPPORT_SCRIPTS_DIR}/validate_changed_files_syntax.sh"
 
       - name: Attempt post-Codex syntax repair
         if: env.SKIP_IMPLEMENT != 'true' && steps.validate_syntax_changed_files.outcome == 'failure'
@@ -3121,8 +3119,8 @@ jobs:
           # Source sanitize_codex_prompt_file (best-effort) so the
           # repair-prompt pipe to codex strips invalid UTF-8 first.
           # shellcheck source=/dev/null
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          source scripts/codex_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
 
           REPAIR_PROMPT_TEMPLATE="prompts/mode-implement-repair.txt"
           REPAIR_VALIDATOR_SCRIPT="scripts/validate_changed_files_syntax.sh"
@@ -3203,8 +3201,8 @@ jobs:
               ;;
           esac
           model_provider_broker_start
-          trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
           model_provider_broker_prepare_codex_writer "${MODEL_EDITOR}" "${REPAIR_REASONING}" "$(pwd)"
+          trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
           REPAIR_CODEX_CONFIG="${CODEX_HOME:-${HOME:-/root}/.codex}/config.toml"
           upsert_repair_reasoning_into_config() {
             local cfg="$1"
@@ -3418,6 +3416,8 @@ jobs:
 
           REPAIR_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/post_codex_repair_semble_query.txt"
           build_repair_semble_query "${REPAIR_SEMBLE_QUERY_FILE}"
+          model_provider_broker_prepare_isolated_writer nobody "$(pwd)" "${ALLOW_LIST_FILE}"
+          trap 'model_provider_broker_finish_isolated_writer && model_provider_broker_stop || { echo "::error::Isolated repair cleanup failed; refusing trusted follow-up." >&2; exit 1; }' EXIT
 
           repair_succeeded=false
           for attempt in $(seq 1 "${max_attempts}"); do
@@ -3508,7 +3508,7 @@ jobs:
               CODEX_THREAD_REUSE_CONTINUATION_FILE="${repair_thread_reuse_continuation_file}" \
               CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
               CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
-              model_provider_broker_exec_sanitized bash scripts/codex_thread_reuse.sh direct-run; then
+              model_provider_broker_exec_isolated_writer bash scripts/codex_thread_reuse.sh direct-run; then
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
@@ -3661,7 +3661,7 @@ jobs:
           fi
 
           # shellcheck source=/dev/null
-          source scripts/write_guard.sh
+          source "${SUPPORT_SCRIPTS_DIR}/write_guard.sh"
           IMPLEMENT_WRITE_GUARD_FILE="$(mktemp)"
           {
             git diff --name-only --diff-filter=ACMRD HEAD || true
@@ -3687,7 +3687,7 @@ jobs:
         id: commit_changes
         run: |
           set -euo pipefail
-          bash scripts/implement_commit_changes.sh
+          bash "${SUPPORT_SCRIPTS_DIR}/implement_commit_changes.sh"
 
       - name: Destructive-commit guard — label + alert on rejection
         # Runs ONLY when the early preflight or commit step exited non-zero
@@ -3736,7 +3736,7 @@ jobs:
           IMPL_NOOP_ANCESTRY_THRESHOLD: ${{ vars.IMPL_NOOP_ANCESTRY_THRESHOLD || '2' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -3951,7 +3951,7 @@ jobs:
           # The commit step may already have removed fetched helper artifacts
           # in caller repos, so only source label_helpers when available.
           if [ -f scripts/label_helpers.sh ]; then
-            source scripts/label_helpers.sh
+            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
             ensure_label_exists "ai:implementation-failed" "${{ github.repository }}"
           else
             gh_retry gh label create "ai:implementation-failed" --repo "${{ github.repository }}" \
@@ -3969,7 +3969,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
@@ -4127,7 +4127,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           # Both `force-review` and `e2e-smoke-test` are now in the
@@ -4151,7 +4151,7 @@ jobs:
             exit 1
           fi
           # shellcheck disable=SC1091
-          source scripts/label_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
           if ! type ensure_label_exists >/dev/null 2>&1; then
             echo "::error::scripts/label_helpers.sh did not export ensure_label_exists; aborting smoke-test PR creation (catalog drift risk)."
             exit 1
@@ -4241,7 +4241,7 @@ jobs:
           fi
           printf '%s\n\n' "${PR_TITLE}" > "${PR_LINT_FILE}"
           cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py \
+          PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/lint_pr_body_auto_close.py" \
             --pr-body-file "${PR_LINT_FILE}" \
             --repo "${GITHUB_REPOSITORY}"
 
@@ -4252,7 +4252,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           PR_TITLE_FILE="${RUNTIME_DIR}/pr-body-lint/title.txt"
           PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"
@@ -4360,7 +4360,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           PR_NUMBER="$(printf '%s\n' "${PR_URL}" | sed -E 's#.*/pull/([0-9]+).*#\1#')"
@@ -4380,7 +4380,7 @@ jobs:
           # source itself is missing.
           if [ -f scripts/label_helpers.sh ]; then
             # shellcheck disable=SC1091
-            source scripts/label_helpers.sh
+            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
           fi
           if type ensure_label_exists >/dev/null 2>&1; then
             ensure_label_exists "force-review" "${REPOSITORY}" >/dev/null 2>&1 || true
@@ -4478,7 +4478,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           PR_URL="$(jq -r '.pr_url // ""' "${PR_METADATA_FILE}")"
           SUMMARY="Implementation PR created for issue #${ISSUE_NUMBER}: ${PR_URL}"
@@ -4501,7 +4501,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           memory_processed_command_complete \
             --issue-number "${ISSUE_NUMBER}" \
@@ -4514,7 +4514,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           PR_NUMBER_STR="$(jq -r 'if .pr_number == null then "" else (.pr_number|tostring) end' "${PR_METADATA_FILE}")"
           FINALIZE_ARGS=(
@@ -4542,8 +4542,8 @@ jobs:
           # Source sanitize_codex_prompt_file (best-effort) so the
           # concatenated prompt is UTF-8-clean before piping to codex.
           # shellcheck source=/dev/null
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          source scripts/codex_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
           model_provider_broker_start
           model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
 
@@ -4599,7 +4599,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           if [ ! -s "${ISSUE_SUMMARY_FILE}" ]; then
@@ -4625,7 +4625,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           gh_retry gh label create "ai:done" --repo "${{ github.repository }}" \
             --color "0e8a16" --description "Implementation PR created" \
@@ -4640,7 +4640,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          bash scripts/orchestrate_force_tick.sh \
+          bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh" \
             --repo "${{ github.repository }}" \
             --issue "${ISSUE_NUMBER}" \
             --reason "implement-pr-created" \
@@ -4651,7 +4651,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           PR_NUMBER_STR="$(jq -r 'if .pr_number == null then "" else (.pr_number|tostring) end' "${PR_METADATA_FILE}")"
           EVENT_ARGS=(
@@ -4675,7 +4675,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           gh_retry gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
             --color "fbca04" --description "Awaiting human approval to implement" \
@@ -4690,7 +4690,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
             local _tmpf
@@ -4829,7 +4829,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           # Reuse the cached issue snapshot when available — see the
           # "Fetch issue metadata" step.  Falls back to a fresh API
@@ -4870,7 +4870,7 @@ jobs:
             echo "tg_helpers.sh not available; skipping Telegram notification."
             exit 0
           fi
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
@@ -4896,7 +4896,7 @@ jobs:
           set -euo pipefail
           support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
           if [ -f scripts/memory_helpers.sh ]; then
-            source scripts/memory_helpers.sh
+            source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           else
             if [ ! -d "${support_checkout_root}" ]; then
               exit 0
@@ -4909,7 +4909,7 @@ jobs:
               fi
               install -m 0755 "${src}" "scripts/${f}"
             done
-            source scripts/memory_helpers.sh
+            source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           fi
 
           if [ -f scripts/memory_helpers.sh ]; then

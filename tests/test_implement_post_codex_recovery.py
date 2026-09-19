@@ -130,6 +130,7 @@ def _isolated_test_env(extra_env: dict[str, str] | None = None, *, cwd: Path | N
 
 def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 	env = _isolated_test_env(env, cwd=cwd)
+	env.setdefault("SUPPORT_SCRIPTS_DIR", str(cwd / "scripts"))
 	script_path = cwd / "__workflow_step_under_test.sh"
 	script_path.write_text(script, encoding="utf-8")
 	script_path.chmod(0o755)
@@ -1289,7 +1290,7 @@ def test_self_repo_guards_use_exact_canonical_repo_match() -> None:
 		assert 'if [ "${{ github.repository }}" = "${wf_source}" ]; then' in block
 		assert 'if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then' not in block
 
-	assert "bash scripts/implement_commit_changes.sh" in commit_step
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/implement_commit_changes.sh"' in commit_step
 	assert 'wf_source="shubhodeep1/coding-workflows"' in commit_helper
 	assert 'if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then' in commit_helper
 	assert 'if [[ "${GITHUB_REPOSITORY:-}" == *"/coding-workflows" ]]; then' not in commit_helper
@@ -1497,7 +1498,7 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block
-	assert "bash scripts/validate_changed_files_syntax.sh" in validate_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/validate_changed_files_syntax.sh"' in validate_block
 
 
 def test_post_codex_syntax_repair_step_contract() -> None:
@@ -1770,7 +1771,7 @@ def test_destructive_guard_handler_covers_unsafe_fetched_manifest_rejections() -
 def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
 	commit_step = _step_block_text("Commit changes")
 	commit_helper = _implement_commit_script_text()
-	assert "bash scripts/implement_commit_changes.sh" in commit_step
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/implement_commit_changes.sh"' in commit_step
 	assert 'STEP_NAME="Commit changes"' not in commit_step
 	assert "canonical_deletions" in commit_helper
 	assert "ALLOW_WORKFLOW_EDITS" in commit_helper
@@ -3214,7 +3215,7 @@ def test_codex_blocked_verdict_bail_and_flag() -> None:
 	)
 	# The reason must be logged so the workflow log names WHY the loop
 	# stopped without the operator opening codex_output.txt.
-	escape_helper_source_idx = codex_block.find("source scripts/gh_helpers.sh")
+	escape_helper_source_idx = codex_block.find('source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"')
 	assert 0 <= escape_helper_source_idx < blocked_idx, (
 		"the GitHub Actions annotation escaper must be sourced before the BLOCKED bail"
 	)

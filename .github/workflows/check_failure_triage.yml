@@ -256,7 +256,7 @@ jobs:
           mkdir -p scripts
 
           _fetched=()
-          for f in gh_helpers.sh tg_helpers.sh render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh model_provider_broker.py collect_pr_check_runs_context.py check_failure_triage.sh; do
+          for f in gh_helpers.sh emit_event.sh emit_event.py tg_helpers.sh render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh model_provider_broker.py collect_pr_check_runs_context.py check_failure_triage.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               if [ "${f}" = "render_prompt.py" ]; then
@@ -269,6 +269,12 @@ jobs:
             install -m 0755 "${src}" "scripts/${f}"
             _fetched+=("${f}")
           done
+          {
+            echo "SUPPORT_ROOT_DIR=${GITHUB_WORKSPACE}"
+            echo "SUPPORT_SCRIPTS_DIR=${GITHUB_WORKSPACE}/scripts"
+            echo "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true"
+            echo "PYTHONPATH=${GITHUB_WORKSPACE}/scripts"
+          } >> "$GITHUB_ENV"
 
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
           if [ -f "${catalog_src}" ]; then

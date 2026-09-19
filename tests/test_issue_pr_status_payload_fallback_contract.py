@@ -14,6 +14,14 @@ def _workflow_text() -> str:
 	return WORKFLOW.read_text(encoding="utf-8")
 
 
+def test_issue_status_stages_complete_transitive_support_closure() -> None:
+	text = _workflow_text()
+	assert "gh_helpers.sh emit_event.sh emit_event.py" in text
+	assert "ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py memory_injection_patterns.py" in text
+	assert "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true" in text
+	assert "AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true" in text
+
+
 def _step_script(step_name: str) -> str:
 	text = _workflow_text()
 	step_marker = f"      - name: {step_name}\n"

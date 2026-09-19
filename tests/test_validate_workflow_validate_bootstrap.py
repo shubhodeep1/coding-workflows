@@ -249,6 +249,30 @@ def test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metach
 		assert not marker_path.exists()
 
 
+def test_immutable_support_bundle_enforces_dependency_closure_and_path_safety() -> None:
+	helper = _helper_text()
+	assert "stage_immutable_support_bundle()" in helper
+	assert "scripts/emit_event.sh scripts/emit_event.py" in helper
+	assert "scripts/openrouter_prompt_cache.py scripts/semantic_cache.py scripts/memory_injection_patterns.py" in helper
+	assert "Immutable support dependency escapes source checkout" in helper
+	assert "Immutable support dependency must be a regular non-symlink file" in helper
+	assert 'GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true' in helper
+	assert 'AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true' in helper
+
+
+def test_validate_support_manifest_requires_memory_and_event_dependencies() -> None:
+	wf = _workflow_text()
+	for required_path in (
+		'"scripts/semantic_cache.py"',
+		'"scripts/memory_injection_patterns.py"',
+		'"scripts/emit_event.sh"',
+		'"scripts/emit_event.py"',
+	):
+		assert required_path in wf
+	validate_process = (REPO_ROOT / "scripts" / "validate_process.sh").read_text(encoding="utf-8")
+	assert 'model_provider_broker_prepare_codex_readonly nobody' in validate_process
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
 	test_validate_runtime_action_comes_from_validated_workflow_sha()

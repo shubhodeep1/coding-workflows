@@ -11,6 +11,7 @@ import base64
 import contextlib
 import fcntl
 import hashlib
+import importlib
 import json
 import logging
 import math
@@ -30,33 +31,51 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-try:
-    from openrouter_prompt_cache import add_ephemeral_cache_breakpoint, should_retry_without_breakpoint
-except ModuleNotFoundError:
-    from scripts.openrouter_prompt_cache import add_ephemeral_cache_breakpoint, should_retry_without_breakpoint
+
+def _import_support_module(module_name: str) -> Any:
+    """Import a support dependency and enforce immutable provenance when requested."""
+    try:
+        imported_module = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        imported_module = importlib.import_module(f"scripts.{module_name}")
+
+    if os.environ.get("AI_MEMORY_STRICT_IMMUTABLE_SUPPORT", "").lower() == "true":
+        support_scripts_value = os.environ.get("SUPPORT_SCRIPTS_DIR", "")
+        if not support_scripts_value:
+            raise RuntimeError("strict immutable-support mode requires SUPPORT_SCRIPTS_DIR")
+        support_scripts_path = Path(support_scripts_value).resolve(strict=True)
+        module_file_value = getattr(imported_module, "__file__", None)
+        if not module_file_value:
+            raise RuntimeError(f"support module {module_name} has no file provenance")
+        module_file_path = Path(module_file_value).resolve(strict=True)
+        if module_file_path.parent != support_scripts_path:
+            raise RuntimeError(
+                f"support module {module_name} resolved outside immutable support directory"
+            )
+    return imported_module
+
+
+_openrouter_prompt_cache_module = _import_support_module("openrouter_prompt_cache")
+add_ephemeral_cache_breakpoint = _openrouter_prompt_cache_module.add_ephemeral_cache_breakpoint
+should_retry_without_breakpoint = _openrouter_prompt_cache_module.should_retry_without_breakpoint
 
 try:
-    from semantic_cache import (
-        DEFAULT_EMBEDDING_BASE_URL as _SEARCH_EMBEDDING_BASE_URL_DEFAULT,
-        DEFAULT_EMBEDDING_MODEL as _SEARCH_EMBEDDING_MODEL_DEFAULT,
-    )
+    _semantic_cache_module = _import_support_module("semantic_cache")
+    _SEARCH_EMBEDDING_BASE_URL_DEFAULT = _semantic_cache_module.DEFAULT_EMBEDDING_BASE_URL
+    _SEARCH_EMBEDDING_MODEL_DEFAULT = _semantic_cache_module.DEFAULT_EMBEDDING_MODEL
 except ModuleNotFoundError:
-    try:
-        from scripts.semantic_cache import (
-            DEFAULT_EMBEDDING_BASE_URL as _SEARCH_EMBEDDING_BASE_URL_DEFAULT,
-            DEFAULT_EMBEDDING_MODEL as _SEARCH_EMBEDDING_MODEL_DEFAULT,
-        )
-    except ModuleNotFoundError:
-        _SEARCH_EMBEDDING_MODEL_DEFAULT = "openai/text-embedding-3-small"
-        _SEARCH_EMBEDDING_BASE_URL_DEFAULT = "https://openrouter.ai/api/v1"
+    if os.environ.get("AI_MEMORY_STRICT_IMMUTABLE_SUPPORT", "").lower() == "true":
+        raise
+    _SEARCH_EMBEDDING_MODEL_DEFAULT = "openai/text-embedding-3-small"
+    _SEARCH_EMBEDDING_BASE_URL_DEFAULT = "https://openrouter.ai/api/v1"
 
 try:
-    from memory_injection_patterns import scan as _scan_memory_injection_patterns
+    _memory_injection_patterns_module = _import_support_module("memory_injection_patterns")
+    _scan_memory_injection_patterns = _memory_injection_patterns_module.scan
 except ModuleNotFoundError:
-    try:
-        from scripts.memory_injection_patterns import scan as _scan_memory_injection_patterns
-    except ModuleNotFoundError:
-        _scan_memory_injection_patterns = None
+    if os.environ.get("AI_MEMORY_STRICT_IMMUTABLE_SUPPORT", "").lower() == "true":
+        raise
+    _scan_memory_injection_patterns = None
 
 _log = logging.getLogger(__name__)
 
