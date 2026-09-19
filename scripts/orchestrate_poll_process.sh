@@ -12536,6 +12536,37 @@ _reset_implementing_to_awaiting_approval_for_retrigger()
   return 1
 }
 
+# Return 0 when a trusted staged-support latch has no trusted release after
+# it, 1 when no unresolved latch exists, and 2 for malformed comment input.
+# Event timestamps and IDs make this independent of REST/GraphQL array order.
+_staged_support_latch_release_incomplete()
+{
+  local staged_support_comments_json="$1"
+  if ! printf '%s' "${staged_support_comments_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    return 2
+  fi
+  printf '%s' "${staged_support_comments_json}" | jq -e '
+    def trusted:
+      ((.user.login // "" | test("\\[bot\\]$")) or
+       ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")));
+    def event_key:
+      [(.created_at // ""), ((.id // .databaseId // 0) | tonumber? // 0)];
+    def staged_support_latch:
+      ((.body // "") | (
+        contains("<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->") or
+        (startswith("🚨 **Staged-support restore failed; implementation halted.**") and
+         contains("/actions/runs/35072286584"))));
+    ([.[] | select(trusted and staged_support_latch)] | max_by(event_key) // null) as $latch
+    | $latch != null
+    and ([.[]
+      | select(
+          trusted and
+          ((.body // "") | contains("<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict")) and
+          (event_key > ($latch | event_key))
+        )] | length == 0)
+  ' >/dev/null 2>&1
+}
+
 execute_stall_recovery_action() {
   local issue_num="$1"
   local phase="$2"
@@ -12635,6 +12666,24 @@ STALL_EOF
         tg_notify "Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
         STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return 0
+      fi
+      local _managed_staged_support_comments='[]'
+      local _managed_staged_support_latch_rc=0
+      if [ -n "${_current_wave_details_json:-}" ] \
+        && printf '%s' "${_current_wave_details_json}" | jq -e --arg n "${issue_num}" 'has($n)' >/dev/null 2>&1; then
+        _managed_staged_support_comments="$(printf '%s' "${_current_wave_details_json}" | jq -c --arg n "${issue_num}" '.[$n].comments // []' 2>/dev/null || printf '')"
+      else
+        # The issue-state and linked-PR caches do not carry comment bodies.
+        # Fall back only when the existing current-wave GraphQL batch missed.
+        _managed_staged_support_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null || printf '')"
+      fi
+      _staged_support_latch_release_incomplete "${_managed_staged_support_comments}" || _managed_staged_support_latch_rc=$?
+      if [ "${_managed_staged_support_latch_rc}" -eq 0 ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_release_incomplete phase=${phase} action=none"
+        return 1
+      elif [ "${_managed_staged_support_latch_rc}" -eq 2 ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_comments_unavailable phase=${phase} action=none"
+        return 1
       fi
       echo "  Auto-approving plan for issue #${issue_num}..."
       local _auto_approve_rc=0
@@ -14537,8 +14586,8 @@ _reconcile_merged_pr_issue() {
 #
 # Scope is deliberately narrow: only latches whose latest latch comment is
 # the staged-support one (marker `<!-- ai:needs-human-latch
-# reason=staged_support_rebase_conflict -->`, or the pre-marker header
-# `🚨 **Staged-support restore failed; implementation halted.**`) are
+# reason=staged_support_rebase_conflict -->`, or the exact pre-marker incident
+# from run 35072286584) are
 # released, only in this source repository, only when the matching comment
 # came from a trusted repository actor or installed bot, and only when the
 # engine carries scripts/implement_staged_support_workspace.sh (the fix,
@@ -14554,8 +14603,8 @@ _reconcile_merged_pr_issue() {
 # API calls (§15): in this source repository, one paginated `issues` REST read
 # per tick; per latched issue one paginated comments read, one paginated events
 # read, one label edit, and one comment write.  The poller's existing issue
-# caches do not carry comment authorship, label-event provenance, or the
-# historical release markers this sweep must verify.  Every
+# cache carries only the latest 100 comments; it does not carry full marker
+# history or label-event provenance, both of which this sweep must verify. Every
 # read failure skips that issue for the tick (fail open); consumer
 # repositories, a kill switch
 # (STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED=false) and an unresolved engine
@@ -14615,7 +14664,7 @@ release_staged_support_needs_human_latches() {
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=other_human_gated_latch_present"
       continue
     fi
-    if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+    if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=comments_unavailable"
       continue
     fi
@@ -14628,7 +14677,8 @@ release_staged_support_needs_human_latches() {
             ) and
             ((.value.body // "") | (
               contains("<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->")
-              or startswith("🚨 **Staged-support restore failed; implementation halted.**")
+              or (startswith("🚨 **Staged-support restore failed; implementation halted.**")
+                  and contains("/actions/runs/35072286584"))
             ))
           )
         | {idx: .key, created_at: (.value.created_at // ""), actor_login: (.value.user.login // "")}]
@@ -14794,6 +14844,7 @@ run_standalone_stall_recovery() {
   local took_action
   local _standalone_latch_label
   local _standalone_phase_resolve_rc
+  local _standalone_staged_support_latch_rc
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
@@ -14808,7 +14859,7 @@ run_standalone_stall_recovery() {
       comments_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].comments // []')"
     else
       labels_json="$(get_issue_labels_json "${issue_num}")"
-      comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
+      comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // [] | sort_by(.created_at // "")' 2>/dev/null || echo '[]')"
     fi
     has_pipeline_label="$(echo "${labels_json}" | jq -r --argjson wanted "${pipeline_labels}" '[.[] | select($wanted | index(.))] | length')"
     has_marker="$(echo "${comments_json}" | jq -r '[.[] | select((.body // "") | test("<!-- AI_STANDALONE_STALL_STATE_V1|<!-- ai:clarification-questions -->"))] | length')"
@@ -14842,24 +14893,16 @@ PY
     # both the /approved POST and the compensating label edit fail.  The
     # original latch comment is the durable record: never let generic stall
     # recovery auto-approve until a trusted release comment follows it.
-    if [ "${phase}" = "ai:awaiting-approval" ] && printf '%s' "${comments_json}" | jq -e '
-      ([to_entries[]
-        | select(
-            ((.value.user.login // "" | test("\\[bot\\]$")) or
-             ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))) and
-            ((.value.body // "") | (
-              contains("<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->") or
-              startswith("🚨 **Staged-support restore failed; implementation halted.**")))
-          )] | last // null) as $latch
-      | $latch != null
-      and (any(to_entries[];
-        .key > $latch.key and
-        (((.value.user.login // "" | test("\\[bot\\]$")) or
-          ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))) and
-         ((.value.body // "") | contains("<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict")))) | not)
-    ' >/dev/null 2>&1; then
-      echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_release_incomplete phase=${phase} action=none"
-      continue
+    if [ "${phase}" = "ai:awaiting-approval" ]; then
+      _standalone_staged_support_latch_rc=0
+      _staged_support_latch_release_incomplete "${comments_json}" || _standalone_staged_support_latch_rc=$?
+      if [ "${_standalone_staged_support_latch_rc}" -eq 0 ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_release_incomplete phase=${phase} action=none"
+        continue
+      elif [ "${_standalone_staged_support_latch_rc}" -eq 2 ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_comments_unavailable phase=${phase} action=none"
+        continue
+      fi
     fi
 
     # Human-gated latch labels: implement.yml's

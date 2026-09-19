@@ -4071,6 +4071,7 @@ jobs:
           SVB_ALLOWLIST: ${{ steps.preflight_destructive_guard.outputs.scope_violation_allowlist || steps.commit_changes.outputs.scope_violation_allowlist }}
           SSB_REASON: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict || steps.commit_changes.outputs.staged_support_rebase_conflict }}
           SSB_FILES: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict_files || steps.commit_changes.outputs.staged_support_rebase_conflict_files }}
+          SSB_AUTO_RELEASE_SAFE: ${{ steps.commit_changes.outputs.staged_support_auto_release_safe }}
         run: |
           set -euo pipefail
           bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"

@@ -248,11 +248,13 @@ a new value, add it to the appropriate overrides file with a
 - Staged-support failures are consumed by the runtime-preserved rejection handler,
   which attempts and verifies the `ai:needs-human` latch, comments with the affected paths and
   latch status, sends the configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.
-  The comment opens with `<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->`;
-  the source-repository poller's `release_staged_support_needs_human_latches` sweep (gated by
+  Genuine three-way rebase conflicts add
+  `<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->`; missing ledgers,
+  baselines, unsafe paths, and merge-tool failures remain human-gated without that marker.
+  The source-repository poller's `release_staged_support_needs_human_latches` sweep (gated by
   `STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED`, default `true`) runs in sweep-only mode when no
-  tracking project is active and matches that marker or the
-  pre-marker header only on comments from an `OWNER`, `MEMBER`, `COLLABORATOR`, or installed
+  tracking project is active and matches that marker or the exact pre-marker #4113 incident
+  from run `35072286584`, only on comments from an `OWNER`, `MEMBER`, `COLLABORATOR`, or installed
   `[bot]`, and once the running engine carries
   `scripts/implement_staged_support_workspace.sh` it restores `ai:awaiting-approval` and posts
   `/approved` with a `<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict
@@ -262,7 +264,7 @@ a new value, add it to the appropriate overrides file with a
   the staged-support comment and have the same actor, so clearing that latch and later setting
   another human gate cannot reuse the stale marker. A failed `/approved` write restores
   `ai:needs-human`; if that compensation also fails, the unresolved latch marker blocks
-  standalone auto-approval and raises a CRITICAL alert. Consumer repositories and other latch
+  managed and standalone auto-approval and raises a CRITICAL alert. Consumer repositories and other latch
   reasons stay human-cleared.
 - The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,

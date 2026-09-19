@@ -1821,7 +1821,7 @@ if args[0] == 'api':
 					comment_nodes.append({
 						'databaseId': int(comment.get('id', 0) or 0),
 						'body': str(comment.get('body', '')),
-						'createdAt': '2026-01-01T00:00:00Z',
+						'createdAt': str(comment.get('created_at', '2026-01-01T00:00:00Z')),
 						'authorAssociation': str(comment.get('author_association', '')),
 						'author': {'login': str((comment.get('user') or {}).get('login', ''))},
 					})
@@ -4889,6 +4889,21 @@ def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_al
 	assert "ai:needs-human" not in marker_only["issues"]["700"]["labels"]
 	assert "ai:awaiting-approval" in marker_only["issues"]["700"]["labels"]
 
+	# Header-only compatibility is limited to the known #4113 incident run.
+	# Other historical staged-support failures did not encode their specific
+	# failure class and therefore remain human-gated.
+	ambiguous_legacy_latch = _staged_support_latch_comment()
+	ambiguous_legacy_latch["body"] = ambiguous_legacy_latch["body"].replace("35072286584", "99999999999")
+	ambiguous_legacy = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[ambiguous_legacy_latch],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in ambiguous_legacy["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=no_staged_support_latch_comment" in (
+		ambiguous_legacy["stdout"] + ambiguous_legacy["stderr"]
+	)
+
 	trusted_marker_spoof = _run_latch_release_tick(
 		issue_labels=["ai:needs-human"],
 		issue_comments=[_staged_support_latch_comment("OWNER", "different-maintainer")],
@@ -5073,6 +5088,71 @@ def test_staged_support_latch_release_is_source_only_and_compensates_comment_fai
 	half_released_log = half_released["stdout"] + half_released["stderr"]
 	assert "STALL_SKIP issue=700 reason=staged_support_latch_release_incomplete phase=ai:awaiting-approval action=none" in half_released_log
 	assert not any(comment["body"].startswith("/approved") for comment in half_released["issues"]["700"]["comments"])
+
+
+def test_managed_auto_approve_skips_unresolved_staged_support_latch() -> None:
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:awaiting-approval"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	latch_comment = _staged_support_latch_comment()
+	latch_comment["body"] = (
+		"<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\n"
+		+ latch_comment["body"]
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [latch_comment]},
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert "STALL_SKIP issue=10 reason=staged_support_latch_release_incomplete phase=ai:awaiting-approval action=none" in combined_log
+	assert not any(comment["body"].startswith("/approved") for comment in result["issues"]["10"]["comments"])
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_staged_support_release_guard_is_comment_order_independent() -> None:
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	latch_comment = _staged_support_latch_comment()
+	latch_comment["body"] = (
+		"<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\n"
+		+ latch_comment["body"]
+	)
+	latch_comment["created_at"] = "2026-01-01T00:00:02Z"
+	release_comment = _staged_support_release_comment("c" * 40)
+	release_comment["created_at"] = "2026-01-01T00:00:03Z"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		# Deliberately newest-first, matching the former REST fallback shape.
+		issue_comments={501: [release_comment, latch_comment, standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert "reason=staged_support_latch_release_incomplete" not in combined_log
+	approved_comments = [
+		comment["body"] for comment in result["issues"]["501"]["comments"]
+		if comment["body"].startswith("/approved")
+	]
+	assert len(approved_comments) == 2
 
 
 def test_security_pass_cycle_exhaustion_drops_oversized_findings_table_by_bytes() -> None:
