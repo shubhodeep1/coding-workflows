@@ -231,6 +231,7 @@ changelog.d/orchestrator-security-pass-phase-4-default-on.md
 changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
 changelog.d/security-audit-concurrency-deadlock.md
+changelog.d/security-pass-line-ownership-engine.md
 changelog.d/seed-repo-command.md
 changelog.d/slash-commands-session-model.md
 changelog.d/stall-recovery-dead-end-fixes.md
