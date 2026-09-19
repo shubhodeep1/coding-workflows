@@ -686,6 +686,7 @@ def _run_poller(
 	issue_comments: dict[int, list[str | dict]] | None = None,
 	issue_bodies: dict[int, str] | None = None,
 	issue_events: dict[int, list[dict]] | None = None,
+	issue_events_after_first_get: dict[int, list[dict]] | None = None,
 	gql_mode: str = "full",
 	gql_labels: dict[int, list[str]] | None = None,
 	codex_json: dict | None = None,
@@ -780,6 +781,7 @@ def _run_poller(
 	issue_comments = issue_comments or {}
 	issue_bodies = issue_bodies or {}
 	issue_events = issue_events or {}
+	issue_events_after_first_get = issue_events_after_first_get or {}
 	gql_labels = gql_labels or {}
 	prs = prs or []
 	pr_commits = pr_commits or {}
@@ -1105,6 +1107,7 @@ def _run_poller(
 		store = {
 			"issues": issues,
 			"issue_events": {str(k): list(v) for k, v in issue_events.items()},
+			"issue_events_after_first_get": {str(k): list(v) for k, v in issue_events_after_first_get.items()},
 			"next_comment_id": next_comment_id,
 			"api_calls": [],
 			"label_create_calls": [],
@@ -2089,7 +2092,10 @@ if args[0] == 'api':
 		calls = store.setdefault('issue_events_get_calls', {})
 		calls[num] = int(calls.get(num, 0)) + 1
 		save()
-		print(json.dumps(store.get('issue_events', {}).get(num, [])))
+		if calls[num] > 1 and num in store.get('issue_events_after_first_get', {}):
+			print(json.dumps(store['issue_events_after_first_get'][num]))
+		else:
+			print(json.dumps(store.get('issue_events', {}).get(num, [])))
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)/labels$', path)
@@ -4757,6 +4763,7 @@ def _run_latch_release_tick(
 	issue_comments: list[str | dict],
 	env_overrides: dict[str, str],
 	issue_events: list[dict] | None = None,
+	issue_events_after_first_get: list[dict] | None = None,
 	fail_issue_comment_get_after: dict[int, int] | None = None,
 	fail_issue_comment_post_for: list[int] | None = None,
 	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
@@ -4781,6 +4788,7 @@ def _run_latch_release_tick(
 		issue_labels={10: ["ai:merged"], 700: list(issue_labels)},
 		issue_comments={700: list(issue_comments)},
 		issue_events={700: list(issue_events)},
+		issue_events_after_first_get={700: list(issue_events_after_first_get)} if issue_events_after_first_get is not None else None,
 		mock_gh_issue_list_label_filter=True,
 		fail_issue_comment_get_after=fail_issue_comment_get_after,
 		fail_issue_comment_post_for=fail_issue_comment_post_for,
@@ -5095,6 +5103,34 @@ def test_staged_support_latch_release_is_source_only_and_compensates_comment_fai
 	half_released_log = half_released["stdout"] + half_released["stderr"]
 	assert "STALL_SKIP issue=700 reason=staged_support_latch_release_incomplete phase=ai:awaiting-approval action=none" in half_released_log
 	assert not any(comment["body"].startswith("/approved") for comment in half_released["issues"]["700"]["comments"])
+
+
+def test_staged_support_latch_release_revalidates_current_latch_before_edit() -> None:
+	engine_sha = "c" * 40
+	initial_event = {
+		"event": "labeled",
+		"label": {"name": "ai:needs-human"},
+		"actor": {"login": "workflow-owner"},
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+	relatched_event = {
+		"event": "labeled",
+		"label": {"name": "ai:needs-human"},
+		"actor": {"login": "different-maintainer"},
+		"created_at": "2026-01-01T00:00:03Z",
+	}
+	result = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		issue_events=[initial_event],
+		issue_events_after_first_get=[initial_event, relatched_event],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+
+	assert "ai:needs-human" in result["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" not in result["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=latch_changed_during_release" in result["stdout"] + result["stderr"]
+	assert not any(comment["body"].startswith("/approved") for comment in result["issues"]["700"]["comments"])
 
 
 def test_managed_auto_approve_skips_unresolved_staged_support_latch() -> None:

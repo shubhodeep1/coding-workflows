@@ -14642,9 +14642,9 @@ _reconcile_merged_pr_issue() {
 # that also carries ai:destructive-blocked or ai:scope-blocked is left alone.
 #
 # API calls (§15): in this source repository, one paginated `issues` REST read
-# per tick; per latched issue one paginated comments read, one paginated events
-# read, one label edit, and one comment write.  The poller's existing issue
-# cache carries only the latest 100 comments; it does not carry full marker
+# per tick; per latched issue one paginated comments read, two paginated events
+# reads, one labels read, one label edit, and one comment write.  The poller's
+# existing issue cache carries only the latest 100 comments; it does not carry full marker
 # history or label-event provenance, both of which this sweep must verify. Every
 # read failure skips that issue for the tick (fail open); consumer
 # repositories, a kill switch
@@ -14678,6 +14678,7 @@ release_staged_support_needs_human_latches() {
   local latched_issues latched_count latched_idx issue_num issue_labels_json
   local comments_json latch_record latch_idx latch_created_at latch_actor_login
   local needs_human_events_json current_needs_human_event release_marker release_body
+  local refreshed_issue_labels_json refreshed_needs_human_event
   if ! latched_issues="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai%3Aneeds-human&per_page=100" \
     | jq -s 'add // [] | map(select(.pull_request == null))' 2>/dev/null)"; then
     echo "::warning::Could not list open ai:needs-human issues for staged-support latch release; leaving all latches unchanged."
@@ -14762,6 +14763,18 @@ release_staged_support_needs_human_latches() {
           ))
       ' >/dev/null 2>&1; then
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=already_released engine_sha=${ORCHESTRATOR_ENGINE_SHA}"
+      continue
+    fi
+
+    if ! refreshed_issue_labels_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" --jq '[.[].name]' 2>/dev/null)" \
+      || ! refreshed_needs_human_event="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/events?per_page=100" | jq -sc '
+        [add // [] | .[] | select((.event == "labeled" or .event == "unlabeled") and (.label.name // "") == "ai:needs-human") | {event, created_at: (.created_at // ""), actor_login: (.actor.login // "")}] | sort_by(.created_at) | last // null' 2>/dev/null)"; then
+      echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=latch_revalidation_unavailable"
+      continue
+    fi
+    if ! printf '%s' "${refreshed_issue_labels_json}" | jq -e 'index("ai:needs-human") != null and index("ai:destructive-blocked") == null and index("ai:scope-blocked") == null' >/dev/null 2>&1 \
+      || [ "${refreshed_needs_human_event}" != "${current_needs_human_event}" ]; then
+      echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=latch_changed_during_release"
       continue
     fi
 
