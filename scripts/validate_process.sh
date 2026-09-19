@@ -309,16 +309,15 @@ export SELF_HEAL_ATTEMPT MAX_SELF_HEAL_ATTEMPTS SELF_HEAL_PATCHES_FILE
 # ---------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------
-# shellcheck source=gh_helpers.sh
-if [ -f "scripts/gh_helpers.sh" ]; then
-  # shellcheck disable=SC1091
-  source scripts/gh_helpers.sh
+# shellcheck source=/dev/null
+if [ ! -f "${_validate_script_dir}/gh_helpers.sh" ] || [ ! -f "${_validate_script_dir}/tg_helpers.sh" ]; then
+  local_failure_summary="Missing required immutable GitHub or Telegram support"
+  printf '%s\n' "::error::${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
 fi
-# shellcheck source=tg_helpers.sh
-if [ -f "scripts/tg_helpers.sh" ]; then
-  # shellcheck disable=SC1091
-  source scripts/tg_helpers.sh
-fi
+source "${_validate_script_dir}/gh_helpers.sh"
+source "${_validate_script_dir}/tg_helpers.sh"
 # shellcheck source=/dev/null
 if [ ! -f "${_validate_script_dir}/codex_helpers.sh" ]; then
   local_failure_summary="Missing required support script ${_validate_script_dir}/codex_helpers.sh"
@@ -480,16 +479,16 @@ export SERENA_ENABLED SERENA_AVAILABLE SERENA_BOOTSTRAP_ATTEMPTED SERENA_PROJECT
 
 SEMBLE_HELPERS_AVAILABLE="false"
 # shellcheck source=semble_helpers.sh
-if [ -f "scripts/semble_helpers.sh" ]; then
+if [ -f "${_validate_script_dir}/semble_helpers.sh" ]; then
   # shellcheck disable=SC1091
-  if source scripts/semble_helpers.sh; then
+  if source "${_validate_script_dir}/semble_helpers.sh"; then
     if type semble_query_block >/dev/null 2>&1; then
       SEMBLE_HELPERS_AVAILABLE="true"
     else
       echo "::warning::scripts/semble_helpers.sh did not provide semble_query_block; continuing without Semble prompt context." >&2
     fi
   else
-    echo "::warning::Failed to source scripts/semble_helpers.sh; continuing without Semble prompt context." >&2
+    echo "::warning::Failed to source immutable Semble helpers; continuing without Semble prompt context." >&2
   fi
 fi
 
@@ -806,7 +805,7 @@ ensure_serena_bootstrap()
   export SERENA_PROJECT_PREEXISTED
   write_github_env_value "SERENA_PROJECT_PREEXISTED" "${SERENA_PROJECT_PREEXISTED}"
 
-  if [ ! -f "scripts/setup_serena.sh" ]; then
+  if [ ! -f "${_validate_script_dir}/setup_serena.sh" ]; then
     echo "::notice::scripts/setup_serena.sh is unavailable; validation will continue without Serena."
     emit_serena_fallback "${serena_phase}" "setup-failure"
     clear_stale_serena_codex_config
@@ -817,7 +816,7 @@ ensure_serena_bootstrap()
   fi
 
   bootstrap_env_file="$(mktemp "${RUNTIME_DIR}/serena-bootstrap-env.XXXXXX")"
-  if ! SERENA_FALLBACK_TARGET="validate" SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" bash scripts/setup_serena.sh; then
+  if ! SERENA_FALLBACK_TARGET="validate" SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" bash "${_validate_script_dir}/setup_serena.sh"; then
     echo "::warning::scripts/setup_serena.sh exited non-zero; validation will continue without Serena."
     emit_serena_fallback "${serena_phase}" "setup-failure"
     clear_stale_serena_codex_config
@@ -876,7 +875,7 @@ attempt_self_heal_and_reexec()
     return 0
   fi
 
-  if [ ! -f "scripts/self_heal_validation.sh" ]; then
+  if [ ! -f "${_validate_script_dir}/self_heal_validation.sh" ]; then
     echo "::warning::self-heal helper scripts/self_heal_validation.sh not found; skipping self-heal." >&2
     return 0
   fi
@@ -890,7 +889,7 @@ attempt_self_heal_and_reexec()
     echo "::warning::self-heal prompt prompts/mode-validate-self-heal.txt not found; skipping self-heal." >&2
     return 0
   fi
-  if [ ! -f "scripts/render_prompt.sh" ]; then
+  if [ ! -f "${_validate_script_dir}/render_prompt.sh" ]; then
     echo "::warning::self-heal dependency scripts/render_prompt.sh not found; skipping self-heal." >&2
     return 0
   fi
@@ -905,7 +904,7 @@ attempt_self_heal_and_reexec()
     self_heal_continuation_source="$(resolve_validate_thread_reuse_asset 'prompts/mode-validate-self-heal-continuation.txt' 2>/dev/null || true)"
     if [ -n "${self_heal_continuation_source}" ]; then
       self_heal_continuation_rendered="${RUNTIME_DIR}/mode-validate-self-heal-continuation.rendered.txt"
-      if SERENA_TOOL_HINTS='' bash scripts/render_prompt.sh "${self_heal_continuation_source}" > "${self_heal_continuation_rendered}"; then
+      if SERENA_TOOL_HINTS='' bash "${_validate_script_dir}/render_prompt.sh" "${self_heal_continuation_source}" > "${self_heal_continuation_rendered}"; then
         if self_heal_wrapper_dir="$(codex_thread_reuse_install_wrapper \
           'validate-self-heal' \
           "${self_heal_continuation_rendered}" \
@@ -934,7 +933,7 @@ attempt_self_heal_and_reexec()
     DISCOVER_OUTPUT_FILE="${DISCOVER_OUTPUT_FILE}" \
     GENERATE_OUTPUT_FILE="${GENERATE_OUTPUT_FILE}" \
     DIAGNOSE_OUTPUT_FILE="${DIAGNOSE_OUTPUT_FILE}" \
-    bash scripts/self_heal_validation.sh || heal_exit=$?
+    bash "${_validate_script_dir}/self_heal_validation.sh" || heal_exit=$?
 
   case "${heal_exit}" in
     0)
@@ -1208,7 +1207,7 @@ set_tracking_phase_label()
   fi
 
   local phase_changes
-  if ! phase_changes="$(python3 scripts/ai_labels.py resolve-phase \
+  if ! phase_changes="$(python3 "${_validate_script_dir}/ai_labels.py" resolve-phase \
     --contract-file "${contract_file}" \
     --phase "${phase_label}" 2>/dev/null)"; then
     echo "::warning::set_tracking_phase_label: resolve-phase failed for '${phase_label}' using ${contract_file}." >&2
@@ -2010,8 +2009,8 @@ EOF
 run_template_validation_harness_renderer()
 {
 	local manifest_path=".ai/validate.yml"
-	local renderer_script="scripts/render_validation_templates.py"
-	local schema_path="scripts/templates/slot_manifest.schema.json"
+	local renderer_script="${_validate_script_dir}/render_validation_templates.py"
+	local schema_path="${_validate_script_dir}/templates/slot_manifest.schema.json"
 	local templates_root="workflow-templates/validation-harness"
 	local renderer_summary=""
 	local python3_bin="python3"
@@ -2808,26 +2807,8 @@ trap cleanup_runtime_containers EXIT
 # still picks up the catalog shipped next to validate_process.sh.
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
-WORKSPACE_SAFETY_CHECK_HELPER=""
-for _workspace_safety_candidate in \
-  "${_validate_script_dir}/workspace_safety_check.sh" \
-  "scripts/workspace_safety_check.sh" \
-  ".codex-workflow-src/scripts/workspace_safety_check.sh"; do
-  if [ -f "${_workspace_safety_candidate}" ]; then
-    WORKSPACE_SAFETY_CHECK_HELPER="${_workspace_safety_candidate}"
-    break
-  fi
-done
-CODEX_THREAD_REUSE_HELPER=""
-for _thread_reuse_candidate in \
-  "${_validate_script_dir}/codex_thread_reuse.sh" \
-  "scripts/codex_thread_reuse.sh" \
-  ".codex-workflow-src/scripts/codex_thread_reuse.sh"; do
-  if [ -f "${_thread_reuse_candidate}" ]; then
-    CODEX_THREAD_REUSE_HELPER="${_thread_reuse_candidate}"
-    break
-  fi
-done
+WORKSPACE_SAFETY_CHECK_HELPER="${_validate_script_dir}/workspace_safety_check.sh"
+CODEX_THREAD_REUSE_HELPER="${_validate_script_dir}/codex_thread_reuse.sh"
 export CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR}}"
 if [ -n "${CODEX_THREAD_REUSE_HELPER}" ]; then
   # shellcheck disable=SC1090
@@ -2836,16 +2817,8 @@ else
   echo "::error::codex_thread_reuse.sh is required for isolated validation launches" >&2
   exit 1
 fi
-LEDGER_SUBSTATE_HELPER=""
-for _ledger_candidate in \
-  "${_validate_script_dir}/ledger_emit_substate.sh" \
-  "scripts/ledger_emit_substate.sh" \
-  ".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
-  if [ -f "${_ledger_candidate}" ]; then
-    LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
-    break
-  fi
-done
+LEDGER_SUBSTATE_HELPER="${_validate_script_dir}/ledger_emit_substate.sh"
+[ -f "${LEDGER_SUBSTATE_HELPER}" ] || LEDGER_SUBSTATE_HELPER=""
 CODEX_HELPERS_SCRIPTS_DIR="${_validate_script_dir}"
 export CODEX_HELPERS_SCRIPTS_DIR
 model_provider_broker_start
@@ -3103,7 +3076,7 @@ else
   echo
   echo "=== DISCOVERY TASK ==="
   echo
-  SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-discover.txt
+  SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" prompts/mode-validate-discover.txt
   echo
   echo "TOOL_CALL_BUDGET: 15"
   echo
@@ -3876,7 +3849,7 @@ diagnose_semble_query="$(build_validate_diagnose_semble_query || true)"
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
-  SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-diagnose.txt
+  SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" prompts/mode-validate-diagnose.txt
   echo
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
   echo

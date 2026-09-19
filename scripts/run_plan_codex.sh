@@ -237,7 +237,7 @@ EOF
   # Inject the configurable tool call budget before the static heredoc
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
   echo
-  bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+  bash "${_run_plan_scripts_dir}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"
   echo
   REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash "${_run_plan_scripts_dir}/render_prompt.sh" prompts/header.txt
   echo

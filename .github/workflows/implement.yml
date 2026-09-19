@@ -274,12 +274,27 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
-          mkdir -p scripts
-          tg_helper_src=".codex-workflow-src/scripts/tg_helpers.sh"
-          if [ -f "${tg_helper_src}" ]; then
-            install -m 0755 "${tg_helper_src}" scripts/tg_helpers.sh
-            source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
-          fi
+          duplicate_notice_immutable_support_manifest="${RUNNER_TEMP}/duplicate-notice-immutable-support-manifest.json"
+          duplicate_notice_immutable_support_root="${RUNNER_TEMP}/duplicate-notice-immutable-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          jq -n '{
+            required_scripts: [
+              "scripts/gh_helpers.sh",
+              "scripts/emit_event.sh",
+              "scripts/emit_event.py",
+              "scripts/tg_helpers.sh"
+            ],
+            executable_files: [
+              "scripts/gh_helpers.sh",
+              "scripts/emit_event.sh",
+              "scripts/emit_event.py",
+              "scripts/tg_helpers.sh"
+            ]
+          }' > "${duplicate_notice_immutable_support_manifest}"
+          WORKFLOW_SUPPORT_REF="${DUPLICATE_NOTICE_SCRIPT_REF}" bash ".codex-workflow-src/scripts/stage_workflow_support.sh" immutable-bundle \
+            --manifest "${duplicate_notice_immutable_support_manifest}" \
+            --source-root ".codex-workflow-src" \
+            --destination-root "${duplicate_notice_immutable_support_root}"
+          source "${duplicate_notice_immutable_support_root}/scripts/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Skipping implementation for issue #${ISSUE_NUMBER} — PR already exists."
@@ -972,7 +987,7 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+          PYTHONDONTWRITEBYTECODE=1 python3 "${implement_immutable_support_root}/scripts/load_workflow_overlay.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"

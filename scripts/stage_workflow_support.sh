@@ -941,9 +941,10 @@ emit_consumer_gitignore()
 run_overlay_loader()
 {
 	: "${GITHUB_ENV:?GITHUB_ENV must be set}"
+	: "${SUPPORT_SCRIPTS_DIR:?SUPPORT_SCRIPTS_DIR must point to immutable support}"
 	# WORKFLOW.md overlay is opt-in by file presence; absent file must
 	# stay a no-op while valid prompt overrides flow through render_prompt.py.
-	PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+	PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py" \
 		--repo-root "${REPO_ROOT}" \
 		--schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
 		--github-env "${GITHUB_ENV}"
@@ -959,7 +960,7 @@ stage_validate_support()
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
-		stage_required_entry "${repo_path}" "true" "${repo_path#scripts/}" "false"
+		stage_required_entry "${repo_path}" "true" "${repo_path#scripts/}" "true"
 	done < <(json_array_lines "required_scripts")
 
 	while IFS= read -r repo_path; do

@@ -23,8 +23,12 @@ def _workflow() -> dict:
 
 def test_triage_stages_event_helpers_with_gh_helpers() -> None:
 	text = WORKFLOW_PATH.read_text(encoding="utf-8")
+	triage_script = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
 	assert "for f in gh_helpers.sh emit_event.sh emit_event.py" in text
 	assert "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true" in text
+	assert 'python3 "${CHECK_TRIAGE_SCRIPT_DIR}/collect_pr_check_runs_context.py"' in triage_script
+	assert 'bash "${CHECK_TRIAGE_SCRIPT_DIR}/render_prompt.sh"' in triage_script
+	assert "python3 scripts/collect_pr_check_runs_context.py" not in triage_script
 
 
 def _step(job: dict, *, step_id: str | None = None, name: str | None = None) -> dict:

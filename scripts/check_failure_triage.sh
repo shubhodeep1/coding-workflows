@@ -263,11 +263,11 @@ fi
 PR_PAYLOAD_FILE="${PR_JSON_FILE}"
 PR_CHECK_RUNS_CONTEXT_FILE="${RUNTIME_DIR}/pr_check_runs_context.txt"
 : > "${PR_CHECK_RUNS_CONTEXT_FILE}"
-if [ -f scripts/collect_pr_check_runs_context.py ]; then
+if [ -f "${CHECK_TRIAGE_SCRIPT_DIR}/collect_pr_check_runs_context.py" ]; then
 	if PR_PAYLOAD_FILE="${PR_PAYLOAD_FILE}" \
 		PR_CHECK_RUNS_CONTEXT_FILE="${PR_CHECK_RUNS_CONTEXT_FILE}" \
 		CHECK_RUNS_WAIT_TIMEOUT_SECS="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-60}" \
-		PYTHONDONTWRITEBYTECODE=1 python3 scripts/collect_pr_check_runs_context.py; then
+		PYTHONDONTWRITEBYTECODE=1 python3 "${CHECK_TRIAGE_SCRIPT_DIR}/collect_pr_check_runs_context.py"; then
 		:
 	else
 		: > "${PR_CHECK_RUNS_CONTEXT_FILE}"
@@ -298,8 +298,8 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		cat agents.md
 		echo
 	fi
-	if [ -f scripts/render_prompt.sh ]; then
-		bash scripts/render_prompt.sh prompts/mode-check-failure-triage.txt 2>/dev/null || cat prompts/mode-check-failure-triage.txt
+	if [ -f "${CHECK_TRIAGE_SCRIPT_DIR}/render_prompt.sh" ]; then
+		bash "${CHECK_TRIAGE_SCRIPT_DIR}/render_prompt.sh" prompts/mode-check-failure-triage.txt 2>/dev/null || cat prompts/mode-check-failure-triage.txt
 	else
 		cat prompts/mode-check-failure-triage.txt 2>/dev/null || true
 	fi

@@ -277,7 +277,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-            for f in gh_helpers.sh emit_event.sh emit_event.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh model_provider_broker.py orchestrate_parse_and_post_answer.sh; do
+            for f in gh_helpers.sh emit_event.sh emit_event.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh model_provider_broker.py orchestrate_parse_and_post_answer.sh clarify_data_provision_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
@@ -315,13 +315,6 @@ jobs:
             fi
           done
 
-          # WORKFLOW.md overlay is opt-in by file presence; absent file must
-          # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
-            --repo-root "${GITHUB_WORKSPACE}" \
-            --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
-            --github-env "${GITHUB_ENV}"
-
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
 
@@ -345,6 +338,13 @@ jobs:
             --source-root ".codex-workflow-src" \
             --destination-root "${clarify_respond_immutable_support_root}"
           echo "PYTHONPATH=${clarify_respond_immutable_support_root}/scripts" >> "$GITHUB_ENV"
+
+          # WORKFLOW.md overlay is opt-in by file presence; absent file must
+          # stay a no-op while valid prompt overrides flow through render_prompt.py.
+          PYTHONDONTWRITEBYTECODE=1 python3 "${clarify_respond_immutable_support_root}/scripts/load_workflow_overlay.py" \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
+            --github-env "${GITHUB_ENV}"
 
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
@@ -895,17 +895,13 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          if [ ! -f scripts/clarify_data_provision_guard.py ]; then
-            echo "::notice::clarify_data_provision_guard.py not found; skipping data-provision guard."
-            exit 0
-          fi
           if [ ! -f "${RUNTIME_DIR}/clarification_comment.txt" ] || [ ! -f "${CODEX_OUTPUT_FILE}" ]; then
             echo "::notice::Missing clarification or answer files; skipping data-provision guard."
             exit 0
           fi
 
           GUARDED_OUTPUT="${RUNTIME_DIR}/codex_output_guarded.txt"
-          if python3 scripts/clarify_data_provision_guard.py \
+          if python3 "${SUPPORT_SCRIPTS_DIR}/clarify_data_provision_guard.py" \
             --clarification-file "${RUNTIME_DIR}/clarification_comment.txt" \
             --answers-file "${CODEX_OUTPUT_FILE}" > "${GUARDED_OUTPUT}"; then
             if ! diff -q "${CODEX_OUTPUT_FILE}" "${GUARDED_OUTPUT}" >/dev/null 2>&1; then

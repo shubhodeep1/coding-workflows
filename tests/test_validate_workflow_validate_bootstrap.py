@@ -129,7 +129,7 @@ def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> Non
 	helper = _helper_text()
 	for snippet in (
 		"WORKFLOW.md overlay is opt-in by file presence",
-		"python3 scripts/load_workflow_overlay.py",
+		'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"',
 		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
 		'--github-env "${GITHUB_ENV}"',
 	):
@@ -267,10 +267,19 @@ def test_validate_support_manifest_requires_memory_and_event_dependencies() -> N
 		'"scripts/memory_injection_patterns.py"',
 		'"scripts/emit_event.sh"',
 		'"scripts/emit_event.py"',
+		'"scripts/self_heal_validation.sh"',
+		'"scripts/semble_helpers.sh"',
+		'"scripts/setup_serena.sh"',
+		'"scripts/ledger_emit_substate.sh"',
+		'"scripts/templates/slot_manifest.schema.json"',
 	):
 		assert required_path in wf
 	validate_process = (REPO_ROOT / "scripts" / "validate_process.sh").read_text(encoding="utf-8")
 	assert 'model_provider_broker_prepare_codex_readonly nobody' in validate_process
+	assert 'source "${_validate_script_dir}/gh_helpers.sh"' in validate_process
+	assert 'source "${_validate_script_dir}/tg_helpers.sh"' in validate_process
+	assert 'bash "${_validate_script_dir}/self_heal_validation.sh"' in validate_process
+	assert "source scripts/gh_helpers.sh" not in validate_process
 
 
 def main() -> int:
@@ -287,6 +296,8 @@ def main() -> int:
 	test_run_validation_repo_checks_override_preserves_quoted_arguments()
 	test_run_validation_repo_checks_override_preserves_env_prefix_assignments()
 	test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metacharacters()
+	test_immutable_support_bundle_enforces_dependency_closure_and_path_safety()
+	test_validate_support_manifest_requires_memory_and_event_dependencies()
 	return 0
 
 

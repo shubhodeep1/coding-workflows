@@ -189,8 +189,9 @@ def test_review_workflow_bootstraps_and_restages_workspace_safety_helper() -> No
 
 def test_validate_process_guards_codex_attempts_and_short_circuits_exit_78() -> None:
 	text = VALIDATE_PROCESS.read_text(encoding="utf-8")
-	assert 'WORKSPACE_SAFETY_CHECK_HELPER=""' in text
-	assert '".codex-workflow-src/scripts/workspace_safety_check.sh"' in text
+	assert 'WORKSPACE_SAFETY_CHECK_HELPER="${_validate_script_dir}/workspace_safety_check.sh"' in text
+	assert 'WORKSPACE_SAFETY_CHECK_HELPER=""' not in text
+	assert '".codex-workflow-src/scripts/workspace_safety_check.sh"' not in text
 	assert '".codex-workflow-src-main/scripts/workspace_safety_check.sh"' not in text
 	assert 'bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?' in text
 	assert 'local exit_code="${5:-1}"' in text

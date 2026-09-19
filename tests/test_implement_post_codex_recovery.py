@@ -130,7 +130,7 @@ def _isolated_test_env(extra_env: dict[str, str] | None = None, *, cwd: Path | N
 
 def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 	env = _isolated_test_env(env, cwd=cwd)
-	env.setdefault("SUPPORT_SCRIPTS_DIR", str(cwd / "scripts"))
+	env.setdefault("SUPPORT_SCRIPTS_DIR", str(REPO_ROOT / "scripts"))
 	script_path = cwd / "__workflow_step_under_test.sh"
 	script_path.write_text(script, encoding="utf-8")
 	script_path.chmod(0o755)
@@ -579,6 +579,8 @@ def _run_diagnose_step(
 			"MODEL_EDITOR": "openai/gpt-5.4",
 			"PR_BASE_BRANCH": "orchestrator/project-829",
 			"SERENA_AVAILABLE": "true",
+			"SUPPORT_SCRIPTS_DIR": str(repo_dir / "scripts"),
+			"SUPPORT_PROMPTS_DIR": str(repo_dir / "prompts"),
 			"ISSUE_BODY_FILE": str(issue_body_file),
 			"ISSUE_META_FILE": str(issue_meta_file),
 			"IMPLEMENT_DIAGNOSE_PROMPT_FILE": str(prompt_file),

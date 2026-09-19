@@ -549,8 +549,8 @@ def test_implement_workflow_contains_thread_reuse_wiring() -> None:
 def test_validate_process_contains_thread_reuse_wiring() -> None:
 	text = VALIDATE_PROCESS.read_text(encoding="utf-8")
 	assert 'CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"' in text
-	assert 'CODEX_THREAD_REUSE_HELPER=""' in text
-	assert '"scripts/codex_thread_reuse.sh"' in text
+	assert 'CODEX_THREAD_REUSE_HELPER="${_validate_script_dir}/codex_thread_reuse.sh"' in text
+	assert 'CODEX_THREAD_REUSE_HELPER=""' not in text
 	assert "resolve_validate_thread_reuse_asset()" in text
 	assert "validate_thread_reuse_enabled()" in text
 	assert 'CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true"' in text

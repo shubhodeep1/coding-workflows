@@ -48,6 +48,7 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in step
 	assert "TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}" in step
 	assert 'TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"' in PLAN_RUNNER.read_text(encoding="utf-8")
+	assert 'bash "${_run_plan_scripts_dir}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"' in PLAN_RUNNER.read_text(encoding="utf-8")
 	assert step.split("        run: |\n", 1)[1] == (
 		'          bash "${SUPPORT_SCRIPTS_DIR}/run_plan_codex.sh"\n'
 	)

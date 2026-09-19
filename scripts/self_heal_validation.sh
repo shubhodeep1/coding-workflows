@@ -42,27 +42,28 @@ set -euo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "self-heal: jq is required" >&2; exit 2; }
 command -v patch >/dev/null 2>&1 || { echo "self-heal: patch is required" >&2; exit 2; }
+SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source gh_helpers.sh for sanitize_codex_prompt_file (best-effort —
 # the call site below guards via `command -v`).
-if [ -f "scripts/gh_helpers.sh" ]; then
+if [ -f "${SELF_HEAL_SCRIPT_DIR}/gh_helpers.sh" ]; then
 	# shellcheck source=gh_helpers.sh
 	# shellcheck disable=SC1091
-	source scripts/gh_helpers.sh 2>/dev/null || true
+	source "${SELF_HEAL_SCRIPT_DIR}/gh_helpers.sh"
 fi
 
 SEMBLE_HELPERS_AVAILABLE="false"
 # shellcheck source=semble_helpers.sh
-if [ -f "scripts/semble_helpers.sh" ]; then
+if [ -f "${SELF_HEAL_SCRIPT_DIR}/semble_helpers.sh" ]; then
 	# shellcheck disable=SC1091
-	if source scripts/semble_helpers.sh; then
+	if source "${SELF_HEAL_SCRIPT_DIR}/semble_helpers.sh"; then
 		if type semble_query_block >/dev/null 2>&1; then
 			SEMBLE_HELPERS_AVAILABLE="true"
 		else
 			echo "self-heal: semble_helpers.sh did not expose semble_query_block; continuing without Semble context" >&2
 		fi
 	else
-		echo "self-heal: failed to source scripts/semble_helpers.sh; continuing without Semble context" >&2
+		echo "self-heal: failed to source immutable Semble helpers; continuing without Semble context" >&2
 	fi
 fi
 
@@ -83,7 +84,6 @@ SELF_HEAL_OUTPUT_FILE="${RUNTIME_DIR}/validate_self_heal_output.txt"
 SELF_HEAL_LOG_FILE="${RUNTIME_DIR}/validate_self_heal.log"
 SELF_HEAL_DECISION_FILE="${RUNTIME_DIR}/validate_self_heal_decision.json"
 SELF_HEAL_PATCH_TMP="${RUNTIME_DIR}/validate_self_heal_patch.diff"
-SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ ! -f "${SELF_HEAL_SCRIPT_DIR}/codex_helpers.sh" ]; then
 	echo "self-heal: codex_helpers.sh is required for brokered model execution" >&2
 	exit 2
@@ -107,16 +107,8 @@ if [ -z "${MODEL_PROVIDER_BROKER_TOKEN:-}" ] || [ -z "${MODEL_PROVIDER_BROKER_BA
 fi
 CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_stall_guard.sh"
-LEDGER_SUBSTATE_HELPER=""
-for _ledger_candidate in \
-	"${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh" \
-	"scripts/ledger_emit_substate.sh" \
-	".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
-	if [ -f "${_ledger_candidate}" ]; then
-		LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
-		break
-	fi
-done
+LEDGER_SUBSTATE_HELPER="${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh"
+[ -f "${LEDGER_SUBSTATE_HELPER}" ] || LEDGER_SUBSTATE_HELPER=""
 SELF_HEAL_STALL_STATE=""
 
 emit_self_heal_substate()
@@ -380,7 +372,7 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 	echo
 	echo "=== SELF-HEAL TASK ==="
 	echo
-	SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt
+	SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash "${SELF_HEAL_SCRIPT_DIR}/render_prompt.sh" prompts/mode-validate-self-heal.txt
 	echo
 	echo "=== SELF-HEAL ATTEMPT ==="
 	echo "attempt_number: $((SELF_HEAL_ATTEMPT + 1))"

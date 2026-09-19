@@ -14,13 +14,17 @@ LOADER_SNIPPET = (
 	'python3 scripts/load_workflow_overlay.py \\\n'
 	'            --repo-root "${GITHUB_WORKSPACE}"'
 )
+IMMUTABLE_LOADER_SNIPPET = (
+	'python3 "${clarify_respond_immutable_support_root}/scripts/load_workflow_overlay.py" \\\n'
+	'            --repo-root "${GITHUB_WORKSPACE}"'
+)
 LOADER_SCHEMA_SNIPPET = '--schema-path "ai-memory/schemas/workflow_overlay.v1.json"'
 LOADER_ENV_SNIPPET = '--github-env "${GITHUB_ENV}"'
 
 WORKFLOW_EXPECTATIONS = {
 	"orchestrate.yml": 'bash scripts/render_prompt.sh prompts/mode-orchestrate.txt',
 	"orchestrate_poll.yml": "bash scripts/orchestrate_poll_process.sh",
-	"orchestrate_clarify_respond.yml": 'bash scripts/render_prompt.sh prompts/mode-clarify-respond.txt',
+	"orchestrate_clarify_respond.yml": 'bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" prompts/mode-clarify-respond.txt',
 }
 
 ORCHESTRATE_PROMPT_ASSETS = (
@@ -53,14 +57,15 @@ def _read(path: Path) -> str:
 def test_orchestrator_workflows_stage_overlay_loader_before_prompt_consumers() -> None:
 	for workflow_name, downstream_snippet in WORKFLOW_EXPECTATIONS.items():
 		workflow_text = _read(WORKFLOWS_DIR / workflow_name)
+		loader_snippet = IMMUTABLE_LOADER_SNIPPET if workflow_name == "orchestrate_clarify_respond.yml" else LOADER_SNIPPET
 		assert "load_workflow_overlay.py" in workflow_text, workflow_name
 		assert "workflow_overlay.v1.json" in workflow_text, workflow_name
 		assert "WORKFLOW.md overlay is opt-in by file presence" in workflow_text, workflow_name
-		assert LOADER_SNIPPET in workflow_text, workflow_name
+		assert loader_snippet in workflow_text, workflow_name
 		assert LOADER_SCHEMA_SNIPPET in workflow_text, workflow_name
 		assert LOADER_ENV_SNIPPET in workflow_text, workflow_name
 		assert downstream_snippet in workflow_text, workflow_name
-		assert workflow_text.find(LOADER_SNIPPET) < workflow_text.find(downstream_snippet), workflow_name
+		assert workflow_text.find(loader_snippet) < workflow_text.find(downstream_snippet), workflow_name
 
 
 def test_orchestrator_wrapper_templates_match_reusable_workflow_targets() -> None:
