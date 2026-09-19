@@ -965,7 +965,8 @@ jobs:
                   "prompts/mode-implement-repair-continuation.txt",
                   "prompts/mode-implement-diagnose.txt",
                   "prompts/mode-implement-diagnose-continuation.txt"
-                ]
+                ],
+                model_catalog_path: "scripts/codex_model_catalog.json"
               }
           ' > "${implement_immutable_support_manifest}"
           WORKFLOW_SUPPORT_REF="${SCRIPT_REF}" bash ".codex-workflow-src/scripts/stage_workflow_support.sh" immutable-bundle \

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -18,12 +19,14 @@ IMMUTABLE_LOADER_SNIPPET = (
 	'python3 "${clarify_respond_immutable_support_root}/scripts/load_workflow_overlay.py" \\\n'
 	'            --repo-root "${GITHUB_WORKSPACE}"'
 )
+ORCHESTRATE_LOADER_SNIPPET = 'python3 "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py" \\'
+POLL_LOADER_SNIPPET = 'python3 "${poll_immutable_support_root}/scripts/load_workflow_overlay.py" \\'
 LOADER_SCHEMA_SNIPPET = '--schema-path "ai-memory/schemas/workflow_overlay.v1.json"'
 LOADER_ENV_SNIPPET = '--github-env "${GITHUB_ENV}"'
 
 WORKFLOW_EXPECTATIONS = {
-	"orchestrate.yml": 'bash scripts/render_prompt.sh prompts/mode-orchestrate.txt',
-	"orchestrate_poll.yml": "bash scripts/orchestrate_poll_process.sh",
+	"orchestrate.yml": 'bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-orchestrate.txt"',
+	"orchestrate_poll.yml": 'bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_poll_process.sh"',
 	"orchestrate_clarify_respond.yml": 'bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" prompts/mode-clarify-respond.txt',
 }
 
@@ -57,13 +60,18 @@ def _read(path: Path) -> str:
 def test_orchestrator_workflows_stage_overlay_loader_before_prompt_consumers() -> None:
 	for workflow_name, downstream_snippet in WORKFLOW_EXPECTATIONS.items():
 		workflow_text = _read(WORKFLOWS_DIR / workflow_name)
-		loader_snippet = IMMUTABLE_LOADER_SNIPPET if workflow_name == "orchestrate_clarify_respond.yml" else LOADER_SNIPPET
+		loader_snippet = {
+			"orchestrate.yml": ORCHESTRATE_LOADER_SNIPPET,
+			"orchestrate_poll.yml": POLL_LOADER_SNIPPET,
+			"orchestrate_clarify_respond.yml": IMMUTABLE_LOADER_SNIPPET,
+		}[workflow_name]
 		assert "load_workflow_overlay.py" in workflow_text, workflow_name
 		assert "workflow_overlay.v1.json" in workflow_text, workflow_name
 		assert "WORKFLOW.md overlay is opt-in by file presence" in workflow_text, workflow_name
 		assert loader_snippet in workflow_text, workflow_name
 		assert LOADER_SCHEMA_SNIPPET in workflow_text, workflow_name
 		assert LOADER_ENV_SNIPPET in workflow_text, workflow_name
+		assert "immutable-bundle" in workflow_text, workflow_name
 		assert downstream_snippet in workflow_text, workflow_name
 		assert workflow_text.find(loader_snippet) < workflow_text.find(downstream_snippet), workflow_name
 
@@ -82,12 +90,24 @@ def test_orchestrate_workflow_stages_prompt_assembly_assets() -> None:
 	assert "for prompt_assembly_asset in " in workflow_text
 	for prompt_asset in ORCHESTRATE_PROMPT_ASSETS:
 		assert prompt_asset in workflow_text
+	assert "gh_helpers.sh emit_event.sh emit_event.py" in workflow_text
+	assert "openrouter_prompt_cache.py semantic_cache.py" in workflow_text
+
+
+def test_orchestrator_runtime_helpers_reject_checkout_relative_execution() -> None:
+	for workflow_name in ("orchestrate.yml", "orchestrate_poll.yml"):
+		workflow_text = _read(WORKFLOWS_DIR / workflow_name)
+		assert re.search(r"^\s*(?:source|bash|python3)\s+scripts/", workflow_text, re.MULTILINE) is None, workflow_name
+	poller_text = _read(REPO_ROOT / "scripts" / "orchestrate_poll_process.sh")
+	assert 'ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-' in poller_text
+	assert 'source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' in poller_text
 
 
 def main() -> int:
 	test_orchestrator_workflows_stage_overlay_loader_before_prompt_consumers()
 	test_orchestrator_wrapper_templates_match_reusable_workflow_targets()
 	test_orchestrate_workflow_stages_prompt_assembly_assets()
+	test_orchestrator_runtime_helpers_reject_checkout_relative_execution()
 	return 0
 
 

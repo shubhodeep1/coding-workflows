@@ -317,6 +317,7 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in implement_workflow
 	assert "SCRIPT_REF=stable" not in implement_workflow
 	assert ".codex-workflow-src-main" not in implement_workflow
+	assert 'model_catalog_path: "scripts/codex_model_catalog.json"' in implement_workflow
 	assert 'source "${duplicate_notice_immutable_support_root}/scripts/tg_helpers.sh"' in implement_workflow
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"' not in implement_workflow.split("- name: Telegram duplicate PR notification", 1)[1].split("- name: Exit when existing PR is found", 1)[0]
 	validate_workflow = (REPO_ROOT / ".github/workflows/validate.yml").read_text(encoding="utf-8")

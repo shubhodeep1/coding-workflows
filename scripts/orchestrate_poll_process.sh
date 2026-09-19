@@ -11,43 +11,48 @@
 
 set -euo pipefail
 
+ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+ORCHESTRATE_POLL_SUPPORT_ROOT_DIR="${SUPPORT_ROOT_DIR:-$(cd "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/.." && pwd)}"
+ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${ORCHESTRATE_POLL_SUPPORT_ROOT_DIR}/prompts}"
+export ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR ORCHESTRATE_POLL_SUPPORT_ROOT_DIR ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR
+
 # ---------------------------------------------------------------
 # Helper: Telegram (tracked via tg_helpers.sh)
 # ---------------------------------------------------------------
 # shellcheck source=gh_helpers.sh
-if [ -f "scripts/gh_helpers.sh" ]; then
+if [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
   # shellcheck disable=SC1091
-  source scripts/gh_helpers.sh
+  source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 fi
-if [ ! -f "scripts/codex_helpers.sh" ]; then
-  echo "::error::Missing required support script scripts/codex_helpers.sh" >&2
+if [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_helpers.sh" ]; then
+  echo "::error::Missing required support script ${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_helpers.sh" >&2
   exit 1
 fi
 # shellcheck source=codex_helpers.sh
-source scripts/codex_helpers.sh
+source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
 if ! type emit_event >/dev/null 2>&1; then
   emit_event() { return 0; }
 fi
 # shellcheck source=tg_helpers.sh
-if [ -f "scripts/tg_helpers.sh" ]; then
+if [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
   # shellcheck disable=SC1091
-  source scripts/tg_helpers.sh
+  source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
 fi
 # shellcheck source=memory_helpers.sh
-if [ -f "scripts/memory_helpers.sh" ]; then
+if [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
-  source scripts/memory_helpers.sh
+  source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 fi
-if [ -f "scripts/transcript_archive.sh" ]; then
+if [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
   # shellcheck disable=SC1091
-  source scripts/transcript_archive.sh 2>/dev/null || true
+  source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" 2>/dev/null || true
 fi
 if ! type archive_transcript >/dev/null 2>&1; then
   archive_transcript() { return 0; }
 fi
-if [ -f "scripts/nag_reminder.sh" ]; then
+if [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/nag_reminder.sh" ]; then
   # shellcheck disable=SC1091
-  source scripts/nag_reminder.sh 2>/dev/null || true
+  source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/nag_reminder.sh" 2>/dev/null || true
 fi
 # shellcheck source=pr_checks_lib.sh
 # Shared PR check-runs merge gate (_pr_checks_completed /
@@ -63,9 +68,9 @@ _OPP_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || ec
 if [ -f "${_OPP_LIB_DIR}/pr_checks_lib.sh" ]; then
   # shellcheck disable=SC1091
   source "${_OPP_LIB_DIR}/pr_checks_lib.sh"
-elif [ -f "scripts/pr_checks_lib.sh" ]; then
+elif [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" ]; then
   # shellcheck disable=SC1091
-  source scripts/pr_checks_lib.sh
+  source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh"
 fi
 unset _OPP_LIB_DIR
 # shellcheck source=scripts/semble_helpers.sh
@@ -73,9 +78,9 @@ SEMBLE_HELPERS_AVAILABLE="false"
 JUDGE_SEMBLE_MAX_CHUNKS="4"
 JUDGE_SEMBLE_QUERY_MAX_BYTES="12000"
 JUDGE_SEMBLE_CONTEXT_MAX_BYTES="12000"
-if [ -f "scripts/semble_helpers.sh" ]; then
+if [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
   # shellcheck disable=SC1091
-  if source scripts/semble_helpers.sh; then
+  if source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"; then
     if type semble_query_block >/dev/null 2>&1; then
       SEMBLE_HELPERS_AVAILABLE="true"
     else
@@ -237,8 +242,8 @@ worktree_registry_register() {
 
 	worktree_registry_enabled || return 0
 	[ -n "${name}" ] || return 0
-	[ -f "scripts/worktree_registry.sh" ] || return 0
-	bash scripts/worktree_registry.sh register "${name}" "${path}" "${branch}" "${task_id}" "${owner_phase}" || true
+	[ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/worktree_registry.sh" ] || return 0
+	bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/worktree_registry.sh" register "${name}" "${path}" "${branch}" "${task_id}" "${owner_phase}" || true
 }
 
 worktree_registry_deregister() {
@@ -246,8 +251,8 @@ worktree_registry_deregister() {
 
 	worktree_registry_enabled || return 0
 	[ -n "${name}" ] || return 0
-	[ -f "scripts/worktree_registry.sh" ] || return 0
-	bash scripts/worktree_registry.sh deregister "${name}" || true
+	[ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/worktree_registry.sh" ] || return 0
+	bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/worktree_registry.sh" deregister "${name}" || true
 }
 
 extract_judge_json_with_status() {
@@ -1974,7 +1979,7 @@ review_blocked_refusal_is_valid() {
       rm -f "${refusal_envelope_file}"
       continue
     fi
-    if python3 scripts/orchestrate_state_v2.py verify-refusal \
+    if python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" verify-refusal \
         --envelope-file "${refusal_envelope_file}" \
         --repository "${GITHUB_REPOSITORY}" \
         --tracking-issue "${TRACKING_NUM}" \
@@ -2014,7 +2019,7 @@ post_review_blocked_refusal() {
     return 1
   fi
   refusal_envelope_file="$(mktemp "${RUNTIME_DIR}/review_blocked_refusal_sign.XXXXXX.json")"
-  if ! python3 scripts/orchestrate_state_v2.py sign-refusal \
+  if ! python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" sign-refusal \
       --repository "${GITHUB_REPOSITORY}" \
       --tracking-issue "${TRACKING_NUM}" \
       --source-pr "${source_pr}" \
@@ -2063,7 +2068,7 @@ post_state_comment() {
   # but if the staging list omits it we surface a hard error here rather
   # than silently swallowing pack failures and falling through to stale
   # V1 state on the next poll cycle.
-  if [ ! -f "scripts/orchestrate_state_v2.py" ]; then
+  if [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" ]; then
     echo "::error::scripts/orchestrate_state_v2.py is missing from the staged scripts tree; V2 state persistence cannot run for issue #${TRACKING_NUM}. Update the workflow's 'Stage workflow support files' loop to include this helper." >&2
     return 1
   fi
@@ -2078,7 +2083,7 @@ post_state_comment() {
   if [ -z "${integration_branch}" ]; then
     integration_branch="orchestrator/project-${TRACKING_NUM}"
   fi
-  if ! python3 scripts/orchestrate_state_v2.py sign \
+  if ! python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" sign \
       --state-file "${STATE_FILE}" \
       --out-file "${signed_state_file}" \
       --repository "${GITHUB_REPOSITORY}" \
@@ -2090,7 +2095,7 @@ post_state_comment() {
     rm -rf "${pack_dir}"
     return 1
   fi
-  if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
+  if ! manifest_json="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" pack \
       --state-file "${signed_state_file}" \
       --out-dir "${pack_dir}" 2>&1)"; then
     echo "::error::orchestrate_state_v2 pack failed for issue #${TRACKING_NUM}: ${manifest_json}" >&2
@@ -2502,7 +2507,7 @@ refresh_validation_dispatch_wave_gate() {
     ahead_by="0"
   fi
 
-  wave_status="$(python3 scripts/orchestrate_lib.py check-wave-status \
+  wave_status="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" check-wave-status \
     --state-file "${STATE_FILE}" \
     --labels-json "${labels_json}" \
     --issue-states-json "${issue_states_json}" \
@@ -2611,7 +2616,7 @@ extract_latest_valid_orchestrator_state() {
   _v2_comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_comments.XXXXXX")"
   _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
   printf '%s' "${trusted_comments_json}" > "${_v2_comments_file}"
-  python3 scripts/orchestrate_state_v2.py extract \
+  python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" extract \
     --comments-json "${_v2_comments_file}" \
     --prefer-highest-auth-generation > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
@@ -2643,7 +2648,7 @@ extract_latest_valid_orchestrator_state() {
 		if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
 			candidate_verification_branch="${expected_integration_branch}"
 			candidate_auth_rc=1
-			python3 scripts/orchestrate_state_v2.py verify \
+			python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" verify \
 				--state-file "${_v2_payload_file}" \
 				--repository "${GITHUB_REPOSITORY}" \
 				--tracking-issue "${expected_tracking_num}" \
@@ -2696,7 +2701,7 @@ extract_latest_valid_orchestrator_state() {
 		candidate_auth_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v1_auth.XXXXXX")"
 		printf '%s' "${candidate_state}" > "${candidate_auth_file}"
 		candidate_auth_rc=1
-		python3 scripts/orchestrate_state_v2.py verify \
+		python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" verify \
 			--state-file "${candidate_auth_file}" \
 			--repository "${GITHUB_REPOSITORY}" \
 			--tracking-issue "${expected_tracking_num}" \
@@ -2742,7 +2747,7 @@ ensure_label_exists() {
     return 0
   fi
 
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file="${ORCHESTRATE_POLL_SUPPORT_ROOT_DIR}/.github/ai/label_contract.v1.json"
   local color="1d76db"
   local description="AI workflow label"
   local contract_color=""
@@ -2792,7 +2797,7 @@ ensure_label_exists() {
 set_issue_phase_label() {
   local issue_num="$1"
   local phase_label="$2"
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file="${ORCHESTRATE_POLL_SUPPORT_ROOT_DIR}/.github/ai/label_contract.v1.json"
 
   ensure_label_exists "${phase_label}"
 
@@ -2804,7 +2809,7 @@ set_issue_phase_label() {
   local phase_changes
   local _resolve_err_file
   _resolve_err_file="$(mktemp)"
-  if ! phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
+  if ! phase_changes="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
     local _resolve_err
     _resolve_err="$(tr '\n' ' ' < "${_resolve_err_file}" 2>/dev/null || true)"
     rm -f "${_resolve_err_file}"
@@ -2931,7 +2936,7 @@ PY
 	}
 
 	if jq -e '(.project_body_snapshot // "") != ""' "${STATE_FILE}" >/dev/null 2>&1; then
-		if ! python3 scripts/orchestrate_lib.py render-tracking-body \
+		if ! python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" render-tracking-body \
 			--state-file "${STATE_FILE}" > "${desired_body_file}" 2>"${render_err_file}"; then
 			render_err="$(tr '\n' ' ' < "${render_err_file}" 2>/dev/null | head -c 512 || true)"
 			echo "::warning::[tracking-body-sync] failed to render tracking body for issue #${TRACKING_NUM}: ${render_err:-unknown error}" >&2
@@ -2973,7 +2978,7 @@ PY
 		if [ -z "${current_hash}" ]; then
 			current_hash="$(sha256sum "${template_body_file}" 2>/dev/null | awk '{print $1}' || true)"
 		fi
-		if ! python3 scripts/orchestrate_lib.py render-tracking-body \
+		if ! python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" render-tracking-body \
 			--state-file "${STATE_FILE}" \
 			--template-body-file "${template_body_file}" > "${desired_body_file}" 2>"${render_err_file}"; then
 			render_err="$(tr '\n' ' ' < "${render_err_file}" 2>/dev/null | head -c 512 || true)"
@@ -3030,7 +3035,7 @@ PY
 				write_label_names_file_from_json "${TRACKING_LABELS:-[]}" "${tracking_labels_file}"
 				pr_labels_json="$(get_issue_labels_json "${final_pr}")"
 				write_label_names_file_from_json "${pr_labels_json}" "${pr_labels_file}"
-				if python3 scripts/check_integration_pr_readiness.py \
+				if python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/check_integration_pr_readiness.py" \
 					--repo "${GITHUB_REPOSITORY}" \
 					--head-ref "${pr_head_ref}" \
 					--head-sha "${pr_head_sha}" \
@@ -3656,7 +3661,7 @@ backfill_validation_fix_issue_merged_label() {
   # `get_issue_labels_json` round-trip.  When empty/omitted the helper
   # falls back to fetching itself, preserving the original contract.
   local cached_labels="${2:-}"
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file="${ORCHESTRATE_POLL_SUPPORT_ROOT_DIR}/.github/ai/label_contract.v1.json"
   local fix_labels
   local phase_changes
   local edit_args=()
@@ -3684,7 +3689,7 @@ backfill_validation_fix_issue_merged_label() {
 
   edit_args+=(--add-label "ai:merged")
   if [ -f "${contract_file}" ]; then
-    phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
+    phase_changes="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
     while IFS= read -r remove_label; do
       [ -n "${remove_label}" ] || continue
       if has_label "${fix_labels}" "${remove_label}"; then
@@ -3946,7 +3951,7 @@ reconcile_managed_issue_labels() {
   local issue_state="$3"
   local pr_state="$4"
   local pr_merged="$5"
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file="${ORCHESTRATE_POLL_SUPPORT_ROOT_DIR}/.github/ai/label_contract.v1.json"
 
   if [ ! -f "${contract_file}" ]; then
     echo "${labels_json}"
@@ -3956,7 +3961,7 @@ reconcile_managed_issue_labels() {
   local labels_csv
   labels_csv="$(echo "${labels_json}" | jq -r 'join(",")' 2>/dev/null || echo "")"
   local repair_json
-  repair_json="$(python3 scripts/ai_labels.py repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
+  repair_json="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
 
   local plan_json
   plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
@@ -5176,13 +5181,13 @@ run_security_pass_inline() {
   fi
 
   for required_security_asset in \
-    scripts/security_audit.sh \
-    scripts/codex_heartbeat.sh \
-    scripts/security_audit_fp_exclusions.json \
-    scripts/write_codex_config.sh \
-    prompts/mode-security-audit.txt \
-    prompts/_templates/mode-security-audit.txt \
-    prompts/references/security-money-lens.txt; do
+    "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/security_audit.sh" \
+    "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh" \
+    "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/security_audit_fp_exclusions.json" \
+    "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/write_codex_config.sh" \
+    "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-security-audit.txt" \
+    "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/_templates/mode-security-audit.txt" \
+    "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/references/security-money-lens.txt"; do
     if [ ! -f "${required_security_asset}" ]; then
       security_pass_fail_closed "engine_unavailable" "Required security-pass asset ${required_security_asset} is unavailable." "${prior_security_status}"
       return 1
@@ -5238,7 +5243,7 @@ run_security_pass_inline() {
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
 
   effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
-  if ! bash scripts/write_codex_config.sh \
+  if ! bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/write_codex_config.sh" \
     --model "${effective_security_model}" \
     --reasoning xhigh \
     --provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}" \
@@ -5256,13 +5261,15 @@ run_security_pass_inline() {
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
     SECURITY_AUDIT_CAPTURE="${SECURITY_AUDIT_CAPTURE:-}" \
+    SECURITY_AUDIT_SUPPORT_DIR="${ORCHESTRATE_POLL_SUPPORT_ROOT_DIR}" \
+    SECURITY_AUDIT_FP_EXCLUSIONS="${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/security_audit_fp_exclusions.json" \
     CODEX_HEARTBEAT_ENABLED="${CODEX_HEARTBEAT_ENABLED:-1}" \
     CODEX_HEARTBEAT_INTERVAL_SECS="${CODEX_HEARTBEAT_INTERVAL_SECS:-30}" \
     WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
-    bash scripts/codex_heartbeat.sh \
+    bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh" \
       --phase "orchestrate-security-pass" \
       --stderr-file "${audit_error_file}" \
-      -- bash scripts/security_audit.sh "${context_file}"; then
+      -- bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/security_audit.sh" "${context_file}"; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
     return 1
   fi
@@ -5659,13 +5666,13 @@ extract_autofix_resolver_retry_state_from_comments() {
 
   comments_json="$(cat)"
   if ! resolve_orchestrator_state_producer \
-		|| [ ! -f "scripts/orchestrate_state_v2.py" ]; then
+		|| [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" ]; then
     return 2
   fi
   comments_file="$(mktemp)"
   selection_file="$(mktemp)"
   printf '%s' "${comments_json}" > "${comments_file}"
-  if PYTHONDONTWRITEBYTECODE=1 python3 "scripts/orchestrate_state_v2.py" select-resolver-retry \
+  if PYTHONDONTWRITEBYTECODE=1 python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" select-resolver-retry \
       --comments-json "${comments_file}" \
       --repository "${repository}" \
       --tracking-issue "${tracking_issue}" \
@@ -6747,7 +6754,7 @@ invoke_judge_for_integration_conflict() {
   # Ensure codex config exists — mirrors the review-blocked judge setup.
   # Centralised in scripts/write_codex_config.sh — see that script's
   # header for the apply_patch / trust / elevation rationale.
-  bash scripts/write_codex_config.sh \
+  bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/write_codex_config.sh" \
     --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
     --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
 
@@ -7534,12 +7541,12 @@ _iso8601_to_epoch() {
 
 _branch_rebuild_audit_get() {
   local integration_branch="$1"
-  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || [ ! -f "scripts/ai_memory.py" ]; then
+  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_memory.py" ]; then
     return 1
   fi
 
   local audit_json
-  audit_json="$(python3 scripts/ai_memory.py branch-rebuild-audit get \
+  audit_json="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_memory.py" branch-rebuild-audit get \
     --repo "${GITHUB_REPOSITORY}" \
     --tracking-issue "${TRACKING_NUM}" \
     --integration-branch "${integration_branch}" 2>/dev/null || echo "")"
@@ -7552,7 +7559,7 @@ _branch_rebuild_audit_get() {
 _branch_rebuild_audit_put() {
   local integration_branch="$1"
   local audit_json="$2"
-  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || [ ! -f "scripts/ai_memory.py" ]; then
+  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_memory.py" ]; then
     return 1
   fi
 
@@ -7561,7 +7568,7 @@ _branch_rebuild_audit_put() {
   audit_file="$(mktemp "${TMPDIR:-/tmp}/branch-rebuild-audit.XXXXXX" 2>/dev/null || true)"
   [ -n "${audit_file}" ] || return 1
   printf '%s\n' "${audit_json}" > "${audit_file}"
-  result_json="$(python3 scripts/ai_memory.py branch-rebuild-audit put \
+  result_json="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_memory.py" branch-rebuild-audit put \
     --repo "${GITHUB_REPOSITORY}" \
     --tracking-issue "${TRACKING_NUM}" \
     --integration-branch "${integration_branch}" \
@@ -10488,8 +10495,8 @@ _load_actions_runs_cached() {
   local now_epoch
   now_epoch="$(date +%s)"
 
-  if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-    cache_json="$(python3 scripts/ai_memory.py actions-runs-cache get --repo "${repo}" || echo '{}')"
+  if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_memory.py" ]; then
+    cache_json="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_memory.py" actions-runs-cache get --repo "${repo}" || echo '{}')"
     cache_hit="$(printf '%s' "${cache_json}" | jq -r 'if (.ok == true and .hit == true and (.cache | type == "object")) then "true" else "false" end' 2>/dev/null || echo 'false')"
     if [ "${cache_hit}" = "true" ]; then
       cache_payload="$(printf '%s' "${cache_json}" | jq -c '.cache // {}' 2>/dev/null || echo '{}')"
@@ -10569,8 +10576,8 @@ _load_actions_runs_cached() {
       ttl_put_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-refresh.XXXXXX" 2>/dev/null || true)"
       if [ -n "${ttl_put_file}" ]; then
         jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' > "${ttl_put_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${ttl_put_file}"
-        if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-          python3 scripts/ai_memory.py actions-runs-cache put \
+        if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_memory.py" ]; then
+          python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_memory.py" actions-runs-cache put \
             --repo "${repo}" \
             --runs-file "${ttl_put_file}" \
             --etag "${response_etag:-${cached_etag}}" \
@@ -10604,8 +10611,8 @@ _load_actions_runs_cached() {
 		if [ ! -s "${response_body_file}" ]; then
 			jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' > "${response_body_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${response_body_file}"
 		fi
-	if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-		python3 scripts/ai_memory.py actions-runs-cache put \
+	if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_memory.py" ]; then
+		python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_memory.py" actions-runs-cache put \
 			--repo "${repo}" \
 			--runs-file "${response_body_file}" \
 	        --etag "${response_etag}" \
@@ -10755,7 +10762,7 @@ prime_phase_concurrency_snapshot() {
   fi
   rm -f "${actions_runs_blob_file}" 2>/dev/null || true
   rm -f "${actions_runs_fetch_err_file}" 2>/dev/null || true
-  caps_cmd=(python3 scripts/orchestrate_lib.py concurrency-caps --caps-path "${caps_path}" --threshold-minutes "${STALL_THRESHOLD_MINUTES:-120}")
+  caps_cmd=(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" concurrency-caps --caps-path "${caps_path}" --threshold-minutes "${STALL_THRESHOLD_MINUTES:-120}")
   if [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ]; then
     caps_cmd+=(--implementing-threshold-minutes "${STALL_THRESHOLD_IMPLEMENTING_MINUTES}")
   fi
@@ -12561,7 +12568,7 @@ invoke_stall_judge() {
     echo
     echo "=== STALL JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
+    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-stall-recovery.txt"
     echo
     echo "=== STALL DIAGNOSTICS JSON ==="
     echo
@@ -12569,7 +12576,7 @@ invoke_stall_judge() {
   } > "${stall_judge_prompt_file}"
 
   # Centralised in scripts/write_codex_config.sh.
-  bash scripts/write_codex_config.sh \
+  bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/write_codex_config.sh" \
     --model "${MODEL_EDITOR}" \
     --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
 
@@ -15271,7 +15278,7 @@ _runtime_blocker_dispatch_eligible()
 		echo "::warning::[runtime-blocker] failed to create temp file for ${local_id}; failing open."
 		return 0
 	fi
-	if ! blocker_result="$(python3 scripts/blocker_check.py \
+	if ! blocker_result="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/blocker_check.py" \
 		--state-file "${STATE_FILE}" \
 		--local-id "${local_id}" \
 		--candidate-details-json "${candidate_truth_json}" 2>"${blocker_err_file}")"; then
@@ -15346,7 +15353,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   echo "Processing tracking issue #${TRACKING_NUM}: ${TRACKING_TITLE}"
   echo "========================================"
 
-  if ! python3 scripts/orchestrate_state_v2.py validate-keyring >/dev/null; then
+  if ! python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" validate-keyring >/dev/null; then
     echo "::error::State-auth keyring is unavailable or invalid for tracking issue #${TRACKING_NUM}; pausing all project mutations this cycle." >&2
     continue
   fi
@@ -15483,7 +15490,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # ReconstructionUnsafeError when the body marks completed work the issue
     # map cannot account for) is surfaced in the log instead of discarded.
     REBUILD_ERR_FILE="${RUNTIME_DIR}/rebuild_err_${TRACKING_NUM}.txt"
-    if python3 scripts/orchestrate_lib.py rebuild-state \
+    if python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" rebuild-state \
       --body-file "${REBUILD_BODY_FILE}" \
       --issue-map-json "${ISSUE_MAP_JSON}" \
       --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>"${REBUILD_ERR_FILE}"; then
@@ -17042,7 +17049,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # Update issue phase timestamps for stall tracking
   # ---------------------------------------------------------------
   STATE_HASH_BEFORE="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
-  python3 scripts/orchestrate_lib.py update-timestamps \
+  python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" update-timestamps \
     --state-file "${STATE_FILE}" \
     --labels-json "${LABELS_JSON}" || true
   STATE_HASH_AFTER="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
@@ -17059,7 +17066,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # backpressure, and the staleness alert all reuse the same compare result.
   check_integration_branch_staleness "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH:-}" "${CWS_AHEAD_BY}" || true
 
-  WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
+  WAVE_STATUS="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" check-wave-status \
     --state-file "${STATE_FILE}" \
     --labels-json "${LABELS_JSON}" \
     --issue-states-json "${ISSUE_STATES_JSON}" \
@@ -17538,7 +17545,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
     # Ensure codex config exists for the judge.
     # Centralised in scripts/write_codex_config.sh.
-    bash scripts/write_codex_config.sh \
+    bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/write_codex_config.sh" \
       --model "${MODEL_EDITOR}" \
       --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
 
@@ -17800,7 +17807,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -18580,7 +18587,7 @@ EOF
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
       done
 
-      WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
+      WAVE_STATUS="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" check-wave-status \
         --state-file "${STATE_FILE}" \
         --labels-json "${LABELS_JSON}")"
       WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
@@ -19113,7 +19120,7 @@ fi
     fi
     _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
 
-    STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
+    STALLS_JSON="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
 
     STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
@@ -19392,7 +19399,7 @@ Manual intervention required." >/dev/null
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
   echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
   # Centralised in scripts/write_codex_config.sh.
-  bash scripts/write_codex_config.sh \
+  bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/write_codex_config.sh" \
     --model "${MODEL_EDITOR}" \
     --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
 
@@ -19511,7 +19518,7 @@ ${PR_DIFF}
     echo
     echo "=== JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt
+    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge.txt"
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -20113,7 +20120,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
         _gate_violations=""
         if [ -n "${_gate_integration_branch}" ] \
            && [ "${_gate_fp_count}" -gt 0 ] \
-           && [ -f "scripts/verify_integration_fingerprints.py" ]; then
+           && [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
           # Resolve a fresh ref for the integration branch. In the normal
           # GitHub Actions path, fetch the branch and pin FETCH_HEAD to a
           # concrete commit SHA immediately so later git operations cannot
@@ -20184,7 +20191,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
             jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
             _gate_exit=0
             INTEGRATION_BRANCH_NAME="${_gate_integration_branch}" \
-              python3 scripts/verify_integration_fingerprints.py \
+              python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
                 --ref "${_gate_ref}" \
                 "${_gate_fp_file}" \
                 > "${_gate_log_file}" 2>&1 || _gate_exit=$?
@@ -20556,9 +20563,9 @@ NOOP_MAX_RETRIES=3
 NOOP_FORCE_MERGE_SKIP_LABELS=$'e2e-smoke-test\nforce-review'
 
 # Source the shared audit helper once, outside the loop.
-if [ -f scripts/validate_editor_audit.sh ]; then
+if [ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/validate_editor_audit.sh" ]; then
 	# shellcheck source=scripts/validate_editor_audit.sh disable=SC1091
-	source scripts/validate_editor_audit.sh
+	source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/validate_editor_audit.sh"
 fi
 
 for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do

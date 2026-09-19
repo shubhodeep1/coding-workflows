@@ -358,7 +358,7 @@ EOF
 stage_immutable_support_bundle()
 {
 	local manifest_path="$1" source_root="$2" destination_root="$3"
-	local source_real destination_parent destination_real temporary_root repo_path source_path target_path mode
+	local source_real source_head destination_parent destination_real temporary_root repo_path source_path target_path mode
 	local support_scripts_dir support_prompts_dir
 	local -a required_paths=()
 	declare -A required_set=() executable_set=()
@@ -372,13 +372,15 @@ stage_immutable_support_bundle()
 		echo "::error::Immutable support source '${source_real}' is not a git checkout." >&2
 		return 1
 	fi
-	if [ -n "${WORKFLOW_SUPPORT_REF:-}" ]; then
-		if ! [[ "${WORKFLOW_SUPPORT_REF}" =~ ^[0-9a-fA-F]{40}$ ]] \
-			|| [ "$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR \
-				git -C "${source_real}" rev-parse HEAD 2>/dev/null | tr '[:upper:]' '[:lower:]')" != "${WORKFLOW_SUPPORT_REF,,}" ]; then
-			echo "::error::Immutable support source HEAD does not match WORKFLOW_SUPPORT_REF." >&2
-			return 1
-		fi
+	if ! [[ "${WORKFLOW_SUPPORT_REF:-}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		echo "::error::Immutable support staging requires WORKFLOW_SUPPORT_REF to be a 40-character commit SHA." >&2
+		return 1
+	fi
+	source_head="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR \
+		git -C "${source_real}" rev-parse HEAD 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+	if [ "${source_head}" != "${WORKFLOW_SUPPORT_REF,,}" ]; then
+		echo "::error::Immutable support source HEAD does not match WORKFLOW_SUPPORT_REF." >&2
+		return 1
 	fi
 
 	destination_parent="$(dirname -- "${destination_root}")"
@@ -483,6 +485,7 @@ stage_immutable_support_bundle()
 		rm -rf -- "${temporary_root}"
 		return 1
 	fi
+	chmod 0555 "${temporary_root}"
 	mv -- "${temporary_root}" "${destination_root}"
 	destination_real="$(realpath -e -- "${destination_root}")" || return 1
 	support_scripts_dir="${destination_real}/scripts"

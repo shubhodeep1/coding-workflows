@@ -384,7 +384,10 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   escapes, enforces the `gh_helpers.sh` and `ai_memory_lib.py` transitive
   dependency closure, and publishes read-only support paths under
   `RUNNER_TEMP`. Strict shell and Python loaders reject dependencies resolving
-  outside `SUPPORT_SCRIPTS_DIR`.
+  outside `SUPPORT_SCRIPTS_DIR`. The reusable orchestrate and orchestrate-poll
+  phases stage their model, state, memory, prompt, and GitHub helpers through
+  this bundle; `orchestrate_poll_process.sh` resolves nested executable calls
+  from that immutable root rather than from the integration-branch checkout.
 - Implement and syntax-repair writers use
   `model_provider_broker_prepare_isolated_writer`, a runner-owned
   `codex_stall_guard.sh` supervisor around the dedicated-UID Codex launcher,
