@@ -5489,6 +5489,7 @@ jobs:
         # source file is missing.
         if: always()
         env:
+          GATE_ONLY: ${{ inputs.gate_only }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5518,7 +5519,6 @@ jobs:
           ALT_MODEL="${{ needs.e2e-alt-model-test.result }}"
           VALIDATE="${{ needs.validate.result }}"
           RELEASE="${{ needs.release.result }}"
-          GATE_ONLY="${{ inputs.gate_only }}"
           LOG_ANALYSIS_RUN_ID="${{ needs.workflow-log-analysis-test.outputs.workflow_run_id || '' }}"
           LOG_ANALYSIS_STATUS="${{ needs.workflow-log-analysis-test.outputs.workflow_snapshot_status || '' }}"
           LOG_ANALYSIS_SNAPSHOT_CONCLUSION="${{ needs.workflow-log-analysis-test.outputs.workflow_snapshot_conclusion || '' }}"

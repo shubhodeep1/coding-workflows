@@ -300,8 +300,10 @@ def test_release_gate_only_mode_contract() -> None:
 	assert gate["jobs"]["source"]["steps"][0]["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
 	assert 'if [ "${GATE_ONLY}" = "true" ]; then' in source_run
 	assert 'echo "branch=${REF}" >> "$GITHUB_OUTPUT"' in source_run
-	notify_run = next(step["run"] for step in gate["jobs"]["notify"]["steps"] if step.get("id") == "tg_send")
-	assert 'GATE_ONLY="${{ inputs.gate_only }}"' in notify_run
+	notify_step = next(step for step in gate["jobs"]["notify"]["steps"] if step.get("id") == "tg_send")
+	assert notify_step["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
+	notify_run = notify_step["run"]
+	assert 'GATE_ONLY="${{' not in notify_run
 	assert '[ "$GATE_ONLY" = "true" ] && [ "$RELEASE" = "skipped" ]' in notify_run
 
 
