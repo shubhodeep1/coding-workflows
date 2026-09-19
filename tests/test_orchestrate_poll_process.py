@@ -777,6 +777,7 @@ def _run_poller(
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
 	env_overrides: dict[str, str] | None = None,
+	mock_store_extra: dict | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -1202,6 +1203,8 @@ def _run_poller(
 			"fail_security_pass_managed_issue_lookup": bool(fail_security_pass_managed_issue_lookup),
 			"security_pass_managed_issue_pages_raw": security_pass_managed_issue_pages_raw,
 		}
+		if mock_store_extra:
+			store.update(mock_store_extra)
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
 		(runtime_dir / "tracking_issues.json").write_text(
@@ -1454,7 +1457,7 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		store['review_dispatches'].append({'workflow': wf, 'pr_number': pr_number, 'ref': ref})
 		save()
 		sys.exit(0)
-	if wf == 'test-and-mark-stable.yml':
+	if wf in ('test-and-mark-stable.yml', 'promote-main-to-stable.yml'):
 		if store.get('fail_release_dispatch'):
 			print('dispatch failed', file=sys.stderr)
 			sys.exit(1)
@@ -2233,6 +2236,7 @@ if args[0] == 'api':
 				'mergeable_state': pr.get('mergeable_state', ''),
 				'merged': pr.get('merged', False),
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
+				'merge_commit_sha': pr.get('merge_commit_sha'),
 				'labels': [{'name': label} for label in pr.get('labels', [])],
 				'title': pr.get('title', ''),
 				'body': pr.get('body', ''),
@@ -2347,6 +2351,35 @@ if args[0] == 'api':
 		print(json.dumps({'ref': ref, 'object': {'sha': sha or 'mocksha'}}))
 		sys.exit(0)
 
+	m_tag_ref = re.search(r'/git/ref/tags/([^/]+)$', path)
+	if m_tag_ref:
+		if store.get('tag_ref_lookup_error'):
+			print('HTTP 503 simulated tag lookup failure', file=sys.stderr)
+			sys.exit(1)
+		tag_entry = (store.get('tag_refs') or {}).get(m_tag_ref.group(1))
+		if not tag_entry:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		payload = {'ref': 'refs/tags/' + m_tag_ref.group(1), 'object': {'type': tag_entry.get('type', 'commit'), 'sha': tag_entry['sha']}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
+	m_tag_obj = re.search(r'/git/tags/([0-9a-f]{40})$', path)
+	if m_tag_obj:
+		commit = (store.get('tag_objects') or {}).get(m_tag_obj.group(1))
+		if not commit:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		payload = {'object': {'type': 'commit', 'sha': commit}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
 	m = re.search(r'/git/ref/heads/(.+)$', path)
 	if m:
 		encoded_branch = m.group(1)
@@ -2416,6 +2449,18 @@ if args[0] == 'api':
 			print(json.dumps(events))
 		sys.exit(0)
 
+	m_commit = re.search(r'/commits/([0-9a-f]{40})$', path)
+	if m_commit:
+		files = [{'filename': f} for f in (store.get('commit_files') or {}).get(m_commit.group(1), [])]
+		payload = {'sha': m_commit.group(1), 'files': files}
+		if jq:
+			import subprocess as _sp
+			p = _sp.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
+
 	m = re.search(r'/commits/([^/]+)/check-runs(\?.*)?$', path)
 	if m:
 		sha = m.group(1)
@@ -2457,6 +2502,8 @@ if args[0] == 'api':
 		else:
 			ahead_by = int(store.get('compare_ahead_by', 0))
 		compare_payload = {'ahead_by': ahead_by, 'behind_by': 0}
+		_range = path.split('/compare/', 1)[1]
+		compare_payload['status'] = (store.get('compare_status_by_range') or {}).get(_range) or ('identical' if ahead_by == 0 else 'ahead')
 		# Optional commit topology for the backpressure work-commit count:
 		# 'compare_commit_parent_counts' is a list of per-commit parent
 		# counts (1 = squash/regular commit, 2 = merge commit such as the
@@ -2465,7 +2512,10 @@ if args[0] == 'api':
 		# and falls back to raw ahead_by — the pre-existing semantics that
 		# older tests pin.
 		parent_counts = store.get('compare_commit_parent_counts')
-		if parent_counts is not None:
+		if store.get('compare_commits_detail') is not None:
+			compare_payload['commits'] = list(store['compare_commits_detail'])
+			compare_payload['total_commits'] = int(store.get('compare_total_commits', len(compare_payload['commits'])))
+		elif parent_counts is not None:
 			compare_payload['commits'] = [
 				{'sha': 'c%04d' % idx, 'parents': [{'sha': 'p%d' % j} for j in range(int(n))]}
 				for idx, n in enumerate(parent_counts)
@@ -2557,9 +2607,12 @@ if args[0] == 'api':
 		sys.stdout.write(output)
 		sys.exit(0)
 
-	m = re.search(r'/actions/workflows/[^/]+/runs', path)
+	m = re.search(r'/actions/workflows/([^/]+)/runs', path)
 	if m:
 		runs = store.get('validation_workflow_runs', [])
+		by_file = store.get('workflow_runs_by_file') or {}
+		if m.group(1) in by_file:
+			runs = by_file[m.group(1)]
 		result = {'workflow_runs': runs, 'total_count': len(runs)}
 		if jq:
 			import subprocess as _sp
@@ -7997,12 +8050,46 @@ def test_comprehensive_pending_complete_dispatches_release_with_metadata():
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert dispatch["version_tag"] == "v9.9.9"
 	assert dispatch["test_repo"] == "owner/release-tests"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
+def test_comprehensive_pending_complete_honours_legacy_release_workflow_override():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 353,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"COMPREHENSIVE_RELEASE_WORKFLOW_FILE": "test-and-mark-stable.yml",
+			"COMPREHENSIVE_RELEASE_WORKFLOW_REF": "stable",
+		},
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert len(result["release_dispatches"]) == 1
+	dispatch = result["release_dispatches"][0]
+	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
+	assert dispatch["dry_run"] == "false"
 
 
 def test_comprehensive_pending_complete_dispatches_release_without_optional_metadata():
@@ -8030,8 +8117,8 @@ def test_comprehensive_pending_complete_dispatches_release_without_optional_meta
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert "version_tag" not in dispatch
 	assert "test_repo" not in dispatch
@@ -8063,8 +8150,8 @@ def test_comprehensive_pending_already_complete_dispatches_release():
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
 

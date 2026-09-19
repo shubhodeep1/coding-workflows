@@ -53,6 +53,30 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/promote_main_cycle.sh` + `scripts/apply_analysis_on_main.sh` + the `cycle` job of `.github/workflows/promote-main-to-stable.yml`
+
+- **Introduced in:** #4134 (2026-09-19)
+- **Type:** supervisor
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view promote-main-to-stable.yml -R shubhodeep1/coding-workflows` confirms the daily schedule still exists and the `cycle` job still runs `scripts/promote_main_cycle.sh`.
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:orchestrator-tracking,ai:comprehensive-test-pending"` returns `[]` (no proving or verifying run in flight).
+  - `git ls-remote origin refs/heads/main 'refs/tags/stable^{}'` shows no code change on `main` since the tag, or a replacement promotion path is live.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_orchestrate_poll_promote_cycle.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
+### `scripts/auto_release_stable.sh` + `.github/workflows/auto-release-stable.yml`
+
+- **Introduced in:** #4134 (2026-09-19)
+- **Type:** supervisor
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view auto-release-stable.yml -R shubhodeep1/coding-workflows` confirms the 6-hourly schedule still exists and still runs `scripts/auto_release_stable.sh`.
+  - `git ls-remote origin refs/heads/stable 'refs/tags/stable^{}'` prints the same commit for both refs (nothing on the `stable` branch is waiting for a release).
+  - `gh api "repos/shubhodeep1/coding-workflows/actions/workflows/test-and-mark-stable.yml/runs?per_page=1"` shows the latest run was not dispatched by the schedule, i.e. a replacement release path is live.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_auto_release_stable.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
 ### `scripts/workflow_retro.py`
 
 - **Introduced in:** #3532 (2026-06-26)
