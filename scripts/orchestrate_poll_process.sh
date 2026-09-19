@@ -10904,16 +10904,24 @@ The proving run merged, but the verifying run could not be dispatched (${verific
     esac
   elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_marker')" = "true" ]; then
     # A marker comment from an untrusted author with no trusted one: never
-    # dispatch or promote on its say-so. Record and let a human look.
-    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "untrusted"}' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment || true
-    echo "COMPREHENSIVE_MARKER_UNTRUSTED tracking_issue=${TRACKING_NUM}"
-    post_tracking_comment "## ⚠️ Untrusted apply-analysis marker
+    # dispatch or promote on its say-so, and never consume the cycle either.
+    # The callback stays unhandled and the label stays on, so the issue
+    # keeps the daily cycle held (cycle_in_flight) until a human either
+    # posts a trusted marker or removes the label. Alert once, not per tick.
+    local untrusted_alerted
+    untrusted_alerted="$(jq -r '.comprehensive_release_callback.untrusted_marker_alerted // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+    echo "COMPREHENSIVE_MARKER_UNTRUSTED tracking_issue=${TRACKING_NUM} alerted=${untrusted_alerted}"
+    if [ "${untrusted_alerted}" != "true" ]; then
+      jq --arg alerted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {role: "untrusted", untrusted_marker_alerted: true, untrusted_marker_alerted_at: $alerted_at})' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
+      post_tracking_comment "## ⚠️ Untrusted apply-analysis marker
 
-This tracking issue carries \`ai:comprehensive-test-pending\` but its only apply-analysis marker comment was posted by an author outside \`${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}\`. The poller does not dispatch or promote on it. Nothing is promoted."
-    tg_notify "Project #${TRACKING_NUM}: apply-analysis marker from an untrusted author ignored; no verifying run, no promotion." "CRITICAL"
+This tracking issue carries \`ai:comprehensive-test-pending\` but its only apply-analysis marker comment was posted by an author outside \`${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}\`. The poller does not dispatch or promote on it, and it keeps the label so no new promote cycle starts until a human resolves this: post the marker from a trusted account, or remove \`ai:comprehensive-test-pending\` to abandon the cycle. Nothing is promoted."
+      tg_notify "Project #${TRACKING_NUM}: apply-analysis marker from an untrusted author ignored; cycle held human-gated (label kept), no verifying run, no promotion." "CRITICAL"
+    fi
+    return 0
   elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.role')" = "verifying" ]; then
     # Promotion (or its deferral) already happened before this final merge;
     # the verifying run's own merge never promotes.

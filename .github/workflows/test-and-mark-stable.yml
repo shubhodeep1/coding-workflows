@@ -5058,6 +5058,15 @@ jobs:
     if: ${{ success() && !inputs.gate_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Serialise the mutating tag pushes across every dispatcher of this
+    # workflow (auto-release-stable.yml, promote-main-to-stable.yml, manual).
+    # The dispatchers' own locks end at dispatch time, so without this lock
+    # two gates on different `stable` tips could interleave their tag pushes.
+    # The stale-tip guard in the tagging step below covers the ordering half:
+    # a gate whose checkout is no longer the branch tip refuses to tag.
+    concurrency:
+      group: stable-release-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Checkout source branch
         uses: actions/checkout@v5
@@ -5132,6 +5141,8 @@ jobs:
 
       - name: Tag version and update stable pointer
         if: ${{ !inputs.dry_run }}
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -5139,6 +5150,24 @@ jobs:
 
           VERSION="${{ needs.resolve-version.outputs.version }}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
+
+          # Stale-tip guard: only tag the commit that is still the branch tip.
+          # A gate dispatched on an older tip that finishes after the branch
+          # moved (a promotion fast-forwarded `stable`, or a patch landed)
+          # would otherwise move the `stable` tag backwards onto history the
+          # newer gate has already superseded. The changelog step above
+          # pushes HEAD to the branch, so HEAD equals the tip unless someone
+          # else pushed since; refuse rather than retag.
+          TESTED_SHA="$(git rev-parse HEAD)"
+          BRANCH_TIP="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" | awk '{print $1}')"
+          if [ -z "${BRANCH_TIP}" ]; then
+            echo "::error::Could not read the tip of ${SOURCE_BRANCH} from origin; refusing to tag without confirming the checkout is current."
+            exit 1
+          fi
+          if [ "${BRANCH_TIP}" != "${TESTED_SHA}" ]; then
+            echo "::error::RELEASE_STALE_TIP branch=${SOURCE_BRANCH} tested=${TESTED_SHA} tip=${BRANCH_TIP}: the branch moved after this gate started; not tagging a stale checkout. The gate on the new tip owns the release."
+            exit 1
+          fi
 
           # Immutable version tag (refs/tags/ prefix for consistency with the moving-tag pushes below)
           git tag -a "$VERSION" -m "Release $VERSION"

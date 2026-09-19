@@ -147,7 +147,10 @@ active_count=$((active_count + promote_active_count))
 if [ "${active_count}" -gt 0 ]; then
 	skip_release release_in_flight "active_runs=${active_count}"
 fi
-last_conclusion_on_tip="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha)] | sort_by(.created_at) | last | .conclusion // empty')"
+# Restrict to runs on the stable branch: the promote cycle runs the same
+# workflow in gate_only mode on the default branch, and when the two branches
+# share a tip a failed smoke gate there must not read as a failed release.
+last_conclusion_on_tip="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha and .head_branch == $branch)] | sort_by(.created_at) | last | .conclusion // empty')"
 case "${last_conclusion_on_tip}" in
 	failure|cancelled|timed_out|startup_failure)
 		echo "::warning::${AUTO_RELEASE_STABLE_WORKFLOW_FILE} already ended with '${last_conclusion_on_tip}' on ${AUTO_RELEASE_STABLE_BRANCH}@${branch_tip}; not re-dispatching until the branch moves or a human re-runs the gate."

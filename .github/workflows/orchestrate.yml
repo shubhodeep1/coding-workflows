@@ -1020,21 +1020,49 @@ jobs:
           # Optional dispatcher bindings (see the tracking_labels /
           # tracking_comment inputs). Applied right after creation so a
           # dispatcher never has to guess which tracking issue is its own.
+          #
+          # The bindings are all-or-nothing. A label without its marker
+          # comment would make the poller treat the project as a legacy
+          # release callback (and hold every future promote cycle); a marker
+          # without its label would mark the source doc processed while the
+          # poller never sees the project. So a failed binding closes the
+          # issue it just created (removing any label already applied) and
+          # fails this run: the dispatcher's next tick finds no open
+          # labelled issue and no marker, and retries the whole dispatch.
+          _binding_failed_stage=""
           if [ -n "${TRACKING_LABELS_INPUT:-}" ]; then
             IFS=',' read -r -a _tracking_extra_labels <<< "${TRACKING_LABELS_INPUT}"
             for _extra_label in "${_tracking_extra_labels[@]}"; do
               _extra_label="$(printf '%s' "${_extra_label}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
               [ -n "${_extra_label}" ] || continue
-              ensure_label_exists "${_extra_label}" "${{ github.repository }}"
-              gh_retry gh issue edit "${TRACKING_ISSUE_NUMBER}" --repo "${{ github.repository }}" \
-                --add-label "${_extra_label}" >/dev/null
+              if ! ensure_label_exists "${_extra_label}" "${{ github.repository }}" \
+                || ! gh_retry gh issue edit "${TRACKING_ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+                  --add-label "${_extra_label}" >/dev/null; then
+                _binding_failed_stage="label:${_extra_label}"
+                break
+              fi
               echo "TRACKING_ISSUE_LABEL_APPLIED tracking_issue=${TRACKING_ISSUE_NUMBER} label=${_extra_label}"
             done
           fi
-          if [ -n "${TRACKING_COMMENT_INPUT:-}" ]; then
-            gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
-              -f body="${TRACKING_COMMENT_INPUT}" >/dev/null
-            echo "TRACKING_ISSUE_COMMENT_POSTED tracking_issue=${TRACKING_ISSUE_NUMBER}"
+          if [ -z "${_binding_failed_stage}" ] && [ -n "${TRACKING_COMMENT_INPUT:-}" ]; then
+            if gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+              -f body="${TRACKING_COMMENT_INPUT}" >/dev/null; then
+              echo "TRACKING_ISSUE_COMMENT_POSTED tracking_issue=${TRACKING_ISSUE_NUMBER}"
+            else
+              _binding_failed_stage="comment"
+            fi
+          fi
+          if [ -n "${_binding_failed_stage}" ]; then
+            echo "::error::TRACKING_ISSUE_BINDING_FAILED tracking_issue=${TRACKING_ISSUE_NUMBER} stage=${_binding_failed_stage}: closing the partially bound tracking issue so the dispatcher can retry."
+            if [ -n "${TRACKING_LABELS_INPUT:-}" ]; then
+              gh_retry gh issue edit "${TRACKING_ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+                --remove-label "${TRACKING_LABELS_INPUT}" >/dev/null 2>&1 || true
+            fi
+            gh_retry gh issue close "${TRACKING_ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --reason "not planned" \
+              --comment "Closed by orchestrate.yml: the dispatcher binding (${_binding_failed_stage}) could not be applied after this issue was created, so the project was never started. The dispatcher retries on its next tick." >/dev/null 2>&1 \
+              || echo "::warning::Could not close partially bound tracking issue #${TRACKING_ISSUE_NUMBER}; close it by hand so the dispatcher can retry."
+            exit 1
           fi
           {
             echo "tracking_issue_number=${TRACKING_ISSUE_NUMBER}"

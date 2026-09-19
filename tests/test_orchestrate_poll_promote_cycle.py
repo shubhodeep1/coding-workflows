@@ -315,9 +315,20 @@ def test_untrusted_marker_never_promotes_or_dispatches() -> None:
 	assert "comprehensive_promotion" not in result["latest_state"]
 	assert result["release_dispatches"] == []
 	assert result["latest_state"]["status"] == "complete"
-	assert result["latest_state"]["comprehensive_release_callback"]["role"] == "untrusted"
-	assert LABEL not in result["tracking_labels"]
+	callback = result["latest_state"]["comprehensive_release_callback"]
+	assert callback["role"] == "untrusted"
+	assert callback.get("handled") is not True
+	assert callback["untrusted_marker_alerted"] is True
+	# The cycle stays human-gated: the label is kept so no new cycle starts.
+	assert LABEL in result["tracking_labels"]
 	assert "COMPREHENSIVE_MARKER_UNTRUSTED" in result["stdout"]
+	assert "alerted=false" in result["stdout"]
+	# A later tick neither re-alerts nor consumes the label.
+	second = _verifying_run(result["latest_state"], compare_commits=commits, untrusted_marker=True)
+	assert "alerted=true" in second["stdout"]
+	assert LABEL in second["tracking_labels"]
+	assert second["release_dispatches"] == []
+	assert second["latest_state"]["comprehensive_release_callback"].get("handled") is not True
 
 
 def test_release_workflow_override_cannot_pin_and_fails_closed() -> None:

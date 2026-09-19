@@ -319,3 +319,22 @@ def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
 	assert "TRACKING_LABELS_INPUT: ${{ inputs.tracking_labels }}" in text
 	assert "source scripts/label_helpers.sh" in text.split("- name: Create tracking issue", 1)[1]
 	assert "TRACKING_ISSUE_COMMENT_POSTED" in text
+	# Bindings are all-or-nothing: a failed label or marker comment closes the
+	# freshly created issue and fails the run so the dispatcher can retry.
+	create_step = text.split("- name: Create tracking issue", 1)[1].split("- name: Create integration branch", 1)[0]
+	assert "TRACKING_ISSUE_BINDING_FAILED" in create_step
+	assert "gh issue close" in create_step
+	assert '--remove-label "${TRACKING_LABELS_INPUT}"' in create_step
+	assert create_step.index("TRACKING_ISSUE_BINDING_FAILED") < create_step.index("exit 1")
+
+
+def test_release_job_is_serialised_and_refuses_a_stale_tip() -> None:
+	gate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8"))
+	release = gate["jobs"]["release"]
+	assert release["concurrency"] == {"group": "stable-release-${{ github.repository }}", "cancel-in-progress": False}
+	tag_step = next(step for step in release["steps"] if step.get("name") == "Tag version and update stable pointer")
+	assert tag_step["env"]["SOURCE_BRANCH"] == "${{ needs.source.outputs.branch }}"
+	run = tag_step["run"]
+	assert 'git ls-remote origin "refs/heads/${SOURCE_BRANCH}"' in run
+	assert "RELEASE_STALE_TIP" in run
+	assert run.index("RELEASE_STALE_TIP") < run.index('git tag -a "$VERSION"')

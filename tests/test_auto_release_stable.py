@@ -155,14 +155,25 @@ def test_in_flight_promotion_run_skips() -> None:
 
 def test_failed_gate_on_same_tip_skips_until_branch_moves() -> None:
 	runs = [
-		{"status": "completed", "conclusion": "success", "head_sha": TIP, "created_at": "2026-09-18T00:00:00Z"},
-		{"status": "completed", "conclusion": "failure", "head_sha": TIP, "created_at": "2026-09-19T00:00:00Z"},
+		{"status": "completed", "conclusion": "success", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-18T00:00:00Z"},
+		{"status": "completed", "conclusion": "failure", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T00:00:00Z"},
 	]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs))
 	assert proc.returncode == 0, proc.stderr
 	assert f"AUTO_RELEASE_SKIPPED reason=last_gate_failed sha={TIP} conclusion=failure" in proc.stdout
 	assert not state.get("dispatches")
+
+
+def test_failed_gate_only_run_on_main_with_same_tip_does_not_block() -> None:
+	# The promote cycle runs the same workflow in gate_only mode on main; when
+	# main and stable share a tip, its failure is not a failed stable release.
+	runs = [{"status": "completed", "conclusion": "failure", "head_sha": TIP, "head_branch": "main", "created_at": "2026-09-19T00:00:00Z"}]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs))
+	assert proc.returncode == 0, proc.stderr
+	assert "last_gate_failed" not in proc.stdout
+	assert len(state["dispatches"]) == 1
 
 
 def test_failed_gate_on_older_tip_does_not_block() -> None:
