@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR creates `changelog.d/security-pass-line-ownership-engine.md` but `.ai/.workspace_source_manifest.txt` was not regenerated to include it, so the workspace source manifest is inconsistent with the source tree when new `changelog.d/` fragments are added.\n  expected_change_site: `.ai/.workspace_source_manifest.txt` \u2014 insert `changelog.d/security-pass-line-ownership-engine.md` in sorted position after `changelog.d/security-audit-concurrency-deadlock.md`.\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  EVIDENCE: The manifest diff registers only `changelog.d/3965-security-pass-loop-convergence.md` and `changelog.d/security-audit-concurrency-deadlock.md` at lines 184 and 233; `changelog.d/security-pass-line-ownership-engine.md` is absent from the manifest despite being added by the PR. The missing fragment was identified as unaddressed Copilot review comment entry[1] (id 4053002474).\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: The PR creates `changelog.d/security-pass-line-ownership-engine.md` but the workspace source manifest `.ai/.workspace_source_manifest.txt` was not regenerated to include it. The manifest diff only registers two unrelated fragments from other PRs (line 184: `changelog.d/3965-security-pass-loop-convergence.md` and line 233: `changelog.d/security-audit-concurrency-deadlock.md`). The Copilot review comment entry[1] flagged this and it was not addressed in the last run.\n  Expected change site: `.ai/.workspace_source_manifest.txt` \u2014 insert `changelog.d/security-pass-line-ownership-engine.md` in sorted position after line 233 (`changelog.d/security-audit-concurrency-deadlock.md`).\n  Evidence of absence: The PR diff shows `.ai/.workspace_source_manifest.txt` changed at lines 181-187 and 230-236, adding only two unrelated changelog fragments. The fragment `changelog.d/security-pass-line-ownership-engine.md` created by this PR is not in the manifest at any line.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: Operational hygiene \u2014 keep `.ai/.workspace_source_manifest.txt` (the inventory consumed by `workspace_init.sh`) consistent with the source tree when new `changelog.d/` fragments are added, so a fresh workspace materialization does not omit committed fragments.\n  Expected change site: `.ai/.workspace_source_manifest.txt`\n  Evidence of absence: The PR adds `changelog.d/security-pass-line-ownership-engine.md` (visible in the PR diff as a new 3-line file with the `<!-- changelog: changed -->` marker) but the manifest diff only registers two unrelated fragments from other PRs (`changelog.d/3965-security-pass-loop-convergence.md` at line 184 and `changelog.d/security-audit-concurrency-deadlock.md` at line 233). The new fragment for this PR is missing from the inventory. This is the unaddressed Copilot review comment entry[1] (id 4053002474); the last autofix run audited only entry[0] and left this open.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "178a7eb40c39787b10cff117c0be0d887fec95d023f6db6c58eac6b289580535",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4141,
+    "run_id": "35441827149",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35441827149",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919130551_c30ebe8baa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4141,
+    "run_id": "35441827149"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-19T13:05:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
