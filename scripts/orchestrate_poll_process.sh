@@ -1326,6 +1326,24 @@ if ! [[ "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" =~ ^[0-9]+$ ]]; then
   MAX_SECURITY_PASS_JUDGE_ROUNDS="0"
 fi
 
+# Comprehensive release callback target (README 12f).  A tracking issue that
+# carries ai:comprehensive-test-pending (applied by
+# .github/workflows/apply-analysis-on-main.yml) dispatches this workflow when
+# the project completes.  The default promotes the default branch to stable
+# (fast-forward + full release gate); the pre-2026-09 target
+# test-and-mark-stable.yml on `stable` stays selectable for a stable-only
+# patch release.
+COMPREHENSIVE_RELEASE_WORKFLOW_FILE="${COMPREHENSIVE_RELEASE_WORKFLOW_FILE:-promote-main-to-stable.yml}"
+COMPREHENSIVE_RELEASE_WORKFLOW_REF="${COMPREHENSIVE_RELEASE_WORKFLOW_REF:-main}"
+if ! [[ "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+  echo "::warning::COMPREHENSIVE_RELEASE_WORKFLOW_FILE must be a workflow filename; defaulting to promote-main-to-stable.yml"
+  COMPREHENSIVE_RELEASE_WORKFLOW_FILE="promote-main-to-stable.yml"
+fi
+if [ -z "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" ] || [[ "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" =~ [[:space:]] ]]; then
+  echo "::warning::COMPREHENSIVE_RELEASE_WORKFLOW_REF must be a single ref name; defaulting to main"
+  COMPREHENSIVE_RELEASE_WORKFLOW_REF="main"
+fi
+
 # Advisory follow-ups for accepted (waived) findings are filed only after the
 # project's integration branch has merged into the default branch.  Filing
 # them at judge time pointed the standalone clarify/plan pipeline at a
@@ -10202,7 +10220,7 @@ extract_comprehensive_release_metadata() {
 dispatch_comprehensive_release_workflow() {
   local version_tag="${1:-}"
   local test_repo="${2:-}"
-  local run_args=("test-and-mark-stable.yml" "--repo" "${GITHUB_REPOSITORY}" "--ref" "stable" "-f" "dry_run=false")
+  local run_args=("${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" "--repo" "${GITHUB_REPOSITORY}" "--ref" "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" "-f" "dry_run=false")
 
   if [ -n "${version_tag}" ]; then
     run_args+=("-f" "version_tag=${version_tag}")
@@ -10257,7 +10275,7 @@ handle_comprehensive_release_callback_if_needed() {
 
     if dispatch_comprehensive_release_workflow "${version_tag}" "${test_repo}"; then
       msg="Comprehensive release callback dispatched for project #${TRACKING_NUM}."
-      msg+=$'\n'"Workflow: test-and-mark-stable.yml"
+      msg+=$'\n'"Workflow: ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (ref ${COMPREHENSIVE_RELEASE_WORKFLOW_REF})"
       msg+=$'\n'"dry_run: false"
       if [ -n "${version_tag}" ]; then
         msg+=$'\n'"version_tag: ${version_tag}"
@@ -10273,7 +10291,7 @@ handle_comprehensive_release_callback_if_needed() {
       post_state_comment || true
     else
       msg="Comprehensive release callback failed for project #${TRACKING_NUM}."
-      msg+=$'\n'"Workflow: test-and-mark-stable.yml"
+      msg+=$'\n'"Workflow: ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (ref ${COMPREHENSIVE_RELEASE_WORKFLOW_REF})"
       msg+=$'\n'"dry_run: false"
       if [ -n "${COMPREHENSIVE_RELEASE_DISPATCH_ERROR:-}" ]; then
         msg+=$'\n'"Error: ${COMPREHENSIVE_RELEASE_DISPATCH_ERROR}"

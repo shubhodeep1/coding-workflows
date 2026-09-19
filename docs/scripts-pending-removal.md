@@ -53,6 +53,30 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/apply_analysis_on_main.sh` + `.github/workflows/apply-analysis-on-main.yml`
+
+- **Introduced in:** claude/auto-apply-analysis-release-main (2026-09-19)
+- **Type:** supervisor
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view apply-analysis-on-main.yml -R shubhodeep1/coding-workflows` confirms the push-to-main trigger still exists and still runs `scripts/apply_analysis_on_main.sh`.
+  - `ls analysis/workflow-optimization-*.md` on `main` returns no files, or every remaining file is listed in `analysis/recommendation-processing-report.md` (nothing left for the dispatcher to hand off).
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:orchestrator-tracking,ai:comprehensive-test-pending"` returns `[]` (no apply-analysis project still in flight).
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_apply_analysis_on_main.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
+### `scripts/auto_release_stable.sh` + `.github/workflows/auto-release-stable.yml`
+
+- **Introduced in:** claude/auto-apply-analysis-release-main (2026-09-19)
+- **Type:** supervisor
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view auto-release-stable.yml -R shubhodeep1/coding-workflows` confirms the 6-hourly schedule still exists and still runs `scripts/auto_release_stable.sh`.
+  - `git ls-remote origin refs/heads/stable 'refs/tags/stable^{}'` prints the same commit for both refs (nothing on the `stable` branch is waiting for a release).
+  - `gh api "repos/shubhodeep1/coding-workflows/actions/workflows/test-and-mark-stable.yml/runs?per_page=1"` shows the latest run was not dispatched by the schedule, i.e. a replacement release path is live.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_auto_release_stable.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
 ### `scripts/workflow_retro.py`
 
 - **Introduced in:** #3532 (2026-06-26)

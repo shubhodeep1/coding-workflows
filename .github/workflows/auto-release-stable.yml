@@ -1,0 +1,48 @@
+---
+name: Auto release stable
+
+# Releases the `stable` branch when it is ahead of the `stable` tag.
+#
+# Consumers pin the tag, not the branch, so a patch merged straight into the
+# `stable` branch is invisible to them until test-and-mark-stable.yml runs.
+# This schedule dispatches that gate whenever the branch tip differs from the
+# tag commit, skipping while a gate run is queued or running and after the
+# gate already failed on the current tip (a human has to look at that). See
+# scripts/auto_release_stable.sh for the decision order.
+#
+# Promotion of `main` to `stable` stays with promote-main-to-stable.yml,
+# which the orchestrator poller dispatches after a clean apply-analysis
+# project (see apply-analysis-on-main.yml) and an operator can still run by
+# hand.
+
+"on":
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: auto-release-stable-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Dispatch the release gate when stable is ahead of its tag
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AUTO_RELEASE_STABLE_ENABLED: ${{ vars.AUTO_RELEASE_STABLE_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          bash scripts/auto_release_stable.sh

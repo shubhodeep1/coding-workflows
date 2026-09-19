@@ -1445,7 +1445,7 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		store['review_dispatches'].append({'workflow': wf, 'pr_number': pr_number, 'ref': ref})
 		save()
 		sys.exit(0)
-	if wf == 'test-and-mark-stable.yml':
+	if wf in ('test-and-mark-stable.yml', 'promote-main-to-stable.yml'):
 		if store.get('fail_release_dispatch'):
 			print('dispatch failed', file=sys.stderr)
 			sys.exit(1)
@@ -7680,12 +7680,46 @@ def test_comprehensive_pending_complete_dispatches_release_with_metadata():
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert dispatch["version_tag"] == "v9.9.9"
 	assert dispatch["test_repo"] == "owner/release-tests"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
+def test_comprehensive_pending_complete_honours_legacy_release_workflow_override():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 353,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"COMPREHENSIVE_RELEASE_WORKFLOW_FILE": "test-and-mark-stable.yml",
+			"COMPREHENSIVE_RELEASE_WORKFLOW_REF": "stable",
+		},
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert len(result["release_dispatches"]) == 1
+	dispatch = result["release_dispatches"][0]
+	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
+	assert dispatch["dry_run"] == "false"
 
 
 def test_comprehensive_pending_complete_dispatches_release_without_optional_metadata():
@@ -7713,8 +7747,8 @@ def test_comprehensive_pending_complete_dispatches_release_without_optional_meta
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert "version_tag" not in dispatch
 	assert "test_repo" not in dispatch
@@ -7746,8 +7780,8 @@ def test_comprehensive_pending_already_complete_dispatches_release():
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
 

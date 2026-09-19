@@ -690,6 +690,8 @@ jobs:
           SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+          COMPREHENSIVE_RELEASE_WORKFLOW_FILE: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_FILE || 'promote-main-to-stable.yml' }}
+          COMPREHENSIVE_RELEASE_WORKFLOW_REF: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_REF || 'main' }}
           MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}
           # Master switch for the orchestrator-aware PR autofix flow.  Read
           # by the final-PR-phase MAX_JUDGE_CYCLES cap bypass in

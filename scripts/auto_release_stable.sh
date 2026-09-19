@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# auto_release_stable.sh — release the `stable` branch when it is ahead of the
+# `stable` tag.
+#
+# Runs from .github/workflows/auto-release-stable.yml on a schedule. Patch
+# fixes merged straight into the `stable` branch (the `claude/*-stable` PRs)
+# used to sit unreleased until an operator dispatched test-and-mark-stable.yml
+# by hand; consumers pin the *tag*, so they never saw the fix. This script
+# dispatches the same release gate automatically, and only when there is
+# something to release.
+#
+# Decision order (every exit is a logged, stable prefix):
+#   AUTO_RELEASE_SKIPPED reason=disabled          kill switch
+#   AUTO_RELEASE_SKIPPED reason=up_to_date        branch tip == tag commit
+#   AUTO_RELEASE_SKIPPED reason=release_in_flight the gate is queued/running
+#   AUTO_RELEASE_SKIPPED reason=last_gate_failed  the gate already failed or
+#                                                 was cancelled on this exact
+#                                                 tip; a human must look
+#   AUTO_RELEASE_DISPATCHED sha=<tip>
+#
+# API calls per run (§15): 2 ref reads (+1 to dereference an annotated tag),
+# 1 workflow-runs list, at most 1 dispatch.
+#
+# Environment (all optional unless stated):
+#   GITHUB_REPOSITORY (required)        owner/repo
+#   GH_TOKEN (required)                 token able to dispatch workflows
+#   AUTO_RELEASE_STABLE_ENABLED         default true
+#   AUTO_RELEASE_STABLE_BRANCH          default stable
+#   AUTO_RELEASE_STABLE_TAG             default stable
+#   AUTO_RELEASE_STABLE_WORKFLOW_FILE   default test-and-mark-stable.yml
+#   GITHUB_OUTPUT                       receives dispatched=/sha=
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
+type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+AUTO_RELEASE_STABLE_ENABLED="${AUTO_RELEASE_STABLE_ENABLED:-true}"
+AUTO_RELEASE_STABLE_BRANCH="${AUTO_RELEASE_STABLE_BRANCH:-stable}"
+AUTO_RELEASE_STABLE_TAG="${AUTO_RELEASE_STABLE_TAG:-stable}"
+AUTO_RELEASE_STABLE_WORKFLOW_FILE="${AUTO_RELEASE_STABLE_WORKFLOW_FILE:-test-and-mark-stable.yml}"
+
+for required_env in GITHUB_REPOSITORY GH_TOKEN; do
+	if [ -z "${!required_env:-}" ]; then
+		echo "::error::auto_release_stable.sh requires ${required_env}."
+		exit 1
+	fi
+done
+
+emit_output()
+{
+	if [ -n "${GITHUB_OUTPUT:-}" ]; then
+		printf '%s=%s\n' "$1" "$2" >> "${GITHUB_OUTPUT}"
+	fi
+}
+
+skip_release()
+{
+	local reason="$1"
+	local detail="${2:-}"
+	echo "AUTO_RELEASE_SKIPPED reason=${reason}${detail:+ ${detail}}"
+	emit_output dispatched false
+	emit_output sha ""
+	exit 0
+}
+
+is_truthy()
+{
+	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+if ! is_truthy "${AUTO_RELEASE_STABLE_ENABLED}"; then
+	skip_release disabled
+fi
+
+branch_tip="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${AUTO_RELEASE_STABLE_BRANCH}" | jq -r '.object.sha // empty')"
+if ! [[ "${branch_tip}" =~ ^[0-9a-f]{40}$ ]]; then
+	echo "::error::Could not resolve branch ${AUTO_RELEASE_STABLE_BRANCH} on ${GITHUB_REPOSITORY}."
+	exit 1
+fi
+
+# The stable tag is annotated (`git tag -a` in the release job), so the ref
+# points at a tag object that must be dereferenced to its commit.
+tag_ref_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${AUTO_RELEASE_STABLE_TAG}" 2>/dev/null || true)"
+tag_object_type="$(printf '%s' "${tag_ref_json}" | jq -r '.object.type // empty' 2>/dev/null || true)"
+tag_object_sha="$(printf '%s' "${tag_ref_json}" | jq -r '.object.sha // empty' 2>/dev/null || true)"
+tag_commit=""
+if [ "${tag_object_type}" = "tag" ] && [[ "${tag_object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+	tag_commit="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" | jq -r '.object.sha // empty')"
+elif [ "${tag_object_type}" = "commit" ]; then
+	tag_commit="${tag_object_sha}"
+fi
+if [ -z "${tag_commit}" ]; then
+	echo "::warning::Tag ${AUTO_RELEASE_STABLE_TAG} does not resolve to a commit on ${GITHUB_REPOSITORY}; treating the branch as unreleased."
+fi
+
+if [ "${branch_tip}" = "${tag_commit}" ]; then
+	skip_release up_to_date "sha=${branch_tip}"
+fi
+
+runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${AUTO_RELEASE_STABLE_WORKFLOW_FILE}/runs?per_page=30")"
+active_count="$(printf '%s' "${runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+if [ "${active_count}" -gt 0 ]; then
+	skip_release release_in_flight "active_runs=${active_count}"
+fi
+last_conclusion_on_tip="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha)] | sort_by(.created_at) | last | .conclusion // empty')"
+case "${last_conclusion_on_tip}" in
+	failure|cancelled|timed_out|startup_failure)
+		echo "::warning::${AUTO_RELEASE_STABLE_WORKFLOW_FILE} already ended with '${last_conclusion_on_tip}' on ${AUTO_RELEASE_STABLE_BRANCH}@${branch_tip}; not re-dispatching until the branch moves or a human re-runs the gate."
+		skip_release last_gate_failed "sha=${branch_tip} conclusion=${last_conclusion_on_tip}"
+		;;
+esac
+
+echo "Dispatching ${AUTO_RELEASE_STABLE_WORKFLOW_FILE} on ${AUTO_RELEASE_STABLE_BRANCH} (tip ${branch_tip}, tag at ${tag_commit:-none})."
+gh_retry gh workflow run "${AUTO_RELEASE_STABLE_WORKFLOW_FILE}" \
+	--repo "${GITHUB_REPOSITORY}" \
+	--ref "${AUTO_RELEASE_STABLE_BRANCH}"
+echo "AUTO_RELEASE_DISPATCHED sha=${branch_tip}"
+emit_output dispatched true
+emit_output sha "${branch_tip}"
