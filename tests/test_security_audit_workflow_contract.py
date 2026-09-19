@@ -364,6 +364,28 @@ def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> No
 	assert "ai-security-audit.yml" in manifest.splitlines()
 
 
+def test_security_audit_reusable_concurrency_group_differs_from_consumer_wrapper() -> None:
+	"""A called workflow that declares the same concurrency group as its caller
+	deadlocks: GitHub cancels the run at startup with zero jobs ("Canceling since
+	a deadlock was detected for concurrency group ... between a top level
+	workflow and 'security-audit'"). tele-funtoken-msg-scoring's weekly
+	AI Security Audit failed that way on every scheduled run (runs 34747244353,
+	34021337015, 33301125251) once both files carried
+	`security-audit-${{ github.repository }}`.
+	"""
+	import yaml
+
+	reusable = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+	template = yaml.safe_load(
+		(REPO_ROOT / "workflow-templates" / "ai-security-audit.yml").read_text(encoding="utf-8")
+	)
+	template_group = template["concurrency"]["group"]
+	assert template_group == "security-audit-${{ github.repository }}"
+	reusable_group = reusable["concurrency"]["group"]
+	assert reusable_group == "security-audit-reusable-${{ github.repository }}"
+	assert reusable_group != template_group
+
+
 def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None:
 	content = SCRIPT_PATH.read_text(encoding="utf-8")
 	assert '--sandbox read-only' in content
