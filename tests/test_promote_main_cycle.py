@@ -87,11 +87,35 @@ fi
 '''
 
 
+MOCK_GIT = """#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+state_path = Path(os.environ["MOCK_GH_STATE"])
+state = json.loads(state_path.read_text())
+args = sys.argv[1:]
+state.setdefault("git_calls", []).append(args)
+if args[:1] == ["fetch"] and state.get("git_fetch_fail"):
+    state_path.write_text(json.dumps(state))
+    sys.stderr.write("fatal: simulated fetch failure\\n")
+    sys.exit(1)
+if args[:1] == ["checkout"]:
+    state["git_head"] = args[-1]
+if args[:2] == ["rev-parse", "HEAD"]:
+    sys.stdout.write(state.get("git_head", "1" * 40) + "\\n")
+state_path.write_text(json.dumps(state))
+sys.exit(0)
+"""
+
+
 def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict, Path]:
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	(bin_dir / "gh").write_text(MOCK_GH, encoding="utf-8")
 	(bin_dir / "gh").chmod(0o755)
+	# The script only touches git when the smoke gate tested a newer commit
+	# than the tip it started from; never let a test move the real checkout.
+	(bin_dir / "git").write_text(MOCK_GIT, encoding="utf-8")
+	(bin_dir / "git").chmod(0o755)
 	stub = tmp / "dispatcher_stub.sh"
 	stub.write_text(STUB_DISPATCHER, encoding="utf-8")
 	stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
@@ -346,4 +370,18 @@ def test_smoke_sha_is_the_gate_runs_head_when_main_advanced_before_the_gate() ->
 	assert f"Smoke gate passed on {ADVANCED_TIP} (run 500)" in proc.stdout
 	assert f"APPLY_ANALYSIS_SMOKE_SHA={ADVANCED_TIP}" in env_lines
 	assert f"APPLY_ANALYSIS_CYCLE_BASELINE_SHA={TIP}" in env_lines
+	# The dispatcher runs against the smoke-tested commit, not the older tip.
+	assert f"GITHUB_SHA={ADVANCED_TIP}" in env_lines
+	assert ["checkout", "--quiet", "--detach", ADVANCED_TIP] in final["git_calls"]
 	assert f"PROMOTE_CYCLE_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md baseline={TIP} smoke={ADVANCED_TIP}" in proc.stdout
+
+
+def test_smoke_head_checkout_failure_fails_the_cycle() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS_ON_ADVANCED_MAIN, "git_fetch_fail": True})
+		assert not env_out.exists()
+	assert proc.returncode != 0
+	assert f"PROMOTE_CYCLE_FAILED reason=smoke_head_checkout_failed sha={ADVANCED_TIP}" in proc.stdout
+	# The smoke gate was dispatched (that is what moved main), but nothing else.
+	assert [d for d in final.get("dispatches", []) if d and d[0] != "test-and-mark-stable.yml"] == []
+	assert "outcome=failed:smoke_head_checkout_failed" in final["github_output"]

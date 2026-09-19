@@ -29,6 +29,9 @@
 #   PROMOTE_CYCLE_SKIPPED reason=guard_unavailable          an API guard failed; fail closed
 #   PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=<id>
 #   PROMOTE_CYCLE_FAILED reason=smoke_gate_timeout
+#   PROMOTE_CYCLE_FAILED reason=smoke_head_checkout_failed  main advanced during the gate and
+#                                                           the smoke-tested commit could not
+#                                                           be checked out for the dispatch
 #   PROMOTE_CYCLE_DISPATCHED doc=<path> baseline=<sha> smoke=<sha>
 #
 # Non-code paths (do not count as a change): analysis/**, ai-memory/**,
@@ -386,11 +389,24 @@ if [[ "${gate_head_sha:-}" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 echo "Smoke gate passed on ${smoke_sha} (run ${gate_run_id})."
 
+# The dispatcher reads the analysis docs from this checkout and stamps
+# GITHUB_SHA into the project description, so both must be the smoke-tested
+# commit, not the tip this job happened to check out. Move the working tree
+# there when the gate tested a newer commit; refuse the cycle if that fails.
+if [ "${smoke_sha}" != "${main_tip}" ]; then
+	if ! git fetch --quiet --depth 1 origin "${smoke_sha}" \
+		|| ! git checkout --quiet --detach "${smoke_sha}" \
+		|| [ "$(git rev-parse HEAD 2>/dev/null || true)" != "${smoke_sha}" ]; then
+		fail_cycle smoke_head_checkout_failed "sha=${smoke_sha}"
+	fi
+	echo "Checked out the smoke-tested commit ${smoke_sha} for the proving dispatch."
+fi
+
 # 8. Proving run.
 dispatch_output="$(APPLY_ANALYSIS_ROLE=proving \
 	APPLY_ANALYSIS_CYCLE_BASELINE_SHA="${main_tip}" \
 	APPLY_ANALYSIS_SMOKE_SHA="${smoke_sha}" \
-	GITHUB_SHA="${main_tip}" \
+	GITHUB_SHA="${smoke_sha}" \
 	GITHUB_OUTPUT="" \
 	bash "${APPLY_ANALYSIS_DISPATCHER}")"
 printf '%s\n' "${dispatch_output}"
