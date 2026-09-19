@@ -4190,13 +4190,17 @@ def _passed_security_state_for_rebind() -> dict:
 
 
 def test_security_pass_clean_sync_merge_rebinds_without_model_run() -> None:
+	state = _passed_security_state_for_rebind()
+	advisory = _security_pass_test_finding()
+	advisory["audited_head_sha"] = "a" * 40
+	state["security_pass_advisory_backlog"] = [advisory]
 	result = _run_poller(
-		state=_passed_security_state_for_rebind(),
+		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
 		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
-		issue_labels={10: ["ai:merged"]},
+		issue_labels={10: ["ai:planning"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		branch_ref_shas={
 			"main": "__advanced_default_head__",
@@ -4209,9 +4213,33 @@ def test_security_pass_clean_sync_merge_rebinds_without_model_run() -> None:
 	assert result["latest_state"]["security_pass_status"] == "passed"
 	assert result["latest_state"]["security_pass_cycle"] == 2
 	assert result["latest_state"]["security_pass_head_sha"] == result["latest_state"]["security_pass_last_audited_sha"]
+	assert result["latest_state"]["security_pass_advisory_backlog"] == []
+	assert result["latest_state"]["security_pass_followups_merge_checked"] == [900]
+	assert result["latest_state"] == result["state_on_disk"]
 	assert "SECURITY_PASS_REBOUND tracking_issue=192" in combined_log
 	assert "reason=no_new_project_lines" in combined_log
 	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" not in combined_log
+
+
+def test_security_pass_valid_head_persists_advisory_backlog_drain() -> None:
+	state = _passed_security_state_for_rebind()
+	advisory = _security_pass_test_finding()
+	advisory["audited_head_sha"] = "a" * 40
+	state["security_pass_advisory_backlog"] = [advisory]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:planning"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["security_audit_capture"] is None
+	assert result["latest_state"]["security_pass_advisory_backlog"] == []
+	assert result["latest_state"]["security_pass_followups_merge_checked"] == [900]
+	assert result["latest_state"] == result["state_on_disk"]
 
 
 def test_security_pass_evil_merge_and_non_merge_commit_fall_through_to_audit() -> None:

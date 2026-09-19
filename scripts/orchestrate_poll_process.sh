@@ -6521,6 +6521,9 @@ run_security_pass_inline() {
   fi
   if security_pass_current_head_is_valid "${current_head_sha}"; then
     security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
+    fi
     return 0
   fi
 
@@ -6570,6 +6573,9 @@ run_security_pass_inline() {
   if [ "${prior_security_status}" = "passed" ] \
     && security_pass_rebind_if_no_new_project_lines "${current_head_sha}" "${merge_base_sha}"; then
     security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
+    fi
     return 0
   fi
 
@@ -7037,6 +7043,9 @@ ensure_security_pass_before_completion() {
   fi
   if security_pass_current_head_is_valid "${current_head_sha}"; then
     security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
+    fi
     return 0
   fi
   run_security_pass_inline \

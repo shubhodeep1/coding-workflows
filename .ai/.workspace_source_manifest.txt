@@ -210,6 +210,7 @@ changelog.d/4093-pytest-git-env-isolation.md
 changelog.d/4109-bind-auto-merge-head.md
 changelog.d/4109-bind-auto-merge-to-evaluated-head.md
 changelog.d/4127-security-fix-pr-base.md
+changelog.d/4143-security-pass-line-ownership-poller.md
 changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/433-readme-wrapper-predicate-examples.md
@@ -233,7 +234,6 @@ changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
 changelog.d/security-audit-concurrency-deadlock.md
 changelog.d/security-pass-line-ownership-engine.md
-changelog.d/security-pass-line-ownership-poller.md
 changelog.d/seed-repo-command.md
 changelog.d/slash-commands-session-model.md
 changelog.d/stall-recovery-dead-end-fixes.md
