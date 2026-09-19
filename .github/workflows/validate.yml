@@ -330,6 +330,7 @@ jobs:
             ],
             "required_files": [
               "scripts/templates/slot_manifest.schema.json",
+              "ai-memory/schemas/workflow_overlay.v1.json",
               "unattended_system_instructions.md",
               "ai_pipeline.md",
               "agents.md"

@@ -22,6 +22,11 @@ IMMUTABLE_LOADER_SNIPPET = (
 ORCHESTRATE_LOADER_SNIPPET = 'python3 "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py" \\'
 POLL_LOADER_SNIPPET = 'python3 "${poll_immutable_support_root}/scripts/load_workflow_overlay.py" \\'
 LOADER_SCHEMA_SNIPPET = '--schema-path "ai-memory/schemas/workflow_overlay.v1.json"'
+IMMUTABLE_LOADER_SCHEMA_SNIPPETS = {
+	"orchestrate.yml": '--schema-path "${orchestrate_immutable_support_root}/ai-memory/schemas/workflow_overlay.v1.json"',
+	"orchestrate_poll.yml": '--schema-path "${poll_immutable_support_root}/ai-memory/schemas/workflow_overlay.v1.json"',
+	"orchestrate_clarify_respond.yml": '--schema-path "${clarify_respond_immutable_support_root}/ai-memory/schemas/workflow_overlay.v1.json"',
+}
 LOADER_ENV_SNIPPET = '--github-env "${GITHUB_ENV}"'
 
 WORKFLOW_EXPECTATIONS = {
@@ -69,7 +74,9 @@ def test_orchestrator_workflows_stage_overlay_loader_before_prompt_consumers() -
 		assert "workflow_overlay.v1.json" in workflow_text, workflow_name
 		assert "WORKFLOW.md overlay is opt-in by file presence" in workflow_text, workflow_name
 		assert loader_snippet in workflow_text, workflow_name
-		assert LOADER_SCHEMA_SNIPPET in workflow_text, workflow_name
+		assert '"ai-memory/schemas/workflow_overlay.v1.json"' in workflow_text, workflow_name
+		assert IMMUTABLE_LOADER_SCHEMA_SNIPPETS[workflow_name] in workflow_text, workflow_name
+		assert LOADER_SCHEMA_SNIPPET not in workflow_text, workflow_name
 		assert LOADER_ENV_SNIPPET in workflow_text, workflow_name
 		assert "immutable-bundle" in workflow_text, workflow_name
 		assert downstream_snippet in workflow_text, workflow_name

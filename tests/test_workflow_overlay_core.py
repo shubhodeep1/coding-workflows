@@ -336,6 +336,15 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 	assert 'python3 "${clarify_immutable_support_root}/scripts/load_workflow_overlay.py"' in (REPO_ROOT / ".github" / "workflows" / "clarify.yml").read_text(encoding="utf-8")
 	assert 'python3 "${plan_immutable_support_root}/scripts/load_workflow_overlay.py"' in (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
 	assert 'python3 "${implement_immutable_support_root}/scripts/load_workflow_overlay.py"' in (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
+	for workflow_name, support_root_name in (
+		("clarify.yml", "clarify_immutable_support_root"),
+		("plan.yml", "plan_immutable_support_root"),
+		("implement.yml", "implement_immutable_support_root"),
+	):
+		workflow_text = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+		assert '"ai-memory/schemas/workflow_overlay.v1.json"' in workflow_text
+		assert f'--schema-path "${{{support_root_name}}}/ai-memory/schemas/workflow_overlay.v1.json"' in workflow_text
+		assert '--schema-path "ai-memory/schemas/workflow_overlay.v1.json"' not in workflow_text
 	review_autofix_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	assert 'bash "${helper}"' in review_autofix_text
 	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"' in stage_helper_text
@@ -344,7 +353,7 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 	for snippet in (
 		'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"',
 		'--repo-root "${REPO_ROOT}"',
-		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
+		'--schema-path "${support_root_dir}/ai-memory/schemas/workflow_overlay.v1.json"',
 		'--github-env "${GITHUB_ENV}"',
 	):
 		assert snippet in stage_helper_text

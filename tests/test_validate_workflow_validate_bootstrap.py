@@ -130,7 +130,7 @@ def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> Non
 	for snippet in (
 		"WORKFLOW.md overlay is opt-in by file presence",
 		'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"',
-		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
+		'--schema-path "${support_root_dir}/ai-memory/schemas/workflow_overlay.v1.json"',
 		'--github-env "${GITHUB_ENV}"',
 	):
 		assert snippet in helper
@@ -279,6 +279,7 @@ def test_validate_support_manifest_requires_memory_and_event_dependencies() -> N
 		'"scripts/setup_serena.sh"',
 		'"scripts/ledger_emit_substate.sh"',
 		'"scripts/templates/slot_manifest.schema.json"',
+		'"ai-memory/schemas/workflow_overlay.v1.json"',
 		'"unattended_system_instructions.md"',
 		'"ai_pipeline.md"',
 		'"prompts/mode-validate-self-heal.txt"',

@@ -329,6 +329,7 @@ jobs:
                   "prompts/_identity_recall.txt"
                 ],
                 required_files: [
+                  "ai-memory/schemas/workflow_overlay.v1.json",
                   "unattended_system_instructions.md",
                   "ai_pipeline.md",
                   "agents.md"
@@ -361,7 +362,7 @@ jobs:
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
           PYTHONDONTWRITEBYTECODE=1 python3 "${plan_immutable_support_root}/scripts/load_workflow_overlay.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
-            --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
+            --schema-path "${plan_immutable_support_root}/ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"

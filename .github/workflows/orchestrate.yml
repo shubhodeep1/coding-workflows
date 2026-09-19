@@ -419,6 +419,7 @@ jobs:
                 ],
                 required_files: [
                   ".github/ai/orchestrate_schema.v1.json",
+                  "ai-memory/schemas/workflow_overlay.v1.json",
                   "unattended_system_instructions.md",
                   "ai_pipeline.md",
                   "agents.md"
@@ -436,7 +437,7 @@ jobs:
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
           PYTHONDONTWRITEBYTECODE=1 python3 "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
-            --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
+            --schema-path "${orchestrate_immutable_support_root}/ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
 
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
