@@ -1043,7 +1043,7 @@ review_blocked_build_approval_request()
 	action="$(printf '%s' "${decision_json}" | jq -r '.action // empty')"
 	decision_digest="$(review_blocked_decision_digest "${decision_json}")"
 	helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	request_id="$(PYTHONPATH="${helper_dir}:${PYTHONPATH:-}" PYTHONDONTWRITEBYTECODE=1 python3 -c 'from ai_memory_lib import make_record_id; print(make_record_id("review_blocked_approval"))')" || return 1
+	request_id="$(python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); from ai_memory_lib import make_record_id; print(make_record_id("review_blocked_approval"))' "${helper_dir}")" || return 1
 	created_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 	jq -cn --arg request_id "${request_id}" --argjson pr_number "${pr_number}" \
 		--argjson issue_number "${issue_number:-0}" --arg action "${action}" \

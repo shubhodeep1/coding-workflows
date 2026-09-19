@@ -378,14 +378,14 @@ emit_judge_lessons_learned_records() {
   fi
 
   telemetry_json="$(printf '%s\n' "${judge_json}" | {
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${PWD}" "${source_name}" "${issue_number}" "${pr_number}" <<'PY'
+    python3 -I -B - "${PWD}" "${source_name}" "${issue_number}" "${pr_number}" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 
+support_scripts_dir = Path(os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"]).resolve(strict=True)
+sys.path.insert(0, str(support_scripts_dir))
 from ai_memory_lib import persist_memory_operation, record_lessons_learned, resolve_memory_root_dir
 
 

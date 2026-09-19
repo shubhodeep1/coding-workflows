@@ -34,24 +34,39 @@ from typing import Any, Callable
 
 def _import_support_module(module_name: str) -> Any:
     """Import a support dependency and enforce immutable provenance when requested."""
-    try:
-        imported_module = importlib.import_module(module_name)
-    except ModuleNotFoundError:
-        imported_module = importlib.import_module(f"scripts.{module_name}")
-
     if os.environ.get("AI_MEMORY_STRICT_IMMUTABLE_SUPPORT", "").lower() == "true":
         support_scripts_value = os.environ.get("SUPPORT_SCRIPTS_DIR", "")
         if not support_scripts_value:
             raise RuntimeError("strict immutable-support mode requires SUPPORT_SCRIPTS_DIR")
         support_scripts_path = Path(support_scripts_value).resolve(strict=True)
-        module_file_value = getattr(imported_module, "__file__", None)
-        if not module_file_value:
-            raise RuntimeError(f"support module {module_name} has no file provenance")
-        module_file_path = Path(module_file_value).resolve(strict=True)
-        if module_file_path.parent != support_scripts_path:
+        module_candidate_path = support_scripts_path / f"{module_name}.py"
+        if module_candidate_path.is_symlink():
+            raise RuntimeError(f"support module {module_name} must not be a symlink")
+        module_file_path = module_candidate_path.resolve(strict=True)
+        if module_file_path.parent != support_scripts_path or not module_file_path.is_file():
             raise RuntimeError(
                 f"support module {module_name} resolved outside immutable support directory"
             )
+        module_spec = importlib.util.spec_from_file_location(module_name, module_file_path)
+        if module_spec is None or module_spec.loader is None:
+            raise RuntimeError(f"support module {module_name} has no loadable file specification")
+        imported_module = importlib.util.module_from_spec(module_spec)
+        previous_module = sys.modules.get(module_name)
+        sys.modules[module_name] = imported_module
+        try:
+            module_spec.loader.exec_module(imported_module)
+        except BaseException:
+            if previous_module is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous_module
+            raise
+        return imported_module
+
+    try:
+        imported_module = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        imported_module = importlib.import_module(f"scripts.{module_name}")
     return imported_module
 
 

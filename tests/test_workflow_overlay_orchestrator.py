@@ -105,6 +105,9 @@ def test_orchestrator_runtime_helpers_reject_checkout_relative_execution() -> No
 	poller_text = _read(REPO_ROOT / "scripts" / "orchestrate_poll_process.sh")
 	assert 'ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-' in poller_text
 	assert 'source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' in poller_text
+	assert 'PYTHONPATH="${PWD}/scripts' not in poller_text
+	assert 'python3 -I -B - "${PWD}"' in poller_text
+	assert 'sys.path.insert(0, str(support_scripts_dir))' in poller_text
 	assert "sys.path.insert(0, 'scripts')" not in poller_text
 	assert poller_text.count("python3 -I -B") >= 7
 	assert 'os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"]' in poller_text
