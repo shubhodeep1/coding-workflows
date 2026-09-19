@@ -689,6 +689,8 @@ jobs:
           MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
           MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
           SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
+          SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE: ${{ vars.SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE || 'true' }}
+          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
@@ -797,6 +799,17 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+        run: bash scripts/orchestrate_poll_process.sh
+
+      - name: Release staged-support latches without active projects
+        if: steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
+          STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
         run: bash scripts/orchestrate_poll_process.sh
 
       - name: Run worktree registry GC

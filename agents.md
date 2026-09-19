@@ -248,6 +248,28 @@ a new value, add it to the appropriate overrides file with a
 - Staged-support failures are consumed by the runtime-preserved rejection handler,
   which attempts and verifies the `ai:needs-human` latch, comments with the affected paths and
   latch status, sends the configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.
+  Genuine three-way rebase conflicts add
+  `<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->`; missing ledgers,
+  baselines, unsafe paths, and merge-tool failures remain human-gated without that marker.
+  The source-repository poller's `release_staged_support_needs_human_latches` sweep (gated by
+  `STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED`, default `true`) runs in sweep-only mode when no
+  tracking project is active and matches that marker or the exact pre-marker #4113 incident
+  from run `35072286584`, only on comments from an `OWNER`, `MEMBER`, `COLLABORATOR`, or installed
+  `[bot]`, and once the running engine carries
+  `scripts/implement_staged_support_workspace.sh` it restores `ai:awaiting-approval` and posts
+  `/approved` with a `<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict
+  engine=<sha> -->` marker, at most once per issue per engine commit (log keys
+  `STAGED_SUPPORT_LATCH_RELEASED`, `STAGED_SUPPORT_LATCH_SKIP`,
+  `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`). The latest `ai:needs-human` label event must precede
+  the staged-support comment and have the same actor, so clearing that latch and later setting
+  another human gate cannot reuse the stale marker. Immediately before changing labels, the
+  sweep re-reads the live labels and latest latch event; a changed or unreadable latch skips
+  release for that tick. A failed `/approved` write restores
+  `ai:needs-human`; if that compensation also fails, the unresolved latch marker blocks
+  managed and standalone auto-approval and raises a CRITICAL alert. Those recovery guards use
+  the batched comment cache only when it contains fewer than 100 entries; a full window triggers
+  a paginated history read, and unavailable or malformed history fails closed for that tick.
+  Consumer repositories and other latch reasons stay human-cleared.
 - The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,
   `check_failure_triage.yml`) either never commit from that checkout or run on
@@ -566,6 +588,22 @@ and cycles 2 and 3 were never told to audit as new code.
 Persistent findings after `MAX_SECURITY_PASS_CYCLES` (default `5`)
 terminalize as `ai:security-pass-failed`; `/re-security-pass` resets the
 bounded loop and the next audit covers the full range again.
+The terminal state is engine-aware: every terminal path
+(`security_pass_terminal_failure`, `security_pass_closed_fix_failure`,
+`security_pass_fix_reissue_exhausted`) records the engine commit that ran the
+tick in `security_pass_failed_engine_sha` (`ORCHESTRATOR_ENGINE_SHA`, resolved
+once at startup by `resolve_orchestrator_engine_sha` from `ORCHESTRATE_ENGINE_SHA`
+or the `.codex-workflow-src` HEAD; empty when unresolvable). With
+`SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE` (default `true`), a tick whose
+engine differs from that record, with no `/re-security-pass` comment claiming
+the tick, performs the same reset once per engine commit
+(`security_pass_auto_reset_engine_shas`, last 20 kept, both fields normalized by
+`ensure_security_pass_state_fields`), logs `SECURITY_PASS_AUTO_RESET` or
+`SECURITY_PASS_AUTO_RESET_SKIPPED ... reason=engine_unresolved|same_engine|already_reset_on_engine`,
+and posts a `<!-- security-pass-auto-reset:<sha> -->` tracking comment. A
+legacy state without the record counts as a different engine, so projects
+parked by older engines (binance-blessings#249) re-run on their first tick
+after a sync; the same engine failing a project again never re-fires.
 The budget bounds *persistent* findings, so a recorded clean pass breaks the
 chain: when the integration head advances past a `passed` SHA (a
 `chore: sync <default> into <integration>` merge, a resolver/judge conflict
@@ -883,6 +921,12 @@ and shipped:
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED`
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED`
 - `SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED`
+- `SECURITY_PASS_AUTO_RESET`
+- `SECURITY_PASS_AUTO_RESET_SKIPPED`
+- `STAGED_SUPPORT_LATCH_RELEASED`
+- `STAGED_SUPPORT_LATCH_SKIP`
+- `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`
+- `ORCHESTRATOR_ENGINE_SHA`
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED`
 - `SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED`
 
@@ -1044,6 +1088,12 @@ LOG_PREFIX.name=SECURITY_PASS_WAIVED_SUPPRESSED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED
+LOG_PREFIX.name=SECURITY_PASS_AUTO_RESET
+LOG_PREFIX.name=SECURITY_PASS_AUTO_RESET_SKIPPED
+LOG_PREFIX.name=STAGED_SUPPORT_LATCH_RELEASED
+LOG_PREFIX.name=STAGED_SUPPORT_LATCH_SKIP
+LOG_PREFIX.name=STAGED_SUPPORT_LATCH_RELEASE_SKIPPED
+LOG_PREFIX.name=ORCHESTRATOR_ENGINE_SHA
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED
 LOG_PREFIX.name=SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED
 LOG_PREFIX.name=SEMBLE_QUERY
