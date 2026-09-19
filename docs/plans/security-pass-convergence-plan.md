@@ -84,9 +84,11 @@ project that touched their files, and each fix widened the audited surface:
   `emit_event.sh` — as a critical project finding. That list is unchanged
   since the merge-base and identical on `main`
   (`scripts/gh_helpers.sh:28-35` on `main` sources `scripts/emit_event.sh`
-  from the checkout the same way). Nine of cycle 7's ten findings are of this
-  kind: real hardening gaps in this repository's own workflows, none
-  introduced by the project.
+  from the checkout the same way). The other nine findings cite the same two
+  patterns (support-staging lists that omit a transitive helper, and agents
+  launched under the runner UID), both present on `main` before the project:
+  real hardening gaps in this repository's own workflows, none introduced by
+  the project.
 - **tele-funtoken-msg-scoring #3928** and **#3955** (from the original plan):
   findings in shared bet-execution code dated months before the project,
   charged to the first project that touched those files; four audits with no
