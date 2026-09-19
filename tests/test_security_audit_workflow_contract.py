@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -160,6 +161,7 @@ def _run_security_audit(
 	extra_env: dict | None = None,
 	cwd: Path | None = None,
 	support_failure_mode: str | None = None,
+	git_failure_mode: str | None = None,
 	script_args: tuple[str, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="security-audit-test-") as td:
@@ -170,6 +172,30 @@ def _run_security_audit(
 		_install_mock_gh(bin_dir, state_file)
 		if codex_available:
 			_install_mock_codex(bin_dir, state_file)
+		if git_failure_mode is not None:
+			real_git_path = shutil.which("git")
+			assert real_git_path is not None
+			_write_exec(
+				bin_dir / "git",
+				r'''#!/usr/bin/env python3
+import os
+import sys
+
+args = sys.argv[1:]
+failure_mode = os.environ.get("MOCK_GIT_FAILURE_MODE", "")
+if failure_mode == "blame" and args[:1] == ["blame"]:
+	sys.exit(2)
+if (
+	failure_mode == "ancestry"
+	and args[:2] == ["merge-base", "--is-ancestor"]
+	and len(args) == 4
+	and args[3] == os.environ.get("MOCK_GIT_BASE_SHA", "")
+):
+	sys.exit(2)
+real_git = os.environ["MOCK_REAL_GIT"]
+os.execv(real_git, [real_git, *args])
+''',
+			)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		codex_home = tmp_path / "codex-home"
 		codex_home.mkdir(parents=True, exist_ok=True)
@@ -203,6 +229,9 @@ def _run_security_audit(
 			env["SECURITY_AUDIT_SUPPORT_DIR"] = str(
 				_install_security_audit_support_tree(tmp_path, failure_mode=support_failure_mode)
 			)
+		if git_failure_mode is not None:
+			env["MOCK_GIT_FAILURE_MODE"] = git_failure_mode
+			env["MOCK_REAL_GIT"] = real_git_path
 		env.update(extra_env or {})
 		proc = subprocess.run(
 			["bash", "--noprofile", "--norc", str(SCRIPT_PATH), *script_args],
@@ -761,6 +790,7 @@ def test_security_audit_filters_findings_and_caps_followups() -> None:
 	assert "ai:security" in followup_create_args
 	assert "high-finding-one" in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "high-finding-two" in "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "- Advisory findings:" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "low-confidence-finding" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "excluded-finding" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "invalid-path" not in "\n".join(final_state.get("issue_comment_bodies", []))
@@ -803,7 +833,10 @@ def test_security_audit_findings_json_filters_without_github_side_effects() -> N
 	payload = json.loads(final_state["security_audit_findings_output"])
 	assert payload["schema_version"] == "security_audit_findings.v1"
 	assert [finding["finding_id"] for finding in payload["findings"]] == ["high-survivor", "low-survivor"]
+	assert payload["advisory_findings"] == []
+	assert payload["verified_fixed_finding_ids"] == []
 	assert payload["counts"] == {
+		"advisory": 0,
 		"kept": 2,
 		"suppressed_excluded": 1,
 		"suppressed_invalid": 1,
@@ -852,6 +885,250 @@ def test_security_audit_explicit_diff_scope_filters_changed_files() -> None:
 	assert "Files changed in the explicit range" in prompt
 	assert "checked-out HEAD may be a non-default branch" in prompt
 	assert "on the default branch" not in prompt
+	assert "Only lines the project itself added or modified in the range block completion" not in prompt
+
+
+def _git_line_ownership_fixture(base_dir: Path) -> tuple[Path, str, str]:
+	repo_dir = base_dir / "line-ownership-repo"
+	repo_dir.mkdir(parents=True, exist_ok=True)
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update(
+		{
+			"GIT_AUTHOR_NAME": "t",
+			"GIT_AUTHOR_EMAIL": "t@example.invalid",
+			"GIT_COMMITTER_NAME": "t",
+			"GIT_COMMITTER_EMAIL": "t@example.invalid",
+		}
+	)
+
+	def fixture_git(*args: str) -> str:
+		return subprocess.run(
+			["git", *args],
+			cwd=repo_dir,
+			env=git_env,
+			check=True,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+		).stdout.strip()
+
+	fixture_git("init", "-q")
+	owned_file_path = repo_dir / "owned.py"
+	owned_file_path.write_text("".join(f"LINE_{line_number} = {line_number}\n" for line_number in range(1, 10)), encoding="utf-8")
+	fixture_git("add", "owned.py")
+	fixture_git("commit", "-q", "-m", "base lines")
+	base_sha = fixture_git("rev-parse", "HEAD")
+	owned_lines = owned_file_path.read_text(encoding="utf-8").splitlines()
+	owned_lines[4] = "LINE_5 = 'project change'"
+	owned_lines.append("LINE_10 = 'new project line'")
+	owned_file_path.write_text("\n".join(owned_lines) + "\n", encoding="utf-8")
+	fixture_git("add", "owned.py")
+	fixture_git("commit", "-q", "-m", "project change")
+	head_sha = fixture_git("rev-parse", "HEAD")
+	return repo_dir, base_sha, head_sha
+
+
+def test_security_audit_project_line_ownership_routes_and_reports_verified_fixed_ids() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-line-ownership-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, base_sha, head_sha = _git_line_ownership_fixture(tmp_path)
+		output_path = tmp_path / "findings.json"
+		prior_findings_path = tmp_path / "prior-findings.json"
+		prior_findings_path.write_text(
+			json.dumps(
+				[
+					{"finding_id": "missing-prior", "file": "deleted.py", "line": 1},
+					{"finding_id": "re-emitted-prior", "file": "owned.py", "line": 5},
+				]
+			),
+			encoding="utf-8",
+		)
+		fix_cycle_diffs_path = tmp_path / "fix-cycle-diffs.json"
+		fix_cycle_diffs_path.write_text(
+			json.dumps([{"cycle": 1, "since_sha": base_sha, "head_sha": head_sha, "files": ["owned.py"]}]),
+			encoding="utf-8",
+		)
+		findings = []
+		for finding_id, line_number in (
+			("four-lines-away", 1),
+			("within-three-lines", 2),
+			("re-emitted-prior", 5),
+			("new-project-line", 10),
+		):
+			finding = _finding_payload(finding_id, file_path="owned.py")
+			finding["line"] = line_number
+			findings.append(finding)
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps(findings),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": base_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_LINE_OWNERSHIP": "project-lines",
+				"SECURITY_AUDIT_PRIOR_FINDINGS": str(prior_findings_path),
+				"SECURITY_AUDIT_FIX_CYCLE_DIFFS": str(fix_cycle_diffs_path),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert payload["schema_version"] == "security_audit_findings.v1"
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["within-three-lines", "re-emitted-prior", "new-project-line"]
+	assert [finding["finding_id"] for finding in payload["advisory_findings"]] == ["four-lines-away"]
+	assert payload["verified_fixed_finding_ids"] == ["missing-prior"]
+	assert payload["counts"]["kept"] == 3
+	assert payload["counts"]["advisory"] == 1
+	prompt = final_state["codex_stdin"][0]
+	assert "Only lines the project itself added or modified in the range block completion" in prompt
+	assert "Cite the exact line where the defect is, not the nearest project-written line." in prompt
+
+
+def test_security_audit_sync_merged_line_reachable_from_base_is_advisory() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-sync-line-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = tmp_path / "sync-repo"
+		repo_dir.mkdir()
+		git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		git_env.update(
+			{
+				"GIT_AUTHOR_NAME": "t",
+				"GIT_AUTHOR_EMAIL": "t@example.invalid",
+				"GIT_COMMITTER_NAME": "t",
+				"GIT_COMMITTER_EMAIL": "t@example.invalid",
+			}
+		)
+
+		def sync_git(*args: str) -> str:
+			return subprocess.run(
+				["git", *args],
+				cwd=repo_dir,
+				env=git_env,
+				check=True,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+			).stdout.strip()
+
+		sync_git("init", "-q")
+		owned_file_path = repo_dir / "owned.py"
+		owned_file_path.write_text("\n".join(f"LINE_{line_number} = {line_number}" for line_number in range(1, 6)) + "\n", encoding="utf-8")
+		sync_git("add", "owned.py")
+		sync_git("commit", "-q", "-m", "initial")
+		initial_sha = sync_git("rev-parse", "HEAD")
+		sync_git("checkout", "-q", "-b", "default-side")
+		synced_lines = owned_file_path.read_text(encoding="utf-8").splitlines()
+		synced_lines[0] = "LINE_1 = 'from default branch'"
+		owned_file_path.write_text("\n".join(synced_lines) + "\n", encoding="utf-8")
+		sync_git("add", "owned.py")
+		sync_git("commit", "-q", "-m", "default-side change")
+		sync_git("checkout", "-q", "-b", "project", initial_sha)
+		sync_git("merge", "-q", "--no-ff", "default-side", "-m", "sync default into project")
+		base_sha = sync_git("rev-parse", "HEAD")
+		project_lines = owned_file_path.read_text(encoding="utf-8").splitlines()
+		project_lines[4] = "LINE_5 = 'project change'"
+		owned_file_path.write_text("\n".join(project_lines) + "\n", encoding="utf-8")
+		sync_git("add", "owned.py")
+		sync_git("commit", "-q", "-m", "project change")
+		head_sha = sync_git("rev-parse", "HEAD")
+		output_path = tmp_path / "findings.json"
+		finding = _finding_payload("sync-owned", file_path="owned.py")
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([finding]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": base_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_LINE_OWNERSHIP": "project-lines",
+				"SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES": "0",
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert payload["findings"] == []
+	assert [advisory["finding_id"] for advisory in payload["advisory_findings"]] == ["sync-owned"]
+
+
+def test_security_audit_project_line_ownership_failures_stay_blocking_and_warn_once() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-line-ownership-failure-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, base_sha, head_sha = _git_line_ownership_fixture(tmp_path)
+		findings = []
+		for finding_id, line_number in (("first", 2), ("second", 5)):
+			finding = _finding_payload(finding_id, file_path="owned.py")
+			finding["line"] = line_number
+			findings.append(finding)
+		for failure_mode in ("blame", "ancestry"):
+			output_path = tmp_path / f"{failure_mode}.json"
+			proc, final_state = _run_security_audit(
+				{},
+				codex_output=json.dumps(findings),
+				cwd=repo_dir,
+				git_failure_mode=failure_mode,
+				extra_env={
+					"MOCK_GIT_BASE_SHA": base_sha,
+					"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+					"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+					"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+					"SECURITY_AUDIT_DIFF_BASE": base_sha,
+					"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+					"SECURITY_AUDIT_LINE_OWNERSHIP": "project-lines",
+				},
+			)
+
+			assert proc.returncode == 0, proc.stderr
+			payload = json.loads(final_state["security_audit_findings_output"])
+			assert [finding["finding_id"] for finding in payload["findings"]] == ["first", "second"]
+			assert payload["advisory_findings"] == []
+			assert proc.stderr.count("line ownership could not be determined for owned.py") == 1
+
+
+def test_security_audit_line_ownership_preflight_is_side_effect_free() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-line-ownership-preflight-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, base_sha, head_sha = _git_line_ownership_fixture(tmp_path)
+		output_path = tmp_path / "findings.json"
+		failure_envs = [
+			{
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_LINE_OWNERSHIP": "unknown",
+			},
+			{
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_LINE_OWNERSHIP": "project-lines",
+			},
+			{
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES": "51",
+			},
+			{
+				"SECURITY_AUDIT_LINE_OWNERSHIP": "project-lines",
+				"SECURITY_AUDIT_DIFF_BASE": base_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			},
+		]
+		for failure_env in failure_envs:
+			proc, final_state = _run_security_audit({}, cwd=repo_dir, extra_env=failure_env)
+			assert proc.returncode != 0
+			assert final_state.get("calls", []) == []
+			assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_prompt_mirrors_require_exact_line_citations() -> None:
+	exact_line_rule = "Cite the line where the defect lives. The runtime routes findings by line ownership; a finding attributed to the wrong line is routed wrongly."
+	for prompt_path in (REPO_ROOT / "prompts" / "mode-security-audit.txt", REPO_ROOT / "prompts" / "_templates" / "mode-security-audit.txt"):
+		assert prompt_path.read_text(encoding="utf-8").count(exact_line_rule) == 1
 
 
 def _git_fixture_repo_three_commits(base_dir: Path) -> tuple[Path, str, str, str]:
@@ -1206,6 +1483,16 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 		repo_dir, first_sha, second_sha, head_sha = _git_fixture_repo_three_commits(tmp_path)
 		output_path = tmp_path / "findings.json"
 		waived_findings_path = tmp_path / "waived-findings.json"
+		prior_findings_path = tmp_path / "prior-findings.json"
+		prior_findings_path.write_text(
+			json.dumps(
+				[
+					{"finding_id": "waived-exact", "file": "file_b.py", "line": 1},
+					{"finding_id": "missing-prior", "file": "file_c.py", "line": 1},
+				]
+			),
+			encoding="utf-8",
+		)
 		waived_findings_path.write_text(
 			json.dumps(
 				[
@@ -1249,6 +1536,7 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
 				"SECURITY_AUDIT_DIFF_BASE": first_sha,
 				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_PRIOR_FINDINGS": str(prior_findings_path),
 				"SECURITY_AUDIT_WAIVED_FINDINGS": str(waived_findings_path),
 			},
 		)
@@ -1256,6 +1544,7 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
 	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot"]
+	assert payload["verified_fixed_finding_ids"] == ["missing-prior"]
 	assert payload["counts"]["kept"] == 1
 	assert payload["counts"]["suppressed_waived"] == 3
 	assert "waived-findings=3 (line window 40)" in proc.stdout

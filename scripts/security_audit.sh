@@ -131,6 +131,9 @@ security_audit_append_prompt_context() {
 			echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return 1
 		fi
 		sed 's/^/- /' "${CHANGED_FILES_FILE}" || return 1
+		if [ "${SECURITY_AUDIT_LINE_OWNERSHIP}" = "project-lines" ]; then
+			echo "Only lines the project itself added or modified in the range block completion; a finding on an older line in these files is still worth reporting and is routed as an advisory. Cite the exact line where the defect is, not the nearest project-written line." || return 1
+		fi
 		echo "You may read any file in the repository to trace cross-file impact (callers, configuration, trust boundaries), but only emit findings whose cited file appears in the changed list above; findings citing unchanged files are dropped by the post-filter." || return 1
 	else
 		if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
@@ -218,6 +221,27 @@ SECURITY_AUDIT_DIFF_HEAD="${SECURITY_AUDIT_DIFF_HEAD:-}"
 if { [ -n "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -z "${SECURITY_AUDIT_DIFF_HEAD}" ]; } \
 		|| { [ -z "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -n "${SECURITY_AUDIT_DIFF_HEAD}" ]; }; then
 	echo "SECURITY_AUDIT_DIFF_BASE and SECURITY_AUDIT_DIFF_HEAD must be supplied together" >&2
+	exit 1
+fi
+
+SECURITY_AUDIT_LINE_OWNERSHIP="${SECURITY_AUDIT_LINE_OWNERSHIP:-file}"
+case "${SECURITY_AUDIT_LINE_OWNERSHIP}" in
+	file|project-lines)
+		;;
+	*)
+		echo "SECURITY_AUDIT_LINE_OWNERSHIP must be file or project-lines" >&2
+		exit 1
+		;;
+esac
+SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES="${SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES:-3}"
+if ! [[ "${SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES}" =~ ^[0-9]+$ ]] \
+		|| [ "${SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES}" -gt 50 ]; then
+	echo "SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES must be an integer from 0 to 50" >&2
+	exit 1
+fi
+if [ "${SECURITY_AUDIT_LINE_OWNERSHIP}" = "project-lines" ] \
+		&& { [ "${SECURITY_AUDIT_OUTPUT_MODE}" != "findings-json" ] || [ -z "${SECURITY_AUDIT_DIFF_BASE}" ]; }; then
+	echo "line ownership requires findings-json mode and an explicit diff range" >&2
 	exit 1
 fi
 
@@ -393,6 +417,8 @@ RENDER_PROMPT_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prompt-render-error.txt"
 CODEX_OUTPUT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-output.json"
 CODEX_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-error.txt"
 FILTERED_FINDINGS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filtered-findings.json"
+ADVISORY_FINDINGS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/advisory-findings.json"
+VERIFIED_FIXED_FINDING_IDS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/verified-fixed-finding-ids.json"
 FILTER_SUMMARY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filter-summary.json"
 EXISTING_FOLLOWUPS_JSON="${SECURITY_AUDIT_RUNTIME_DIR}/existing-followups.json"
 TRACKER_COMMENT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-comment.md"
@@ -407,6 +433,7 @@ FINDINGS_PACKAGE_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/findings-package-erro
 DELTA_CHANGED_FILES_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/delta-changed-files.txt"
 PRIOR_FINDINGS_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-scope.txt"
 PRIOR_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-prompt.txt"
+PRIOR_FINDINGS_IDS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-ids.json"
 PRIOR_FINDINGS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-error.txt"
 WAIVED_FINDINGS_NORMALIZED_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings.json"
 WAIVED_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings-prompt.txt"
@@ -646,12 +673,14 @@ echo "security-audit: scope=${AUDIT_SCOPE_MODE} (${AUDIT_SCOPE_REASON})"
 PRIOR_FINDINGS_COUNT=0
 : > "${PRIOR_FINDINGS_SCOPE_FILE}"
 : > "${PRIOR_FINDINGS_PROMPT_FILE}"
+printf '[]\n' > "${PRIOR_FINDINGS_IDS_FILE}"
 if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
 	if ! PRIOR_FINDINGS_COUNT="$(python3 - \
 		"${REPO_ROOT}" \
 		"${SECURITY_AUDIT_PRIOR_FINDINGS}" \
 		"${PRIOR_FINDINGS_SCOPE_FILE}" \
-		"${PRIOR_FINDINGS_PROMPT_FILE}" 2> "${PRIOR_FINDINGS_ERROR_FILE}" <<'PY'
+		"${PRIOR_FINDINGS_PROMPT_FILE}" \
+		"${PRIOR_FINDINGS_IDS_FILE}" 2> "${PRIOR_FINDINGS_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -662,6 +691,7 @@ repo_root = Path(sys.argv[1]).resolve()
 prior_findings_path = Path(sys.argv[2])
 scope_path = Path(sys.argv[3])
 prompt_path = Path(sys.argv[4])
+ids_path = Path(sys.argv[5])
 
 try:
 	prior_findings = json.loads(prior_findings_path.read_text(encoding="utf-8"))
@@ -687,6 +717,7 @@ def text_field(finding: dict, key: str) -> str:
 
 scope_files: list[str] = []
 prompt_lines: list[str] = []
+finding_ids: list[str] = []
 for index, finding in enumerate(prior_findings):
 	if not isinstance(finding, dict):
 		raise SystemExit(f"prior finding #{index} must be an object")
@@ -709,6 +740,8 @@ for index, finding in enumerate(prior_findings):
 	if resolved.is_file() and relative_file not in scope_files:
 		scope_files.append(relative_file)
 	finding_id = text_field(finding, "finding_id") or f"prior-finding-{index + 1}"
+	if finding_id not in finding_ids:
+		finding_ids.append(finding_id)
 	line_value = finding.get("line")
 	location = relative_file
 	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
@@ -734,6 +767,7 @@ for index, finding in enumerate(prior_findings):
 
 scope_path.write_text("".join(f"{path}\n" for path in scope_files), encoding="utf-8")
 prompt_path.write_text("".join(f"{line}\n" for line in prompt_lines), encoding="utf-8")
+ids_path.write_text(json.dumps(finding_ids, ensure_ascii=True) + "\n", encoding="utf-8")
 print(len(prior_findings))
 PY
 	)"; then
@@ -1160,10 +1194,19 @@ python3 - \
 	"${AUDIT_SCOPE_MODE}" \
 	"${CHANGED_FILES_FILE}" \
 	"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
-	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" <<'PY'
+	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" \
+	"${SECURITY_AUDIT_LINE_OWNERSHIP}" \
+	"${SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES}" \
+	"${AUDIT_SCOPE_BASE_SHA}" \
+	"${AUDIT_SCOPE_HEAD_SHA}" \
+	"${PRIOR_FINDINGS_IDS_FILE}" \
+	"${ADVISORY_FINDINGS_FILE}" \
+	"${VERIFIED_FIXED_FINDING_IDS_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -1177,6 +1220,13 @@ audit_scope_mode = sys.argv[7]
 changed_files_path = Path(sys.argv[8])
 waived_findings_path = Path(sys.argv[9])
 waiver_line_window = int(sys.argv[10])
+line_ownership_mode = sys.argv[11]
+ownership_context_lines = int(sys.argv[12])
+audit_scope_base_sha = sys.argv[13]
+audit_scope_head_sha = sys.argv[14]
+prior_finding_ids_path = Path(sys.argv[15])
+advisory_findings_path = Path(sys.argv[16])
+verified_fixed_finding_ids_path = Path(sys.argv[17])
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -1200,6 +1250,7 @@ severity_rank = {
 }
 allowed_exact_fields = {"finding_id", "owasp_or_stride_category", "severity", "file"}
 allowed_contains_fields = {"exploit_scenario", "recommendation"}
+file_line_counts: dict[str, int] = {}
 
 
 def fail(message: str) -> None:
@@ -1328,6 +1379,7 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		return None, f"{finding_id}: file is empty and cannot back a concrete line reference"
 	if line > line_count:
 		return None, f"{finding_id}: line {line} exceeds file length {line_count}"
+	file_line_counts[normalized_file] = line_count
 
 	return (
 		{
@@ -1370,6 +1422,11 @@ exclusion_rules = normalize_exclusions(load_json(exclusions_path, label="securit
 waived_findings_input = load_json(waived_findings_path, label="waived findings") if waived_findings_path.is_file() else []
 if not isinstance(waived_findings_input, list):
 	fail("waived findings must be a JSON array")
+prior_finding_ids_input = load_json(prior_finding_ids_path, label="prior finding ids")
+if not isinstance(prior_finding_ids_input, list) or any(
+	not isinstance(finding_id, str) or not finding_id for finding_id in prior_finding_ids_input
+):
+	fail("prior finding ids must be a JSON array of non-empty strings")
 
 
 def matching_waiver(finding: dict[str, object]) -> str | None:
@@ -1399,10 +1456,104 @@ def matching_waiver(finding: dict[str, object]) -> str | None:
 	return None
 
 
+blame_header_pattern = re.compile(r"^\^?([0-9a-f]{40,64}) [0-9]+ [0-9]+(?: [0-9]+)?$")
+ancestry_cache: dict[str, bool | None] = {}
+ownership_warned_files: set[str] = set()
+
+
+def warn_ownership_once(file_name: str) -> None:
+	if file_name in ownership_warned_files:
+		return
+	ownership_warned_files.add(file_name)
+	print(
+		f"::warning::security-audit: line ownership could not be determined for {file_name}; findings remain blocking",
+		file=sys.stderr,
+	)
+
+
+def finding_is_project_owned(finding: dict[str, object]) -> bool:
+	"""Return True unless every blamed line is provably owned by the base."""
+	if line_ownership_mode != "project-lines":
+		return True
+	file_name = str(finding["file"])
+	line_number = int(finding["line"])
+	line_count = file_line_counts.get(file_name, 0)
+	low_line = max(1, line_number - ownership_context_lines)
+	high_line = min(line_count, line_number + ownership_context_lines)
+	try:
+		blame_result = subprocess.run(
+			[
+				"git",
+				"blame",
+				"--porcelain",
+				"-L",
+				f"{low_line},{high_line}",
+				audit_scope_head_sha,
+				"--",
+				file_name,
+			],
+			cwd=repo_root,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			check=False,
+		)
+	except (OSError, ValueError):
+		warn_ownership_once(file_name)
+		return True
+	if blame_result.returncode != 0:
+		warn_ownership_once(file_name)
+		return True
+	blamed_commits: list[str] = []
+	source_line_count = 0
+	for blame_line in blame_result.stdout.splitlines():
+		header_match = blame_header_pattern.match(blame_line)
+		if header_match is not None:
+			blamed_commits.append(header_match.group(1))
+		elif blame_line.startswith("\t"):
+			source_line_count += 1
+	expected_line_count = high_line - low_line + 1
+	if source_line_count != expected_line_count or len(blamed_commits) != expected_line_count:
+		warn_ownership_once(file_name)
+		return True
+	project_owned = False
+	ownership_indeterminate = False
+	for blamed_commit in sorted(set(blamed_commits)):
+		is_ancestor = ancestry_cache.get(blamed_commit)
+		if blamed_commit not in ancestry_cache:
+			try:
+				ancestry_result = subprocess.run(
+					["git", "merge-base", "--is-ancestor", blamed_commit, audit_scope_base_sha],
+					cwd=repo_root,
+					capture_output=True,
+					check=False,
+				)
+			except (OSError, ValueError):
+				is_ancestor = None
+			else:
+				if ancestry_result.returncode == 0:
+					is_ancestor = True
+				elif ancestry_result.returncode == 1:
+					is_ancestor = False
+				else:
+					is_ancestor = None
+			ancestry_cache[blamed_commit] = is_ancestor
+		if is_ancestor is None:
+			ownership_indeterminate = True
+		elif not is_ancestor:
+			project_owned = True
+	if ownership_indeterminate:
+		warn_ownership_once(file_name)
+		return True
+	return project_owned
+
+
 if not isinstance(raw_findings, list):
 	fail("security-audit Codex output must be a JSON array")
 
 kept_findings: list[dict[str, object]] = []
+advisory_findings: list[dict[str, object]] = []
 invalid_findings: list[dict[str, str]] = []
 excluded_findings: list[dict[str, str]] = []
 low_confidence_findings: list[str] = []
@@ -1434,26 +1585,52 @@ for raw_finding in raw_findings:
 	if waived_id is not None:
 		waived_findings.append({"finding_id": finding_id, "waived_finding_id": waived_id})
 		continue
+	if not finding_is_project_owned(normalized_finding):
+		advisory_findings.append(normalized_finding)
+		continue
 	kept_findings.append(normalized_finding)
 
-kept_findings.sort(
-	key=lambda finding: (
+
+def finding_sort_key(finding: dict[str, object]) -> tuple[object, ...]:
+	return (
 		severity_rank[str(finding["severity"])],
 		-int(finding["confidence"]),
 		str(finding["file"]),
 		int(finding["line"]),
 		str(finding["finding_id"]),
 	)
-)
+
+
+kept_findings.sort(key=finding_sort_key)
+advisory_findings.sort(key=finding_sort_key)
+surfaced_finding_ids = {
+	str(finding["finding_id"])
+	for finding in [*kept_findings, *advisory_findings]
+}
+surfaced_finding_ids.update(set(prior_finding_ids_input) & seen_ids)
+verified_fixed_finding_ids = [
+	finding_id
+	for finding_id in prior_finding_ids_input
+	if finding_id not in surfaced_finding_ids
+]
 
 filtered_findings_path.write_text(
 	json.dumps(kept_findings, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+	encoding="utf-8",
+)
+advisory_findings_path.write_text(
+	json.dumps(advisory_findings, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+	encoding="utf-8",
+)
+verified_fixed_finding_ids_path.write_text(
+	json.dumps(verified_fixed_finding_ids, ensure_ascii=True, indent=2) + "\n",
 	encoding="utf-8",
 )
 summary_path.write_text(
 	json.dumps(
 		{
 			"kept": len(kept_findings),
+			"advisory": len(advisory_findings),
 			"suppressed_low_confidence": len(low_confidence_findings),
 			"suppressed_excluded": len(excluded_findings),
 			"suppressed_invalid": len(invalid_findings),
@@ -1478,6 +1655,8 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if python3 - \
 		"${FILTERED_FINDINGS_FILE}" \
 		"${FILTER_SUMMARY_FILE}" \
+		"${ADVISORY_FINDINGS_FILE}" \
+		"${VERIFIED_FIXED_FINDING_IDS_FILE}" \
 		"${SECURITY_AUDIT_FINDINGS_OUT}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
@@ -1489,9 +1668,12 @@ from pathlib import Path
 
 findings_path = Path(sys.argv[1])
 summary_path = Path(sys.argv[2])
-output_path = Path(sys.argv[3])
+advisory_findings_path = Path(sys.argv[3])
+verified_fixed_finding_ids_path = Path(sys.argv[4])
+output_path = Path(sys.argv[5])
 count_keys = (
 	"kept",
+	"advisory",
 	"suppressed_excluded",
 	"suppressed_invalid",
 	"suppressed_low_confidence",
@@ -1509,8 +1691,16 @@ def load_json(path: Path, *, label: str):
 
 findings = load_json(findings_path, label="filtered findings")
 summary = load_json(summary_path, label="filter summary")
-if not isinstance(findings, list) or not isinstance(summary, dict):
+advisory_findings = load_json(advisory_findings_path, label="advisory findings")
+verified_fixed_finding_ids = load_json(verified_fixed_finding_ids_path, label="verified fixed finding ids")
+if not isinstance(findings, list) or not isinstance(summary, dict) or not isinstance(advisory_findings, list):
 	raise SystemExit("security-audit findings packaging received invalid JSON payloads")
+if not isinstance(verified_fixed_finding_ids, list) or any(
+	not isinstance(finding_id, str) or not finding_id for finding_id in verified_fixed_finding_ids
+):
+	raise SystemExit("security-audit findings packaging received invalid verified fixed finding ids")
+if len(set(verified_fixed_finding_ids)) != len(verified_fixed_finding_ids):
+	raise SystemExit("security-audit findings packaging received duplicate verified fixed finding ids")
 
 counts: dict[str, int] = {}
 for count_key in count_keys:
@@ -1520,10 +1710,14 @@ for count_key in count_keys:
 	counts[count_key] = count_value
 if counts["kept"] != len(findings):
 	raise SystemExit("security-audit findings packaging received a mismatched kept count")
+if counts["advisory"] != len(advisory_findings):
+	raise SystemExit("security-audit findings packaging received a mismatched advisory count")
 
 payload = {
 	"schema_version": "security_audit_findings.v1",
 	"findings": findings,
+	"advisory_findings": advisory_findings,
+	"verified_fixed_finding_ids": verified_fixed_finding_ids,
 	"counts": counts,
 }
 
