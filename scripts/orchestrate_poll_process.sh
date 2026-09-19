@@ -15279,8 +15279,8 @@ _reconcile_merged_pr_issue() {
 #
 # API calls (§15): in this source repository, one paginated `issues` REST read
 # per tick; per latched issue one paginated comments read, two paginated events
-# reads, one labels read, one label edit, and one comment write.  The poller's
-# existing issue cache carries only the latest 100 comments; it does not carry full marker
+# reads, one paginated labels read, one label edit, and one comment write.  The
+# poller's existing issue cache carries only the latest 100 comments; it does not carry full marker
 # history or label-event provenance, both of which this sweep must verify. Every
 # read failure skips that issue for the tick (fail open); consumer
 # repositories, a kill switch
@@ -15402,7 +15402,8 @@ release_staged_support_needs_human_latches() {
       continue
     fi
 
-    if ! refreshed_issue_labels_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" --jq '[.[].name]' 2>/dev/null)" \
+    if ! refreshed_issue_labels_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels?per_page=100" \
+      --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')" \
       || ! refreshed_needs_human_event="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/events?per_page=100" | jq -sc '
         [add // [] | .[] | select((.event == "labeled" or .event == "unlabeled") and (.label.name // "") == "ai:needs-human") | {event, created_at: (.created_at // ""), actor_login: (.actor.login // "")}] | sort_by(.created_at) | last // null' 2>/dev/null)"; then
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=latch_revalidation_unavailable"

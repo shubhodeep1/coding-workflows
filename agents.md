@@ -263,7 +263,7 @@ a new value, add it to the appropriate overrides file with a
   `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`). The latest `ai:needs-human` label event must precede
   the staged-support comment and have the same actor, so clearing that latch and later setting
   another human gate cannot reuse the stale marker. Immediately before changing labels, the
-  sweep re-reads the live labels and latest latch event; a changed or unreadable latch skips
+  sweep re-reads the paginated live labels and latest latch event; a changed or unreadable latch skips
   release for that tick. A failed `/approved` write restores
   `ai:needs-human`; if that compensation also fails, the unresolved latch marker blocks
   managed and standalone auto-approval and raises a CRITICAL alert. Those recovery guards use

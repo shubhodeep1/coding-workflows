@@ -2110,7 +2110,7 @@ if args[0] == 'api':
 			print(json.dumps(store.get('issue_events', {}).get(num, [])))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\d+)/labels$', path)
+	m = re.search(r'/issues/(\d+)/labels(?:\?.*)?$', path)
 	if m:
 		num = m.group(1)
 		issue = get_issue(num)
@@ -5175,6 +5175,10 @@ def test_staged_support_latch_release_is_source_only_and_compensates_comment_fai
 
 
 def test_staged_support_latch_release_revalidates_current_latch_before_edit() -> None:
+	poller_text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels?per_page=100"' in poller_text
+	assert "--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []'" in poller_text
+
 	engine_sha = "c" * 40
 	initial_event = {
 		"event": "labeled",
