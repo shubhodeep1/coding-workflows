@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-09-18T16:12:22Z",
+  "tick_at": "2026-09-19T13:23:18Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -36,23 +36,23 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "0",
+      "integration_ahead_by": "1",
       "issue_counts": {
         "closed": 0,
-        "done": 0,
+        "done": 1,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
-        "review_blocked": 1,
+        "review_blocked": 0,
         "skipped": 0
       },
-      "number": 4131,
+      "number": 4139,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 35356773021)",
-      "total_waves": 1,
+      "title": "[Orchestrator] Security pass convergence by project-line ownership",
+      "total_waves": 2,
       "wave_complete": false
     }
   ]
