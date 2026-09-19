@@ -306,7 +306,8 @@ if ! [[ "${MAX_SELF_HEAL_ATTEMPTS}" =~ ^[0-9]+$ ]]; then
   MAX_SELF_HEAL_ATTEMPTS=2
 fi
 SELF_HEAL_PATCHES_FILE="${SELF_HEAL_PATCHES_FILE:-${RUNTIME_DIR}/self_heal_patches.jsonl}"
-export SELF_HEAL_ATTEMPT MAX_SELF_HEAL_ATTEMPTS SELF_HEAL_PATCHES_FILE
+SELF_HEAL_PROMPT_OVERRIDE_DIR="${RUNTIME_DIR}/self-heal-prompt-overrides/prompts"
+export SELF_HEAL_ATTEMPT MAX_SELF_HEAL_ATTEMPTS SELF_HEAL_PATCHES_FILE SELF_HEAL_PROMPT_OVERRIDE_DIR
 
 
 # ---------------------------------------------------------------
@@ -2868,6 +2869,19 @@ resolve_validate_thread_reuse_asset() {
 	printf '%s\n' "${candidate}"
 }
 
+resolve_validate_prompt_source() {
+	local prompt_name="$1"
+	local override_candidate="${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${prompt_name}"
+	local immutable_candidate="${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/${prompt_name}"
+
+	if [ -f "${override_candidate}" ]; then
+		printf '%s\n' "${override_candidate}"
+		return 0
+	fi
+	[ -f "${immutable_candidate}" ] || return 1
+	printf '%s\n' "${immutable_candidate}"
+}
+
 validate_thread_reuse_enabled() {
 	[ -n "${CODEX_THREAD_REUSE_HELPER:-}" ] || return 1
 	declare -F codex_thread_reuse_truthy >/dev/null 2>&1 || return 1
@@ -3070,7 +3084,7 @@ else
   echo
   echo "=== DISCOVERY TASK ==="
   echo
-  SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/mode-validate-discover.txt"
+  SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "$(resolve_validate_prompt_source 'mode-validate-discover.txt')"
   echo
   echo "TOOL_CALL_BUDGET: 15"
   echo
@@ -3837,7 +3851,7 @@ diagnose_semble_query="$(build_validate_diagnose_semble_query || true)"
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
-  SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/mode-validate-diagnose.txt"
+  SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "$(resolve_validate_prompt_source 'mode-validate-diagnose.txt')"
   echo
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
   echo

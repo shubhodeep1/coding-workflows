@@ -22,6 +22,7 @@
 #   SELF_HEAL_ATTEMPT          — current attempt count (0-based, pre-increment)
 #   MAX_SELF_HEAL_ATTEMPTS     — budget for this validate_process.sh invocation
 #   SELF_HEAL_PATCHES_FILE     — JSONL ledger of accumulated patches
+#   SELF_HEAL_PROMPT_OVERRIDE_DIR — runner-owned prompt overlay used after patching
 #   SELF_HEAL_FAILURE_PHASE    — string tag ("generate"|"preflight"|"render"|"canary"|"diagnose"|"runtime"|"discover")
 #   MODEL_EDITOR               — OpenRouter model slug for the self-heal LLM call
 #   OPENROUTER_API_KEY         — for codex exec
@@ -36,6 +37,8 @@ set -euo pipefail
 : "${SELF_HEAL_ATTEMPT:?SELF_HEAL_ATTEMPT is required}"
 : "${MAX_SELF_HEAL_ATTEMPTS:?MAX_SELF_HEAL_ATTEMPTS is required}"
 : "${SELF_HEAL_PATCHES_FILE:?SELF_HEAL_PATCHES_FILE is required}"
+: "${SELF_HEAL_PROMPT_OVERRIDE_DIR:?SELF_HEAL_PROMPT_OVERRIDE_DIR is required}"
+: "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}"
 : "${SELF_HEAL_FAILURE_PHASE:=unknown}"
 : "${MODEL_EDITOR:?MODEL_EDITOR is required}"
 : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
@@ -365,6 +368,25 @@ fi
 # ---------------------------------------------------------------
 # Compose the self-heal prompt
 # ---------------------------------------------------------------
+self_heal_prompt_override_root="$(dirname -- "${SELF_HEAL_PROMPT_OVERRIDE_DIR}")"
+mkdir -p "${SELF_HEAL_PROMPT_OVERRIDE_DIR}"
+chmod 0700 "${self_heal_prompt_override_root}" "${SELF_HEAL_PROMPT_OVERRIDE_DIR}"
+for self_heal_prompt_name in "${ALLOWED_TARGETS[@]}"; do
+	self_heal_prompt_source="${SUPPORT_PROMPTS_DIR}/${self_heal_prompt_name}"
+	self_heal_prompt_override="${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${self_heal_prompt_name}"
+	if [ ! -f "${self_heal_prompt_source}" ] || [ -L "${self_heal_prompt_source}" ]; then
+		echo "self-heal: immutable prompt source is missing or symlinked: ${self_heal_prompt_source}" >&2
+		exit 2
+	fi
+	if [ -L "${self_heal_prompt_override}" ]; then
+		echo "self-heal: refusing symlinked prompt override: ${self_heal_prompt_override}" >&2
+		exit 2
+	fi
+	if [ ! -f "${self_heal_prompt_override}" ]; then
+		install -m 0600 "${self_heal_prompt_source}" "${self_heal_prompt_override}"
+	fi
+done
+
 self_heal_semble_query="$(build_self_heal_semble_query || true)"
 self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 {
@@ -390,9 +412,9 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 	echo "Note: keep diffs anchored to the literal file text shown here; some prompts intentionally contain the runtime placeholder {{SERENA_TOOL_HINTS}}."
 	echo
 	for _target in "${ALLOWED_TARGETS[@]}"; do
-		if [ -f "prompts/${_target}" ]; then
+		if [ -f "${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${_target}" ]; then
 			echo "--- prompts/${_target} ---"
-			cat "prompts/${_target}"
+			cat "${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${_target}"
 			echo
 			echo "--- end prompts/${_target} ---"
 			echo
@@ -607,9 +629,9 @@ if grep -E '^(\+\+\+|---) ' "${SELF_HEAL_PATCH_TMP}" | grep -vE "${_expected_re}
 fi
 
 # Dry-run the patch.
-if ! patch --dry-run -p1 -N -s < "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+if ! (cd "${self_heal_prompt_override_root}" && patch --dry-run -p1 -N -s < "${SELF_HEAL_PATCH_TMP}") >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
 	# Try git apply as a fallback (handles different whitespace tolerances).
-	if ! git apply --check "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+	if ! (cd "${self_heal_prompt_override_root}" && git apply --check "${SELF_HEAL_PATCH_TMP}") >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
 		echo "self-heal: refusing — patch does not apply cleanly to prompts/${DECISION_TARGET}" >&2
 		exit 2
 	fi
@@ -626,19 +648,19 @@ fi
 # Without this, a model-produced idempotent patch would burn a self-heal
 # attempt without changing the prompt, and the re-exec would hit the
 # same failure and repeat — silently draining MAX_SELF_HEAL_ATTEMPTS.
-_target_file="prompts/${DECISION_TARGET}"
+_target_file="${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${DECISION_TARGET}"
 _hash_before=""
 if [ -f "${_target_file}" ]; then
 	_hash_before="$(sha256sum "${_target_file}" | awk '{print $1}')"
 fi
 
 if [ "${_APPLY_WITH_GIT}" = "true" ]; then
-	if ! git apply "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+	if ! (cd "${self_heal_prompt_override_root}" && git apply "${SELF_HEAL_PATCH_TMP}") >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
 		echo "self-heal: git apply failed after dry-run succeeded (race)" >&2
 		exit 2
 	fi
 else
-	if ! patch -p1 -N -s < "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+	if ! (cd "${self_heal_prompt_override_root}" && patch -p1 -N -s < "${SELF_HEAL_PATCH_TMP}") >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
 		echo "self-heal: patch -p1 failed after dry-run succeeded (race)" >&2
 		exit 2
 	fi
