@@ -92,6 +92,10 @@ def test_orchestrate_workflow_stages_prompt_assembly_assets() -> None:
 		assert prompt_asset in workflow_text
 	assert "gh_helpers.sh emit_event.sh emit_event.py" in workflow_text
 	assert "openrouter_prompt_cache.py semantic_cache.py" in workflow_text
+	assert "python3 -I -B -c" in workflow_text
+	assert "sys.path.insert(0, '${SUPPORT_SCRIPTS_DIR}')" in workflow_text
+	assert "sys.path.insert(0, 'scripts')" not in workflow_text
+	assert 'repository_agents_file="AGENTS.md"' in workflow_text
 
 
 def test_orchestrator_runtime_helpers_reject_checkout_relative_execution() -> None:
@@ -101,6 +105,9 @@ def test_orchestrator_runtime_helpers_reject_checkout_relative_execution() -> No
 	poller_text = _read(REPO_ROOT / "scripts" / "orchestrate_poll_process.sh")
 	assert 'ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-' in poller_text
 	assert 'source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' in poller_text
+	assert "sys.path.insert(0, 'scripts')" not in poller_text
+	assert poller_text.count("python3 -I -B") >= 7
+	assert 'os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"]' in poller_text
 	assert 'cat "${ORCHESTRATE_POLL_SUPPORT_ROOT_DIR}/unattended_system_instructions.md"' in poller_text
 	assert "cat unattended_system_instructions.md" not in poller_text
 
@@ -112,6 +119,10 @@ def test_orchestrator_model_instructions_are_immutable() -> None:
 			assert f'"{required_path}"' in workflow_text, workflow_name
 		assert "cat unattended_system_instructions.md" not in workflow_text, workflow_name
 		assert "cat ai_pipeline.md" not in workflow_text, workflow_name
+	static_context_text = _read(REPO_ROOT / "scripts" / "build_static_context.sh")
+	assert 'if [ -f AGENTS.md ]; then' in static_context_text
+	assert 'repository_agents="AGENTS.md"' in static_context_text
+	assert 'emit_untrusted_repository_file "${repository_agents}" "${repository_agents}"' in static_context_text
 
 
 def main() -> int:

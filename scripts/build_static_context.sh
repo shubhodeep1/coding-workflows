@@ -72,13 +72,19 @@ emit_untrusted_repository_file() {
 
 emit_agents_md() {
 	local canonical_agents="${BUILD_STATIC_CONTEXT_SUPPORT_ROOT}/agents.md"
+	local repository_agents=""
 	if [ -f "${canonical_agents}" ]; then
 		echo "=== TRUSTED WORKFLOW ARCHITECTURE (agents.md) ==="
 		cat "${canonical_agents}"
 		echo
 	fi
-	if [ -f agents.md ] && { [ ! -f "${canonical_agents}" ] || ! cmp -s agents.md "${canonical_agents}"; }; then
-		emit_untrusted_repository_file "agents.md" agents.md
+	if [ -f AGENTS.md ]; then
+		repository_agents="AGENTS.md"
+	elif [ -f agents.md ]; then
+		repository_agents="agents.md"
+	fi
+	if [ -n "${repository_agents}" ] && { [ ! -f "${canonical_agents}" ] || ! cmp -s "${repository_agents}" "${canonical_agents}"; }; then
+		emit_untrusted_repository_file "${repository_agents}" "${repository_agents}"
 	fi
 }
 

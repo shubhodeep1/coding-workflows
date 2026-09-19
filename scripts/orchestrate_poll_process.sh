@@ -11492,9 +11492,9 @@ recovery_action_for_phase() {
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
-import sys
-sys.path.insert(0, 'scripts')
+  action="$(python3 -I -B - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"])
 from orchestrate_lib import resolve_stall_recovery_action
 
 phase = sys.argv[1]
@@ -11524,9 +11524,9 @@ normalize_stall_recovery_action() {
   local candidate_action="${3:-}"
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
-import sys
-sys.path.insert(0, 'scripts')
+  action="$(python3 -I -B - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"])
 from orchestrate_lib import resolve_effective_stall_recovery_action
 
 phase = sys.argv[1]
@@ -13729,9 +13729,9 @@ run_standalone_stall_recovery() {
     phase=""
     _standalone_latch_label=""
     _standalone_phase_resolve_rc=0
-    IFS=$'\t' read -r phase _standalone_latch_label < <(python3 - "$labels_json" <<'PY'
-import json, sys
-sys.path.insert(0, 'scripts')
+    IFS=$'\t' read -r phase _standalone_latch_label < <(python3 -I -B - "$labels_json" <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"])
 from orchestrate_lib import determine_phase, stall_recovery_latch_label
 labels = json.loads(sys.argv[1])
 print(f"{determine_phase(labels)}\t{stall_recovery_latch_label(labels) or ''}")
@@ -13796,9 +13796,9 @@ PY
     if [ "${phase}" = "ai:done" ]; then
       effective_max_recoveries="${MAX_STALL_RECOVERIES_DONE}"
     fi
-    threshold_minutes="$(python3 - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
-import json, sys
-sys.path.insert(0, 'scripts')
+    threshold_minutes="$(python3 -I -B - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"])
 from orchestrate_lib import DEFAULT_PHASE_STALL_THRESHOLDS
 phase = sys.argv[1]
 fallback = int(sys.argv[2])
@@ -14625,9 +14625,9 @@ REISSUE_EOF
 # Read the impl_noop_count for a local_id from the state file.
 get_impl_noop_count() {
   local lid="$1"
-  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -c "
+  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -I -B -c "
 import json, os, sys
-sys.path.insert(0, 'scripts')
+sys.path.insert(0, os.environ['ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR'])
 from orchestrate_lib import get_impl_noop_count
 
 with open(os.environ['STATE_FILE']) as f:
@@ -14644,9 +14644,9 @@ except (TypeError, ValueError):
 # Increment the impl_noop_count for a local_id in the state file.
 bump_impl_noop_count() {
   local lid="$1"
-  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -c "
+  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -I -B -c "
 import json, os, sys
-sys.path.insert(0, 'scripts')
+sys.path.insert(0, os.environ['ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR'])
 from orchestrate_lib import increment_impl_noop_count
 
 with open(os.environ['STATE_FILE']) as f:
@@ -19246,9 +19246,9 @@ fi
           STALL_STATE_CHANGED=true
 
           if [ "${STALL_RECOVERY_SHOULD_INCREMENT}" = "true" ] && [ -n "${STALL_LOCAL_ID}" ] && [ "${STALL_LOCAL_ID}" != "null" ]; then
-            python3 -c "
-import json, time, sys
-sys.path.insert(0, 'scripts')
+            python3 -I -B -c "
+import json, os, time, sys
+sys.path.insert(0, os.environ['ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR'])
 from orchestrate_lib import increment_stall_recovery
 
 with open('${STATE_FILE}') as f:
