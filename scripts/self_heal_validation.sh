@@ -562,6 +562,17 @@ if ! is_allowed_target "${DECISION_TARGET}"; then
 	exit 2
 fi
 
+# Template-mode validation no longer renders the generate/fix-harness prompts,
+# so patching either one cannot affect the immediate re-exec.
+case "${DECISION_TARGET}" in
+	mode-validate-discover.txt|mode-validate-diagnose.txt)
+		;;
+	*)
+		echo "self-heal: refusing — target_prompt '${DECISION_TARGET}' is not consumed by the current validation rerun" >&2
+		exit 1
+		;;
+esac
+
 # Write patch to a tmp file and validate.
 printf '%s\n' "${DECISION_PATCH}" > "${SELF_HEAL_PATCH_TMP}"
 

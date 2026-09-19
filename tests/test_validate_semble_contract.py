@@ -409,6 +409,9 @@ def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 	assert 'cat "${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${_target}"' in text
 	assert '_target_file="${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${DECISION_TARGET}"' in text
 	assert 'cd "${self_heal_prompt_override_root}" && patch -p1 -N -s' in text
+	assert 'mode-validate-discover.txt|mode-validate-diagnose.txt)' in text
+	assert "is not consumed by the current validation rerun" in text
+	assert "Template-mode reruns consume local self-heal overrides only" in _read(REPO_ROOT / "prompts" / "mode-validate-self-heal.txt")
 	assert 'bash scripts/render_prompt.sh "prompts/${_target}"' not in text
 	assert 'append_self_heal_semble_context "${self_heal_semble_query}"' in text
 
