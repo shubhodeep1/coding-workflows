@@ -192,6 +192,7 @@ changelog.d/4088-resolver-agent-home-preflight.md
 changelog.d/4088-resolver-stall-guard-nesting.md
 changelog.d/4090-broker-input-cost-budgets-status-first-locator.md
 changelog.d/4092-security-pass-cycle-6-immutable-support.md
+changelog.d/4113-security-isolation.md
 changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md

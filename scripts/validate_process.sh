@@ -3070,7 +3070,7 @@ else
   echo
   echo "=== DISCOVERY TASK ==="
   echo
-  SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" prompts/mode-validate-discover.txt
+  SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/mode-validate-discover.txt"
   echo
   echo "TOOL_CALL_BUDGET: 15"
   echo
@@ -3837,7 +3837,7 @@ diagnose_semble_query="$(build_validate_diagnose_semble_query || true)"
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
-  SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" prompts/mode-validate-diagnose.txt
+  SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/mode-validate-diagnose.txt"
   echo
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
   echo
