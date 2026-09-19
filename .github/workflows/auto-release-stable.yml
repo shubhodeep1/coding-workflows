@@ -10,10 +10,9 @@ name: Auto release stable
 # gate already failed on the current tip (a human has to look at that). See
 # scripts/auto_release_stable.sh for the decision order.
 #
-# Promotion of `main` to `stable` stays with promote-main-to-stable.yml,
-# which the orchestrator poller dispatches after a clean apply-analysis
-# project (see apply-analysis-on-main.yml) and an operator can still run by
-# hand.
+# Promotion of `main` to `stable` stays with promote-main-to-stable.yml:
+# its daily cycle job proves `main` first, and an operator can still run it
+# by hand.
 
 "on":
   schedule:

@@ -24,6 +24,16 @@ name: Test & Mark Stable Release
         required: false
         type: boolean
         default: false
+      gate_only:
+        description: >
+          Run every test job but never release: skips the `release` and
+          `sync-to-main` jobs and accepts any dispatch ref (normally `main`).
+          Used by promote-main-to-stable.yml's daily cycle as the smoke gate
+          before the apply-analysis proving run. Static checks and live
+          E2E jobs run exactly as in a real release.
+        required: false
+        type: boolean
+        default: false
       dry_run:
         description: >
           Validate only — do not push tags or create release. Also skips every
@@ -148,6 +158,15 @@ jobs:
         run: |
           set -euo pipefail
           REF="${{ github.ref_name }}"
+          GATE_ONLY="${{ inputs.gate_only }}"
+          if [ "${GATE_ONLY}" = "true" ]; then
+            # Gate-only runs never tag or release, so any ref is safe: the
+            # test jobs check out this ref and the release/sync-to-main jobs
+            # are skipped by their `!inputs.gate_only` conditions.
+            echo "Dispatched from '${REF}' in gate_only mode — test jobs only, no release"
+            echo "branch=${REF}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$REF" != "stable" ]; then
             echo "::error::test-and-mark-stable.yml must be dispatched from the 'stable' branch (got '${REF}')."
             echo "::error::To promote 'main' to a new stable baseline, run promote-main-to-stable.yml — it fast-forwards stable to main and then dispatches this workflow on stable automatically."
@@ -5027,6 +5046,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   release:
     needs: [source, resolve-version, validate]
+    # gate_only runs stop here: every test job above ran, nothing is tagged.
+    if: ${{ success() && !inputs.gate_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -5208,6 +5229,7 @@ jobs:
     needs: [release]
     if: >-
       !inputs.dry_run &&
+      !inputs.gate_only &&
       needs.release.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 2

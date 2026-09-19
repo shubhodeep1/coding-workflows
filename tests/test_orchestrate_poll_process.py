@@ -768,6 +768,7 @@ def _run_poller(
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
 	env_overrides: dict[str, str] | None = None,
+	mock_store_extra: dict | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -1193,6 +1194,8 @@ def _run_poller(
 			"fail_security_pass_managed_issue_lookup": bool(fail_security_pass_managed_issue_lookup),
 			"security_pass_managed_issue_pages_raw": security_pass_managed_issue_pages_raw,
 		}
+		if mock_store_extra:
+			store.update(mock_store_extra)
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
 		(runtime_dir / "tracking_issues.json").write_text(
@@ -2404,6 +2407,18 @@ if args[0] == 'api':
 			print(json.dumps(events))
 		sys.exit(0)
 
+	m_commit = re.search(r'/commits/([0-9a-f]{40})$', path)
+	if m_commit:
+		files = [{'filename': f} for f in (store.get('commit_files') or {}).get(m_commit.group(1), [])]
+		payload = {'sha': m_commit.group(1), 'files': files}
+		if jq:
+			import subprocess as _sp
+			p = _sp.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
+
 	m = re.search(r'/commits/([^/]+)/check-runs(\?.*)?$', path)
 	if m:
 		sha = m.group(1)
@@ -2453,7 +2468,10 @@ if args[0] == 'api':
 		# and falls back to raw ahead_by — the pre-existing semantics that
 		# older tests pin.
 		parent_counts = store.get('compare_commit_parent_counts')
-		if parent_counts is not None:
+		if store.get('compare_commits_detail') is not None:
+			compare_payload['commits'] = list(store['compare_commits_detail'])
+			compare_payload['total_commits'] = int(store.get('compare_total_commits', len(compare_payload['commits'])))
+		elif parent_counts is not None:
 			compare_payload['commits'] = [
 				{'sha': 'c%04d' % idx, 'parents': [{'sha': 'p%d' % j} for j in range(int(n))]}
 				for idx, n in enumerate(parent_counts)
@@ -2545,9 +2563,12 @@ if args[0] == 'api':
 		sys.stdout.write(output)
 		sys.exit(0)
 
-	m = re.search(r'/actions/workflows/[^/]+/runs', path)
+	m = re.search(r'/actions/workflows/([^/]+)/runs', path)
 	if m:
 		runs = store.get('validation_workflow_runs', [])
+		by_file = store.get('workflow_runs_by_file') or {}
+		if m.group(1) in by_file:
+			runs = by_file[m.group(1)]
 		result = {'workflow_runs': runs, 'total_count': len(runs)}
 		if jq:
 			import subprocess as _sp

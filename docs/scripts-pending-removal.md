@@ -53,16 +53,16 @@ Copy this block when adding a new entry:
 
 ## Entries
 
-### `scripts/apply_analysis_on_main.sh` + `.github/workflows/apply-analysis-on-main.yml`
+### `scripts/promote_main_cycle.sh` + `scripts/apply_analysis_on_main.sh` + the `cycle` job of `.github/workflows/promote-main-to-stable.yml`
 
 - **Introduced in:** claude/auto-apply-analysis-release-main (2026-09-19)
 - **Type:** supervisor
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**
-  - `gh workflow view apply-analysis-on-main.yml -R shubhodeep1/coding-workflows` confirms the push-to-main trigger still exists and still runs `scripts/apply_analysis_on_main.sh`.
-  - `ls analysis/workflow-optimization-*.md` on `main` returns no files, or every remaining file is listed in `analysis/recommendation-processing-report.md` (nothing left for the dispatcher to hand off).
-  - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:orchestrator-tracking,ai:comprehensive-test-pending"` returns `[]` (no apply-analysis project still in flight).
-  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_apply_analysis_on_main.py` returns exit code 0.
+  - `gh workflow view promote-main-to-stable.yml -R shubhodeep1/coding-workflows` confirms the daily schedule still exists and the `cycle` job still runs `scripts/promote_main_cycle.sh`.
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:orchestrator-tracking,ai:comprehensive-test-pending"` returns `[]` (no proving or verifying run in flight).
+  - `git ls-remote origin refs/heads/main 'refs/tags/stable^{}'` shows no code change on `main` since the tag, or a replacement promotion path is live.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_orchestrate_poll_promote_cycle.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 
 ### `scripts/auto_release_stable.sh` + `.github/workflows/auto-release-stable.yml`

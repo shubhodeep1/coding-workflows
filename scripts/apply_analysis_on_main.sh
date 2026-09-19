@@ -1,51 +1,66 @@
 #!/usr/bin/env bash
 # apply_analysis_on_main.sh — hand ONE pending analysis doc to the orchestrator.
 #
-# Runs from .github/workflows/apply-analysis-on-main.yml on every push to the
-# default branch. It is the unattended equivalent of the interactive
-# `/apply-analysis` command, deliberately limited to a single source doc per
-# dispatch so later pushes to main still have analysis docs left to execute.
+# The unattended equivalent of the interactive `/apply-analysis` command,
+# limited to a single source doc per dispatch. Two callers:
+#
+#   * scripts/promote_main_cycle.sh (the daily promote cycle) dispatches the
+#     PROVING run with APPLY_ANALYSIS_ROLE=proving after the smoke gate passed.
+#   * The orchestrator poller dispatches the VERIFYING run with
+#     APPLY_ANALYSIS_ROLE=verifying once the proving run has merged.
+#
+# The project is bound at dispatch time: orchestrate.yml's optional
+# `tracking_labels` / `tracking_comment` inputs apply the tracking label and
+# post the marker comment when the tracking issue is created, so nothing here
+# has to guess which (model-titled) tracking issue is its own.
 #
 # Decision order (every exit is a logged, stable prefix):
-#   APPLY_ANALYSIS_SKIPPED reason=disabled          kill switch
-#   APPLY_ANALYSIS_SKIPPED reason=project_in_flight  an open tracking issue still
-#                                                    carries the pending label
-#   APPLY_ANALYSIS_SKIPPED reason=no_docs            nothing under the doc glob
-#   APPLY_ANALYSIS_SKIPPED reason=all_docs_processed every doc is already recorded
-#                                                    in the processing report or
-#                                                    was dispatched before
-#   APPLY_ANALYSIS_SKIPPED reason=guard_unavailable  the dispatch-history search
-#                                                    failed; fail closed, the next
-#                                                    push retries
-#   APPLY_ANALYSIS_DISPATCHED doc=<path> tracking_issue=<n>
+#   APPLY_ANALYSIS_SKIPPED reason=disabled                   kill switch
+#   APPLY_ANALYSIS_SKIPPED reason=project_in_flight          an open tracking issue
+#                                                            still carries the label
+#   APPLY_ANALYSIS_SKIPPED reason=orchestrate_run_in_flight  the orchestrator
+#                                                            workflow is queued or
+#                                                            running (its tracking
+#                                                            issue does not exist yet)
+#   APPLY_ANALYSIS_SKIPPED reason=no_docs                    nothing under the glob
+#   APPLY_ANALYSIS_SKIPPED reason=all_docs_processed         every doc is recorded in
+#                                                            the processing report or
+#                                                            was dispatched before
+#   APPLY_ANALYSIS_SKIPPED reason=guard_unavailable          the dispatch-history
+#                                                            search failed; fail closed
+#   APPLY_ANALYSIS_CANDIDATES count=<n> docs=<a,b>           list-only mode
+#   APPLY_ANALYSIS_DISPATCHED doc=<path> role=<role>
 #
-# Loop guard: the tracking-issue title and body are model-written, so the doc a
-# project came from is recorded as a visible marker comment on the tracking
-# issue ("<marker>: <path>"). Before dispatching a doc the script searches
-# tracking issues (open or closed) for that marker and skips docs that were
-# dispatched before, whatever the outcome — a project that failed, or that
-# merged without deleting its doc, is a human decision, not a credit burner.
+# Loop guard: the marker comment carries "apply-analysis-source-doc: <path>";
+# before dispatching a doc the script searches tracking issues (open or
+# closed) for that marker and skips docs dispatched before, whatever the
+# outcome. A project that failed, or merged without deleting its doc, is a
+# human decision, not a credit burner.
 #
-# API calls per run (§15): 1 issue list (in-flight guard), ≤1 search per
-# candidate doc until the first unprocessed one, 1 dispatch, then one issue
-# list per poll tick until the new tracking issue appears, 1 label edit and
-# 1 comment. Nothing here runs per poll cycle of the orchestrator.
+# API calls per run (§15): 1 issue list, 1 workflow-runs list, ≤1 search per
+# candidate doc until the first unprocessed one, 1 dispatch.
 #
 # Environment (all optional unless stated):
 #   GITHUB_REPOSITORY (required)  owner/repo
-#   GH_TOKEN (required)           token able to dispatch workflows + edit issues
+#   GH_TOKEN (required)           token able to dispatch workflows
 #   GITHUB_REF_NAME               branch to dispatch on (default: main)
-#   GITHUB_SHA                    commit the docs were read at (for the reference block)
+#   GITHUB_SHA                    commit the docs were read at
 #   GITHUB_SERVER_URL             default https://github.com
 #   GITHUB_RUN_ID                 for the "dispatched by" line
-#   GITHUB_OUTPUT                 receives dispatched=/doc=/tracking_issue=
-#   APPLY_ANALYSIS_ON_MAIN_ENABLED           default true
-#   APPLY_ANALYSIS_DOC_GLOB                  default analysis/workflow-optimization-*.md
-#   APPLY_ANALYSIS_REPORT_PATH               default analysis/recommendation-processing-report.md
-#   APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE default internal-orchestrate.yml
-#   APPLY_ANALYSIS_TRACKING_LABEL            default ai:comprehensive-test-pending
-#   APPLY_ANALYSIS_TRACKING_WAIT_SECS        default 1800
-#   APPLY_ANALYSIS_TRACKING_POLL_SECS        default 30
+#   GITHUB_OUTPUT                 receives dispatched=/doc=/role=/candidate_count=
+#   APPLY_ANALYSIS_ON_MAIN_ENABLED             default true
+#   APPLY_ANALYSIS_ROLE                        proving (default) | verifying
+#   APPLY_ANALYSIS_CYCLE_BASELINE_SHA          main tip when the cycle started (marker line)
+#   APPLY_ANALYSIS_SMOKE_SHA                   main tip the smoke gate ran on (marker line)
+#   APPLY_ANALYSIS_PROMOTE_SHA                 commit a verifying run promotes (marker line)
+#   APPLY_ANALYSIS_PROVING_MERGE_SHA           the proving run's merge commit (marker line)
+#   APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE     tracking issue number the in-flight
+#                                              guard ignores (the completing proving run)
+#   APPLY_ANALYSIS_LIST_ONLY                   true: print the unprocessed docs, no dispatch
+#   APPLY_ANALYSIS_DOC_GLOB                    default analysis/workflow-optimization-*.md
+#   APPLY_ANALYSIS_REPORT_PATH                 default analysis/recommendation-processing-report.md
+#   APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE   default internal-orchestrate.yml
+#   APPLY_ANALYSIS_TRACKING_LABEL              default ai:comprehensive-test-pending
 
 set -euo pipefail
 
@@ -58,12 +73,17 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 APPLY_ANALYSIS_SOURCE_DOC_MARKER="apply-analysis-source-doc"
 APPLY_ANALYSIS_ON_MAIN_ENABLED="${APPLY_ANALYSIS_ON_MAIN_ENABLED:-true}"
+APPLY_ANALYSIS_ROLE="${APPLY_ANALYSIS_ROLE:-proving}"
+APPLY_ANALYSIS_CYCLE_BASELINE_SHA="${APPLY_ANALYSIS_CYCLE_BASELINE_SHA:-}"
+APPLY_ANALYSIS_SMOKE_SHA="${APPLY_ANALYSIS_SMOKE_SHA:-}"
+APPLY_ANALYSIS_PROMOTE_SHA="${APPLY_ANALYSIS_PROMOTE_SHA:-}"
+APPLY_ANALYSIS_PROVING_MERGE_SHA="${APPLY_ANALYSIS_PROVING_MERGE_SHA:-}"
+APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE="${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE:-}"
+APPLY_ANALYSIS_LIST_ONLY="${APPLY_ANALYSIS_LIST_ONLY:-false}"
 APPLY_ANALYSIS_DOC_GLOB="${APPLY_ANALYSIS_DOC_GLOB:-analysis/workflow-optimization-*.md}"
 APPLY_ANALYSIS_REPORT_PATH="${APPLY_ANALYSIS_REPORT_PATH:-analysis/recommendation-processing-report.md}"
 APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE="${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE:-internal-orchestrate.yml}"
 APPLY_ANALYSIS_TRACKING_LABEL="${APPLY_ANALYSIS_TRACKING_LABEL:-ai:comprehensive-test-pending}"
-APPLY_ANALYSIS_TRACKING_WAIT_SECS="${APPLY_ANALYSIS_TRACKING_WAIT_SECS:-1800}"
-APPLY_ANALYSIS_TRACKING_POLL_SECS="${APPLY_ANALYSIS_TRACKING_POLL_SECS:-30}"
 GITHUB_REF_NAME="${GITHUB_REF_NAME:-main}"
 GITHUB_SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
 GITHUB_SHA="${GITHUB_SHA:-}"
@@ -75,12 +95,23 @@ for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 		exit 1
 	fi
 done
-for numeric_env in APPLY_ANALYSIS_TRACKING_WAIT_SECS APPLY_ANALYSIS_TRACKING_POLL_SECS; do
-	if ! [[ "${!numeric_env}" =~ ^[0-9]+$ ]] || [ "${!numeric_env}" -lt 1 ]; then
-		echo "::error::${numeric_env} must be a positive integer (got '${!numeric_env}')."
+case "${APPLY_ANALYSIS_ROLE}" in
+	proving|verifying) ;;
+	*)
+		echo "::error::APPLY_ANALYSIS_ROLE must be 'proving' or 'verifying' (got '${APPLY_ANALYSIS_ROLE}')."
+		exit 1
+		;;
+esac
+for sha_env in APPLY_ANALYSIS_CYCLE_BASELINE_SHA APPLY_ANALYSIS_SMOKE_SHA APPLY_ANALYSIS_PROMOTE_SHA APPLY_ANALYSIS_PROVING_MERGE_SHA; do
+	if [ -n "${!sha_env}" ] && ! [[ "${!sha_env}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "::error::${sha_env} must be a 40-hex commit SHA (got '${!sha_env}')."
 		exit 1
 	fi
 done
+if [ -n "${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE}" ] && ! [[ "${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE}" =~ ^[0-9]+$ ]]; then
+	echo "::error::APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE must be an issue number."
+	exit 1
+fi
 
 emit_output()
 {
@@ -96,7 +127,7 @@ skip_dispatch()
 	echo "APPLY_ANALYSIS_SKIPPED reason=${reason}${detail:+ ${detail}}"
 	emit_output dispatched false
 	emit_output doc ""
-	emit_output tracking_issue ""
+	emit_output role "${APPLY_ANALYSIS_ROLE}"
 	exit 0
 }
 
@@ -109,8 +140,8 @@ is_truthy()
 }
 
 # open_tracking_issue_numbers [extra-label]
-# Prints the JSON array of open ai:orchestrator-tracking issue numbers,
-# optionally narrowed to issues that also carry <extra-label>. One API call.
+# JSON array of open ai:orchestrator-tracking issue numbers, optionally
+# narrowed to issues that also carry <extra-label>. One API call.
 open_tracking_issue_numbers()
 {
 	local labels="ai:orchestrator-tracking"
@@ -124,8 +155,8 @@ open_tracking_issue_numbers()
 }
 
 # doc_dispatched_before <path>
-# Returns 0 when a tracking issue (open or closed) already carries this doc's
-# marker comment, 1 when none does, 2 when the search itself failed.
+# 0 when a tracking issue (open or closed) carries this doc's marker, 1 when
+# none does, 2 when the search itself failed.
 doc_dispatched_before()
 {
 	local doc_path="$1"
@@ -143,53 +174,104 @@ doc_dispatched_before()
 	return 1
 }
 
+orchestrate_run_in_flight()
+{
+	local active
+	active="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}/runs?per_page=20" \
+		| jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+	[[ "${active}" =~ ^[0-9]+$ ]] || active=0
+	[ "${active}" -gt 0 ]
+}
+
+# unprocessed_docs
+# Prints one unprocessed doc path per line, oldest first. Docs listed in the
+# processing report or carrying a dispatch marker are skipped with a warning.
+# Returns 2 when the marker search is unavailable.
+unprocessed_docs()
+{
+	local candidate candidate_basename dispatched_rc
+	local candidates=()
+	while IFS= read -r candidate; do
+		[ -n "${candidate}" ] && candidates+=("${candidate}")
+	done < <(compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" | sort -V || true)
+	for candidate in "${candidates[@]}"; do
+		candidate_basename="$(basename "${candidate}")"
+		if [ -f "${APPLY_ANALYSIS_REPORT_PATH}" ] && grep -qF -- "${candidate_basename}" "${APPLY_ANALYSIS_REPORT_PATH}"; then
+			echo "::warning::${candidate} is already listed in ${APPLY_ANALYSIS_REPORT_PATH} but still exists; skipping it (delete it by hand or via a normal PR)." >&2
+			continue
+		fi
+		set +e
+		doc_dispatched_before "${candidate}"
+		dispatched_rc=$?
+		set -e
+		case "${dispatched_rc}" in
+			0)
+				echo "::warning::${candidate} was dispatched to the orchestrator before (marker comment found) but still exists; skipping it — decide by hand whether to re-run it." >&2
+				continue
+				;;
+			1)
+				printf '%s\n' "${candidate}"
+				;;
+			*)
+				return 2
+				;;
+		esac
+	done
+	return 0
+}
+
 if ! is_truthy "${APPLY_ANALYSIS_ON_MAIN_ENABLED}"; then
 	skip_dispatch disabled
 fi
 
+if is_truthy "${APPLY_ANALYSIS_LIST_ONLY}"; then
+	set +e
+	docs_output="$(unprocessed_docs)"
+	docs_rc=$?
+	set -e
+	if [ "${docs_rc}" -ne 0 ]; then
+		skip_dispatch guard_unavailable "mode=list_only"
+	fi
+	candidate_count=0
+	candidate_csv=""
+	while IFS= read -r line; do
+		[ -n "${line}" ] || continue
+		candidate_count=$((candidate_count + 1))
+		candidate_csv="${candidate_csv:+${candidate_csv},}${line}"
+	done <<< "${docs_output}"
+	echo "APPLY_ANALYSIS_CANDIDATES count=${candidate_count} docs=${candidate_csv}"
+	emit_output dispatched false
+	emit_output candidate_count "${candidate_count}"
+	emit_output candidate_docs "${candidate_csv}"
+	exit 0
+fi
+
 in_flight_json="$(open_tracking_issue_numbers "${APPLY_ANALYSIS_TRACKING_LABEL}")"
+if [ -n "${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE}" ]; then
+	in_flight_json="$(printf '%s' "${in_flight_json}" | jq -c --argjson n "${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE}" '[.[] | select(. != $n)]')"
+fi
 if [ "$(printf '%s' "${in_flight_json}" | jq -r 'length')" -gt 0 ]; then
 	skip_dispatch project_in_flight "tracking_issues=$(printf '%s' "${in_flight_json}" | jq -r 'join(",")')"
 fi
 
-# Oldest doc first: the filenames embed the collection date
-# (workflow-optimization-YYYY-MM-DD[-N].md), so a version sort orders them
-# chronologically and keeps -2/-3 suffixes after their base date.
-candidate_docs=()
-while IFS= read -r candidate; do
-	[ -n "${candidate}" ] && candidate_docs+=("${candidate}")
-done < <(compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" | sort -V || true)
-if [ "${#candidate_docs[@]}" -eq 0 ]; then
+if orchestrate_run_in_flight; then
+	skip_dispatch orchestrate_run_in_flight "workflow=${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}"
+fi
+
+if ! compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" >/dev/null; then
 	skip_dispatch no_docs "glob=${APPLY_ANALYSIS_DOC_GLOB}"
 fi
 
-selected_doc=""
-for candidate in "${candidate_docs[@]}"; do
-	candidate_basename="$(basename "${candidate}")"
-	if [ -f "${APPLY_ANALYSIS_REPORT_PATH}" ] && grep -qF -- "${candidate_basename}" "${APPLY_ANALYSIS_REPORT_PATH}"; then
-		echo "::warning::${candidate} is already listed in ${APPLY_ANALYSIS_REPORT_PATH} but still exists; skipping it (delete it by hand or via a normal PR)."
-		continue
-	fi
-	set +e
-	doc_dispatched_before "${candidate}"
-	dispatched_rc=$?
-	set -e
-	case "${dispatched_rc}" in
-		0)
-			echo "::warning::${candidate} was dispatched to the orchestrator before (marker comment found) but still exists; skipping it — decide by hand whether to re-run it."
-			continue
-			;;
-		1)
-			selected_doc="${candidate}"
-			break
-			;;
-		*)
-			skip_dispatch guard_unavailable "doc=${candidate}"
-			;;
-	esac
-done
+set +e
+docs_output="$(unprocessed_docs)"
+docs_rc=$?
+set -e
+if [ "${docs_rc}" -ne 0 ]; then
+	skip_dispatch guard_unavailable
+fi
+selected_doc="$(printf '%s\n' "${docs_output}" | sed -n '1p')"
 if [ -z "${selected_doc}" ]; then
-	skip_dispatch all_docs_processed "docs=${#candidate_docs[@]}"
+	skip_dispatch all_docs_processed
 fi
 
 selected_basename="$(basename "${selected_doc}")"
@@ -206,64 +288,41 @@ Scope: process ONLY the single source doc referenced below. Do not read, modify,
 
 Source doc: ${selected_doc} (branch ${GITHUB_REF_NAME} at ${ref_sha})
 Source doc URL: ${doc_url}
-Dispatched by apply-analysis-on-main: ${run_url}
+Dispatched by the promote cycle (${APPLY_ANALYSIS_ROLE} run): ${run_url}
 DESC
 )"
 
-before_json="$(open_tracking_issue_numbers)"
+marker_lines="${APPLY_ANALYSIS_SOURCE_DOC_MARKER}: ${selected_doc}
+apply-analysis-role: ${APPLY_ANALYSIS_ROLE}"
+[ -n "${APPLY_ANALYSIS_CYCLE_BASELINE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-cycle-baseline-sha: ${APPLY_ANALYSIS_CYCLE_BASELINE_SHA}"
+[ -n "${APPLY_ANALYSIS_SMOKE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-smoke-sha: ${APPLY_ANALYSIS_SMOKE_SHA}"
+[ -n "${APPLY_ANALYSIS_PROMOTE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-promote-sha: ${APPLY_ANALYSIS_PROMOTE_SHA}"
+[ -n "${APPLY_ANALYSIS_PROVING_MERGE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-proving-merge-sha: ${APPLY_ANALYSIS_PROVING_MERGE_SHA}"
 
-echo "Dispatching ${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE} on ${GITHUB_REF_NAME} for ${selected_doc}."
-gh_retry gh workflow run "${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}" \
-	--repo "${GITHUB_REPOSITORY}" \
-	--ref "${GITHUB_REF_NAME}" \
-	-f "project_description=${project_description}"
-
-# The orchestrator creates the tracking issue after its own clarify and
-# decompose steps, so wait for a NEW open tracking issue rather than a title
-# (the title is model-written).
-deadline=$(( $(date +%s) + APPLY_ANALYSIS_TRACKING_WAIT_SECS ))
-tracking_issue=""
-while [ "$(date +%s)" -lt "${deadline}" ]; do
-	sleep "${APPLY_ANALYSIS_TRACKING_POLL_SECS}"
-	after_json="$(open_tracking_issue_numbers)" || continue
-	new_json="$(jq -cn --argjson before "${before_json}" --argjson after "${after_json}" '$after - $before')"
-	new_count="$(printf '%s' "${new_json}" | jq -r 'length')"
-	if [ "${new_count}" -eq 0 ]; then
-		continue
-	fi
-	if [ "${new_count}" -eq 1 ]; then
-		tracking_issue="$(printf '%s' "${new_json}" | jq -r '.[0]')"
-		break
-	fi
-	echo "::error::${new_count} tracking issues appeared while waiting for the apply-analysis project (${new_json}); refusing to guess which one to label."
-	emit_output dispatched true
-	emit_output doc "${selected_doc}"
-	emit_output tracking_issue ""
-	exit 1
-done
-if [ -z "${tracking_issue}" ]; then
-	echo "::error::No new tracking issue appeared within ${APPLY_ANALYSIS_TRACKING_WAIT_SECS}s after dispatching ${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE} for ${selected_doc}. The project may still start; label it ${APPLY_ANALYSIS_TRACKING_LABEL} by hand to keep the release callback."
-	emit_output dispatched true
-	emit_output doc "${selected_doc}"
-	emit_output tracking_issue ""
-	exit 1
+if [ "${APPLY_ANALYSIS_ROLE}" = "verifying" ]; then
+	role_prose="This is the VERIFYING run of a promote cycle: it re-proves the pipeline on top of the proving run's merged changes. When it reaches ready-to-merge, the orchestrator poller promotes \`apply-analysis-promote-sha\` to \`stable\` and holds this project's final merge until that release finishes. Its own merge never promotes anything; the next daily cycle covers it."
+else
+	role_prose="This is the PROVING run of a promote cycle: once it merges, the orchestrator poller dispatches the verifying run on the next analysis doc, and that run's ready-to-merge point promotes \`main\` (including this project's merge) to \`stable\`."
 fi
-
-gh_retry gh issue edit "${tracking_issue}" --repo "${GITHUB_REPOSITORY}" \
-	--add-label "${APPLY_ANALYSIS_TRACKING_LABEL}"
-
 marker_comment="$(cat <<COMMENT
 <!-- ${APPLY_ANALYSIS_SOURCE_DOC_MARKER} -->
 ## Apply-analysis dispatch
 
-${APPLY_ANALYSIS_SOURCE_DOC_MARKER}: ${selected_doc}
+${marker_lines}
 
-This project was dispatched by apply-analysis-on-main (${run_url}) for the single source doc above. The tracking issue carries \`${APPLY_ANALYSIS_TRACKING_LABEL}\`, so the orchestrator poller promotes \`${GITHUB_REF_NAME}\` to \`stable\` when the project completes cleanly. The marker line is the loop guard: the doc is never dispatched automatically again.
+Dispatched by ${run_url} for the single source doc above; the tracking issue carries \`${APPLY_ANALYSIS_TRACKING_LABEL}\`. ${role_prose} The marker lines are machine-read by the poller and are the loop guard: this doc is never dispatched automatically again.
 COMMENT
 )"
-gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${tracking_issue}/comments" -f "body=${marker_comment}" >/dev/null
 
-echo "APPLY_ANALYSIS_DISPATCHED doc=${selected_doc} tracking_issue=${tracking_issue}"
+echo "Dispatching ${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE} on ${GITHUB_REF_NAME} for ${selected_doc} (role=${APPLY_ANALYSIS_ROLE})."
+gh_retry gh workflow run "${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}" \
+	--repo "${GITHUB_REPOSITORY}" \
+	--ref "${GITHUB_REF_NAME}" \
+	-f "project_description=${project_description}" \
+	-f "tracking_labels=${APPLY_ANALYSIS_TRACKING_LABEL}" \
+	-f "tracking_comment=${marker_comment}"
+
+echo "APPLY_ANALYSIS_DISPATCHED doc=${selected_doc} role=${APPLY_ANALYSIS_ROLE}"
 emit_output dispatched true
 emit_output doc "${selected_doc}"
-emit_output tracking_issue "${tracking_issue}"
+emit_output role "${APPLY_ANALYSIS_ROLE}"
