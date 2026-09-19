@@ -10,6 +10,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -126,6 +127,27 @@ def test_strict_support_import_validates_provenance_before_execution() -> None:
 		finally:
 			sys.path.remove(str(untrusted_checkout_dir))
 			sys.modules.pop(strict_module_name, None)
+
+	strict_import_environment = os.environ.copy()
+	strict_import_environment.update(
+		AI_MEMORY_STRICT_IMMUTABLE_SUPPORT="true",
+		SUPPORT_SCRIPTS_DIR=str(REPO_ROOT / "scripts"),
+	)
+	strict_import_result = subprocess.run(
+		[
+			sys.executable,
+			"-I",
+			"-B",
+			"-c",
+			"import sys; sys.path.insert(0, sys.argv[1]); import ai_memory_lib",
+			str(REPO_ROOT / "scripts"),
+		],
+		env=strict_import_environment,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert strict_import_result.returncode == 0, strict_import_result.stderr
 
 
 @contextlib.contextmanager

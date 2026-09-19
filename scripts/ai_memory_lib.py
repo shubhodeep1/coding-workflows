@@ -12,6 +12,7 @@ import contextlib
 import fcntl
 import hashlib
 import importlib
+import importlib.util
 import json
 import logging
 import math
