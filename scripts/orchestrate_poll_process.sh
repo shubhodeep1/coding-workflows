@@ -14344,8 +14344,10 @@ _reconcile_merged_pr_issue() {
 # the staged-support one (marker `<!-- ai:needs-human-latch
 # reason=staged_support_rebase_conflict -->`, or the pre-marker header
 # `🚨 **Staged-support restore failed; implementation halted.**`) are
-# released, and only when the engine carries
-# scripts/implement_staged_support_workspace.sh (the fix, PR #4119).  Every
+# released, only in this source repository, only when the matching comment
+# came from a trusted repository actor or installed bot, and only when the
+# engine carries scripts/implement_staged_support_workspace.sh (the fix,
+# PR #4119).  Every
 # other ai:needs-human reason stays human-cleared.  Each release posts a
 # `<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict
 # engine=<sha> -->` marker; an issue is released at most once per engine and
@@ -14353,11 +14355,12 @@ _reconcile_merged_pr_issue() {
 # latch that recurs on the same engine stays parked for a human.  An issue
 # that also carries ai:destructive-blocked or ai:scope-blocked is left alone.
 #
-# API calls (§15): one `gh issue list --label ai:needs-human` per tick; per
-# latched issue one paginated comments read, one label edit, and one comment
-# write.  Consumer repos never set the staged-support ledger, so there the
-# list is normally empty and the sweep costs the single list call.  Every
-# read failure skips that issue for the tick (fail open); a kill switch
+# API calls (§15): in this source repository, one paginated `issues` REST read
+# per tick; per latched issue one paginated comments read, one label edit, and
+# one comment write.  The poller's existing issue caches do not carry comment
+# authorship or the historical release markers this sweep must verify.  Every
+# read failure skips that issue for the tick (fail open); consumer
+# repositories, a kill switch
 # (STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED=false) and an unresolved engine
 # both skip the sweep entirely.
 release_staged_support_needs_human_latches() {
@@ -14371,6 +14374,10 @@ release_staged_support_needs_human_latches() {
   echo "Staged-support needs-human latch release"
   echo "========================================"
 
+  if [ "${GITHUB_REPOSITORY}" != "shubhodeep1/coding-workflows" ]; then
+    echo "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=repository_out_of_scope repository=${GITHUB_REPOSITORY}"
+    return 0
+  fi
   if [ -z "${ORCHESTRATOR_ENGINE_SHA}" ]; then
     echo "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=engine_unresolved"
     return 0
@@ -14383,9 +14390,18 @@ release_staged_support_needs_human_latches() {
 
   local latched_issues latched_count latched_idx issue_num issue_labels_json
   local comments_json latch_idx release_marker release_body
-  latched_issues="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label "ai:needs-human" --json number,labels --limit 200 2>/dev/null || echo '[]')"
-  latched_count="$(printf '%s' "${latched_issues}" | jq 'length' 2>/dev/null || echo 0)"
-  [[ "${latched_count}" =~ ^[0-9]+$ ]] || latched_count=0
+  if ! latched_issues="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai%3Aneeds-human&per_page=100" \
+    | jq -s 'add // [] | map(select(.pull_request == null))' 2>/dev/null)"; then
+    echo "::warning::Could not list open ai:needs-human issues for staged-support latch release; leaving all latches unchanged."
+    echo "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=issue_list_unavailable repository=${GITHUB_REPOSITORY}"
+    return 0
+  fi
+  if ! latched_count="$(printf '%s' "${latched_issues}" | jq 'length' 2>/dev/null)" \
+    || ! [[ "${latched_count}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::The staged-support latch issue list was malformed; leaving all latches unchanged."
+    echo "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=issue_list_malformed repository=${GITHUB_REPOSITORY}"
+    return 0
+  fi
   echo "Found ${latched_count} open issue(s) with ai:needs-human."
   release_marker="<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict engine=${ORCHESTRATOR_ENGINE_SHA} -->"
 
@@ -14403,10 +14419,16 @@ release_staged_support_needs_human_latches() {
     fi
     latch_idx="$(printf '%s' "${comments_json}" | jq -r '
       [to_entries[]
-        | select((.value.body // "") | (
-            contains("<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->")
-            or startswith("🚨 **Staged-support restore failed; implementation halted.**")
-          ))
+        | select(
+            (
+              (.value.user.login // "" | test("\\[bot\\]$")) or
+              ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+            ) and
+            ((.value.body // "") | (
+              contains("<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->")
+              or startswith("🚨 **Staged-support restore failed; implementation halted.**")
+            ))
+          )
         | .key]
       | last // -1' 2>/dev/null || echo -1)"
     if ! [[ "${latch_idx}" =~ ^[0-9]+$ ]]; then
@@ -14415,9 +14437,14 @@ release_staged_support_needs_human_latches() {
     fi
     if printf '%s' "${comments_json}" | jq -e --argjson latch_idx "${latch_idx}" --arg marker "${release_marker}" '
         any(to_entries[];
-          (.key > $latch_idx
-            and ((.value.body // "") | contains("<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict")))
-          or ((.value.body // "") | contains($marker)))
+          (
+            (.value.user.login // "" | test("\\[bot\\]$")) or
+            ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+          ) and (
+            (.key > $latch_idx
+              and ((.value.body // "") | contains("<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict")))
+            or ((.value.body // "") | contains($marker))
+          ))
       ' >/dev/null 2>&1; then
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=already_released engine_sha=${ORCHESTRATOR_ENGINE_SHA}"
       continue
@@ -14434,7 +14461,15 @@ release_staged_support_needs_human_latches() {
 ${release_marker}
 _Orchestrator: released the \`ai:needs-human\` latch that the staged-support restore failure set. The workflow engine now running (\`${ORCHESTRATOR_ENGINE_SHA}\`) restores support helpers to the branch version before the editor runs and commits the editor's own edits as plain branch edits, so the re-base conflict that halted this issue no longer occurs. Re-approving automatically so implementation resumes without a human; if it halts again on this engine the latch stays for a human._"
     if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${release_body}" >/dev/null 2>&1; then
-      echo "::warning::Released the ai:needs-human latch on #${issue_num} but the /approved comment failed; stall recovery re-approves on its ladder."
+      echo "::warning::The /approved comment failed after releasing the ai:needs-human latch on #${issue_num}; restoring the latch."
+      if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label "ai:awaiting-approval" --add-label "ai:needs-human" >/dev/null 2>&1; then
+        echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=approval_comment_failed_latch_restored"
+      else
+        echo "::warning::Could not restore ai:needs-human on #${issue_num} after the /approved comment failed; operator attention is required."
+        echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=approval_comment_failed_compensation_failed"
+      fi
+      continue
     fi
     echo "STAGED_SUPPORT_LATCH_RELEASED issue=${issue_num} engine_sha=${ORCHESTRATOR_ENGINE_SHA}"
     tg_notify_issue "${issue_num}" "Released the ai:needs-human latch on issue #${issue_num}: the staged-support re-base conflict that halted it is fixed in workflow engine ${ORCHESTRATOR_ENGINE_SHA}. Re-approved for implementation." "WARNING"

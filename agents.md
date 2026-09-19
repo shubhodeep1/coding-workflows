@@ -249,14 +249,16 @@ a new value, add it to the appropriate overrides file with a
   which attempts and verifies the `ai:needs-human` latch, comments with the affected paths and
   latch status, sends the configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.
   The comment opens with `<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->`;
-  the poller's `release_staged_support_needs_human_latches` sweep (gated by
+  the source-repository poller's `release_staged_support_needs_human_latches` sweep (gated by
   `STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED`, default `true`) matches that marker or the
-  pre-marker header, and once the running engine carries
+  pre-marker header only on comments from an `OWNER`, `MEMBER`, `COLLABORATOR`, or installed
+  `[bot]`, and once the running engine carries
   `scripts/implement_staged_support_workspace.sh` it restores `ai:awaiting-approval` and posts
   `/approved` with a `<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict
   engine=<sha> -->` marker, at most once per issue per engine commit (log keys
   `STAGED_SUPPORT_LATCH_RELEASED`, `STAGED_SUPPORT_LATCH_SKIP`,
-  `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`). Other `ai:needs-human` reasons stay human-cleared.
+  `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`). A failed `/approved` write restores `ai:needs-human`;
+  consumer repositories and other latch reasons stay human-cleared.
 - The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,
   `check_failure_triage.yml`) either never commit from that checkout or run on
