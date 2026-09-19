@@ -55,7 +55,7 @@ Copy this block when adding a new entry:
 
 ### `scripts/promote_main_cycle.sh` + `scripts/apply_analysis_on_main.sh` + the `cycle` job of `.github/workflows/promote-main-to-stable.yml`
 
-- **Introduced in:** claude/auto-apply-analysis-release-main (2026-09-19)
+- **Introduced in:** #4134 (2026-09-19)
 - **Type:** supervisor
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**
@@ -67,7 +67,7 @@ Copy this block when adding a new entry:
 
 ### `scripts/auto_release_stable.sh` + `.github/workflows/auto-release-stable.yml`
 
-- **Introduced in:** claude/auto-apply-analysis-release-main (2026-09-19)
+- **Introduced in:** #4134 (2026-09-19)
 - **Type:** supervisor
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**

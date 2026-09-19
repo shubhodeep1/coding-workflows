@@ -2317,7 +2317,7 @@ Two automations take the operator out of that loop by default:
      `CLAUDE.md` and anything under `.claude/` still count because consumers receive them), and
      none of: a cycle already in flight, a previous cycle job still running, the same tip already
      covered by an earlier cycle or failed tick, fewer than `PROMOTE_CYCLE_MIN_DOCS` analysis docs;
-  2. the smoke gate: `test-and-mark-stable.yml` in `gate_only` mode on `main`, waited on by the tick;
+  2. the smoke gate: `test-and-mark-stable.yml` in `gate_only` mode on `main`, carrying the cycle run ID so the tick waits for that exact dispatch rather than another concurrent gate;
   3. the proving run: one analysis doc handed to the orchestrator via `internal-orchestrate.yml`,
      bound at dispatch through the new `tracking_labels` / `tracking_comment` inputs;
   4. the verifying run: dispatched by the poller when the proving run merges (12f), on the next doc,

@@ -35,6 +35,10 @@ if args[:1] == ["api"]:
     if path.endswith("/git/ref/heads/main"):
         respond({"object": {"type": "commit", "sha": state["main_tip"]}})
     if path.endswith("/git/ref/tags/stable"):
+        if state.get("tag_missing"):
+            save(); sys.stderr.write("404\n"); sys.exit(1)
+        if state.get("tag_lookup_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
         respond({"object": {"type": "tag", "sha": "9" * 40}})
     if "/git/tags/" in path:
         respond({"object": {"type": "commit", "sha": state["tag_commit"]}})
@@ -50,7 +54,7 @@ if args[:1] == ["api"]:
             respond({"total_count": 1 if state.get("last_cycle_issue") else 0, "items": ([{"number": state["last_cycle_issue"]}] if state.get("last_cycle_issue") else [])})
         respond({"total_count": 0, "items": []})
     if "/issues/" in path and path.endswith("/comments?per_page=100"):
-        respond([{"body": "apply-analysis-source-doc: x\napply-analysis-cycle-baseline-sha: " + state.get("last_cycle_baseline", "")}])
+        respond(state.get("cycle_comments", [{"body": "apply-analysis-source-doc: x\napply-analysis-cycle-baseline-sha: " + state.get("last_cycle_baseline", "")}]))
     if "/issues?" in path:
         respond([{"number": n, "labels": []} for n in state.get("in_flight", [])])
     if "/actions/workflows/promote-main-to-stable.yml/runs" in path:
@@ -130,8 +134,8 @@ def _compare(files: list[str], status: str = "ahead") -> dict:
 
 GATE_SUCCESS = [
 	[],
-	[{"id": 500, "status": "in_progress", "conclusion": None, "head_branch": "main", "created_at": "2026-09-19T00:00:01Z"}],
-	[{"id": 500, "status": "completed", "conclusion": "success", "head_branch": "main", "created_at": "2026-09-19T00:00:01Z"}],
+	[{"id": 500, "status": "in_progress", "conclusion": None, "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
+	[{"id": 500, "status": "completed", "conclusion": "success", "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
 ]
 
 
@@ -200,6 +204,33 @@ def test_no_code_change_since_last_cycle_baseline_skips() -> None:
 	assert not final.get("dispatches")
 
 
+def test_non_marker_comments_do_not_break_last_cycle_baseline_lookup() -> None:
+	state = {
+		"compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), OLD_BASELINE: _compare(["analysis/a.md"])},
+		"last_cycle_issue": 900,
+		"last_cycle_baseline": OLD_BASELINE,
+		"cycle_comments": [
+			{"body": "unrelated orchestrator state"},
+			{"body": f"apply-analysis-cycle-baseline-sha: {OLD_BASELINE}"},
+			{"body": "another progress comment"},
+		],
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert "reason=guard_unavailable" not in proc.stdout
+	assert "reason=no_code_changes_since_last_cycle" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_tag_lookup_failure_fails_closed() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"tag_lookup_error": True})
+	assert proc.returncode == 0, proc.stderr
+	assert "PROMOTE_CYCLE_SKIPPED reason=guard_unavailable lookup=tag:stable" in proc.stdout
+	assert not final.get("dispatches")
+
+
 def test_no_code_change_since_failed_run_skips() -> None:
 	failed_head = "4" * 40
 	runs = [{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": failed_head, "created_at": "2026-09-18T00:00:00Z"}]
@@ -222,7 +253,7 @@ def test_full_cycle_runs_smoke_gate_then_dispatches_proving_run() -> None:
 		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh", "README.md"])}, "gate_runs_sequence": GATE_SUCCESS})
 		env_lines = env_out.read_text(encoding="utf-8").splitlines()
 	assert proc.returncode == 0, proc.stderr + proc.stdout
-	assert final["dispatches"] == [["test-and-mark-stable.yml", "--repo", "owner/repo", "--ref", "main", "-f", "gate_only=true"]]
+	assert final["dispatches"] == [["test-and-mark-stable.yml", "--repo", "owner/repo", "--ref", "main", "-f", "gate_only=true", "-f", "gate_cycle_id=777"]]
 	assert "Smoke gate passed on " + TIP + " (run 500)" in proc.stdout
 	assert f"PROMOTE_CYCLE_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md baseline={TIP} smoke={TIP}" in proc.stdout
 	assert "APPLY_ANALYSIS_ROLE=proving" in env_lines
@@ -233,7 +264,7 @@ def test_full_cycle_runs_smoke_gate_then_dispatches_proving_run() -> None:
 
 
 def test_smoke_gate_failure_fails_the_cycle_without_dispatching_a_proving_run() -> None:
-	seq = [[], [{"id": 501, "status": "completed", "conclusion": "failure", "head_branch": "main", "created_at": "2026-09-19T00:00:01Z"}]]
+	seq = [[], [{"id": 501, "status": "completed", "conclusion": "failure", "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}]]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": seq})
 		assert not env_out.exists()
@@ -243,11 +274,27 @@ def test_smoke_gate_failure_fails_the_cycle_without_dispatching_a_proving_run() 
 
 
 def test_smoke_gate_timeout_fails_the_cycle() -> None:
-	seq = [[], [{"id": 502, "status": "in_progress", "conclusion": None, "head_branch": "main", "created_at": "2026-09-19T00:00:01Z"}]]
+	seq = [[], [{"id": 502, "status": "in_progress", "conclusion": None, "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}]]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": seq}, env={"PROMOTE_CYCLE_GATE_WAIT_SECS": "3"})
 	assert proc.returncode == 1
 	assert "PROMOTE_CYCLE_FAILED reason=smoke_gate_timeout" in proc.stdout
+
+
+def test_smoke_gate_ignores_unrelated_concurrent_dispatch() -> None:
+	seq = [
+		[],
+		[
+			{"id": 503, "status": "completed", "conclusion": "failure", "head_branch": "main", "display_title": "Test & Mark Stable Release", "created_at": "2026-09-19T00:00:01Z"},
+			{"id": 504, "status": "in_progress", "conclusion": None, "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:02Z"},
+		],
+		[{"id": 504, "status": "completed", "conclusion": "success", "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:02Z"}],
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": seq})
+	assert proc.returncode == 0, proc.stderr
+	assert "Smoke gate run: 504" in proc.stdout
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout
 
 
 def test_dispatcher_skip_after_gate_is_reported_as_skip() -> None:

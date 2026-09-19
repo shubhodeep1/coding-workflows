@@ -171,14 +171,27 @@ code_changes_between()
 resolve_tag_commit()
 {
 	local tag="$1"
-	local ref_json object_type object_sha
-	ref_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" 2>/dev/null || true)"
+	local ref_json object_type object_sha tag_ref_error_file
+	tag_ref_error_file="$(mktemp)"
+	if ! ref_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" 2>"${tag_ref_error_file}")"; then
+		if grep -qE '(^|[^0-9])404([^0-9]|$)' "${tag_ref_error_file}"; then
+			rm -f "${tag_ref_error_file}"
+			return 1
+		fi
+		cat "${tag_ref_error_file}" >&2
+		rm -f "${tag_ref_error_file}"
+		return 2
+	fi
+	rm -f "${tag_ref_error_file}"
 	object_type="$(printf '%s' "${ref_json}" | jq -r '.object.type // empty' 2>/dev/null || true)"
 	object_sha="$(printf '%s' "${ref_json}" | jq -r '.object.sha // empty' 2>/dev/null || true)"
 	if [ "${object_type}" = "tag" ] && [[ "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-		gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" | jq -r '.object.sha // empty'
+		gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" | jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))'
 	elif [ "${object_type}" = "commit" ]; then
+		[[ "${object_sha}" =~ ^[0-9a-f]{40}$ ]] || return 2
 		printf '%s\n' "${object_sha}"
+	else
+		return 2
 	fi
 }
 
@@ -196,7 +209,7 @@ last_cycle_baseline_sha()
 	fi
 	local sha
 	if ! sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" \
-		| jq -r --arg m "${CYCLE_BASELINE_MARKER}" '[.[] | .body // "" | capture("(?m)^" + $m + ": (?<sha>[0-9a-f]{40})") | .sha] | last // empty')"; then
+		| jq -r --arg m "${CYCLE_BASELINE_MARKER}" '[.[] | .body // "" | capture("(?m)^" + $m + ": (?<sha>[0-9a-f]{40})")? | .sha] | last // empty')"; then
 		return 2
 	fi
 	printf '%s\n' "${sha}"
@@ -245,14 +258,23 @@ if ! [[ "${main_tip}" =~ ^[0-9a-f]{40}$ ]]; then
 	echo "::error::Could not resolve branch ${PROMOTE_CYCLE_DEFAULT_BRANCH}."
 	exit 1
 fi
+set +e
 tag_commit="$(resolve_tag_commit "${PROMOTE_CYCLE_STABLE_TAG}")"
-if [[ "${tag_commit}" =~ ^[0-9a-f]{40}$ ]]; then
-	require_code_changes "${tag_commit}" "${main_tip}" no_code_changes
-	echo "Code changes since ${PROMOTE_CYCLE_STABLE_TAG} (${tag_commit:0:7}):"
-	printf '%s\n' "${CODE_CHANGES_OUT}" | sed 's/^/  /'
-else
-	echo "::warning::Tag ${PROMOTE_CYCLE_STABLE_TAG} does not resolve to a commit; treating main as never promoted."
-fi
+tag_lookup_rc=$?
+set -e
+case "${tag_lookup_rc}" in
+	0)
+		require_code_changes "${tag_commit}" "${main_tip}" no_code_changes
+		echo "Code changes since ${PROMOTE_CYCLE_STABLE_TAG} (${tag_commit:0:7}):"
+		printf '%s\n' "${CODE_CHANGES_OUT}" | sed 's/^/  /'
+		;;
+	1)
+		echo "::warning::Tag ${PROMOTE_CYCLE_STABLE_TAG} does not exist; treating main as never promoted."
+		;;
+	*)
+		skip_cycle guard_unavailable "lookup=tag:${PROMOTE_CYCLE_STABLE_TAG}"
+		;;
+esac
 
 # 4. Not the same tip the last cycle already covered (Q14: retry only after
 #    main moves with code), regardless of that cycle's outcome.
@@ -286,7 +308,8 @@ echo "Dispatching ${PROMOTE_CYCLE_GATE_WORKFLOW_FILE} on ${PROMOTE_CYCLE_DEFAULT
 gh_retry gh workflow run "${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}" \
 	--repo "${GITHUB_REPOSITORY}" \
 	--ref "${PROMOTE_CYCLE_DEFAULT_BRANCH}" \
-	-f gate_only=true
+	-f gate_only=true \
+	-f "gate_cycle_id=${GITHUB_RUN_ID}"
 smoke_sha="${main_tip}"
 
 deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_WAIT_SECS ))
@@ -296,7 +319,7 @@ while [ "$(date +%s)" -lt "${deadline}" ]; do
 	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
 	runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue
 	if [ -z "${gate_run_id}" ]; then
-		gate_run_id="$(printf '%s' "${runs_json}" | jq -r --argjson before "${before_gate_ids}" --arg branch "${PROMOTE_CYCLE_DEFAULT_BRANCH}" '[.workflow_runs[]? | select((.id as $id | ($before | index($id) | not)) and (.head_branch // "") == $branch)] | sort_by(.created_at) | first | .id // empty')"
+		gate_run_id="$(printf '%s' "${runs_json}" | jq -r --argjson before "${before_gate_ids}" --arg branch "${PROMOTE_CYCLE_DEFAULT_BRANCH}" --arg title "Test & Mark Stable Release [cycle:${GITHUB_RUN_ID}]" '[.workflow_runs[]? | select((.id as $id | ($before | index($id) | not)) and (.head_branch // "") == $branch and (.display_title // "") == $title)] | sort_by(.created_at) | first | .id // empty')"
 		[ -n "${gate_run_id}" ] || continue
 		echo "Smoke gate run: ${gate_run_id}"
 	fi

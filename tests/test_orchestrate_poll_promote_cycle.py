@@ -116,12 +116,34 @@ def test_proving_run_completion_reports_when_verifying_run_cannot_be_dispatched(
 			issue_labels={10: ["ai:merged"]},
 			prs=[_open_final_pr()],
 			existing_branches=["main", "orchestrator/project-192"],
+			branch_ref_shas={"main": PROMOTE_SHA},
 			env_overrides={"APPLY_ANALYSIS_DISPATCHER": str(stub)},
 		)
 		assert result["latest_state"]["status"] == "complete"
 		assert result["latest_state"]["comprehensive_release_callback"]["verification"] == "SKIPPED reason=no_docs"
 		assert result["release_dispatches"] == []
 		assert "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED" in result["stdout"]
+
+
+def test_proving_run_retries_when_default_branch_ref_is_unavailable() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		stub, env_out = _stub_dispatcher(Path(tmp))
+		result = _run_poller(
+			state=_project_state(),
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_labels=[LABEL],
+			tracking_comments=[_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA)],
+			issue_labels={10: ["ai:merged"]},
+			prs=[_open_final_pr()],
+			existing_branches=["main", "orchestrator/project-192"],
+			env_overrides={"APPLY_ANALYSIS_DISPATCHER": str(stub)},
+		)
+		assert not env_out.exists()
+	assert "comprehensive_release_callback" not in result["latest_state"]
+	assert LABEL in result["tracking_labels"]
+	assert "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED" in result["stdout"]
+	assert "RETRY reason=default_branch_unavailable" in result["stdout"]
 
 
 def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None):

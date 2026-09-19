@@ -38,9 +38,13 @@ if args[:1] == ["api"]:
     if path.endswith("/git/ref/tags/stable"):
         if state.get("tag_missing"):
             save(); sys.stderr.write("404\n"); sys.exit(1)
+        if state.get("tag_lookup_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
         respond({"object": {"type": "tag", "sha": state["tag_object"]}})
     if "/git/tags/" in path:
         respond({"object": {"type": "commit", "sha": state["tag_commit"]}})
+    if "/actions/workflows/promote-main-to-stable.yml/runs" in path:
+        respond({"workflow_runs": state.get("promote_runs", [])})
     if "/actions/workflows/" in path and "/runs" in path:
         respond({"workflow_runs": state.get("runs", [])})
     save(); sys.stderr.write("unexpected api path " + path + "\n"); sys.exit(1)
@@ -117,14 +121,31 @@ def test_missing_tag_counts_as_unreleased() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, state = _run(Path(tmp), _state(tag_missing=True))
 	assert proc.returncode == 0, proc.stderr
-	assert "does not resolve to a commit" in proc.stdout + proc.stderr
+	assert "does not exist" in proc.stdout + proc.stderr
 	assert len(state["dispatches"]) == 1
+
+
+def test_tag_lookup_failure_fails_closed() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_lookup_error=True))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=guard_unavailable lookup=tag:stable" in proc.stdout
+	assert not state.get("dispatches")
 
 
 def test_in_flight_gate_run_skips() -> None:
 	runs = [{"status": "in_progress", "conclusion": None, "head_sha": TIP, "created_at": "2026-09-19T00:00:00Z"}]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("dispatches")
+
+
+def test_in_flight_promotion_run_skips() -> None:
+	promote_runs = [{"status": "in_progress", "conclusion": None, "head_sha": TIP, "created_at": "2026-09-19T00:00:00Z"}]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, promote_runs=promote_runs))
 	assert proc.returncode == 0, proc.stderr
 	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
 	assert not state.get("dispatches")

@@ -5242,9 +5242,12 @@ jobs:
             gh_retry gh label create "ai:blocked" --repo "${{ github.repository }}" \
               --color "b60205" --description "Blocked: human input required" \
               2>/dev/null || true
-            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --add-label 'ai:blocked' --remove-label 'ai:implementing' \
-              --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
+              --remove-label 'ai:awaiting-approval' >/dev/null; then
+              echo "::error::Failed to apply the ai:blocked latch to issue ${ISSUE_NUMBER}; refusing to report terminalization."
+              exit 1
+            fi
             BLOCKED_COMMENT="$(printf '%s\n\n%s\n\n%s\n%s\n\n%s' \
               "Implementation blocked: human input required." \
               "Reason: ${BLOCKED_REASON}" \

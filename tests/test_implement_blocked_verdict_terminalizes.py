@@ -31,11 +31,14 @@ with log.open("a", encoding="utf-8") as fh:
 if args[:1] == ["api"] and "--jq" in args:
     sys.stdout.write(json.dumps(os.environ.get("MOCK_ISSUE_LABELS", "[]")))
     sys.exit(0)
+if os.environ.get("MOCK_FAIL_BLOCKED_EDIT") == "1" and args[:2] == ["issue", "edit"] and "ai:blocked" in args:
+    sys.stderr.write("label edit failed\n")
+    sys.exit(1)
 sys.exit(0)
 '''
 
 
-def _run_failure_step(*, blocked_reason: str | None, labels: list[str]) -> list[list[str]]:
+def _run_failure_step(*, blocked_reason: str | None, labels: list[str], fail_blocked_edit: bool = False) -> list[list[str]]:
 	script = _render_github_expressions(_extract_run_script("Comment on issue failure"))
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
@@ -57,6 +60,7 @@ def _run_failure_step(*, blocked_reason: str | None, labels: list[str]) -> list[
 				"PATH": f"{bin_dir}:{env['PATH']}",
 				"MOCK_GH_LOG": str(log),
 				"MOCK_ISSUE_LABELS": json.dumps(labels),
+				"MOCK_FAIL_BLOCKED_EDIT": "1" if fail_blocked_edit else "0",
 				"ISSUE_NUMBER": "4395",
 				"ISSUE_URL": "https://github.com/owner/repo/issues/4395",
 				"RUNTIME_DIR": str(runtime_dir),
@@ -69,7 +73,10 @@ def _run_failure_step(*, blocked_reason: str | None, labels: list[str]) -> list[
 		script_path = tmp_path / "step.sh"
 		script_path.write_text(script, encoding="utf-8")
 		proc = subprocess.run(["bash", str(script_path)], cwd=str(tmp_path), env=env, text=True, capture_output=True, timeout=60)
-		assert proc.returncode == 0, proc.stderr + proc.stdout
+		if fail_blocked_edit:
+			assert proc.returncode != 0
+		else:
+			assert proc.returncode == 0, proc.stderr + proc.stdout
 		return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
@@ -114,3 +121,9 @@ def test_non_blocked_failure_keeps_awaiting_approval_path() -> None:
 	bodies = _comment_bodies(calls)
 	assert len(bodies) == 1
 	assert "AI implementation workflow failed" in bodies[0]
+
+
+def test_blocked_verdict_does_not_report_terminalization_when_latch_fails() -> None:
+	calls = _run_failure_step(blocked_reason="BLOCKED: credentials unavailable", labels=["ai:implementing"], fail_blocked_edit=True)
+	assert len(_label_edits(calls)) == 1
+	assert _comment_bodies(calls) == []

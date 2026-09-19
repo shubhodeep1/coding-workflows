@@ -19,7 +19,7 @@
 #   AUTO_RELEASE_DISPATCHED sha=<tip>
 #
 # API calls per run (§15): 2 ref reads (+1 to dereference an annotated tag),
-# 1 workflow-runs list, at most 1 dispatch.
+# 2 workflow-runs lists, at most 1 dispatch.
 #
 # Environment (all optional unless stated):
 #   GITHUB_REPOSITORY (required)        owner/repo
@@ -85,17 +85,35 @@ fi
 
 # The stable tag is annotated (`git tag -a` in the release job), so the ref
 # points at a tag object that must be dereferenced to its commit.
-tag_ref_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${AUTO_RELEASE_STABLE_TAG}" 2>/dev/null || true)"
+tag_ref_error_file="$(mktemp)"
+tag_missing="false"
+if ! tag_ref_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${AUTO_RELEASE_STABLE_TAG}" 2>"${tag_ref_error_file}")"; then
+	if grep -qE '(^|[^0-9])404([^0-9]|$)' "${tag_ref_error_file}"; then
+		tag_ref_json=""
+		tag_missing="true"
+	else
+		cat "${tag_ref_error_file}" >&2
+		rm -f "${tag_ref_error_file}"
+		skip_release guard_unavailable "lookup=tag:${AUTO_RELEASE_STABLE_TAG}"
+	fi
+fi
+rm -f "${tag_ref_error_file}"
 tag_object_type="$(printf '%s' "${tag_ref_json}" | jq -r '.object.type // empty' 2>/dev/null || true)"
 tag_object_sha="$(printf '%s' "${tag_ref_json}" | jq -r '.object.sha // empty' 2>/dev/null || true)"
 tag_commit=""
 if [ "${tag_object_type}" = "tag" ] && [[ "${tag_object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-	tag_commit="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" | jq -r '.object.sha // empty')"
+	if ! tag_commit="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" | jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))')"; then
+		skip_release guard_unavailable "lookup=tag-object:${tag_object_sha}"
+	fi
 elif [ "${tag_object_type}" = "commit" ]; then
 	tag_commit="${tag_object_sha}"
 fi
 if [ -z "${tag_commit}" ]; then
-	echo "::warning::Tag ${AUTO_RELEASE_STABLE_TAG} does not resolve to a commit on ${GITHUB_REPOSITORY}; treating the branch as unreleased."
+	if [ "${tag_missing}" = "true" ]; then
+		echo "::warning::Tag ${AUTO_RELEASE_STABLE_TAG} does not exist on ${GITHUB_REPOSITORY}; treating the branch as unreleased."
+	else
+		skip_release guard_unavailable "lookup=tag:${AUTO_RELEASE_STABLE_TAG}"
+	fi
 fi
 
 if [ "${branch_tip}" = "${tag_commit}" ]; then
@@ -104,6 +122,12 @@ fi
 
 runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${AUTO_RELEASE_STABLE_WORKFLOW_FILE}/runs?per_page=30")"
 active_count="$(printf '%s' "${runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+# The gate-runs endpoint above cannot report a promotion that has moved
+# `stable` but has not dispatched its gate yet, so this requires a separate
+# workflow-scoped read.
+promote_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/promote-main-to-stable.yml/runs?per_page=30")"
+promote_active_count="$(printf '%s' "${promote_runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+active_count=$((active_count + promote_active_count))
 if [ "${active_count}" -gt 0 ]; then
 	skip_release release_in_flight "active_runs=${active_count}"
 fi

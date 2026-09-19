@@ -119,9 +119,6 @@ jobs:
     # The smoke gate alone can take ~2-3h; the script's own wait cap is
     # PROMOTE_CYCLE_GATE_WAIT_SECS (default 5h) and this job cap sits above it.
     timeout-minutes: 340
-    concurrency:
-      group: promote-main-cycle-${{ github.repository }}
-      cancel-in-progress: false
     permissions:
       contents: read
       issues: write

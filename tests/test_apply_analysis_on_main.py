@@ -97,6 +97,7 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, docs: list[s
 			"GH_TOKEN": "x",
 			"GITHUB_SHA": "a" * 40,
 			"GITHUB_RUN_ID": "42",
+			"GITHUB_REF_NAME": "main",
 			"GITHUB_OUTPUT": str(output_file),
 			"PYTHONDONTWRITEBYTECODE": "1",
 		}
@@ -274,7 +275,7 @@ def test_promote_workflow_cycle_job_runs_the_cycle_script_daily() -> None:
 	assert "concurrency" not in wf, "workflow-level concurrency would queue promotions behind a waiting cycle"
 	cycle = wf["jobs"]["cycle"]
 	assert cycle["if"] == "github.event_name == 'schedule'"
-	assert cycle["concurrency"] == {"group": "promote-main-cycle-${{ github.repository }}", "cancel-in-progress": False}
+	assert "concurrency" not in cycle, "job-level concurrency would queue a later scheduled tick"
 	run_step = next(s for s in cycle["steps"] if "run" in s)
 	assert "bash scripts/promote_main_cycle.sh" in run_step["run"]
 	assert run_step["env"]["PROMOTE_CYCLE_ENABLED"] == "${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}"
@@ -291,11 +292,16 @@ def test_promote_workflow_cycle_job_runs_the_cycle_script_daily() -> None:
 def test_release_gate_only_mode_contract() -> None:
 	gate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8"))
 	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_only"]["default"] is False
+	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_cycle_id"]["default"] == ""
+	assert "[cycle:{0}]" in gate["run-name"]
 	assert gate["jobs"]["release"]["if"] == "${{ success() && !inputs.gate_only }}"
 	assert "!inputs.gate_only" in gate["jobs"]["sync-to-main"]["if"]
 	source_run = gate["jobs"]["source"]["steps"][0]["run"]
 	assert 'GATE_ONLY="${{ inputs.gate_only }}"' in source_run
 	assert 'echo "branch=${REF}" >> "$GITHUB_OUTPUT"' in source_run
+	notify_run = next(step["run"] for step in gate["jobs"]["notify"]["steps"] if step.get("id") == "tg_send")
+	assert 'GATE_ONLY="${{ inputs.gate_only }}"' in notify_run
+	assert '[ "$GATE_ONLY" = "true" ] && [ "$RELEASE" = "skipped" ]' in notify_run
 
 
 def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
@@ -308,4 +314,5 @@ def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
 	assert internal["jobs"]["orchestrate"]["with"]["tracking_comment"] == "${{ inputs.tracking_comment }}"
 	text = (REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8")
 	assert "TRACKING_LABELS_INPUT: ${{ inputs.tracking_labels }}" in text
+	assert "source scripts/label_helpers.sh" in text.split("- name: Create tracking issue", 1)[1]
 	assert "TRACKING_ISSUE_COMMENT_POSTED" in text

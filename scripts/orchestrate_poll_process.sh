@@ -10338,6 +10338,10 @@ dispatch_comprehensive_verification_run() {
   local default_branch main_tip final_pr proving_merge_sha dispatch_output outcome
   default_branch="${DEFAULT_BRANCH_TRACKING:-main}"
   main_tip="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/heads/${default_branch}" --jq '.object.sha // empty' || echo "")"
+  if ! [[ "${main_tip}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "RETRY reason=default_branch_unavailable branch=${default_branch}"
+    return 0
+  fi
   final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
   proving_merge_sha=""
   if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
@@ -10580,6 +10584,10 @@ handle_comprehensive_release_callback_if_needed() {
     local cycle_metadata_json verification_outcome
     cycle_metadata_json="$(comprehensive_cycle_metadata_json "${comments_json}")"
     verification_outcome="$(dispatch_comprehensive_verification_run "${cycle_metadata_json}")"
+    if [[ "${verification_outcome}" == RETRY* ]]; then
+      echo "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome}"
+      return 0
+    fi
     jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg outcome "${verification_outcome}" \
       '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "proving", verification: $outcome}' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
