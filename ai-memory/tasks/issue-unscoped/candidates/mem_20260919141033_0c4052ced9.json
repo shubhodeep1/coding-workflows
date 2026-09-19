@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1891 | severity=blocker | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The issues-mode tracker comment builder unconditionally adds an \"Advisory findings\" summary line, changing weekly tracker output when `SECURITY_AUDIT_LINE_OWNERSHIP` is unset.\n  WHY: The linked issue acceptance criteria require existing behavior and fixture output to remain byte-identical in the default file mode, including the weekly audit path.\n- tests/test_security_audit_workflow_contract.py:793 | severity=blocker | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The weekly issues-mode test asserts that `- Advisory findings: 0` is present, encoding the contract violation caused by the unconditional advisory line.\n  WHY: The assertion should verify that the advisory line is absent when `SECURITY_AUDIT_LINE_OWNERSHIP` is unset; severity was reported as major by deepseek_deepseek-v4-pro and blocker by qwen_qwen3_7-plus, so blocker is used.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/security_audit.sh:1891 | severity=BLOCKER | confidence=5\n  PROBLEM: The issues-mode tracker comment builder includes an \"Advisory findings\" summary line unconditionally.\n  WHY: The advisory count is always 0 in the weekly path, but the new line changes the weekly tracker comment and violates the byte-identical acceptance criterion.\n- tests/test_security_audit_workflow_contract.py:793 | severity=MAJOR | confidence=5\n  PROBLEM: The test asserts \"- Advisory findings: 0\" in the issue comment bodies for the weekly issues-mode test.\n  WHY: The test passes while encoding the broken byte-identical contract and should assert that the advisory line is not present when the default file mode is used.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh:1891 | severity=BLOCKER | confidence=5\n  PROBLEM: The \"Advisory findings\" summary line is appended to `comment_lines` unconditionally, so it is emitted into the weekly issues-mode tracker comment even when `SECURITY_AUDIT_LINE_OWNERSHIP` is unset.\n  WHY: The Phase A acceptance criterion requires the default and weekly audit path to remain byte-identical when the new flag is unset, but the inserted line changes that byte stream on every weekly run.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:1891 | severity=BLOCKER | confidence=5\n  PROBLEM: The `comment_lines` block that builds the weekly issues-mode tracker comment includes `f\"- Advisory findings: {int(summary.get('advisory', 0))}\"` unconditionally.\n  WHY: The weekly tracker comment gains a line that was not present before this PR, violating the Phase A byte-identical acceptance criterion when `SECURITY_AUDIT_LINE_OWNERSHIP` is unset.\n- tests/test_security_audit_workflow_contract.py:793 | severity=BLOCKER | confidence=5\n  PROBLEM: The assertion `assert \"- Advisory findings: 0\" in \"\\n\".join(final_state.get(\"issue_comment_bodies\", []))` was added to `test_security_audit_filters_findings_and_caps_followups`, which exercises the weekly `issues` mode.\n  WHY: The assertion validates the contract violation by expecting the new line to be present even though `SECURITY_AUDIT_LINE_OWNERSHIP` is not set in this test.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8023f4c3fcbb12df6e436aaaee9025237871ff5e4fe970f03577a34588376cca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4141,
+    "run_id": "35445108751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35445108751",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919141033_0c4052ced9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4141,
+    "run_id": "35445108751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-19T14:10:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
