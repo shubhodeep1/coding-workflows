@@ -790,7 +790,7 @@ def test_security_audit_filters_findings_and_caps_followups() -> None:
 	assert "ai:security" in followup_create_args
 	assert "high-finding-one" in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "high-finding-two" in "\n".join(final_state.get("issue_comment_bodies", []))
-	assert "- Advisory findings: 0" in "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "- Advisory findings:" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "low-confidence-finding" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "excluded-finding" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "invalid-path" not in "\n".join(final_state.get("issue_comment_bodies", []))

@@ -1888,7 +1888,6 @@ comment_lines = [
 	f"- Confidence gate: `>= {confidence_gate}`",
 	f"- Exclusion catalog: `{exclusions_path}`",
 	f"- Findings surfaced: {len(findings)}",
-	f"- Advisory findings: {int(summary.get('advisory', 0))}",
 	f"- Suppressed low-confidence findings: {int(summary.get('suppressed_low_confidence', 0))}",
 	f"- Suppressed excluded findings: {int(summary.get('suppressed_excluded', 0))}",
 	f"- Suppressed invalid findings: {int(summary.get('suppressed_invalid', 0))}",
