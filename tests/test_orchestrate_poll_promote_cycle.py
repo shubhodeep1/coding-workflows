@@ -157,10 +157,12 @@ def test_proving_run_retries_when_default_branch_ref_is_unavailable() -> None:
 	assert "RETRY reason=default_branch_unavailable" in result["stdout"]
 
 
-def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None, tag_commit: str = "9" * 40, untrusted_marker: bool = False, env_overrides: dict | None = None):
+def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None, tag_commit: str = "9" * 40, untrusted_marker: bool = False, env_overrides: dict | None = None, compare_status_by_range: dict | None = None):
 	extra = {"compare_commits_detail": compare_commits, "tag_refs": {"stable": {"type": "tag", "sha": "8" * 40}}, "tag_objects": {"8" * 40: tag_commit}}
 	if commit_files:
 		extra["commit_files"] = commit_files
+	if compare_status_by_range:
+		extra["compare_status_by_range"] = compare_status_by_range
 	if runs_by_file:
 		extra["workflow_runs_by_file"] = runs_by_file
 	return _run_poller(
@@ -307,6 +309,18 @@ def test_forward_merge_subject_without_matching_pr_counts_as_untested() -> None:
 	result = _verifying_run(_project_state(), compare_commits=commits, prs=[_open_final_pr(), spoof])
 	assert result["latest_state"]["comprehensive_promotion"]["status"] == "deferred"
 	assert result["release_dispatches"] == []
+
+
+def test_diverged_promotion_candidate_is_deferred_even_with_no_listed_commits() -> None:
+	# A reset or rewritten main lists no forward commits, which must not read
+	# as "nothing untested": the candidate does not descend from smoke_sha.
+	result = _verifying_run(_project_state(), compare_commits=[], compare_status_by_range={f"{SMOKE_SHA}...{PROMOTE_SHA}": "diverged"})
+	promotion = result["latest_state"]["comprehensive_promotion"]
+	assert promotion["status"] == "deferred"
+	assert promotion["untested_count"] == 1
+	assert "compare status diverged" in (result["stdout"] + result["stderr"]) or "COMPREHENSIVE_PROMOTION_DEFERRED" in result["stdout"]
+	assert result["release_dispatches"] == []
+	assert result["latest_state"]["final_merge_status"] == "merged"
 
 
 def test_untrusted_marker_never_promotes_or_dispatches() -> None:

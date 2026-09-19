@@ -10593,10 +10593,22 @@ comprehensive_untested_commits_json() {
   local promote_sha="$2"
   local proving_merge_sha="${3:-}"
   local compare_json
-  if ! compare_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${smoke_sha}...${promote_sha}" --jq '{total_commits: (.total_commits // 0), commits: [(.commits // [])[] | {sha: .sha, message: ((.commit.message // "") | split("\n")[0]), author: (.author.login // ""), committer: (.committer.login // "")}]}')"; then
+  if ! compare_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${smoke_sha}...${promote_sha}" --jq '{status: (.status // ""), total_commits: (.total_commits // 0), commits: [(.commits // [])[] | {sha: .sha, message: ((.commit.message // "") | split("\n")[0]), author: (.author.login // ""), committer: (.committer.login // "")}]}')"; then
     return 2
   fi
-  local listed total
+  local listed total compare_status
+  # Only a range that descends from the smoke-tested commit can be judged
+  # by its commit list. `behind` or `diverged` (a reset or rewritten default
+  # branch) lists no commits in the forward direction and would otherwise
+  # read as "nothing untested"; treat it as untested so the promotion defers.
+  compare_status="$(printf '%s' "${compare_json}" | jq -r '.status')"
+  case "${compare_status}" in
+    ahead|identical) ;;
+    *)
+      printf '[{"sha":"","message":"compare status %s: the promotion candidate does not descend from the smoke-tested commit","author":""}]\n' "${compare_status:-unknown}"
+      return 0
+      ;;
+  esac
   listed="$(printf '%s' "${compare_json}" | jq -r '.commits | length')"
   total="$(printf '%s' "${compare_json}" | jq -r '.total_commits')"
   if [ "${listed}" -lt "${total}" ]; then
