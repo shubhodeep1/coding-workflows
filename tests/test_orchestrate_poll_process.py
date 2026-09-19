@@ -4897,6 +4897,307 @@ def test_security_pass_exhaustion_judge_keep_fixing_creates_consolidated_fix_iss
 	assert "| SEC-TEST-2 | medium | scripts/example.py:1 | accept_with_followup |" in judge_comments[0]
 
 
+def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories() -> None:
+	"""Past MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS (default 2), keep_fixing becomes accept_with_followup.
+
+	Regression for #3965: the judge was consulted twice on a 5-cycle budget
+	and granted "one more" consolidated cycle both times (cycles 6 and 7),
+	and nothing bounded the sequence.  Round 3 now converts every
+	keep_fixing decision to a deferred advisory so the project completes
+	without a human; `fail` verdicts are unaffected.
+	"""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), _security_pass_second_test_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_judge_rounds"] == 3
+	assert latest_state["security_pass_reported_findings"] == []
+	assert latest_state["security_pass_active_fix_issues"] == []
+	waived = {row["finding_id"]: row for row in latest_state["security_pass_waived_findings"]}
+	assert set(waived) == {"SEC-TEST-1", "SEC-TEST-2"}
+	assert waived["SEC-TEST-1"]["justification"].startswith(
+		"[keep_fixing capped after 2 judge round(s); converted to advisory follow-up] SEC-TEST-1: keep_fixing"
+	)
+	assert waived["SEC-TEST-2"]["justification"].startswith("SEC-TEST-2: accept_with_followup")
+	# Both advisories are filed by the final-merge arm of the same tick; no
+	# consolidated fix issue is created.
+	created = result.get("created_issues", [])
+	assert sorted(issue["labels"] for issue in created) == [["ai:security"], ["ai:security"]]
+	assert {issue["title"] for issue in created} == {
+		"[security-pass] Advisory: SEC-TEST-1 (high, scripts/example.py:1)",
+		"[security-pass] Advisory: SEC-TEST-2 (medium, scripts/example.py:1)",
+	}
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert "ai:security-pass-fixing" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
+	assert "accepted=2 keep_fixing=0 failed=0" in combined_log
+	assert "SECURITY_PASS_CLEAN tracking_issue=192" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	# Advisories filed by this tick's final-merge arm are recorded as
+	# merge-checked at creation, so no follow-up is read back.
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in combined_log
+	assert sorted(latest_state["security_pass_followups_merge_checked"]) == sorted(issue["number"] for issue in created)
+	judge_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")
+	]
+	assert len(judge_comments) == 1
+	assert "The judge accepted every remaining finding as a known risk" in judge_comments[0]
+	assert (
+		"1 of them were `keep_fixing` decisions converted to advisories because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent."
+		in judge_comments[0]
+	)
+	assert "| SEC-TEST-1 | high | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
+
+
+def test_security_pass_exhaustion_judge_keep_fixing_allowed_within_cap() -> None:
+	"""Round 2 with the default cap of 2 still grants the consolidated fix cycle."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=1),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"))),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_judge_rounds"] == 2
+	assert len(latest_state["security_pass_active_fix_issues"]) == 1
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in combined_log
+	assert "accepted=0 keep_fixing=1 failed=0" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=192" in combined_log
+
+
+def test_security_pass_exhaustion_judge_keep_fixing_cap_zero_is_unbounded() -> None:
+	"""MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=0 restores the unbounded keep_fixing loop."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=7),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS": "0",
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"))),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_judge_rounds"] == 8
+	assert len(latest_state["security_pass_active_fix_issues"]) == 1
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=192" in combined_log
+
+
+def test_security_pass_final_merge_reanswers_advisory_followups_parked_in_ai_blocked() -> None:
+	"""Advisories filed before the merge and parked in ai:blocked get one /answer at final merge.
+
+	Regression for #4090 / #4091 (project #3965): both were filed at judge
+	time, the planner answered `BLOCKED: PR #3968 is still open`, and
+	standalone stall recovery skips ai:blocked by design, so they waited for
+	a human `/answer`.  The final-merge arm now re-answers each follow-up at
+	most once (`security_pass_followups_merge_checked`), never touches issues
+	that are not blocked or closed, and leaves the follow-up rows' shape alone.
+	"""
+	state = _base_state(status="in_progress")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_followup_issues": [
+				{"finding_id": "SEC-PARKED", "issue": 850},
+				{"finding_id": "SEC-PLANNED", "issue": 851},
+				{"finding_id": "SEC-CLOSED", "issue": 852},
+				{"finding_id": "SEC-CHECKED", "issue": 853},
+			],
+			"security_pass_followups_merge_checked": [853],
+		}
+	)
+	labels = {
+		10: ["ai:merged"],
+		850: ["ai:security", "ai:blocked"],
+		851: ["ai:security", "ai:planning"],
+		852: ["ai:security", "ai:blocked"],
+		853: ["ai:security", "ai:blocked"],
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["final_merge_status"] == "merged"
+	final_pr = latest_state["final_merge_pr"]
+
+	def _answers(issue_number: int) -> list[str]:
+		return [
+			comment["body"]
+			for comment in result["issues"][str(issue_number)]["comments"]
+			if comment["body"].startswith("/answer [auto-answered-by-poller]")
+		]
+
+	parked_answers = _answers(850)
+	assert len(parked_answers) == 1
+	assert f"`orchestrator/project-192` has merged into `main` via PR #{final_pr}" in parked_answers[0]
+	assert "parked this issue in `ai:blocked` no longer holds" in parked_answers[0]
+	assert "<!-- security-pass-advisory-unblock:192:850 -->" in parked_answers[0]
+	assert _answers(851) == []
+	assert _answers(852) == []
+	assert _answers(853) == []
+	# Row shape is untouched; the check is recorded in a separate list.
+	assert latest_state["security_pass_followup_issues"] == [
+		{"finding_id": "SEC-PARKED", "issue": 850},
+		{"finding_id": "SEC-PLANNED", "issue": 851},
+		{"finding_id": "SEC-CLOSED", "issue": 852},
+		{"finding_id": "SEC-CHECKED", "issue": 853},
+	]
+	assert latest_state["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=192 finding=SEC-PARKED issue=850 final_pr={final_pr} outcome=answered" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=192 finding=SEC-PLANNED issue=851 final_pr={final_pr} outcome=not_blocked" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=192 finding=SEC-CLOSED issue=852 final_pr={final_pr} outcome=closed" in combined_log
+	assert "issue=853" not in combined_log
+	replanned_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## 🔓 Security-pass advisory follow-ups re-planned")
+	]
+	assert len(replanned_comments) == 1
+	assert f"via PR #{final_pr}" in replanned_comments[0]
+	assert "- `SEC-PARKED` → #850" in replanned_comments[0]
+	assert "SEC-PLANNED" not in replanned_comments[0]
+
+	# A later completed tick re-enters the merged arm but every row is
+	# already checked: no second /answer, no second tracking comment.
+	second = _run_poller(
+		state=latest_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert second["latest_state"]["final_merge_status"] == "merged"
+	assert second["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert not any(
+		comment["body"].startswith("/answer [auto-answered-by-poller]")
+		for comment in second["issues"]["850"]["comments"]
+	)
+	assert not any(
+		comment["body"].startswith("## 🔓 Security-pass advisory follow-ups re-planned")
+		for comment in second["issues"]["192"]["comments"]
+	)
+	second_log = second["stdout"] + second["stderr"]
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in second_log
+
+	# A public commenter can copy both the command prefix and predictable
+	# marker, but an untrusted author association must not suppress the real
+	# poller answer or mark the follow-up checked without posting it.
+	retry_state_after_forged_marker = json.loads(json.dumps(latest_state))
+	retry_state_after_forged_marker["security_pass_followups_merge_checked"] = [851, 852, 853]
+	retry_after_forged_marker = _run_poller(
+		state=retry_state_after_forged_marker,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_comments={
+			850: [
+				{
+					"body": parked_answers[0],
+					"author_association": "CONTRIBUTOR",
+					"user": {"login": "drive-by", "type": "User"},
+				}
+			]
+		},
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert len(
+		[
+			comment["body"]
+			for comment in retry_after_forged_marker["issues"]["850"]["comments"]
+			if comment["body"].startswith("/answer [auto-answered-by-poller]")
+		]
+	) == 2
+	assert retry_after_forged_marker["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert "outcome=answered" in retry_after_forged_marker["stdout"] + retry_after_forged_marker["stderr"]
+
+	# Simulate the POST succeeding while the local merge-checked state write
+	# was lost. The durable comment marker suppresses a duplicate /answer even
+	# if the issue still carries ai:blocked when the next tick starts. The
+	# persisted comment is a trusted User comment, matching the GH_PAT path.
+	retry_state_after_lost_mark = json.loads(json.dumps(latest_state))
+	retry_state_after_lost_mark["security_pass_followups_merge_checked"] = [851, 852, 853]
+	retry_after_lost_mark = _run_poller(
+		state=retry_state_after_lost_mark,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_comments={
+			850: [
+				{
+					"body": parked_answers[0],
+					"author_association": "OWNER",
+					"user": {"login": "octocat", "type": "User"},
+				}
+			]
+		},
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	retry_answer_comments = [
+		comment["body"]
+		for comment in retry_after_lost_mark["issues"]["850"]["comments"]
+		if comment["body"].startswith("/answer [auto-answered-by-poller]")
+	]
+	assert retry_answer_comments == parked_answers
+	assert retry_after_lost_mark["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert not any(
+		comment["body"].startswith("## 🔓 Security-pass advisory follow-ups re-planned")
+		for comment in retry_after_lost_mark["issues"]["192"]["comments"]
+	)
+	assert "outcome=answered" in retry_after_lost_mark["stdout"] + retry_after_lost_mark["stderr"]
+
+
 def test_security_pass_exhaustion_judge_fail_verdict_terminalizes_with_verdict_comment() -> None:
 	result = _run_poller(
 		state=_security_pass_exhausted_state(),
