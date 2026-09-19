@@ -297,7 +297,8 @@ def test_release_gate_only_mode_contract() -> None:
 	assert gate["jobs"]["release"]["if"] == "${{ success() && !inputs.gate_only }}"
 	assert "!inputs.gate_only" in gate["jobs"]["sync-to-main"]["if"]
 	source_run = gate["jobs"]["source"]["steps"][0]["run"]
-	assert 'GATE_ONLY="${{ inputs.gate_only }}"' in source_run
+	assert gate["jobs"]["source"]["steps"][0]["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
+	assert 'if [ "${GATE_ONLY}" = "true" ]; then' in source_run
 	assert 'echo "branch=${REF}" >> "$GITHUB_OUTPUT"' in source_run
 	notify_run = next(step["run"] for step in gate["jobs"]["notify"]["steps"] if step.get("id") == "tg_send")
 	assert 'GATE_ONLY="${{ inputs.gate_only }}"' in notify_run

@@ -161,10 +161,11 @@ jobs:
     steps:
       - name: Validate dispatch ref
         id: detect
+        env:
+          GATE_ONLY: ${{ inputs.gate_only }}
         run: |
           set -euo pipefail
           REF="${{ github.ref_name }}"
-          GATE_ONLY="${{ inputs.gate_only }}"
           if [ "${GATE_ONLY}" = "true" ]; then
             # Gate-only runs never tag or release, so any ref is safe: the
             # test jobs check out this ref and the release/sync-to-main jobs
