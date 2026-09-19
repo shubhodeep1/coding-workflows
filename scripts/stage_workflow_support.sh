@@ -483,6 +483,7 @@ stage_immutable_support_bundle()
 		echo "::notice::Passwordless sudo is unavailable outside GitHub Actions; retaining current ownership for immutable-support validation."
 	else
 		echo "::error::Immutable support staging requires root ownership but passwordless sudo is unavailable." >&2
+		chmod u+w "${temporary_root}" 2>/dev/null || true
 		rm -rf -- "${temporary_root}"
 		return 1
 	fi

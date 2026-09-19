@@ -260,6 +260,9 @@ def test_immutable_support_bundle_enforces_dependency_closure_and_path_safety() 
 	assert 'chmod 0555 "${temporary_root}"' in helper
 	assert helper.index('chmod 0555 "${temporary_root}"') < helper.index('chown -R root:root "${temporary_root}"')
 	assert helper.index('chmod 0555 "${temporary_root}"') < helper.index('sudo -n chown -R root:root "${temporary_root}"')
+	immutable_sudo_failure_block = helper.split("Immutable support staging requires root ownership", 1)[1].split("return 1", 1)[0]
+	assert 'chmod u+w "${temporary_root}"' in immutable_sudo_failure_block
+	assert immutable_sudo_failure_block.index('chmod u+w "${temporary_root}"') < immutable_sudo_failure_block.index('rm -rf -- "${temporary_root}"')
 	assert 'GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true' in helper
 	assert 'AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true' in helper
 
