@@ -166,6 +166,7 @@ changelog.d/3902-secure-workflow-shell-inputs.md
 changelog.d/3903-changelog-only-notification.md
 changelog.d/3906-stall-recovery-human-gated-latch.md
 changelog.d/3909-deterministic-manifest-conflict-resolution.md
+changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
 changelog.d/3928-security-pass-delta-reaudit.md
 changelog.d/3928-security-pass-exhaustion-findings.md
 changelog.d/3928-security-pass-fix-reissue.md
@@ -232,6 +233,7 @@ changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
 changelog.d/security-audit-concurrency-deadlock.md
 changelog.d/security-pass-line-ownership-engine.md
+changelog.d/security-pass-line-ownership-poller.md
 changelog.d/seed-repo-command.md
 changelog.d/slash-commands-session-model.md
 changelog.d/stall-recovery-dead-end-fixes.md
