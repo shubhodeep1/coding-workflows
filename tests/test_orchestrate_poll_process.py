@@ -1817,7 +1817,7 @@ if args[0] == 'api':
 				issue_payload['labels'] = {'nodes': [{'name': label} for label in labels]}
 			if 'comments(last:' in query:
 				comment_nodes = []
-				for comment in issue.get('comments', []):
+				for comment in issue.get('comments', [])[-100:]:
 					comment_nodes.append({
 						'databaseId': int(comment.get('id', 0) or 0),
 						'body': str(comment.get('body', '')),
@@ -2732,6 +2732,11 @@ for jq_argument in "$@"; do
 	if [ "${MOCK_STAGED_SUPPORT_LABEL_EXTRACTION_FAIL:-false}" = "true" ]; then
 		case "${jq_argument}" in
 			*'.labels // [] | map('*) exit 1 ;;
+		esac
+	fi
+	if [ "${MOCK_STAGED_SUPPORT_LATCH_PREDICATE_JQ_FAIL:-false}" = "true" ]; then
+		case "${jq_argument}" in
+			*'def staged_support_latch:'*) exit 3 ;;
 		esac
 	fi
 	done
@@ -4752,6 +4757,7 @@ def _run_latch_release_tick(
 	issue_comments: list[str | dict],
 	env_overrides: dict[str, str],
 	issue_events: list[dict] | None = None,
+	fail_issue_comment_get_after: dict[int, int] | None = None,
 	fail_issue_comment_post_for: list[int] | None = None,
 	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
 	fail_needs_human_issue_list: bool = False,
@@ -4776,6 +4782,7 @@ def _run_latch_release_tick(
 		issue_comments={700: list(issue_comments)},
 		issue_events={700: list(issue_events)},
 		mock_gh_issue_list_label_filter=True,
+		fail_issue_comment_get_after=fail_issue_comment_get_after,
 		fail_issue_comment_post_for=fail_issue_comment_post_for,
 		fail_issue_edit_on_calls=fail_issue_edit_on_calls,
 		fail_needs_human_issue_list=fail_needs_human_issue_list,
@@ -5114,6 +5121,84 @@ def test_managed_auto_approve_skips_unresolved_staged_support_latch() -> None:
 	assert "STALL_SKIP issue=10 reason=staged_support_latch_release_incomplete phase=ai:awaiting-approval action=none" in combined_log
 	assert not any(comment["body"].startswith("/approved") for comment in result["issues"]["10"]["comments"])
 	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_staged_support_guards_fetch_full_history_when_cache_is_at_limit() -> None:
+	latch_comment = _staged_support_latch_comment()
+	latch_comment["body"] = (
+		"<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\n"
+		+ latch_comment["body"]
+	)
+	comment_history = [latch_comment, *[f"routine comment {idx}" for idx in range(100)]]
+
+	standalone = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval"],
+		issue_comments=comment_history,
+		env_overrides={},
+	)
+	standalone_log = standalone["stdout"] + standalone["stderr"]
+	assert "STALL_SKIP issue=700 reason=staged_support_latch_release_incomplete" in standalone_log
+	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
+
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1})
+	managed = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: comment_history},
+	)
+	managed_log = managed["stdout"] + managed["stderr"]
+	assert "STALL_SKIP issue=10 reason=staged_support_latch_release_incomplete" in managed_log
+	assert not any(comment["body"].startswith("/approved") for comment in managed["issues"]["10"]["comments"])
+
+
+def test_staged_support_guards_fail_closed_when_full_history_is_unavailable() -> None:
+	comment_history = [_staged_support_latch_comment(), *[f"routine comment {idx}" for idx in range(100)]]
+	standalone = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval"],
+		issue_comments=comment_history,
+		env_overrides={},
+		fail_issue_comment_get_after={700: 0},
+	)
+	standalone_log = standalone["stdout"] + standalone["stderr"]
+	assert "STALL_SKIP issue=700 reason=staged_support_latch_comments_unavailable" in standalone_log
+	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
+
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1})
+	managed = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: comment_history},
+		fail_issue_comment_get_after={10: 0},
+	)
+	managed_log = managed["stdout"] + managed["stderr"]
+	assert "STALL_SKIP issue=10 reason=staged_support_latch_comments_unavailable" in managed_log
+	assert not any(comment["body"].startswith("/approved") for comment in managed["issues"]["10"]["comments"])
+
+
+def test_staged_support_latch_predicate_error_fails_closed() -> None:
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_staged_support_latch_comment()]},
+		env_overrides={"MOCK_STAGED_SUPPORT_LATCH_PREDICATE_JQ_FAIL": "true"},
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert "STALL_SKIP issue=10 reason=staged_support_latch_comments_unavailable" in combined_log
+	assert not any(comment["body"].startswith("/approved") for comment in result["issues"]["10"]["comments"])
 
 
 def test_staged_support_release_guard_is_comment_order_independent() -> None:

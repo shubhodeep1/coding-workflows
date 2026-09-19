@@ -264,8 +264,10 @@ a new value, add it to the appropriate overrides file with a
   the staged-support comment and have the same actor, so clearing that latch and later setting
   another human gate cannot reuse the stale marker. A failed `/approved` write restores
   `ai:needs-human`; if that compensation also fails, the unresolved latch marker blocks
-  managed and standalone auto-approval and raises a CRITICAL alert. Consumer repositories and other latch
-  reasons stay human-cleared.
+  managed and standalone auto-approval and raises a CRITICAL alert. Those recovery guards use
+  the batched comment cache only when it contains fewer than 100 entries; a full window triggers
+  a paginated history read, and unavailable or malformed history fails closed for that tick.
+  Consumer repositories and other latch reasons stay human-cleared.
 - The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,
   `check_failure_triage.yml`) either never commit from that checkout or run on
