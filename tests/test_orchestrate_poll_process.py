@@ -5183,6 +5183,39 @@ def test_staged_support_guards_fail_closed_when_full_history_is_unavailable() ->
 	assert not any(comment["body"].startswith("/approved") for comment in managed["issues"]["10"]["comments"])
 
 
+def test_standalone_comment_fetch_failure_only_blocks_approval_recovery() -> None:
+	state = _base_state(status="complete")
+	planning = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:planning"]},
+		gql_mode="error",
+		mock_gh_issue_list_label_filter=True,
+		fail_issue_comment_get_after={700: 0},
+	)
+	planning_log = planning["stdout"] + planning["stderr"]
+	assert "continuing without comment context, but approval recovery will fail closed" in planning_log
+	assert "reason=staged_support_latch_comments_unavailable phase=ai:planning" not in planning_log
+	assert any(
+		"AI_STANDALONE_STALL_STATE_V1" in comment["body"]
+		for comment in planning["issues"]["700"]["comments"]
+	)
+
+	awaiting_approval = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:awaiting-approval"]},
+		gql_mode="error",
+		mock_gh_issue_list_label_filter=True,
+		fail_issue_comment_get_after={700: 0},
+	)
+	awaiting_log = awaiting_approval["stdout"] + awaiting_approval["stderr"]
+	assert "STALL_SKIP issue=700 reason=staged_support_latch_comments_unavailable phase=ai:awaiting-approval action=none" in awaiting_log
+	assert not any(comment["body"].startswith("/approved") for comment in awaiting_approval["issues"]["700"]["comments"])
+
+
 def test_staged_support_latch_predicate_error_fails_closed() -> None:
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]

@@ -14887,6 +14887,7 @@ run_standalone_stall_recovery() {
   local _standalone_phase_resolve_rc
   local _standalone_staged_support_latch_rc
   local _standalone_staged_support_cache_available
+  local _standalone_staged_support_comments_unavailable
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
@@ -14897,6 +14898,7 @@ run_standalone_stall_recovery() {
     fi
 
     _standalone_staged_support_cache_available="false"
+    _standalone_staged_support_comments_unavailable="false"
     comments_json='[]'
     if printf '%s' "${_candidate_details_json}" | jq -e --arg n "${issue_num}" 'has($n)' >/dev/null 2>&1; then
       labels_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].labels // []')"
@@ -14906,8 +14908,9 @@ run_standalone_stall_recovery() {
       labels_json="$(get_issue_labels_json "${issue_num}")"
       if ! comments_json="$(_staged_support_comments_for_guard \
         "${issue_num}" "${comments_json}" "false")"; then
-        echo "::warning::[standalone-stall] comments unavailable for issue #${issue_num}; skipping this candidate for this cycle." >&2
-        continue
+        comments_json='[]'
+        _standalone_staged_support_comments_unavailable="true"
+        echo "::warning::[standalone-stall] comments unavailable for issue #${issue_num}; continuing without comment context, but approval recovery will fail closed." >&2
       fi
     fi
     has_pipeline_label="$(echo "${labels_json}" | jq -r --argjson wanted "${pipeline_labels}" '[.[] | select($wanted | index(.))] | length')"
@@ -14943,7 +14946,10 @@ PY
     # original latch comment is the durable record: never let generic stall
     # recovery auto-approve until a trusted release comment follows it.
     if [ "${phase}" = "ai:awaiting-approval" ]; then
-      if [ "${_standalone_staged_support_cache_available}" = "true" ] \
+      if [ "${_standalone_staged_support_comments_unavailable}" = "true" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_comments_unavailable phase=${phase} action=none"
+        continue
+      elif [ "${_standalone_staged_support_cache_available}" = "true" ] \
         && ! comments_json="$(_staged_support_comments_for_guard \
           "${issue_num}" "${comments_json}" "true")"; then
         echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_comments_unavailable phase=${phase} action=none"
