@@ -10538,16 +10538,64 @@ comprehensive_cycle_metadata_json() {
 # comprehensive_stable_tag_commit
 # Prints the commit the `stable` tag points at (dereferencing an annotated
 # tag), or "" when the tag cannot be resolved.
+# Prints the commit the `stable` tag points at (dereferencing an annotated
+# tag). Prints nothing and returns 0 when the tag does not exist; returns 2
+# when the lookup itself failed, so callers can tell "no tag yet" from "could
+# not read the tag" and never treat a transient API error as an absent tag.
 comprehensive_stable_tag_commit() {
-  local ref_json object_type object_sha
-  ref_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable" 2>/dev/null || true)"
+  local ref_json object_type object_sha tag_json err_file
+  err_file="$(mktemp)"
+  if ! ref_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable" 2>"${err_file}")"; then
+    if grep -qiE '404|not found' "${err_file}"; then
+      rm -f "${err_file}"
+      return 0
+    fi
+    cat "${err_file}" >&2
+    rm -f "${err_file}"
+    return 2
+  fi
+  rm -f "${err_file}"
   object_type="$(printf '%s' "${ref_json}" | jq -r '.object.type // empty' 2>/dev/null || true)"
   object_sha="$(printf '%s' "${ref_json}" | jq -r '.object.sha // empty' 2>/dev/null || true)"
   if [ "${object_type}" = "tag" ] && [[ "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-    gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" 2>/dev/null | jq -r '.object.sha // empty' 2>/dev/null || true
-  elif [ "${object_type}" = "commit" ]; then
+    if ! tag_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" 2>/dev/null)"; then
+      return 2
+    fi
+    printf '%s' "${tag_json}" | jq -r '.object.sha // empty' 2>/dev/null || return 2
+  elif [ "${object_type}" = "commit" ] && [[ "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
     printf '%s\n' "${object_sha}"
+  else
+    return 2
   fi
+}
+
+# comprehensive_promotion_hold_or_fail <reason> <now_epoch> <alert_text>
+#
+# Shared bounded hold for pre-dispatch checks that could not run this tick
+# (compare or tag lookup unavailable). Returns 1 (hold the merge) until
+# COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS have passed since the first hold,
+# then records the promotion as failed, alerts, and returns 0 (merge proceeds).
+comprehensive_promotion_hold_or_fail() {
+  local reason="$1"
+  local now="$2"
+  local alert_text="$3"
+  local gate_started
+  gate_started="$(jq -r '.comprehensive_promotion.gate_started_at // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  if ! [[ "${gate_started}" =~ ^[0-9]+$ ]]; then
+    jq --argjson t "${now}" '.comprehensive_promotion = {status: "pending", gate_started_at: $t}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} reason=${reason}"
+    return 1
+  fi
+  if [ $((now - gate_started)) -lt "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" ]; then
+    echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} reason=${reason}"
+    return 1
+  fi
+  jq --arg r "${reason}" '.comprehensive_promotion = {status: "failed", reason: ($r + " past the hold cap")}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=${reason}"
+  tg_notify "${alert_text}" "CRITICAL"
+  return 0
 }
 
 # comprehensive_forward_merge_pr_verified <sha> <subject>
@@ -10630,17 +10678,24 @@ comprehensive_untested_commits_json() {
       allowed="true"
     elif printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${author}," \
       || printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${committer},"; then
-      if ! files_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '[(.files // [])[] | .filename, (.previous_filename // empty)]')"; then
+      if ! files_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '{count: ((.files // []) | length), paths: [(.files // [])[] | .filename, (.previous_filename // empty)]}')"; then
         return 2
       fi
-      allowed="true"
-      while IFS= read -r path; do
-        [ -n "${path}" ] || continue
-        if comprehensive_cycle_is_code_path "${path}"; then
-          allowed="false"
-          break
-        fi
-      done < <(printf '%s' "${files_json}" | jq -r '.[]')
+      # The commit endpoint returns at most 300 files per page; a bot commit
+      # that large cannot be proven non-code from one page, so fail closed.
+      if [ "$(printf '%s' "${files_json}" | jq -r '.count')" -ge 300 ]; then
+        echo "::warning::Commit ${sha:0:7} lists 300+ files; treating it as untested rather than trusting a truncated file list." >&2
+        allowed="false"
+      else
+        allowed="true"
+        while IFS= read -r path; do
+          [ -n "${path}" ] || continue
+          if comprehensive_cycle_is_code_path "${path}"; then
+            allowed="false"
+            break
+          fi
+        done < <(printf '%s' "${files_json}" | jq -r '.paths[]')
+      fi
     fi
     if [ "${allowed}" != "true" ]; then
       untested="$(printf '%s' "${untested}" | jq -c --argjson r "${row}" '. + [$r]')"
@@ -10714,7 +10769,7 @@ comprehensive_promotion_release_outcome() {
   # since dispatch and now points at promote_sha or a descendant of it (the
   # release job commits the changelog assembly on top before tagging). A
   # concurrent unrelated release cannot satisfy this.
-  tag_now="$(comprehensive_stable_tag_commit)"
+  tag_now="$(comprehensive_stable_tag_commit 2>/dev/null || true)"
   if [[ "${tag_now}" =~ ^[0-9a-f]{40}$ ]] && [ "${tag_now}" != "${tag_before}" ] && [[ "${promote_sha}" =~ ^[0-9a-f]{40}$ ]]; then
     compare_status="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${promote_sha}...${tag_now}" --jq '.status // empty' 2>/dev/null || echo "")"
     case "${compare_status}" in
@@ -10798,20 +10853,10 @@ This verifying run's marker comment lacks \`apply-analysis-promote-sha\` / \`app
       untested_rc=$?
       set -e
       if [ "${untested_rc}" -ne 0 ]; then
-        local gate_started
-        gate_started="$(jq -r '.comprehensive_promotion.gate_started_at // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
-        if [ -z "${gate_started}" ]; then
-          jq --argjson t "${now}" '.comprehensive_promotion = {status: "pending", gate_started_at: $t}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-          echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} reason=quiescence_check_unavailable"
+        if ! comprehensive_promotion_hold_or_fail quiescence_check_unavailable "${now}" \
+          "Project #${TRACKING_NUM}: could not compare ${smoke_sha:0:7}...${promote_sha:0:7} within the hold cap; promotion abandoned, merge proceeds."; then
           return 1
         fi
-        if [ $((now - gate_started)) -lt "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" ]; then
-          echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} reason=quiescence_check_unavailable"
-          return 1
-        fi
-        jq '.comprehensive_promotion = {status: "failed", reason: "quiescence check unavailable past the hold cap"}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-        echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=quiescence_check_unavailable"
-        tg_notify "Project #${TRACKING_NUM}: could not compare ${smoke_sha:0:7}...${promote_sha:0:7} within the hold cap; promotion abandoned, merge proceeds." "CRITICAL"
         return 0
       fi
       local untested_count
@@ -10832,10 +10877,23 @@ Nothing is promoted. This project's final merge proceeds; the next daily promote
         tg_notify "Project #${TRACKING_NUM}: promotion deferred, ${untested_count} untested commit(s) on main since ${smoke_sha:0:7}. Next daily cycle re-proves." "WARNING"
         return 0
       fi
+      # The pre-dispatch tag position is what later proves the promotion
+      # moved the tag. A lookup failure must not be recorded as "no tag":
+      # hold (bounded) and retry next tick instead.
+      local tag_before tag_before_rc
+      set +e
+      tag_before="$(comprehensive_stable_tag_commit)"
+      tag_before_rc=$?
+      set -e
+      if [ "${tag_before_rc}" -ne 0 ]; then
+        if ! comprehensive_promotion_hold_or_fail stable_tag_lookup_unavailable "${now}" \
+          "Project #${TRACKING_NUM}: could not read the stable tag before dispatching the promotion within the hold cap; promotion abandoned, merge proceeds."; then
+          return 1
+        fi
+        return 0
+      fi
       local _dispatch_err
       _dispatch_err="$(mktemp)"
-      local tag_before
-      tag_before="$(comprehensive_stable_tag_commit)"
       if gh_retry gh workflow run "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" --ref "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" -f "target_sha=${promote_sha}" -f "dry_run=false" -f "skip_e2e=false" >/dev/null 2>"${_dispatch_err}"; then
         rm -f "${_dispatch_err}"
         jq --arg promote "${promote_sha}" --arg tag_before "${tag_before}" --argjson t "${now}" '.comprehensive_promotion = {status: "dispatched", promote_sha: $promote, dispatched_at: $t, tag_before: $tag_before}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"

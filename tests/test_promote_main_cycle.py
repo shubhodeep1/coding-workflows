@@ -245,6 +245,17 @@ def test_untrusted_baseline_marker_comment_is_ignored() -> None:
 	assert "Dispatching test-and-mark-stable.yml on main with gate_only=true" in proc.stdout
 
 
+def test_diverged_main_skips_before_the_smoke_gate() -> None:
+	# main no longer descends from the stable tag: the promotion's
+	# fast-forward would refuse it, so the tick must not spend a cycle.
+	state = {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"], status="diverged")}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert f"PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base={TAG_COMMIT} head={TIP} status=diverged" in proc.stdout
+	assert not final.get("dispatches")
+
+
 def test_tag_lookup_failure_fails_closed() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), {"tag_lookup_error": True})

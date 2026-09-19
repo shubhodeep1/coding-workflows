@@ -21,7 +21,8 @@
 #   AUTO_RELEASE_DISPATCHED sha=<tip>
 #
 # API calls per run (§15): 2 ref reads (+1 to dereference an annotated tag),
-# 2 workflow-runs lists, at most 1 dispatch.
+# 1 compare, 3 workflow-runs lists (the release gate, promote-main-to-stable,
+# and the legacy mark-stable path), at most 1 dispatch.
 #
 # Environment (all optional unless stated):
 #   GITHUB_REPOSITORY (required)        owner/repo

@@ -2353,6 +2353,9 @@ if args[0] == 'api':
 
 	m_tag_ref = re.search(r'/git/ref/tags/([^/]+)$', path)
 	if m_tag_ref:
+		if store.get('tag_ref_lookup_error'):
+			print('HTTP 503 simulated tag lookup failure', file=sys.stderr)
+			sys.exit(1)
 		tag_entry = (store.get('tag_refs') or {}).get(m_tag_ref.group(1))
 		if not tag_entry:
 			print('not found', file=sys.stderr)

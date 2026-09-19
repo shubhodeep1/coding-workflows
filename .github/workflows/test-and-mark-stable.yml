@@ -168,7 +168,8 @@ jobs:
           REF="${{ github.ref_name }}"
           if [ "${GATE_ONLY}" = "true" ]; then
             # Gate-only runs never tag or release, so any ref is safe: the
-            # test jobs check out this ref and the release/sync-to-main jobs
+            # test jobs check out the dispatched commit (github.sha, the tip
+            # of this ref at dispatch time) and the release/sync-to-main jobs
             # are skipped by their `!inputs.gate_only` conditions.
             echo "Dispatched from '${REF}' in gate_only mode — test jobs only, no release"
             echo "branch=${REF}" >> "$GITHUB_OUTPUT"
@@ -195,7 +196,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.source.outputs.branch }}
+          # The dispatched commit, not the branch name: the branch may move
+          # while this run is queued, and every job must test the same commit
+          # (the one the promote cycle records as the smoke-tested revision).
+          ref: ${{ github.sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -3506,7 +3510,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.source.outputs.branch }}
+          # The dispatched commit, not the branch name: the branch may move
+          # while this run is queued, and every job must test the same commit
+          # (the one the promote cycle records as the smoke-tested revision).
+          ref: ${{ github.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -4966,7 +4973,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.source.outputs.branch }}
+          # The dispatched commit, not the branch name: the branch may move
+          # while this run is queued, and every job must test the same commit
+          # (the one the promote cycle records as the smoke-tested revision).
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Ensure tag does not already exist

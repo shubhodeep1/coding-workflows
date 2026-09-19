@@ -22,6 +22,9 @@
 #   PROMOTE_CYCLE_SKIPPED reason=no_code_changes            nothing but non-code paths changed
 #   PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_last_cycle
 #   PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run
+#   PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor          main diverged from the stable
+#                                                           tag / last baseline; cannot
+#                                                           fast-forward, so no cycle
 #   PROMOTE_CYCLE_SKIPPED reason=insufficient_docs          fewer than PROMOTE_CYCLE_MIN_DOCS docs
 #   PROMOTE_CYCLE_SKIPPED reason=guard_unavailable          an API guard failed; fail closed
 #   PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=<id>
@@ -146,6 +149,7 @@ code_changes_between()
 	local head="$2"
 	local payload
 	CODE_CHANGES_OUT=""
+	CODE_CHANGES_STATUS=""
 	if ! payload="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/compare/${base}...${head}")"; then
 		return 2
 	fi
@@ -153,9 +157,20 @@ code_changes_between()
 	status="$(printf '%s' "${payload}" | jq -r '.status // empty')"
 	total_commits="$(printf '%s' "${payload}" | jq -r '.total_commits // 0')"
 	file_count="$(printf '%s' "${payload}" | jq -r '(.files // []) | length')"
-	if [ "${status}" = "identical" ] || [ "${status}" = "behind" ]; then
-		return 0
-	fi
+	CODE_CHANGES_STATUS="${status}"
+	case "${status}" in
+		ahead) ;;
+		identical|behind)
+			return 0
+			;;
+		*)
+			# `diverged` (or an unknown status): head does not descend from
+			# base, so the promotion's fast-forward preflight would refuse it
+			# anyway. Skip now instead of spending a smoke gate and a proving
+			# run on a tip that cannot be promoted.
+			return 3
+			;;
+	esac
 	if [ "${file_count}" -ge 300 ] || [ "${total_commits}" -ge 250 ]; then
 		CODE_CHANGES_OUT="(compare payload truncated: ${file_count} files, ${total_commits} commits — treated as a code change)"
 		return 0
@@ -238,6 +253,9 @@ require_code_changes()
 	code_changes_between "$1" "$2"
 	rc=$?
 	set -e
+	if [ "${rc}" -eq 3 ]; then
+		skip_cycle base_not_ancestor "base=$1 head=$2 status=${CODE_CHANGES_STATUS:-unknown}"
+	fi
 	if [ "${rc}" -ne 0 ]; then
 		skip_cycle guard_unavailable "compare=$1...$2"
 	fi

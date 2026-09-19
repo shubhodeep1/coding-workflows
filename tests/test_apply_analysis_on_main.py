@@ -50,6 +50,8 @@ if args[:1] == ["api"]:
         default_body = "\n".join("apply-analysis-source-doc: " + m for m in state.get("search_hits", {}))
         respond(state.get("issue_comments", [{"body": default_body, "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}]))
     if "/actions/workflows/" in path and "/runs" in path:
+        if state.get("orchestrate_runs_fail"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
         respond({"workflow_runs": state.get("orchestrate_runs", [])})
     if path.startswith("repos/") and "/issues?" in path:
         labels = path.split("labels=")[1].split("&")[0].replace("%3A", ":").replace("%2C", ",")
@@ -231,6 +233,16 @@ def test_in_flight_guard_can_exclude_the_completing_proving_issue() -> None:
 	assert len(final["dispatches"]) == 1
 
 
+def test_orchestrate_runs_lookup_failure_fails_closed() -> None:
+	docs = ["analysis/workflow-optimization-2026-08-30.md"]
+	state = {"open_tracking": [], "orchestrate_runs_fail": True}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=guard_unavailable lookup=workflow-runs:internal-orchestrate.yml" in proc.stdout
+	assert not final.get("dispatches")
+
+
 def test_orchestrate_run_in_flight_holds() -> None:
 	docs = ["analysis/workflow-optimization-2026-08-30.md"]
 	state = {"open_tracking": [], "orchestrate_runs": [{"id": 5, "status": "in_progress", "conclusion": None}]}
@@ -347,6 +359,16 @@ def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
 	assert "gh issue close" in create_step
 	assert '--remove-label "${TRACKING_LABELS_INPUT}"' in create_step
 	assert create_step.index("TRACKING_ISSUE_BINDING_FAILED") < create_step.index("exit 1")
+
+
+def test_gate_test_jobs_check_out_the_dispatched_commit() -> None:
+	gate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8"))
+	for job_name in ("resolve-version", "validate-scripts", "validate"):
+		steps = gate["jobs"][job_name]["steps"]
+		checkout = next(step for step in steps if str(step.get("name", "")).startswith("Checkout repository"))
+		assert checkout["with"]["ref"] == "${{ github.sha }}", job_name
+	text = (REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8")
+	assert "ref: ${{ needs.source.outputs.branch }}" not in text
 
 
 def test_release_job_is_serialised_and_refuses_a_stale_tip() -> None:

@@ -27,7 +27,10 @@
 #                                                            the processing report or
 #                                                            was dispatched before
 #   APPLY_ANALYSIS_SKIPPED reason=guard_unavailable          the dispatch-history
-#                                                            search failed; fail closed
+#                                                            search, a candidate's
+#                                                            comment read, or the
+#                                                            workflow-runs list
+#                                                            failed; fail closed
 #   APPLY_ANALYSIS_CANDIDATES count=<n> docs=<a,b>           list-only mode
 #   APPLY_ANALYSIS_DISPATCHED doc=<path> role=<role>
 #
@@ -37,8 +40,11 @@
 # outcome. A project that failed, or merged without deleting its doc, is a
 # human decision, not a credit burner.
 #
-# API calls per run (§15): 1 issue list, 1 workflow-runs list, ≤1 search per
-# candidate doc until the first unprocessed one, 1 dispatch.
+# API calls per run (§15): 1 issue list, 1 workflow-runs list, then per
+# candidate doc until the first unprocessed one: 1 search plus 1
+# issue-comments read per search hit (the trusted-author check; up to 20
+# hits per doc), and 1 dispatch. The common marker-present path therefore
+# costs 2 + 2·(docs already dispatched) + 1 calls.
 #
 # Environment (all optional unless stated):
 #   GITHUB_REPOSITORY (required)  owner/repo
@@ -213,13 +219,19 @@ doc_dispatched_before()
 	return 1
 }
 
+# orchestrate_run_in_flight
+# 0 when the orchestrator workflow has a queued or running run, 1 when it has
+# none, 2 when the runs list could not be read (callers fail closed).
 orchestrate_run_in_flight()
 {
-	local active
-	active="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}/runs?per_page=20" \
-		| jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
-	[[ "${active}" =~ ^[0-9]+$ ]] || active=0
-	[ "${active}" -gt 0 ]
+	local runs_json active
+	if ! runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}/runs?per_page=20")"; then
+		return 2
+	fi
+	active="$(printf '%s' "${runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length' 2>/dev/null || true)"
+	[[ "${active}" =~ ^[0-9]+$ ]] || return 2
+	[ "${active}" -gt 0 ] && return 0
+	return 1
 }
 
 # unprocessed_docs
@@ -293,9 +305,15 @@ if [ "$(printf '%s' "${in_flight_json}" | jq -r 'length')" -gt 0 ]; then
 	skip_dispatch project_in_flight "tracking_issues=$(printf '%s' "${in_flight_json}" | jq -r 'join(",")')"
 fi
 
-if orchestrate_run_in_flight; then
-	skip_dispatch orchestrate_run_in_flight "workflow=${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}"
-fi
+set +e
+orchestrate_run_in_flight
+orchestrate_run_in_flight_rc=$?
+set -e
+case "${orchestrate_run_in_flight_rc}" in
+	0) skip_dispatch orchestrate_run_in_flight "workflow=${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}" ;;
+	1) ;;
+	*) skip_dispatch guard_unavailable "lookup=workflow-runs:${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}" ;;
+esac
 
 if ! compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" >/dev/null; then
 	skip_dispatch no_docs "glob=${APPLY_ANALYSIS_DOC_GLOB}"
