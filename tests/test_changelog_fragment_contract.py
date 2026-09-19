@@ -205,7 +205,10 @@ def test_release_assembly_fails_open() -> None:
 			"      - name: ", 1
 		)[0]
 		assert 'if [ "${DRY_RUN}" = "true" ]' in step
-		assert 'git reset --hard "origin/${SOURCE_BRANCH}"' in step
+		# Transient push failures still fail open, but only back onto the
+		# commit the gate tested, never onto a branch tip that moved.
+		assert 'git reset --hard "${RELEASE_TESTED_SHA}"' in step
+		assert "RELEASE_STALE_TIP" in step
 		assert "::warning::Could not push the assembled changelog" in step
 
 

@@ -357,7 +357,7 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 def test_judge_context_issue_numbers_are_normalized_without_globbing():
 	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	block_start_marker = '  MERGED_PR_SUMMARIES=""\n  OPEN_PR_SUMMARIES=""\n'
-	block_end_marker = '  unset _sorted_issue_nums _issue_status\n'
+	block_end_marker = '  unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left\n'
 	block_start_index = poller_source_text.index(block_start_marker)
 	block_end_index = poller_source_text.index(block_end_marker, block_start_index)
 	production_block = poller_source_text[
@@ -370,12 +370,21 @@ def test_judge_context_issue_numbers_are_normalized_without_globbing():
 		# unquoted shell expansion in the production block.
 		(worktree / "3").touch()
 		(worktree / "17").touch()
+		# The block reads each issue's wave status from STATE_FILE before the
+		# PR lookup (merged PRs are collected first, then open ones); an empty
+		# wave keeps every issue on the open pass, in sorted order.
+		state_file = worktree / "state.json"
+		state_file.write_text(json.dumps({"waves": [{"issues": []}]}), encoding="utf-8")
 		runner = worktree / "run-normalization.sh"
 		runner.write_text(
 			"#!/usr/bin/env bash\n"
 			"set -euo pipefail\n"
 			"LOOKUP_LOG=\"${1}\"\n"
 			"ISSUE_NUMS=\"${2-}\"\n"
+			f"STATE_FILE={str(state_file)!r}\n"
+			"WAVE_IDX=0\n"
+			"JUDGE_PR_DIFF_MAX_BYTES=65536\n"
+			"JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=524288\n"
 			"_issue_cross_ref_pr_number_last()\n"
 			"{\n"
 			"  printf '%s\\n' \"${1}\" >> \"${LOOKUP_LOG}\"\n"
@@ -772,6 +781,7 @@ def _run_poller(
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
 	env_overrides: dict[str, str] | None = None,
+	mock_store_extra: dict | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -1204,6 +1214,8 @@ def _run_poller(
 			"fail_security_pass_managed_issue_lookup": bool(fail_security_pass_managed_issue_lookup),
 			"security_pass_managed_issue_pages_raw": security_pass_managed_issue_pages_raw,
 		}
+		if mock_store_extra:
+			store.update(mock_store_extra)
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
 		(runtime_dir / "tracking_issues.json").write_text(
@@ -1456,7 +1468,7 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		store['review_dispatches'].append({'workflow': wf, 'pr_number': pr_number, 'ref': ref})
 		save()
 		sys.exit(0)
-	if wf == 'test-and-mark-stable.yml':
+	if wf in ('test-and-mark-stable.yml', 'promote-main-to-stable.yml'):
 		if store.get('fail_release_dispatch'):
 			print('dispatch failed', file=sys.stderr)
 			sys.exit(1)
@@ -2212,6 +2224,9 @@ if args[0] == 'api':
 		if pr is None:
 			print('{}')
 			sys.exit(0)
+		if any('application/vnd.github.diff' in arg for arg in args) and 'diff' in pr:
+			print(pr.get('diff', ''), end='')
+			sys.exit(0)
 		if method == 'PATCH':
 			payload = {}
 			if input_file:
@@ -2266,6 +2281,7 @@ if args[0] == 'api':
 				'mergeable_state': pr.get('mergeable_state', ''),
 				'merged': pr.get('merged', False),
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
+				'merge_commit_sha': pr.get('merge_commit_sha'),
 				'labels': [{'name': label} for label in pr.get('labels', [])],
 				'title': pr.get('title', ''),
 				'body': pr.get('body', ''),
@@ -2380,6 +2396,35 @@ if args[0] == 'api':
 		print(json.dumps({'ref': ref, 'object': {'sha': sha or 'mocksha'}}))
 		sys.exit(0)
 
+	m_tag_ref = re.search(r'/git/ref/tags/([^/]+)$', path)
+	if m_tag_ref:
+		if store.get('tag_ref_lookup_error'):
+			print('HTTP 503 simulated tag lookup failure', file=sys.stderr)
+			sys.exit(1)
+		tag_entry = (store.get('tag_refs') or {}).get(m_tag_ref.group(1))
+		if not tag_entry:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		payload = {'ref': 'refs/tags/' + m_tag_ref.group(1), 'object': {'type': tag_entry.get('type', 'commit'), 'sha': tag_entry['sha']}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
+	m_tag_obj = re.search(r'/git/tags/([0-9a-f]{40})$', path)
+	if m_tag_obj:
+		commit = (store.get('tag_objects') or {}).get(m_tag_obj.group(1))
+		if not commit:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		payload = {'object': {'type': 'commit', 'sha': commit}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
 	m = re.search(r'/git/ref/heads/(.+)$', path)
 	if m:
 		encoded_branch = m.group(1)
@@ -2449,6 +2494,18 @@ if args[0] == 'api':
 			print(json.dumps(events))
 		sys.exit(0)
 
+	m_commit = re.search(r'/commits/([0-9a-f]{40})$', path)
+	if m_commit:
+		files = [{'filename': f} for f in (store.get('commit_files') or {}).get(m_commit.group(1), [])]
+		payload = {'sha': m_commit.group(1), 'files': files}
+		if jq:
+			import subprocess as _sp
+			p = _sp.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
+
 	m = re.search(r'/commits/([^/]+)/check-runs(\?.*)?$', path)
 	if m:
 		sha = m.group(1)
@@ -2490,6 +2547,8 @@ if args[0] == 'api':
 		else:
 			ahead_by = int(store.get('compare_ahead_by', 0))
 		compare_payload = {'ahead_by': ahead_by, 'behind_by': 0}
+		_range = path.split('/compare/', 1)[1]
+		compare_payload['status'] = (store.get('compare_status_by_range') or {}).get(_range) or ('identical' if ahead_by == 0 else 'ahead')
 		# Optional commit topology for the backpressure work-commit count:
 		# 'compare_commit_parent_counts' is a list of per-commit parent
 		# counts (1 = squash/regular commit, 2 = merge commit such as the
@@ -2498,7 +2557,10 @@ if args[0] == 'api':
 		# and falls back to raw ahead_by — the pre-existing semantics that
 		# older tests pin.
 		parent_counts = store.get('compare_commit_parent_counts')
-		if parent_counts is not None:
+		if store.get('compare_commits_detail') is not None:
+			compare_payload['commits'] = list(store['compare_commits_detail'])
+			compare_payload['total_commits'] = int(store.get('compare_total_commits', len(compare_payload['commits'])))
+		elif parent_counts is not None:
 			compare_payload['commits'] = [
 				{'sha': 'c%04d' % idx, 'parents': [{'sha': 'p%d' % j} for j in range(int(n))]}
 				for idx, n in enumerate(parent_counts)
@@ -2590,9 +2652,12 @@ if args[0] == 'api':
 		sys.stdout.write(output)
 		sys.exit(0)
 
-	m = re.search(r'/actions/workflows/[^/]+/runs', path)
+	m = re.search(r'/actions/workflows/([^/]+)/runs', path)
 	if m:
 		runs = store.get('validation_workflow_runs', [])
+		by_file = store.get('workflow_runs_by_file') or {}
+		if m.group(1) in by_file:
+			runs = by_file[m.group(1)]
 		result = {'workflow_runs': runs, 'total_count': len(runs)}
 		if jq:
 			import subprocess as _sp
@@ -3329,6 +3394,10 @@ sys.exit(proc.returncode)
 		result["stderr"] = proc.stderr
 		judge_prompt_path = runtime_dir / "judge_prompt.txt"
 		result["judge_prompt"] = judge_prompt_path.read_text(encoding="utf-8") if judge_prompt_path.exists() else ""
+		result["rb_judge_prompts"] = {
+			path.stem.removeprefix("rb_judge_prompt_"): path.read_text(encoding="utf-8")
+			for path in runtime_dir.glob("rb_judge_prompt_*.txt")
+		}
 		result["security_audit_capture"] = (
 			json.loads(security_audit_capture.read_text(encoding="utf-8"))
 			if security_audit_capture.exists()
@@ -8877,12 +8946,46 @@ def test_comprehensive_pending_complete_dispatches_release_with_metadata():
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert dispatch["version_tag"] == "v9.9.9"
 	assert dispatch["test_repo"] == "owner/release-tests"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
+def test_comprehensive_pending_complete_honours_legacy_release_workflow_override():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 353,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"COMPREHENSIVE_RELEASE_WORKFLOW_FILE": "test-and-mark-stable.yml",
+			"COMPREHENSIVE_RELEASE_WORKFLOW_REF": "stable",
+		},
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert len(result["release_dispatches"]) == 1
+	dispatch = result["release_dispatches"][0]
+	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
+	assert dispatch["dry_run"] == "false"
 
 
 def test_comprehensive_pending_complete_dispatches_release_without_optional_metadata():
@@ -8910,8 +9013,8 @@ def test_comprehensive_pending_complete_dispatches_release_without_optional_meta
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert "version_tag" not in dispatch
 	assert "test_repo" not in dispatch
@@ -8943,8 +9046,8 @@ def test_comprehensive_pending_already_complete_dispatches_release():
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
 
@@ -9094,6 +9197,71 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 		pr.get("headRefName", "").startswith("fix/10-followup-") and pr.get("baseRefName") == "main"
 		for pr in followup_prs
 	)
+
+
+def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	huge_line = "rb-bundle-" + ("x" * 5000)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 77},
+		prs=[{
+			"number": 77,
+			"state": "open",
+			"merged": False,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "ordinary PR body",
+			"diff": huge_line,
+		}],
+		codex_json={
+			"action": "fix",
+			"justification": "apply fixes",
+			"fix_description": "none",
+			"remaining_issues_summary": "none",
+		},
+		env_overrides={"JUDGE_PR_DIFF_MAX_BYTES": "2000"},
+	)
+	prompt = result["rb_judge_prompts"]["10"]
+	assert "[NOTE: PR diff is " in prompt
+	assert "after the 1000-line cap; truncated to a prefix within 2000 bytes" in prompt
+	assert "x" * 2001 not in prompt
+	assert "Review-blocked judge prompt size: " in result["stdout"]
+	assert "JUDGE_PR_DIFF_MAX_BYTES=2000" in result["stdout"]
+
+
+def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_bodies={10: "oversized-review-blocked-body-" + ("x" * 1_048_576)},
+		issue_linked_prs={10: 77},
+		prs=[{
+			"number": 77,
+			"state": "open",
+			"merged": False,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	stdout = result["stdout"]
+	assert "Review-blocked judge prompt for issue #10 exceeds codex's 1048576-character stdin cap; skipping 2 attempts" in stdout
+	assert "Review-blocked judge attempt " not in stdout
+	assert "::warning::Review-blocked judge failed for issue #10" in stdout
 
 
 def test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable():
@@ -13856,6 +14024,158 @@ def test_judge_prompt_includes_harness_validation_context():
 	assert "Latest validation raw status: harness_error" in prompt
 	assert "Harness-broken label present: true" in prompt
 	assert "Judge note: the latest validation failure is classified as a harness/infrastructure defect" in prompt
+
+
+def test_judge_prompt_caps_embedded_pr_diffs_by_bytes():
+	"""Regression for tele-funtoken-msg-scoring#3928 / run 35425771769: a
+	merged PR whose diff is a handful of huge single lines passes the
+	500-line cap untouched, and two such PRs pushed the judge prompt past
+	codex's 1,048,576-character stdin cap. JUDGE_PR_DIFF_MAX_BYTES must cut
+	each diff, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES must bound the sum across the
+	prompt (merged PRs first, sorted issue order), every cut must be
+	labelled for the judge, and the poller must log the prompt size."""
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 3
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": 10, "status": "merged"},
+		{"id": "issue-2", "github_issue": 11, "status": "merged"},
+		{"id": "issue-3", "github_issue": 12, "status": "merged"},
+	]
+	state["issue_number_map"] = {"issue-1": 10, "issue-2": 11, "issue-3": 12}
+	# One "diff" line far larger than the per-PR cap, like a minified bundle.
+	huge_line = "bundle-" + ("x" * 5000)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"], 11: ["ai:merged"], 12: ["ai:merged"]},
+		issue_linked_prs={10: 77, 11: 78, 12: 79},
+		prs=[
+			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "body": huge_line},
+			{"number": 78, "state": "closed", "merged": True, "headRefName": "ai/issue-11", "body": huge_line},
+			{"number": 79, "state": "closed", "merged": True, "headRefName": "ai/issue-12", "body": huge_line},
+		],
+		codex_json={
+			"status": "in_progress",
+			"justification": "wave verified",
+			"assessment": "ok",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+		env_overrides={
+			"JUDGE_PR_DIFF_MAX_BYTES": "2000",
+			"JUDGE_PR_DIFFS_TOTAL_MAX_BYTES": "2500",
+		},
+	)
+	prompt = result["judge_prompt"]
+	assert "--- PR #77 (Issue #10) ---" in prompt
+	assert "--- PR #78 (Issue #11) ---" in prompt
+	assert "--- PR #79 (Issue #12) ---" in prompt
+	merged_block = prompt.partition("=== MERGED PR DIFFS (truncated; cache-stable) ===")[2].partition("=== WAVE 1 COMPLETION STATUS ===")[0]
+	# Per-PR cap: the first PR gets the full 2000 bytes, the second only the
+	# 500 bytes left in the shared budget, and the third is elided outright.
+	assert "truncated to a prefix within 2000 bytes (JUDGE_PR_DIFF_MAX_BYTES=2000, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)" in merged_block
+	assert "truncated to a prefix within 500 bytes (JUDGE_PR_DIFF_MAX_BYTES=2000, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)" in merged_block
+	assert "[NOTE: PR diff elided — the shared judge PR-diff budget (JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500 bytes) is exhausted" in merged_block
+	# The sum of embedded diff bytes never exceeds the shared budget; the
+	# 5 KB single lines are gone, only headers and notes remain on top.
+	assert len(merged_block.encode("utf-8")) < 2500 + 1500, len(merged_block)
+	assert merged_block.count("bundle-") == 2
+	assert "x" * 2001 not in merged_block
+	# Merged-first ordering by issue number: PR #77 must precede #78 and #79.
+	assert merged_block.index("--- PR #77 ") < merged_block.index("--- PR #78 ") < merged_block.index("--- PR #79 ")
+	stdout = result["stdout"]
+	assert "Judge context: PR #77 (issue #10) diff truncated from" in stdout
+	assert "Judge context: PR #79 (issue #12) diff elided — JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500 budget exhausted" in stdout
+	assert "Judge prompt size: " in stdout
+	assert "characters; codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=2000, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)." in stdout
+	assert "::warning::Judge prompt for #192" not in stdout
+	assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_judge_diff_truncation_failure_is_reported_to_caller():
+	"""The caller must be able to elide a diff when both truncators fail."""
+	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	block_start_index = poller_source_text.index("_judge_truncate_pr_diff_file()\n")
+	block_end_marker = "\n}\n\nextract_judge_json_with_status()"
+	block_end_index = poller_source_text.index(block_end_marker, block_start_index) + 3
+	function_source = poller_source_text[block_start_index:block_end_index]
+	with tempfile.TemporaryDirectory() as td:
+		test_root = Path(td)
+		fake_bin = test_root / "bin"
+		fake_bin.mkdir()
+		_write_exec(fake_bin / "python3", "#!/usr/bin/env bash\nexit 1\n")
+		_write_exec(fake_bin / "head", "#!/usr/bin/env bash\nexit 1\n")
+		diff_path = test_root / "pr.diff"
+		diff_path.write_bytes(b"x" * 100)
+		runner_path = test_root / "run.sh"
+		runner_path.write_text(
+			"#!/usr/bin/env bash\n"
+			f"{function_source}\n"
+			"_judge_truncate_pr_diff_file \"$1\" 10\n"
+			"printf '%s' \"$?\"\n",
+			encoding="utf-8",
+		)
+		proc = subprocess.run(
+			["bash", str(runner_path), str(diff_path)],
+			check=True,
+			capture_output=True,
+			text=True,
+			env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+		)
+		assert proc.stdout == "1"
+		assert diff_path.read_bytes() == b"x" * 100
+	assert 'if _judge_truncate_pr_diff_file "${_pr_diff_capped_tmp}" "${_pr_diff_allowance}"; then' in poller_source_text
+	assert "eliding ${_pr_diff_bytes} bytes instead of embedding an over-budget payload" in poller_source_text
+
+
+def test_judge_prompt_over_character_cap_skips_codex_attempts():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["project_body_snapshot"] = "oversized-project-body-" + ("x" * 1_048_576)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"]},
+	)
+	stdout = result["stdout"]
+	assert "exceeds codex's 1048576-character stdin cap; skipping 2 attempts" in stdout
+	assert "Judge attempt " not in stdout
+	assert "::error::Judge failed for tracking issue #192" in stdout
+
+
+def test_judge_prompt_keeps_small_pr_diffs_intact_under_default_byte_caps():
+	"""Ordinary diffs sit far below the default caps and must be embedded
+	verbatim, with no truncation note and no budget log line."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 77},
+		prs=[
+			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "body": "ordinary small diff"},
+		],
+		codex_json={
+			"status": "in_progress",
+			"justification": "wave verified",
+			"assessment": "ok",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	prompt = result["judge_prompt"]
+	assert "--- PR #77 (Issue #10) ---" in prompt
+	assert "ordinary small diff" in prompt
+	assert "[NOTE: PR diff" not in prompt
+	assert "Judge context: PR #77" not in result["stdout"]
+	assert "JUDGE_PR_DIFF_MAX_BYTES=65536, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=524288" in result["stdout"]
 
 
 def test_judge_repeat_fingerprint_penalty_is_suppressed_after_harness_error():

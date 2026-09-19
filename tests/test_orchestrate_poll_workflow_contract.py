@@ -26,6 +26,22 @@ def test_stall_control_env_defaults_are_declared() -> None:
 	assert "RECOVERY_COUNT_DISTINCT_FINDINGS: ${{ vars.RECOVERY_COUNT_DISTINCT_FINDINGS || 'false' }}" in wf
 
 
+def test_judge_pr_diff_byte_budgets_are_declared_and_consumed() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert "JUDGE_PR_DIFF_MAX_BYTES: ${{ vars.JUDGE_PR_DIFF_MAX_BYTES || '65536' }}" in wf
+	assert "JUDGE_PR_DIFFS_TOTAL_MAX_BYTES: ${{ vars.JUDGE_PR_DIFFS_TOTAL_MAX_BYTES || '524288' }}" in wf
+	assert 'JUDGE_PR_DIFF_MAX_BYTES="${JUDGE_PR_DIFF_MAX_BYTES:-65536}"' in poller
+	assert 'JUDGE_PR_DIFFS_TOTAL_MAX_BYTES="${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES:-524288}"' in poller
+	assert 'if _judge_truncate_pr_diff_file "${_pr_diff_capped_tmp}" "${_pr_diff_allowance}"; then' in poller
+	assert 'JUDGE_PROMPT_CHARS="$(LC_ALL=C.UTF-8 wc -m' in poller
+	assert "Judge prompt size: ${JUDGE_PROMPT_BYTES} bytes (${JUDGE_PROMPT_CHARS} characters; codex stdin cap: 1048576 characters" in poller
+	assert 'if [ "${JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then' in poller
+	assert "after the 1000-line cap; truncated to a prefix within ${JUDGE_PR_DIFF_MAX_BYTES} bytes" in poller
+	assert "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (${RB_JUDGE_PROMPT_CHARS} characters" in poller
+	assert 'if [ "${RB_JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then' in poller
+
+
 def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt; do" in wf
