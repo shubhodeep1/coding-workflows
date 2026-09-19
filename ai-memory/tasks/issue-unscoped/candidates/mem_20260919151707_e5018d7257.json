@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh: 12746-12784, 13724 | severity=high | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The unresolved staged-support latch guard is applied only to the auto_approve branch, allowing the stall-judge-driven retrigger_implement branch to post /approved without checking the latch.\n  WHY: An unresolved latch on an ai:awaiting-approval issue can therefore be bypassed and implementation re-entered despite the human gate remaining unresolved.\n- .github/workflows/implement.yml: 4073-4074 | severity=high | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: SSB_AUTO_RELEASE_SAFE is sourced only from steps.commit_changes.outputs.staged_support_auto_release_safe while SSB_REASON also accepts the preflight destructive guard output.\n  WHY: Reviewers disagree on severity, but both identify that a preflight-detected staged-support rebase conflict can omit the machine-readable latch marker, causing the poller sweep to skip the issue and leave it parked for human intervention.\n\n- scripts/orchestrate_poll_process.sh: 14905-14912 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The GraphQL-cache-miss fallback for standalone candidates now skips the candidate when the comments fetch fails instead of failing open.\n  WHY: A transient comments-API outage blocks all standalone recovery actions for that candidate, not only the auto-approval path.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh: 13724 and 12746-12784 | severity=MAJOR | confidence=3\n  PROBLEM: The staged-support latch guard is applied only inside the auto_approve case branch. When invoke_stall_judge returns retrigger_implement as the effective action, execute_stall_recovery_action at line 13724 dispatches to the retrigger_implement case (lines 12746-12784), which posts /approved without calling _staged_support_latch_release_incomplete.\n  WHY: A half-released ai:awaiting-approval issue whose unresolved staged-support latch survived the auto_approve guard and then entered stall-judge escalation can have the judge return retrigger_implement, which posts an unguarded /approved and re-enters implementation despite the human gate never being resolved.\n- .github/workflows/implement.yml: 4074 | severity=MAJOR | confidence=2\n  PROBLEM: SSB_AUTO_RELEASE_SAFE is sourced only from steps.commit_changes.outputs.staged_support_auto_release_safe with no preflight fallback, while SSB_REASON at line 4072 accepts both preflight and commit_changes outputs.\n  WHY: A genuine 3-way rebase conflict caught by the preflight guard produces an ai:needs-human latch comment without the machine-readable marker, so the poller's release_staged_support_needs_human_latches sweep skips it with reason=no_staged_support_latch_comment, leaving the issue parked indefinitely when the engine has already been fixed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh: lines 14905-14912 (else branch of the standalone stall-recovery candidate loop, introduced in LAST RUN DIFF) | severity=NIT | confidence=3\n  PROBLEM: The GraphQL-cache-miss fallback for standalone candidates was changed from a fail-open comments fetch (gh_retry gh api ... || echo '[]') to a fail-closed _staged_support_comments_for_guard call that skips the candidate entirely when the comments fetch fails.\n  WHY: This blocks every recovery action for that candidate, not just the auto-approval path the latch guard was built for, so recovery is delayed by one poll tick per outage window.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: execute_stall_recovery_action, retrigger_implement case branch (around line 12786) | severity=MAJOR | confidence=3\n  PROBLEM: The unresolved-staged-support-latch guard (_staged_support_latch_release_incomplete) added in the last run is applied only inside the auto_approve case branch. The retrigger_implement branch also posts /approved but has no equivalent guard.\n  WHY: When stall-judge-driven recovery returns retrigger_implement for an ai:awaiting-approval issue whose half-applied release left an unresolved staged-support latch, the retrigger_implement branch posts /approved without checking the latch, defeating the containment.\n- .github/workflows/implement.yml: lines 4073-4074 | severity=NIT | confidence=2\n  PROBLEM: SSB_AUTO_RELEASE_SAFE is sourced only from steps.commit_changes.outputs.staged_support_auto_release_safe, while SSB_REASON accepts a fallback from steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict.\n  WHY: When the preflight destructive guard detects a genuine three-way staged-support rebase conflict before the commit_changes step runs, the handler omits the machine-readable latch marker and the poller sweep skips the issue with reason=no_staged_support_latch_comment.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "a32f03ce27c5f20d7a3808b75e6267f0718bc4b80cd81e3908f01f83f40459dd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4133,
+    "run_id": "35447407826",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35447407826",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919151707_e5018d7257",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4133,
+    "run_id": "35447407826"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-19T15:17:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
