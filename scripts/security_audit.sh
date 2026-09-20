@@ -1343,8 +1343,10 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 	confidence = raw_finding.get("confidence")
 	line = raw_finding.get("line")
 
+	if not finding_id:
+		return None, "finding_id is required"
 	if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,200}", finding_id):
-		return None, "finding_id must use 1-201 safe display characters"
+		finding_id = "finding-" + hashlib.sha256(finding_id.encode("utf-8")).hexdigest()
 	if not category:
 		return None, f"{finding_id}: owasp_or_stride_category is required"
 	if severity not in severity_rank:
@@ -1373,9 +1375,8 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		normalized_file = normalized_file[2:]
 	if not normalized_file or normalized_file == ".":
 		return None, f"{finding_id}: file must resolve to a repository file"
-	if any(character in normalized_file for character in ("*", "?", "[", "]", "`")) \
-		or any(ord(character) < 32 or ord(character) == 127 for character in normalized_file):
-		return None, f"{finding_id}: file must be one exact metadata-safe repository path"
+	if any(ord(character) < 32 or ord(character) == 127 for character in normalized_file):
+		return None, f"{finding_id}: file contains a control character"
 
 	resolved_path = (repo_root / normalized_file).resolve()
 	try:
@@ -1384,6 +1385,8 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		return None, f"{finding_id}: file escapes repository root"
 	if not resolved_path.is_file():
 		return None, f"{finding_id}: file does not exist in checkout"
+	if any(character in normalized_file for character in ("*", "?", "[", "]", "`")):
+		fail(f"{finding_id}: tracked file path cannot be encoded safely in generated advisory metadata")
 
 	try:
 		line_count = len(resolved_path.read_text(encoding="utf-8", errors="replace").splitlines())
@@ -1498,6 +1501,10 @@ blame_header_pattern = re.compile(r"^\^?([0-9a-f]{40,64}) [0-9]+ [0-9]+(?: [0-9]
 ancestry_cache: dict[str, bool | None] = {}
 ownership_warned_files: set[str] = set()
 causal_diff_cache: dict[str, tuple[bool | None, list[tuple[int, int, bool, bool, bool, bool]]]] = {}
+cross_file_causal_change_cache: tuple[bool, bool] | None = None
+guard_deletion_pattern = re.compile(
+	r"(?i)\b(?:auth\w*|permission|privilege|admin|guard|middleware|before_request|require_\w+|login_required|is_authenticated|authenticated|authori[sz]e|can_access|forbidden|check_(?:user|permission|access)|role|access[_ -]?control|policy|allow|deny)\b"
+)
 
 
 def warn_ownership_once(file_name: str) -> None:
@@ -1512,10 +1519,47 @@ def warn_ownership_once(file_name: str) -> None:
 
 def finding_is_project_owned(finding: dict[str, object]) -> bool:
 	"""Return True unless every blamed line is provably owned by the base."""
+	global cross_file_causal_change_cache
 	if line_ownership_mode != "project-lines":
 		return True
 	file_name = str(finding["file"])
 	line_number = int(finding["line"])
+	if cross_file_causal_change_cache is None:
+		try:
+			cross_file_causal_result = subprocess.run(
+				[
+					"git", "diff", "--no-color", "--no-ext-diff", "--unified=0",
+					f"{audit_scope_base_sha}..{audit_scope_head_sha}",
+				],
+				cwd=repo_root,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+				errors="replace",
+				check=False,
+			)
+		except (OSError, ValueError):
+			cross_file_causal_change_cache = (False, False)
+		else:
+			cross_file_guard_deleted = any(
+				diff_line.startswith("-")
+				and not diff_line.startswith("---")
+				and (
+					re.match(r"^-\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line) is not None
+					or guard_deletion_pattern.search(diff_line[1:]) is not None
+				)
+				for diff_line in cross_file_causal_result.stdout.splitlines()
+			)
+			cross_file_causal_change_cache = (
+				cross_file_causal_result.returncode == 0,
+				cross_file_guard_deleted,
+			)
+	cross_file_causal_ok, cross_file_guard_deleted = cross_file_causal_change_cache
+	if not cross_file_causal_ok:
+		warn_ownership_once(file_name)
+		return True
+	if cross_file_guard_deleted:
+		return True
 	if file_name not in causal_diff_cache:
 		try:
 			causal_result = subprocess.run(
@@ -1555,7 +1599,7 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 					current_hunk["has_deletion"] = True
 					if re.match(r"^-\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line):
 						current_hunk["has_control_change"] = True
-					if re.search(r"(?i)\b(?:auth\w*|permission|privilege|admin|guard|middleware|before_request|require_\w+|login_required|is_authenticated|authenticated|authori[sz]e|can_access|forbidden|check_(?:user|permission|access)|role|access[_ -]?control|policy|allow|deny)\b", diff_line):
+					if guard_deletion_pattern.search(diff_line[1:]):
 						current_hunk["has_guard_deletion"] = True
 				elif current_hunk is not None and diff_line.startswith("+") and not diff_line.startswith("+++"):
 					if re.match(r"^\+\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line):
@@ -1657,7 +1701,9 @@ excluded_findings: list[dict[str, str]] = []
 low_confidence_findings: list[str] = []
 out_of_scope_findings: list[str] = []
 waived_findings: list[dict[str, str]] = []
+observed_finding_ids: set[str] = set()
 seen_ids: set[str] = set()
+seen_waiver_keys: set[str] = set()
 
 for raw_finding in raw_findings:
 	normalized_finding, error_message = normalize_finding(raw_finding)
@@ -1665,10 +1711,7 @@ for raw_finding in raw_findings:
 		invalid_findings.append({"error": error_message or "invalid finding"})
 		continue
 	finding_id = str(normalized_finding["finding_id"])
-	if finding_id in seen_ids:
-		invalid_findings.append({"error": f"{finding_id}: duplicate finding_id"})
-		continue
-	seen_ids.add(finding_id)
+	observed_finding_ids.add(finding_id)
 	if audit_scope_mode == "incremental" and str(normalized_finding["file"]) not in changed_files:
 		out_of_scope_findings.append(finding_id)
 		continue
@@ -1683,6 +1726,17 @@ for raw_finding in raw_findings:
 	if waived_id is not None:
 		waived_findings.append({"finding_id": finding_id, "waived_finding_id": waived_id})
 		continue
+	waiver_match_key = str(normalized_finding["waiver_match_key"])
+	if waiver_match_key in seen_waiver_keys:
+		invalid_findings.append({"error": f"{finding_id}: duplicate waiver_match_key"})
+		continue
+	if finding_id in seen_ids:
+		finding_id = "finding-" + waiver_match_key.removeprefix("sha256:")
+		if finding_id in seen_ids:
+			fail("finding_id collision after provenance-key canonicalization")
+		normalized_finding["finding_id"] = finding_id
+	seen_ids.add(finding_id)
+	seen_waiver_keys.add(waiver_match_key)
 	if not finding_is_project_owned(normalized_finding):
 		advisory_findings.append(normalized_finding)
 		continue
@@ -1705,7 +1759,7 @@ surfaced_finding_ids = {
 	str(finding["finding_id"])
 	for finding in [*kept_findings, *advisory_findings]
 }
-surfaced_finding_ids.update(set(prior_finding_ids_input) & seen_ids)
+surfaced_finding_ids.update(set(prior_finding_ids_input) & observed_finding_ids)
 verified_fixed_finding_ids = [
 	finding_id
 	for finding_id in prior_finding_ids_input
@@ -1984,7 +2038,10 @@ for finding in findings:
 		continue
 	finding_id = str(finding.get("finding_id") or "").strip()
 	waiver_match_key = str(finding.get("waiver_match_key") or "").strip()
-	if waiver_match_key in existing_waiver_keys or finding_id in existing_finding_ids:
+	if (
+		waiver_match_key in existing_waiver_keys
+		or (not waiver_match_key and finding_id in existing_finding_ids)
+	):
 		skipped_existing_count += 1
 		continue
 	if len(planned_followups) >= remaining_weekly_capacity:

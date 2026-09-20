@@ -816,14 +816,17 @@ def test_security_audit_filters_findings_and_caps_followups() -> None:
 	assert "low-confidence-finding" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "excluded-finding" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "invalid-path" not in "\n".join(final_state.get("issue_comment_bodies", []))
-	assert not any("high-finding-one" in body for body in final_state.get("issue_create_bodies", []))
-	assert any("high-finding-two" in body for body in final_state.get("issue_create_bodies", []))
+	assert any("high-finding-one" in body for body in final_state.get("issue_create_bodies", []))
+	assert not any("high-finding-two" in body for body in final_state.get("issue_create_bodies", []))
 
 
 def test_security_audit_findings_json_filters_without_github_side_effects() -> None:
+	unsafe_display_id = "A08/guard-removal"
+	normalized_unsafe_display_id = "finding-" + hashlib.sha256(unsafe_display_id.encode("utf-8")).hexdigest()
 	findings = [
 		_finding_payload("low-survivor", severity="low"),
 		_finding_payload("high-survivor", file_path="scripts/label_helpers.sh"),
+		_finding_payload(unsafe_display_id, category="A08:2021-Software and Data Integrity Failures"),
 		_finding_payload("low-confidence", confidence=7),
 		_finding_payload(
 			"excluded",
@@ -836,13 +839,31 @@ def test_security_audit_findings_json_filters_without_github_side_effects() -> N
 	project_spec = "Refs #3933\nLiteral {{REFERENCE_SECURITY_MONEY_LENS}} token stays unrendered.\n"
 	with tempfile.TemporaryDirectory(prefix="security-audit-json-") as td:
 		tmp_path = Path(td)
+		repo_dir, _first_sha, _head_sha = _git_fixture_repo(tmp_path)
+		fixture_scripts_dir = repo_dir / "scripts"
+		fixture_scripts_dir.mkdir()
+		for fixture_script_name in ("security_audit.sh", "label_helpers.sh", "gh_helpers.sh"):
+			shutil.copy2(REPO_ROOT / "scripts" / fixture_script_name, fixture_scripts_dir / fixture_script_name)
+		git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		git_env.update(
+			{
+				"GIT_AUTHOR_NAME": "t",
+				"GIT_AUTHOR_EMAIL": "t@example.invalid",
+				"GIT_COMMITTER_NAME": "t",
+				"GIT_COMMITTER_EMAIL": "t@example.invalid",
+			}
+		)
+		subprocess.run(["git", "add", "scripts"], cwd=repo_dir, env=git_env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "audit fixtures"], cwd=repo_dir, env=git_env, check=True)
 		output_path = tmp_path / "findings.json"
 		project_spec_path = tmp_path / "project.md"
 		project_spec_path.write_text(project_spec, encoding="utf-8")
 		proc, final_state = _run_security_audit(
 			{},
 			codex_output=json.dumps(findings),
+			cwd=repo_dir,
 			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
 				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
 				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
 			},
@@ -854,12 +875,16 @@ def test_security_audit_findings_json_filters_without_github_side_effects() -> N
 	assert final_state.get("label_create_args", []) == []
 	payload = json.loads(final_state["security_audit_findings_output"])
 	assert payload["schema_version"] == "security_audit_findings.v1"
-	assert [finding["finding_id"] for finding in payload["findings"]] == ["high-survivor", "low-survivor"]
+	assert [finding["finding_id"] for finding in payload["findings"]] == [
+		"high-survivor",
+		normalized_unsafe_display_id,
+		"low-survivor",
+	]
 	assert payload["advisory_findings"] == []
 	assert payload["verified_fixed_finding_ids"] == []
 	assert payload["counts"] == {
 		"advisory": 0,
-		"kept": 2,
+		"kept": 3,
 		"suppressed_excluded": 1,
 		"suppressed_invalid": 1,
 		"suppressed_low_confidence": 1,
@@ -874,6 +899,76 @@ def test_security_audit_findings_json_filters_without_github_side_effects() -> N
 	assert "=== END UNTRUSTED PROJECT SPECIFICATION ===" in prompt
 	project_spec_context = prompt.split("=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===\n", 1)[1]
 	assert project_spec_context.split("\n=== END UNTRUSTED PROJECT SPECIFICATION ===", 1)[0] == project_spec
+
+
+def test_security_audit_fails_closed_for_tracked_path_that_metadata_cannot_encode() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-special-path-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, _first_sha, _head_sha = _git_fixture_repo(tmp_path)
+		git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		git_env.update(
+			{
+				"GIT_AUTHOR_NAME": "t",
+				"GIT_AUTHOR_EMAIL": "t@example.invalid",
+				"GIT_COMMITTER_NAME": "t",
+				"GIT_COMMITTER_EMAIL": "t@example.invalid",
+			}
+		)
+		special_path = repo_dir / "rules[0].py"
+		special_path.write_text("ALLOW = False\n", encoding="utf-8")
+		subprocess.run(["git", "add", special_path.name], cwd=repo_dir, env=git_env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "special path"], cwd=repo_dir, env=git_env, check=True)
+		output_path = tmp_path / "findings.json"
+		proc, _final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([_finding_payload("special-path", file_path=special_path.name)]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			},
+		)
+
+	assert proc.returncode != 0
+	assert "tracked file path cannot be encoded safely" in proc.stderr
+	assert not output_path.exists()
+
+
+def test_security_audit_preserves_distinct_findings_with_colliding_display_ids() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-colliding-ids-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, _first_sha, head_sha = _git_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		findings = [
+			_finding_payload("duplicate-display-id", file_path="file_a.py"),
+			_finding_payload("duplicate-display-id", file_path="file_b.py"),
+		]
+		second_waiver_key = _fixture_waiver_key(
+			repo_dir,
+			head_sha,
+			"file_b.py",
+			1,
+			"A05:2021-Security Misconfiguration",
+		)
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps(findings),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [row["finding_id"] for row in payload["findings"]] == [
+		"duplicate-display-id",
+		"finding-" + second_waiver_key.removeprefix("sha256:"),
+	]
+	assert payload["counts"]["suppressed_invalid"] == 0
 
 
 def test_security_audit_explicit_diff_scope_filters_changed_files() -> None:
@@ -1140,6 +1235,65 @@ def test_security_audit_deleted_guard_keeps_unchanged_sink_blocking() -> None:
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
 	assert [row["finding_id"] for row in payload["findings"]] == ["deleted-guard"]
+	assert payload["advisory_findings"] == []
+
+
+def test_security_audit_cross_file_deleted_guard_keeps_sink_blocking() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-cross-file-guard-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = tmp_path / "repo"
+		repo_dir.mkdir()
+		git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		git_env.update(
+			{
+				"GIT_AUTHOR_NAME": "t",
+				"GIT_AUTHOR_EMAIL": "t@example.invalid",
+				"GIT_COMMITTER_NAME": "t",
+				"GIT_COMMITTER_EMAIL": "t@example.invalid",
+			}
+		)
+
+		def fixture_git(*args: str) -> str:
+			return subprocess.run(
+				["git", *args], cwd=repo_dir, env=git_env, check=True,
+				capture_output=True, text=True, encoding="utf-8",
+			).stdout.strip()
+
+		fixture_git("init", "-q")
+		(repo_dir / "auth.py").write_text("@login_required\ndef enforce_access():\n\treturn True\n", encoding="utf-8")
+		views_lines = ["def privileged_action(user):", "\treturn mutate_money_state()"]
+		views_lines.extend(f"FILLER_{line_number} = {line_number}" for line_number in range(3, 21))
+		(repo_dir / "views.py").write_text("\n".join(views_lines) + "\n", encoding="utf-8")
+		fixture_git("add", "auth.py", "views.py")
+		fixture_git("commit", "-q", "-m", "guarded base")
+		base_sha = fixture_git("rev-parse", "HEAD")
+		(repo_dir / "auth.py").write_text("def enforce_access():\n\treturn True\n", encoding="utf-8")
+		views_lines[-1] = "FILLER_20 = 'project change'"
+		(repo_dir / "views.py").write_text("\n".join(views_lines) + "\n", encoding="utf-8")
+		fixture_git("add", "auth.py", "views.py")
+		fixture_git("commit", "-q", "-m", "remove cross-file guard")
+		head_sha = fixture_git("rev-parse", "HEAD")
+		finding = _finding_payload("cross-file-guard", file_path="views.py", category="A01: Broken Access Control")
+		finding["line"] = 2
+		output_path = tmp_path / "findings.json"
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([finding]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": base_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_LINE_OWNERSHIP": "project-lines",
+				"SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES": "0",
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [row["finding_id"] for row in payload["findings"]] == ["cross-file-guard"]
 	assert payload["advisory_findings"] == []
 
 
