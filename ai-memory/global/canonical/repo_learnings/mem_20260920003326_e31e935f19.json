@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow and automation changes in this repository are typically protected by contract-focused tests.",
   "timestamps": {
     "created_at": "2026-09-20T00:33:26Z",
