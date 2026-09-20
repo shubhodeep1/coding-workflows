@@ -935,6 +935,29 @@ def test_security_audit_fails_closed_for_tracked_path_that_metadata_cannot_encod
 	assert not output_path.exists()
 
 
+def test_security_audit_fails_closed_when_finding_provenance_is_unavailable() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-no-provenance-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = tmp_path / "not-a-git-repository"
+		repo_dir.mkdir()
+		(repo_dir / "security.py").write_text("ALLOW = False\n", encoding="utf-8")
+		output_path = tmp_path / "findings.json"
+		proc, _final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([_finding_payload("missing-provenance", file_path="security.py")]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			},
+		)
+
+	assert proc.returncode != 0
+	assert "unable to derive immutable Git provenance" in proc.stderr
+	assert not output_path.exists()
+
+
 def test_security_audit_preserves_distinct_findings_with_colliding_display_ids() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-colliding-ids-") as fixture_td:
 		tmp_path = Path(fixture_td)
@@ -1260,14 +1283,17 @@ def test_security_audit_cross_file_deleted_guard_keeps_sink_blocking() -> None:
 			).stdout.strip()
 
 		fixture_git("init", "-q")
-		(repo_dir / "auth.py").write_text("@login_required\ndef enforce_access():\n\treturn True\n", encoding="utf-8")
+		(repo_dir / "auth.py").write_text(
+			"@tenant_gate\ndef enforce_access(user):\n\treturn True\n",
+			encoding="utf-8",
+		)
 		views_lines = ["def privileged_action(user):", "\treturn mutate_money_state()"]
 		views_lines.extend(f"FILLER_{line_number} = {line_number}" for line_number in range(3, 21))
 		(repo_dir / "views.py").write_text("\n".join(views_lines) + "\n", encoding="utf-8")
 		fixture_git("add", "auth.py", "views.py")
 		fixture_git("commit", "-q", "-m", "guarded base")
 		base_sha = fixture_git("rev-parse", "HEAD")
-		(repo_dir / "auth.py").write_text("def enforce_access():\n\treturn True\n", encoding="utf-8")
+		(repo_dir / "auth.py").write_text("def enforce_access(user):\n\treturn True\n", encoding="utf-8")
 		views_lines[-1] = "FILLER_20 = 'project change'"
 		(repo_dir / "views.py").write_text("\n".join(views_lines) + "\n", encoding="utf-8")
 		fixture_git("add", "auth.py", "views.py")
@@ -1295,6 +1321,143 @@ def test_security_audit_cross_file_deleted_guard_keeps_sink_blocking() -> None:
 	payload = json.loads(final_state["security_audit_findings_output"])
 	assert [row["finding_id"] for row in payload["findings"]] == ["cross-file-guard"]
 	assert payload["advisory_findings"] == []
+
+
+def test_security_audit_unrelated_control_deletion_does_not_block_base_owned_sink() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-unrelated-control-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = tmp_path / "repo"
+		repo_dir.mkdir()
+		git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		git_env.update(
+			{
+				"GIT_AUTHOR_NAME": "t",
+				"GIT_AUTHOR_EMAIL": "t@example.invalid",
+				"GIT_COMMITTER_NAME": "t",
+				"GIT_COMMITTER_EMAIL": "t@example.invalid",
+			}
+		)
+
+		def fixture_git(*args: str) -> str:
+			return subprocess.run(
+				["git", *args], cwd=repo_dir, env=git_env, check=True,
+				capture_output=True, text=True, encoding="utf-8",
+			).stdout.strip()
+
+		fixture_git("init", "-q")
+		module_path = repo_dir / "module.py"
+		module_path.write_text(
+			"def choose(flag):\n"
+			"\tif flag:\n"
+			"\t\treturn 1\n"
+			"\treturn 0\n"
+			"\n"
+			"def privileged_action(user):\n"
+			"\treturn mutate_money_state()\n",
+			encoding="utf-8",
+		)
+		fixture_git("add", "module.py")
+		fixture_git("commit", "-q", "-m", "base")
+		base_sha = fixture_git("rev-parse", "HEAD")
+		module_path.write_text(
+			"def choose(flag):\n"
+			"\treturn 1 if flag else 0\n"
+			"\n"
+			"def privileged_action(user):\n"
+			"\treturn mutate_money_state()\n",
+			encoding="utf-8",
+		)
+		fixture_git("add", "module.py")
+		fixture_git("commit", "-q", "-m", "refactor unrelated control flow")
+		head_sha = fixture_git("rev-parse", "HEAD")
+		finding = _finding_payload("base-owned-sink", file_path="module.py", category="A01: Broken Access Control")
+		finding["line"] = 5
+		output_path = tmp_path / "findings.json"
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([finding]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": base_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_LINE_OWNERSHIP": "project-lines",
+				"SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES": "0",
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert payload["findings"] == []
+	assert [row["finding_id"] for row in payload["advisory_findings"]] == ["base-owned-sink"]
+
+
+def test_security_audit_delta_ownership_ignores_guard_deleted_before_since_commit() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-delta-ownership-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = tmp_path / "repo"
+		repo_dir.mkdir()
+		git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		git_env.update(
+			{
+				"GIT_AUTHOR_NAME": "t",
+				"GIT_AUTHOR_EMAIL": "t@example.invalid",
+				"GIT_COMMITTER_NAME": "t",
+				"GIT_COMMITTER_EMAIL": "t@example.invalid",
+			}
+		)
+
+		def fixture_git(*args: str) -> str:
+			return subprocess.run(
+				["git", *args], cwd=repo_dir, env=git_env, check=True,
+				capture_output=True, text=True, encoding="utf-8",
+			).stdout.strip()
+
+		fixture_git("init", "-q")
+		(repo_dir / "auth.py").write_text(
+			"def enforce_access(user):\n\tcheck_entitlement(user)\n\treturn True\n",
+			encoding="utf-8",
+		)
+		view_lines = ["def privileged_action(user):", "\treturn mutate_money_state()"]
+		view_lines.extend(f"FILLER_{line_number} = {line_number}" for line_number in range(3, 21))
+		(repo_dir / "views.py").write_text("\n".join(view_lines) + "\n", encoding="utf-8")
+		fixture_git("add", "auth.py", "views.py")
+		fixture_git("commit", "-q", "-m", "guarded base")
+		base_sha = fixture_git("rev-parse", "HEAD")
+		(repo_dir / "auth.py").write_text("def enforce_access(user):\n\treturn True\n", encoding="utf-8")
+		fixture_git("add", "auth.py")
+		fixture_git("commit", "-q", "-m", "remove old guard")
+		since_sha = fixture_git("rev-parse", "HEAD")
+		view_lines[-1] = "FILLER_20 = 'current delta change'"
+		(repo_dir / "views.py").write_text("\n".join(view_lines) + "\n", encoding="utf-8")
+		fixture_git("add", "views.py")
+		fixture_git("commit", "-q", "-m", "current delta")
+		head_sha = fixture_git("rev-parse", "HEAD")
+		finding = _finding_payload("delta-base-owned-sink", file_path="views.py", category="A01: Broken Access Control")
+		finding["line"] = 2
+		output_path = tmp_path / "findings.json"
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([finding]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": base_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_DIFF_SINCE": since_sha,
+				"SECURITY_AUDIT_LINE_OWNERSHIP": "project-lines",
+				"SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES": "0",
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert payload["findings"] == []
+	assert [row["finding_id"] for row in payload["advisory_findings"]] == ["delta-base-owned-sink"]
 
 
 def test_security_audit_project_line_ownership_failures_stay_blocking_and_warn_once() -> None:

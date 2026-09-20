@@ -1210,7 +1210,8 @@ python3 - \
 	"${AUDIT_SCOPE_HEAD_SHA}" \
 	"${PRIOR_FINDINGS_IDS_FILE}" \
 	"${ADVISORY_FINDINGS_FILE}" \
-	"${VERIFIED_FIXED_FINDING_IDS_FILE}" <<'PY'
+	"${VERIFIED_FIXED_FINDING_IDS_FILE}" \
+	"${AUDIT_SCOPE_SINCE_SHA:-}" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -1237,6 +1238,7 @@ audit_scope_head_sha = sys.argv[14]
 prior_finding_ids_path = Path(sys.argv[15])
 advisory_findings_path = Path(sys.argv[16])
 verified_fixed_finding_ids_path = Path(sys.argv[17])
+audit_scope_since_sha = sys.argv[18]
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -1425,7 +1427,7 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 			provenance_commit = audit_scope_head_sha
 		finding_provenance_cache[provenance_cache_key] = provenance_commit
 	if provenance_commit is None:
-		return None, f"{finding_id}: unable to derive immutable Git provenance for cited line"
+		fail(f"{finding_id}: unable to derive immutable Git provenance for cited line")
 	normalized_category = " ".join(category.lower().split())
 	waiver_key_payload = json.dumps(
 		[normalized_file, normalized_category, line, provenance_commit],
@@ -1502,8 +1504,19 @@ ancestry_cache: dict[str, bool | None] = {}
 ownership_warned_files: set[str] = set()
 causal_diff_cache: dict[str, tuple[bool | None, list[tuple[int, int, bool, bool, bool, bool]]]] = {}
 cross_file_causal_change_cache: tuple[bool, bool] | None = None
+causal_diff_base_sha = audit_scope_since_sha or audit_scope_base_sha
 guard_deletion_pattern = re.compile(
 	r"(?i)\b(?:auth\w*|permission|privilege|admin|guard|middleware|before_request|require_\w+|login_required|is_authenticated|authenticated|authori[sz]e|can_access|forbidden|check_(?:user|permission|access)|role|access[_ -]?control|policy|allow|deny)\b"
+)
+cross_file_guard_deletion_pattern = re.compile(
+	r"(?ix)(?:"
+	r"^\s*@\s*(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*\b"
+	r"|^\s*(?:await\s+)?(?:[A-Za-z_]\w*\.)*(?:auth\w*|authori[sz]\w*|login_required|check_\w+|verify_\w+|require_\w+|enforce_\w+|ensure_\w+|can_\w+|rate_limit\w*)\s*\("
+	r"|^\s*(?:if|elif|while|assert|return|raise)\b[^\n]*\b(?:authori[sz]\w*|permission\w*|privilege\w*|access[_ -]?control|entitlement|is_admin|is_authenticated|login_required|forbidden)\b"
+	r")"
+)
+access_control_finding_pattern = re.compile(
+	r"(?i)\b(?:broken access control|authori[sz]ation|authentication|permission|privilege|elevation of privilege|spoofing)\b"
 )
 
 
@@ -1529,7 +1542,7 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 			cross_file_causal_result = subprocess.run(
 				[
 					"git", "diff", "--no-color", "--no-ext-diff", "--unified=0",
-					f"{audit_scope_base_sha}..{audit_scope_head_sha}",
+					f"{causal_diff_base_sha}..{audit_scope_head_sha}",
 				],
 				cwd=repo_root,
 				capture_output=True,
@@ -1544,10 +1557,7 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 			cross_file_guard_deleted = any(
 				diff_line.startswith("-")
 				and not diff_line.startswith("---")
-				and (
-					re.match(r"^-\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line) is not None
-					or guard_deletion_pattern.search(diff_line[1:]) is not None
-				)
+				and cross_file_guard_deletion_pattern.search(diff_line[1:]) is not None
 				for diff_line in cross_file_causal_result.stdout.splitlines()
 			)
 			cross_file_causal_change_cache = (
@@ -1558,14 +1568,16 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 	if not cross_file_causal_ok:
 		warn_ownership_once(file_name)
 		return True
-	if cross_file_guard_deleted:
+	if cross_file_guard_deleted and access_control_finding_pattern.search(
+		str(finding.get("owasp_or_stride_category") or "")
+	):
 		return True
 	if file_name not in causal_diff_cache:
 		try:
 			causal_result = subprocess.run(
 				[
 					"git", "diff", "--no-color", "--no-ext-diff", "--unified=0",
-					"--function-context", f"{audit_scope_base_sha}..{audit_scope_head_sha}",
+					"--function-context", f"{causal_diff_base_sha}..{audit_scope_head_sha}",
 					"--", file_name,
 				],
 				cwd=repo_root,
@@ -1613,11 +1625,6 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 		return True
 	for hunk_start, hunk_end, has_deletion, has_control_change, has_context_name, has_guard_deletion in causal_hunks:
 		if hunk_start <= line_number <= hunk_end and (has_deletion or has_control_change):
-			return True
-		if has_deletion and (has_control_change or has_guard_deletion):
-			# Deleted control flow and authorization hooks can protect sinks in a
-			# different function, so line-local blame cannot prove them unrelated.
-			warn_ownership_once(file_name)
 			return True
 	line_count = file_line_counts.get(file_name, 0)
 	low_line = max(1, line_number - ownership_context_lines)
