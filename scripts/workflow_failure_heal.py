@@ -510,6 +510,7 @@ def budget_decision(
 	issues: Iterable[dict[str, Any]],
 	*,
 	fp: str,
+	preferred_repo: str | None = None,
 	source_gen: int | None = None,
 	source_root: str | None = None,
 	max_depth: int = DEFAULT_MAX_LINEAGE_DEPTH,
@@ -544,8 +545,17 @@ def budget_decision(
 			created_today += 1
 		if state == "open":
 			open_issues.append(issue)
-			if markers.get("fp") == fp and (duplicate is None or number > _positive_int(duplicate.get("number"))):
-				duplicate = issue
+			if markers.get("fp") == fp:
+				if duplicate is None:
+					duplicate = issue
+				else:
+					duplicate_repository = duplicate.get("repository") if is_valid_repo_slug(duplicate.get("repository")) else ""
+					candidate_preferred_repo = bool(preferred_repo and issue_repository == preferred_repo)
+					duplicate_preferred_repo = bool(preferred_repo and duplicate_repository == preferred_repo)
+					if candidate_preferred_repo and not duplicate_preferred_repo:
+						duplicate = issue
+					elif candidate_preferred_repo == duplicate_preferred_repo and issue_repository == duplicate_repository and number > (_positive_int(duplicate.get("number")) or 0):
+						duplicate = issue
 		elif markers.get("fp") == fp:
 			gen = _positive_int(markers.get("gen")) or 1
 			prior_same_fp.append((gen, number, markers.get("root") or fp, issue_repository))
@@ -819,6 +829,7 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 	decision = budget_decision(
 		issues if isinstance(issues, list) else [],
 		fp=args.fingerprint,
+		preferred_repo=args.preferred_repo or None,
 		source_gen=args.source_gen,
 		source_root=args.source_root or None,
 		max_depth=args.max_depth,
@@ -919,6 +930,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("budget", help="Dedup / lineage / budget decision")
 	p.add_argument("--issues-json", required=True)
 	p.add_argument("--fingerprint", required=True)
+	p.add_argument("--preferred-repo", default="")
 	p.add_argument("--source-gen", type=int)
 	p.add_argument("--source-root", default="")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)

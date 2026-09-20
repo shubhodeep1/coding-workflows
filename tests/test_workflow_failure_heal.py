@@ -167,6 +167,9 @@ def test_reusable_report_workflow_binds_inputs_through_env() -> None:
 	stage = [s for s in job["steps"] if s.get("name") == "Stage workflow support files"][0]["run"]
 	for name in ("gh_helpers.sh", "tg_helpers.sh", "workflow_failure_heal.py", "workflow_failure_heal_report.sh"):
 		assert name in stage
+	report_checkout_steps = [step for step in job["steps"] if step.get("uses") == "actions/checkout@v5"]
+	assert len(report_checkout_steps) == 3
+	assert all(step["with"]["persist-credentials"] is False for step in report_checkout_steps)
 
 
 def test_prompt_declares_classification_tokens() -> None:
@@ -338,6 +341,17 @@ def test_budget_decision_matrix() -> None:
 
 	dup = heal.budget_decision([_heal_issue(10, state="open", fp=fp), _heal_issue(11, state="open", fp=fp, gen=2)], fp=fp, now=now)
 	assert dup["action"] == "duplicate" and dup["existing_issue"] == 11
+	cross_repo_dup = heal.budget_decision(
+		[
+			dict(_heal_issue(500, state="open", fp=fp), repository=SELF_REPO),
+			dict(_heal_issue(5, state="open", fp=fp), repository=CONSUMER_REPO),
+		],
+		fp=fp,
+		preferred_repo=CONSUMER_REPO,
+		now=now,
+	)
+	assert cross_repo_dup["existing_issue"] == 5
+	assert cross_repo_dup["existing_repo"] == CONSUMER_REPO
 
 	lineage = heal.budget_decision([_heal_issue(5, state="closed", fp=fp, gen=1), _heal_issue(6, state="closed", fp=fp, gen=2, root=other)], fp=fp, now=now)
 	assert lineage == {"action": "open", "gen": 3, "root": other, "open_count": 0, "today_count": 0}

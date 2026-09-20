@@ -280,7 +280,7 @@ fi
 jq -s 'add // []' "${SELF_ISSUES_FILE}" "${SOURCE_ISSUES_FILE}" > "${ISSUES_FILE}"
 jq -e 'type == "array"' "${ISSUES_FILE}" >/dev/null 2>&1 || printf '[]' > "${ISSUES_FILE}"
 
-BUDGET_ARGS=(--issues-json "${ISSUES_FILE}" --fingerprint "${FP}" --max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}")
+BUDGET_ARGS=(--issues-json "${ISSUES_FILE}" --fingerprint "${FP}" --preferred-repo "${SOURCE_REPO}" --max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}")
 if [[ "${SOURCE_GEN}" =~ ^[0-9]+$ ]]; then
 	BUDGET_ARGS+=(--source-gen "${SOURCE_GEN}" --source-root "${SOURCE_ROOT}")
 fi

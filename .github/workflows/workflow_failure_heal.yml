@@ -92,6 +92,7 @@ jobs:
         with:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
 
       - name: Resolve workflow support ref
         run: |
@@ -113,6 +114,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
@@ -123,6 +125,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow support files
         run: |
