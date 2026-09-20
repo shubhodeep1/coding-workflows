@@ -407,3 +407,105 @@ No exact TODO, FIXME, HACK, or XXX debt markers were found in scoped files.
 | Code modularization | 12–15 | Large |
 | Expression size reduction | 2 | Medium |
 | Medium/Low fixes | 5–7 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-20)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is directly implementable; `NEEDS_VERIFICATION` requires specified parity checks; `RISKY_SKIP` must not be automated because pagination, concurrency, retry, or race-sensitive behavior is involved.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Batch promotion-baseline search and comment hydration
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and lines:** `scripts/promote_main_cycle.sh:224-230` and `scripts/promote_main_cycle.sh:232-246`
+- **Current call count:** 1 search call plus up to 10 comment calls: **1–11**.
+- **Proposed call count:** **1** GraphQL call.
+- **Endpoints:** `GET /search/issues`; `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`; proposed `POST /graphql`.
+- **Evidence:**
+  ```bash
+  numbers="$(gh_retry gh api -X GET search/issues ... -f per_page=10 ...)"
+  ...
+  sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" ...)
+  ```
+  `last_cycle_baseline_sha` searches for at most ten issues and then hydrates each issue’s comments solely to authenticate and extract the baseline marker.
+- **Proposed fix:** Rewrite `last_cycle_baseline_sha` to issue one GraphQL search requesting candidate issue numbers plus the first 100 comment bodies, author logins, and author associations. Preserve the created-descending search order and existing ten-issue cap. Follow `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh` for transformation and partial-result validation.
+- **Safety rationale:** The reads occur in one function with no intervening mutation, but REST-to-GraphQL search ordering and partial-error semantics are not statically proven equivalent.
+- **Downstream signal:** Verify identical output and return codes for zero/one/ten candidates, trusted and untrusted markers, markers at comments 100/101, malformed responses, and partial GraphQL errors before implementation.
+
+#### MERGE-002 — Snapshot closed-PR queued and in-progress runs together
+- **Safety tag:** `RISKY_SKIP`
+- **File path and lines:** `.github/workflows/cancel_on_pr_close.yml:120-130` and `.github/workflows/cancel_on_pr_close.yml:131-141`
+- **Current call count:** **2** logical paginated calls.
+- **Proposed call count:** **1** logical paginated call.
+- **Endpoints:** Two filtered `GET /repos/{owner}/{repo}/actions/runs` calls; proposed one call to the same endpoint retaining `event=pull_request` and `branch=<head>`, followed by local filtering for `queued` and `in_progress`.
+- **Evidence:**
+  ```bash
+  -f status=queued
+  ...
+  -f status=in_progress
+  ```
+  Both responses are immediately combined before identical branch, PR-number, event, and current-run filtering.
+- **Proposed fix:** In the `Cancel queued/in-progress runs for closed PR branch` step, fetch the branch/event snapshot once and have the existing `jq` select only `queued` or `in_progress` runs.
+- **Safety rationale:** Both existing calls use `--paginate`; removing the server-side status filters can alter page volume and page-boundary behavior, triggering mandatory `RISKY_SKIP` treatment.
+- **Downstream signal:** Do not auto-implement; manually compare run-ID sets, request/page counts, failure behavior, and ARG_MAX exposure on branches containing queued, in-progress, pending, and completed runs.
+
+#### MERGE-003 — Fetch integration tracking metadata and state comments together
+- **Safety tag:** `RISKY_SKIP`
+- **File path and lines:** `scripts/review_conflict_prepare.sh:462-467` and `scripts/review_conflict_prepare.sh:469-499`
+- **Current call count:** **2** logical calls.
+- **Proposed call count:** **1** logical paginated GraphQL call.
+- **Endpoints:** `GET /repos/{owner}/{repo}/issues/{number}`; paginated `GET /repos/{owner}/{repo}/issues/{number}/comments`; proposed `POST /graphql`.
+- **Evidence:**
+  ```bash
+  _ti_json="$(gh_retry gh api ... "repos/.../issues/${INTEGRATION_TRACKING_NUM}")"
+  ...
+  gh_retry gh api --paginate \
+    "repos/.../issues/${INTEGRATION_TRACKING_NUM}/comments?per_page=100"
+  ```
+- **Proposed fix:** Add `_fetch_integration_tracking_context_graphql` returning issue title/body and ordered comment bodies, then derive the latest `ORCHESTRATOR_STATE_V1` payload locally. Follow `_fetch_candidate_issue_details_graphql`’s page validation and fail-open pattern.
+- **Safety rationale:** The comments read is paginated and this conflict-resolution path explicitly protects against upstream races, so it must not be automatically consolidated.
+- **Downstream signal:** Manually test zero, one, and more than 100 comments, concurrent state-comment insertion, GraphQL partial errors, and preservation of the current blank-context fail-open behavior.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Merge-train comment list already contains the fetched body
+- **Safety tag:** `RISKY_SKIP`
+- **File path and lines:** `scripts/review_merge_train.sh:255-261`, `scripts/review_merge_train.sh:272-290`, with callers at `scripts/review_merge_train.sh:335-387` and `scripts/review_merge_train.sh:464-486`
+- **Current call count:** **2** reads when a marker exists, plus the unchanged optional write.
+- **Proposed call count:** **1** read, plus the same optional write.
+- **Endpoints:** Paginated `GET /repos/{owner}/{repo}/issues/{pr}/comments`; `GET /repos/{owner}/{repo}/issues/comments/{comment_id}`.
+- **Evidence:**
+  ```bash
+  --jq ".[] | select(.body | startswith(\"${marker}\")) | .id"
+  ...
+  existing_body="$(gh_retry gh api "repos/.../issues/comments/${existing_id}" --jq '.body' ...)"
+  ```
+  The paginated list payload already contains both `.id` and `.body`.
+- **Proposed fix:** Replace `_mt_find_marker_comment_id` with a helper returning the latest compact `{id,body}` object. Update `_mt_upsert_comment`, `_mt_gate`, and `_mt_release` to reuse both fields instead of fetching the comment again.
+- **Safety rationale:** The source call uses `--paginate`, and release processing includes concurrency-sensitive claim mutations; both are mandatory `RISKY_SKIP` triggers.
+- **Downstream signal:** Do not auto-implement; manually verify latest-marker selection across pages, multiline-body preservation, concurrent comment edits, and unchanged queue-marker claim behavior.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — The consolidation changes a paginated comments path and its asymmetric mandatory/fail-open error handling.
+- API-002: `RISKY_SKIP` — GraphQL and REST pagination fallbacks require parity testing; the extended helper should also replace `scripts/review_rb_judge.sh:933-1003` with data reused from its `gh_pr_with_all_comments` call at `scripts/review_rb_judge.sh:1106-1118`.
+- BATCH-001: `RISKY_SKIP` — It is inside `orchestrate_poll_process.sh` and reads race-sensitive mergeability state.
+- BATCH-002: `RISKY_SKIP` — It is inside the poller, so alias batching must preserve cycle-local cache and fail-open contracts.
+- BATCH-003: `RISKY_SKIP` — It combines poller execution, paginated trusted-comment reads, and required writes.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| `SAFE_TO_MERGE` | 0 | — |
+| `NEEDS_VERIFICATION` | 1 | MERGE-001 |
+| `RISKY_SKIP` | 8 | MERGE-002, MERGE-003, REUSE-001, API-001, API-002, BATCH-001, BATCH-002, BATCH-003 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
