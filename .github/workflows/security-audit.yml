@@ -78,7 +78,6 @@ jobs:
           fi
 
       - name: Checkout workflow support source
-        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -88,7 +87,6 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
       - name: Stage audit support files
-        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -137,8 +138,17 @@ def _install_security_audit_support_tree(base_dir: Path, *, failure_mode: str) -
 	scripts_dir.mkdir(parents=True, exist_ok=True)
 	prompts_dir.mkdir(parents=True, exist_ok=True)
 
-	for script_name in ("label_helpers.sh", "gh_helpers.sh", "render_prompt.py", "assemble_prompt.sh"):
+	for script_name in (
+		"label_helpers.sh",
+		"gh_helpers.sh",
+		"render_prompt.py",
+		"assemble_prompt.sh",
+	):
 		(scripts_dir / script_name).symlink_to(REPO_ROOT / "scripts" / script_name)
+	(scripts_dir / "orchestrate_lib.py").write_text(
+		(REPO_ROOT / "scripts" / "orchestrate_lib.py").read_text(encoding="utf-8"),
+		encoding="utf-8",
+	)
 
 	render_helper_path = scripts_dir / "render_prompt.sh"
 	if failure_mode == "render_failure":
@@ -355,6 +365,16 @@ def test_security_audit_workflow_has_required_triggers_and_checkout_contract() -
 
 def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
+	support_checkout_block = content.split("- name: Checkout workflow support source", 1)[1].split(
+		"- name: Stage audit support files", 1
+	)[0]
+	support_stage_block = content.split("- name: Stage audit support files", 1)[1].split(
+		"- name: Install Codex CLI", 1
+	)[0]
+	assert "if:" not in support_checkout_block
+	assert "if:" not in support_stage_block
+	assert "ref: ${{ env.SCRIPT_REF }}" in support_checkout_block
+	assert 'rm -rf .codex-workflow-src' in support_stage_block
 	# Source-repo runs must keep using the local action so branch-local changes
 	# to install-codex stay testable; consumer-called runs use the reviewed immutable ref.
 	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO == 'true'" in content
@@ -423,6 +443,22 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 		'\t\t\tsecurity_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"\n'
 		'\t\t\treturn 1\n'
 	) in content
+	inline_python_launches = [
+		(line_number, line)
+		for line_number, line in enumerate(content.splitlines(), 1)
+		if not line.lstrip().startswith("#")
+		and re.search(r"\bpython3\s+(?:-I\b|-c\b|-(?:\s|$))", line)
+	]
+	assert inline_python_launches == [
+		(next(
+			line_number
+			for line_number, line in enumerate(content.splitlines(), 1)
+			if 'python3 -I -B "$@"' in line
+		), '\t\tpython3 -I -B "$@"')
+	]
+	assert '(cd "${SECURITY_AUDIT_RUNTIME_DIR}" && security_audit_run_isolated_python - \\' in content
+	assert 'security_audit_require_file "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/orchestrate_lib.py"' in content
+	assert '"${SECURITY_AUDIT_ORCHESTRATE_LIB_DIR}" <<\'PY\'' in content
 
 
 def test_security_audit_uses_workflow_editor_model_with_stable_fallback() -> None:
@@ -840,6 +876,58 @@ def test_security_audit_findings_json_filters_without_github_side_effects() -> N
 	assert "=== END UNTRUSTED PROJECT SPECIFICATION ===" in prompt
 	project_spec_context = prompt.split("=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===\n", 1)[1]
 	assert project_spec_context.split("\n=== END UNTRUSTED PROJECT SPECIFICATION ===", 1)[0] == project_spec
+
+
+def test_security_audit_isolated_python_blocks_checkout_startup_forgery_and_local_imports() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-sitecustomize-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, head_sha = _git_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		local_import_marker = tmp_path / "checkout-orchestrate-lib-imported"
+		(repo_dir / "orchestrate_lib.py").write_text(
+			"from pathlib import Path\n"
+			f"Path({str(local_import_marker)!r}).write_text('imported', encoding='utf-8')\n"
+			"raise RuntimeError('checkout-local orchestrate_lib imported')\n",
+			encoding="utf-8",
+		)
+		(repo_dir / "sitecustomize.py").write_text(
+			"import atexit\n"
+			"import json\n"
+			"import os\n"
+			"import sys\n"
+			"from pathlib import Path\n"
+			"if sys.argv[0] in {'-', '-c'} and os.environ.get('FORGED_OUTPUT_PATH'):\n"
+			"\tdef forge_output():\n"
+			"\t\tPath(os.environ['FORGED_OUTPUT_PATH']).write_text(json.dumps({\n"
+			"\t\t\t'schema_version': 'security_audit_findings.v1',\n"
+			"\t\t\t'findings': [],\n"
+			"\t\t\t'counts': {'kept': 0, 'suppressed_excluded': 0, 'suppressed_invalid': 0,\n"
+			"\t\t\t\t'suppressed_low_confidence': 0, 'suppressed_out_of_scope': 0, 'suppressed_waived': 0},\n"
+			"\t\t}), encoding='utf-8')\n"
+			"\tatexit.register(forge_output)\n",
+			encoding="utf-8",
+		)
+		finding = _finding_payload("real-finding", file_path="file_b.py")
+		proc, final_state = _run_security_audit(
+			{},
+			cwd=repo_dir,
+			codex_output=json.dumps([finding]),
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"FORGED_OUTPUT_PATH": str(output_path),
+				"PYTHONPATH": str(repo_dir),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["real-finding"]
+	assert payload["counts"]["kept"] == 1
+	assert not local_import_marker.exists()
 
 
 def test_security_audit_explicit_diff_scope_filters_changed_files() -> None:

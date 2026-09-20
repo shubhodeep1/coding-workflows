@@ -381,6 +381,70 @@ def _run_poller_subprocess(
 			shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def test_poller_inline_python_is_centralized_and_ignores_checkout_startup_hooks() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	inline_python_launches = [
+		(line_number, line)
+		for line_number, line in enumerate(script.splitlines(), 1)
+		if not line.lstrip().startswith("#")
+		and re.search(r"\bpython3\s+(?:-I\b|-c\b|-(?:\s|$))", line)
+	]
+	assert inline_python_launches == [
+		(next(
+			line_number
+			for line_number, line in enumerate(script.splitlines(), 1)
+			if 'python3 -I -B "$@"' in line
+		), '  "${isolated_python_environment[@]}" python3 -I -B "$@"')
+	]
+
+	helper_match = re.search(
+		r"(?ms)^poller_run_isolated_python\(\) \{\n.*?^\}",
+		script,
+	)
+	assert helper_match is not None
+	with tempfile.TemporaryDirectory(prefix="poller-sitecustomize-") as td:
+		checkout = Path(td)
+		startup_marker = checkout / "startup-hook-ran"
+		(checkout / "sitecustomize.py").write_text(
+			"import os\n"
+			"from pathlib import Path\n"
+			f"Path({str(startup_marker)!r}).write_text(os.environ.get('GH_PAT', 'missing'), encoding='utf-8')\n",
+			encoding="utf-8",
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"GH_PAT": "poller-secret-sentinel",
+				"ORCHESTRATOR_STATE_AUTH_KEYRING": "state-secret-sentinel",
+				"PYTHONPATH": str(checkout),
+			}
+		)
+		proc = subprocess.run(
+			[
+				"bash",
+				"--noprofile",
+				"--norc",
+				"-c",
+				(
+					helper_match.group(0)
+					+ '\ncd "$1"\n'
+					+ "poller_run_isolated_python -- -c "
+					+ "'import os; print(os.environ.get(\"GH_PAT\", \"missing\"))'\n"
+				),
+				"poller-isolation-test",
+				str(checkout),
+			],
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip() == "missing"
+	assert not startup_marker.exists()
+
+
 def test_judge_reasoning_effort_uses_configured_value_without_downgrade():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))' in script
@@ -3051,6 +3115,8 @@ import sys
 from pathlib import Path
 
 args = sys.argv[1:]
+if args[:2] == ["-I", "-B"]:
+	os.execv(sys.executable, [sys.executable, *args])
 real_python = os.environ.get("REAL_PYTHON_BIN", "python3")
 store_path = Path(os.environ.get("GH_MOCK_STORE", ""))
 
