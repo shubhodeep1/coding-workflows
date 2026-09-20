@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.94,
+  "details": "Merged changes repeatedly pair edits to GitHub Actions, shell scripts, prompts, or orchestration logic with targeted tests under tests/. When planning similar work, identify or add contract tests that assert exact workflow structure, argument propagation, labels, fallbacks, and security-sensitive behavior rather than relying only on end-to-end execution.",
+  "fingerprint": "83e67fa8d0e157215df228d2ab6c4ae96db00300754b1df19b3cf63efa106140",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35479014990",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35479014990",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4092",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4109",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4127",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4140",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4093",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4112",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4130",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4141"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260920003326_e31e935f19",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow and automation changes in this repository are typically protected by contract-focused tests.",
+  "timestamps": {
+    "created_at": "2026-09-20T00:33:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
