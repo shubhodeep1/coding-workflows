@@ -69,6 +69,28 @@ Phases of the unattended pipeline (each is a separate workflow file under
     in-flight triage per repo+PR+check and caps the
     auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
     (escalates with `ai:check-triage-escalated` + Telegram at the cap).
+14. **workflow failure heal** (`workflow_failure_heal.yml`,
+    `internal-workflow-failure-heal.yml`, `workflow-failure-heal-intake.yml`,
+    `scripts/workflow_failure_heal_report.sh`,
+    `scripts/workflow_failure_heal_intake.sh`, `scripts/workflow_failure_heal.py`,
+    `prompts/mode-workflow-failure-heal.txt`) — triggers on `issues: labeled` /
+    `pull_request: labeled` with a human-needed escalation label
+    (`ai:needs-human`, `ai:check-triage-escalated`, `ai:destructive-blocked`,
+    `ai:scope-blocked`, `ai:harness-broken`, `ai:resolver-escalated`,
+    `ai:security-pass-failed`) in a consumer or in this repo, and on
+    `workflow_run: completed` failures of the five release / promotion
+    workflows. The reporter links the failed runs and the wrapper release pin
+    and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
+    the intake fetches the failed job logs, diagnoses against the source at
+    that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
+    `Target branch: stable`; `consumer-app-defect` → issue in the consumer;
+    `consumer-config` / `transient` → Telegram + comment only), de-dupes by
+    fingerprint (label `ai:workflow-heal`), caps the lineage at
+    `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
+    `ai:workflow-heal-escalated` + Telegram), and bounds the volume with
+    `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`. On by
+    default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
+    code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -411,7 +433,7 @@ Cycle-local caches that must not be re-fetched per iteration:
 PROFILE.default=full
 PROFILE.name=core manifest=workflow-templates/profiles/core.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml
 PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate.yml,ai-orchestrate-poll.yml,ai-orchestrate-clarify-respond.yml,ai-validate.yml,ai-sync-labels.yml,review_rb_judge_dispatch.yml
-PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-check-failure-triage.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-security-audit.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,review_rb_judge_dispatch.yml
+PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-check-failure-triage.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-security-audit.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,ai-workflow-failure-heal.yml,review_rb_judge_dispatch.yml
 
 ## Immutable consumer wrapper pins
 
@@ -900,6 +922,8 @@ and shipped:
 - `IDENTITY_REINJECT_PARSE_FAIL`
 - `drift-audit:`
 - `CHECK_TRIAGE`
+- `WORKFLOW_HEAL_REPORT`
+- `WORKFLOW_HEAL`
 - `WORKTREE_REGISTER`
 - `WORKTREE_DEREGISTER`
 - `WORKTREE_GC`
@@ -1060,6 +1084,8 @@ LOG_PREFIX.name=TRANSCRIPT_ARCHIVE_FAIL
 LOG_PREFIX.name=IDENTITY_REINJECT_PARSE_FAIL
 LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
+LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
+LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKTREE_REGISTER
 LOG_PREFIX.name=WORKTREE_DEREGISTER
 LOG_PREFIX.name=WORKTREE_GC
@@ -1303,6 +1329,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/internal-plan.yml
 .github/workflows/internal-review.yml
 .github/workflows/internal-validate.yml
+.github/workflows/internal-workflow-failure-heal.yml
 .github/workflows/issue_pr_status.yml
 .github/workflows/lint-plan-archival.yml
 .github/workflows/lint-pr-body-auto-close.yml
@@ -1325,7 +1352,9 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/validate.yml
 .github/workflows/validation-improvements-intake.yml
 .github/workflows/validation-refresh.yml
+.github/workflows/workflow-failure-heal-intake.yml
 .github/workflows/workflow-log-analysis.yml
+.github/workflows/workflow_failure_heal.yml
 .github/workflows/workspace-cache-maintenance.yml
 ```
 <!-- TREE:END id=workflows -->
@@ -1349,6 +1378,7 @@ workflow-templates/ai-security-audit.yml
 workflow-templates/ai-sync-labels.yml
 workflow-templates/ai-update-workflows.yml
 workflow-templates/ai-validate.yml
+workflow-templates/ai-workflow-failure-heal.yml
 workflow-templates/review_rb_judge_dispatch.yml
 ```
 <!-- TREE:END id=workflow_templates -->

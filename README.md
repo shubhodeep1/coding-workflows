@@ -1105,6 +1105,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
 | `workflow-log-analysis.yml` | `workflow_dispatch` (typically called from comprehensive-test-and-release / test-and-mark-stable smoke gates) | Periodic Codex audit of workflow runs (analyze, deep-audit, api-redundancy passes); see [`probably_unnecessary_but_read_if_stuck.md`](probably_unnecessary_but_read_if_stuck.md) for the runbook |
 | `check_failure_triage.yml` | `check_run.completed` (failure) | LLM diagnoses a failing PR check and opens an `ai:check-triage` issue for the pipeline to fix. On by default; disable via `CHECK_FAILURE_TRIAGE_ENABLED=false`; see "Check Failure Triage Phase" below |
+| `workflow_failure_heal.yml` | `issues.labeled`, `pull_request.labeled` (human-needed escalation labels) | Reports an `ai:needs-human` / terminal-latch escalation to coding-workflows, whose `workflow-failure-heal-intake.yml` diagnoses the failed runs and opens an `ai:workflow-heal` issue for the pipeline to fix (in coding-workflows for workflow defects, in the consumer for consumer defects). On by default; disable via `WORKFLOW_HEAL_ENABLED=false`; see "Workflow Failure Heal" below |
 
 <!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
 
@@ -1157,6 +1158,83 @@ the way to a fix PR without human action.
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
   sent and the run fails (no partial state is left). Stable log lines are
   prefixed `CHECK_TRIAGE`.
+
+### Workflow Failure Heal
+
+When the pipeline gives up on something and asks for a human, the **workflow
+failure heal** path turns that escalation into a fix issue instead of leaving
+it on the Telegram feed. It complements check-failure triage: triage reacts to
+a failing PR check, heal reacts to a *pipeline* failure that ended in a
+human-needed escalation, and to a failed release or promotion run in
+coding-workflows itself. Like triage it **never pushes code**: every fix flows
+through `clarify → plan → implement → review`.
+
+- **Trigger (consumers and coding-workflows):** `issues: labeled` /
+  `pull_request: labeled` with one of the human-needed escalation labels:
+  `ai:needs-human`, `ai:check-triage-escalated`, `ai:destructive-blocked`,
+  `ai:scope-blocked`, `ai:harness-broken`, `ai:resolver-escalated`,
+  `ai:security-pass-failed`. The consumer wrapper is
+  `ai-workflow-failure-heal.yml` (profile `full`); coding-workflows uses
+  `internal-workflow-failure-heal.yml`. Both call the reusable
+  `workflow_failure_heal.yml`, which runs `scripts/workflow_failure_heal_report.sh`.
+- **Trigger (releases):** `workflow_run: completed` with conclusion `failure`
+  or `timed_out` on `Test & Mark Stable Release`, `Mark Stable Release`,
+  `Promote main to stable`, `Auto release stable`, and
+  `Forward-merge stable to main`, handled directly by
+  `workflow-failure-heal-intake.yml` in coding-workflows. A promote or
+  auto-release run that failed only because the smoke gate failed is skipped
+  (`skip reason=downstream_gate_failure`) because the gate run reports itself.
+- **Report (consumer side):** the reporter reads the escalated issue / PR, its
+  comments, and the repository's recent runs, links the failed runs (run URLs in
+  the pipeline's failure comments plus failed runs whose display title equals
+  the issue title, at most 3), records the coding-workflows release SHA the
+  wrappers are pinned to, and sends one `repository_dispatch` (event type
+  `workflow-failure-heal`) to coding-workflows. It skips closed issues and the
+  `[E2E Smoke Test` fixtures the release gate creates. Stable log lines are
+  prefixed `WORKFLOW_HEAL_REPORT`.
+- **Intake (coding-workflows):** `scripts/workflow_failure_heal_intake.sh`
+  re-validates the payload (`scripts/workflow_failure_heal.py validate-payload`),
+  accepts reports only from this repo and the repos listed in
+  `.github/ai/consumer_repos.json`, fetches the failed jobs and a filtered tail
+  of their logs (3 runs × 3 jobs × 60 KB), checks out coding-workflows at the
+  release SHA the failing run used, and runs the diagnosis model
+  (`WORKFLOW_HEAL_MODEL`, default `openai/gpt-5.6-sol`, `xhigh`) with
+  `prompts/mode-workflow-failure-heal.txt`. Stable log lines are prefixed
+  `WORKFLOW_HEAL`.
+- **Classification and routing:** the diagnosis starts with a
+  `## Classification` token. `workflow-defect` and `inconclusive` open an issue
+  **in coding-workflows** (label `ai:workflow-heal`) whose body carries
+  ``**Target branch:** `stable` `` (`WORKFLOW_HEAL_TARGET_BRANCH`), so plan and
+  implement work against the stable line and the PR is a hotfix on `stable`;
+  `auto-release-stable.yml` releases it within its 6-hourly schedule and
+  `forward-merge-stable-to-main.yml` carries it to `main`. A failed release run
+  targets the branch it failed on. `consumer-app-defect` opens the issue **in
+  the consumer repository** for its own pipeline. `consumer-config` (missing
+  secret, variable, permission) sends a Telegram ERROR with the diagnosis and
+  opens nothing; `transient` sends a DEBUG note and opens nothing. Every
+  outcome is also posted as a comment on the escalated issue.
+- **De-duplication and lineage:** the failure is fingerprinted from the failed
+  workflow name, the failing step, and a normalised error signature (numbers,
+  SHAs, URLs, and temp paths stripped) — the same bug in ten consumers is one
+  issue with an occurrence comment per report (`<!-- workflow-failure-heal:fp=… -->`).
+  A recurrence after the previous heal issue closed increments the generation
+  (`<!-- workflow-failure-heal:gen=N -->`, `root=…`); an escalation on a heal
+  issue itself inherits its generation. Past
+  `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (default 3) the chain stops: the prior
+  issue is labelled `ai:workflow-heal-escalated` and a Telegram CRITICAL asks
+  for a human.
+- **Budget:** at most `WORKFLOW_HEAL_MAX_OPEN_ISSUES` (default 10) open heal
+  issues and `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` (default 20) new ones per UTC
+  day; beyond that the report is logged and a Telegram WARNING is sent
+  (`skip reason=budget_exhausted`). All intakes share one concurrency group so
+  the dedup and budgets see a consistent issue list.
+- **Kill switch:** `WORKFLOW_HEAL_ENABLED=false` (per repo) skips the wrapper
+  job, the reusable report, and the intake.
+- **Failure modes:** the path fails open. An invalid payload, an unregistered
+  source repo, or an exhausted budget logs a skip and alerts; missing logs file
+  the issue with the raw context; an empty model response files an
+  `inconclusive` issue with a fallback body; a failed `gh issue create` or a
+  crash of either workflow sends a Telegram CRITICAL.
 
 ## Required Secrets
 
@@ -1386,6 +1464,14 @@ the way to a fix PR without human action.
 | `COMPREHENSIVE_RELEASE_WORKFLOW_FILE` | `promote-main-to-stable.yml` | Workflow the comprehensive release callback dispatches on project completion (12f). |
 | `COMPREHENSIVE_RELEASE_WORKFLOW_REF` | `main` | Ref for that dispatch. |
 | `REISSUE_PRESERVE_BASELINE_ENABLED` | `true` | Let the review-blocked judge's `spot-fix` reissue preserve the closed PR head as an `ai/reissue-baseline/*` branch that the next implement run starts from. `false` forces `redo` (start over from the base branch) |
+| `WORKFLOW_HEAL_ENABLED` | `true` | Switch for the workflow failure heal path. On by default: a human-needed escalation label (`ai:needs-human`, `ai:check-triage-escalated`, `ai:destructive-blocked`, `ai:scope-blocked`, `ai:harness-broken`, `ai:resolver-escalated`, `ai:security-pass-failed`) is reported to coding-workflows, whose intake diagnoses the failed runs and opens an `ai:workflow-heal` issue for the pipeline. Set to `false` per repo to disable the wrapper, the report, and (in coding-workflows) the intake. |
+| `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` | `3` | coding-workflows only. Max heal generations for one failure fingerprint before the chain is escalated (`ai:workflow-heal-escalated` + Telegram CRITICAL) instead of opening another issue. |
+| `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
+| `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
+| `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead. |
+| `WORKFLOW_HEAL_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-5.6-sol`) | coding-workflows only. Diagnosis model for the workflow failure heal intake. |
+| `THINKING_LEVEL_WORKFLOW_HEAL` | `xhigh` | coding-workflows only. Reasoning effort for the heal diagnosis call. |
+| `VERBOSITY_WORKFLOW_HEAL` | `low` | coding-workflows only. Codex verbosity for the heal diagnosis call. |
 
 ## Semantic Cache (Clarification Only)
 
