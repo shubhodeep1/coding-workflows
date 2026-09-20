@@ -934,7 +934,8 @@ RB_LINKED_ISSUES_GRAPHQL_JSON="$(gh_retry gh api graphql \
 	-f owner="${REPOSITORY%/*}" \
 	-f name="${REPOSITORY#*/}" \
 	-F number="${PR_NUMBER}" \
-	-f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number body labels(first: 100) { nodes { name } pageInfo { hasNextPage } } } } } } }' || true)"
+	-f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { baseRefName closingIssuesReferences(first: 50) { nodes { number body labels(first: 100) { nodes { name } pageInfo { hasNextPage } } } } } } }' || true)"
+PR_BASE_REF="$(printf '%s' "${RB_LINKED_ISSUES_GRAPHQL_JSON}" | jq -r '.data.repository.pullRequest.baseRefName // ""' 2>/dev/null || true)"
 ISSUE_NUMBERS="$(printf '%s' "${RB_LINKED_ISSUES_GRAPHQL_JSON}" | jq -r '
 	.data.repository.pullRequest.closingIssuesReferences.nodes[]?
 	| select(try ((type == "object") and ((.number | type) == "number")) catch false)
@@ -2670,28 +2671,50 @@ print(m.group(1) if m else "")
       # branch.  The block goes BEFORE the review-blocked footer because
       # implement.yml's baseline resolver requires that footer to run to the
       # end of the body.
-      RB_REISSUE_ORCH_METADATA_LINES=""
+      RB_REISSUE_PARENT_ORCH_METADATA_LINES=""
       if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
-        RB_REISSUE_ORCH_METADATA_LINES="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+        RB_REISSUE_PARENT_ORCH_METADATA_LINES="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
 import re, sys
 body = sys.stdin.read()
 lines = body.splitlines()
 start = next((i for i, line in enumerate(lines) if re.match(r"^\s*\*\*Orchestrator metadata\*\*", line)), None)
 if start is None:
     sys.exit(0)
-keep = []
+block = []
 for line in lines[start + 1:]:
     if line.strip() == "---":
         break
-    if re.match(r"^- (Tracking issue|Integration branch|Local ID|Priority|Managed by):", line):
-        keep.append(line.rstrip())
-print("\n".join(keep))
+    block.append(line.rstrip())
+patterns = (
+    (r"^- Tracking issue: #(\d+)$", "- Tracking issue: #{}"),
+    (r"^- Integration branch: `([A-Za-z0-9._/-]+)`$", "- Integration branch: `{}`"),
+    (r"^- Local ID: `([A-Za-z0-9_.:-]+)`$", "- Local ID: `{}`"),
+    (r"^- Priority: (\d+)$", "- Priority: {}"),
+    (r"^- Managed by: (AI Orchestrator)$", "- Managed by: {}"),
+)
+for pattern, template in patterns:
+    match = next((re.fullmatch(pattern, line) for line in block if re.fullmatch(pattern, line)), None)
+    if match:
+        print(template.format(match.group(1)))
 ' 2>/dev/null || echo "")"
       fi
-      if [ -z "${RB_REISSUE_ORCH_METADATA_LINES}" ] && [ -n "${PR_BASE_REF:-}" ] \
-        && [[ "${PR_BASE_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
-        RB_REISSUE_ORCH_METADATA_LINES="- Tracking issue: #${BASH_REMATCH[1]}
+      RB_REISSUE_ORCH_METADATA_LINES=""
+      RB_REISSUE_BASE_TRACKING_ISSUE=""
+      if [[ "${PR_BASE_REF:-}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+        RB_REISSUE_BASE_TRACKING_ISSUE="${BASH_REMATCH[1]}"
+        if [ -n "${RB_REISSUE_PARENT_ORCH_METADATA_LINES}" ] \
+          && printf '%s\n' "${RB_REISSUE_PARENT_ORCH_METADATA_LINES}" | grep -qxF -- "- Tracking issue: #${RB_REISSUE_BASE_TRACKING_ISSUE}" \
+          && printf '%s\n' "${RB_REISSUE_PARENT_ORCH_METADATA_LINES}" | grep -qxF -- "- Integration branch: \`${PR_BASE_REF}\`"; then
+          RB_REISSUE_ORCH_METADATA_LINES="${RB_REISSUE_PARENT_ORCH_METADATA_LINES}"
+        elif [ -n "${RB_REISSUE_PARENT_ORCH_METADATA_LINES}" ]; then
+          echo "::warning::Ignoring parent issue orchestrator metadata that does not match verified PR base ${PR_BASE_REF}; carrying only base-derived lineage."
+        fi
+        if [ -z "${RB_REISSUE_ORCH_METADATA_LINES}" ]; then
+          RB_REISSUE_ORCH_METADATA_LINES="- Tracking issue: #${RB_REISSUE_BASE_TRACKING_ISSUE}
 - Integration branch: \`${PR_BASE_REF}\`"
+        fi
+      elif [ -n "${RB_REISSUE_PARENT_ORCH_METADATA_LINES}" ]; then
+        echo "::warning::Ignoring parent issue orchestrator metadata because PR base ${PR_BASE_REF:-unknown} does not identify a tracking project."
       fi
 
       FULL_NEW_BODY="${NEW_ISSUE_BODY}"

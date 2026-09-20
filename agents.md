@@ -260,15 +260,17 @@ a new value, add it to the appropriate overrides file with a
   `/approved` with a `<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict
   engine=<sha> -->` marker, at most once per issue per engine commit (log keys
   `STAGED_SUPPORT_LATCH_RELEASED`, `STAGED_SUPPORT_LATCH_SKIP`,
-  `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`). The latest `ai:needs-human` label event must precede
-  the staged-support comment and have the same actor, so clearing that latch and later setting
-  another human gate cannot reuse the stale marker. Immediately before changing labels, the
-  sweep re-reads the paginated live labels and latest latch event; a changed or unreadable latch skips
-  release for that tick. A failed `/approved` write restores
+  `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`). The latest `ai:needs-human` label event must strictly
+  precede the staged-support comment and have the same actor; same-second timestamps fail closed,
+  so clearing that latch and later setting another human gate cannot reuse the stale marker.
+  Immediately before changing labels, the sweep re-reads the paginated live labels and latest
+  latch event; a changed or unreadable latch, or a residual `ai:implementing` label, skips release
+  for that tick. A failed `/approved` write restores
   `ai:needs-human`; if that compensation also fails, the unresolved latch marker blocks
   managed and standalone auto-approval and raises a CRITICAL alert. Those recovery guards use
-  the batched comment cache only when it contains fewer than 100 entries; a full window triggers
-  a paginated history read, and unavailable or malformed history fails closed for that tick.
+  the batched comment cache only when it explicitly reports an available array with fewer than
+  100 entries; a missing/partial field or a full window triggers a paginated history read, and
+  unavailable or malformed history fails closed for that tick.
   Consumer repositories and other latch reasons stay human-cleared.
 - The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,
@@ -646,9 +648,11 @@ re-issue, adopts it into `security_pass_active_fix_issues`, and logs
 another project or another cycle is never adopted. The review-blocked judge's
 `close_and_reissue` replacement carries those markers as well:
 `scripts/review_rb_judge.sh` copies the parent's `**Orchestrator metadata**`
-lines (tracking issue, integration branch, local ID, priority, managed-by; the
-PR base supplies tracking issue and integration branch when the parent has
-none) into the reissue ahead of its review-blocked footer
+lines (tracking issue, integration branch, local ID, priority, managed-by) only
+when its tracking and branch lines agree with the GitHub-reported
+`orchestrator/project-<n>` PR base. Missing, malformed, or inconsistent metadata
+falls back to base-derived tracking and branch lines without an unverified local
+ID. The validated block is placed ahead of the review-blocked footer
 (`REISSUE_ORCHESTRATOR_METADATA_CARRIED` / `_ABSENT`), and its spot-fix
 `files_touched` allowlist unions the judge's cited files with the closed PR's
 changed files that still exist at its head (`REISSUE_FILES_TOUCHED_UNION`,

@@ -736,7 +736,10 @@ def test_close_and_reissue_carries_parent_orchestrator_metadata_before_reissue_f
 	"""
 	state = _run_close_and_reissue(
 		["ai:orchestrator-managed"],
-		extra_env={"FIRST_ISSUE_LINEAGE_BODY": _parent_orchestrator_metadata_body()},
+		extra_env={
+			"FIRST_ISSUE_LINEAGE_BODY": _parent_orchestrator_metadata_body(),
+			"PR_BASE_REF": "orchestrator/project-249",
+		},
 	)
 	creates = state.get("issue_create_args", [])
 	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
@@ -759,6 +762,30 @@ def test_close_and_reissue_carries_parent_orchestrator_metadata_before_reissue_f
 	assert orch_idx < footer_idx
 	assert body.rstrip().endswith("- Type: review-blocked-reissue")
 	assert "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=41 lines=5" in state["_stdout"]
+
+
+def test_close_and_reissue_rejects_parent_metadata_inconsistent_with_pr_base() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={
+			"FIRST_ISSUE_LINEAGE_BODY": _parent_orchestrator_metadata_body(),
+			"PR_BASE_REF": "orchestrator/project-77",
+		},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	assert "- Tracking issue: #77" in body
+	assert "- Integration branch: `orchestrator/project-77`" in body
+	assert "- Tracking issue: #249" not in body
+	assert "- Local ID: `security-pass-fix-cycle-1`" not in body
+	assert "Ignoring parent issue orchestrator metadata that does not match verified PR base" in (
+		state["_stdout"] + state["_stderr"]
+	)
+
+
+def test_close_and_reissue_graphql_fetches_verified_pr_base() -> None:
+	script = _rb_judge_text()
+	assert "pullRequest(number:$number) { baseRefName closingIssuesReferences" in script
+	assert "PR_BASE_REF=\"$(printf '%s' \"${RB_LINKED_ISSUES_GRAPHQL_JSON}\"" in script
 
 
 def test_close_and_reissue_derives_orchestrator_metadata_from_pr_base_when_parent_has_none() -> None:

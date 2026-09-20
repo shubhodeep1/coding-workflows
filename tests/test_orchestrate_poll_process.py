@@ -698,6 +698,7 @@ def _run_poller(
 	issue_events_after_first_get: dict[int, list[dict]] | None = None,
 	gql_mode: str = "full",
 	gql_labels: dict[int, list[str]] | None = None,
+	gql_comments_unavailable_for: list[int] | None = None,
 	codex_json: dict | None = None,
 	fail_validation_dispatch: bool = False,
 	fail_release_dispatch: bool = False,
@@ -793,6 +794,7 @@ def _run_poller(
 	issue_events = issue_events or {}
 	issue_events_after_first_get = issue_events_after_first_get or {}
 	gql_labels = gql_labels or {}
+	gql_comments_unavailable_for = gql_comments_unavailable_for or []
 	prs = prs or []
 	pr_commits = pr_commits or {}
 	pr_api_sequence = pr_api_sequence or {}
@@ -1130,6 +1132,7 @@ def _run_poller(
 			"closed_issues": [],
 			"graphql_mode": gql_mode,
 			"graphql_labels": {str(k): list(v) for k, v in gql_labels.items()},
+			"graphql_comments_unavailable_for": [int(x) for x in gql_comments_unavailable_for],
 			"graphql_calls": 0,
 			"candidate_details_graphql_calls": 0,
 			"label_batch_graphql_calls": 0,
@@ -1830,7 +1833,7 @@ if args[0] == 'api':
 				issue_payload['state'] = issue_state
 			if 'labels(first:' in query:
 				issue_payload['labels'] = {'nodes': [{'name': label} for label in labels]}
-			if 'comments(last:' in query:
+			if 'comments(last:' in query and issue_num not in set(store.get('graphql_comments_unavailable_for', [])):
 				comment_nodes = []
 				for comment in issue.get('comments', [])[-100:]:
 					comment_nodes.append({
@@ -4833,6 +4836,7 @@ def _run_latch_release_tick(
 	env_overrides: dict[str, str],
 	issue_events: list[dict] | None = None,
 	issue_events_after_first_get: list[dict] | None = None,
+	gql_comments_unavailable_for: list[int] | None = None,
 	fail_issue_comment_get_after: dict[int, int] | None = None,
 	fail_issue_comment_post_for: list[int] | None = None,
 	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
@@ -4858,6 +4862,7 @@ def _run_latch_release_tick(
 		issue_comments={700: list(issue_comments)},
 		issue_events={700: list(issue_events)},
 		issue_events_after_first_get={700: list(issue_events_after_first_get)} if issue_events_after_first_get is not None else None,
+		gql_comments_unavailable_for=gql_comments_unavailable_for,
 		mock_gh_issue_list_label_filter=True,
 		fail_issue_comment_get_after=fail_issue_comment_get_after,
 		fail_issue_comment_post_for=fail_issue_comment_post_for,
@@ -5205,6 +5210,36 @@ def test_staged_support_latch_release_revalidates_current_latch_before_edit() ->
 	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=latch_changed_during_release" in result["stdout"] + result["stderr"]
 	assert not any(comment["body"].startswith("/approved") for comment in result["issues"]["700"]["comments"])
 
+	# GitHub timestamps have second-level precision. A later label event in
+	# the same second as the latch comment is ambiguous and must fail closed.
+	same_second = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		issue_events=[{
+			"event": "labeled",
+			"label": {"name": "ai:needs-human"},
+			"actor": {"login": "workflow-owner"},
+			"created_at": "2026-01-01T00:00:02Z",
+		}],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in same_second["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=current_latch_not_staged_support" in (
+		same_second["stdout"] + same_second["stderr"]
+	)
+
+	implementing_residue = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:implementing"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in implementing_residue["issues"]["700"]["labels"]
+	assert "ai:implementing" in implementing_residue["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=latch_changed_during_release" in (
+		implementing_residue["stdout"] + implementing_residue["stderr"]
+	)
+	assert not any(comment["body"].startswith("/approved") for comment in implementing_residue["issues"]["700"]["comments"])
+
 
 def test_managed_auto_approve_skips_unresolved_staged_support_latch() -> None:
 	state = _base_state(status="in_progress")
@@ -5230,6 +5265,37 @@ def test_managed_auto_approve_skips_unresolved_staged_support_latch() -> None:
 	assert "STALL_SKIP issue=10 reason=staged_support_latch_release_incomplete phase=ai:awaiting-approval action=none" in combined_log
 	assert not any(comment["body"].startswith("/approved") for comment in result["issues"]["10"]["comments"])
 	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_staged_support_guards_refetch_when_graphql_comments_are_unavailable() -> None:
+	latch_comment = _staged_support_latch_comment()
+	latch_comment["body"] = (
+		"<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\n"
+		+ latch_comment["body"]
+	)
+
+	managed_state = _base_state(status="in_progress")
+	managed_issue = managed_state["waves"][0]["issues"][0]
+	managed_issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1})
+	managed = _run_poller(
+		state=managed_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [latch_comment]},
+		gql_comments_unavailable_for=[10],
+	)
+	assert "STALL_SKIP issue=10 reason=staged_support_latch_release_incomplete" in managed["stdout"] + managed["stderr"]
+	assert not any(comment["body"].startswith("/approved") for comment in managed["issues"]["10"]["comments"])
+
+	standalone = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval"],
+		issue_comments=[latch_comment],
+		env_overrides={},
+		gql_comments_unavailable_for=[700],
+	)
+	assert "STALL_SKIP issue=700 reason=staged_support_latch_release_incomplete" in standalone["stdout"] + standalone["stderr"]
+	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
 
 
 def test_staged_support_guards_fetch_full_history_when_cache_is_at_limit() -> None:

@@ -13341,8 +13341,9 @@ STALL_EOF
       local _managed_staged_support_latch_rc=0
       local _managed_staged_support_cache_available="false"
       if [ -n "${_current_wave_details_json:-}" ] \
-        && printf '%s' "${_current_wave_details_json}" | jq -e --arg n "${issue_num}" 'has($n)' >/dev/null 2>&1; then
-        _managed_staged_support_comments="$(printf '%s' "${_current_wave_details_json}" | jq -c --arg n "${issue_num}" '.[$n].comments // []' 2>/dev/null || printf '')"
+        && printf '%s' "${_current_wave_details_json}" | jq -e --arg n "${issue_num}" \
+          'has($n) and (.[$n].comments_available == true) and ((.[$n].comments | type) == "array")' >/dev/null 2>&1; then
+        _managed_staged_support_comments="$(printf '%s' "${_current_wave_details_json}" | jq -c --arg n "${issue_num}" '.[$n].comments' 2>/dev/null || printf '')"
         _managed_staged_support_cache_available="true"
       fi
       if ! _managed_staged_support_comments="$(_staged_support_comments_for_guard \
@@ -14564,6 +14565,7 @@ _fetch_candidate_issue_details_graphql() {
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
             labels: [(.value.labels.nodes // [])[]?.name],
+            comments_available: ((.value.comments.nodes? | type) == "array"),
             comments: [(.value.comments.nodes // [])[]? | {
               id: .databaseId,
               body: .body,
@@ -15381,7 +15383,7 @@ release_staged_support_needs_human_latches() {
     if ! printf '%s' "${current_needs_human_event}" | jq -e \
       --arg latch_created_at "${latch_created_at}" --arg latch_actor_login "${latch_actor_login}" '
         .event == "labeled"
-        and (.created_at != "" and .created_at <= $latch_created_at)
+        and (.created_at != "" and .created_at < $latch_created_at)
         and (.actor_login != "" and .actor_login == $latch_actor_login)
       ' >/dev/null 2>&1; then
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=current_latch_not_staged_support"
@@ -15409,7 +15411,7 @@ release_staged_support_needs_human_latches() {
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=latch_revalidation_unavailable"
       continue
     fi
-    if ! printf '%s' "${refreshed_issue_labels_json}" | jq -e 'index("ai:needs-human") != null and index("ai:destructive-blocked") == null and index("ai:scope-blocked") == null' >/dev/null 2>&1 \
+    if ! printf '%s' "${refreshed_issue_labels_json}" | jq -e 'index("ai:needs-human") != null and index("ai:implementing") == null and index("ai:destructive-blocked") == null and index("ai:scope-blocked") == null' >/dev/null 2>&1 \
       || [ "${refreshed_needs_human_event}" != "${current_needs_human_event}" ]; then
       echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=latch_changed_during_release"
       continue
@@ -15552,8 +15554,11 @@ run_standalone_stall_recovery() {
     comments_json='[]'
     if printf '%s' "${_candidate_details_json}" | jq -e --arg n "${issue_num}" 'has($n)' >/dev/null 2>&1; then
       labels_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].labels // []')"
-      comments_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].comments // []')"
-      _standalone_staged_support_cache_available="true"
+      if printf '%s' "${_candidate_details_json}" | jq -e --arg n "${issue_num}" \
+        '(.[$n].comments_available == true) and ((.[$n].comments | type) == "array")' >/dev/null 2>&1; then
+        comments_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].comments')"
+        _standalone_staged_support_cache_available="true"
+      fi
     else
       labels_json="$(get_issue_labels_json "${issue_num}")"
       if ! comments_json="$(_staged_support_comments_for_guard \
@@ -15561,6 +15566,8 @@ run_standalone_stall_recovery() {
         comments_json='[]'
         _standalone_staged_support_comments_unavailable="true"
         echo "::warning::[standalone-stall] comments unavailable for issue #${issue_num}; continuing without comment context, but approval recovery will fail closed." >&2
+      else
+        _standalone_staged_support_cache_available="complete"
       fi
     fi
     has_pipeline_label="$(echo "${labels_json}" | jq -r --argjson wanted "${pipeline_labels}" '[.[] | select($wanted | index(.))] | length')"
@@ -15602,6 +15609,11 @@ PY
       elif [ "${_standalone_staged_support_cache_available}" = "true" ] \
         && ! comments_json="$(_staged_support_comments_for_guard \
           "${issue_num}" "${comments_json}" "true")"; then
+        echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_comments_unavailable phase=${phase} action=none"
+        continue
+      elif [ "${_standalone_staged_support_cache_available}" != "complete" ] \
+        && ! comments_json="$(_staged_support_comments_for_guard \
+          "${issue_num}" "${comments_json}" "false")"; then
         echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_comments_unavailable phase=${phase} action=none"
         continue
       fi
