@@ -6,9 +6,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.orchestrate_lib import security_finding_defect_fingerprint
 

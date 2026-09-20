@@ -5604,6 +5604,33 @@ def test_security_pass_exhaustion_judge_rejects_mixed_fail_verdict() -> None:
 	assert "SECURITY_PASS_JUDGE_DECIDED" not in combined_log
 
 
+def test_security_pass_exhaustion_judge_rejects_ambiguous_waiver_fingerprint() -> None:
+	first = _security_pass_test_finding()
+	second = _security_pass_second_test_finding()
+	second["defect_fingerprint"] = first["defect_fingerprint"]
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([first, second]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_waived_findings"] == []
+	assert {row["finding_id"] for row in latest_state["security_pass_reported_findings"]} == {"SEC-TEST-1", "SEC-TEST-2"}
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_FAILED tracking_issue=192 reason=waiver_state_write_failed round=1" in combined_log
+
+
 def test_security_pass_exhaustion_judge_invalid_verdict_falls_back_to_terminal_failure() -> None:
 	"""An unusable verdict (missing decision, bad action) never passes anything."""
 	result = _run_poller(
@@ -5988,6 +6015,30 @@ def test_security_pass_waive_command_rejects_unknown_findings_atomically() -> No
 	assert "reason=finding_match" in result["stdout"] + result["stderr"]
 
 
+def test_security_pass_waive_command_rejects_ambiguous_current_fingerprint() -> None:
+	state = _security_pass_waive_failed_state()
+	duplicate = dict(state["security_pass_reported_findings"][-1])
+	duplicate["finding_id"] = "SEC-DUPLICATE"
+	state["security_pass_reported_findings"].append(duplicate)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:security-pass-failed"],
+		tracking_comments=[{
+			"body": "/security-pass-waive SEC-OLD",
+			"user": {"login": "octocat", "type": "User"},
+		}],
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		collaborator_roles={"octocat": "admin"},
+	)
+	assert result["latest_state"]["security_pass_waived_findings"] == []
+	assert "reason=finding_match" in result["stdout"] + result["stderr"]
+
+
 def test_security_pass_waive_permission_lookup_failure_remains_pending() -> None:
 	state = _security_pass_waive_failed_state()
 	state["status"] = "security-pass-fixing"
@@ -6041,6 +6092,35 @@ def test_security_pass_waive_head_lookup_failure_does_not_skip_fix_processing() 
 	)
 	combined_log = result["stdout"] + result["stderr"]
 	assert "Could not resolve the current integration head" in combined_log
+	assert "Security-pass fix issue #700 remains in progress." in combined_log
+	assert "security-pass-waive-dedup:" not in "\n".join(
+		comment["body"] for comment in result["issues"]["192"]["comments"]
+	)
+
+
+def test_security_pass_waive_missing_audited_head_remains_pending() -> None:
+	state = _security_pass_waive_failed_state()
+	state["status"] = "security-pass-fixing"
+	state["security_pass_status"] = "blocked"
+	state["security_pass_active_fix_issues"] = [700]
+	state["security_pass_head_sha"] = ""
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:security-pass-fixing"],
+		tracking_comments=[{
+			"body": "/security-pass-waive SEC-OLD",
+			"user": {"login": "octocat", "type": "User"},
+		}],
+		issue_labels={700: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		collaborator_roles={"octocat": "maintain"},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Could not resolve the audited integration head" in combined_log
 	assert "Security-pass fix issue #700 remains in progress." in combined_log
 	assert "security-pass-waive-dedup:" not in "\n".join(
 		comment["body"] for comment in result["issues"]["192"]["comments"]

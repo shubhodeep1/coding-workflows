@@ -5929,14 +5929,29 @@ security_pass_record_waivers() {
     ' >/dev/null 2>&1; then
     return 1
   fi
+  if ! jq -e --argjson waivers "${waivers_json}" '
+    . as $waiver_state_to_record
+    | (.security_pass_head_sha // "") as $waiver_current_head_sha
+    | ($waivers | map(.defect_fingerprint)) as $waiver_fingerprints_to_record
+    | $waiver_current_head_sha != ""
+      and all($waiver_fingerprints_to_record[];
+        . as $waiver_fingerprint_to_record
+        | [($waiver_state_to_record.security_pass_reported_findings // [])[]
+            | select(.audited_head_sha == $waiver_current_head_sha and .defect_fingerprint == $waiver_fingerprint_to_record)]
+          | length == 1)
+  ' "${STATE_FILE}" >/dev/null 2>&1; then
+    return 1
+  fi
   if ! jq --argjson waivers "${waivers_json}" '
     (.security_pass_waived_findings // []) as $existing
+    | (.security_pass_head_sha // "") as $waiver_current_head_sha
     | ($waivers | map(.defect_fingerprint)) as $fingerprints
     | .security_pass_waived_findings = (
         ([$existing[] | select(((.defect_fingerprint // "") | IN($fingerprints[])) | not)] + $waivers) | .[-100:]
       )
     | .security_pass_reported_findings = (
-        [(.security_pass_reported_findings // [])[] | select(((.defect_fingerprint // "") | IN($fingerprints[])) | not)]
+        [(.security_pass_reported_findings // [])[]
+          | select((.audited_head_sha == $waiver_current_head_sha and ((.defect_fingerprint // "") | IN($fingerprints[]))) | not)]
       )
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     rm -f "${STATE_FILE}.tmp"
@@ -18117,6 +18132,9 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         if [ -z "${SECURITY_PASS_WAIVE_CURRENT_HEAD}" ]; then
           echo "::warning::Could not resolve the current integration head for /security-pass-waive comment ${SECURITY_PASS_WAIVE_COMMENT_ID}; leaving the command unmarked for retry."
           SECURITY_PASS_WAIVE_REJECT_REASON="retry"
+        elif [ -z "${SECURITY_PASS_WAIVE_AUDITED_HEAD}" ]; then
+          echo "::warning::Could not resolve the audited integration head for /security-pass-waive comment ${SECURITY_PASS_WAIVE_COMMENT_ID}; leaving the command unmarked for retry."
+          SECURITY_PASS_WAIVE_REJECT_REASON="retry"
         elif [ "${SECURITY_PASS_WAIVE_AUDITED_HEAD}" != "${SECURITY_PASS_WAIVE_CURRENT_HEAD}" ]; then
           SECURITY_PASS_WAIVE_REJECT_REASON="stale_head"
         fi
@@ -18128,13 +18146,24 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
           | [
               $ids[] as $id
               | ([$reported[] | select(.audited_head_sha == $audited_head_sha and .finding_id == $id)]) as $matches
-              | {id: $id, count: ($matches | length), finding: ($matches[0] // null)}
+              | ($matches[0] // null) as $finding
+              | {
+                  id: $id,
+                  count: ($matches | length),
+                  current_fingerprint_count: (
+                    [$reported[]
+                      | select(.audited_head_sha == $audited_head_sha and .defect_fingerprint == ($finding.defect_fingerprint // null))]
+                    | length
+                  ),
+                  finding: $finding
+                }
             ]
         ' "${STATE_FILE}" 2>/dev/null || echo '[]')"
         if ! printf '%s' "${SECURITY_PASS_WAIVE_MATCHES_JSON}" | jq -e --argjson expected "$(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length')" '
           length == $expected
           and all(.[];
             .count == 1
+            and .current_fingerprint_count == 1
             and (.finding.defect_fingerprint | type) == "string"
             and (.finding.defect_fingerprint | test("^security_defect_context\\.v1:[0-9a-f]{64}$")))
           and ((map(.finding.defect_fingerprint) | unique | length) == length)
