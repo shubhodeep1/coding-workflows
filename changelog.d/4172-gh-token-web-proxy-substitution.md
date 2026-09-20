@@ -9,7 +9,7 @@ Every web session opened with `WARNING: 'gh auth status' failed ... (likely inva
 | Files shipped to consumer repos on the next `@stable` sync | `.claude/hooks/session-start.sh`, `CLAUDE.md` |
 | Pull request | #4172 |
 
-What this means for operators: on the web, do not expect a session-environment PAT to widen GitHub reach; enable the repositories in the Claude GitHub App installation or attach them per session instead, and use a local CLI, desktop, or IDE session when the PAT itself is needed (other repositories without attaching them, GraphQL, repository variables). The hook's log line now tells you which of the two situations you are in.
+What this means for operators: on the web, do not expect a session-environment PAT to widen GitHub reach; enable the repositories in the Claude GitHub App installation or attach them per session instead, and use a local CLI, desktop, or IDE session when the PAT itself is needed (other repositories without attaching them, GraphQL, repository variables). The hook now distinguishes confirmed proxy substitution, absence of an always-on proxy credential, and an inconclusive substitution probe without claiming that a failed probe proves the PAT was forwarded.
 
 ### For contributors
 

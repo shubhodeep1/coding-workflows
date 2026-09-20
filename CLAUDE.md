@@ -1232,13 +1232,15 @@ still serves every non-Actions read in §23.A.
   expansion (`$GH_TOKEN`).
 - Never write the token into committed files, PR bodies, issue comments, commit
   messages, or diagnostic output. Redact it if a tool response contains it.
-- If the token is missing, `gh auth status` reports it invalid, or the API
+- If the token is missing, the REST identity probe fails, or an API call
   returns 401/403, **say so once**, fall back to the `mcp__github__*` tools for
   whatever they can still reach, and continue with the rest of the task — do
   not retry-loop, and do not ask the user to run the calls manually (§18).
-  A failing `gh auth status` when `GH_TOKEN` is set means the PAT is invalid,
-  expired, or was saved incorrectly in the session environment; report that
-  diagnosis rather than "gh is broken".
+  Diagnose authentication with `gh api user --jq .login`, not the GraphQL-
+  backed `gh auth status`. In a web session, a successful identity probe may
+  be the proxy's identity and a 403 may be a proxy scope restriction (§23.A);
+  only a local session's rejected REST probe supports diagnosing the PAT as
+  invalid, expired, or saved incorrectly.
 - Never commit a workflow, script, or hook that reads `GH_TOKEN` from the
   session environment. This section governs interactive sessions only;
   Actions-side code authenticates via `secrets.GH_PAT` (§23.G).

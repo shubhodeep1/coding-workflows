@@ -151,8 +151,8 @@ verify_token() {
   # "The token in GH_TOKEN is invalid" for a perfectly good PAT. `gh api
   # user` is a REST call and answers the real question (CLAUDE.md §23.D).
   local gh_login=""
-  if ! gh_login=$(gh api user --jq .login 2>/dev/null) || [ -z "${gh_login}" ]; then
-    log "WARNING: REST probe 'gh api user' failed. Token is set but GitHub did not accept it (invalid or expired token, or api.github.com unreachable)."
+  if ! gh_login=$(timeout 15 gh api user --jq .login 2>/dev/null) || [ -z "${gh_login}" ]; then
+    log "WARNING: REST identity probe 'gh api user' failed. GitHub authentication is unavailable or api.github.com could not be reached; this does not prove the configured token is invalid in a web session."
     log "  'gh auth status' is not used here: it verifies over GraphQL, which the Claude Code Web proxy blocks (HTTP 403) even for a valid token."
     return 0
   fi
@@ -164,22 +164,29 @@ verify_token() {
   # GitHub, so a 200 can only mean the proxy injected a credential — and
   # therefore GH_TOKEN never reaches GitHub, whatever its scopes. Probing
   # without any credential (rather than with a bogus one) keeps the check
-  # free of bad-credential attempts on the user's account. curl is already a
-  # dependency of install_gh above.
-  local anon_probe_status="000"
+  # free of bad-credential attempts on the user's account.
+  local anon_probe_status="unavailable"
   if command -v curl >/dev/null 2>&1; then
-    anon_probe_status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+    if ! anon_probe_status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
       -H "Accept: application/vnd.github+json" \
-      "https://api.github.com/user" 2>/dev/null || echo "000")
+      "https://api.github.com/user" 2>/dev/null); then
+      anon_probe_status="000"
+    fi
   fi
 
-  if [ "${anon_probe_status}" = "200" ]; then
-    log "NOTE: the agent proxy authenticates api.github.com calls itself (as '${gh_login}') and does NOT forward GH_TOKEN — the PAT in this session's environment is never sent to GitHub."
-    log "  Reach is the proxy's, not the PAT's: only repositories attached to this session (attach more with the host's add_repo mechanism), REST only (GraphQL is HTTP 403), and some Actions paths (e.g. repo variables) are refused."
-    log "  For PAT-backed access (other repos, GraphQL, repo variables) run Claude Code locally (CLI / desktop / IDE), where no proxy sits in front of api.github.com. See CLAUDE.md §23.A."
-  else
-    log "gh authenticated as '${gh_login}' via GH_TOKEN; PR/issue/commit/file reads should work via 'gh' for any repo this token can access."
-  fi
+  case "${anon_probe_status}" in
+    200)
+      log "NOTE: the agent proxy authenticates api.github.com calls itself (as '${gh_login}') and does NOT forward GH_TOKEN — the PAT in this session's environment is never sent to GitHub."
+      log "  Reach is the proxy's, not the PAT's: only repositories attached to this session (attach more with the host's add_repo mechanism), REST only (GraphQL is HTTP 403), and some Actions paths (e.g. repo variables) are refused."
+      log "  For PAT-backed access (other repos, GraphQL, repo variables) run Claude Code locally (CLI / desktop / IDE), where no proxy sits in front of api.github.com. See CLAUDE.md §23.A."
+      ;;
+    401)
+      log "NOTE: REST identity resolved as '${gh_login}' and the unauthenticated probe returned 401, so no always-on proxy credential was detected; this does not prove GH_TOKEN was forwarded."
+      ;;
+    *)
+      log "NOTE: REST identity resolved as '${gh_login}', but the proxy-substitution probe was inconclusive (result: ${anon_probe_status}); cannot determine whether GH_TOKEN or an agent-proxy credential authenticated the request."
+      ;;
+  esac
 
   # In Claude Code Web the only git remote points at a local proxy
   # (http://...@127.0.0.1:PORT/git/<owner>/<repo>), so `gh` can't infer
