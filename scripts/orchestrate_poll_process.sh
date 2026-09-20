@@ -11448,7 +11448,7 @@ comprehensive_cycle_metadata_json() {
     --tracking-issue "${TRACKING_NUM}" \
     --out-file "${selected_file}" >/dev/null 2>&1; then
     rm -f "${comments_file}" "${selected_file}"
-    echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","dispatcher_run_id":0,"smoke_run_id":0,"smoke_actor_id":0,"untrusted_marker":true}'
+    echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","dispatcher_run_id":0,"smoke_run_id":0,"smoke_actor_id":0,"untrusted_marker":false,"lookup_failed":true}'
     return 0
   fi
   jq -c '
@@ -11468,9 +11468,10 @@ comprehensive_cycle_metadata_json() {
         smoke_display_title: ($marker.smoke_display_title // ""),
         smoke_conclusion: ($marker.smoke_conclusion // ""),
         smoke_inputs: ($marker.smoke_inputs // {}),
-        untrusted_marker: (.untrusted_marker // false)
+        untrusted_marker: (.untrusted_marker // false),
+        lookup_failed: false
       }
-  ' "${selected_file}" 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","dispatcher_run_id":0,"smoke_run_id":0,"smoke_actor_id":0,"untrusted_marker":true}'
+  ' "${selected_file}" 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","dispatcher_run_id":0,"smoke_run_id":0,"smoke_actor_id":0,"untrusted_marker":false,"lookup_failed":true}'
   rm -f "${comments_file}" "${selected_file}"
 }
 
@@ -11786,6 +11787,14 @@ comprehensive_promotion_gate_before_final_merge() {
   fi
   local metadata_json role promote_sha smoke_sha proving_merge_sha status now
   metadata_json="$(comprehensive_cycle_metadata_json "${COMMENTS:-[]}")"
+  if [ "$(printf '%s' "${metadata_json}" | jq -r '.lookup_failed // false')" = "true" ]; then
+    now="$(date +%s)"
+    if ! comprehensive_promotion_hold_or_fail marker_lookup_unavailable "${now}" \
+      "Project #${TRACKING_NUM}: comprehensive-cycle marker lookup remained unavailable through the hold cap; promotion abandoned, merge proceeds."; then
+      return 1
+    fi
+    return 0
+  fi
   role="$(printf '%s' "${metadata_json}" | jq -r '.role')"
   if [ "${role}" != "verifying" ]; then
     return 0
@@ -11965,20 +11974,24 @@ handle_comprehensive_release_callback_if_needed() {
   local project_status="$1"
   local tracking_labels="$2"
   local comments_json="$3"
-  local callback_handled
+  local callback_handled callback_cycle_metadata_json
 
   if ! has_label "${tracking_labels}" "ai:comprehensive-test-pending"; then
     return 0
   fi
 
   callback_handled="$(jq -r '.comprehensive_release_callback.handled // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+  callback_cycle_metadata_json="$(comprehensive_cycle_metadata_json "${comments_json}")"
   if [ "${callback_handled}" = "true" ]; then
     echo "Comprehensive release callback already handled for project #${TRACKING_NUM}; skipping dispatch."
-  elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.role')" = "proving" ]; then
+  elif [ "${project_status}" = "complete" ] && [ "$(printf '%s' "${callback_cycle_metadata_json}" | jq -r '.lookup_failed // false')" = "true" ]; then
+    echo "::warning::Comprehensive-cycle marker lookup failed for project #${TRACKING_NUM}; deferring callback processing without retiring the cycle."
+    return 0
+  elif [ "${project_status}" = "complete" ] && [ "$(printf '%s' "${callback_cycle_metadata_json}" | jq -r '.role')" = "proving" ]; then
     # Promote cycle, proving run merged: dispatch the verifying run. The
     # promotion itself happens at the verifying run's ready-to-merge point.
     local cycle_metadata_json verification_outcome
-    cycle_metadata_json="$(comprehensive_cycle_metadata_json "${comments_json}")"
+    cycle_metadata_json="${callback_cycle_metadata_json}"
     verification_outcome="$(dispatch_comprehensive_verification_run "${cycle_metadata_json}")"
     if [[ "${verification_outcome}" == RETRY* ]]; then
       local verification_retries
@@ -12016,7 +12029,7 @@ The proving run merged, but the verifying run could not be dispatched (${verific
         tg_notify "Project #${TRACKING_NUM} (proving) merged but the verifying run was not dispatched (${verification_outcome}); no promotion this cycle." "CRITICAL"
         ;;
     esac
-  elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_marker')" = "true" ]; then
+  elif [ "${project_status}" = "complete" ] && [ "$(printf '%s' "${callback_cycle_metadata_json}" | jq -r '.untrusted_marker // false')" = "true" ]; then
     # Marker evidence that fails producer or signature authentication must
     # never dispatch or promote. Retire this cycle automatically so the next
     # scheduled run can create fresh issue-bound evidence without an operator.
@@ -12036,7 +12049,7 @@ The proving run merged, but the verifying run could not be dispatched (${verific
 This tracking issue carries \`ai:comprehensive-test-pending\`, but its apply-analysis marker failed producer-ID, tracking-issue binding, or keyring-signature authentication. The poller does not dispatch or promote on it. It is removing the cycle label automatically so the next scheduled promote cycle can start with fresh producer-bound, issue-bound evidence. Nothing is promoted."
       tg_notify "Project #${TRACKING_NUM}: apply-analysis marker authentication failed; no promotion occurred and the cycle label is being removed for an automated retry." "CRITICAL"
     fi
-  elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.role')" = "verifying" ]; then
+  elif [ "${project_status}" = "complete" ] && [ "$(printf '%s' "${callback_cycle_metadata_json}" | jq -r '.role')" = "verifying" ]; then
     # Promotion (or its deferral) already happened before this final merge;
     # the verifying run's own merge never promotes.
     jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

@@ -3454,6 +3454,14 @@ if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[
 		print(json.dumps(payload))
 		sys.exit(0)
 
+if (
+	len(args) >= 2
+	and _script_matches(args[0], "scripts/orchestrate_state_v2.py")
+	and args[1] == "select-comprehensive-marker"
+	and os.environ.get("MOCK_ORCH_STATE_V2_SELECT_FAILURE") == "true"
+):
+	sys.exit(2)
+
 if len(args) >= 2 and _script_matches(args[0], "scripts/orchestrate_state_v2.py") and args[1] == "pack":
 	mode = os.environ.get("MOCK_ORCH_STATE_V2_PACK_MODE", "")
 	if mode == "count_mismatch":

@@ -478,6 +478,61 @@ def test_untrusted_marker_never_promotes_or_dispatches() -> None:
 	assert any("next scheduled promote cycle" in body for body in tracking_bodies)
 	assert all("post the marker from a trusted account" not in body for body in tracking_bodies)
 
+	second = _run_poller(
+		state=result["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=result["tracking_labels"],
+		issue_labels={10: ["ai:merged"]},
+		prs=result["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert second["latest_state"]["comprehensive_release_callback"] == callback
+	assert second["release_dispatches"] == []
+	assert "COMPREHENSIVE_MARKER_UNTRUSTED" not in second["stdout"]
+	assert not any(
+		"Untrusted apply-analysis marker" in comment.get("body", "")
+		for comment in second["issues"]["192"]["comments"]
+	)
+
+
+def test_marker_lookup_failure_holds_merge_without_retiring_cycle() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(
+		_project_state(),
+		compare_commits=commits,
+		env_overrides={"MOCK_ORCH_STATE_V2_SELECT_FAILURE": "true"},
+	)
+
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"
+	assert result["latest_state"]["final_merge_status"] != "merged"
+	assert LABEL in result["tracking_labels"]
+	assert result["release_dispatches"] == []
+	assert "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=192 reason=marker_lookup_unavailable" in result["stdout"]
+	assert "COMPREHENSIVE_MARKER_UNTRUSTED" not in result["stdout"]
+
+
+def test_marker_lookup_failure_defers_completed_callback_without_retiring_cycle() -> None:
+	state = _project_state()
+	state["status"] = "complete"
+	state["final_merge_status"] = "merged"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=[LABEL],
+		tracking_comments=[_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))],
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_ORCH_STATE_V2_SELECT_FAILURE": "true"},
+	)
+
+	assert result["latest_state"].get("comprehensive_release_callback", {}).get("handled") is not True
+	assert LABEL in result["tracking_labels"]
+	assert result["release_dispatches"] == []
+	assert "deferring callback processing without retiring the cycle" in result["stdout"]
+	assert "COMPREHENSIVE_MARKER_UNTRUSTED" not in result["stdout"]
+
 
 def test_release_workflow_override_cannot_pin_and_fails_closed() -> None:
 	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
