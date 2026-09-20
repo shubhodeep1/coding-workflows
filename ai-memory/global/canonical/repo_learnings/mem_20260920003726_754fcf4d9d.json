@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Orchestration polling and state transitions are treated as explicit contracts, including stale-head and retry handling.",
   "timestamps": {
     "created_at": "2026-09-20T00:37:26Z",
