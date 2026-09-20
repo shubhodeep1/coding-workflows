@@ -13,9 +13,10 @@ must stay byte-identical because the consumer-sync step in
 `.github/workflows/update_workflows.yml` mirrors the template into every
 consumer repo.
 
-The verify_token cases pin the bounded REST identity probe, confirmed proxy
-substitution, absence of an always-on proxy credential, and inconclusive probe
-outcomes so none can be misreported as direct GH_TOKEN authentication.
+The verify_token cases pin the bounded REST identity probe and its no-timeout
+fallback, confirmed proxy substitution, absence of an always-on proxy
+credential, and inconclusive outcomes so none can be misreported as direct
+session-token authentication.
 """
 
 from __future__ import annotations
@@ -123,13 +124,15 @@ def run_verify_token_probe(
     gh_login: str = "proxy-user",
     anon_status: str | None = "200",
     curl_exit: int = 0,
+    timeout_available: bool = True,
+    github_token_only: bool = False,
 ) -> str:
     """Run verify_token() with isolated gh/curl/timeout/git shims."""
     with tempfile.TemporaryDirectory() as temporary_directory:
         shim_directory = Path(temporary_directory)
         shim_bodies = {
             "gh": """#!/bin/bash
-if [ "${SESSION_START_TEST_TIMEOUT_WRAPPED:-}" != "1" ]; then
+if [ "${SESSION_START_TEST_EXPECT_TIMEOUT_WRAPPER:-1}" = "1" ] && [ "${SESSION_START_TEST_TIMEOUT_WRAPPED:-}" != "1" ]; then
   exit 97
 fi
 if [ "${1:-}" = "api" ] && [ "${2:-}" = "user" ]; then
@@ -139,15 +142,16 @@ if [ "${1:-}" = "api" ] && [ "${2:-}" = "user" ]; then
 fi
 exit 1
 """,
-            "timeout": """#!/bin/bash
-[ "${1:-}" = "15" ] || exit 96
-shift
-SESSION_START_TEST_TIMEOUT_WRAPPED=1 exec "$@"
-""",
             "git": """#!/bin/bash
 exit 1
 """,
         }
+        if timeout_available:
+            shim_bodies["timeout"] = """#!/bin/bash
+[ "${1:-}" = "15" ] || exit 96
+shift
+SESSION_START_TEST_TIMEOUT_WRAPPED=1 exec "$@"
+"""
         if anon_status is not None:
             shim_bodies["curl"] = """#!/bin/bash
 printf '%s' "${SESSION_START_TEST_ANON_STATUS:-000}"
@@ -161,12 +165,13 @@ printf '%s' "${SESSION_START_TEST_ANON_STATUS:-000}"
 
         probe_environment = {
             "PATH": str(shim_directory),
-            "GH_TOKEN": "test-token",
-            "GITHUB_TOKEN": "",
+            "GH_TOKEN": "" if github_token_only else "test-token",
+            "GITHUB_TOKEN": "test-token" if github_token_only else "",
             "SESSION_START_TEST_GH_EXIT": str(gh_exit),
             "SESSION_START_TEST_GH_LOGIN": gh_login,
             "SESSION_START_TEST_ANON_STATUS": anon_status or "",
             "SESSION_START_TEST_CURL_EXIT": str(curl_exit),
+            "SESSION_START_TEST_EXPECT_TIMEOUT_WRAPPER": "1" if timeout_available else "0",
         }
         result = subprocess.run(
             [
@@ -221,26 +226,44 @@ def main() -> int:
         ),
         (
             "proxy-substitution",
-            {"anon_status": "200"},
-            ("the agent proxy authenticates api.github.com calls itself", "does NOT forward GH_TOKEN"),
+            {"anon_status": "200", "github_token_only": True},
+            (
+                "the agent proxy authenticates api.github.com calls itself",
+                "does NOT forward the configured session credential (GH_TOKEN or GITHUB_TOKEN)",
+            ),
             ("probe was inconclusive", "via GH_TOKEN"),
         ),
         (
             "anonymous-401",
             {"anon_status": "401"},
-            ("no always-on proxy credential was detected", "does not prove GH_TOKEN was forwarded"),
+            (
+                "no always-on proxy credential was detected",
+                "does not prove the configured session credential (GH_TOKEN or GITHUB_TOKEN) was forwarded",
+            ),
             ("via GH_TOKEN",),
+        ),
+        (
+            "timeout-unavailable",
+            {"timeout_available": False},
+            ("the agent proxy authenticates api.github.com calls itself",),
+            ("REST identity probe 'gh api user' failed",),
         ),
         (
             "probe-timeout",
             {"anon_status": "000", "curl_exit": 28},
-            ("proxy-substitution probe was inconclusive (result: 000)",),
+            (
+                "proxy-substitution probe was inconclusive (result: 000)",
+                "configured session credential (GH_TOKEN or GITHUB_TOKEN)",
+            ),
             ("via GH_TOKEN",),
         ),
         (
             "curl-unavailable",
             {"anon_status": None},
-            ("proxy-substitution probe was inconclusive (result: unavailable)",),
+            (
+                "proxy-substitution probe was inconclusive (result: unavailable)",
+                "configured session credential (GH_TOKEN or GITHUB_TOKEN)",
+            ),
             ("via GH_TOKEN",),
         ),
     ]
