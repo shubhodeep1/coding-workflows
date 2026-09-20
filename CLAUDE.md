@@ -1095,6 +1095,39 @@ in `.github/ai/consumer_repos.json`, and any repo the user names. When the
 host session exposes a repo-attachment mechanism, prefer attaching the repo
 over reaching around the session's declared scope.
 
+**Web sessions: the PAT never reaches GitHub.** In Claude Code on the web
+(claude.ai/code and the mobile/desktop apps backed by it) every request to
+`api.github.com` — `gh`, `curl`, anything — passes through the session's
+agent proxy, which strips the `Authorization` header and signs the request
+with its own short-lived GitHub App token. `GH_TOKEN` is read by `gh` but
+discarded in transit, so a valid, invalid, or absent token all behave the
+same. Consequences, verified against the proxy (2026-09-20):
+
+- **Identity and reach are the proxy's.** Calls authenticate as the user
+  who connected the GitHub App, and only for repositories attached to the
+  session. A consumer repo that is not attached answers 403 `GitHub access
+  to this repository is not enabled for this session. Use add_repo to
+  request access.` — attach it (with `access: "push"` when writes or the
+  API are needed) rather than treating the 403 as a token problem. Making a
+  repo reachable in *every* session is done in the Claude GitHub App
+  installation and claude.ai's repository access settings, not with any
+  env var.
+- **Some endpoints are refused outright**, whatever the token: GraphQL
+  (§23.D), and Actions paths such as repo variables (`Access to this GitHub
+  Actions path is not permitted through this proxy.`). Run/job logs and
+  runs remain readable.
+- **`gh auth status` is not a token test here.** It verifies over GraphQL,
+  so it reports `The token in GH_TOKEN is invalid` for a good PAT. The
+  SessionStart hook therefore probes over REST (`gh api user`) and, when an
+  unauthenticated `GET /user` also returns 200, reports that the proxy is
+  substituting its credential.
+- **The reads and writes above that need the PAT itself** — other repos
+  without attaching them, GraphQL, repo variables — are available only in
+  a local Claude Code session (CLI, desktop app, IDE extension), where no
+  proxy sits in front of `api.github.com` and `gh` uses `GH_TOKEN`
+  as-is. Do not try to route around the proxy (unsetting `HTTPS_PROXY`,
+  alternate hosts, credential helpers): direct egress is blocked as well.
+
 ### B) Routine Repository Writes — Act, Do Not Ask
 
 These writes are ordinary session work, already implied by the task the user
@@ -1179,11 +1212,14 @@ Two environment facts that make `gh` calls fail in confusing ways:
   Claude Code Web the only git remote points at a local proxy, so bare calls
   fail with `failed to determine base repo` — which is not an auth problem.
   The SessionStart hook prints the resolved slug.
-- **Check auth directly, nounset-safe**, rather than inferring it from the
+- **Check auth over REST, nounset-safe**, rather than inferring it from the
   SessionStart log:
-  `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh auth status`.
-  The hook's secondary probe only tests `actions:read` for one repo and can
-  emit a `NOTE`/`WARNING` while `gh` works fine for everything else.
+  `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh api user --jq .login`.
+  Do not use `gh auth status` for this in a web session: it verifies over
+  GraphQL, which the proxy answers with 403, so it reports the token as
+  invalid whether or not it is (§23.A, "Web sessions"). The hook's secondary
+  probe only tests `actions:read` for one repo and can emit a
+  `NOTE`/`WARNING` while `gh` works fine for everything else.
 
 Useful token scopes: classic PATs need `repo` plus `workflow` (and
 `read:org` for org metadata); fine-grained PATs need contents, pull requests,

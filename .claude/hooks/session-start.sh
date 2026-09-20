@@ -140,15 +140,46 @@ verify_token() {
     return 0
   fi
 
-  # Two-stage probe so a missing actions:read scope doesn't get reported as
-  # "token broken" — gh remains usable for PRs, issues, commits, and file
-  # contents even when Actions logs are gated.
-  if ! gh auth status >/dev/null 2>&1; then
-    log "WARNING: 'gh auth status' failed. Token is set but gh cannot authenticate (likely invalid or expired)."
+  # Three-stage probe so neither a blocked GraphQL endpoint nor a missing
+  # actions:read scope gets reported as "token broken" — gh remains usable
+  # for PRs, issues, commits, and file contents even when Actions logs are
+  # gated.
+  #
+  # Stage 1 is deliberately NOT `gh auth status`: that command verifies the
+  # token over GraphQL, which Claude Code Web's agent proxy rejects with
+  # HTTP 403 for every operation outside its pinned set, so it reports
+  # "The token in GH_TOKEN is invalid" for a perfectly good PAT. `gh api
+  # user` is a REST call and answers the real question (CLAUDE.md §23.D).
+  local gh_login=""
+  if ! gh_login=$(gh api user --jq .login 2>/dev/null) || [ -z "${gh_login}" ]; then
+    log "WARNING: REST probe 'gh api user' failed. Token is set but GitHub did not accept it (invalid or expired token, or api.github.com unreachable)."
+    log "  'gh auth status' is not used here: it verifies over GraphQL, which the Claude Code Web proxy blocks (HTTP 403) even for a valid token."
     return 0
   fi
 
-  log "gh authenticated; PR/issue/commit/file reads should work via 'gh' for any repo this token can access."
+  # Stage 2: detect credential substitution. In Claude Code Web every
+  # request to api.github.com passes through the agent proxy, which strips
+  # the Authorization header and signs the request with its own short-lived
+  # GitHub App token. An *unauthenticated* GET /user is 401 straight from
+  # GitHub, so a 200 can only mean the proxy injected a credential — and
+  # therefore GH_TOKEN never reaches GitHub, whatever its scopes. Probing
+  # without any credential (rather than with a bogus one) keeps the check
+  # free of bad-credential attempts on the user's account. curl is already a
+  # dependency of install_gh above.
+  local anon_probe_status="000"
+  if command -v curl >/dev/null 2>&1; then
+    anon_probe_status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+      -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/user" 2>/dev/null || echo "000")
+  fi
+
+  if [ "${anon_probe_status}" = "200" ]; then
+    log "NOTE: the agent proxy authenticates api.github.com calls itself (as '${gh_login}') and does NOT forward GH_TOKEN — the PAT in this session's environment is never sent to GitHub."
+    log "  Reach is the proxy's, not the PAT's: only repositories attached to this session (attach more with the host's add_repo mechanism), REST only (GraphQL is HTTP 403), and some Actions paths (e.g. repo variables) are refused."
+    log "  For PAT-backed access (other repos, GraphQL, repo variables) run Claude Code locally (CLI / desktop / IDE), where no proxy sits in front of api.github.com. See CLAUDE.md §23.A."
+  else
+    log "gh authenticated as '${gh_login}' via GH_TOKEN; PR/issue/commit/file reads should work via 'gh' for any repo this token can access."
+  fi
 
   # In Claude Code Web the only git remote points at a local proxy
   # (http://...@127.0.0.1:PORT/git/<owner>/<repo>), so `gh` can't infer
@@ -170,7 +201,7 @@ verify_token() {
   if gh run list -L 1 -R "${repo_slug}" >/dev/null 2>&1; then
     log "gh has actions:read for ${repo_slug}; Actions logs readable via 'gh run view --log <id> -R ${repo_slug}'."
   else
-    log "NOTE: 'gh run list -R ${repo_slug}' failed — possible causes: token lacks actions:read, repo not accessible to this token (403/404), incorrect derived slug, or transient error. Actions log access unavailable; if PR/issue/file reads via 'gh -R ${repo_slug}' also fail, verify token scopes with 'gh auth status'."
+    log "NOTE: 'gh run list -R ${repo_slug}' failed — possible causes: token lacks actions:read, repo not accessible to this token (403/404), incorrect derived slug, or transient error. Actions log access unavailable; if PR/issue/file reads via 'gh -R ${repo_slug}' also fail, re-check with 'gh api user' and 'gh api repos/${repo_slug}' (REST — 'gh auth status' is GraphQL-backed and fails behind the Claude Code Web proxy regardless of token validity)."
   fi
 }
 
