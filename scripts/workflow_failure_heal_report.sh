@@ -96,18 +96,13 @@ if [ ! -f "${HEAL_PY}" ]; then
 	log "error heal_helper_missing path=${HEAL_PY}"
 	exit 1
 fi
-if ! python3 - "${HEAL_PY}" "${LABEL}" <<'PY'
-import importlib.util
-import sys
-spec = importlib.util.spec_from_file_location("workflow_failure_heal", sys.argv[1])
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-sys.exit(0 if sys.argv[2] in module.HUMAN_NEEDED_LABELS else 1)
-PY
-then
-	log "skip reason=label_not_human_needed label=${LABEL}"
-	exit 0
-fi
+case "${LABEL}" in
+	ai:needs-human|ai:check-triage-escalated|ai:destructive-blocked|ai:scope-blocked|ai:harness-broken|ai:resolver-escalated|ai:security-pass-failed) ;;
+	*)
+		log "skip reason=label_not_human_needed label=${LABEL}"
+		exit 0
+		;;
+esac
 
 # --- Collect evidence pointers ---------------------------------------------
 
@@ -127,7 +122,7 @@ if [ "${ISSUE_STATE}" != "open" ]; then
 fi
 
 COMMENTS_JSON_FILE="${RUNTIME_DIR}/comments.json"
-if ! gh_retry gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
+if ! gh_retry gh api --method GET --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
 	--jq '.[] | {body: (.body // ""), created_at: (.created_at // "")}' 2>/dev/null \
 	| jq -s '.' > "${COMMENTS_JSON_FILE}" 2>/dev/null; then
 	log "warn comments_fetch_failed issue=${ISSUE_NUMBER}; continuing without comments"
@@ -138,7 +133,7 @@ if ! jq -e 'type == "array"' "${COMMENTS_JSON_FILE}" >/dev/null 2>&1; then
 fi
 
 RUNS_JSON_FILE="${RUNTIME_DIR}/runs.json"
-if ! gh_api_json_to_file "${RUNS_JSON_FILE}" gh api "repos/${REPO}/actions/runs" -F per_page=100; then
+if ! gh_api_json_to_file "${RUNS_JSON_FILE}" gh api --method GET "repos/${REPO}/actions/runs" -F per_page=100; then
 	log "warn runs_fetch_failed repo=${REPO}; continuing without run listing"
 	printf '{"workflow_runs":[]}' > "${RUNS_JSON_FILE}"
 fi

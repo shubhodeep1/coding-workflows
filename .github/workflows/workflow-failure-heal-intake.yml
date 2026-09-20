@@ -83,6 +83,7 @@ jobs:
         with:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
 
       - name: Create runtime workspace
         run: |

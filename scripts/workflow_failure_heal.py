@@ -528,7 +528,7 @@ def budget_decision(
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 	open_issues: list[dict[str, Any]] = []
 	created_today = 0
-	prior_same_fp: list[tuple[int, int, str]] = []
+	prior_same_fp: list[tuple[int, int, str, str]] = []
 	duplicate: dict[str, Any] | None = None
 	for issue in issues:
 		if not isinstance(issue, dict) or issue.get("pull_request"):
@@ -537,6 +537,7 @@ def budget_decision(
 		if number is None:
 			continue
 		markers = parse_heal_markers(issue.get("body"))
+		issue_repository = issue.get("repository") if is_valid_repo_slug(issue.get("repository")) else ""
 		state = str(issue.get("state") or "").lower()
 		created = _parse_iso(issue.get("created_at"))
 		if created is not None and created >= day_start:
@@ -547,13 +548,14 @@ def budget_decision(
 				duplicate = issue
 		elif markers.get("fp") == fp:
 			gen = _positive_int(markers.get("gen")) or 1
-			prior_same_fp.append((number, gen, markers.get("root") or fp))
+			prior_same_fp.append((gen, number, markers.get("root") or fp, issue_repository))
 
 	if duplicate is not None:
 		return {
 			"action": "duplicate",
 			"existing_issue": _positive_int(duplicate.get("number")),
 			"existing_url": sanitize_text(duplicate.get("html_url"), 300),
+			"existing_repo": duplicate.get("repository") if is_valid_repo_slug(duplicate.get("repository")) else "",
 			"gen": _positive_int(parse_heal_markers(duplicate.get("body")).get("gen")) or 1,
 			"root": parse_heal_markers(duplicate.get("body")).get("root") or fp,
 			"open_count": len(open_issues),
@@ -563,12 +565,13 @@ def budget_decision(
 	gen = 1
 	root = fp
 	prior_issue: int | None = None
+	prior_repo = ""
 	if source_gen is not None:
 		gen = source_gen + 1
 		root = source_root or fp
 	elif prior_same_fp:
 		prior_same_fp.sort()
-		prior_issue, prior_gen, prior_root = prior_same_fp[-1]
+		prior_gen, prior_issue, prior_root, prior_repo = prior_same_fp[-1]
 		gen = prior_gen + 1
 		root = prior_root
 	if gen > max_depth:
@@ -578,6 +581,7 @@ def budget_decision(
 			"gen": gen,
 			"root": root,
 			"prior_issue": prior_issue,
+			"prior_repo": prior_repo,
 			"open_count": len(open_issues),
 			"today_count": created_today,
 		}

@@ -100,8 +100,11 @@ def test_human_needed_label_parity_across_workflows() -> None:
 	assert heal.ESCALATED_LABEL in contract
 	# The validate step of the reusable workflow carries the same allow-list.
 	validate_step = reusable["jobs"]["report"]["steps"][0]["run"]
+	report_script = REPORT_SCRIPT.read_text(encoding="utf-8")
 	for label in expected:
 		assert label in validate_step
+		assert label in report_script
+	assert "importlib.util" not in report_script
 
 
 def test_consumer_template_is_pinned_and_in_full_profile() -> None:
@@ -142,6 +145,14 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	# External inputs are env-bound, never interpolated into the script body.
 	assert "${{" not in payload_step["run"]
 	assert payload_step["env"]["CLIENT_PAYLOAD_JSON"] == "${{ toJson(github.event.client_payload) }}"
+	checkout_step = [s for s in job["steps"] if s.get("name") == "Checkout repository"][0]
+	assert checkout_step["with"]["persist-credentials"] is False
+	intake_script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert "--sandbox read-only" in intake_script
+	assert "include_apply_patch_tool=false" in intake_script
+	assert "shell_environment_policy.ignore_default_excludes=false" in intake_script
+	assert 'shell_environment_policy.filters.OPENROUTER_API_KEY="exclude"' in intake_script
+	assert "danger-full-access" not in intake_script
 
 
 def test_reusable_report_workflow_binds_inputs_through_env() -> None:
@@ -165,6 +176,13 @@ def test_prompt_declares_classification_tokens() -> None:
 	for token in heal.CLASSIFICATIONS:
 		assert f"`{token}`" in text
 	assert "UNTRUSTED" in text
+
+
+def test_stable_log_prefixes_are_registered() -> None:
+	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL"):
+		assert f"- `{prefix}`" in agents_text
+		assert f"LOG_PREFIX.name={prefix}" in agents_text
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +341,17 @@ def test_budget_decision_matrix() -> None:
 
 	lineage = heal.budget_decision([_heal_issue(5, state="closed", fp=fp, gen=1), _heal_issue(6, state="closed", fp=fp, gen=2, root=other)], fp=fp, now=now)
 	assert lineage == {"action": "open", "gen": 3, "root": other, "open_count": 0, "today_count": 0}
+	cross_repo_lineage = heal.budget_decision(
+		[
+			dict(_heal_issue(500, state="closed", fp=fp, gen=1), repository=SELF_REPO),
+			dict(_heal_issue(5, state="closed", fp=fp, gen=3, root=other), repository=CONSUMER_REPO),
+		],
+		fp=fp,
+		now=now,
+	)
+	assert cross_repo_lineage["action"] == "escalate"
+	assert cross_repo_lineage["prior_issue"] == 5
+	assert cross_repo_lineage["prior_repo"] == CONSUMER_REPO
 
 	capped = heal.budget_decision([_heal_issue(6, state="closed", fp=fp, gen=3)], fp=fp, now=now)
 	assert capped["action"] == "escalate" and capped["gen"] == 4 and capped["prior_issue"] == 6
@@ -399,7 +428,7 @@ def test_filter_log_keeps_signal_lines_and_bounds_size() -> None:
 # ---------------------------------------------------------------------------
 
 MOCK_GH = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, urllib.parse
 from pathlib import Path
 state_path = Path(os.environ["MOCK_GH_STATE"])
 state = json.loads(state_path.read_text())
@@ -419,8 +448,26 @@ def fail(msg):
 	sys.stderr.write(msg + "\n")
 	sys.exit(1)
 
+def inferred_method(rest):
+	method = ""
+	has_field = False
+	index = 0
+	while index < len(rest):
+		arg = rest[index]
+		if arg in ("-X", "--method"):
+			method = rest[index + 1]
+			index += 2
+			continue
+		if arg.startswith("-X") and len(arg) > 2:
+			method = arg[2:]
+		if arg in ("-f", "-F", "--field", "--raw-field"):
+			has_field = True
+		index += 1
+	return method or ("POST" if has_field else "GET")
+
 if args[:1] == ["api"]:
 	rest = [a for a in args[1:]]
+	method = inferred_method(rest)
 	path = next((a for a in rest if a.startswith("repos/")), "")
 	if "--input" in rest:
 		body = json.loads(Path(rest[rest.index("--input") + 1]).read_text())
@@ -437,10 +484,16 @@ if args[:1] == ["api"]:
 			state.setdefault("comments_posted", []).append({"path": path, "body": text})
 			out("{}")
 	if "/issues/" in path and path.endswith("/comments"):
+		if method != "GET":
+			fail("HTTP method must be GET for comments list")
 		items = state.get("comments", {}).get(path, [])
 		out("".join(json.dumps(item) + "\n" for item in items))
 	if path.endswith("/issues") and "--paginate" in rest:
-		items = state.get("heal_issues", [])
+		if method != "GET":
+			fail("HTTP method must be GET for issues list")
+		repo_slug = path[len("repos/"):-len("/issues")]
+		issues_by_repo = state.get("heal_issues_by_repo", {})
+		items = issues_by_repo.get(repo_slug, state.get("heal_issues", []) if repo_slug == "shubhodeep1/coding-workflows" else [])
 		out("".join(json.dumps(item) + "\n" for item in items))
 	if "/issues/" in path and path.split("/")[-1].isdigit():
 		number = path.split("/")[-1]
@@ -449,8 +502,12 @@ if args[:1] == ["api"]:
 			fail("HTTP 404")
 		out(json.dumps(issue))
 	if path.endswith("/actions/runs"):
+		if method != "GET":
+			fail("HTTP method must be GET for runs list")
 		out(json.dumps({"workflow_runs": state.get("runs", [])}))
 	if "/actions/runs/" in path and path.endswith("/jobs"):
+		if method != "GET":
+			fail("HTTP method must be GET for jobs list")
 		run_id = path.split("/")[-2]
 		jobs = state.get("jobs", {}).get(run_id)
 		if jobs is None:
@@ -463,7 +520,7 @@ if args[:1] == ["api"]:
 			fail("HTTP 404")
 		out(text)
 	if "/branches/" in path:
-		branch = path.split("/branches/")[-1]
+		branch = urllib.parse.unquote(path.split("/branches/")[-1])
 		if branch in state.get("branches", ["stable", "main"]):
 			out(json.dumps({"name": branch}))
 		fail("HTTP 404")
@@ -587,6 +644,9 @@ def test_report_script_dispatches_thin_payload() -> None:
 		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500", "501"]
 		assert payload["source_kind"] == "issue"
 		assert "AI implementation workflow failed" in payload["comments_excerpt"]
+		for call in state["calls"]:
+			if any(part.endswith("/comments") or part.endswith("/actions/runs") for part in call):
+				assert "--method" in call and call[call.index("--method") + 1] == "GET"
 
 
 def test_report_script_skip_paths() -> None:
@@ -717,6 +777,9 @@ def test_intake_opens_upstream_hotfix_issue_for_workflow_defect() -> None:
 	# Heal labels were ensured through label_helpers (no raw gh label create in the script).
 	assert any(args[0] == heal.HEAL_LABEL for args in state["labels_created"])
 	assert "gh label create" not in INTAKE_SCRIPT.read_text(encoding="utf-8")
+	for call in state["calls"]:
+		if any(part.endswith("/jobs") or part.endswith("/issues") for part in call):
+			assert "--method" in call and call[call.index("--method") + 1] == "GET"
 
 
 def test_intake_routes_consumer_defect_to_consumer_repo() -> None:
@@ -727,6 +790,25 @@ def test_intake_routes_consumer_defect_to_consumer_repo() -> None:
 	assert created["repo"] == CONSUMER_REPO
 	assert not TARGET_BRANCH_RE.search(created["body"])
 	assert any(args[0] == heal.HEAL_LABEL and args[2] == CONSUMER_REPO for args in state["labels_created"])
+
+
+def test_intake_deduplicates_and_escalates_consumer_owned_heal_issues() -> None:
+	signature = heal.error_signature(heal.filter_log(JOB_LOG))
+	fp = heal.fingerprint("AI Implement", "Run codex", signature)
+	consumer_duplicate = _heal_issue(31, state="open", fp=fp)
+	state = _intake_state(heal_issues_by_repo={SELF_REPO: [], CONSUMER_REPO: [consumer_duplicate]})
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"existing_repo={CONSUMER_REPO}" in result.stdout
+	assert "issues_created" not in state_after
+	assert any(comment["path"] == f"repos/{CONSUMER_REPO}/issues/31/comments" for comment in state_after["comments_posted"])
+
+	consumer_capped = _heal_issue(32, state="closed", fp=fp, gen=3)
+	state = _intake_state(heal_issues_by_repo={SELF_REPO: [], CONSUMER_REPO: [consumer_capped]})
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"prior_repo={CONSUMER_REPO}" in result.stdout
+	assert ["32", "--repo", CONSUMER_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 
 
 def test_intake_no_issue_for_config_and_transient() -> None:
@@ -820,6 +902,22 @@ def test_intake_workflow_run_targets_failed_branch_and_skips_downstream_gate() -
 	assert result.returncode == 0
 	assert "skip reason=downstream_gate_failure" in result.stdout
 	assert "issues_created" not in state_after
+
+
+def test_intake_workflow_run_preserves_slash_bearing_target_branch() -> None:
+	branch_name = "release/2026-09"
+	run_payload = heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Mark Stable Release", "conclusion": "failure", "head_sha": SHA_B, "head_branch": branch_name, "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Mark Stable Release"},
+	)
+	state = _intake_state(branches=["stable", "main", branch_name])
+	result, state_after, _ = _run_intake(run_payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == branch_name
+	branch_calls = [call for call in state_after["calls"] if any("/branches/" in part for part in call)]
+	assert branch_calls and "%2F" in next(part for part in branch_calls[0] if "/branches/" in part)
 
 
 def test_intake_without_linked_runs_still_files_from_label_context() -> None:

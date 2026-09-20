@@ -181,7 +181,7 @@ while IFS=$'\t' read -r run_id run_url; do
 		break
 	fi
 	JOBS_FILE="${LOG_DIR}/run-${run_id}-jobs.json"
-	if ! gh_api_json_to_file "${JOBS_FILE}" gh api "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
+	if ! gh_api_json_to_file "${JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
 		log "warn jobs_fetch_failed source=${SOURCE_REPO} run=${run_id}"
 		continue
 	fi
@@ -253,14 +253,31 @@ log "fingerprint fp=${FP} workflow=${FIRST_WORKFLOW_NAME} step=${FIRST_FAILING_S
 
 # --- Dedup / lineage / budget ----------------------------------------------
 
+SELF_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_self.json"
+SOURCE_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_source.json"
 ISSUES_FILE="${RUNTIME_DIR}/heal_issues.json"
-if ! gh_retry gh api --paginate "repos/${SELF_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
+if ! gh_retry gh api --method GET --paginate "repos/${SELF_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
 	--jq '.[] | {number, state, body: (.body // ""), created_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
-	| jq -s '.' > "${ISSUES_FILE}" 2>/dev/null; then
+	| jq -s --arg repository "${SELF_REPO}" 'map(. + {repository: $repository})' > "${SELF_ISSUES_FILE}" 2>/dev/null; then
 	log "error heal_issue_list_failed"
 	tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 	exit 1
 fi
+# The upstream list cannot see consumer-owned heal issues. Fetch the source
+# repository once so deduplication, lineage, and volume budgets cover both
+# repositories that can own the issue produced by this intake.
+if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
+	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
+		--jq '.[] | {number, state, body: (.body // ""), created_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+		| jq -s --arg repository "${SOURCE_REPO}" 'map(. + {repository: $repository})' > "${SOURCE_ISSUES_FILE}" 2>/dev/null; then
+		log "error heal_issue_list_failed repo=${SOURCE_REPO}"
+		tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues in ${SOURCE_REPO}; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+		exit 1
+	fi
+else
+	printf '[]' > "${SOURCE_ISSUES_FILE}"
+fi
+jq -s 'add // []' "${SELF_ISSUES_FILE}" "${SOURCE_ISSUES_FILE}" > "${ISSUES_FILE}"
 jq -e 'type == "array"' "${ISSUES_FILE}" >/dev/null 2>&1 || printf '[]' > "${ISSUES_FILE}"
 
 BUDGET_ARGS=(--issues-json "${ISSUES_FILE}" --fingerprint "${FP}" --max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}")
@@ -281,22 +298,27 @@ case "${ACTION}" in
 	duplicate)
 		EXISTING="$(jq -r '.existing_issue' "${DECISION_FILE}")"
 		EXISTING_URL="$(jq -r '.existing_url // ""' "${DECISION_FILE}")"
+		EXISTING_REPO="$(jq -r '.existing_repo // ""' "${DECISION_FILE}")"
+		[ -n "${EXISTING_REPO}" ] || EXISTING_REPO="${SELF_REPO}"
 		OCCURRENCE_FILE="${RUNTIME_DIR}/occurrence.md"
 		python3 "${HEAL_PY}" compose-occurrence --payload-json "${PAYLOAD_FILE}" --intake-run-url "${RUN_URL}" > "${OCCURRENCE_FILE}"
-		if gh_retry gh api "repos/${SELF_REPO}/issues/${EXISTING}/comments" -F body=@"${OCCURRENCE_FILE}" >/dev/null 2>&1; then
-			log "duplicate existing_issue=${EXISTING} fp=${FP} source=${SOURCE_LABEL}"
+		if gh_retry gh api "repos/${EXISTING_REPO}/issues/${EXISTING}/comments" -F body=@"${OCCURRENCE_FILE}" >/dev/null 2>&1; then
+			log "duplicate existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} source=${SOURCE_LABEL}"
 		else
-			log "warn duplicate_comment_failed existing_issue=${EXISTING} fp=${FP}"
+			log "warn duplicate_comment_failed existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
 		fi
 		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} matches open heal issue ${EXISTING_URL:-#${EXISTING}} (recorded as another occurrence)." "DEBUG" >/dev/null 2>&1 || true
 		exit 0
 		;;
 	escalate)
 		PRIOR_ISSUE="$(jq -r '.prior_issue // ""' "${DECISION_FILE}")"
+		PRIOR_REPO="$(jq -r '.prior_repo // ""' "${DECISION_FILE}")"
+		[ -n "${PRIOR_REPO}" ] || PRIOR_REPO="${SELF_REPO}"
 		if [[ "${PRIOR_ISSUE}" =~ ^[0-9]+$ ]]; then
-			gh_retry gh issue edit "${PRIOR_ISSUE}" --repo "${SELF_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${PRIOR_ISSUE}"
+			ensure_label_exists "${ESCALATED_LABEL}" "${PRIOR_REPO}" || true
+			gh_retry gh issue edit "${PRIOR_ISSUE}" --repo "${PRIOR_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${PRIOR_ISSUE} repo=${PRIOR_REPO}"
 		fi
-		log "escalate reason=lineage_cap gen=${GEN} max=${MAX_DEPTH} root=${ROOT} fp=${FP} source=${SOURCE_LABEL} prior_issue=${PRIOR_ISSUE:-none}"
+		log "escalate reason=lineage_cap gen=${GEN} max=${MAX_DEPTH} root=${ROOT} fp=${FP} source=${SOURCE_LABEL} prior_issue=${PRIOR_ISSUE:-none} prior_repo=${PRIOR_REPO}"
 		tg_send_msg "Workflow failure heal hit the lineage cap (generation ${GEN} > ${MAX_DEPTH}) for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}'). The auto-heal chain has been stopped; a human should look at this."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		exit 0
 		;;
@@ -316,6 +338,21 @@ esac
 
 # --- Source checkout at the release SHA the failing run used ---------------
 
+_git_fetch_diagnosis_ref()
+{
+	local diagnosis_ref="$1"
+	local diagnosis_auth_header=""
+	if [ -n "${GH_TOKEN:-}" ]; then
+		diagnosis_auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+		GIT_CONFIG_COUNT=1 \
+			GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+			GIT_CONFIG_VALUE_0="${diagnosis_auth_header}" \
+			git fetch --quiet --depth 1 origin "${diagnosis_ref}" >/dev/null 2>&1
+	else
+		git fetch --quiet --depth 1 origin "${diagnosis_ref}" >/dev/null 2>&1
+	fi
+}
+
 DIAG_SHA="${WRAPPER_SHA}"
 if [ "${SOURCE_KIND}" = "workflow_run" ]; then
 	DIAG_SHA="${HEAD_SHA}"
@@ -328,7 +365,7 @@ if [ "${SOURCE_CHECKOUT,,}" != "false" ] && git rev-parse --is-inside-work-tree 
 		DIAG_REF="${TARGET_BRANCH_DEFAULT}"
 		[ "${SOURCE_KIND}" != "workflow_run" ] || DIAG_REF="${HEAD_BRANCH:-${TARGET_BRANCH_DEFAULT}}"
 	fi
-	if git fetch --quiet --depth 1 origin "${DIAG_REF}" >/dev/null 2>&1 \
+	if _git_fetch_diagnosis_ref "${DIAG_REF}" \
 		&& git worktree add --quiet --detach "${HEAL_SOURCE_DIR}" FETCH_HEAD >/dev/null 2>&1; then
 		HEAL_SOURCE_NOTE="${HEAL_SOURCE_DIR} (coding-workflows at ${DIAG_REF})"
 		log "source_checkout ref=${DIAG_REF} path=${HEAL_SOURCE_DIR}"
@@ -398,10 +435,12 @@ if command -v codex >/dev/null 2>&1; then
 	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
 		codex --ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
-		-c include_apply_patch_tool=true \
+		-c include_apply_patch_tool=false \
+		-c 'shell_environment_policy.ignore_default_excludes=false' \
+		-c 'shell_environment_policy.filters.OPENROUTER_API_KEY="exclude"' \
 		exec --skip-git-repo-check \
 		--model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
-		--sandbox danger-full-access \
+		--sandbox read-only \
 		< "${PROMPT_FILE}" \
 		> "${DIAG_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
 		:
@@ -445,7 +484,10 @@ log "classification=${CLASSIFICATION} source=${SOURCE_LABEL} fp=${FP} gen=${GEN}
 _branch_exists()
 {
 	local repo="$1" branch="$2"
-	gh_retry gh api "repos/${repo}/branches/${branch}" >/dev/null 2>&1
+	local encoded_branch=""
+	encoded_branch="$(printf '%s' "${branch}" | jq -sRr @uri)"
+	[ -n "${encoded_branch}" ] || return 1
+	gh_retry gh api "repos/${repo}/branches/${encoded_branch}" >/dev/null 2>&1
 }
 
 _comment_on_source()
