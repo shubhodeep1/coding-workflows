@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4167,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4167\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4168\",\"pr_number\":4168,\"branch\":\"ai/issue-4167\",\"run_id\":\"35485229406\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35485229406\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/4163-e2e-review-blocked-budget.md\",\"tests/test_test_and_mark_stable_review_blocked_budget.py\"]}",
+  "fingerprint": "961afdffc02888e94c17b61825108ac2fc6dc2dba31aba52dc58ecb3abb89a57",
+  "lineage": {
+    "issue_number": 4167,
+    "parent_ids": [],
+    "pr_number": 4168,
+    "run_id": "35485229406",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35485229406",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4168"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260920030915_c37c3c6e20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4167,
+    "level": "run",
+    "pr_number": 4168,
+    "run_id": "35485229406"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4167: https://github.com/shubhodeep1/coding-workflows/pull/4168",
+  "timestamps": {
+    "created_at": "2026-09-20T03:09:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
