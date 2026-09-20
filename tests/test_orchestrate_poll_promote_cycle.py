@@ -9,6 +9,9 @@ mocked `gh` from test_orchestrate_poll_process.py.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import stat
 import tempfile
 from pathlib import Path
@@ -23,9 +26,50 @@ HUMAN_SHA = "e" * 40
 BOT_SHA = "f" * 40
 
 LABEL = "ai:comprehensive-test-pending"
+DISPATCHER_RUN_ID = 777
+SMOKE_RUN_ID = 500
+SMOKE_ACTOR_ID = 1234
+MARKER_KEY = b"a" * 32
+SMOKE_DISPLAY_TITLE = f"Test & Mark Stable Release [cycle:{DISPATCHER_RUN_ID};gate-only:true;skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]"
 
 
 def _marker(role: str, **extra: str) -> str:
+	marker_document = {
+		"schema_version": "comprehensive_cycle_marker.v1",
+		"algorithm": "hmac-sha256",
+		"key_id": "active",
+		"producer_id": 41898282,
+		"repository": "owner/repo",
+		"tracking_issue": 192,
+		"source_doc": "analysis/workflow-optimization-2026-09-01.md",
+		"role": role,
+		"dispatcher_run_id": DISPATCHER_RUN_ID,
+		"smoke_run_id": SMOKE_RUN_ID,
+		"smoke_actor_id": SMOKE_ACTOR_ID,
+		"smoke_workflow_path": ".github/workflows/test-and-mark-stable.yml",
+		"smoke_event": "workflow_dispatch",
+		"smoke_display_title": SMOKE_DISPLAY_TITLE,
+		"smoke_inputs": {
+			"gate_only": "true",
+			"gate_cycle_id": str(DISPATCHER_RUN_ID),
+			"skip_e2e": "false",
+			"dry_run": "false",
+			"test_repo": "",
+			"review_workflow_file": "internal-review.yml",
+		},
+		"smoke_conclusion": "success",
+		"smoke_head_sha": extra.get("smoke_sha", SMOKE_SHA),
+		"cycle_baseline_sha": extra.get("cycle_baseline_sha", BASELINE_SHA),
+		"promote_sha": extra.get("promote_sha", ""),
+		"proving_merge_sha": extra.get("proving_merge_sha", ""),
+		"signature": "0" * 64,
+	}
+	unsigned_document = dict(marker_document)
+	unsigned_document.pop("signature")
+	message = b"coding-workflows/comprehensive-cycle-marker/v1\n" + json.dumps(
+		unsigned_document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+	).encode()
+	marker_document["signature"] = hmac.new(MARKER_KEY, message, hashlib.sha256).hexdigest()
 	lines = [
 		"<!-- apply-analysis-source-doc -->",
 		"## Apply-analysis dispatch",
@@ -36,17 +80,23 @@ def _marker(role: str, **extra: str) -> str:
 	for key, value in extra.items():
 		lines.append(f"apply-analysis-{key.replace('_', '-')}: {value}")
 	lines.append("")
+	lines.extend([
+		"<!-- COMPREHENSIVE_CYCLE_MARKER_V1",
+		json.dumps(marker_document, sort_keys=True, separators=(",", ":")),
+		"COMPREHENSIVE_CYCLE_MARKER_V1 -->",
+		"",
+	])
 	lines.append("Dispatched by the promote cycle.")
 	return "\n".join(lines)
 
 
 def _trusted(marker: str) -> dict:
-	"""The orchestrator posts the marker with GH_PAT, i.e. as the repository owner."""
-	return {"body": marker, "author_association": "OWNER", "user": {"login": "shubhodeep1"}}
+	"""The orchestrator posts the marker with github.token as Actions bot."""
+	return {"body": marker, "author_association": "NONE", "user": {"login": "github-actions[bot]", "id": 41898282}}
 
 
 def _untrusted(marker: str) -> dict:
-	return {"body": marker, "author_association": "CONTRIBUTOR", "user": {"login": "drive-by"}}
+	return {"body": marker, "author_association": "MEMBER", "user": {"login": "member", "id": 999}}
 
 
 def _open_final_pr(number: int = 360) -> dict:
@@ -158,7 +208,22 @@ def test_proving_run_retries_when_default_branch_ref_is_unavailable() -> None:
 
 
 def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None, tag_commit: str = "9" * 40, untrusted_marker: bool = False, env_overrides: dict | None = None, compare_status_by_range: dict | None = None, extra_store: dict | None = None):
-	extra = {"compare_commits_detail": compare_commits, "tag_refs": {"stable": {"type": "tag", "sha": "8" * 40}}, "tag_objects": {"8" * 40: tag_commit}}
+	extra = {
+		"compare_commits_detail": compare_commits,
+		"tag_refs": {"stable": {"type": "tag", "sha": "8" * 40}},
+		"tag_objects": {"8" * 40: tag_commit},
+		"action_runs_by_id": {
+			str(SMOKE_RUN_ID): {
+				"id": SMOKE_RUN_ID,
+				"path": ".github/workflows/test-and-mark-stable.yml",
+				"event": "workflow_dispatch",
+				"display_title": SMOKE_DISPLAY_TITLE,
+				"conclusion": "success",
+				"head_sha": SMOKE_SHA,
+				"actor": {"id": SMOKE_ACTOR_ID},
+			},
+		},
+	}
 	if commit_files:
 		extra["commit_files"] = commit_files
 	if compare_status_by_range:
@@ -348,6 +413,54 @@ def test_stable_tag_lookup_failure_holds_instead_of_recording_no_tag() -> None:
 	assert isinstance(result["latest_state"]["comprehensive_promotion"]["gate_started_at"], int)
 
 
+def test_smoke_run_api_head_mismatch_holds_without_promotion() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	mismatched_run = {
+		str(SMOKE_RUN_ID): {
+			"id": SMOKE_RUN_ID,
+			"path": ".github/workflows/test-and-mark-stable.yml",
+			"event": "workflow_dispatch",
+			"display_title": SMOKE_DISPLAY_TITLE,
+			"conclusion": "success",
+			"head_sha": HUMAN_SHA,
+			"actor": {"id": SMOKE_ACTOR_ID},
+		},
+	}
+	result = _verifying_run(
+		_project_state(),
+		compare_commits=commits,
+		extra_store={"action_runs_by_id": mismatched_run},
+	)
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"
+	assert result["latest_state"]["final_merge_status"] != "merged"
+	assert result["release_dispatches"] == []
+	assert "reason=smoke_run_verification_unavailable" in result["stdout"]
+
+
+def test_smoke_run_api_unsafe_gate_inputs_hold_without_promotion() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	unsafe_run = {
+		str(SMOKE_RUN_ID): {
+			"id": SMOKE_RUN_ID,
+			"path": ".github/workflows/test-and-mark-stable.yml",
+			"event": "workflow_dispatch",
+			"display_title": SMOKE_DISPLAY_TITLE.replace("skip-e2e:false", "skip-e2e:true"),
+			"conclusion": "success",
+			"head_sha": SMOKE_SHA,
+			"actor": {"id": SMOKE_ACTOR_ID},
+		},
+	}
+	result = _verifying_run(
+		_project_state(),
+		compare_commits=commits,
+		extra_store={"action_runs_by_id": unsafe_run},
+	)
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"
+	assert result["latest_state"]["final_merge_status"] != "merged"
+	assert result["release_dispatches"] == []
+	assert "reason=smoke_run_verification_unavailable" in result["stdout"]
+
+
 def test_untrusted_marker_never_promotes_or_dispatches() -> None:
 	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
 	result = _verifying_run(_project_state(), compare_commits=commits, untrusted_marker=True)
@@ -356,18 +469,109 @@ def test_untrusted_marker_never_promotes_or_dispatches() -> None:
 	assert result["latest_state"]["status"] == "complete"
 	callback = result["latest_state"]["comprehensive_release_callback"]
 	assert callback["role"] == "untrusted"
-	assert callback.get("handled") is not True
+	assert callback["handled"] is True
 	assert callback["untrusted_marker_alerted"] is True
-	# The cycle stays human-gated: the label is kept so no new cycle starts.
-	assert LABEL in result["tracking_labels"]
+	assert LABEL not in result["tracking_labels"]
 	assert "COMPREHENSIVE_MARKER_UNTRUSTED" in result["stdout"]
 	assert "alerted=false" in result["stdout"]
-	# A later tick neither re-alerts nor consumes the label.
-	second = _verifying_run(result["latest_state"], compare_commits=commits, untrusted_marker=True)
-	assert "alerted=true" in second["stdout"]
-	assert LABEL in second["tracking_labels"]
+	tracking_bodies = [comment.get("body", "") for comment in result["issues"]["192"]["comments"]]
+	assert any("next scheduled promote cycle" in body for body in tracking_bodies)
+	assert all("post the marker from a trusted account" not in body for body in tracking_bodies)
+
+	second = _run_poller(
+		state=result["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=result["tracking_labels"],
+		issue_labels={10: ["ai:merged"]},
+		prs=result["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert second["latest_state"]["comprehensive_release_callback"] == callback
 	assert second["release_dispatches"] == []
-	assert second["latest_state"]["comprehensive_release_callback"].get("handled") is not True
+	assert "COMPREHENSIVE_MARKER_UNTRUSTED" not in second["stdout"]
+	assert not any(
+		"Untrusted apply-analysis marker" in comment.get("body", "")
+		for comment in second["issues"]["192"]["comments"]
+	)
+
+
+def test_marker_lookup_failure_holds_merge_without_retiring_cycle() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(
+		_project_state(),
+		compare_commits=commits,
+		env_overrides={"MOCK_ORCH_STATE_V2_SELECT_FAILURE": "true"},
+	)
+
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"
+	assert result["latest_state"]["final_merge_status"] != "merged"
+	assert LABEL in result["tracking_labels"]
+	assert result["release_dispatches"] == []
+	assert "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=192 reason=marker_lookup_unavailable" in result["stdout"]
+	assert "COMPREHENSIVE_MARKER_UNTRUSTED" not in result["stdout"]
+
+
+def test_marker_lookup_failure_does_not_hold_non_verifying_merge() -> None:
+	for scenario, tracking_comments in (
+		("proving", [_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))]),
+		("legacy", []),
+	):
+		result = _run_poller(
+			state=_project_state(),
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_labels=[LABEL],
+			tracking_comments=tracking_comments,
+			issue_labels={10: ["ai:merged"]},
+			prs=[_open_final_pr()],
+			existing_branches=["main", "orchestrator/project-192"],
+			env_overrides={"MOCK_ORCH_STATE_V2_SELECT_FAILURE": "true"},
+		)
+
+		assert result["latest_state"]["final_merge_status"] == "merged", scenario
+		assert "comprehensive_promotion" not in result["latest_state"], scenario
+		assert "COMPREHENSIVE_PROMOTION_HOLD" not in result["stdout"], scenario
+
+
+def test_marker_lookup_failure_preserves_dispatched_promotion() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	first = _verifying_run(_project_state(), compare_commits=commits)
+	assert first["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+
+	second = _verifying_run(
+		first["latest_state"],
+		compare_commits=commits,
+		prs=first["prs"],
+		env_overrides={"MOCK_ORCH_STATE_V2_SELECT_FAILURE": "true"},
+	)
+
+	assert second["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+	assert second["latest_state"]["final_merge_status"] != "merged"
+	assert second["release_dispatches"] == []
+	assert "reason=marker_lookup_unavailable" not in second["stdout"]
+
+
+def test_marker_lookup_failure_defers_completed_callback_without_retiring_cycle() -> None:
+	state = _project_state()
+	state["status"] = "complete"
+	state["final_merge_status"] = "merged"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=[LABEL],
+		tracking_comments=[_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))],
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_ORCH_STATE_V2_SELECT_FAILURE": "true"},
+	)
+
+	assert result["latest_state"].get("comprehensive_release_callback", {}).get("handled") is not True
+	assert LABEL in result["tracking_labels"]
+	assert result["release_dispatches"] == []
+	assert "deferring callback processing without retiring the cycle" in result["stdout"]
+	assert "COMPREHENSIVE_MARKER_UNTRUSTED" not in result["stdout"]
 
 
 def test_release_workflow_override_cannot_pin_and_fails_closed() -> None:

@@ -132,6 +132,19 @@ RESOLVER_RETRY_SIGNED_FIELDS = {
 	"pre_existing_drift_count", "regression_summary", "drift_summary", "escalated",
 	"escalated_at", "updated_at", "signature",
 }
+COMPREHENSIVE_MARKER_SCHEMA_VERSION = "comprehensive_cycle_marker.v1"
+COMPREHENSIVE_MARKER_DOMAIN = b"coding-workflows/comprehensive-cycle-marker/v1"
+COMPREHENSIVE_MARKER_MAX_BYTES = 65_536
+COMPREHENSIVE_MARKER_OPENER = "<!-- COMPREHENSIVE_CYCLE_MARKER_V1"
+COMPREHENSIVE_MARKER_CLOSER = "COMPREHENSIVE_CYCLE_MARKER_V1 -->"
+COMPREHENSIVE_MARKER_WORKFLOW_PATH = ".github/workflows/test-and-mark-stable.yml"
+COMPREHENSIVE_MARKER_SIGNED_FIELDS = {
+	"schema_version", "algorithm", "key_id", "producer_id", "repository",
+	"tracking_issue", "source_doc", "role", "dispatcher_run_id", "smoke_run_id", "smoke_actor_id",
+	"smoke_workflow_path", "smoke_event", "smoke_display_title", "smoke_inputs",
+	"smoke_conclusion", "smoke_head_sha", "cycle_baseline_sha", "promote_sha",
+	"proving_merge_sha", "signature",
+}
 
 V2_OPENER_RE = re.compile(
 	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
@@ -626,6 +639,298 @@ def _signature_for_resolver_retry(document: dict[str, Any], auth_key: bytes) -> 
 	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
 
 
+def _validated_comprehensive_marker_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	repository = args.repository.strip()
+	tracking_issue = getattr(args, "tracking_issue", 0)
+	if (
+		len(repository) > 256
+		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+		or any(segment in (".", "..") for segment in repository.split("/"))
+	):
+		return None, "repository must be an owner/repo slug"
+	if args.producer_id < 1:
+		return None, "producer id must be a positive integer"
+	if tracking_issue < 0:
+		return None, "tracking issue must be a non-negative integer"
+	return {
+		"schema_version": COMPREHENSIVE_MARKER_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"producer_id": args.producer_id,
+		"repository": repository,
+		"tracking_issue": tracking_issue,
+	}, None
+
+
+def _valid_comprehensive_marker_document(document: dict[str, Any], *, allow_unbound: bool = False) -> bool:
+	if set(document) != COMPREHENSIVE_MARKER_SIGNED_FIELDS:
+		return False
+	for integer_field in ("producer_id", "dispatcher_run_id", "smoke_run_id", "smoke_actor_id"):
+		value = document.get(integer_field)
+		if not isinstance(value, int) or isinstance(value, bool) or value < 1 or value > STATE_AUTH_MAX_GENERATION:
+			return False
+	tracking_issue = document.get("tracking_issue")
+	if not isinstance(tracking_issue, int) or isinstance(tracking_issue, bool) or tracking_issue > STATE_AUTH_MAX_GENERATION:
+		return False
+	if (allow_unbound and tracking_issue != 0) or (not allow_unbound and tracking_issue < 1):
+		return False
+	if document.get("schema_version") != COMPREHENSIVE_MARKER_SCHEMA_VERSION:
+		return False
+	if document.get("algorithm") != STATE_AUTH_ALGORITHM:
+		return False
+	if document.get("role") not in ("proving", "verifying"):
+		return False
+	source_doc = document.get("source_doc")
+	if (
+		not isinstance(source_doc, str)
+		or not 1 <= len(source_doc) <= 512
+		or source_doc.startswith("/")
+		or ".." in source_doc.replace("\\", "/").split("/")
+		or "\\" in source_doc
+	):
+		return False
+	if document.get("smoke_workflow_path") != COMPREHENSIVE_MARKER_WORKFLOW_PATH:
+		return False
+	if document.get("smoke_event") != "workflow_dispatch" or document.get("smoke_conclusion") != "success":
+		return False
+	expected_title = (
+		f"Test & Mark Stable Release [cycle:{document['dispatcher_run_id']};gate-only:true;"
+		"skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]"
+	)
+	if document.get("smoke_display_title") != expected_title:
+		return False
+	if document.get("smoke_inputs") != {
+		"gate_only": "true",
+		"gate_cycle_id": str(document["dispatcher_run_id"]),
+		"skip_e2e": "false",
+		"dry_run": "false",
+		"test_repo": "",
+		"review_workflow_file": "internal-review.yml",
+	}:
+		return False
+	for sha_field in ("smoke_head_sha", "cycle_baseline_sha"):
+		if re.fullmatch(r"[0-9a-f]{40}", str(document.get(sha_field, ""))) is None:
+			return False
+	for optional_sha_field in ("promote_sha", "proving_merge_sha"):
+		optional_sha = document.get(optional_sha_field)
+		if not isinstance(optional_sha, str) or (optional_sha and re.fullmatch(r"[0-9a-f]{40}", optional_sha) is None):
+			return False
+	if document["role"] == "verifying" and (not document["promote_sha"] or not document["proving_merge_sha"]):
+		return False
+	if document["role"] == "proving" and (document["promote_sha"] or document["proving_merge_sha"]):
+		return False
+	if re.fullmatch(r"[0-9a-f]{64}", str(document.get("signature", ""))) is None:
+		return False
+	key_id = document.get("key_id")
+	return isinstance(key_id, str) and STATE_AUTH_KEY_ID_RE.fullmatch(key_id) is not None
+
+
+def _signature_for_comprehensive_marker(document: dict[str, Any], auth_key: bytes) -> str:
+	unsigned_document = dict(document)
+	unsigned_document.pop("signature", None)
+	message = b"\n".join((COMPREHENSIVE_MARKER_DOMAIN, _canonical_json_bytes(unsigned_document)))
+	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def _comprehensive_marker_is_verified(
+	document: dict[str, Any],
+	context: dict[str, Any],
+	auth_keys: dict[str, bytes],
+	*,
+	allow_unbound: bool = False,
+) -> bool:
+	if not _valid_comprehensive_marker_document(document, allow_unbound=allow_unbound):
+		return False
+	if any(document.get(field) != expected for field, expected in context.items()):
+		return False
+	key_id = document.get("key_id")
+	if not isinstance(key_id, str) or key_id not in auth_keys:
+		return False
+	expected_signature = _signature_for_comprehensive_marker(document, auth_keys[key_id])
+	return hmac.compare_digest(str(document["signature"]), expected_signature)
+
+
+def cmd_sign_comprehensive_marker(args: argparse.Namespace) -> int:
+	context, context_error = _validated_comprehensive_marker_context(args)
+	if context_error is not None:
+		print(f"comprehensive marker signing failed: {context_error}", file=sys.stderr)
+		return 2
+	candidate = _load_bounded_json_object(Path(args.candidate_file), COMPREHENSIVE_MARKER_MAX_BYTES)
+	if candidate is None:
+		print("comprehensive marker signing failed: candidate is invalid or oversized", file=sys.stderr)
+		return 2
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"comprehensive marker signing failed: {key_error}", file=sys.stderr)
+		return 2
+	assert context is not None and active_key_id is not None and auth_keys is not None
+	document = {
+		**context,
+		"key_id": active_key_id,
+		"source_doc": candidate.get("source_doc"),
+		"role": candidate.get("role"),
+		"dispatcher_run_id": candidate.get("dispatcher_run_id"),
+		"smoke_run_id": candidate.get("smoke_run_id"),
+		"smoke_actor_id": candidate.get("smoke_actor_id"),
+		"smoke_workflow_path": candidate.get("smoke_workflow_path"),
+		"smoke_event": candidate.get("smoke_event"),
+		"smoke_display_title": candidate.get("smoke_display_title"),
+		"smoke_inputs": candidate.get("smoke_inputs"),
+		"smoke_conclusion": candidate.get("smoke_conclusion"),
+		"smoke_head_sha": candidate.get("smoke_head_sha"),
+		"cycle_baseline_sha": candidate.get("cycle_baseline_sha"),
+		"promote_sha": candidate.get("promote_sha", ""),
+		"proving_merge_sha": candidate.get("proving_merge_sha", ""),
+		"signature": "0" * 64,
+	}
+	if not _valid_comprehensive_marker_document(document, allow_unbound=True):
+		print("comprehensive marker signing failed: candidate fields are invalid", file=sys.stderr)
+		return 2
+	document["signature"] = _signature_for_comprehensive_marker(document, auth_keys[active_key_id])
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("comprehensive marker signing failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def cmd_verify_comprehensive_marker(args: argparse.Namespace) -> int:
+	context, context_error = _validated_comprehensive_marker_context(args)
+	if context_error is not None:
+		print(f"comprehensive marker verification failed: {context_error}", file=sys.stderr)
+		return 2
+	document = _load_bounded_json_object(Path(args.envelope_file), COMPREHENSIVE_MARKER_MAX_BYTES)
+	if document is None:
+		return 1
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"comprehensive marker verification failed: {key_error}", file=sys.stderr)
+		return 2
+	assert context is not None and auth_keys is not None
+	if not _comprehensive_marker_is_verified(document, context, auth_keys, allow_unbound=args.tracking_issue == 0):
+		return 1
+	if args.out_file:
+		try:
+			Path(args.out_file).write_bytes(_canonical_json_bytes(document) + b"\n")
+			os.chmod(args.out_file, 0o600)
+		except OSError:
+			print("comprehensive marker verification failed: output file is not writable", file=sys.stderr)
+			return 2
+	return 0
+
+
+def cmd_bind_comprehensive_marker(args: argparse.Namespace) -> int:
+	context, context_error = _validated_comprehensive_marker_context(args)
+	if context_error is not None:
+		print(f"comprehensive marker binding failed: {context_error}", file=sys.stderr)
+		return 2
+	if context is None or context["tracking_issue"] < 1:
+		print("comprehensive marker binding failed: tracking issue must be a positive integer", file=sys.stderr)
+		return 2
+	document = _load_bounded_json_object(Path(args.envelope_file), COMPREHENSIVE_MARKER_MAX_BYTES)
+	if document is None:
+		return 1
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"comprehensive marker binding failed: {key_error}", file=sys.stderr)
+		return 2
+	assert active_key_id is not None and auth_keys is not None
+	unbound_context = dict(context)
+	unbound_context["tracking_issue"] = 0
+	if not _comprehensive_marker_is_verified(document, unbound_context, auth_keys, allow_unbound=True):
+		return 1
+	bound_document = dict(document)
+	bound_document["tracking_issue"] = context["tracking_issue"]
+	bound_document["key_id"] = active_key_id
+	bound_document["signature"] = "0" * 64
+	if not _valid_comprehensive_marker_document(bound_document):
+		return 1
+	bound_document["signature"] = _signature_for_comprehensive_marker(bound_document, auth_keys[active_key_id])
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(bound_document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("comprehensive marker binding failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def _extract_comprehensive_marker(body: str) -> dict[str, Any] | None:
+	if len(body.encode("utf-8")) > GITHUB_COMMENT_BODY_CAP:
+		return None
+	start = body.find(COMPREHENSIVE_MARKER_OPENER)
+	if start < 0:
+		return None
+	payload_start = body.find("\n", start)
+	if payload_start < 0:
+		return None
+	end = body.find("\n" + COMPREHENSIVE_MARKER_CLOSER, payload_start + 1)
+	if end < 0:
+		return None
+	raw_payload = body[payload_start + 1:end]
+	if len(raw_payload.encode("utf-8")) > COMPREHENSIVE_MARKER_MAX_BYTES:
+		return None
+	try:
+		document = json.loads(raw_payload)
+	except json.JSONDecodeError:
+		return None
+	return document if isinstance(document, dict) else None
+
+
+def cmd_select_comprehensive_marker(args: argparse.Namespace) -> int:
+	context, context_error = _validated_comprehensive_marker_context(args)
+	if context_error is not None:
+		print(f"comprehensive marker selection failed: {context_error}", file=sys.stderr)
+		return 2
+	try:
+		comments_path = Path(args.comments_json)
+		if comments_path.stat().st_size > 32 * 1024 * 1024:
+			raise ValueError("comments payload is oversized")
+		comments = json.loads(comments_path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
+		print("comprehensive marker selection failed: comments JSON is invalid", file=sys.stderr)
+		return 2
+	if not isinstance(comments, list) or len(comments) > 10_000:
+		print("comprehensive marker selection failed: comments payload is invalid", file=sys.stderr)
+		return 2
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"comprehensive marker selection failed: {key_error}", file=sys.stderr)
+		return 2
+	assert context is not None and auth_keys is not None
+	selected: dict[str, Any] | None = None
+	marker_seen = False
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		body = comment.get("body")
+		if not isinstance(body, str) or not re.search(r"(?m)^apply-analysis-source-doc: ", body):
+			continue
+		marker_seen = True
+		if COMPREHENSIVE_MARKER_OPENER not in body:
+			continue
+		user = comment.get("user")
+		if not isinstance(user, dict) or user.get("id") != args.producer_id:
+			continue
+		document = _extract_comprehensive_marker(body)
+		if document is not None and _comprehensive_marker_is_verified(
+			document,
+			context,
+			auth_keys,
+			allow_unbound=args.tracking_issue == 0,
+		):
+			selected = document
+	result = {"marker": selected, "untrusted_marker": marker_seen and selected is None}
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(result) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("comprehensive marker selection failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
 def _resolver_retry_document_is_verified(
 	document: dict[str, Any],
 	context: dict[str, Any],
@@ -1052,6 +1357,41 @@ def main() -> int:
 		help="Validate the dedicated state-authentication keyring",
 	)
 	p_validate_keyring.set_defaults(func=cmd_validate_keyring)
+	for command_name, command_help, command_func in (
+		("sign-comprehensive-marker", "Sign a comprehensive-cycle marker envelope", cmd_sign_comprehensive_marker),
+		("verify-comprehensive-marker", "Verify a comprehensive-cycle marker envelope", cmd_verify_comprehensive_marker),
+	):
+		command_parser = sub.add_parser(command_name, help=command_help)
+		command_parser.add_argument("--repository", required=True)
+		command_parser.add_argument("--producer-id", required=True, type=int)
+		command_parser.add_argument("--tracking-issue", type=int, default=0)
+		if command_name == "sign-comprehensive-marker":
+			command_parser.add_argument("--candidate-file", required=True)
+			command_parser.add_argument("--out-file", required=True)
+		else:
+			command_parser.add_argument("--envelope-file", required=True)
+			command_parser.add_argument("--out-file")
+		command_parser.set_defaults(func=command_func)
+	p_bind_comprehensive_marker = sub.add_parser(
+		"bind-comprehensive-marker",
+		help="Bind an authenticated comprehensive-cycle marker to its created tracking issue",
+	)
+	p_bind_comprehensive_marker.add_argument("--envelope-file", required=True)
+	p_bind_comprehensive_marker.add_argument("--repository", required=True)
+	p_bind_comprehensive_marker.add_argument("--producer-id", required=True, type=int)
+	p_bind_comprehensive_marker.add_argument("--tracking-issue", required=True, type=int)
+	p_bind_comprehensive_marker.add_argument("--out-file", required=True)
+	p_bind_comprehensive_marker.set_defaults(func=cmd_bind_comprehensive_marker)
+	p_select_comprehensive_marker = sub.add_parser(
+		"select-comprehensive-marker",
+		help="Select the newest producer-authenticated comprehensive-cycle marker",
+	)
+	p_select_comprehensive_marker.add_argument("--comments-json", required=True)
+	p_select_comprehensive_marker.add_argument("--repository", required=True)
+	p_select_comprehensive_marker.add_argument("--producer-id", required=True, type=int)
+	p_select_comprehensive_marker.add_argument("--tracking-issue", required=True, type=int)
+	p_select_comprehensive_marker.add_argument("--out-file", required=True)
+	p_select_comprehensive_marker.set_defaults(func=cmd_select_comprehensive_marker)
 	for command_name, command_help, command_func in (
 		("sign-refusal", "Sign a context-bound review-blocked refusal envelope", cmd_sign_refusal),
 		("verify-refusal", "Verify a context-bound review-blocked refusal envelope", cmd_verify_refusal),

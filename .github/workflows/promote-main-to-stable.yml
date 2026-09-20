@@ -134,6 +134,7 @@ jobs:
         id: cycle
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
           PROMOTE_CYCLE_ENABLED: ${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}
           PROMOTE_CYCLE_MIN_DOCS: ${{ vars.PROMOTE_CYCLE_MIN_DOCS || '2' }}
           PROMOTE_CYCLE_GATE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}

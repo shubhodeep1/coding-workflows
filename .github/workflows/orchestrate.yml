@@ -33,6 +33,8 @@ name: AI Orchestrate (Reusable)
         required: true
       OPENROUTER_API_KEY:
         required: true
+      ORCHESTRATOR_STATE_AUTH_KEYRING:
+        required: false
       TG_BOT_SECRET:
         required: false
 
@@ -348,7 +350,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-            for f in gh_helpers.sh emit_event.sh emit_event.py label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh model_provider_broker.py; do
+            for f in gh_helpers.sh emit_event.sh emit_event.py label_helpers.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_state_v2.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh model_provider_broker.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
@@ -996,8 +998,11 @@ jobs:
         id: tracking_issue
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_COMMENT_TOKEN: ${{ github.token }}
+          TRACKING_COMMENT_CALLER_ACTOR_ID: ${{ github.actor_id }}
           TRACKING_LABELS_INPUT: ${{ inputs.tracking_labels }}
           TRACKING_COMMENT_INPUT: ${{ inputs.tracking_comment }}
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
@@ -1047,8 +1052,48 @@ jobs:
               echo "TRACKING_ISSUE_LABEL_APPLIED tracking_issue=${TRACKING_ISSUE_NUMBER} label=${_extra_label}"
             done
           fi
+          if [ -z "${_binding_failed_stage}" ] && [ -n "${TRACKING_COMMENT_INPUT:-}" ] \
+            && printf '%s' "${TRACKING_LABELS_INPUT:-}" | tr ',' '\n' | grep -Eq '^[[:space:]]*ai:comprehensive-test-pending[[:space:]]*$'; then
+            _tracking_marker_comments_file="$(mktemp)"
+            _tracking_marker_selected_file="$(mktemp)"
+            _tracking_marker_unbound_file="$(mktemp)"
+            _tracking_marker_bound_file="$(mktemp)"
+            jq -n --arg body "${TRACKING_COMMENT_INPUT}" '[{body: $body, user: {id: 41898282}}]' > "${_tracking_marker_comments_file}"
+            if [ -z "${ORCHESTRATOR_STATE_AUTH_KEYRING:-}" ] \
+              || ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" select-comprehensive-marker \
+                --comments-json "${_tracking_marker_comments_file}" --repository "${{ github.repository }}" \
+                --producer-id 41898282 --tracking-issue 0 --out-file "${_tracking_marker_selected_file}" >/dev/null \
+              || [ "$(jq -r '.marker.smoke_actor_id // 0' "${_tracking_marker_selected_file}" 2>/dev/null || echo 0)" != "${TRACKING_COMMENT_CALLER_ACTOR_ID:-}" ]; then
+              _binding_failed_stage="comment-auth"
+            elif ! jq -e '.marker' "${_tracking_marker_selected_file}" > "${_tracking_marker_unbound_file}" \
+              || ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" bind-comprehensive-marker \
+                --envelope-file "${_tracking_marker_unbound_file}" --repository "${{ github.repository }}" \
+                --producer-id 41898282 --tracking-issue "${TRACKING_ISSUE_NUMBER}" --out-file "${_tracking_marker_bound_file}" >/dev/null \
+              || ! TRACKING_COMMENT_INPUT="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${_tracking_marker_comments_file}" "${_tracking_marker_bound_file}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          comments = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          body = comments[0]["body"]
+          bound_marker = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          opener = "<!-- COMPREHENSIVE_CYCLE_MARKER_V1\n"
+          closer = "\nCOMPREHENSIVE_CYCLE_MARKER_V1 -->"
+          start = body.find(opener)
+          end = body.find(closer, start + len(opener))
+          if start < 0 or end < 0:
+              raise SystemExit(1)
+          bound_body = body[:start + len(opener)] + json.dumps(bound_marker, sort_keys=True, separators=(",", ":")) + body[end:]
+          print(bound_body, end="")
+          PY
+          )"; then
+              _binding_failed_stage="comment-binding"
+            fi
+            rm -f "${_tracking_marker_comments_file}" "${_tracking_marker_selected_file}" \
+              "${_tracking_marker_unbound_file}" "${_tracking_marker_bound_file}"
+          fi
           if [ -z "${_binding_failed_stage}" ] && [ -n "${TRACKING_COMMENT_INPUT:-}" ]; then
-            if gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+            if GH_TOKEN="${TRACKING_COMMENT_TOKEN}" gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
               -f body="${TRACKING_COMMENT_INPUT}" >/dev/null; then
               echo "TRACKING_ISSUE_COMMENT_POSTED tracking_issue=${TRACKING_ISSUE_NUMBER}"
             else
