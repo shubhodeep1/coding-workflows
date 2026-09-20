@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`\n\nScope-mode justification: The task is fully specified and limited to replacing one existing fixture\u2019s contents. No expansion is necessary.\n\n## Planning ref\n\n- Commit: `5570973fb7e28c2b91188daa217ec3e47d8fb8d5`\n- Branch: `main`\n\n## Automation impact\n\n- Extends existing code only; no new script.\n- Scheduler/PR trigger: not applicable.\n- Supervisor: not required.\n- Database gate: not applicable.\n- Removal registry entry: not required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 replace its entire contents with:\n  ```text\n  status: ok\n  run_id: 35479338161\n  updated-by: ai-pipeline\n  ```\n  Preserve the final newline.\n\n## Functions or modules\n\nNone.\n\n## Data structures affected\n\nOnly the three-line smoke-canary text fixture. The `run_id` value changes from `26151428977` to `35479338161`.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Perform an exact whole-file replacement\n\n- **Chosen:** Overwrite the existing file with the specified bytes.\n- **Alternatives considered:** Editing only the `run_id` line.\n- **Why:** Whole-file replacement directly enforces the exact-content requirement and prevents hidden extra content.\n\n## Security considerations\n\n- No trust boundary, authorization surface, external input, secrets, money handling, or executable behavior is affected.\n- Ensure no shell interpolation or generated metadata alters the literal requested content.\n\n## Risks and edge cases\n\n- Accidental modification of another file.\n- Missing trailing newline.\n- Extra blank lines, comments, or whitespace.\n- Planning ref has no integration-branch metadata; no contradictory branch was identified.\n\n## Testing considerations\n\n1. Verify `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n2. Compare the file byte-for-byte with the requested three lines and final newline.\n3. Confirm the resulting file has exactly three lines.\n4. No broader test suite is necessary for this fixture-only content update.\n\n## Pre-execution self-check\n\n- Target file exists and currently has different content.\n- Requirements and auto-clarification answer are unambiguous.\n- Plan modifies exactly one permitted file.\n- No new identifiers, dependencies, scripts, interfaces, or automation wiring are required.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5385658860019f59ac3a2f5b51217c9b94b5f9b3885a48b1074457fe18e686c3",
+  "lineage": {
+    "issue_number": 4155,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35479521481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35479521481",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4155"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260920004809_309b187a96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4155,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35479521481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4155",
+  "timestamps": {
+    "created_at": "2026-09-20T00:48:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
