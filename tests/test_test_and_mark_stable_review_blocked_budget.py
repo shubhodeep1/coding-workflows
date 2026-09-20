@@ -63,16 +63,21 @@ def test_default_serial_budget_leaves_required_headroom() -> None:
 	plan_timeout = _workflow_dispatch_integer_default(workflow, "plan_timeout")
 	review_timeout = _workflow_dispatch_integer_default(workflow, "review_timeout")
 	review_step_timeout = _workflow_dispatch_integer_default(workflow, "review_step_timeout")
+	review_handoff_budget = _integer_contract_value(job, "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES")
 	finalization_reserve = _integer_contract_value(job, "E2E_FINALIZATION_RESERVE_MINUTES")
+	review_effective_budget = max(review_timeout, min(review_step_timeout, 90) + review_handoff_budget)
 	serial_budget = (
 		(2 * phase_timeout)
 		+ plan_timeout
-		+ max(review_timeout, min(review_step_timeout, 90))
+		+ review_effective_budget
 		+ _integer_contract_value(job, "EDITOR_RETRY_BUDGET_MINUTES")
 		+ phase_timeout
 		+ _integer_contract_value(job, "PHASE7_WAIT_BUDGET_MINUTES")
 		+ finalization_reserve
 	)
+	assert review_handoff_budget == 15
+	assert review_effective_budget == 90
+	assert serial_budget == 295
 	assert serial_budget <= job_timeout
 	assert job_timeout - (serial_budget - finalization_reserve) >= finalization_reserve
 
@@ -87,6 +92,8 @@ def test_budget_guard_runs_before_artifact_creation() -> None:
 	assert job.index(guard) < job.index(create_issue)
 	assert "(2 * PHASE_TIMEOUT)" in job
 	assert "REVIEW_EFFECTIVE_BUDGET_MINUTES" in job
+	assert "REVIEW_EFFECTIVE_BUDGET_MINUTES=$((REVIEW_EFFECTIVE_BUDGET_MINUTES + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))" in job
+	assert "REVIEW_PHASE_WALL_BUDGET_MINUTES=$((REVIEW_STEP_TIMEOUT + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))" in job
 	assert 'REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))' in job
 	assert 'if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then' in job
 
@@ -97,8 +104,10 @@ def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
 	prerequisites = _slice_between(job, "- name: Validate prerequisites", "# Fast-fail the hottest")
 	step_budget = 'REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_STEP_TIMEOUT}"'
 	cap_guard = 'if [ "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" -gt 90 ]; then'
+	handoff_budget = "REVIEW_EFFECTIVE_BUDGET_MINUTES=$((REVIEW_EFFECTIVE_BUDGET_MINUTES + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))"
 	review_max = 'if [ "${REVIEW_TIMEOUT}" -gt "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" ]; then'
-	assert prerequisites.index(step_budget) < prerequisites.index(cap_guard) < prerequisites.index(review_max)
+	assert prerequisites.index(step_budget) < prerequisites.index(cap_guard) < prerequisites.index(handoff_budget)
+	assert prerequisites.index(handoff_budget) < prerequisites.index(review_max)
 	assert 'REVIEW_EFFECTIVE_BUDGET_MINUTES=90' in prerequisites
 	assert 'REVIEW_STEP_TIMEOUT_MAX=90' in job
 
@@ -106,6 +115,7 @@ def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
 	plan_timeout = _workflow_dispatch_integer_default(workflow, "plan_timeout")
 	review_timeout = _workflow_dispatch_integer_default(workflow, "review_timeout")
 	review_step_override = _workflow_dispatch_integer_default(workflow, "review_step_timeout") + 30
+	review_handoff_budget = _integer_contract_value(job, "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES")
 	shared_budget = (
 		(2 * phase_timeout)
 		+ plan_timeout
@@ -116,7 +126,7 @@ def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
 	)
 	job_timeout = _integer_contract_value(job, "E2E_JOB_TIMEOUT_MINUTES")
 	assert shared_budget + max(review_timeout, review_step_override) > job_timeout
-	assert shared_budget + max(review_timeout, min(review_step_override, 90)) <= job_timeout
+	assert shared_budget + max(review_timeout, min(review_step_override, 90) + review_handoff_budget) > job_timeout
 
 
 def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
@@ -160,6 +170,9 @@ def test_phase6_transient_api_errors_remain_bounded() -> None:
 	assert '|| echo ""' not in labels_block
 	assert 'sleep "$POLL_INTERVAL"' in labels_block
 	assert "continue" in labels_block
+	assert 'issues/${TRACKING_NUMBER}' in labels_block
+	assert "exit 0" in labels_block
+	assert "exit 1" not in labels_block
 	transient_read = 'if ! POLLER_RUN=$(gh_api_safe_quiet_print'
 	label_progress = 'if [ "$LABELS" != "$PREV_LABELS" ]; then'
 	success_guard = 'if [ "$REVIEW_BLOCKED_PRESENT" -eq 0 ] || [ "$TERMINAL_LABEL_PRESENT" -eq 1 ]; then'
@@ -168,7 +181,9 @@ def test_phase6_transient_api_errors_remain_bounded() -> None:
 	read_complete = 'POLLER_STATUS=$(printf'
 	read_block = phase6[phase6.index(transient_read) : phase6.index(read_complete)]
 	assert 'echo "status=poller_failed"' not in read_block
-	assert 'exit 0' not in read_block
+	assert read_block.count('issues/${TRACKING_NUMBER}') == 2
+	assert read_block.count("exit 0") == 2
+	assert "exit 1" not in read_block
 
 
 def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:

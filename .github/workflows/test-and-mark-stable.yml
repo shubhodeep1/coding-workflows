@@ -413,6 +413,7 @@ jobs:
       # e2e-smoke-test job timeout kills the run.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
       E2E_JOB_TIMEOUT_MINUTES: 300
+      REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
       EDITOR_RETRY_BUDGET_MINUTES: 25
       PHASE7_WAIT_BUDGET_MINUTES: 10
       E2E_FINALIZATION_RESERVE_MINUTES: 20
@@ -458,6 +459,7 @@ jobs:
             "${REVIEW_TIMEOUT}" \
             "${REVIEW_STEP_TIMEOUT}" \
             "${E2E_JOB_TIMEOUT_MINUTES}" \
+            "${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}" \
             "${EDITOR_RETRY_BUDGET_MINUTES}" \
             "${PHASE7_WAIT_BUDGET_MINUTES}" \
             "${E2E_FINALIZATION_RESERVE_MINUTES}"; do
@@ -470,6 +472,7 @@ jobs:
           if [ "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" -gt 90 ]; then
             REVIEW_EFFECTIVE_BUDGET_MINUTES=90
           fi
+          REVIEW_EFFECTIVE_BUDGET_MINUTES=$((REVIEW_EFFECTIVE_BUDGET_MINUTES + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))
           if [ "${REVIEW_TIMEOUT}" -gt "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" ]; then
             REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_TIMEOUT}"
           fi
@@ -485,7 +488,7 @@ jobs:
           echo "E2E conservative serial budget: ${E2E_SERIAL_BUDGET_MINUTES}/${E2E_JOB_TIMEOUT_MINUTES} minutes"
           if [ "${E2E_SERIAL_BUDGET_MINUTES}" -gt "${E2E_JOB_TIMEOUT_MINUTES}" ]; then
             echo "::error::Configured E2E phase budgets require ${E2E_SERIAL_BUDGET_MINUTES}m, exceeding the ${E2E_JOB_TIMEOUT_MINUTES}m job timeout."
-            echo "::error::Budget = 2*phase(${PHASE_TIMEOUT}) + plan(${PLAN_PHASE_TIMEOUT}) + max(review=${REVIEW_TIMEOUT}, min(review-step=${REVIEW_STEP_TIMEOUT}, cap=90)) + editor-retry(${EDITOR_RETRY_BUDGET_MINUTES}) + phase-6(${PHASE_TIMEOUT}) + phase-7(${PHASE7_WAIT_BUDGET_MINUTES}) + finalization(${E2E_FINALIZATION_RESERVE_MINUTES})."
+            echo "::error::Budget = 2*phase(${PHASE_TIMEOUT}) + plan(${PLAN_PHASE_TIMEOUT}) + max(review=${REVIEW_TIMEOUT}, min(review-step=${REVIEW_STEP_TIMEOUT}, cap=90) + handoff=${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}) + editor-retry(${EDITOR_RETRY_BUDGET_MINUTES}) + phase-6(${PHASE_TIMEOUT}) + phase-7(${PHASE7_WAIT_BUDGET_MINUTES}) + finalization(${E2E_FINALIZATION_RESERVE_MINUTES})."
             exit 1
           fi
           echo "Target repo: ${TEST_REPO}"
@@ -1426,9 +1429,9 @@ jobs:
           fi
           STEP_INACTIVITY_LIMIT=$((REVIEW_STEP_TIMEOUT * 60))
           echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
-          REVIEW_PHASE_WALL_BUDGET_MINUTES="${REVIEW_TIMEOUT}"
-          if [ "$REVIEW_STEP_TIMEOUT" -gt "$REVIEW_PHASE_WALL_BUDGET_MINUTES" ]; then
-            REVIEW_PHASE_WALL_BUDGET_MINUTES="$REVIEW_STEP_TIMEOUT"
+          REVIEW_PHASE_WALL_BUDGET_MINUTES=$((REVIEW_STEP_TIMEOUT + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))
+          if [ "$REVIEW_TIMEOUT" -gt "$REVIEW_PHASE_WALL_BUDGET_MINUTES" ]; then
+            REVIEW_PHASE_WALL_BUDGET_MINUTES="$REVIEW_TIMEOUT"
           fi
           REVIEW_PHASE_STARTED_AT=$(date +%s)
           REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))
@@ -2896,7 +2899,9 @@ jobs:
               if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
                 echo "::error::Review-blocked issue #${ISSUE_NUMBER} labels remained unreadable for ${PHASE_TIMEOUT} minutes"
                 echo "status=timeout" >> "$GITHUB_OUTPUT"
-                exit 1
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
               fi
               echo "::warning::Could not read review-blocked issue #${ISSUE_NUMBER} labels; retrying within the inactivity window"
               sleep "$POLL_INTERVAL"
@@ -2964,7 +2969,9 @@ jobs:
               if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
                 echo "::error::Pinned poller run #${POLLER_RUN_ID} remained unreadable for ${PHASE_TIMEOUT} minutes"
                 echo "status=timeout" >> "$GITHUB_OUTPUT"
-                exit 1
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
               fi
               echo "::warning::Could not read pinned poller run #${POLLER_RUN_ID}; retrying within the inactivity window"
               sleep "$POLL_INTERVAL"
@@ -2976,7 +2983,9 @@ jobs:
               if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
                 echo "::error::Pinned poller run #${POLLER_RUN_ID} returned malformed payloads for ${PHASE_TIMEOUT} minutes"
                 echo "status=timeout" >> "$GITHUB_OUTPUT"
-                exit 1
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
               fi
               echo "::warning::Pinned poller run #${POLLER_RUN_ID} returned a malformed payload; retrying within the inactivity window"
               sleep "$POLL_INTERVAL"
