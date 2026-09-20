@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml: lines 678 and 970 \u2014 `ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}` | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The `env.ALERT_MSG_LEVEL` prefix cannot read the runtime value written through `$GITHUB_ENV`, so the change is functionally a no-op and advertises an incorrect mechanism for preserving smoke-test silencing.\n  WHY: GitHub's `env` expression context does not include values appended to `$GITHUB_ENV`; smoke silencing still works only because the process environment overrides step-level `env`, with severity reported as NIT by the reviewer.\n- agents.md (stable log prefixes registry) vs. scripts/review_rb_judge.sh | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: `scripts/review_rb_judge.sh` emits `REISSUE_FILES_TOUCHED_UNION`, `REISSUE_ORCHESTRATOR_METADATA_CARRIED`, and `REISSUE_ORCHESTRATOR_METADATA_ABSENT`, but these prefixes are absent from the contractual registry in `agents.md`.\n  WHY: Log-analysis and API-hygiene reporting that classify lines by the registry will not recognize these markers, with severity reported as NIT by the reviewer.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/orchestrate_poll.yml\n  Line or code reference: lines 678 and 970 \u2014 `ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}`\n  Problem: The `env.ALERT_MSG_LEVEL` prefix cannot read the runtime value written through `$GITHUB_ENV`, so the change is functionally a no-op and advertises an incorrect mechanism for preserving smoke-test silencing.\n  Why it fails at runtime: GitHub's `env` expression context does not include values appended to `$GITHUB_ENV`; smoke silencing still works because the process environment overrides step-level `env` in execution.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- agents.md (stable log prefixes registry) vs. scripts/review_rb_judge.sh\n  Line or code reference: `scripts/review_rb_judge.sh:2656` emits `REISSUE_FILES_TOUCHED_UNION`, and lines 2730/2732 emit `REISSUE_ORCHESTRATOR_METADATA_CARRIED` / `REISSUE_ORCHESTRATOR_METADATA_ABSENT`; the agents.md contractual registry contains `LOG_PREFIX.name=REISSUE_BASELINE_PRESERVED` / `_DISCARDED` / `REISSUE_MODE` (lines 1017-1019) but no entries for the three new keys.\n  Problem: This PR introduces three new grep-targeted log prefixes that are asserted verbatim in `tests/test_review_rb_judge_label_propagation.py` (lines 764, 801, 810, 869, 893) and named as log keys in agents.md prose (lines 656-658), yet they are not registered in either the bullet list or the machine-readable `LOG_PREFIX.name=` list.\n  Why it fails at runtime: workflow-log-analysis and API-hygiene reporting that classify log lines by the contractual prefix list will not recognize occurrences of these three markers, so reissue metadata carriage and allowlist-union outcomes are invisible to the periodic audit reports that consume the registry.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge.sh\n  Location: lines 937-941\n  Issue: The two `printf` invocations feeding jq use inconsistent styles - `printf '%s'` for the GraphQL response and `printf '%s\\n'` for the REST metadata fallback.\n  Suggested minimal fix: Use `printf '%s'` for both branches to match the rest of the script's convention for raw JSON payloads.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "de516ac2ff2e05556a8c42bc379cfe7fc09b12915c92f95211b6aeb18561b40a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4133,
+    "run_id": "35492432276",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35492432276",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260920064440_afd7074b56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4133,
+    "run_id": "35492432276"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-20T06:44:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
