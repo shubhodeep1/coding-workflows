@@ -313,6 +313,8 @@ def _run_fragment(
 	enforce: str = "true",
 	allow_out_of_scope: str = "false",
 	label: str = "commit",
+	issue_author_association: str = "OWNER",
+	issue_author_login: str = "octocat",
 ) -> tuple[int, str, str]:
 	fragment = _scope_fragment(label)
 	with tempfile.TemporaryDirectory() as td:
@@ -345,7 +347,8 @@ def _run_fragment(
 				"ENFORCE_FILES_TOUCHED": enforce,
 				"ALLOW_OUT_OF_SCOPE_FILES": allow_out_of_scope,
 				"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(tdp / "scripts"),
-				"ISSUE_AUTHOR_ASSOCIATION": "OWNER",
+				"ISSUE_AUTHOR_ASSOCIATION": issue_author_association,
+				"ISSUE_AUTHOR_LOGIN": issue_author_login,
 			}
 		)
 		proc = subprocess.run(
@@ -409,6 +412,17 @@ def test_generated_advisory_cannot_use_scope_bypasses_or_lockfile_allowance() ->
 	assert "scope_violation_blocked=out-of-scope" in gh_output
 
 
+def test_generated_advisory_accepts_exact_github_actions_bot_identity() -> None:
+	rc, gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		issue_author_association="NONE",
+		issue_author_login="github-actions[bot]",
+	)
+	assert rc == 0, log
+	assert "scope_violation_blocked" not in gh_output
+
+
 def _strip_comments(fragment: str) -> str:
 	keep = [ln for ln in fragment.splitlines() if ln.strip() and not ln.strip().startswith("#")]
 	return "\n".join(keep)
@@ -454,9 +468,11 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	text = _implement_text()
 	commit_text = _implement_commit_text()
 	combined_text = text + "\n" + commit_text
+	assert 'ISSUE_AUTHOR_LOGIN="$(printf \'%s\' "${ISSUE_PAYLOAD}" | jq -r \'.user.login // ""\')"' in text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
 	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
 	assert combined_text.count('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"') == 3
+	assert combined_text.count('--issue-author-login "${ISSUE_AUTHOR_LOGIN:-}"') == 2
 	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
 	assert "scope_violation_blocked=scope-lock-label" in commit_text
 

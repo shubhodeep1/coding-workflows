@@ -216,6 +216,7 @@ changelog.d/4127-security-fix-pr-base.md
 changelog.d/4134-auto-apply-analysis-and-stable-release.md
 changelog.d/4143-security-pass-line-ownership-poller.md
 changelog.d/4161-smoke-test-telegram-silencing.md
+changelog.d/4173-security-pass-integrity-hardening.md
 changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/433-readme-wrapper-predicate-examples.md

@@ -176,8 +176,8 @@ security_audit_append_prompt_context() {
 			cat "${WAIVED_FINDINGS_PROMPT_FILE}" || return 1
 			echo "=== END UNTRUSTED ACCEPTED FINDINGS ===" || return 1
 			echo "Rules for accepted findings:" || return 1
-			echo "- Never report an accepted finding again, neither under its finding_id nor under a new one, for the same location or the same defect at that location." || return 1
-			echo "- An acceptance covers one location. Other locations in the scoped files remain in scope." || return 1
+			echo "- Report candidate findings normally, including findings similar to accepted rows. Exact waiver_match_key suppression is performed deterministically after normalization." || return 1
+			echo "- Do not suppress a candidate based on finding_id, location, category, or model judgment; other provenance or locations remain in scope." || return 1
 		fi
 		if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
 			echo || return 1
@@ -1555,7 +1555,7 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 					current_hunk["has_deletion"] = True
 					if re.match(r"^-\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line):
 						current_hunk["has_control_change"] = True
-					if re.search(r"(?i)\b(?:auth\w*|permission|privilege|admin|guard|middleware|before_request|require_\w+|role|access[_ -]?control|policy|allow|deny)\b", diff_line):
+					if re.search(r"(?i)\b(?:auth\w*|permission|privilege|admin|guard|middleware|before_request|require_\w+|login_required|is_authenticated|authenticated|authori[sz]e|can_access|forbidden|check_(?:user|permission|access)|role|access[_ -]?control|policy|allow|deny)\b", diff_line):
 						current_hunk["has_guard_deletion"] = True
 				elif current_hunk is not None and diff_line.startswith("+") and not diff_line.startswith("+++"):
 					if re.match(r"^\+\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line):

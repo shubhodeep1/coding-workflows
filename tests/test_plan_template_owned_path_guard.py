@@ -62,6 +62,7 @@ def _run_guard(
 	*,
 	issue_body: str = "",
 	issue_author_association: str = "OWNER",
+	issue_author_login: str = "octocat",
 	workflow_source_repo: bool = False,
 ):
 	"""Execute the guard against a synthetic plan; return (exit_code, output).
@@ -113,6 +114,7 @@ def _run_guard(
 				"PLAN_PROGRESS_COMMENT_ID": "",
 				"ISSUE_BODY_FILE": str(issue_body_file),
 				"ISSUE_AUTHOR_ASSOCIATION": issue_author_association,
+				"ISSUE_AUTHOR_LOGIN": issue_author_login,
 				"IS_WORKFLOW_SOURCE_REPO": "true" if workflow_source_repo else "false",
 			}
 		)
@@ -170,6 +172,17 @@ def test_generated_security_advisory_rejects_extra_plan_path_or_untrusted_author
 	)
 	assert returncode != 0
 	assert "author association is not trusted" in output
+
+
+def test_generated_security_advisory_accepts_exact_github_actions_bot_identity() -> None:
+	returncode, output = _run_guard(
+		_plan_listing("src/security.py"),
+		FETCHED_HELPERS,
+		issue_body=_generated_advisory_body(),
+		issue_author_association="NONE",
+		issue_author_login="github-actions[bot]",
+	)
+	assert returncode == 0, output
 
 
 @pytest.mark.parametrize(
@@ -442,3 +455,5 @@ def test_workflow_materializes_issue_body_for_generated_advisory_guard() -> None
 	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	assert 'echo "ISSUE_BODY_FILE=${RUNTIME_DIR}/issue_body.txt"' in workflow_text
 	assert 'jq -r \'.body // ""\' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}"' in workflow_text
+	assert 'echo "ISSUE_AUTHOR_LOGIN=$(jq -r \'.user.login // ""\' "${ISSUE_META_FILE}")"' in workflow_text
+	assert '--issue-author-login "${ISSUE_AUTHOR_LOGIN}"' in workflow_text

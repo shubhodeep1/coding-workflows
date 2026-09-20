@@ -1103,9 +1103,7 @@ def test_security_audit_deleted_guard_keeps_unchanged_sink_blocking() -> None:
 		fixture_git("init", "-q")
 		guarded_path = repo_dir / "guarded.py"
 		guarded_path.write_text(
-			"def register_security(app):\n"
-			"\tapp.before_request(require_admin)\n"
-			"\n"
+			"@login_required\n"
 			"def privileged_action(user):\n"
 			"\treturn mutate_money_state()\n",
 			encoding="utf-8",
@@ -1114,9 +1112,6 @@ def test_security_audit_deleted_guard_keeps_unchanged_sink_blocking() -> None:
 		fixture_git("commit", "-q", "-m", "guarded base")
 		base_sha = fixture_git("rev-parse", "HEAD")
 		guarded_path.write_text(
-			"def register_security(app):\n"
-			"\tpass\n"
-			"\n"
 			"def privileged_action(user):\n"
 			"\treturn mutate_money_state()\n",
 			encoding="utf-8",
@@ -1125,7 +1120,7 @@ def test_security_audit_deleted_guard_keeps_unchanged_sink_blocking() -> None:
 		fixture_git("commit", "-q", "-m", "remove guard")
 		head_sha = fixture_git("rev-parse", "HEAD")
 		finding = _finding_payload("deleted-guard", file_path="guarded.py", category="A01: Broken Access Control")
-		finding["line"] = 5
+		finding["line"] = 2
 		output_path = tmp_path / "findings.json"
 		proc, final_state = _run_security_audit(
 			{},
@@ -1679,8 +1674,9 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	assert "- `waived-by-location` | A04:2021-Insecure Design / STRIDE: Denial of Service | unknown | file_c.py:1" in accepted_block
 	assert "- `waived-id-only` | uncategorised | unknown | (location not recorded)" in accepted_block
 	assert "Rules for accepted findings:" not in accepted_block
-	assert "Never report an accepted finding again" in prompt
-	assert "An acceptance covers one location." in prompt
+	assert "Report candidate findings normally" in prompt
+	assert "Exact waiver_match_key suppression is performed deterministically" in prompt
+	assert "Never report an accepted finding again" not in prompt
 
 
 def test_security_audit_waived_findings_fail_closed_on_malformed_input() -> None:

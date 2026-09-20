@@ -460,6 +460,10 @@ jobs:
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+          {
+            echo "ISSUE_AUTHOR_ASSOCIATION=$(jq -r '.author_association // ""' "${ISSUE_META_FILE}")"
+            echo "ISSUE_AUTHOR_LOGIN=$(jq -r '.user.login // ""' "${ISSUE_META_FILE}")"
+          } >> "$GITHUB_ENV"
           ISSUE_BODY_DELIM="EOF_$(date +%s%N)_$RANDOM"
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
@@ -1551,7 +1555,6 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}
           IS_WORKFLOW_SOURCE_REPO: ${{ endsWith(github.repository, '/coding-workflows') }}
         run: |
           set -euo pipefail
@@ -1632,6 +1635,7 @@ jobs:
               --issue-body-file "${ISSUE_BODY_FILE}" \
               --plan-file "${CODEX_OUTPUT_FILE}" \
               --issue-author-association "${ISSUE_AUTHOR_ASSOCIATION}" \
+              --issue-author-login "${ISSUE_AUTHOR_LOGIN}" \
               --generated-advisory-mode required
           fi
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then

@@ -489,6 +489,7 @@ else
         --staged-file "${scope_staged_file}" \
         --allowlist-out "${scope_allowlist_file}" \
         --issue-author-association "${ISSUE_AUTHOR_ASSOCIATION:-}" \
+        --issue-author-login "${ISSUE_AUTHOR_LOGIN:-}" \
         --generated-advisory-mode auto)"
       scope_rc=$?
       set -e

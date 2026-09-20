@@ -5687,9 +5687,10 @@ PY
 #
 # Upsert waiver rows by waiver_match_key into security_pass_waived_findings,
 # drop the same keys from security_pass_reported_findings so the next delta
-# audit does not ask the engine to re-verify them, and keep the array
-# bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
-# severity, justification, source, waived_by, waived_at_cycle, issue}.
+# audit does not ask the engine to re-verify them. The untruncated authorization
+# history is persisted through the chunked V2 state chain. Rows carry
+# {finding_id, file, line, owasp_or_stride_category, severity, justification,
+# source, waived_by, waived_at_cycle, issue}.
 security_pass_record_waivers() {
   local waivers_json="$1" waivers_file
   waivers_file="${RUNTIME_DIR}/security_pass_waivers_${TRACKING_NUM}.json"
@@ -5954,7 +5955,7 @@ security_pass_file_advisory_findings() {
     SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK=$(( ${SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK:-0} + 1 ))
     finding_json="$(printf '%s' "${row_json}" | jq -c 'del(.audited_head_sha)')"
     finding_id="$(printf '%s' "${row_json}" | jq -r '.finding_id')"
-    waiver_match_key="$(printf '%s' "${row_json}" | jq -r '.waiver_match_key')"
+    waiver_match_key="$(printf '%s' "${row_json}" | jq -r '.waiver_match_key // ""')"
     audited_head_sha="$(printf '%s' "${row_json}" | jq -r '.audited_head_sha // empty')"
     [ -n "${audited_head_sha}" ] || audited_head_sha="${head_sha}"
     justification="The cited line predates this project's merge-base and already exists on the default branch; routed as a non-blocking advisory by line ownership."

@@ -72,6 +72,7 @@ STATUS_OUT_OF_SCOPE = "out-of-scope"
 GENERATED_ADVISORY_HEADER = "**Generated security advisory metadata**"
 GENERATED_ADVISORY_SCHEMA = "generated-security-advisory.v1"
 TRUSTED_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+TRUSTED_GENERATED_ADVISORY_BOT_LOGINS = frozenset({"github-actions[bot]"})
 _GENERATED_ADVISORY_FOOTER_RE = re.compile(
 	r"(?:^|\n)---\n"
 	r"\*\*Generated security advisory metadata\*\*\n"
@@ -345,6 +346,7 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--allowlist-out", default="")
 	parser.add_argument("--plan-file", default="")
 	parser.add_argument("--issue-author-association", default="")
+	parser.add_argument("--issue-author-login", default="")
 	parser.add_argument(
 		"--generated-advisory-mode",
 		choices=("auto", "required", "off"),
@@ -367,7 +369,12 @@ def main(argv: list[str] | None = None) -> int:
 			print("generated security advisory metadata is required", file=sys.stderr)
 			return EXIT_INVALID_GENERATED_ADVISORY
 	if generated_advisory is not None:
-		if args.issue_author_association.strip().upper() not in TRUSTED_AUTHOR_ASSOCIATIONS:
+		issue_author_association = args.issue_author_association.strip().upper()
+		issue_author_login = args.issue_author_login.strip().lower()
+		if issue_author_association not in TRUSTED_AUTHOR_ASSOCIATIONS and not (
+			issue_author_association == "NONE"
+			and issue_author_login in TRUSTED_GENERATED_ADVISORY_BOT_LOGINS
+		):
 			print("generated security advisory author association is not trusted", file=sys.stderr)
 			return EXIT_INVALID_GENERATED_ADVISORY
 		cited_file = generated_advisory["cited_file"]
