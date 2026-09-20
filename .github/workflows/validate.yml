@@ -24,6 +24,11 @@ name: AI Validate (Reusable)
         required: false
         type: string
         default: "15"
+      alert_msg_level:
+        description: "Minimum Telegram alert level for this run (DEBUG|WARNING|ERROR|CRITICAL|SILENT). Empty honours vars.ALERT_MSG_LEVEL; the test-and-mark-stable gate passes SILENT so its standalone validate smoke emits no per-phase alerts."
+        required: false
+        type: string
+        default: ""
     secrets:
       GH_PAT:
         required: true
@@ -882,7 +887,7 @@ jobs:
           VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           bash scripts/validate_process.sh
