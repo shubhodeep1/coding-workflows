@@ -40,6 +40,7 @@ def _marker(role: str, **extra: str) -> str:
 		"key_id": "active",
 		"producer_id": 41898282,
 		"repository": "owner/repo",
+		"tracking_issue": 192,
 		"source_doc": "analysis/workflow-optimization-2026-09-01.md",
 		"role": role,
 		"dispatcher_run_id": DISPATCHER_RUN_ID,
@@ -468,21 +469,14 @@ def test_untrusted_marker_never_promotes_or_dispatches() -> None:
 	assert result["latest_state"]["status"] == "complete"
 	callback = result["latest_state"]["comprehensive_release_callback"]
 	assert callback["role"] == "untrusted"
-	assert callback.get("handled") is not True
+	assert callback["handled"] is True
 	assert callback["untrusted_marker_alerted"] is True
-	# The cycle stays human-gated: the label is kept so no new cycle starts.
-	assert LABEL in result["tracking_labels"]
+	assert LABEL not in result["tracking_labels"]
 	assert "COMPREHENSIVE_MARKER_UNTRUSTED" in result["stdout"]
 	assert "alerted=false" in result["stdout"]
 	tracking_bodies = [comment.get("body", "") for comment in result["issues"]["192"]["comments"]]
-	assert any("automated promote cycle" in body for body in tracking_bodies)
+	assert any("next scheduled promote cycle" in body for body in tracking_bodies)
 	assert all("post the marker from a trusted account" not in body for body in tracking_bodies)
-	# A later tick neither re-alerts nor consumes the label.
-	second = _verifying_run(result["latest_state"], compare_commits=commits, untrusted_marker=True)
-	assert "alerted=true" in second["stdout"]
-	assert LABEL in second["tracking_labels"]
-	assert second["release_dispatches"] == []
-	assert second["latest_state"]["comprehensive_release_callback"].get("handled") is not True
 
 
 def test_release_workflow_override_cannot_pin_and_fails_closed() -> None:

@@ -188,6 +188,7 @@ trusted_marker_comment_present()
 		--comments-json "${comments_file}" \
 		--repository "${GITHUB_REPOSITORY}" \
 		--producer-id "${COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID}" \
+		--tracking-issue "${issue_number}" \
 		--out-file "${selected_file}" >/dev/null 2>&1; then
 		rm -f "${comments_file}" "${selected_file}"
 		return 2

@@ -11445,6 +11445,7 @@ comprehensive_cycle_metadata_json() {
     --comments-json "${comments_file}" \
     --repository "${GITHUB_REPOSITORY}" \
     --producer-id "${COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID}" \
+    --tracking-issue "${TRACKING_NUM}" \
     --out-file "${selected_file}" >/dev/null 2>&1; then
     rm -f "${comments_file}" "${selected_file}"
     echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","dispatcher_run_id":0,"smoke_run_id":0,"smoke_actor_id":0,"untrusted_marker":true}'
@@ -12017,13 +12018,14 @@ The proving run merged, but the verifying run could not be dispatched (${verific
     esac
   elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_marker')" = "true" ]; then
     # Marker evidence that fails producer or signature authentication must
-    # never dispatch or promote, and must not consume the cycle either.
-    # The callback stays unhandled and the label stays on, so the issue
-    # keeps the daily cycle held (cycle_in_flight) until an operator removes
-    # the label to abandon or restart the cycle. Alert once, not per tick.
+    # never dispatch or promote. Retire this cycle automatically so the next
+    # scheduled run can create fresh issue-bound evidence without an operator.
     local untrusted_alerted
     untrusted_alerted="$(jq -r '.comprehensive_release_callback.untrusted_marker_alerted // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
     echo "COMPREHENSIVE_MARKER_UNTRUSTED tracking_issue=${TRACKING_NUM} alerted=${untrusted_alerted}"
+    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {handled: true, status: $status, handled_at: $handled_at, role: "untrusted"})' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     if [ "${untrusted_alerted}" != "true" ]; then
       jq --arg alerted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {role: "untrusted", untrusted_marker_alerted: true, untrusted_marker_alerted_at: $alerted_at})' \
@@ -12031,10 +12033,9 @@ The proving run merged, but the verifying run could not be dispatched (${verific
       post_state_comment || true
       post_tracking_comment "## ⚠️ Untrusted apply-analysis marker
 
-This tracking issue carries \`ai:comprehensive-test-pending\`, but its apply-analysis marker failed producer-ID or keyring-signature authentication. The poller does not dispatch or promote on it. Remove \`ai:comprehensive-test-pending\` to abandon the cycle; to retry, remove the label and let the automated promote cycle create a new tracking issue with a producer-bound, signed marker. Nothing is promoted."
-      tg_notify "Project #${TRACKING_NUM}: apply-analysis marker authentication failed; cycle held (label kept), remove the label to abandon or retry through the automated promote cycle." "CRITICAL"
+This tracking issue carries \`ai:comprehensive-test-pending\`, but its apply-analysis marker failed producer-ID, tracking-issue binding, or keyring-signature authentication. The poller does not dispatch or promote on it. It is removing the cycle label automatically so the next scheduled promote cycle can start with fresh producer-bound, issue-bound evidence. Nothing is promoted."
+      tg_notify "Project #${TRACKING_NUM}: apply-analysis marker authentication failed; no promotion occurred and the cycle label is being removed for an automated retry." "CRITICAL"
     fi
-    return 0
   elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.role')" = "verifying" ]; then
     # Promotion (or its deferral) already happened before this final merge;
     # the verifying run's own merge never promotes.

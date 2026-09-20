@@ -71,6 +71,25 @@ def _sign(tmp_path: Path) -> dict[str, object]:
 	return json.loads(envelope_path.read_text(encoding="utf-8"))
 
 
+def _bind(tmp_path: Path, envelope: dict[str, object], tracking_issue: int = 192) -> dict[str, object]:
+	envelope_path = tmp_path / "unbound-envelope.json"
+	bound_path = tmp_path / "bound-envelope.json"
+	envelope_path.write_text(json.dumps(envelope), encoding="utf-8")
+	subprocess.run(
+		[
+			"python3", str(HELPER), "bind-comprehensive-marker",
+			"--envelope-file", str(envelope_path),
+			"--repository", "owner/repo",
+			"--producer-id", str(PRODUCER_ID),
+			"--tracking-issue", str(tracking_issue),
+			"--out-file", str(bound_path),
+		],
+		check=True,
+		env=_environment(),
+	)
+	return json.loads(bound_path.read_text(encoding="utf-8"))
+
+
 def _comment(envelope: dict[str, object], producer_id: int = PRODUCER_ID) -> dict[str, object]:
 	return {
 		"body": (
@@ -83,7 +102,7 @@ def _comment(envelope: dict[str, object], producer_id: int = PRODUCER_ID) -> dic
 	}
 
 
-def _select(tmp_path: Path, comments: list[dict[str, object]]) -> tuple[int, dict[str, object]]:
+def _select(tmp_path: Path, comments: list[dict[str, object]], tracking_issue: int = 192) -> tuple[int, dict[str, object]]:
 	comments_path = tmp_path / "comments.json"
 	output_path = tmp_path / "selected.json"
 	comments_path.write_text(json.dumps(comments), encoding="utf-8")
@@ -93,6 +112,7 @@ def _select(tmp_path: Path, comments: list[dict[str, object]]) -> tuple[int, dic
 			"--comments-json", str(comments_path),
 			"--repository", "owner/repo",
 			"--producer-id", str(PRODUCER_ID),
+			"--tracking-issue", str(tracking_issue),
 			"--out-file", str(output_path),
 		],
 		check=False,
@@ -102,7 +122,10 @@ def _select(tmp_path: Path, comments: list[dict[str, object]]) -> tuple[int, dic
 
 
 def test_comprehensive_marker_round_trips_and_selects_exact_producer(tmp_path: Path) -> None:
-	envelope = _sign(tmp_path)
+	unbound_envelope = _sign(tmp_path)
+	assert unbound_envelope["tracking_issue"] == 0
+	envelope = _bind(tmp_path, unbound_envelope)
+	assert envelope["tracking_issue"] == 192
 	returncode, selected = _select(tmp_path, [_comment(envelope)])
 	assert returncode == 0
 	assert selected["marker"] == envelope
@@ -112,9 +135,17 @@ def test_comprehensive_marker_round_trips_and_selects_exact_producer(tmp_path: P
 	assert returncode == 0
 	assert wrong_producer == {"marker": None, "untrusted_marker": True}
 
+	returncode, wrong_issue = _select(tmp_path, [_comment(envelope)], tracking_issue=193)
+	assert returncode == 0
+	assert wrong_issue == {"marker": None, "untrusted_marker": True}
+
+	returncode, unbound = _select(tmp_path, [_comment(unbound_envelope)])
+	assert returncode == 0
+	assert unbound == {"marker": None, "untrusted_marker": True}
+
 
 def test_comprehensive_marker_rejects_tampering_and_unsigned_legacy(tmp_path: Path) -> None:
-	envelope = _sign(tmp_path)
+	envelope = _bind(tmp_path, _sign(tmp_path))
 	envelope["smoke_head_sha"] = "e" * 40
 	returncode, tampered = _select(tmp_path, [_comment(envelope)])
 	assert returncode == 0
@@ -140,6 +171,7 @@ def test_comprehensive_marker_rejects_oversized_comments_before_parsing(tmp_path
 			"--comments-json", str(comments_path),
 			"--repository", "owner/repo",
 			"--producer-id", str(PRODUCER_ID),
+			"--tracking-issue", "192",
 			"--out-file", str(output_path),
 		],
 		check=False,

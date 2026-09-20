@@ -140,7 +140,7 @@ COMPREHENSIVE_MARKER_CLOSER = "COMPREHENSIVE_CYCLE_MARKER_V1 -->"
 COMPREHENSIVE_MARKER_WORKFLOW_PATH = ".github/workflows/test-and-mark-stable.yml"
 COMPREHENSIVE_MARKER_SIGNED_FIELDS = {
 	"schema_version", "algorithm", "key_id", "producer_id", "repository",
-	"source_doc", "role", "dispatcher_run_id", "smoke_run_id", "smoke_actor_id",
+	"tracking_issue", "source_doc", "role", "dispatcher_run_id", "smoke_run_id", "smoke_actor_id",
 	"smoke_workflow_path", "smoke_event", "smoke_display_title", "smoke_inputs",
 	"smoke_conclusion", "smoke_head_sha", "cycle_baseline_sha", "promote_sha",
 	"proving_merge_sha", "signature",
@@ -641,6 +641,7 @@ def _signature_for_resolver_retry(document: dict[str, Any], auth_key: bytes) -> 
 
 def _validated_comprehensive_marker_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
 	repository = args.repository.strip()
+	tracking_issue = getattr(args, "tracking_issue", 0)
 	if (
 		len(repository) > 256
 		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
@@ -649,21 +650,29 @@ def _validated_comprehensive_marker_context(args: argparse.Namespace) -> tuple[d
 		return None, "repository must be an owner/repo slug"
 	if args.producer_id < 1:
 		return None, "producer id must be a positive integer"
+	if tracking_issue < 0:
+		return None, "tracking issue must be a non-negative integer"
 	return {
 		"schema_version": COMPREHENSIVE_MARKER_SCHEMA_VERSION,
 		"algorithm": STATE_AUTH_ALGORITHM,
 		"producer_id": args.producer_id,
 		"repository": repository,
+		"tracking_issue": tracking_issue,
 	}, None
 
 
-def _valid_comprehensive_marker_document(document: dict[str, Any]) -> bool:
+def _valid_comprehensive_marker_document(document: dict[str, Any], *, allow_unbound: bool = False) -> bool:
 	if set(document) != COMPREHENSIVE_MARKER_SIGNED_FIELDS:
 		return False
 	for integer_field in ("producer_id", "dispatcher_run_id", "smoke_run_id", "smoke_actor_id"):
 		value = document.get(integer_field)
 		if not isinstance(value, int) or isinstance(value, bool) or value < 1 or value > STATE_AUTH_MAX_GENERATION:
 			return False
+	tracking_issue = document.get("tracking_issue")
+	if not isinstance(tracking_issue, int) or isinstance(tracking_issue, bool) or tracking_issue > STATE_AUTH_MAX_GENERATION:
+		return False
+	if (allow_unbound and tracking_issue != 0) or (not allow_unbound and tracking_issue < 1):
+		return False
 	if document.get("schema_version") != COMPREHENSIVE_MARKER_SCHEMA_VERSION:
 		return False
 	if document.get("algorithm") != STATE_AUTH_ALGORITHM:
@@ -726,8 +735,10 @@ def _comprehensive_marker_is_verified(
 	document: dict[str, Any],
 	context: dict[str, Any],
 	auth_keys: dict[str, bytes],
+	*,
+	allow_unbound: bool = False,
 ) -> bool:
-	if not _valid_comprehensive_marker_document(document):
+	if not _valid_comprehensive_marker_document(document, allow_unbound=allow_unbound):
 		return False
 	if any(document.get(field) != expected for field, expected in context.items()):
 		return False
@@ -771,7 +782,7 @@ def cmd_sign_comprehensive_marker(args: argparse.Namespace) -> int:
 		"proving_merge_sha": candidate.get("proving_merge_sha", ""),
 		"signature": "0" * 64,
 	}
-	if not _valid_comprehensive_marker_document(document):
+	if not _valid_comprehensive_marker_document(document, allow_unbound=True):
 		print("comprehensive marker signing failed: candidate fields are invalid", file=sys.stderr)
 		return 2
 	document["signature"] = _signature_for_comprehensive_marker(document, auth_keys[active_key_id])
@@ -797,7 +808,7 @@ def cmd_verify_comprehensive_marker(args: argparse.Namespace) -> int:
 		print(f"comprehensive marker verification failed: {key_error}", file=sys.stderr)
 		return 2
 	assert context is not None and auth_keys is not None
-	if not _comprehensive_marker_is_verified(document, context, auth_keys):
+	if not _comprehensive_marker_is_verified(document, context, auth_keys, allow_unbound=args.tracking_issue == 0):
 		return 1
 	if args.out_file:
 		try:
@@ -806,6 +817,42 @@ def cmd_verify_comprehensive_marker(args: argparse.Namespace) -> int:
 		except OSError:
 			print("comprehensive marker verification failed: output file is not writable", file=sys.stderr)
 			return 2
+	return 0
+
+
+def cmd_bind_comprehensive_marker(args: argparse.Namespace) -> int:
+	context, context_error = _validated_comprehensive_marker_context(args)
+	if context_error is not None:
+		print(f"comprehensive marker binding failed: {context_error}", file=sys.stderr)
+		return 2
+	if context is None or context["tracking_issue"] < 1:
+		print("comprehensive marker binding failed: tracking issue must be a positive integer", file=sys.stderr)
+		return 2
+	document = _load_bounded_json_object(Path(args.envelope_file), COMPREHENSIVE_MARKER_MAX_BYTES)
+	if document is None:
+		return 1
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"comprehensive marker binding failed: {key_error}", file=sys.stderr)
+		return 2
+	assert active_key_id is not None and auth_keys is not None
+	unbound_context = dict(context)
+	unbound_context["tracking_issue"] = 0
+	if not _comprehensive_marker_is_verified(document, unbound_context, auth_keys, allow_unbound=True):
+		return 1
+	bound_document = dict(document)
+	bound_document["tracking_issue"] = context["tracking_issue"]
+	bound_document["key_id"] = active_key_id
+	bound_document["signature"] = "0" * 64
+	if not _valid_comprehensive_marker_document(bound_document):
+		return 1
+	bound_document["signature"] = _signature_for_comprehensive_marker(bound_document, auth_keys[active_key_id])
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(bound_document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("comprehensive marker binding failed: output file is not writable", file=sys.stderr)
+		return 2
 	return 0
 
 
@@ -867,7 +914,12 @@ def cmd_select_comprehensive_marker(args: argparse.Namespace) -> int:
 		if not isinstance(user, dict) or user.get("id") != args.producer_id:
 			continue
 		document = _extract_comprehensive_marker(body)
-		if document is not None and _comprehensive_marker_is_verified(document, context, auth_keys):
+		if document is not None and _comprehensive_marker_is_verified(
+			document,
+			context,
+			auth_keys,
+			allow_unbound=args.tracking_issue == 0,
+		):
 			selected = document
 	result = {"marker": selected, "untrusted_marker": marker_seen and selected is None}
 	try:
@@ -1312,6 +1364,7 @@ def main() -> int:
 		command_parser = sub.add_parser(command_name, help=command_help)
 		command_parser.add_argument("--repository", required=True)
 		command_parser.add_argument("--producer-id", required=True, type=int)
+		command_parser.add_argument("--tracking-issue", type=int, default=0)
 		if command_name == "sign-comprehensive-marker":
 			command_parser.add_argument("--candidate-file", required=True)
 			command_parser.add_argument("--out-file", required=True)
@@ -1319,6 +1372,16 @@ def main() -> int:
 			command_parser.add_argument("--envelope-file", required=True)
 			command_parser.add_argument("--out-file")
 		command_parser.set_defaults(func=command_func)
+	p_bind_comprehensive_marker = sub.add_parser(
+		"bind-comprehensive-marker",
+		help="Bind an authenticated comprehensive-cycle marker to its created tracking issue",
+	)
+	p_bind_comprehensive_marker.add_argument("--envelope-file", required=True)
+	p_bind_comprehensive_marker.add_argument("--repository", required=True)
+	p_bind_comprehensive_marker.add_argument("--producer-id", required=True, type=int)
+	p_bind_comprehensive_marker.add_argument("--tracking-issue", required=True, type=int)
+	p_bind_comprehensive_marker.add_argument("--out-file", required=True)
+	p_bind_comprehensive_marker.set_defaults(func=cmd_bind_comprehensive_marker)
 	p_select_comprehensive_marker = sub.add_parser(
 		"select-comprehensive-marker",
 		help="Select the newest producer-authenticated comprehensive-cycle marker",
@@ -1326,6 +1389,7 @@ def main() -> int:
 	p_select_comprehensive_marker.add_argument("--comments-json", required=True)
 	p_select_comprehensive_marker.add_argument("--repository", required=True)
 	p_select_comprehensive_marker.add_argument("--producer-id", required=True, type=int)
+	p_select_comprehensive_marker.add_argument("--tracking-issue", required=True, type=int)
 	p_select_comprehensive_marker.add_argument("--out-file", required=True)
 	p_select_comprehensive_marker.set_defaults(func=cmd_select_comprehensive_marker)
 	for command_name, command_help, command_func in (

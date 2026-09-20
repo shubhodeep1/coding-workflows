@@ -32,6 +32,7 @@ def _signed_cycle_comment(baseline_sha: str) -> dict:
 	document = {
 		"schema_version": "comprehensive_cycle_marker.v1", "algorithm": "hmac-sha256",
 		"key_id": "test-key", "producer_id": 41898282, "repository": "owner/repo",
+		"tracking_issue": 900,
 		"source_doc": "analysis/workflow-optimization-test.md", "role": "proving",
 		"dispatcher_run_id": 42, "smoke_run_id": 500, "smoke_actor_id": 1234,
 		"smoke_workflow_path": ".github/workflows/test-and-mark-stable.yml",

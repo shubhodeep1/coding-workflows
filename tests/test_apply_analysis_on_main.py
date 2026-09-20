@@ -30,13 +30,14 @@ MARKER_KEYRING = json.dumps({
 })
 
 
-def _signed_marker_comment(source_doc: str) -> dict:
+def _signed_marker_comment(source_doc: str, tracking_issue: int = 700) -> dict:
 	document = {
 		"schema_version": "comprehensive_cycle_marker.v1",
 		"algorithm": "hmac-sha256",
 		"key_id": "test-key",
 		"producer_id": 41898282,
 		"repository": "owner/repo",
+		"tracking_issue": tracking_issue,
 		"source_doc": source_doc,
 		"role": "proving",
 		"dispatcher_run_id": 42,
@@ -435,6 +436,8 @@ def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
 	# freshly created issue and fails the run so the dispatcher can retry.
 	create_step = text.split("- name: Create tracking issue", 1)[1].split("- name: Create integration branch", 1)[0]
 	assert 'orchestrate_state_v2.py" select-comprehensive-marker' in create_step
+	assert 'orchestrate_state_v2.py" bind-comprehensive-marker' in create_step
+	assert '--tracking-issue "${TRACKING_ISSUE_NUMBER}"' in create_step
 	assert ".marker.smoke_actor_id // 0" in create_step
 	assert '_binding_failed_stage="comment-auth"' in create_step
 	assert "TRACKING_ISSUE_BINDING_FAILED" in create_step
