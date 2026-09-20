@@ -1423,7 +1423,14 @@ jobs:
           fi
           STEP_INACTIVITY_LIMIT=$((REVIEW_STEP_TIMEOUT * 60))
           echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
-          LAST_ACTIVITY=$(date +%s)
+          REVIEW_PHASE_WALL_BUDGET_MINUTES="${REVIEW_TIMEOUT}"
+          if [ "$REVIEW_STEP_TIMEOUT" -gt "$REVIEW_PHASE_WALL_BUDGET_MINUTES" ]; then
+            REVIEW_PHASE_WALL_BUDGET_MINUTES="$REVIEW_STEP_TIMEOUT"
+          fi
+          REVIEW_PHASE_STARTED_AT=$(date +%s)
+          REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))
+          echo "Review total wall-clock budget: ${REVIEW_PHASE_WALL_BUDGET_MINUTES} minutes"
+          LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
           PREV_STATE=""
           LAST_STEP_GUARD_RUN_ID=""
           LAST_STEP_GUARD_NAME=""
@@ -1454,6 +1461,11 @@ jobs:
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
+            if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then
+              echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
 
             # Find the review workflow run for this PR's head branch
             PR_BRANCH="ai/issue-${ISSUE_NUMBER}"
@@ -2745,16 +2757,23 @@ jobs:
           . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           REGISTERED_POLLER_RUN_ID=""
-          dispatch_and_register_poller() {
+          POLLER_DISPATCH_REF="ai/issue-${ISSUE_NUMBER}"
+          dispatch_and_register_poller()
+          {
             local workflow_file="$1"
             local baseline_id=""
             local registration_deadline
             local runs_json=""
+            local candidate_query=""
             local candidate_count=""
             local candidate_id=""
+            local dispatch_started_epoch=""
 
-            if ! baseline_id=$(gh_api_safe_quiet_print \
-              "repos/${TEST_REPO}/actions/workflows/${workflow_file}/runs?event=workflow_dispatch&per_page=1" \
+            # GitHub's workflow_dispatch API returns 204/no run id. The old
+            # broad actions/runs lookup could select a peer poller, so this is
+            # intentionally scoped to the unique smoke-test issue branch.
+            candidate_query="repos/${TEST_REPO}/actions/workflows/${workflow_file}/runs?event=workflow_dispatch&branch=${POLLER_DISPATCH_REF}&per_page=10"
+            if ! baseline_id=$(gh_api_safe_quiet_print "${candidate_query}" \
               --jq '.workflow_runs[0].id // 0'); then
               echo "  Poller wrapper ${workflow_file} is unavailable for snapshot/dispatch."
               return 1
@@ -2763,43 +2782,51 @@ jobs:
               echo "::error::Malformed pre-dispatch run id for ${workflow_file}: '${baseline_id}'"
               return 2
             fi
-            echo "  ${workflow_file} pre-dispatch run id: ${baseline_id}"
 
-            if ! gh workflow run "${workflow_file}" --repo "${TEST_REPO}" 2>/dev/null; then
+            dispatch_started_epoch=$(date +%s)
+            if ! gh workflow run "${workflow_file}" --repo "${TEST_REPO}" --ref "${POLLER_DISPATCH_REF}" 2>/dev/null; then
               echo "  Poller wrapper ${workflow_file} could not be dispatched."
               return 1
             fi
 
             registration_deadline=$(( $(date +%s) + 90 ))
             while [ "$(date +%s)" -lt "${registration_deadline}" ]; do
-              if ! runs_json=$(gh_api_safe_quiet_print \
-                "repos/${TEST_REPO}/actions/workflows/${workflow_file}/runs?event=workflow_dispatch&per_page=10"); then
-                echo "::error::Could not list post-dispatch runs for ${workflow_file}; refusing to guess a run id."
-                return 2
+              if ! runs_json=$(gh_api_safe_quiet_print "${candidate_query}"); then
+                echo "::warning::Could not list post-dispatch runs for ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
               fi
               if ! printf '%s' "${runs_json}" \
                 | jq -se 'length == 1 and (.[0] | type == "object" and (.workflow_runs | type == "array"))' \
                 >/dev/null 2>&1; then
-                echo "::error::Malformed run-list payload for ${workflow_file}; refusing to guess a run id."
-                return 2
+                echo "::warning::Malformed run-list payload for ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
               fi
 
               candidate_count=$(printf '%s' "${runs_json}" \
-                | jq -r --argjson baseline_id "${baseline_id}" \
-                  '[.workflow_runs[] | select(.event == "workflow_dispatch" and .id > $baseline_id)] | length' \
+                | jq -r \
+                  --arg dispatch_ref "${POLLER_DISPATCH_REF}" \
+                  --argjson baseline_id "${baseline_id}" \
+                  --argjson dispatch_started_epoch "${dispatch_started_epoch}" \
+                  '[.workflow_runs[] | select(.event == "workflow_dispatch" and .id > $baseline_id and .head_branch == $dispatch_ref and ((.created_at | fromdateiso8601? // 0) >= ($dispatch_started_epoch - 5)))] | length' \
                 2>/dev/null || echo "")
               if ! [[ "${candidate_count}" =~ ^[0-9]+$ ]]; then
-                echo "::error::Malformed candidate count while registering ${workflow_file}."
-                return 2
+                echo "::warning::Malformed candidate count while registering ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
               fi
               if [ "${candidate_count}" -gt 1 ]; then
-                echo "::error::Ambiguous ${workflow_file} registration: ${candidate_count} runs appeared after baseline ${baseline_id}."
+                echo "::error::Ambiguous ${workflow_file} registration: ${candidate_count} branch-scoped runs appeared after baseline ${baseline_id}."
                 return 2
               fi
               if [ "${candidate_count}" -eq 1 ]; then
                 candidate_id=$(printf '%s' "${runs_json}" \
-                  | jq -r --argjson baseline_id "${baseline_id}" \
-                    '.workflow_runs[] | select(.event == "workflow_dispatch" and .id > $baseline_id) | .id' \
+                  | jq -r \
+                    --arg dispatch_ref "${POLLER_DISPATCH_REF}" \
+                    --argjson baseline_id "${baseline_id}" \
+                    --argjson dispatch_started_epoch "${dispatch_started_epoch}" \
+                    '.workflow_runs[] | select(.event == "workflow_dispatch" and .id > $baseline_id and .head_branch == $dispatch_ref and ((.created_at | fromdateiso8601? // 0) >= ($dispatch_started_epoch - 5))) | .id' \
                   2>/dev/null || echo "")
                 if ! [[ "${candidate_id}" =~ ^[0-9]+$ ]] || [ "${candidate_id}" -lt 1 ]; then
                   echo "::error::Registered ${workflow_file} run id is not a positive integer: '${candidate_id}'"
@@ -2811,7 +2838,7 @@ jobs:
               sleep 5
             done
 
-            echo "::error::${workflow_file} dispatch did not register a run within 90 seconds."
+            echo "::error::${workflow_file} dispatch did not register a branch-scoped run within 90 seconds."
             return 2
           }
 
@@ -2874,20 +2901,26 @@ jobs:
             # dispatch. Never substitute a newer scheduled/manual poller.
             if ! POLLER_RUN=$(gh_api_safe_quiet_print \
               "repos/${TEST_REPO}/actions/runs/${POLLER_RUN_ID}"); then
-              echo "::warning::Could not read pinned poller run #${POLLER_RUN_ID}"
-              echo "status=poller_failed" >> "$GITHUB_OUTPUT"
-              gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
-                -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
-              exit 0
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Pinned poller run #${POLLER_RUN_ID} remained unreadable for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+              echo "::warning::Could not read pinned poller run #${POLLER_RUN_ID}; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
             fi
             if ! printf '%s' "${POLLER_RUN}" \
               | jq -se 'length == 1 and (.[0] | type == "object" and (.status | type == "string") and ((.conclusion == null) or (.conclusion | type == "string")))' \
               >/dev/null 2>&1; then
-              echo "::warning::Pinned poller run #${POLLER_RUN_ID} returned a malformed payload"
-              echo "status=poller_failed" >> "$GITHUB_OUTPUT"
-              gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
-                -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
-              exit 0
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Pinned poller run #${POLLER_RUN_ID} returned malformed payloads for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+              echo "::warning::Pinned poller run #${POLLER_RUN_ID} returned a malformed payload; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
             fi
             POLLER_STATUS=$(printf '%s' "${POLLER_RUN}" | jq -r '.status')
             POLLER_CONCLUSION=$(printf '%s' "${POLLER_RUN}" | jq -r '.conclusion // "null"')

@@ -214,6 +214,7 @@ changelog.d/4109-bind-auto-merge-head.md
 changelog.d/4109-bind-auto-merge-to-evaluated-head.md
 changelog.d/4127-security-fix-pr-base.md
 changelog.d/4134-auto-apply-analysis-and-stable-release.md
+changelog.d/4163-e2e-review-blocked-budget.md
 changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/433-readme-wrapper-predicate-examples.md
@@ -863,6 +864,7 @@ tests/test_task_state_unblock.py
 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py
 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
 tests/test_test_and_mark_stable_plan_polling_guard.py
+tests/test_test_and_mark_stable_review_blocked_budget.py
 tests/test_transcript_archive.sh
 tests/test_truncate_to_utf8_byte_cap.py
 tests/test_update_repo_tree.py

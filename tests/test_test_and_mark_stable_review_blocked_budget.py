@@ -75,6 +75,8 @@ def test_budget_guard_runs_before_artifact_creation() -> None:
 	assert job.index(guard) < job.index(create_issue)
 	assert "(2 * PHASE_TIMEOUT)" in job
 	assert "REVIEW_EFFECTIVE_BUDGET_MINUTES" in job
+	assert 'REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))' in job
+	assert 'if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then' in job
 
 
 def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
@@ -85,18 +87,38 @@ def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
 
 def test_phase6_registers_once_and_polls_only_the_pinned_run() -> None:
 	phase6 = _phase6(_read_workflow())
-	snapshot = 'actions/workflows/${workflow_file}/runs?event=workflow_dispatch&per_page=1'
-	dispatch = 'gh workflow run "${workflow_file}" --repo "${TEST_REPO}"'
-	assert snapshot in phase6
+	branch_query = "runs?event=workflow_dispatch&branch=${POLLER_DISPATCH_REF}&per_page=10"
+	dispatch = 'gh workflow run "${workflow_file}" --repo "${TEST_REPO}" --ref "${POLLER_DISPATCH_REF}"'
+	assert branch_query in phase6
 	assert dispatch in phase6
-	assert phase6.index(snapshot) < phase6.index(dispatch)
-	assert 'actions/workflows/${workflow_file}/runs?event=workflow_dispatch&per_page=10' in phase6
-	assert 'if [ "${candidate_count}" -gt 1 ]; then' in phase6
-	assert "refusing to guess a run id" in phase6
+	assert phase6.index(branch_query) < phase6.index(dispatch)
 	assert phase6.count('echo "poller_run_id=${POLLER_RUN_ID}" >> "$GITHUB_OUTPUT"') == 1
 	assert '"repos/${TEST_REPO}/actions/runs/${POLLER_RUN_ID}"' in phase6
+	assert 'actions/workflows/${workflow_file}/dispatches' not in phase6
+	assert "workflow_run_id" not in phase6
 	assert "actions/runs?per_page=5&event=workflow_dispatch" not in phase6
 	assert "POLLER_LATEST_ID" not in phase6
+
+
+def test_phase6_rejects_a_newer_foreign_ref_dispatch() -> None:
+	phase6 = _phase6(_read_workflow())
+	assert '--arg dispatch_ref "${POLLER_DISPATCH_REF}"' in phase6
+	assert '.head_branch == $dispatch_ref' in phase6
+	assert '.id > $baseline_id' in phase6
+	assert 'fromdateiso8601? // 0) >= ($dispatch_started_epoch - 5)' in phase6
+	assert 'if [ "${candidate_count}" -gt 1 ]; then' in phase6
+	assert 'Ambiguous ${workflow_file} registration' in phase6
+
+
+def test_phase6_transient_api_errors_remain_bounded() -> None:
+	phase6 = _phase6(_read_workflow())
+	assert phase6.count("retrying within the inactivity window") == 2
+	assert 'echo "status=timeout" >> "$GITHUB_OUTPUT"' in phase6
+	transient_read = 'if ! POLLER_RUN=$(gh_api_safe_quiet_print'
+	read_complete = 'POLLER_STATUS=$(printf'
+	read_block = phase6[phase6.index(transient_read) : phase6.index(read_complete)]
+	assert 'echo "status=poller_failed"' not in read_block
+	assert 'exit 0' not in read_block
 
 
 def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:
