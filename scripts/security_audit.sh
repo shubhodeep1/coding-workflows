@@ -1567,9 +1567,9 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 	for hunk_start, hunk_end, has_deletion, has_control_change, has_context_name in causal_hunks:
 		if hunk_start <= line_number <= hunk_end and (has_deletion or has_control_change):
 			return True
-		if has_deletion and not has_context_name:
-			# Without a language-aware enclosing-context header, the engine cannot
-			# prove that a removed guard is unrelated to the cited sink.
+		if has_deletion:
+			# A named hunk can still remove a guard or registration hook used by a
+			# different function, so same-file deletions are not provably unrelated.
 			warn_ownership_once(file_name)
 			return True
 	line_count = file_line_counts.get(file_name, 0)

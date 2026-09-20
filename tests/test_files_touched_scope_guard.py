@@ -49,13 +49,13 @@ def _body(*entries: str) -> str:
 	return "\n".join(lines) + "\n"
 
 
-def _generated_advisory_body(path: str = "src/security.py") -> str:
+def _generated_advisory_body(path: str = "src/security.py", audited_commit: str = "b" * 40) -> str:
 	return (
 		"Generated advisory.\n\n---\n"
 		"**Generated security advisory metadata**\n"
 		"- Schema: `generated-security-advisory.v1`\n"
 		f"- Waiver match key: `sha256:{'a' * 64}`\n"
-		f"- Audited commit: `{'b' * 40}`\n"
+		f"- Audited commit: `{audited_commit}`\n"
 		f"- Cited file: `{path}`\n"
 		"files_touched:\n"
 		f"  - {path}\n"
@@ -189,6 +189,9 @@ def test_generated_advisory_requires_trusted_author_and_exact_path() -> None:
 	assert status == guard.STATUS_OUT_OF_SCOPE
 	assert allowlist == ["src/security.py"]
 	assert oos == ["package-lock.json"]
+	sha256_metadata = guard.parse_generated_advisory(_generated_advisory_body(audited_commit="c" * 64))
+	assert sha256_metadata is not None
+	assert sha256_metadata["audited_commit"] == "c" * 64
 
 
 def test_generated_advisory_rejects_malformed_or_mismatched_footer() -> None:

@@ -1090,9 +1090,10 @@ def test_security_audit_deleted_guard_keeps_unchanged_sink_blocking() -> None:
 		fixture_git("init", "-q")
 		guarded_path = repo_dir / "guarded.py"
 		guarded_path.write_text(
+			"def register_security(app):\n"
+			"\tapp.before_request(require_admin)\n"
+			"\n"
 			"def privileged_action(user):\n"
-			"\tif not user.is_admin:\n"
-			"\t\traise PermissionError()\n"
 			"\treturn mutate_money_state()\n",
 			encoding="utf-8",
 		)
@@ -1100,14 +1101,18 @@ def test_security_audit_deleted_guard_keeps_unchanged_sink_blocking() -> None:
 		fixture_git("commit", "-q", "-m", "guarded base")
 		base_sha = fixture_git("rev-parse", "HEAD")
 		guarded_path.write_text(
-			"def privileged_action(user):\n\treturn mutate_money_state()\n",
+			"def register_security(app):\n"
+			"\tpass\n"
+			"\n"
+			"def privileged_action(user):\n"
+			"\treturn mutate_money_state()\n",
 			encoding="utf-8",
 		)
 		fixture_git("add", "guarded.py")
 		fixture_git("commit", "-q", "-m", "remove guard")
 		head_sha = fixture_git("rev-parse", "HEAD")
 		finding = _finding_payload("deleted-guard", file_path="guarded.py", category="A01: Broken Access Control")
-		finding["line"] = 2
+		finding["line"] = 5
 		output_path = tmp_path / "findings.json"
 		proc, final_state = _run_security_audit(
 			{},

@@ -341,7 +341,7 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 
 	# Preserve the advisory reconciliation search and the two marker-search
 	# fallbacks, including their paginated aggregation.
-	assert '-f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security security-pass-advisory:${TRACKING_NUM} in:body"' in poller_source_text
+	assert '-f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security (\\"security-pass-advisory-key:${TRACKING_NUM}\\" OR \\"security-pass-advisory:${TRACKING_NUM}\\") in:body"' in poller_source_text
 	assert '-f per_page=100 -f q="${q_state}"' in poller_source_text
 	assert '-f per_page=100 -f q="${q_clarify}"' in poller_source_text
 	assert "jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]'" in poller_source_text
@@ -4613,7 +4613,7 @@ def test_security_pass_advisory_backlog_files_oldest_first_with_one_tick_cap() -
 		row["finding_id"] = finding_id
 		row["line"] = len(backlog) + 1
 		row["waiver_match_key"] = _test_waiver_key(row)
-		row["audited_head_sha"] = "a" * 40
+		row["audited_head_sha"] = "a" * 64
 		backlog.append(row)
 	state = _passed_security_state_for_rebind()
 	state["security_pass_advisory_backlog"] = backlog
@@ -4646,6 +4646,7 @@ def test_security_pass_advisory_backlog_files_oldest_first_with_one_tick_cap() -
 
 	assert len(result["created_issues"]) == 1
 	assert "ADVISORY-OLD" in result["created_issues"][0]["title"]
+	assert f"at `{'a' * 64}`" in result["issues"]["900"]["body"]
 	assert [row["finding_id"] for row in result["latest_state"]["security_pass_advisory_backlog"]] == ["ADVISORY-NEW"]
 	assert any(
 		"1 finding(s) on pre-existing code were routed as non-blocking `ai:security` follow-ups: #900 (1 still queued)." in comment["body"]
@@ -5178,7 +5179,7 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	assert created[0]["title"] == "[security-pass] Advisory: SEC-TEST-1 (high, scripts/example.py:1)"
 	advisory_body = result["issues"][str(created[0]["number"])]["body"]
 	assert "<!-- ai:security-finding:SEC-TEST-1 -->" in advisory_body
-	assert "<!-- security-pass-advisory:192:SEC-TEST-1 -->" in advisory_body
+	assert f"<!-- security-pass-advisory-key:192:{remaining['waiver_match_key']} -->" in advisory_body
 	assert "Refs #192" in advisory_body
 	assert "Notify @​security-team about issue #​123." in advisory_body
 	assert "@security-team" not in advisory_body
@@ -5190,7 +5191,9 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	assert waived[0]["issue"] == created[0]["number"]
 	assert "followup_pending" not in waived[0]
 	assert "finding" not in waived[0]
-	assert latest_state["security_pass_followup_issues"] == [{"finding_id": "SEC-TEST-1", "issue": created[0]["number"]}]
+	assert latest_state["security_pass_followup_issues"] == [
+		{"finding_id": "SEC-TEST-1", "waiver_match_key": remaining["waiver_match_key"], "issue": created[0]["number"]}
+	]
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=1" in combined_log
@@ -5300,8 +5303,8 @@ def test_security_pass_deferred_advisory_followups_file_when_final_merge_lands()
 					"waived_at_cycle": 3,
 					"issue": None,
 					"followup_pending": True,
-					"audited_head_sha": "deadbeefcafe",
-					"finding": _security_pass_test_finding() | {"finding_id": "SEC-DEFERRED"},
+					"audited_head_sha": "d" * 64,
+					"finding": _security_pass_test_finding() | {"finding_id": "SEC-DEFERRED", "waiver_match_key": ""},
 				},
 				{
 					"finding_id": "SEC-ALREADY-FILED",
@@ -5337,8 +5340,8 @@ def test_security_pass_deferred_advisory_followups_file_when_final_merge_lands()
 	assert created[0]["labels"] == ["ai:security"]
 	assert created[0]["title"] == "[security-pass] Advisory: SEC-DEFERRED (high, scripts/example.py:1)"
 	advisory_body = result["issues"][str(created[0]["number"])]["body"]
-	assert "<!-- security-pass-advisory:192:SEC-DEFERRED -->" in advisory_body
-	assert "for integration branch `orchestrator/project-192` at `deadbeefcafe`" in advisory_body
+	assert re.search(r"<!-- security-pass-advisory-key:192:sha256:[0-9a-f]{64} -->", advisory_body)
+	assert f"for integration branch `orchestrator/project-192` at `{'d' * 64}`" in advisory_body
 	assert f"has since merged into the default branch via PR #{final_pr}" in advisory_body
 	waived = {row["finding_id"]: row for row in latest_state["security_pass_waived_findings"]}
 	assert waived["SEC-DEFERRED"]["issue"] == created[0]["number"]
@@ -5383,7 +5386,7 @@ def test_security_pass_deferred_advisory_followup_retries_on_completed_tick() ->
 					"waived_at_cycle": 3,
 					"issue": None,
 					"followup_pending": True,
-					"audited_head_sha": "deadbeefcafe",
+					"audited_head_sha": "d" * 40,
 					"finding": _security_pass_test_finding() | {"finding_id": "SEC-RETRY"},
 				}
 			],
@@ -5434,7 +5437,9 @@ def test_security_pass_advisory_followup_reconciles_remote_marker_before_create(
 	latest_state = result["latest_state"]
 	assert latest_state["status"] == "complete"
 	assert result.get("created_issues", []) == []
-	assert latest_state["security_pass_followup_issues"] == [{"finding_id": "SEC-TEST-1", "issue": 955}]
+	assert latest_state["security_pass_followup_issues"] == [
+		{"finding_id": "SEC-TEST-1", "waiver_match_key": _security_pass_test_finding()["waiver_match_key"], "issue": 955}
+	]
 	assert latest_state["security_pass_waived_findings"][0]["issue"] == 955
 	assert result["api_calls"].count("search/issues") == 1
 

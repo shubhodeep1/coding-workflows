@@ -77,7 +77,7 @@ _GENERATED_ADVISORY_FOOTER_RE = re.compile(
 	r"\*\*Generated security advisory metadata\*\*\n"
 	r"- Schema: `generated-security-advisory\.v1`\n"
 	r"- Waiver match key: `(sha256:[0-9a-f]{64})`\n"
-	r"- Audited commit: `([0-9a-f]{40})`\n"
+	r"- Audited commit: `([0-9a-f]{40,64})`\n"
 	r"- Cited file: `([^`\n]+)`\n"
 	r"files_touched:\n"
 	r"  - ([^\n]+)\n?\Z"

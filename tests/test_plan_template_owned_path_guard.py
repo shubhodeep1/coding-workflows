@@ -62,6 +62,7 @@ def _run_guard(
 	*,
 	issue_body: str = "",
 	issue_author_association: str = "OWNER",
+	workflow_source_repo: bool = False,
 ):
 	"""Execute the guard against a synthetic plan; return (exit_code, output).
 
@@ -112,6 +113,7 @@ def _run_guard(
 				"PLAN_PROGRESS_COMMENT_ID": "",
 				"ISSUE_BODY_FILE": str(issue_body_file),
 				"ISSUE_AUTHOR_ASSOCIATION": issue_author_association,
+				"IS_WORKFLOW_SOURCE_REPO": "true" if workflow_source_repo else "false",
 			}
 		)
 		proc = subprocess.run(
@@ -416,8 +418,21 @@ def test_template_path_negated_only_after_the_path_is_still_rejected() -> None:
 
 
 def test_guard_skips_the_canonical_coding_workflows_repository() -> None:
-	"""In coding-workflows these paths are the source of truth."""
+	"""Source paths remain editable, but generated advisory scope still runs."""
 	workflow = yaml.safe_load(PLAN_WORKFLOW.read_text())
 	steps = workflow["jobs"]["plan"]["steps"]
 	guard = next(s for s in steps if s.get("name") == GUARD_STEP_NAME)
-	assert "endsWith(github.repository, '/coding-workflows')" in guard["if"]
+	assert "endsWith(github.repository, '/coding-workflows')" not in guard["if"]
+	assert guard["env"]["IS_WORKFLOW_SOURCE_REPO"] == "${{ endsWith(github.repository, '/coding-workflows') }}"
+	returncode, output = _run_guard(
+		_plan_listing("scripts/render_prompt.sh"), FETCHED_HELPERS, workflow_source_repo=True
+	)
+	assert returncode == 0, output
+	returncode, output = _run_guard(
+		"## Files likely to change\n- `src/security.py`\n- `README.md`\n",
+		FETCHED_HELPERS,
+		issue_body=_generated_advisory_body(),
+		workflow_source_repo=True,
+	)
+	assert returncode != 0
+	assert "must name only its exact cited file" in output

@@ -4693,7 +4693,7 @@ ensure_security_pass_state_fields() {
           and (.line | type) == "number" and (.line | floor) == .line and .line > 0
           and (.exploit_scenario | type) == "string" and (.exploit_scenario | length) > 0
           and (.recommendation | type) == "string" and (.recommendation | length) > 0
-          and (.audited_head_sha | type) == "string" and (.audited_head_sha | test("^[0-9a-fA-F]{7,40}$"))
+          and (.audited_head_sha | type) == "string" and (.audited_head_sha | test("^[0-9a-fA-F]{7,64}$"))
         ))
         | map(
           .finding_id = .finding_id[0:200]
@@ -5630,12 +5630,12 @@ security_pass_apply_waivers_to_findings() {
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
 findings_path = Path(sys.argv[1])
 state_path = Path(sys.argv[2])
-_line_window = int(sys.argv[3])
 
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -5644,11 +5644,11 @@ waivers = [row for row in state.get("security_pass_waived_findings", []) if isin
 
 def waiver_for(finding: dict) -> str | None:
 	finding_key = str(finding.get("waiver_match_key") or "")
-	if not finding_key.startswith("sha256:") or len(finding_key) != 71:
+	if re.fullmatch(r"sha256:[0-9a-f]{64}", finding_key) is None:
 		return None
 	for waiver in waivers:
 		waived_key = str(waiver.get("waiver_match_key") or "")
-		if waived_key == finding_key:
+		if re.fullmatch(r"sha256:[0-9a-f]{64}", waived_key) and waived_key == finding_key:
 			return waived_key
 	return None
 
@@ -5720,8 +5720,8 @@ security_pass_record_waivers() {
 # finding and leave its number in SECURITY_PASS_ADVISORY_ISSUE_NUMBER (empty
 # when nothing was filed).  Dedupes on security_pass_followup_issues in
 # state (one cheap jq read, no API call); the body carries the weekly
-# audit's `<!-- ai:security-finding:<id> -->` marker so the scheduled audit's
-# own dedupe recognises it, plus `<!-- security-pass-advisory:<tracking>:<id> -->`.
+# audit's `<!-- ai:security-finding:<id> -->` marker plus the provenance-keyed
+# advisory marker. Reconciliation also recognises the legacy finding-id marker.
 # API cost: one paginated reconciliation search per tracking issue per poller
 # process, one `gh issue create` per new accepted finding, and the first cached
 # `gh label create` attempt for `ai:security`. Fail-open: lookup/create failures
@@ -5737,26 +5737,34 @@ create_security_pass_advisory_followup() {
   # the body tells the pipeline the cited code is already on the default
   # branch; empty on the legacy judge-time filing path.
   local merged_pr="${6:-}"
-  local finding_id waiver_match_key existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json advisory_cache_key
+  local finding_id waiver_match_key existing_issue body_file title issue_url issue_number advisory_marker legacy_advisory_marker remote_followups_json advisory_cache_key
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
   waiver_match_key="$(printf '%s' "${finding_json}" | jq -r '.waiver_match_key // ""' 2>/dev/null || true)"
   [ -n "${finding_id}" ] || return 0
-  [[ "${waiver_match_key}" =~ ^sha256:[0-9a-f]{64}$ ]] || return 0
+  if ! [[ "${waiver_match_key}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    [ -z "${waiver_match_key}" ] && [[ "${merged_pr}" =~ ^[0-9]+$ ]] || return 0
+    waiver_match_key="sha256:$(printf '%s\0%s\0%s' "${TRACKING_NUM}" "${head_sha}" "${finding_json}" | sha256sum | awk '{print $1}')"
+    finding_json="$(printf '%s' "${finding_json}" | jq -c --arg key "${waiver_match_key}" '.waiver_match_key = $key')" || return 0
+    echo "::notice::Migrated legacy keyless deferred advisory ${finding_id} to a non-suppressing follow-up key."
+  fi
   advisory_cache_key="${TRACKING_NUM}:${waiver_match_key}"
   existing_issue="${_SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]:-}"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
     SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
     return 0
   fi
-  existing_issue="$(jq -r --arg key "${waiver_match_key}" '
-    [(.security_pass_followup_issues // [])[] | select(.waiver_match_key == $key) | .issue] | last // empty
+  existing_issue="$(jq -r --arg id "${finding_id}" --arg key "${waiver_match_key}" '
+    [(.security_pass_followup_issues // [])[]
+      | select(.waiver_match_key == $key or (((.waiver_match_key // "") == "") and .finding_id == $id))
+      | .issue] | last // empty
   ' "${STATE_FILE}" 2>/dev/null || true)"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
     SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
     return 0
   fi
   advisory_marker="<!-- security-pass-advisory-key:${TRACKING_NUM}:${waiver_match_key} -->"
+  legacy_advisory_marker="<!-- security-pass-advisory:${TRACKING_NUM}:${finding_id} -->"
   if [ -z "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]+set}" ]; then
     # The state cache and weekly-audit lookup cannot detect an issue whose
     # create succeeded but whose response/state write was lost. This single
@@ -5764,17 +5772,19 @@ create_security_pass_advisory_followup() {
     # fails open to an empty cache; subsequent findings reuse the result.
     remote_followups_json="$(gh_retry gh api --method GET --paginate --slurp "search/issues" \
       -f per_page=100 \
-      -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security security-pass-advisory-key:${TRACKING_NUM} in:body" 2>/dev/null || echo '[]')"
+      -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security (\"security-pass-advisory-key:${TRACKING_NUM}\" OR \"security-pass-advisory:${TRACKING_NUM}\") in:body" 2>/dev/null || echo '[]')"
     _SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]="${remote_followups_json}"
   fi
-  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg marker "${advisory_marker}" '
-    [if type == "array" then .[].items[]? else .items[]? end | select((.body // "") | contains($marker)) | .number]
+  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg marker "${advisory_marker}" --arg legacy_marker "${legacy_advisory_marker}" '
+    [if type == "array" then .[].items[]? else .items[]? end
+      | select((.body // "") | contains($marker) or contains($legacy_marker)) | .number]
     | first // empty
   ' 2>/dev/null || true)"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
     if ! jq --arg id "${finding_id}" --arg key "${waiver_match_key}" --argjson issue "${existing_issue}" '
-      .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(.waiver_match_key != $key)] + [{finding_id: $id, waiver_match_key: $key, issue: $issue}])
-      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if .waiver_match_key == $key then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end]
+      def same_advisory: .waiver_match_key == $key or (((.waiver_match_key // "") == "") and .finding_id == $id);
+      .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(same_advisory | not)] + [{finding_id: $id, waiver_match_key: $key, issue: $issue}])
+      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if same_advisory then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end]
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
       rm -f "${STATE_FILE}.tmp"
       echo "::warning::Found advisory follow-up #${existing_issue} for security-pass finding ${finding_id}, but could not reconcile it into state."
@@ -5820,7 +5830,7 @@ if file_path.is_absolute() or ".." in file_path.parts or not file_name or "`" in
 	raise SystemExit("invalid cited file")
 if not isinstance(line_number, int) or isinstance(line_number, bool) or line_number < 1:
 	raise SystemExit("invalid cited line")
-if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+if not re.fullmatch(r"[0-9a-f]{40,64}", head_sha):
 	raise SystemExit("invalid audited head")
 location = f"{file_name}:{line_number}"
 accepted_by = {
@@ -5893,10 +5903,11 @@ PY
   fi
   _SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]="${issue_number}"
   if ! jq --arg id "${finding_id}" --arg key "${waiver_match_key}" --argjson issue "${issue_number}" '
-    .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(.waiver_match_key != $key)] + [{finding_id: $id, waiver_match_key: $key, issue: $issue}])
+    def same_advisory: .waiver_match_key == $key or (((.waiver_match_key // "") == "") and .finding_id == $id);
+    .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(same_advisory | not)] + [{finding_id: $id, waiver_match_key: $key, issue: $issue}])
     | .security_pass_waived_findings = [
         (.security_pass_waived_findings // [])[]
-        | if .waiver_match_key == $key then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
+        | if same_advisory then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
       ]
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     rm -f "${STATE_FILE}.tmp"
@@ -6017,10 +6028,10 @@ security_pass_file_deferred_advisory_followups() {
       # issue; when it returned an issue it already knew from
       # security_pass_followup_issues the row would stay pending forever, so
       # settle it here as well (idempotent).
-      if ! jq --arg key "$(printf '%s' "${row_json}" | jq -r '.waiver_match_key // ""')" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
+      if ! jq --arg id "$(printf '%s' "${row_json}" | jq -r '.finding_id')" --arg key "$(printf '%s' "${row_json}" | jq -r '.waiver_match_key // ""')" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
         .security_pass_waived_findings = [
           (.security_pass_waived_findings // [])[]
-          | if .waiver_match_key == $key then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
+          | if (($key != "" and .waiver_match_key == $key) or ($key == "" and ((.waiver_match_key // "") == "") and .finding_id == $id)) then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
         ]
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
         rm -f "${STATE_FILE}.tmp"

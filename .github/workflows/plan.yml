@@ -1546,10 +1546,11 @@ jobs:
           echo "::notice::Orchestrator auto-answer eligible (run_id=${{ github.run_id }}): ${AUTO_ANSWER_MAPPING}"
 
       - name: Guard plans targeting template-owned paths
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && !endsWith(github.repository, '/coding-workflows')
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}
+          IS_WORKFLOW_SOURCE_REPO: ${{ endsWith(github.repository, '/coding-workflows') }}
         run: |
           set -euo pipefail
           # Template-owned paths are fetched from coding-workflows templates
@@ -1580,9 +1581,9 @@ jobs:
           # failure), we fall back to rejecting every scripts/ path, matching
           # implement.yml's own fallback.
           #
-          # This guard is skipped entirely when the workflow is running inside
-          # the canonical `*/coding-workflows` repository, because in that repo
-          # those paths *are* the source of truth and must be editable.
+          # The template-owned-path portion is skipped when the workflow runs
+          # inside `*/coding-workflows`, where those paths are source of truth.
+          # Generated advisory scope validation still runs there.
           #
           # We only scan the plan's "Files likely to change" section (and any
           # equivalent "Files to change" heading), not prose, so that a plan
@@ -1630,6 +1631,9 @@ jobs:
               --plan-file "${CODEX_OUTPUT_FILE}" \
               --issue-author-association "${ISSUE_AUTHOR_ASSOCIATION}" \
               --generated-advisory-mode required
+          fi
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+            exit 0
           fi
           EXCLUDED_RE='(^|[^[:alnum:]_./-])`?(\./|/)?(scripts|prompts|ai-memory|\.github)'
           TEMPLATE_PATH_CANDIDATES_FILE="${RUNTIME_DIR}/template_path_candidates.txt"
