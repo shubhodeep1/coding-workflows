@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Process isolation and failure diagnosis are important operational requirements for Codex/editor automation.",
   "timestamps": {
     "created_at": "2026-09-20T00:38:47Z",
