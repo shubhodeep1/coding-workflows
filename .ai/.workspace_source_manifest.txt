@@ -195,6 +195,7 @@ changelog.d/3965-security-pass-hardening.md
 changelog.d/3965-security-pass-loop-convergence.md
 changelog.d/3965-security-pass-no-human-input-paths.md
 changelog.d/3965-security-pass-pyyaml-duplicate-key-hardening.md
+changelog.d/3965-security-pass-waiver-marker-auth.md
 changelog.d/3965-sync-contract-list-union.md
 changelog.d/3967-plan-blocker-prompt-routing.md
 changelog.d/3972-blocked-already-satisfied-noop.md
@@ -797,6 +798,7 @@ tests/test_orchestrate_poll_process.py
 tests/test_orchestrate_poll_promote_cycle.py
 tests/test_orchestrate_poll_stages_readiness_script.py
 tests/test_orchestrate_poll_workflow_contract.py
+tests/test_orchestrate_state_comprehensive_marker.py
 tests/test_orchestrate_state_resolver_retry.py
 tests/test_orchestrator_concurrency_caps.py
 tests/test_overlap_validation_fallback.py

@@ -90,10 +90,10 @@ def security_finding_defect_fingerprint(
 ) -> str:
 	"""Bind a security finding to its repository path, class, and exact code context.
 
-	The cited line number selects a fixed five-line window but is deliberately
-	not part of the digest. This keeps the identity stable across unrelated line
-	shifts while making one waiver ambiguous when the same vulnerable context is
-	present more than once.
+	The cited line number selects a fixed five-line window and binds the digest
+	to one occurrence. This deliberately fails closed after line shifts rather
+	than allowing identical code windows at different locations to share waiver
+	authority.
 	"""
 	if not isinstance(repository_path, str) or not repository_path.strip() or len(repository_path) > 512:
 		raise OrchestrateError("security finding path is invalid")
@@ -147,6 +147,7 @@ def security_finding_defect_fingerprint(
 	canonical_context = {
 		"schema_version": SECURITY_DEFECT_CONTEXT_SCHEMA_VERSION,
 		"file": normalized_path,
+		"line": line,
 		"category": normalized_category,
 		"context": context_lines,
 	}

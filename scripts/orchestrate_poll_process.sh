@@ -7099,12 +7099,15 @@ run_security_pass_inline() {
     | .security_pass_reported_findings = (
         if $findings_count == 0 then []
         else (
-          ((.security_pass_reported_findings // []) | map(select(type == "object")))
+          ((.security_pass_reported_findings // [])
+            | map(select(type == "object" and (.audited_head_sha // "") != $head_sha)))
           + [
             $audit_result[0].findings[]
             | {
                 cycle: $cycle,
+                audited_head_sha: $head_sha,
                 finding_id: .finding_id,
+                defect_fingerprint: .defect_fingerprint,
                 owasp_or_stride_category: .owasp_or_stride_category,
                 severity: .severity,
                 confidence: .confidence,
@@ -18096,8 +18099,8 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       fi
       if [ -z "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
         SECURITY_PASS_WAIVE_AUTHOR_URI="$(printf '%s' "${SECURITY_PASS_WAIVE_AUTHOR}" | jq -sRr @uri)"
-        if ! SECURITY_PASS_WAIVE_ROLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/collaborators/${SECURITY_PASS_WAIVE_AUTHOR_URI}/permission" --jq '.role_name // ""' 2>&1)"; then
-          if printf '%s' "${SECURITY_PASS_WAIVE_ROLE}" | grep -Eqi '(^gh: Not Found|HTTP 404|404 Not Found|status code 404|\bnot found\b)'; then
+        if ! SECURITY_PASS_WAIVE_ROLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/collaborators/${SECURITY_PASS_WAIVE_AUTHOR_URI}/permission" --jq '.role_name // ""' 2> "${RUNTIME_DIR}/security-pass-waive-permission-${TRACKING_NUM}-${SECURITY_PASS_WAIVE_COMMENT_ID}.err")"; then
+          if grep -Eqi '(HTTP 404|404 Not Found|status code 404)' "${RUNTIME_DIR}/security-pass-waive-permission-${TRACKING_NUM}-${SECURITY_PASS_WAIVE_COMMENT_ID}.err"; then
             SECURITY_PASS_WAIVE_REJECT_REASON="permission"
           else
             echo "::warning::Could not verify repository permission for /security-pass-waive comment ${SECURITY_PASS_WAIVE_COMMENT_ID}; leaving the command unmarked for retry."
@@ -18120,11 +18123,11 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       fi
       SECURITY_PASS_WAIVE_MATCHES_JSON='[]'
       if [ -z "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
-        SECURITY_PASS_WAIVE_MATCHES_JSON="$(jq -c --argjson ids "${SECURITY_PASS_WAIVE_IDS_JSON}" '
+        SECURITY_PASS_WAIVE_MATCHES_JSON="$(jq -c --argjson ids "${SECURITY_PASS_WAIVE_IDS_JSON}" --arg audited_head_sha "${SECURITY_PASS_WAIVE_AUDITED_HEAD}" '
           (.security_pass_reported_findings // []) as $reported
           | [
               $ids[] as $id
-              | ([$reported[] | select(.finding_id == $id)]) as $matches
+              | ([$reported[] | select(.audited_head_sha == $audited_head_sha and .finding_id == $id)]) as $matches
               | {id: $id, count: ($matches | length), finding: ($matches[0] // null)}
             ]
         ' "${STATE_FILE}" 2>/dev/null || echo '[]')"

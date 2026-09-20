@@ -836,7 +836,7 @@ ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
 only when one current finding and one waiver share the same versioned exact
-code-context `defect_fingerprint`; IDs and line proximity never match, and
+line-and-code-context `defect_fingerprint`; IDs and line proximity never match, and
 legacy fingerprint-less rows suppress nothing. `/security-pass-waive
 <finding_id> ...` requires an API-verified `maintain` or `admin` role plus a
 unique current-head reported finding for every requested ID (dedup marker

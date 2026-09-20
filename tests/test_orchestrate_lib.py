@@ -183,10 +183,11 @@ def test_security_finding_defect_fingerprint_binds_context_path_and_category(tmp
 
 
 def test_security_finding_defect_fingerprint_excludes_line_number(tmp_path: Path) -> None:
+	"""Historical test name retained; v1 now binds one exact source occurrence."""
 	(tmp_path / "same.py").write_text("x\nx\nx\nx\nx\nx\n", encoding="utf-8")
 	first = orchestrate_lib.security_finding_defect_fingerprint(tmp_path, "same.py", 3, "A04")
 	second = orchestrate_lib.security_finding_defect_fingerprint(tmp_path, "same.py", 4, "A04")
-	assert first == second
+	assert first != second
 
 
 def _make_decomposition(

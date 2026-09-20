@@ -785,6 +785,7 @@ def _run_poller(
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	collaborator_roles: dict[str, str] | None = None,
 	fail_collaborator_permission_for: list[str] | None = None,
+	collaborator_permission_failures_before_success: dict[str, int] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
 	fail_auto_pr_merge: bool = False,
@@ -888,6 +889,7 @@ def _run_poller(
 	pr_api_sequence = pr_api_sequence or {}
 	collaborator_roles = collaborator_roles or {"maintainer": "maintain"}
 	fail_collaborator_permission_for = fail_collaborator_permission_for or []
+	collaborator_permission_failures_before_success = collaborator_permission_failures_before_success or {}
 	existing_branches = existing_branches or ["main"]
 	blocked_check_shas = blocked_check_shas or []
 	validation_workflow_runs = validation_workflow_runs or []
@@ -1254,6 +1256,9 @@ def _run_poller(
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
 			"collaborator_roles": {str(k): str(v) for k, v in collaborator_roles.items()},
 			"fail_collaborator_permission_for": [str(login) for login in fail_collaborator_permission_for],
+			"collaborator_permission_failures_before_success": {
+				str(login): int(failures) for login, failures in collaborator_permission_failures_before_success.items()
+			},
 			"existing_branches": existing_branches,
 			"update_branch_calls": [],
 			"update_branch_fail_for_prs": [int(x) for x in update_branch_fail_for_prs],
@@ -2244,12 +2249,18 @@ if args[0] == 'api':
 	m_permission = re.search(r'/collaborators/([^/]+)/permission$', path)
 	if m_permission:
 		login = m_permission.group(1)
+		remaining_failures = int(store.get('collaborator_permission_failures_before_success', {}).get(login, 0))
+		if remaining_failures > 0:
+			store['collaborator_permission_failures_before_success'][login] = remaining_failures - 1
+			save()
+			print('forced transient collaborator permission API failure', file=sys.stderr)
+			sys.exit(1)
 		if login in set(store.get('fail_collaborator_permission_for', [])):
 			print('forced collaborator permission API failure', file=sys.stderr)
 			sys.exit(1)
 		role_name = store.get('collaborator_roles', {}).get(login)
 		if role_name is None:
-			print('not found', file=sys.stderr)
+			print('gh: Not Found (HTTP 404)', file=sys.stderr)
 			sys.exit(1)
 		if jq:
 			print(role_name)
@@ -4221,6 +4232,8 @@ def test_security_pass_first_audit_records_delta_pointer_and_findings_memory() -
 	reported = latest_state["security_pass_reported_findings"]
 	assert [finding["finding_id"] for finding in reported] == ["SEC-TEST-1"]
 	assert reported[0]["cycle"] == 1
+	assert reported[0]["audited_head_sha"] == capture["diff_head"]
+	assert reported[0]["defect_fingerprint"] == _security_pass_test_finding()["defect_fingerprint"]
 	assert reported[0]["file"] == "scripts/example.py"
 	assert reported[0]["line"] == 1
 	assert reported[0]["recommendation"] == "Enforce authorisation before the state mutation."
@@ -5753,7 +5766,21 @@ def _security_pass_waive_failed_state() -> dict:
 			"security_pass_last_audited_sha": "__integration_head__",
 			"security_pass_reported_findings": [
 				{
+					"cycle": 2,
+					"audited_head_sha": "a" * 40,
+					"finding_id": "SEC-OLD",
+					"defect_fingerprint": "security_defect_context.v1:" + "2" * 64,
+					"owasp_or_stride_category": "A04:2021-Insecure Design",
+					"severity": "medium",
+					"confidence": 9,
+					"file": "scripts/example.py",
+					"line": 1,
+					"exploit_scenario": "Historical copy of the finding.",
+					"recommendation": "Rate-limit it.",
+				},
+				{
 					"cycle": 3,
+					"audited_head_sha": "__integration_head__",
 					"finding_id": "SEC-OLD",
 					"defect_fingerprint": "security_defect_context.v1:" + "2" * 64,
 					"owasp_or_stride_category": "A04:2021-Insecure Design",
@@ -6020,12 +6047,41 @@ def test_security_pass_waive_head_lookup_failure_does_not_skip_fix_processing() 
 	)
 
 
+def test_security_pass_waive_permission_retry_success_uses_clean_role_output() -> None:
+	state = _security_pass_waive_failed_state()
+	state["status"] = "security-pass-fixing"
+	state["security_pass_status"] = "blocked"
+	state["security_pass_active_fix_issues"] = [700]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:security-pass-fixing"],
+		tracking_comments=[{
+			"body": "/security-pass-waive SEC-OLD",
+			"user": {"login": "octocat", "type": "User"},
+		}],
+		issue_labels={700: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		collaborator_roles={"octocat": "maintain"},
+		collaborator_permission_failures_before_success={"octocat": 1},
+		env_overrides={"GH_RETRY_MAX_ATTEMPTS": "2"},
+	)
+	assert [row["finding_id"] for row in result["latest_state"]["security_pass_waived_findings"]] == ["SEC-OLD"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=operator by=octocat ids=SEC-OLD" in combined_log
+	assert "SECURITY_PASS_WAIVE_REJECTED" not in combined_log
+
+
 def test_security_pass_waive_command_in_fixing_state_persists_without_reset() -> None:
 	state = _security_pass_fixing_state(
 		security_pass_head_sha="__integration_head__",
 		security_pass_reported_findings=[
 			{
 				"cycle": 1,
+				"audited_head_sha": "__integration_head__",
 				"finding_id": "SEC-FIXING",
 				"defect_fingerprint": "security_defect_context.v1:" + "3" * 64,
 				"owasp_or_stride_category": "A04:2021-Insecure Design",
