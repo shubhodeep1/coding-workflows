@@ -35,6 +35,7 @@
 .github/ai/orchestrate_schema.v1.json
 .github/ai/write_guards.v1.json
 .github/workflows/audit_consumer_drift.yml
+.github/workflows/auto-release-stable.yml
 .github/workflows/cancel_on_pr_close.yml
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
@@ -120,6 +121,8 @@ analysis/workflow-optimization-2026-09-08.md
 analysis/workflow-optimization-2026-09-09.md
 analysis/workflow-optimization-2026-09-16.md
 analysis/workflow-optimization-2026-09-18.md
+analysis/workflow-optimization-2026-09-20-2.md
+analysis/workflow-optimization-2026-09-20.md
 changelog.d/.gitkeep
 changelog.d/255-artifact-cleanup-preserves-tracked.md
 changelog.d/3738-merge-precheck-promisor-recovery.md
@@ -210,7 +213,9 @@ changelog.d/4093-pytest-git-env-isolation.md
 changelog.d/4109-bind-auto-merge-head.md
 changelog.d/4109-bind-auto-merge-to-evaluated-head.md
 changelog.d/4127-security-fix-pr-base.md
+changelog.d/4134-auto-apply-analysis-and-stable-release.md
 changelog.d/4143-security-pass-line-ownership-poller.md
+changelog.d/4161-smoke-test-telegram-silencing.md
 changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/433-readme-wrapper-predicate-examples.md
@@ -423,10 +428,12 @@ scripts/ai_memory.py
 scripts/ai_memory_lib.py
 scripts/analyze_soft_errors.py
 scripts/analyze_workflow_logs.py
+scripts/apply_analysis_on_main.sh
 scripts/apply_audit_gate_assets.py
 scripts/assemble_changelog.py
 scripts/assemble_prompt.sh
 scripts/audit_consumer_drift.py
+scripts/auto_release_stable.sh
 scripts/blocker_check.py
 scripts/build_semble_wrapper.sh
 scripts/build_state_snapshot.py
@@ -505,6 +512,7 @@ scripts/orchestrate_poll_process.sh
 scripts/orchestrate_state_v2.py
 scripts/post_review_comment.sh
 scripts/pr_checks_lib.sh
+scripts/promote_main_cycle.sh
 scripts/render_prompt.py
 scripts/render_prompt.sh
 scripts/render_scenario_trace.py
@@ -684,11 +692,13 @@ tests/test_ai_memory_push_retry_backoff.py
 tests/test_ai_memory_sync_reference_files.py
 tests/test_ai_memory_workflow_log_analysis_cache.py
 tests/test_analyze_workflow_logs.py
+tests/test_apply_analysis_on_main.py
 tests/test_assemble_changelog.py
 tests/test_assemble_prompt.py
 tests/test_audit_consumer_drift.py
 tests/test_audit_gate_identity.py
 tests/test_audit_gate_template_atomicity.py
+tests/test_auto_release_stable.py
 tests/test_blocker_check.py
 tests/test_branch_rebuild.py
 tests/test_changelog_fragment_contract.py
@@ -730,6 +740,7 @@ tests/test_gh_helpers_list_runs_method.py
 tests/test_gh_helpers_parse_reset_header.py
 tests/test_header_render.sh
 tests/test_identity_recall_render.sh
+tests/test_implement_blocked_verdict_terminalizes.py
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
@@ -758,6 +769,7 @@ tests/test_orchestrate_integration_ahead_by_gate.py
 tests/test_orchestrate_lib.py
 tests/test_orchestrate_poll_noop_suspicious_recovery.py
 tests/test_orchestrate_poll_process.py
+tests/test_orchestrate_poll_promote_cycle.py
 tests/test_orchestrate_poll_stages_readiness_script.py
 tests/test_orchestrate_poll_workflow_contract.py
 tests/test_orchestrator_concurrency_caps.py
@@ -777,6 +789,7 @@ tests/test_plan_template_owned_path_guard.py
 tests/test_pr_checks_lib_required_filter.py
 tests/test_pr_merge_status_guard.py
 tests/test_pr_watch_guard.py
+tests/test_promote_main_cycle.py
 tests/test_prompt_compaction.py
 tests/test_pytest_git_env_isolation.py
 tests/test_record_id_format_contract.py
@@ -840,6 +853,7 @@ tests/test_serena_stats_emit.py
 tests/test_session_start_extract_repo_slug.py
 tests/test_setup_serena_toml.py
 tests/test_slop_scan_local.py
+tests/test_smoke_alert_silencing_contract.py
 tests/test_stall_freshness_branch_fallback.py
 tests/test_stall_loop_and_churn_fixes.py
 tests/test_stall_recovery_pr_lookup.py

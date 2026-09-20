@@ -27,6 +27,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -45,6 +47,19 @@ def _body(*entries: str) -> str:
 	lines = ["Implement the task. Stay inside the files_touched list.", "", "files_touched:"]
 	lines.extend(f"  - {entry}" for entry in entries)
 	return "\n".join(lines) + "\n"
+
+
+def _generated_advisory_body(path: str = "src/security.py") -> str:
+	return (
+		"Generated advisory.\n\n---\n"
+		"**Generated security advisory metadata**\n"
+		"- Schema: `generated-security-advisory.v1`\n"
+		f"- Waiver match key: `sha256:{'a' * 64}`\n"
+		f"- Audited commit: `{'b' * 40}`\n"
+		f"- Cited file: `{path}`\n"
+		"files_touched:\n"
+		f"  - {path}\n"
+	)
 
 
 # --------------------------------------------------------------------------
@@ -162,6 +177,23 @@ def test_explicit_allowlist_entries_support_scope_lock_glob() -> None:
 	assert status == guard.STATUS_OUT_OF_SCOPE
 	assert allow == ["scripts/**/*.sh"]
 	assert oos == ["README.md"]
+
+
+def test_generated_advisory_requires_trusted_author_and_exact_path() -> None:
+	metadata = guard.parse_generated_advisory(_generated_advisory_body())
+	assert metadata is not None
+	assert metadata["cited_file"] == "src/security.py"
+	status, allowlist, oos = guard.evaluate_allowlist(
+		[metadata["cited_file"]], ["src/security.py", "package-lock.json"], auto_allow_lockfiles=False
+	)
+	assert status == guard.STATUS_OUT_OF_SCOPE
+	assert allowlist == ["src/security.py"]
+	assert oos == ["package-lock.json"]
+
+
+def test_generated_advisory_rejects_malformed_or_mismatched_footer() -> None:
+	with pytest.raises(ValueError):
+		guard.parse_generated_advisory(_generated_advisory_body().replace("  - src/security.py", "  - README.md"))
 
 
 # --------------------------------------------------------------------------
@@ -288,6 +320,8 @@ def _run_fragment(
 				"TMPDIR": str(tdp),
 				"ENFORCE_FILES_TOUCHED": enforce,
 				"ALLOW_OUT_OF_SCOPE_FILES": allow_out_of_scope,
+				"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(tdp / "scripts"),
+				"ISSUE_AUTHOR_ASSOCIATION": "OWNER",
 			}
 		)
 		proc = subprocess.run(
@@ -338,6 +372,17 @@ def test_fragment_master_toggle_off_skips() -> None:
 	assert rc == 0, log
 	assert "scope_violation_blocked" not in gh_output
 	assert "disabled" in log.lower()
+
+
+def test_generated_advisory_cannot_use_scope_bypasses_or_lockfile_allowance() -> None:
+	rc, gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["package-lock.json"],
+		enforce="false",
+		allow_out_of_scope="true",
+	)
+	assert rc == 1, log
+	assert "scope_violation_blocked=out-of-scope" in gh_output
 
 
 def _strip_comments(fragment: str) -> str:
@@ -443,7 +488,7 @@ def test_redispatch_refusal_checks_scope_label() -> None:
 
 def test_bootstrap_fetches_guard_helper() -> None:
 	text = _implement_text()
-	assert "for f in files_touched_scope_guard.py; do" in text
+	assert "implement_staged_support_workspace.sh files_touched_scope_guard.py; do" in text
 
 
 def test_label_contract_and_helper_have_scope_blocked() -> None:

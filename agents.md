@@ -514,7 +514,7 @@ dashboard without producing a fresh comment per tick.
 When `ENABLE_SECURITY_PASS=true` (default `true`), every completion route
 enters `security-pass` before validation or finalization. A pass is valid only
 when `security_pass_status == "passed"` and `security_pass_head_sha` exactly
-matches the current integration head. A head advanced solely by merge commits with empty combined diffs is safely rebound without a model run (`SECURITY_PASS_REBOUND`); any non-merge, evil/conflict-resolution merge, or git ambiguity takes the existing budget-reset re-audit. With `SECURITY_PASS_LINE_OWNERSHIP=project-lines`, findings on context older than the project merge-base become `source: preexisting` waivers plus bounded immediate advisory follow-ups, while `file` restores the prior blocking behavior. Findings enter `security-pass-fixing`
+matches the current integration head. A head advanced solely by merge commits is rebound without a model run (`SECURITY_PASS_REBOUND`) only when its tree equals a conflict-free `git merge-tree --write-tree` recomputation from the audited and refreshed default heads; non-merge commits, conflicts, parent-selection resolutions, tree mismatch, or Git ambiguity take the existing budget-reset re-audit. Findings and waivers use an engine-generated provenance-bound `waiver_match_key`; model IDs are display-only and legacy keyless rows cannot suppress findings. With `SECURITY_PASS_LINE_OWNERSHIP=project-lines`, blame plus function-context diff analysis routes only provably base-owned defects to advisories, while deleted guards and ambiguous causal changes stay blocking. Generated advisory issues quote model prose as untrusted evidence and carry an exact one-file metadata footer enforced by plan and implement guards. The advisory backlog is untruncated, key-deduplicated, severity/confidence ordered, and drains through the existing per-tick cap. `file` restores the prior blocking behavior. Findings enter `security-pass-fixing`
 through one consolidated `ai:orchestrator-managed` issue (whose body asks the
 implementer to clear every instance of each finding's defect class, not only
 the cited line); a merged fix advances `security_pass_cycle`, clears the
@@ -525,7 +525,7 @@ files changed since the last audited commit stay in scope, plus the files
 cited by `security_pass_reported_findings`, which travel to the engine as
 `SECURITY_AUDIT_PRIOR_FINDINGS` (the engine re-emits persisting findings under
 the same `finding_id` and reports remaining instances of the same class). Both
-fields are written by the same `jq` that records `security_pass_head_sha`; `security_pass_advisory_backlog` separately retains the newest 100 validated pre-existing finding rows plus their audited head until bounded oldest-first filing succeeds. A
+fields are written by the same `jq` that records `security_pass_head_sha`; `security_pass_advisory_backlog` retains every validated pre-existing finding row plus its audited head until bounded severity/confidence-ordered filing succeeds. A
 clean pass empties the blocking memory, `/re-security-pass` and the
 `ENABLE_SECURITY_PASS=false` release path clear both. Legacy `passed` state
 without the pointer falls back to `security_pass_head_sha`. A pointer that
@@ -671,8 +671,7 @@ ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 `keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
-(exact id, or same file and category within `SECURITY_AUDIT_WAIVER_LINE_WINDOW`,
-default 40 lines). `/security-pass-waive <finding_id> ...` (human
+(only an exact engine-generated, provenance-bound `waiver_match_key`; model IDs and location proximity are non-authoritative). `/security-pass-waive <finding_id> ...` (human
 OWNER/MEMBER/COLLABORATOR only, dedup marker
 `<!-- security-pass-waive-dedup:<comment-id> -->`) records operator waivers; in
 the failed state it then resets the loop like `/re-security-pass`, in
@@ -1239,9 +1238,9 @@ depend on it.
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` consolidated security-fix issue per fix cycle before the pass terminalizes as `ai:security-pass-failed`. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
-| `SECURITY_PASS_LINE_OWNERSHIP` | `project-lines` | Route findings whose cited context predates the project merge-base to non-blocking advisories; `file` restores per-file blocking. |
+| `SECURITY_PASS_LINE_OWNERSHIP` | `project-lines` | Route only blame- and causal-diff-proven base-owned findings to advisories; deleted guards and ambiguous control-flow changes remain blocking. `file` restores per-file blocking. |
 | `SECURITY_PASS_OWNERSHIP_CONTEXT_LINES` | `3` | Surrounding lines used for project-line ownership classification (0-50). |
-| `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` | `5` | Maximum pre-existing-code advisories filed per poll tick, oldest first; `0` keeps them queued without blocking completion. |
+| `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` | `5` | Maximum advisories filed per poll tick from the untruncated severity/confidence-ordered state queue; `0` keeps them queued without blocking completion. |
 
 ## Integration-sync verifier + bootstrap contract
 

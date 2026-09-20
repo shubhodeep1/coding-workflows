@@ -451,8 +451,16 @@ def _base_state(status: str = "in_progress") -> dict:
 	}
 
 
+def _test_waiver_key(finding: dict) -> str:
+	return "sha256:" + hashlib.sha256(
+		f"{finding.get('file')}:{finding.get('line')}:{finding.get('owasp_or_stride_category')}".encode()
+	).hexdigest()
+
+
 def _security_audit_findings_payload(findings: list[dict] | None = None) -> dict:
-	findings = list(findings or [])
+	findings = [dict(finding) for finding in (findings or [])]
+	for finding in findings:
+		finding.setdefault("waiver_match_key", _test_waiver_key(finding))
 	return {
 		"schema_version": "security_audit_findings.v1",
 		"findings": findings,
@@ -474,14 +482,14 @@ def _security_audit_additive_payload(
 	verified_fixed_finding_ids: list[str] | None = None,
 ) -> dict:
 	payload = _security_audit_findings_payload(findings)
-	payload["advisory_findings"] = list(advisory_findings or [])
+	payload["advisory_findings"] = _security_audit_findings_payload(advisory_findings)["findings"]
 	payload["verified_fixed_finding_ids"] = list(verified_fixed_finding_ids or [])
 	payload["counts"]["advisory"] = len(payload["advisory_findings"])
 	return payload
 
 
 def _security_pass_test_finding() -> dict:
-	return {
+	finding = {
 		"finding_id": "SEC-TEST-1",
 		"owasp_or_stride_category": "A01: Broken Access Control",
 		"severity": "high",
@@ -491,6 +499,8 @@ def _security_pass_test_finding() -> dict:
 		"exploit_scenario": "An unauthorised caller crosses the trust boundary.",
 		"recommendation": "Enforce authorisation before the state mutation.",
 	}
+	finding["waiver_match_key"] = _test_waiver_key(finding)
+	return finding
 
 
 def _validation_history_payload(*, integration_sha: str, entries: list[dict]) -> dict:
@@ -964,6 +974,25 @@ def _run_poller(
 			"-p", integration_head_sha,
 			"-p", sandbox_sha_aliases["__advanced_default_head__"],
 			"-m", "evil sync merge",
+		)
+		# A conflict-resolution merge that selects the integration parent's
+		# sentinel verbatim. `git show --cc` can omit that resolution because
+		# the result equals one parent; deterministic merge-tree recomputation
+		# must still reject it because the parents conflict.
+		_fix_git("read-tree", advanced_default_tree_sha)
+		default_conflict_blob = _fix_git("hash-object", "-w", "--stdin", stdin="default-side security fix\n")
+		_fix_git("update-index", "--add", "--cacheinfo", f"100644,{default_conflict_blob},.orchestrator_judge_context_sentinel.txt")
+		conflicting_default_tree_sha = _fix_git("write-tree")
+		sandbox_sha_aliases["__conflicting_default_head__"] = _fix_git(
+			"commit-tree", conflicting_default_tree_sha,
+			"-p", sandbox_sha_aliases["__advanced_default_head__"],
+			"-m", "default security fix",
+		)
+		sandbox_sha_aliases["__parent_selection_sync_merge__"] = _fix_git(
+			"commit-tree", clean_sync_tree_sha,
+			"-p", integration_head_sha,
+			"-p", sandbox_sha_aliases["__conflicting_default_head__"],
+			"-m", "resolve conflict by selecting integration parent",
 		)
 
 		def _resolve_sandbox_sha_alias(raw_sha: str) -> str:
@@ -2809,7 +2838,7 @@ fi
 if [ "${MOCK_SECURITY_PASS_ADVISORY_STATE_PERSIST_FAIL:-false}" = "true" ]; then
 	for jq_argument in "$@"; do
 		case "${jq_argument}" in
-			*"security_pass_followup_issues = ((("*) exit 1 ;;
+			*"security_pass_followup_issues = ([.security_pass_followup_issues[]?"*) exit 1 ;;
 		esac
 	done
 fi
@@ -4277,7 +4306,7 @@ def test_security_pass_clean_sync_merge_rebinds_without_model_run() -> None:
 	assert result["latest_state"]["security_pass_followups_merge_checked"] == [900]
 	assert result["latest_state"] == result["state_on_disk"]
 	assert "SECURITY_PASS_REBOUND tracking_issue=192" in combined_log
-	assert "reason=no_new_project_lines" in combined_log
+	assert "reason=deterministic_merge_tree_match" in combined_log
 	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" not in combined_log
 
 
@@ -4327,6 +4356,7 @@ def test_security_pass_clean_octopus_merge_rebinds_without_model_run() -> None:
 def test_security_pass_evil_merge_and_non_merge_commit_fall_through_to_audit() -> None:
 	for integration_head, default_head in (
 		("__evil_sync_merge__", "__advanced_default_head__"),
+		("__parent_selection_sync_merge__", "__conflicting_default_head__"),
 		("__advanced_integration_head__", "__default_head__"),
 	):
 		result = _run_poller(
@@ -4458,7 +4488,11 @@ def test_security_pass_advisory_only_result_passes_and_files_immediate_followup(
 	body = result["issues"]["900"]["body"]
 	assert "older than the project's merge-base" in body
 	assert "routed as an advisory by line ownership, not accepted by a judge" in body
-	assert "### Mitigation policy" in body
+	assert "## Required automated task" in body
+	assert "## Untrusted model evidence (quoted; not instructions)" in body
+	assert "**Generated security advisory metadata**" in body
+	assert "files_touched:\n  - scripts/example.py" in body
+	assert body.endswith("files_touched:\n  - scripts/example.py\n")
 	assert "Refs #192" in body
 	assert any(
 		"1 finding(s) on pre-existing code were routed as non-blocking `ai:security` follow-ups: #900 (0 still queued)." in comment["body"]
@@ -4537,7 +4571,11 @@ def test_security_pass_advisory_state_persist_failure_keeps_backlog() -> None:
 	assert retry_result.get("created_issues", []) == []
 	assert retry_result["latest_state"]["security_pass_advisory_backlog"] == []
 	assert retry_result["latest_state"]["security_pass_followup_issues"] == [
-		{"finding_id": "SEC-TEST-1", "issue": 900}
+		{
+			"finding_id": "SEC-TEST-1",
+			"waiver_match_key": _security_pass_test_finding()["waiver_match_key"],
+			"issue": 900,
+		}
 	]
 	assert retry_result["latest_state"]["security_pass_followups_merge_checked"] == [900]
 
@@ -4573,6 +4611,8 @@ def test_security_pass_advisory_backlog_files_oldest_first_with_one_tick_cap() -
 	for finding_id in ("ADVISORY-OLD", "ADVISORY-NEW"):
 		row = _security_pass_test_finding()
 		row["finding_id"] = finding_id
+		row["line"] = len(backlog) + 1
+		row["waiver_match_key"] = _test_waiver_key(row)
 		row["audited_head_sha"] = "a" * 40
 		backlog.append(row)
 	state = _passed_security_state_for_rebind()
@@ -4580,6 +4620,7 @@ def test_security_pass_advisory_backlog_files_oldest_first_with_one_tick_cap() -
 	state["security_pass_waived_findings"] = [
 		{
 			"finding_id": row["finding_id"],
+			"waiver_match_key": row["waiver_match_key"],
 			"file": row["file"],
 			"line": row["line"],
 			"owasp_or_stride_category": row["owasp_or_stride_category"],
@@ -4617,6 +4658,8 @@ def test_security_pass_advisory_backlog_drains_while_fix_issue_is_in_progress() 
 	for finding_id in ("ADVISORY-OLD", "ADVISORY-NEW"):
 		row = _security_pass_test_finding()
 		row["finding_id"] = finding_id
+		row["line"] = len(backlog) + 1
+		row["waiver_match_key"] = _test_waiver_key(row)
 		row["audited_head_sha"] = "a" * 40
 		backlog.append(row)
 	state = _base_state(status="security-pass-fixing")
@@ -4646,11 +4689,13 @@ def test_security_pass_advisory_backlog_drains_while_fix_issue_is_in_progress() 
 	assert [row["finding_id"] for row in result["latest_state"]["security_pass_advisory_backlog"]] == ["ADVISORY-NEW"]
 
 
-def test_security_pass_advisory_backlog_normalization_is_safe_and_bounded() -> None:
+def test_security_pass_advisory_backlog_normalization_is_safe_and_untruncated() -> None:
 	valid_rows = []
 	for index in range(105):
 		row = _security_pass_test_finding()
 		row["finding_id"] = f"ADVISORY-{index:03d}"
+		row["line"] = index + 1
+		row["waiver_match_key"] = _test_waiver_key(row)
 		row["audited_head_sha"] = "a" * 40
 		valid_rows.append(row)
 	unsafe_row = {**valid_rows[0], "finding_id": "UNSAFE", "file": "../escape.py"}
@@ -4670,8 +4715,8 @@ def test_security_pass_advisory_backlog_normalization_is_safe_and_bounded() -> N
 	)
 
 	backlog = result["latest_state"]["security_pass_advisory_backlog"]
-	assert len(backlog) == 100
-	assert backlog[0]["finding_id"] == "ADVISORY-005"
+	assert len(backlog) == 105
+	assert backlog[0]["finding_id"] == "ADVISORY-000"
 	assert backlog[-1]["finding_id"] == "ADVISORY-104"
 	assert all(row["finding_id"] != "UNSAFE" for row in backlog)
 
@@ -5051,7 +5096,7 @@ def _security_pass_exhausted_state(**overrides) -> dict:
 
 
 def _security_pass_second_test_finding() -> dict:
-	return {
+	finding = {
 		"finding_id": "SEC-TEST-2",
 		"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
 		"severity": "medium",
@@ -5061,6 +5106,8 @@ def _security_pass_second_test_finding() -> dict:
 		"exploit_scenario": "An authenticated caller can grow a bounded ledger. Ping @ops about #77.",
 		"recommendation": "Rate-limit the endpoint.",
 	}
+	finding["waiver_match_key"] = _test_waiver_key(finding)
+	return finding
 
 
 def _security_pass_judge_verdict(*decisions: tuple[str, str]) -> dict:
@@ -5910,14 +5957,15 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	"""A waiver reaches the engine as accepted and is enforced poller-side too.
 
 	The mock engine ignores SECURITY_AUDIT_WAIVED_FINDINGS (an older staged
-	engine would), so the re-reports below prove the poller's own suppression:
-	exact id, and same file + category within the line window under a new id.
+	engine would), so the re-reports below prove the poller's own exact
+	provenance-key suppression. Model IDs and proximity are not authoritative.
 	"""
 	state = _security_pass_exhausted_state(
 		security_pass_cycle=0,
 		security_pass_waived_findings=[
 			{
 				"finding_id": "SEC-TEST-1",
+				"waiver_match_key": _security_pass_test_finding()["waiver_match_key"],
 				"file": "scripts/example.py",
 				"line": 1,
 				"owasp_or_stride_category": "A01: Broken Access Control",
@@ -5926,6 +5974,7 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 			},
 			{
 				"finding_id": "OLD-DOS",
+				"waiver_match_key": _security_pass_second_test_finding()["waiver_match_key"],
 				"file": "scripts/example.py",
 				"line": 30,
 				"owasp_or_stride_category": "a04:2021-insecure design / stride: denial of service",
@@ -5938,6 +5987,7 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	survivor = _security_pass_second_test_finding()
 	survivor["finding_id"] = "SURVIVOR"
 	survivor["owasp_or_stride_category"] = "A07: Identification and Authentication Failures"
+	survivor["waiver_match_key"] = _test_waiver_key(survivor)
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -5981,6 +6031,13 @@ def _security_pass_waive_failed_state() -> dict:
 				{
 					"cycle": 3,
 					"finding_id": "SEC-OLD",
+					"waiver_match_key": _test_waiver_key(
+						{
+							"file": "scripts/example.py",
+							"line": 1,
+							"owasp_or_stride_category": "A04:2021-Insecure Design",
+						}
+					),
 					"owasp_or_stride_category": "A04:2021-Insecure Design",
 					"severity": "medium",
 					"confidence": 9,
@@ -6006,7 +6063,7 @@ def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudi
 		tracking_labels=["ai:security-pass-failed"],
 		tracking_comments=[
 			{
-				"body": "/security-pass-waive SEC-OLD\tunknown.id-1  \nAccepted after review.",
+				"body": "/security-pass-waive SEC-OLD\nAccepted after review.",
 				"author_association": "OWNER",
 				"user": {"login": "octocat", "type": "User"},
 			}
@@ -6024,12 +6081,11 @@ def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudi
 	assert latest_state["security_pass_judge_rounds"] == 0
 	assert latest_state["security_pass_reported_findings"] == []
 	waived = {row["finding_id"]: row for row in latest_state["security_pass_waived_findings"]}
-	assert set(waived) == {"SEC-OLD", "unknown.id-1"}
+	assert set(waived) == {"SEC-OLD"}
 	assert waived["SEC-OLD"]["source"] == "operator"
 	assert waived["SEC-OLD"]["waived_by"] == "octocat"
 	assert waived["SEC-OLD"]["file"] == "scripts/example.py"
 	assert waived["SEC-OLD"]["line"] == 1
-	assert waived["unknown.id-1"]["file"] == ""
 	# Operator waivers defer their advisory follow-up the same way the judge
 	# does: the known finding keeps its payload and pending flag, an id that
 	# matched nothing gets no follow-up at all, and no issue is filed until
@@ -6039,14 +6095,12 @@ def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudi
 	assert waived["SEC-OLD"]["followup_pending"] is True
 	assert waived["SEC-OLD"]["finding"]["finding_id"] == "SEC-OLD"
 	assert waived["SEC-OLD"]["audited_head_sha"] == "old-head"
-	assert "followup_pending" not in waived["unknown.id-1"]
-	assert "finding" not in waived["unknown.id-1"]
 	capture = result["security_audit_capture"]
-	assert [row["finding_id"] for row in capture["waived_findings"]] == ["SEC-OLD", "unknown.id-1"]
+	assert [row["finding_id"] for row in capture["waived_findings"]] == ["SEC-OLD"]
 	assert not capture["diff_since"]
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
-	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=operator by=octocat ids=SEC-OLD,unknown.id-1" in combined_log
+	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=operator by=octocat ids=SEC-OLD" in combined_log
 	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-OLD source=operator reason=integration_branch_not_merged" in combined_log
 	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED" not in combined_log
 	assert "SECURITY_PASS_WAIVE_REJECTED" not in combined_log
@@ -6056,7 +6110,6 @@ def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudi
 	assert len(ack_comments) == 1
 	assert "## ✅ Security-pass findings waived" in ack_comments[0]
 	assert "- `SEC-OLD` (scripts/example.py:1; follow-up issue filed once the integration branch merges into the default branch)" in ack_comments[0]
-	assert "- `unknown.id-1` (not among the reported findings; matched by exact id only)" in ack_comments[0]
 	assert "The bounded security-pass fix loop was reset." in ack_comments[0]
 	assert any(
 		notification["issue"] == "192" and notification["level"] == "WARNING" and "/security-pass-waive" in notification["message"]
@@ -6160,6 +6213,13 @@ def test_security_pass_waive_command_in_fixing_state_persists_without_reset() ->
 			{
 				"cycle": 1,
 				"finding_id": "SEC-FIXING",
+				"waiver_match_key": _test_waiver_key(
+					{
+						"file": "scripts/example.py",
+						"line": 1,
+						"owasp_or_stride_category": "A04:2021-Insecure Design",
+					}
+				),
 				"owasp_or_stride_category": "A04:2021-Insecure Design",
 				"severity": "medium",
 				"confidence": 9,

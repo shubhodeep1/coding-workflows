@@ -4673,7 +4673,6 @@ ensure_security_pass_state_fields() {
       if (.security_pass_waived_findings | type) == "array" then
         .security_pass_waived_findings
         | map(select(type == "object" and (.finding_id | type) == "string" and (.finding_id | length) > 0))
-        | .[-100:]
       else [] end
     )
     | .security_pass_advisory_backlog = (
@@ -4682,6 +4681,7 @@ ensure_security_pass_state_fields() {
         | map(select(
           type == "object"
           and (.finding_id | type) == "string" and (.finding_id | length) > 0
+          and (.waiver_match_key | type) == "string" and (.waiver_match_key | test("^sha256:[0-9a-f]{64}$"))
           and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
           and (.severity | IN("critical", "high", "medium", "low"))
           and (.confidence | type) == "number" and (.confidence | floor) == .confidence and .confidence >= 1 and .confidence <= 10
@@ -4695,7 +4695,16 @@ ensure_security_pass_state_fields() {
           and (.recommendation | type) == "string" and (.recommendation | length) > 0
           and (.audited_head_sha | type) == "string" and (.audited_head_sha | test("^[0-9a-fA-F]{7,40}$"))
         ))
-        | .[-100:]
+        | map(
+          .finding_id = .finding_id[0:200]
+          | .owasp_or_stride_category = .owasp_or_stride_category[0:500]
+          | .exploit_scenario = .exploit_scenario[0:2000]
+          | .recommendation = .recommendation[0:2000]
+        )
+        | sort_by(
+            ({critical: 0, high: 1, medium: 2, low: 3}[.severity] // 4),
+            (-.confidence), .file, .line, .waiver_match_key
+          )
       else [] end
     )
     | .security_pass_followup_issues = (
@@ -4704,9 +4713,9 @@ ensure_security_pass_state_fields() {
         | map(select(
           type == "object"
           and (.finding_id | type) == "string" and (.finding_id | length) > 0
+          and (((.waiver_match_key // "") == "") or ((.waiver_match_key | type) == "string" and (.waiver_match_key | test("^sha256:[0-9a-f]{64}$"))))
           and (.issue | type) == "number" and (.issue | floor) == .issue and .issue > 0
         ))
-        | .[-100:]
       else [] end
     )
     | .security_pass_followups_merge_checked = (
@@ -4756,45 +4765,42 @@ security_pass_current_head_is_valid() {
   ' "${STATE_FILE}" >/dev/null 2>&1
 }
 
-# security_pass_rebind_if_no_new_project_lines <head_sha> <merge_base_sha>
+# security_pass_rebind_if_no_new_project_lines <head_sha> <merge_base_sha> <default_ref>
 #
 # A clean pass is still valid after a default->integration sync merge when the
-# only commits outside the old audited/default histories are merge commits with
-# no combined diff.  Parent counts and combined diffs are derived from local git
-# objects; any missing object, empty range, non-merge commit, conflict-resolution
-# hunk, or git error fails closed to the ordinary model re-audit.
+# candidate tree exactly equals Git's conflict-free merge of the audited head
+# and the refreshed default head. This checks resulting content rather than a
+# combined diff, which omits conflict resolutions that select either parent.
+# Missing objects, ancestry ambiguity, conflicts, parse errors, or a tree
+# mismatch fail closed to the ordinary model re-audit.
 security_pass_rebind_if_no_new_project_lines() {
   local head_sha="$1"
   local merge_base_sha="$2"
-  local last_audited_sha commits_file commit_line commit_sha parents_line combined_diff_file
+  local default_ref="$3"
+  local last_audited_sha default_sha expected_tree head_tree merge_tree_output commits_file commit_sha parents_line
 
   last_audited_sha="$(jq -r '.security_pass_last_audited_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
   [ -n "${last_audited_sha}" ] || return 1
   git cat-file -e "${last_audited_sha}^{commit}" 2>/dev/null || return 1
   git cat-file -e "${head_sha}^{commit}" 2>/dev/null || return 1
   git cat-file -e "${merge_base_sha}^{commit}" 2>/dev/null || return 1
+  default_sha="$(git rev-parse --verify "${default_ref}^{commit}" 2>/dev/null)" || return 1
   git merge-base --is-ancestor "${last_audited_sha}" "${head_sha}" 2>/dev/null || return 1
-
+  git merge-base --is-ancestor "${default_sha}" "${head_sha}" 2>/dev/null || return 1
   commits_file="${RUNTIME_DIR}/security_pass_rebind_commits_${TRACKING_NUM}.txt"
-  combined_diff_file="${RUNTIME_DIR}/security_pass_rebind_diff_${TRACKING_NUM}.txt"
-  if ! git rev-list "${head_sha}" "^${last_audited_sha}" "^${merge_base_sha}" > "${commits_file}" 2>/dev/null; then
-    return 1
-  fi
+  git rev-list "${head_sha}" "^${last_audited_sha}" "^${default_sha}" > "${commits_file}" 2>/dev/null || return 1
   [ -s "${commits_file}" ] || return 1
-
-  while IFS= read -r commit_line; do
-    [ -n "${commit_line}" ] || return 1
-    commit_sha="${commit_line%% *}"
+  while IFS= read -r commit_sha; do
+    [[ "${commit_sha}" =~ ^[0-9a-f]{40,64}$ ]] || return 1
     parents_line="$(git rev-list --parents -n 1 "${commit_sha}" 2>/dev/null)" || return 1
-    # A merge has at least two parents; --cc covers ordinary and octopus merges.
-    if [ "$(printf '%s\n' "${parents_line}" | awk '{print NF}')" -lt 3 ]; then
-      return 1
-    fi
-    if ! git show --format= --cc --no-ext-diff --no-textconv "${commit_sha}" > "${combined_diff_file}" 2>/dev/null; then
-      return 1
-    fi
-    [ ! -s "${combined_diff_file}" ] || return 1
+    [ "$(printf '%s\n' "${parents_line}" | awk '{print NF}')" -ge 3 ] || return 1
   done < "${commits_file}"
+  merge_tree_output="$(git merge-tree --write-tree "${last_audited_sha}" "${default_sha}" 2>/dev/null)" || return 1
+  expected_tree="$(printf '%s\n' "${merge_tree_output}" | head -n1)"
+  [[ "${expected_tree}" =~ ^[0-9a-f]{40,64}$ ]] || return 1
+  [ "$(printf '%s\n' "${merge_tree_output}" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 1 ] || return 1
+  head_tree="$(git rev-parse --verify "${head_sha}^{tree}" 2>/dev/null)" || return 1
+  [ "${expected_tree}" = "${head_tree}" ] || return 1
 
   if ! jq --arg head_sha "${head_sha}" '
     .status = (if .status == "security-pass" then "in_progress" else .status end)
@@ -4808,7 +4814,7 @@ security_pass_rebind_if_no_new_project_lines() {
   fi
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
-  echo "SECURITY_PASS_REBOUND tracking_issue=${TRACKING_NUM} from=${last_audited_sha} to=${head_sha} reason=no_new_project_lines"
+  echo "SECURITY_PASS_REBOUND tracking_issue=${TRACKING_NUM} from=${last_audited_sha} to=${head_sha} reason=deterministic_merge_tree_match"
   return 0
 }
 
@@ -5605,9 +5611,11 @@ security_pass_findings_rows_json() {
 # security_pass_apply_waivers_to_findings <findings_file>
 #
 # Poller-side enforcement of security_pass_waived_findings on an engine
-# result: drops re-reports of accepted findings (exact finding_id, or the
-# same file and category within SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of
-# the waived line) and rewrites the findings file in place with the kept
+# result: drops re-reports only when their deterministic provenance-bound
+# waiver_match_key exactly matches an authoritative waiver row. Model IDs and
+# location proximity are display/reconciliation hints, never authorization.
+# Legacy keyless waivers remain readable but cannot suppress a finding. Rewrites
+# the findings file in place with the kept
 # rows and an updated counts.kept / counts.suppressed_waived.  The engine
 # applies the same rule when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this
 # keeps an older staged engine honest.  Fail-open: any error leaves the file
@@ -5627,34 +5635,21 @@ from pathlib import Path
 
 findings_path = Path(sys.argv[1])
 state_path = Path(sys.argv[2])
-line_window = int(sys.argv[3])
+_line_window = int(sys.argv[3])
 
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
 waivers = [row for row in state.get("security_pass_waived_findings", []) if isinstance(row, dict)]
 
 
-def norm_category(value: object) -> str:
-	return " ".join(str(value or "").lower().split())
-
-
 def waiver_for(finding: dict) -> str | None:
-	finding_id = str(finding.get("finding_id") or "")
+	finding_key = str(finding.get("waiver_match_key") or "")
+	if not finding_key.startswith("sha256:") or len(finding_key) != 71:
+		return None
 	for waiver in waivers:
-		waived_id = str(waiver.get("finding_id") or "")
-		if waived_id and waived_id == finding_id:
-			return waived_id
-		waived_line = waiver.get("line")
-		if (
-			str(waiver.get("file") or "")
-			and str(waiver.get("file") or "") == str(finding.get("file") or "")
-			and norm_category(waiver.get("owasp_or_stride_category"))
-			and norm_category(waiver.get("owasp_or_stride_category")) == norm_category(finding.get("owasp_or_stride_category"))
-			and isinstance(waived_line, int)
-			and not isinstance(waived_line, bool)
-			and abs(int(waived_line) - int(finding.get("line") or 0)) <= line_window
-		):
-			return waived_id or "(unnamed waiver)"
+		waived_key = str(waiver.get("waiver_match_key") or "")
+		if waived_key == finding_key:
+			return waived_key
 	return None
 
 
@@ -5689,8 +5684,8 @@ PY
 
 # security_pass_record_waivers <waivers_json_array>
 #
-# Upsert waiver rows (by finding_id) into security_pass_waived_findings,
-# drop the same ids from security_pass_reported_findings so the next delta
+# Upsert waiver rows by waiver_match_key into security_pass_waived_findings,
+# drop the same keys from security_pass_reported_findings so the next delta
 # audit does not ask the engine to re-verify them, and keep the array
 # bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
 # severity, justification, source, waived_by, waived_at_cycle, issue}.
@@ -5699,14 +5694,18 @@ security_pass_record_waivers() {
   waivers_file="${RUNTIME_DIR}/security_pass_waivers_${TRACKING_NUM}.json"
   printf '%s\n' "${waivers_json}" > "${waivers_file}"
   if ! jq --slurpfile waivers "${waivers_file}" '
-    ($waivers[0] // []) as $waiver_rows
+    ($waivers[0] // [] | map(select(
+      (.waiver_match_key | type) == "string"
+      and (.waiver_match_key | test("^sha256:[0-9a-f]{64}$"))
+    ))) as $waiver_rows
+    | if ($waiver_rows | length) != (($waivers[0] // []) | length) then error("invalid waiver_match_key") else . end
     | (.security_pass_waived_findings // []) as $existing
-    | ($waiver_rows | map(.finding_id)) as $ids
+    | ($waiver_rows | map(.waiver_match_key)) as $keys
     | .security_pass_waived_findings = (
-        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waiver_rows) | .[-100:]
+        [$existing[] | select(((.waiver_match_key // "") | IN($keys[])) | not)] + $waiver_rows
       )
     | .security_pass_reported_findings = (
-        [(.security_pass_reported_findings // [])[] | select((.finding_id | IN($ids[])) | not)]
+        [(.security_pass_reported_findings // [])[] | select(((.waiver_match_key // "") | IN($keys[])) | not)]
       )
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     rm -f "${STATE_FILE}.tmp"
@@ -5738,24 +5737,26 @@ create_security_pass_advisory_followup() {
   # the body tells the pipeline the cited code is already on the default
   # branch; empty on the legacy judge-time filing path.
   local merged_pr="${6:-}"
-  local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json advisory_cache_key
+  local finding_id waiver_match_key existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json advisory_cache_key
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
+  waiver_match_key="$(printf '%s' "${finding_json}" | jq -r '.waiver_match_key // ""' 2>/dev/null || true)"
   [ -n "${finding_id}" ] || return 0
-  advisory_cache_key="${TRACKING_NUM}:${finding_id}"
+  [[ "${waiver_match_key}" =~ ^sha256:[0-9a-f]{64}$ ]] || return 0
+  advisory_cache_key="${TRACKING_NUM}:${waiver_match_key}"
   existing_issue="${_SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]:-}"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
     SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
     return 0
   fi
-  existing_issue="$(jq -r --arg id "${finding_id}" '
-    [(.security_pass_followup_issues // [])[] | select(.finding_id == $id) | .issue] | last // empty
+  existing_issue="$(jq -r --arg key "${waiver_match_key}" '
+    [(.security_pass_followup_issues // [])[] | select(.waiver_match_key == $key) | .issue] | last // empty
   ' "${STATE_FILE}" 2>/dev/null || true)"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
     SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
     return 0
   fi
-  advisory_marker="<!-- security-pass-advisory:${TRACKING_NUM}:${finding_id} -->"
+  advisory_marker="<!-- security-pass-advisory-key:${TRACKING_NUM}:${waiver_match_key} -->"
   if [ -z "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]+set}" ]; then
     # The state cache and weekly-audit lookup cannot detect an issue whose
     # create succeeded but whose response/state write was lost. This single
@@ -5763,7 +5764,7 @@ create_security_pass_advisory_followup() {
     # fails open to an empty cache; subsequent findings reuse the result.
     remote_followups_json="$(gh_retry gh api --method GET --paginate --slurp "search/issues" \
       -f per_page=100 \
-      -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security security-pass-advisory:${TRACKING_NUM} in:body" 2>/dev/null || echo '[]')"
+      -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security security-pass-advisory-key:${TRACKING_NUM} in:body" 2>/dev/null || echo '[]')"
     _SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]="${remote_followups_json}"
   fi
   existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg marker "${advisory_marker}" '
@@ -5771,9 +5772,9 @@ create_security_pass_advisory_followup() {
     | first // empty
   ' 2>/dev/null || true)"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
-    if ! jq --arg id "${finding_id}" --argjson issue "${existing_issue}" '
-      .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(.finding_id != $id)] + [{finding_id: $id, issue: $issue}] | .[-100:])
-      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end]
+    if ! jq --arg id "${finding_id}" --arg key "${waiver_match_key}" --argjson issue "${existing_issue}" '
+      .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(.waiver_match_key != $key)] + [{finding_id: $id, waiver_match_key: $key, issue: $issue}])
+      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if .waiver_match_key == $key then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end]
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
       rm -f "${STATE_FILE}.tmp"
       echo "::warning::Found advisory follow-up #${existing_issue} for security-pass finding ${finding_id}, but could not reconcile it into state."
@@ -5789,7 +5790,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 finding = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 body_path = Path(sys.argv[2])
@@ -5804,18 +5805,32 @@ merged_pr = sys.argv[8] if len(sys.argv) > 8 else ""
 def prose(value: object) -> str:
 	text = " ".join(str(value or "").split())
 	# Audit- and judge-generated prose must not notify users or auto-link issues.
-	return re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b"))
+	text = text.replace("**Generated security advisory metadata**", "[metadata marker removed]")
+	return re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b").replace("`", ""))
 
 
 finding_id = prose(finding.get("finding_id"))
-location = f"{finding.get('file')}:{finding.get('line')}"
+waiver_match_key = str(finding.get("waiver_match_key") or "")
+file_name = str(finding.get("file") or "")
+line_number = finding.get("line")
+file_path = PurePosixPath(file_name)
+if not re.fullmatch(r"sha256:[0-9a-f]{64}", waiver_match_key):
+	raise SystemExit("invalid waiver_match_key")
+if file_path.is_absolute() or ".." in file_path.parts or not file_name or "`" in file_name:
+	raise SystemExit("invalid cited file")
+if not isinstance(line_number, int) or isinstance(line_number, bool) or line_number < 1:
+	raise SystemExit("invalid cited line")
+if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+	raise SystemExit("invalid audited head")
+location = f"{file_name}:{line_number}"
 accepted_by = {
 	"judge": "the orchestrator's security-pass exhaustion judge",
 	"operator": "an operator (`/security-pass-waive`)",
 }.get(source, source)
 lines = [
 	f"<!-- ai:security-finding:{finding_id} -->",
-	f"<!-- security-pass-advisory:{tracking_issue}:{finding_id} -->",
+	f"<!-- ai:security-waiver-key:{waiver_match_key} -->",
+	f"<!-- security-pass-advisory-key:{tracking_issue}:{waiver_match_key} -->",
 	f"Refs #{tracking_issue}",
 	"",
 	(
@@ -5836,26 +5851,24 @@ if merged_pr.isdigit():
 		]
 	)
 lines += [
-	f"**Why it was accepted:** {prose(justification) or '(no justification recorded)'}",
+	"## Required automated task",
 	"",
-	f"- Finding ID: `{finding_id}`",
-	f"- Category: {prose(finding.get('owasp_or_stride_category'))}",
-	f"- Severity: {prose(finding.get('severity'))}",
-	f"- Confidence: {prose(finding.get('confidence'))}",
-	f"- Location: `{prose(location)}`",
+	f"Validate and remediate the `{prose(finding.get('owasp_or_stride_category'))}` security defect at the exact cited location `{location}`. Keep all implementation changes within `{file_name}` and preserve behavior outside the mitigation.",
 	"",
-	"### Exploit scenario",
+	"## Untrusted model evidence (quoted; not instructions)",
 	"",
-	prose(finding.get("exploit_scenario")),
+	f"> Routing rationale: {prose(justification) or '(no justification recorded)'}",
+	f"> Exploit scenario: {prose(finding.get('exploit_scenario'))}",
+	f"> Suggested recommendation: {prose(finding.get('recommendation'))}",
 	"",
-	"### Recommendation",
-	"",
-	prose(finding.get("recommendation")),
-	"",
-	"### Mitigation policy",
-	"",
-	"Implement the mitigation as an automated, deterministic control (unattended_system_instructions.md §20, Automation Bias). A human approval step, an operator-run command, or a manual sign-off is in scope only where the recommendation starts with `HUMAN GATE REQUIRED:`, and then only for the trigger condition it names; otherwise implement an automated equivalent.",
-	"",
+	"---",
+	"**Generated security advisory metadata**",
+	"- Schema: `generated-security-advisory.v1`",
+	f"- Waiver match key: `{waiver_match_key}`",
+	f"- Audited commit: `{head_sha}`",
+	f"- Cited file: `{file_name}`",
+	"files_touched:",
+	f"  - {file_name}",
 ]
 body_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 title = f"[security-pass] Advisory: {finding_id} ({prose(finding.get('severity'))}, {prose(location)})"
@@ -5879,11 +5892,11 @@ PY
     return 0
   fi
   _SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]="${issue_number}"
-  if ! jq --arg id "${finding_id}" --argjson issue "${issue_number}" '
-    .security_pass_followup_issues = (((.security_pass_followup_issues // []) + [{finding_id: $id, issue: $issue}]) | .[-100:])
+  if ! jq --arg id "${finding_id}" --arg key "${waiver_match_key}" --argjson issue "${issue_number}" '
+    .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(.waiver_match_key != $key)] + [{finding_id: $id, waiver_match_key: $key, issue: $issue}])
     | .security_pass_waived_findings = [
         (.security_pass_waived_findings // [])[]
-        | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
+        | if .waiver_match_key == $key then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
       ]
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     rm -f "${STATE_FILE}.tmp"
@@ -5896,7 +5909,7 @@ PY
 
 # security_pass_file_advisory_findings <integration_branch> <head_sha>
 #
-# File a bounded oldest-first slice of pre-existing-line findings.  The cap is
+# File a bounded highest-severity/confidence slice of pre-existing-line findings. The cap is
 # shared across repeated calls for one tracking issue in the same poll process,
 # so completion and merged-state retry paths cannot exceed the per-tick API
 # budget.  Failed creates remain queued; marker/state dedupe in the existing
@@ -5904,7 +5917,7 @@ PY
 security_pass_file_advisory_findings() {
   local integration_branch="$1"
   local head_sha="$2"
-  local attempted_this_tick remaining_cap pending_json row_json finding_json finding_id audited_head_sha justification
+  local attempted_this_tick remaining_cap pending_json row_json finding_json finding_id waiver_match_key audited_head_sha justification
   local queued_count routed_count filed_count=0 filed_issues
 
   attempted_this_tick="${SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK:-0}"
@@ -5920,20 +5933,21 @@ security_pass_file_advisory_findings() {
     SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK=$(( ${SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK:-0} + 1 ))
     finding_json="$(printf '%s' "${row_json}" | jq -c 'del(.audited_head_sha)')"
     finding_id="$(printf '%s' "${row_json}" | jq -r '.finding_id')"
+    waiver_match_key="$(printf '%s' "${row_json}" | jq -r '.waiver_match_key')"
     audited_head_sha="$(printf '%s' "${row_json}" | jq -r '.audited_head_sha // empty')"
     [ -n "${audited_head_sha}" ] || audited_head_sha="${head_sha}"
     justification="The cited line predates this project's merge-base and already exists on the default branch; routed as a non-blocking advisory by line ownership."
     create_security_pass_advisory_followup "${finding_json}" "${integration_branch}" "${audited_head_sha}" "${justification}" "preexisting"
     if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]] \
-      && jq -e --arg id "${finding_id}" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
-        any((.security_pass_followup_issues // [])[]; .finding_id == $id and .issue == $issue)
+      && jq -e --arg key "${waiver_match_key}" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
+        any((.security_pass_followup_issues // [])[]; .waiver_match_key == $key and .issue == $issue)
       ' "${STATE_FILE}" >/dev/null 2>&1; then
       filed_count=$((filed_count + 1))
       SECURITY_PASS_ADVISORY_FILED_ISSUES="${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}${SECURITY_PASS_ADVISORY_FILED_ISSUES:+, }#${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
       security_pass_mark_followup_merge_checked "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" || \
         echo "::warning::Could not record pre-existing-code advisory follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER} as merge-checked on tracking issue #${TRACKING_NUM}."
-      if ! jq --arg id "${finding_id}" '
-        .security_pass_advisory_backlog = [(.security_pass_advisory_backlog // [])[] | select(.finding_id != $id)]
+      if ! jq --arg key "${waiver_match_key}" '
+        .security_pass_advisory_backlog = [(.security_pass_advisory_backlog // [])[] | select(.waiver_match_key != $key)]
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
         rm -f "${STATE_FILE}.tmp"
         echo "::warning::Could not remove filed pre-existing-code advisory ${finding_id} from the backlog for tracking issue #${TRACKING_NUM}; marker dedupe will reconcile it next tick."
@@ -6003,10 +6017,10 @@ security_pass_file_deferred_advisory_followups() {
       # issue; when it returned an issue it already knew from
       # security_pass_followup_issues the row would stay pending forever, so
       # settle it here as well (idempotent).
-      if ! jq --arg id "$(printf '%s' "${row_json}" | jq -r '.finding_id')" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
+      if ! jq --arg key "$(printf '%s' "${row_json}" | jq -r '.waiver_match_key // ""')" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
         .security_pass_waived_findings = [
           (.security_pass_waived_findings // [])[]
-          | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
+          | if .waiver_match_key == $key then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
         ]
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
         rm -f "${STATE_FILE}.tmp"
@@ -6395,6 +6409,7 @@ ${decisions_table}}"
       --argjson defer "$([ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ] && echo true || echo false)" '
       [.decisions[] | select(.action == "accept_with_followup") | {
         finding_id: .finding.finding_id,
+        waiver_match_key: .finding.waiver_match_key,
         file: .finding.file,
         line: .finding.line,
         owasp_or_stride_category: .finding.owasp_or_stride_category,
@@ -6626,7 +6641,7 @@ run_security_pass_inline() {
   fi
 
   if [ "${prior_security_status}" = "passed" ] \
-    && security_pass_rebind_if_no_new_project_lines "${current_head_sha}" "${merge_base_sha}"; then
+    && security_pass_rebind_if_no_new_project_lines "${current_head_sha}" "${merge_base_sha}" "${current_default_ref}"; then
     security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
     if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
       post_state_comment || true
@@ -6848,7 +6863,8 @@ run_security_pass_inline() {
 
   if ! jq -e '
     def valid_finding:
-      (.finding_id | type) == "string" and (.finding_id | length) > 0
+      (.finding_id | type) == "string" and (.finding_id | test("^[A-Za-z0-9][A-Za-z0-9._:-]{0,200}$"))
+      and (.waiver_match_key | type) == "string" and (.waiver_match_key | test("^sha256:[0-9a-f]{64}$"))
       and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
       and (.severity == "critical" or .severity == "high" or .severity == "medium" or .severity == "low")
       and (.confidence | type) == "number"
@@ -6927,6 +6943,7 @@ run_security_pass_inline() {
     security_pass_advisory_waivers="$(jq -c --argjson cycle "${completed_cycles}" --arg justification "${security_pass_advisory_justification}" '
       [(.advisory_findings // [])[] | {
         finding_id: .finding_id,
+        waiver_match_key: .waiver_match_key,
         file: .file,
         line: .line,
         owasp_or_stride_category: .owasp_or_stride_category,
@@ -6939,23 +6956,35 @@ run_security_pass_inline() {
       }]
     ' "${findings_file}")"
     security_pass_advisory_backlog="$(jq -c --arg head_sha "${current_head_sha}" '
-      [(.advisory_findings // [])[] | . + {audited_head_sha: $head_sha}]
+      [(.advisory_findings // [])[]
+        | .exploit_scenario = (.exploit_scenario[0:2000])
+        | .recommendation = (.recommendation[0:2000])
+        | . + {audited_head_sha: $head_sha}]
     ' "${findings_file}")"
     security_pass_advisory_backlog_file="${RUNTIME_DIR}/security_pass_advisory_backlog_${TRACKING_NUM}.json"
     printf '%s\n' "${security_pass_advisory_backlog}" > "${security_pass_advisory_backlog_file}"
     if ! jq --slurpfile backlog "${security_pass_advisory_backlog_file}" '
-      (($backlog[0] // []) | map(.finding_id)) as $ids
+      (($backlog[0] // []) | map(.waiver_match_key)) as $keys
       | .security_pass_advisory_backlog = (
-          [(.security_pass_advisory_backlog // [])[] | select((.finding_id | IN($ids[])) | not)]
+          [(.security_pass_advisory_backlog // [])[] | select(((.waiver_match_key // "") | IN($keys[])) | not)]
           + ($backlog[0] // [])
+          | sort_by(
+              ({critical: 0, high: 1, medium: 2, low: 3}[.severity] // 4),
+              (-.confidence), .file, .line, .waiver_match_key
+            )
         )
-      | .security_pass_advisory_backlog = .security_pass_advisory_backlog[-100:]
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
       rm -f "${STATE_FILE}.tmp"
-      echo "::warning::Could not persist the pre-existing-code advisory backlog for tracking issue #${TRACKING_NUM}; completion remains non-blocking."
+      security_pass_fail_closed "advisory_backlog_persist_failed" "The full pre-existing-code advisory queue could not be checkpointed." "${prior_security_status}"
+      return 1
     fi
     if ! security_pass_record_waivers "${security_pass_advisory_waivers}"; then
-      echo "::warning::Could not persist the pre-existing-code advisory waivers for tracking issue #${TRACKING_NUM}; completion remains non-blocking."
+      security_pass_fail_closed "advisory_waiver_persist_failed" "The provenance-bound advisory waivers could not be checkpointed." "${prior_security_status}"
+      return 1
+    fi
+    if ! post_state_comment; then
+      security_pass_fail_closed "advisory_backlog_checkpoint_failed" "The complete advisory queue could not be written to authoritative orchestrator state." "${prior_security_status}"
+      return 1
     fi
     echo "SECURITY_PASS_ADVISORY_ROUTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} count=${security_pass_advisory_count} ids=$(printf '%s' "${security_pass_advisory_waivers}" | jq -r 'map(.finding_id) | join(",")')"
     security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
@@ -6994,6 +7023,7 @@ run_security_pass_inline() {
             | {
                 cycle: $cycle,
                 finding_id: .finding_id,
+                waiver_match_key: .waiver_match_key,
                 owasp_or_stride_category: .owasp_or_stride_category,
                 severity: .severity,
                 confidence: .confidence,
@@ -17371,6 +17401,7 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
               | ([$reported[] | select(.finding_id == $id)] | last) as $known
               | {
                   finding_id: $id,
+                  waiver_match_key: ($known.waiver_match_key // ""),
                   file: ($known.file // ""),
                   line: ($known.line // 0),
                   owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
@@ -17384,6 +17415,17 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
                 }
             ]
         ' "${STATE_FILE}")"
+        if ! printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -e '
+          length > 0 and all(.[]; (.waiver_match_key | test("^sha256:[0-9a-f]{64}$")))
+        ' >/dev/null 2>&1; then
+          echo "SECURITY_PASS_WAIVE_REJECTED tracking_issue=${TRACKING_NUM} comment=${SECURITY_PASS_WAIVE_COMMENT_ID} reason=unknown_or_legacy_finding"
+          post_tracking_comment "<!-- security-pass-waive-dedup:${SECURITY_PASS_WAIVE_COMMENT_ID} -->
+
+## ⛔ Security-pass waiver not applied
+
+Every requested finding must still be reported with a provenance-bound waiver key. Unknown or legacy keyless finding IDs cannot be waived."
+          continue
+        fi
         # With SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED the row keeps the
         # finding payload and a followup_pending flag so
         # security_pass_file_deferred_advisory_followups can file the

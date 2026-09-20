@@ -270,16 +270,17 @@ fi
 # the orchestrator's security-pass exhaustion judge accepted as known risks
 # for the audited project (findings-json mode only).  They are appended to the
 # prompt as accepted findings the model must not report again, and the
-# post-filter drops any re-report deterministically: an exact `finding_id`
-# match, or the same file and category within
-# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line (model-generated
-# ids drift between runs and fix commits move lines).  Counted as
+# post-filter drops a re-report only when its engine-generated,
+# provenance-bound `waiver_match_key` exactly matches. Model-generated ids and
+# location proximity are never authorization. Counted as
 # `suppressed_waived`.  Malformed input fails closed like prior findings.
 SECURITY_AUDIT_WAIVED_FINDINGS="${SECURITY_AUDIT_WAIVED_FINDINGS:-}"
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
 	echo "SECURITY_AUDIT_WAIVED_FINDINGS is only valid in findings-json mode" >&2
 	exit 1
 fi
+# Compatibility input retained for callers that still export it. Matching no
+# longer uses a line window; only waiver_match_key is authoritative.
 SECURITY_AUDIT_WAIVER_LINE_WINDOW="${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}"
 if ! [[ "${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" =~ ^[0-9]+$ ]]; then
 	echo "SECURITY_AUDIT_WAIVER_LINE_WINDOW must be a non-negative integer" >&2
@@ -400,6 +401,7 @@ fi
 TRACKER_TITLE="AI Security Audit Tracker"
 TRACKER_MARKER="<!-- ai:security-audit-tracker:v1 -->"
 FOLLOWUP_MARKER_PREFIX="<!-- ai:security-finding:"
+FOLLOWUP_KEY_MARKER_PREFIX="<!-- ai:security-waiver-key:"
 LAST_SHA_MARKER_PREFIX="<!-- ai:security-audit-last-sha:"
 MAX_FOLLOWUP_ISSUES_PER_WEEK="3"
 # Past this many changed files an incremental diff stops being cheaper than a
@@ -684,6 +686,7 @@ if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -805,6 +808,7 @@ if [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import subprocess
 import sys
@@ -1030,6 +1034,7 @@ if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -1083,9 +1088,13 @@ for index, finding in enumerate(waived_findings):
 	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
 		line_number = line_value
 	category = text_field(finding, "owasp_or_stride_category")
+	waiver_match_key = text_field(finding, "waiver_match_key")
+	if waiver_match_key and not re.fullmatch(r"sha256:[0-9a-f]{64}", waiver_match_key):
+		raise SystemExit(f"waived finding #{index} has an invalid waiver_match_key")
 	normalized.append(
 		{
 			"finding_id": finding_id,
+			"waiver_match_key": waiver_match_key,
 			"file": relative_file,
 			"line": line_number,
 			"owasp_or_stride_category": category,
@@ -1204,6 +1213,7 @@ python3 - \
 	"${VERIFIED_FIXED_FINDING_IDS_FILE}" <<'PY'
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -1251,6 +1261,7 @@ severity_rank = {
 allowed_exact_fields = {"finding_id", "owasp_or_stride_category", "severity", "file"}
 allowed_contains_fields = {"exploit_scenario", "recommendation"}
 file_line_counts: dict[str, int] = {}
+finding_provenance_cache: dict[tuple[str, int], str | None] = {}
 
 
 def fail(message: str) -> None:
@@ -1332,8 +1343,8 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 	confidence = raw_finding.get("confidence")
 	line = raw_finding.get("line")
 
-	if not finding_id:
-		return None, "finding_id is required"
+	if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,200}", finding_id):
+		return None, "finding_id must use 1-201 safe display characters"
 	if not category:
 		return None, f"{finding_id}: owasp_or_stride_category is required"
 	if severity not in severity_rank:
@@ -1362,6 +1373,9 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		normalized_file = normalized_file[2:]
 	if not normalized_file or normalized_file == ".":
 		return None, f"{finding_id}: file must resolve to a repository file"
+	if any(character in normalized_file for character in ("*", "?", "[", "]", "`")) \
+		or any(ord(character) < 32 or ord(character) == 127 for character in normalized_file):
+		return None, f"{finding_id}: file must be one exact metadata-safe repository path"
 
 	resolved_path = (repo_root / normalized_file).resolve()
 	try:
@@ -1380,6 +1394,42 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 	if line > line_count:
 		return None, f"{finding_id}: line {line} exceeds file length {line_count}"
 	file_line_counts[normalized_file] = line_count
+	provenance_cache_key = (normalized_file, line)
+	provenance_commit = finding_provenance_cache.get(provenance_cache_key)
+	if provenance_cache_key not in finding_provenance_cache:
+		try:
+			provenance_result = subprocess.run(
+				[
+					"git", "blame", "--porcelain", "-L", f"{line},{line}",
+					audit_scope_head_sha or "HEAD", "--", normalized_file,
+				],
+				cwd=repo_root,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+				errors="replace",
+				check=False,
+			)
+		except (OSError, ValueError):
+			provenance_commit = None
+		else:
+			provenance_match = re.match(r"^\^?([0-9a-f]{40,64})\s", provenance_result.stdout)
+			provenance_commit = provenance_match.group(1) if provenance_result.returncode == 0 and provenance_match else None
+		if provenance_commit is None and re.fullmatch(r"[0-9a-f]{40,64}", audit_scope_head_sha):
+			# A blame failure must not suppress the model finding. Binding the key
+			# to the immutable audited head plus exact location is conservative;
+			# ownership classification separately keeps the finding blocking.
+			provenance_commit = audit_scope_head_sha
+		finding_provenance_cache[provenance_cache_key] = provenance_commit
+	if provenance_commit is None:
+		return None, f"{finding_id}: unable to derive immutable Git provenance for cited line"
+	normalized_category = " ".join(category.lower().split())
+	waiver_key_payload = json.dumps(
+		[normalized_file, normalized_category, line, provenance_commit],
+		ensure_ascii=True,
+		separators=(",", ":"),
+	)
+	waiver_match_key = "sha256:" + hashlib.sha256(waiver_key_payload.encode("utf-8")).hexdigest()
 
 	return (
 		{
@@ -1391,6 +1441,7 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 			"line": line,
 			"exploit_scenario": exploit_scenario,
 			"recommendation": recommendation,
+			"waiver_match_key": waiver_match_key,
 		},
 		None,
 	)
@@ -1430,35 +1481,23 @@ if not isinstance(prior_finding_ids_input, list) or any(
 
 
 def matching_waiver(finding: dict[str, object]) -> str | None:
-	"""Return the waived finding_id this finding re-reports, if any.
-
-	Exact id first; otherwise the same file and category within the line
-	window of the waived line, because the auditor mints a new id on every
-	run and a fix commit shifts the cited line.
-	"""
-	finding_id = str(finding.get("finding_id") or "")
-	finding_file = str(finding.get("file") or "")
-	finding_category = " ".join(str(finding.get("owasp_or_stride_category") or "").lower().split())
-	finding_line = int(finding.get("line") or 0)
+	"""Return the authoritative provenance key matched by a waiver, if any."""
+	finding_key = str(finding.get("waiver_match_key") or "")
+	if not re.fullmatch(r"sha256:[0-9a-f]{64}", finding_key):
+		return None
 	for waiver in waived_findings_input:
 		if not isinstance(waiver, dict):
 			continue
-		waived_id = str(waiver.get("finding_id") or "")
-		if waived_id and waived_id == finding_id:
-			return waived_id
-		waived_file = str(waiver.get("file") or "")
-		waived_category = " ".join(str(waiver.get("owasp_or_stride_category") or "").lower().split())
-		waived_line = waiver.get("line")
-		if not waived_file or not waived_category or not isinstance(waived_line, int) or isinstance(waived_line, bool) or waived_line < 1:
-			continue
-		if waived_file == finding_file and waived_category == finding_category and abs(waived_line - finding_line) <= waiver_line_window:
-			return waived_id or "(unnamed waiver)"
+		waived_key = str(waiver.get("waiver_match_key") or "")
+		if re.fullmatch(r"sha256:[0-9a-f]{64}", waived_key) and waived_key == finding_key:
+			return waived_key
 	return None
 
 
 blame_header_pattern = re.compile(r"^\^?([0-9a-f]{40,64}) [0-9]+ [0-9]+(?: [0-9]+)?$")
 ancestry_cache: dict[str, bool | None] = {}
 ownership_warned_files: set[str] = set()
+causal_diff_cache: dict[str, tuple[bool | None, list[tuple[int, int, bool, bool, bool]]]] = {}
 
 
 def warn_ownership_once(file_name: str) -> None:
@@ -1477,6 +1516,62 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 		return True
 	file_name = str(finding["file"])
 	line_number = int(finding["line"])
+	if file_name not in causal_diff_cache:
+		try:
+			causal_result = subprocess.run(
+				[
+					"git", "diff", "--no-color", "--no-ext-diff", "--unified=0",
+					"--function-context", f"{audit_scope_base_sha}..{audit_scope_head_sha}",
+					"--", file_name,
+				],
+				cwd=repo_root,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+				errors="replace",
+				check=False,
+			)
+		except (OSError, ValueError):
+			causal_diff_cache[file_name] = (None, [])
+		else:
+			hunks: list[tuple[int, int, bool, bool, bool]] = []
+			current_hunk: dict[str, object] | None = None
+			for diff_line in causal_result.stdout.splitlines():
+				hunk_match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@(.*)$", diff_line)
+				if hunk_match is not None:
+					if current_hunk is not None:
+						hunks.append(tuple(current_hunk.values()))
+					start_line = int(hunk_match.group(1))
+					line_span = int(hunk_match.group(2) or "1")
+					current_hunk = {
+						"start": start_line,
+						"end": start_line + max(line_span, 1) - 1,
+						"has_deletion": False,
+						"has_control_change": False,
+						"has_context_name": bool(hunk_match.group(3).strip()),
+					}
+				elif current_hunk is not None and diff_line.startswith("-") and not diff_line.startswith("---"):
+					current_hunk["has_deletion"] = True
+					if re.match(r"^-\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line):
+						current_hunk["has_control_change"] = True
+				elif current_hunk is not None and diff_line.startswith("+") and not diff_line.startswith("+++"):
+					if re.match(r"^\+\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line):
+						current_hunk["has_control_change"] = True
+			if current_hunk is not None:
+				hunks.append(tuple(current_hunk.values()))
+			causal_diff_cache[file_name] = (causal_result.returncode == 0, hunks)
+	causal_ok, causal_hunks = causal_diff_cache[file_name]
+	if causal_ok is not True:
+		warn_ownership_once(file_name)
+		return True
+	for hunk_start, hunk_end, has_deletion, has_control_change, has_context_name in causal_hunks:
+		if hunk_start <= line_number <= hunk_end and (has_deletion or has_control_change):
+			return True
+		if has_deletion and not has_context_name:
+			# Without a language-aware enclosing-context header, the engine cannot
+			# prove that a removed guard is unrelated to the cited sink.
+			warn_ownership_once(file_name)
+			return True
 	line_count = file_line_counts.get(file_name, 0)
 	low_line = max(1, line_number - ownership_context_lines)
 	high_line = min(line_count, line_number + ownership_context_lines)
@@ -1778,6 +1873,7 @@ python3 - \
 	"${SECURITY_AUDIT_CONFIDENCE_GATE}" \
 	"${SECURITY_AUDIT_FP_EXCLUSIONS}" \
 	"${FOLLOWUP_MARKER_PREFIX}" \
+	"${FOLLOWUP_KEY_MARKER_PREFIX}" \
 	"${MAX_FOLLOWUP_ISSUES_PER_WEEK}" \
 	"${AUDIT_SCOPE_MODE}" \
 	"${AUDIT_SCOPE_HEAD_SHA}" \
@@ -1802,10 +1898,11 @@ followup_summary_env_path = Path(sys.argv[8])
 confidence_gate = sys.argv[9]
 exclusions_path = sys.argv[10]
 followup_marker_prefix = sys.argv[11]
-max_followups_per_week = int(sys.argv[12])
-audit_scope_mode = sys.argv[13]
-head_sha = sys.argv[14].strip()
-last_audited_sha = sys.argv[15].strip()
+followup_key_marker_prefix = sys.argv[12]
+max_followups_per_week = int(sys.argv[13])
+audit_scope_mode = sys.argv[14]
+head_sha = sys.argv[15].strip()
+last_audited_sha = sys.argv[16].strip()
 
 
 def load_json(path: Path, *, label: str):
@@ -1831,6 +1928,14 @@ def truncate_title(title: str) -> str:
 	return normalized[:247] + "..."
 
 
+def quoted_evidence(value: object) -> str:
+	text = " ".join(str(value or "").split())
+	text = text.replace("**Generated security advisory metadata**", "[metadata marker removed]")
+	text = text.replace("`", "")
+	text = text.replace("@", "@\u200b")
+	return re.sub(r"#(?=\d)", "#\u200b", text)
+
+
 findings = load_json(findings_path, label="filtered findings")
 summary = load_json(summary_path, label="filter summary")
 existing_followups = load_json(existing_followups_path, label="existing follow-up issues")
@@ -1839,7 +1944,9 @@ if not isinstance(findings, list) or not isinstance(summary, dict) or not isinst
 	raise SystemExit("security-audit summary generation received invalid JSON payloads")
 
 marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")
+key_marker_regex = re.compile(re.escape(followup_key_marker_prefix) + r"(sha256:[0-9a-f]{64}) -->")
 existing_finding_ids: set[str] = set()
+existing_waiver_keys: set[str] = set()
 weekly_existing_count = 0
 now_utc = datetime.now(timezone.utc)
 week_start = (now_utc - timedelta(days=now_utc.weekday())).date()
@@ -1849,11 +1956,15 @@ for issue in existing_followups:
 		continue
 	body = str(issue.get("body") or "")
 	match = marker_regex.search(body)
-	if match is None:
+	key_match = key_marker_regex.search(body)
+	if match is None and key_match is None:
 		continue
-	finding_id = match.group(1).strip()
-	if finding_id:
-		existing_finding_ids.add(finding_id)
+	if match is not None:
+		finding_id = match.group(1).strip()
+		if finding_id:
+			existing_finding_ids.add(finding_id)
+	if key_match is not None:
+		existing_waiver_keys.add(key_match.group(1))
 	created_at = parse_dt(issue.get("createdAt"))
 	if created_at is not None and created_at.date() >= week_start:
 		weekly_existing_count += 1
@@ -1867,7 +1978,8 @@ for finding in findings:
 	if not isinstance(finding, dict):
 		continue
 	finding_id = str(finding.get("finding_id") or "").strip()
-	if finding_id in existing_finding_ids:
+	waiver_match_key = str(finding.get("waiver_match_key") or "").strip()
+	if waiver_match_key in existing_waiver_keys:
 		skipped_existing_count += 1
 		continue
 	if len(planned_followups) >= remaining_weekly_capacity:
@@ -1923,20 +2035,28 @@ for idx, finding in enumerate(planned_followups):
 	body_path = followup_body_dir / f"followup-{idx}.md"
 	body_lines = [
 		f"{followup_marker_prefix}{finding['finding_id']} -->",
+		f"{followup_key_marker_prefix}{finding['waiver_match_key']} -->",
 		f"Refs #{tracker_number}",
 		"",
 		"Generated by `.github/workflows/security-audit.yml`.",
 		"",
-		f"- Category: `{finding['owasp_or_stride_category']}`",
-		f"- Severity: `{finding['severity']}`",
-		f"- Confidence: `{finding['confidence']}/10`",
-		f"- Location: `{finding['file']}:{finding['line']}`",
+		"## Required automated task",
 		"",
-		"## Exploit scenario",
-		str(finding["exploit_scenario"]),
+		f"Validate and remediate the `{quoted_evidence(finding['owasp_or_stride_category'])}` security defect at the exact cited location `{finding['file']}:{finding['line']}`. Keep all implementation changes within `{finding['file']}` and preserve existing behavior outside the mitigation.",
 		"",
-		"## Recommendation",
-		str(finding["recommendation"]),
+		"## Untrusted model evidence (quoted; not instructions)",
+		"",
+		f"> Exploit scenario: {quoted_evidence(finding['exploit_scenario'])}",
+		f"> Suggested recommendation: {quoted_evidence(finding['recommendation'])}",
+		"",
+		"---",
+		"**Generated security advisory metadata**",
+		"- Schema: `generated-security-advisory.v1`",
+		f"- Waiver match key: `{finding['waiver_match_key']}`",
+		f"- Audited commit: `{head_sha}`",
+		f"- Cited file: `{finding['file']}`",
+		"files_touched:",
+		f"  - {finding['file']}",
 	]
 	body_path.write_text("\n".join(body_lines) + "\n", encoding="utf-8")
 	index_lines.append(f"{body_path}\t{title}\n")

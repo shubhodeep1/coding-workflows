@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -571,6 +572,14 @@ def test_security_audit_incremental_scope_drops_out_of_scope_findings() -> None:
 	assert "Suppressed out-of-scope findings: 1" in comment_bodies
 	edit_bodies = "\n".join(final_state.get("issue_edit_bodies", []))
 	assert f"<!-- ai:security-audit-last-sha:{head_sha} -->" in edit_bodies
+	followup_body = final_state["issue_create_bodies"][0]
+	assert "## Required automated task" in followup_body
+	assert "## Untrusted model evidence (quoted; not instructions)" in followup_body
+	assert "**Generated security advisory metadata**" in followup_body
+	assert "- Schema: `generated-security-advisory.v1`" in followup_body
+	assert f"- Audited commit: `{head_sha}`" in followup_body
+	assert "- Cited file: `file_b.py`" in followup_body
+	assert followup_body.endswith("files_touched:\n  - file_b.py\n")
 
 
 def test_security_audit_missing_render_helper_reports_sanitized_context() -> None:
@@ -1057,6 +1066,70 @@ def test_security_audit_sync_merged_line_reachable_from_base_is_advisory() -> No
 	assert [advisory["finding_id"] for advisory in payload["advisory_findings"]] == ["sync-owned"]
 
 
+def test_security_audit_deleted_guard_keeps_unchanged_sink_blocking() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-deleted-guard-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = tmp_path / "repo"
+		repo_dir.mkdir()
+		git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		git_env.update(
+			{
+				"GIT_AUTHOR_NAME": "t",
+				"GIT_AUTHOR_EMAIL": "t@example.invalid",
+				"GIT_COMMITTER_NAME": "t",
+				"GIT_COMMITTER_EMAIL": "t@example.invalid",
+			}
+		)
+
+		def fixture_git(*args: str) -> str:
+			return subprocess.run(
+				["git", *args], cwd=repo_dir, env=git_env, check=True,
+				capture_output=True, text=True, encoding="utf-8",
+			).stdout.strip()
+
+		fixture_git("init", "-q")
+		guarded_path = repo_dir / "guarded.py"
+		guarded_path.write_text(
+			"def privileged_action(user):\n"
+			"\tif not user.is_admin:\n"
+			"\t\traise PermissionError()\n"
+			"\treturn mutate_money_state()\n",
+			encoding="utf-8",
+		)
+		fixture_git("add", "guarded.py")
+		fixture_git("commit", "-q", "-m", "guarded base")
+		base_sha = fixture_git("rev-parse", "HEAD")
+		guarded_path.write_text(
+			"def privileged_action(user):\n\treturn mutate_money_state()\n",
+			encoding="utf-8",
+		)
+		fixture_git("add", "guarded.py")
+		fixture_git("commit", "-q", "-m", "remove guard")
+		head_sha = fixture_git("rev-parse", "HEAD")
+		finding = _finding_payload("deleted-guard", file_path="guarded.py", category="A01: Broken Access Control")
+		finding["line"] = 2
+		output_path = tmp_path / "findings.json"
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([finding]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": base_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_LINE_OWNERSHIP": "project-lines",
+				"SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES": "0",
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [row["finding_id"] for row in payload["findings"]] == ["deleted-guard"]
+	assert payload["advisory_findings"] == []
+
+
 def test_security_audit_project_line_ownership_failures_stay_blocking_and_warn_once() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-line-ownership-failure-") as fixture_td:
 		tmp_path = Path(fixture_td)
@@ -1165,6 +1238,23 @@ def _git_fixture_repo_three_commits(base_dir: Path) -> tuple[Path, str, str, str
 	_git("commit", "-q", "-m", "third commit")
 	head_sha = _git("rev-parse", "HEAD")
 	return repo_dir, first_sha, second_sha, head_sha
+
+
+def _fixture_waiver_key(repo_dir: Path, head_sha: str, file_path: str, line: int, category: str) -> str:
+	provenance = subprocess.run(
+		["git", "blame", "--porcelain", "-L", f"{line},{line}", head_sha, "--", file_path],
+		cwd=repo_dir,
+		check=True,
+		capture_output=True,
+		text=True,
+		encoding="utf-8",
+	).stdout.split()[0].lstrip("^")
+	payload = json.dumps(
+		[file_path, " ".join(category.lower().split()), line, provenance],
+		ensure_ascii=True,
+		separators=(",", ":"),
+	)
+	return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def test_security_audit_delta_since_narrows_scope_and_keeps_prior_finding_files() -> None:
@@ -1473,10 +1563,8 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	"""Accepted findings reach the prompt as accepted and never reach the output.
 
 	The orchestrator's security-pass exhaustion judge and the operator's
-	`/security-pass-waive` command persist waivers; the engine must drop a
-	re-report by exact id and by location (same file and category within the
-	line window), because the auditor mints a new id every run and fix commits
-	move the cited line.
+	`/security-pass-waive` command persist provenance-bound waiver keys. Model
+	IDs, proximity, and legacy keyless rows cannot suppress a distinct finding.
 	"""
 	with tempfile.TemporaryDirectory(prefix="security-audit-waived-") as fixture_td:
 		tmp_path = Path(fixture_td)
@@ -1498,6 +1586,9 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 				[
 					{
 						"finding_id": "waived-exact",
+						"waiver_match_key": _fixture_waiver_key(
+							repo_dir, head_sha, "file_b.py", 1, "A04:2021-Insecure Design"
+						),
 						"owasp_or_stride_category": "A04:2021-Insecure Design",
 						"severity": "medium",
 						"file": "file_b.py",
@@ -1507,6 +1598,13 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 					},
 					{
 						"finding_id": "waived-by-location",
+						"waiver_match_key": _fixture_waiver_key(
+							repo_dir,
+							head_sha,
+							"file_c.py",
+							1,
+							"A04:2021-Insecure Design / STRIDE: Denial of Service",
+						),
 						"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
 						"file": "./file_c.py",
 						"line": 1,
@@ -1543,10 +1641,14 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
-	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot"]
+	assert [finding["finding_id"] for finding in payload["findings"]] == [
+		"waived-exact",
+		"different-category-same-spot",
+		"waived-id-only",
+	]
 	assert payload["verified_fixed_finding_ids"] == ["missing-prior"]
-	assert payload["counts"]["kept"] == 1
-	assert payload["counts"]["suppressed_waived"] == 3
+	assert payload["counts"]["kept"] == 3
+	assert payload["counts"]["suppressed_waived"] == 1
 	assert "waived-findings=3 (line window 40)" in proc.stdout
 	prompt = final_state["codex_stdin"][0]
 	assert prompt.count("=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===") == 1

@@ -462,12 +462,17 @@ fi
 # Mirror of the destructive-commit guard above, for scope drift:
 # reject when the staged change set includes paths the issue's
 # files_touched allowlist does not cover. Operates on the same real
-# index that was just staged for the destructive guard. Fails OPEN —
-# no allowlist, master toggle off, or a missing helper all
-# log-and-allow. On a violation the commit is neither created nor
+# index that was just staged for the destructive guard. Ordinary issues fail
+# open without an allowlist or when the master toggle is off. Generated
+# security advisories fail closed on helper/metadata problems and cannot use
+# either scope bypass. On a violation the commit is neither created nor
 # pushed; the "Destructive-commit guard — label + alert on rejection"
 # step labels the issue ai:scope-blocked and alerts.
-if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+generated_security_advisory=false
+if grep -qF '**Generated security advisory metadata**' "${ISSUE_BODY_FILE:-/dev/null}" 2>/dev/null; then
+  generated_security_advisory=true
+fi
+if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${generated_security_advisory}" != "true" ]; then
   echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
 else
   scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
@@ -482,11 +487,13 @@ else
       scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
         --issue-body-file "${ISSUE_BODY_FILE:-}" \
         --staged-file "${scope_staged_file}" \
-        --allowlist-out "${scope_allowlist_file}")"
+        --allowlist-out "${scope_allowlist_file}" \
+        --issue-author-association "${ISSUE_AUTHOR_ASSOCIATION:-}" \
+        --generated-advisory-mode auto)"
       scope_rc=$?
       set -e
     else
-      scope_rc=127
+      if [ "${generated_security_advisory}" = "true" ]; then scope_rc=30; else scope_rc=127; fi
     fi
     rm -f "${scope_staged_file}"
     case "${scope_rc}" in
@@ -499,7 +506,7 @@ else
       20)
         scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
         scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
-        if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+        if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ] && [ "${generated_security_advisory}" != "true" ]; then
           echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
           printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
         else
@@ -518,6 +525,21 @@ else
           rm -f "${scope_allowlist_file}"
           exit 1
         fi
+        ;;
+      30)
+        echo "::error::Refusing to commit: generated security advisory metadata, authorship, or exact path scope is invalid."
+        {
+          echo "scope_violation_blocked=generated-security-advisory"
+          echo "scope_violation_count=1"
+          echo 'scope_violation_files<<__SVF_EOF__'
+          echo '<generated-security-advisory-metadata>'
+          echo '__SVF_EOF__'
+          echo 'scope_violation_allowlist<<__SVA_EOF__'
+          sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true
+          echo '__SVA_EOF__'
+        } >> "$GITHUB_OUTPUT"
+        rm -f "${scope_allowlist_file}"
+        exit 1
         ;;
       *)
         echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."

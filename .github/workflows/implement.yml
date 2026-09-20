@@ -130,6 +130,8 @@ jobs:
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
           ISSUE_STATE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.state // "open"')"
           ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -c '[.labels[]?.name]')"
+          ISSUE_AUTHOR_ASSOCIATION="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.author_association // ""')"
+          echo "ISSUE_AUTHOR_ASSOCIATION=${ISSUE_AUTHOR_ASSOCIATION}" >> "$GITHUB_ENV"
           # Early smoke-fixture detection. The "Telegram duplicate PR
           # notification" step runs before the main "Detect smoke test and
           # silence Telegram alerts" step below, so it needs the SILENT
@@ -960,7 +962,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -980,26 +982,6 @@ jobs:
           # whose fetched-manifest cleanup can remove repository support files.
           # Preserve a runtime copy outside that cleanup set for the late step.
           install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"
-
-          # Optional: files_touched scope-enforcement guard helper. Fail-open —
-          # if it is unavailable on ${SCRIPT_REF} (e.g. ref skew during a
-          # rollout) the scope guard steps degrade to a logged skip rather than
-          # blocking implementation. Added to _fetched_scripts so the generated
-          # scripts/.gitignore keeps it out of consumer-repo commits (and out of
-          # the staged set the scope guard inspects).
-          for f in files_touched_scope_guard.py; do
-            src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::notice::Optional files_touched scope guard ${f} is unavailable on ${SCRIPT_REF}; scope enforcement will fail open this run."
-              continue
-            fi
-            install -m 0755 "${src}" "scripts/${f}"
-            _fetched_scripts+=("${f}")
-            _staged_support_installed_paths+=("scripts/${f}")
-          done
 
           for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
             src=".codex-workflow-src/scripts/${f}"
@@ -3383,10 +3365,15 @@ jobs:
           # reject when the staged change set includes paths the issue's
           # files_touched allowlist does not cover. Shares the same projected
           # staged index the destructive guard just inspected (GIT_INDEX_FILE
-          # is still the temp index here). Fails OPEN — no allowlist, master
-          # toggle off, or a missing helper all log-and-allow, matching the
-          # missing-allowlist posture used elsewhere in this workflow.
-          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+          # is still the temp index here). Ordinary issues fail open when no
+          # allowlist exists or the master toggle is off. Generated security
+          # advisories fail closed on missing/malformed helper metadata and
+          # cannot use either scope bypass.
+          generated_security_advisory=false
+          if grep -qF '**Generated security advisory metadata**' "${ISSUE_BODY_FILE:-/dev/null}" 2>/dev/null; then
+            generated_security_advisory=true
+          fi
+          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${generated_security_advisory}" != "true" ]; then
             echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
           else
             scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
@@ -3401,11 +3388,13 @@ jobs:
                 scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
                   --issue-body-file "${ISSUE_BODY_FILE:-}" \
                   --staged-file "${scope_staged_file}" \
-                  --allowlist-out "${scope_allowlist_file}")"
+                  --allowlist-out "${scope_allowlist_file}" \
+                  --issue-author-association "${ISSUE_AUTHOR_ASSOCIATION:-}" \
+                  --generated-advisory-mode auto)"
                 scope_rc=$?
                 set -e
               else
-                scope_rc=127
+                if [ "${generated_security_advisory}" = "true" ]; then scope_rc=30; else scope_rc=127; fi
               fi
               rm -f "${scope_staged_file}"
               case "${scope_rc}" in
@@ -3418,7 +3407,7 @@ jobs:
                 20)
                   scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
                   scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
-                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ] && [ "${generated_security_advisory}" != "true" ]; then
                     echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
                     printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
                   else
@@ -3437,6 +3426,21 @@ jobs:
                     rm -f "${scope_allowlist_file}"
                     exit 1
                   fi
+                  ;;
+                30)
+                  echo "::error::Refusing to commit: generated security advisory metadata, authorship, or exact path scope is invalid."
+                  {
+                    echo "scope_violation_blocked=generated-security-advisory"
+                    echo "scope_violation_count=1"
+                    echo 'scope_violation_files<<__SVF_EOF__'
+                    echo '<generated-security-advisory-metadata>'
+                    echo '__SVF_EOF__'
+                    echo 'scope_violation_allowlist<<__SVA_EOF__'
+                    sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true
+                    echo '__SVA_EOF__'
+                  } >> "$GITHUB_OUTPUT"
+                  rm -f "${scope_allowlist_file}"
+                  exit 1
                   ;;
                 *)
                   echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
