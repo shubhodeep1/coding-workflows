@@ -55,7 +55,7 @@ Copy this block when adding a new entry:
 
 ### `scripts/workflow_failure_heal_report.sh` + `scripts/workflow_failure_heal_intake.sh` + `scripts/workflow_failure_heal.py` + `.github/workflows/workflow_failure_heal.yml` + `.github/workflows/workflow-failure-heal-intake.yml`
 
-- **Introduced in:** claude/vigilant-dijkstra-9g52xk (2026-09-20)
+- **Introduced in:** #4165 (2026-09-20)
 - **Type:** long-running
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**
