@@ -379,9 +379,13 @@ def main(argv: list[str] | None = None) -> int:
 					file=sys.stderr,
 				)
 				return EXIT_INVALID_GENERATED_ADVISORY
-		status, allowlist, out_of_scope = evaluate_allowlist(
-			[cited_file], staged_paths, auto_allow_lockfiles=False
-		)
+		allowlist = [cited_file]
+		out_of_scope = [
+			normalized_path
+			for staged_path in staged_paths
+			if (normalized_path := normalize_path(staged_path)) and normalized_path != cited_file
+		]
+		status = STATUS_OUT_OF_SCOPE if out_of_scope else STATUS_IN_SCOPE
 	else:
 		status, allowlist, out_of_scope = evaluate(
 			issue_body, staged_paths, allowlist_entries=allowlist_entries

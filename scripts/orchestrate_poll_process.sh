@@ -4681,7 +4681,7 @@ ensure_security_pass_state_fields() {
         | map(select(
           type == "object"
           and (.finding_id | type) == "string" and (.finding_id | length) > 0
-          and (.waiver_match_key | type) == "string" and (.waiver_match_key | test("^sha256:[0-9a-f]{64}$"))
+          and (((.waiver_match_key // "") == "") or ((.waiver_match_key | type) == "string" and (.waiver_match_key | test("^sha256:[0-9a-f]{64}$"))))
           and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
           and (.severity | IN("critical", "high", "medium", "low"))
           and (.confidence | type) == "number" and (.confidence | floor) == .confidence and .confidence >= 1 and .confidence <= 10
@@ -4697,6 +4697,7 @@ ensure_security_pass_state_fields() {
         ))
         | map(
           .finding_id = .finding_id[0:200]
+          | .waiver_match_key = (.waiver_match_key // "")
           | .owasp_or_stride_category = .owasp_or_stride_category[0:500]
           | .exploit_scenario = .exploit_scenario[0:2000]
           | .recommendation = .recommendation[0:2000]
@@ -5743,10 +5744,17 @@ create_security_pass_advisory_followup() {
   waiver_match_key="$(printf '%s' "${finding_json}" | jq -r '.waiver_match_key // ""' 2>/dev/null || true)"
   [ -n "${finding_id}" ] || return 0
   if ! [[ "${waiver_match_key}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    [ -z "${waiver_match_key}" ] && [[ "${merged_pr}" =~ ^[0-9]+$ ]] || return 0
+    if [ -n "${waiver_match_key}" ]; then
+      echo "::warning::Advisory follow-up ${finding_id} has an invalid waiver key; retaining it for retry."
+      return 0
+    fi
+    if ! [[ "${head_sha}" =~ ^[0-9a-f]{40,64}$ ]]; then
+      echo "::warning::Legacy advisory ${finding_id} has no full audited commit; retaining it for retry."
+      return 0
+    fi
     waiver_match_key="sha256:$(printf '%s\0%s\0%s' "${TRACKING_NUM}" "${head_sha}" "${finding_json}" | sha256sum | awk '{print $1}')"
     finding_json="$(printf '%s' "${finding_json}" | jq -c --arg key "${waiver_match_key}" '.waiver_match_key = $key')" || return 0
-    echo "::notice::Migrated legacy keyless deferred advisory ${finding_id} to a non-suppressing follow-up key."
+    echo "::notice::Migrated legacy keyless advisory ${finding_id} to a non-suppressing follow-up key."
   fi
   advisory_cache_key="${TRACKING_NUM}:${waiver_match_key}"
   existing_issue="${_SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]:-}"
@@ -5816,6 +5824,8 @@ def prose(value: object) -> str:
 	text = " ".join(str(value or "").split())
 	# Audit- and judge-generated prose must not notify users or auto-link issues.
 	text = text.replace("**Generated security advisory metadata**", "[metadata marker removed]")
+	text = text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+	text = re.sub(r"(?i)(?:ai:security-(?:finding|waiver-key)|security-pass-advisory(?:-key)?):", "[security marker removed]:", text)
 	return re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b").replace("`", ""))
 
 
@@ -5950,15 +5960,17 @@ security_pass_file_advisory_findings() {
     justification="The cited line predates this project's merge-base and already exists on the default branch; routed as a non-blocking advisory by line ownership."
     create_security_pass_advisory_followup "${finding_json}" "${integration_branch}" "${audited_head_sha}" "${justification}" "preexisting"
     if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]] \
-      && jq -e --arg key "${waiver_match_key}" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
-        any((.security_pass_followup_issues // [])[]; .waiver_match_key == $key and .issue == $issue)
+      && jq -e --arg id "${finding_id}" --arg key "${waiver_match_key}" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
+        any((.security_pass_followup_issues // [])[];
+          (($key != "" and .waiver_match_key == $key) or ($key == "" and .finding_id == $id)) and .issue == $issue)
       ' "${STATE_FILE}" >/dev/null 2>&1; then
       filed_count=$((filed_count + 1))
       SECURITY_PASS_ADVISORY_FILED_ISSUES="${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}${SECURITY_PASS_ADVISORY_FILED_ISSUES:+, }#${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
       security_pass_mark_followup_merge_checked "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" || \
         echo "::warning::Could not record pre-existing-code advisory follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER} as merge-checked on tracking issue #${TRACKING_NUM}."
-      if ! jq --arg key "${waiver_match_key}" '
-        .security_pass_advisory_backlog = [(.security_pass_advisory_backlog // [])[] | select(.waiver_match_key != $key)]
+      if ! jq --arg id "${finding_id}" --arg key "${waiver_match_key}" '
+        .security_pass_advisory_backlog = [(.security_pass_advisory_backlog // [])[]
+          | select((($key != "" and .waiver_match_key == $key) or ($key == "" and .finding_id == $id)) | not)]
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
         rm -f "${STATE_FILE}.tmp"
         echo "::warning::Could not remove filed pre-existing-code advisory ${finding_id} from the backlog for tracking issue #${TRACKING_NUM}; marker dedupe will reconcile it next tick."

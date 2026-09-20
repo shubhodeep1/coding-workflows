@@ -1124,7 +1124,7 @@ PY
 		exit 1
 	fi
 	[[ "${WAIVED_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || WAIVED_FINDINGS_COUNT=0
-	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (line window ${SECURITY_AUDIT_WAIVER_LINE_WINDOW})"
+	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (provenance-key match only)"
 fi
 
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
@@ -1497,7 +1497,7 @@ def matching_waiver(finding: dict[str, object]) -> str | None:
 blame_header_pattern = re.compile(r"^\^?([0-9a-f]{40,64}) [0-9]+ [0-9]+(?: [0-9]+)?$")
 ancestry_cache: dict[str, bool | None] = {}
 ownership_warned_files: set[str] = set()
-causal_diff_cache: dict[str, tuple[bool | None, list[tuple[int, int, bool, bool, bool]]]] = {}
+causal_diff_cache: dict[str, tuple[bool | None, list[tuple[int, int, bool, bool, bool, bool]]]] = {}
 
 
 def warn_ownership_once(file_name: str) -> None:
@@ -1534,7 +1534,7 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 		except (OSError, ValueError):
 			causal_diff_cache[file_name] = (None, [])
 		else:
-			hunks: list[tuple[int, int, bool, bool, bool]] = []
+			hunks: list[tuple[int, int, bool, bool, bool, bool]] = []
 			current_hunk: dict[str, object] | None = None
 			for diff_line in causal_result.stdout.splitlines():
 				hunk_match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@(.*)$", diff_line)
@@ -1549,11 +1549,14 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 						"has_deletion": False,
 						"has_control_change": False,
 						"has_context_name": bool(hunk_match.group(3).strip()),
+						"has_guard_deletion": False,
 					}
 				elif current_hunk is not None and diff_line.startswith("-") and not diff_line.startswith("---"):
 					current_hunk["has_deletion"] = True
 					if re.match(r"^-\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line):
 						current_hunk["has_control_change"] = True
+					if re.search(r"(?i)\b(?:auth\w*|permission|privilege|admin|guard|middleware|before_request|require_\w+|role|access[_ -]?control|policy|allow|deny)\b", diff_line):
+						current_hunk["has_guard_deletion"] = True
 				elif current_hunk is not None and diff_line.startswith("+") and not diff_line.startswith("+++"):
 					if re.match(r"^\+\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line):
 						current_hunk["has_control_change"] = True
@@ -1564,12 +1567,12 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 	if causal_ok is not True:
 		warn_ownership_once(file_name)
 		return True
-	for hunk_start, hunk_end, has_deletion, has_control_change, has_context_name in causal_hunks:
+	for hunk_start, hunk_end, has_deletion, has_control_change, has_context_name, has_guard_deletion in causal_hunks:
 		if hunk_start <= line_number <= hunk_end and (has_deletion or has_control_change):
 			return True
-		if has_deletion:
-			# A named hunk can still remove a guard or registration hook used by a
-			# different function, so same-file deletions are not provably unrelated.
+		if has_deletion and (has_control_change or has_guard_deletion):
+			# Deleted control flow and authorization hooks can protect sinks in a
+			# different function, so line-local blame cannot prove them unrelated.
 			warn_ownership_once(file_name)
 			return True
 	line_count = file_line_counts.get(file_name, 0)
@@ -1933,6 +1936,8 @@ def quoted_evidence(value: object) -> str:
 	text = text.replace("**Generated security advisory metadata**", "[metadata marker removed]")
 	text = text.replace("`", "")
 	text = text.replace("@", "@\u200b")
+	text = text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+	text = re.sub(r"(?i)(?:ai:security-(?:finding|waiver-key)|security-pass-advisory(?:-key)?):", "[security marker removed]:", text)
 	return re.sub(r"#(?=\d)", "#\u200b", text)
 
 
@@ -1979,7 +1984,7 @@ for finding in findings:
 		continue
 	finding_id = str(finding.get("finding_id") or "").strip()
 	waiver_match_key = str(finding.get("waiver_match_key") or "").strip()
-	if waiver_match_key in existing_waiver_keys:
+	if waiver_match_key in existing_waiver_keys or finding_id in existing_finding_ids:
 		skipped_existing_count += 1
 		continue
 	if len(planned_followups) >= remaining_weekly_capacity:

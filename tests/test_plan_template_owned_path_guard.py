@@ -436,3 +436,9 @@ def test_guard_skips_the_canonical_coding_workflows_repository() -> None:
 	)
 	assert returncode != 0
 	assert "must name only its exact cited file" in output
+
+
+def test_workflow_materializes_issue_body_for_generated_advisory_guard() -> None:
+	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
+	assert 'echo "ISSUE_BODY_FILE=${RUNTIME_DIR}/issue_body.txt"' in workflow_text
+	assert 'jq -r \'.body // ""\' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}"' in workflow_text

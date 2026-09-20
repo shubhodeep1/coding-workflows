@@ -204,7 +204,12 @@ def test_generated_advisory_rejects_malformed_or_mismatched_footer() -> None:
 # --------------------------------------------------------------------------
 
 
-def _run_cli(body: str, staged: list[str], allowlist_out: Path | None = None) -> tuple[int, str]:
+def _run_cli(
+	body: str,
+	staged: list[str],
+	allowlist_out: Path | None = None,
+	extra_args: tuple[str, ...] = (),
+) -> tuple[int, str]:
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		body_file = tdp / "body.txt"
@@ -221,6 +226,7 @@ def _run_cli(body: str, staged: list[str], allowlist_out: Path | None = None) ->
 		]
 		if allowlist_out is not None:
 			cmd += ["--allowlist-out", str(allowlist_out)]
+		cmd.extend(extra_args)
 		proc = subprocess.run(cmd, capture_output=True, text=True)
 		return proc.returncode, proc.stdout
 
@@ -265,6 +271,21 @@ def test_cli_explicit_allowlist_file_supports_scope_lock_glob() -> None:
 		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE
 		assert proc.stdout.split() == ["README.md"]
 		assert allowlist_out.read_text(encoding="utf-8").strip() == "scripts/**/*.sh"
+
+
+def test_generated_advisory_scope_matches_only_the_exact_cited_path() -> None:
+	rc, out = _run_cli(
+		_generated_advisory_body("src"),
+		["src/security.py"],
+		extra_args=(
+			"--issue-author-association",
+			"OWNER",
+			"--generated-advisory-mode",
+			"auto",
+		),
+	)
+	assert rc == guard.EXIT_OUT_OF_SCOPE
+	assert out.split() == ["src/security.py"]
 
 
 # --------------------------------------------------------------------------

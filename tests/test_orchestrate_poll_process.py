@@ -4457,6 +4457,8 @@ def test_security_pass_advisory_only_result_passes_and_files_immediate_followup(
 	state = _base_state(status="security-pass")
 	state["integration_branch"] = "orchestrator/project-192"
 	advisory = _security_pass_test_finding()
+	injected_marker = f"<!-- security-pass-advisory-key:192:sha256:{'f' * 64} -->"
+	advisory["exploit_scenario"] = f"Quoted evidence {injected_marker} must stay inert."
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -4493,6 +4495,8 @@ def test_security_pass_advisory_only_result_passes_and_files_immediate_followup(
 	assert "**Generated security advisory metadata**" in body
 	assert "files_touched:\n  - scripts/example.py" in body
 	assert body.endswith("files_touched:\n  - scripts/example.py\n")
+	assert injected_marker not in body
+	assert "[security marker removed]" in body
 	assert "Refs #192" in body
 	assert any(
 		"1 finding(s) on pre-existing code were routed as non-blocking `ai:security` follow-ups: #900 (0 still queued)." in comment["body"]
@@ -4652,6 +4656,32 @@ def test_security_pass_advisory_backlog_files_oldest_first_with_one_tick_cap() -
 		"1 finding(s) on pre-existing code were routed as non-blocking `ai:security` follow-ups: #900 (1 still queued)." in comment["body"]
 		for comment in result["issues"]["192"]["comments"]
 	)
+
+
+def test_security_pass_legacy_keyless_advisory_backlog_is_migrated_and_filed() -> None:
+	legacy_row = _security_pass_test_finding()
+	legacy_row.pop("waiver_match_key")
+	legacy_row["audited_head_sha"] = "a" * 40
+	state = _passed_security_state_for_rebind()
+	state["security_pass_advisory_backlog"] = [legacy_row]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "1"},
+	)
+
+	assert len(result["created_issues"]) == 1
+	assert result["latest_state"]["security_pass_advisory_backlog"] == []
+	assert re.search(
+		r"<!-- security-pass-advisory-key:192:sha256:[0-9a-f]{64} -->",
+		result["issues"]["900"]["body"],
+	)
+	assert "Migrated legacy keyless advisory SEC-TEST-1" in result["stdout"] + result["stderr"]
 
 
 def test_security_pass_advisory_backlog_drains_while_fix_issue_is_in_progress() -> None:
