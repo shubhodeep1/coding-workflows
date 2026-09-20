@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_session_start_extract_repo_slug.py:the probe_cases iteration loop in main() that calls `run_verify_token_probe(HOOK, **probe_arguments)` | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The six `verify_token` probe cases exercise only `HOOK`, so `TEMPLATE_HOOK`'s equivalent `verify_token` body is not directly covered.\n  WHY: A regression in the template hook could be propagated to consumer repositories despite the root hook tests passing; the reviewer notes the existing byte-parity assertion as related coverage.\n- tests/test_session_start_extract_repo_slug.py:probe_cases list, where the catch-all `*)` branch in `case \"${anon_probe_status}\" in` is exercised only by the synthetic \"000\" timeout and \"unavailable\" no-curl entries | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: No probe case exercises a realistic non-200/non-401 HTTP response such as 5xx, 429, or 302 through the catch-all branch.\n  WHY: A future change to the catch-all handling or its inconclusive diagnostic could regress behavior for real transient GitHub or proxy failures without test coverage; no current runtime defect is reported.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_session_start_extract_repo_slug.py:the probe_cases iteration loop in main() that calls `run_verify_token_probe(HOOK, **probe_arguments)`\n  PROBLEM: The six `verify_token` probe cases iterate only against `HOOK`; `TEMPLATE_HOOK`'s `verify_token` body is never exercised.\n  WHY: A regression introduced into `workflow-templates/.claude/hooks/session-start.sh` could still pass the test suite on `HOOK` and be silently propagated to consumer repositories.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- tests/test_session_start_extract_repo_slug.py:probe_cases list, where the catch-all `*)` branch in `case \"${anon_probe_status}\" in` is exercised only by the synthetic \"000\" timeout and \"unavailable\" no-curl entries\n  PROBLEM: The catch-all branch is not exercised by a realistic HTTP error response that is not 200 or 401, such as a 5xx server error, a 429 rate-limit response, or a 302 redirect.\n  WHY: A future tightening of the case statement or change to the inconclusive wording could silently regress user-visible behavior on real transient GitHub or proxy failures; there is no current runtime defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "1a8e08bc0687eb41c36fa0eb752638c3121e1358c10de9ac0348b3f30e343011",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4172,
+    "run_id": "35497953289",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35497953289",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260920085006_0380c2ebdb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4172,
+    "run_id": "35497953289"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-20T08:50:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
