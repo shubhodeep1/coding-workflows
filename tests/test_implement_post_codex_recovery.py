@@ -1660,6 +1660,7 @@ def test_commit_helper_fails_closed_when_staged_support_rebase_conflicts() -> No
 		output_text = github_output.read_text(encoding="utf-8")
 		assert "staged_support_rebase_conflict=true" in output_text
 		assert "staged_support_rebase_conflict_files=scripts/helper.sh" in output_text
+		assert "staged_support_auto_release_safe=true" in output_text
 		assert "did_commit=" not in output_text
 		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
 		assert _git_out(["git", "diff", "--cached", "--name-only"], cwd=repo_dir).strip() == ""
@@ -1975,6 +1976,7 @@ def test_commit_helper_fails_closed_when_staged_support_base_is_missing() -> Non
 		output_text = github_output.read_text(encoding="utf-8")
 		assert "staged_support_rebase_conflict=true" in output_text
 		assert "staged_support_rebase_conflict_files=scripts/helper.sh" in output_text
+		assert "staged_support_auto_release_safe=" not in output_text
 		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
 
 
@@ -2196,6 +2198,7 @@ def _run_guard_handler_case(
 	destructive_reason: str = "",
 	scope_reason: str = "",
 	staged_support_reason: str = "",
+	staged_support_auto_release_safe: bool = False,
 	mock_issue_edit_failure: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
 	repo_dir = tmp_path / "repo"
@@ -2245,6 +2248,7 @@ def _run_guard_handler_case(
 			"SVB_ALLOWLIST": "scripts/**/*.sh",
 			"SSB_REASON": staged_support_reason,
 			"SSB_FILES": "scripts/helper.sh",
+			"SSB_AUTO_RELEASE_SAFE": "true" if staged_support_auto_release_safe else "",
 			"MOCK_GH_ISSUE_EDIT_FAILURE": "true" if mock_issue_edit_failure else "false",
 		},
 		cwd=repo_dir,
@@ -2314,7 +2318,20 @@ def test_staged_support_guard_reports_failed_human_latch() -> None:
 		assert "FAILED to latch ai:needs-human" in proc.stdout + proc.stderr
 		assert gh_state["issue_labels"] == ["ai:implementing"]
 		assert "did not find `ai:needs-human`" in gh_state["issue_comments"][0]["body"]
+		assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" not in gh_state["issue_comments"][0]["body"]
 		assert "FAILED to confirm ai:needs-human latch" in " ".join(curl_calls[0])
+
+
+def test_staged_support_guard_marks_only_auto_release_safe_conflicts() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_staged_release_safe_") as td:
+		proc, gh_state, _curl_calls = _run_guard_handler_case(
+			Path(td),
+			repository="shubhodeep1/coding-workflows",
+			staged_support_reason="true",
+			staged_support_auto_release_safe=True,
+		)
+		assert proc.returncode != 0
+		assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" in gh_state["issue_comments"][0]["body"]
 
 
 def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
@@ -2344,8 +2361,10 @@ def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
 		"SVB_ALLOWLIST",
 		"SSB_REASON",
 		"SSB_FILES",
+		"SSB_AUTO_RELEASE_SAFE",
 	):
 		assert f"{env_name}:" in guard_block
+	assert "SSB_AUTO_RELEASE_SAFE: ${{ steps.commit_changes.outputs.staged_support_auto_release_safe }}" in guard_block
 
 
 def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow() -> None:

@@ -270,6 +270,31 @@ a new value, add it to the appropriate overrides file with a
 - Staged-support failures are consumed by the runtime-preserved rejection handler,
   which attempts and verifies the `ai:needs-human` latch, comments with the affected paths and
   latch status, sends the configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.
+  Genuine three-way rebase conflicts add
+  `<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->`; missing ledgers,
+  baselines, unsafe paths, and merge-tool failures remain human-gated without that marker.
+  The source-repository poller's `release_staged_support_needs_human_latches` sweep (gated by
+  `STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED`, default `true`) runs in sweep-only mode when no
+  tracking project is active and matches that marker or the exact pre-marker #4113 incident
+  from run `35072286584`, only on comments from an `OWNER`, `MEMBER`, `COLLABORATOR`, or installed
+  `[bot]`, and once the running engine carries
+  `scripts/implement_staged_support_workspace.sh` it restores `ai:awaiting-approval` and posts
+  `/approved` with a `<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict
+  engine=<sha> -->` marker, at most once per issue per engine commit (log keys
+  `STAGED_SUPPORT_LATCH_RELEASED`, `STAGED_SUPPORT_LATCH_SKIP`,
+  `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`). The latest `ai:needs-human` label event must strictly
+  precede the staged-support comment and have the same actor; same-second timestamps fail closed,
+  so clearing that latch and later setting another human gate cannot reuse the stale marker.
+  Immediately before changing labels, the sweep re-reads the paginated live labels and latest
+  latch event; a changed or unreadable latch, or a residual `ai:implementing` label, skips release
+  for that tick. A failed `/approved` response triggers a paginated history check; a trusted
+  release marker confirms an accepted write, while a confirmed failure restores
+  `ai:needs-human`. If that compensation also fails, the unresolved latch marker blocks
+  managed and standalone auto-approval and raises a CRITICAL alert. Those recovery guards use
+  the batched comment cache only when it explicitly reports an available array with fewer than
+  100 entries; a missing/partial field or a full window triggers a paginated history read, and
+  unavailable or malformed history fails closed for that tick.
+  Consumer repositories and other latch reasons stay human-cleared.
 - The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,
   `check_failure_triage.yml`) either never commit from that checkout or run on
@@ -588,6 +613,22 @@ and cycles 2 and 3 were never told to audit as new code.
 Persistent findings after `MAX_SECURITY_PASS_CYCLES` (default `5`)
 terminalize as `ai:security-pass-failed`; `/re-security-pass` resets the
 bounded loop and the next audit covers the full range again.
+The terminal state is engine-aware: every terminal path
+(`security_pass_terminal_failure`, `security_pass_closed_fix_failure`,
+`security_pass_fix_reissue_exhausted`) records the engine commit that ran the
+tick in `security_pass_failed_engine_sha` (`ORCHESTRATOR_ENGINE_SHA`, resolved
+once at startup by `resolve_orchestrator_engine_sha` from `ORCHESTRATE_ENGINE_SHA`
+or the `.codex-workflow-src` HEAD; empty when unresolvable). With
+`SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE` (default `true`), a tick whose
+engine differs from that record, with no `/re-security-pass` comment claiming
+the tick, performs the same reset once per engine commit
+(`security_pass_auto_reset_engine_shas`, last 20 kept, both fields normalized by
+`ensure_security_pass_state_fields`), logs `SECURITY_PASS_AUTO_RESET` or
+`SECURITY_PASS_AUTO_RESET_SKIPPED ... reason=engine_unresolved|same_engine|already_reset_on_engine`,
+and posts a `<!-- security-pass-auto-reset:<sha> -->` tracking comment. A
+legacy state without the record counts as a different engine, so projects
+parked by older engines (binance-blessings#249) re-run on their first tick
+after a sync; the same engine failing a project again never re-fires.
 The budget bounds *persistent* findings, so a recorded clean pass breaks the
 chain: when the integration head advances past a `passed` SHA (a
 `chore: sync <default> into <integration>` merge, a resolver/judge conflict
@@ -627,7 +668,22 @@ looks for the live successor by the durable `- Tracking issue: #<N>` and
 ``- Local ID: `security-pass-fix-cycle-<K>` `` body markers that survive
 re-issue, adopts it into `security_pass_active_fix_issues`, and logs
 `SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`. Both markers must match, so
-another project or another cycle is never adopted. An inconclusive lookup
+another project or another cycle is never adopted. The review-blocked judge's
+`close_and_reissue` replacement carries those markers as well:
+`scripts/review_rb_judge.sh` copies the parent's `**Orchestrator metadata**`
+lines (tracking issue, integration branch, local ID, priority, managed-by) only
+when its tracking and branch lines agree with the GitHub-reported
+`orchestrator/project-<n>` PR base. Missing, malformed, or inconsistent metadata
+falls back to base-derived tracking and branch lines without an unverified local
+ID. The validated block is placed ahead of the review-blocked footer
+(`REISSUE_ORCHESTRATOR_METADATA_CARRIED` / `_ABSENT`), and its spot-fix
+`files_touched` allowlist unions the judge's cited files with the closed PR's
+changed files that still exist at its head (`REISSUE_FILES_TOUCHED_UNION`,
+fail-open on a failed `pulls/<n>/files` listing).
+Before that block is appended, canonical tracking-issue, integration-branch,
+and local-ID lines are removed from the judge-generated issue prose, so only
+the PR-base-validated block can supply successor-adoption lineage. Incident:
+binance-blessings#249 / #294, 2026-09-19. An inconclusive lookup
 (API or parse failure) retains `security-pass-fixing` for retry rather than
 reading a transient read failure as evidence of a failed fix.
 Setting `ENABLE_SECURITY_PASS=false` remains the immediate operator kill switch.
@@ -820,6 +876,9 @@ and shipped:
 - `REISSUE_BASELINE_PRESERVED`
 - `REISSUE_BASELINE_DISCARDED`
 - `REISSUE_MODE`
+- `REISSUE_FILES_TOUCHED_UNION`
+- `REISSUE_ORCHESTRATOR_METADATA_CARRIED`
+- `REISSUE_ORCHESTRATOR_METADATA_ABSENT`
 - `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1`
 - `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1`
 - `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1`
@@ -905,6 +964,12 @@ and shipped:
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED`
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED`
 - `SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED`
+- `SECURITY_PASS_AUTO_RESET`
+- `SECURITY_PASS_AUTO_RESET_SKIPPED`
+- `STAGED_SUPPORT_LATCH_RELEASED`
+- `STAGED_SUPPORT_LATCH_SKIP`
+- `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`
+- `ORCHESTRATOR_ENGINE_SHA`
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED`
 - `SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED`
 
@@ -983,6 +1048,9 @@ LOG_PREFIX.name=BEHAVIOURAL_SMOKE_PRESENT_PASSED
 LOG_PREFIX.name=REISSUE_BASELINE_PRESERVED
 LOG_PREFIX.name=REISSUE_BASELINE_DISCARDED
 LOG_PREFIX.name=REISSUE_MODE
+LOG_PREFIX.name=REISSUE_FILES_TOUCHED_UNION
+LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_CARRIED
+LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_ABSENT
 LOG_PREFIX.name=FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1
 LOG_PREFIX.name=FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1
 LOG_PREFIX.name=FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1
@@ -1068,6 +1136,12 @@ LOG_PREFIX.name=SECURITY_PASS_WAIVED_SUPPRESSED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED
+LOG_PREFIX.name=SECURITY_PASS_AUTO_RESET
+LOG_PREFIX.name=SECURITY_PASS_AUTO_RESET_SKIPPED
+LOG_PREFIX.name=STAGED_SUPPORT_LATCH_RELEASED
+LOG_PREFIX.name=STAGED_SUPPORT_LATCH_SKIP
+LOG_PREFIX.name=STAGED_SUPPORT_LATCH_RELEASE_SKIPPED
+LOG_PREFIX.name=ORCHESTRATOR_ENGINE_SHA
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED
 LOG_PREFIX.name=SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED
 LOG_PREFIX.name=SEMBLE_QUERY
