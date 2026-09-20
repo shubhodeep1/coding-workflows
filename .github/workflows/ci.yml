@@ -321,6 +321,7 @@ jobs:
           python3 -m py_compile scripts/workflow_retro.py
           python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
+          python3 -m py_compile scripts/workflow_failure_heal.py
           # Phase 4b smoke-test fixture (only run from
           # test-and-mark-stable.yml). py_compile catches syntax-level
           # breakage (parse errors, indentation) early in CI; it does
@@ -438,6 +439,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+
+      - name: Workflow failure heal contract and driver tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py
 
       - name: Plan-archival completeness lint unit tests
         # P6 from docs/postmortems/2026-05-18-project-2734-stall.md.

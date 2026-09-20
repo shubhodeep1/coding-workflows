@@ -1,0 +1,159 @@
+---
+name: Workflow Failure Heal Intake
+
+# Receives workflow-failure reports and turns them into heal issues for the AI
+# pipeline. Three entry points:
+#
+#   1. `repository_dispatch` (event type `workflow-failure-heal`), sent by
+#      scripts/workflow_failure_heal_report.sh from a consumer repository (or
+#      from this repo's own `internal-workflow-failure-heal.yml`) when a
+#      human-needed escalation label lands on an issue / pull request.
+#   2. `workflow_run: completed` for the release and promotion workflows of
+#      this repository; only `failure` / `timed_out` conclusions proceed.
+#   3. `workflow_dispatch` with a raw payload JSON, for manual re-runs.
+#
+# scripts/workflow_failure_heal_intake.sh fetches the failed job logs, runs the
+# diagnosis model (prompts/mode-workflow-failure-heal.txt), de-duplicates by
+# fingerprint, applies the lineage / budget caps, and opens the heal issue
+# (label `ai:workflow-heal`, `Target branch: stable` so the fix ships as a
+# hotfix on the stable line). See README "Workflow Failure Heal".
+
+"on":
+  repository_dispatch:
+    types:
+      - workflow-failure-heal
+  workflow_run:
+    workflows:
+      - "Test & Mark Stable Release"
+      - "Mark Stable Release"
+      - "Promote main to stable"
+      - "Auto release stable"
+      - "Forward-merge stable to main"
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      payload_json:
+        description: "Raw workflow_failure_heal.v1 payload JSON (manual re-run / testing)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+# Serialise every intake so the fingerprint dedup and the open-issue / per-day
+# budgets are evaluated against a consistent issue list.
+concurrency:
+  group: workflow-failure-heal-intake
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+
+jobs:
+  intake:
+    if: >-
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
+      (github.event_name != 'workflow_run' ||
+       contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      MODEL_EDITOR: ${{ vars.WORKFLOW_HEAL_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_WORKFLOW_HEAL || 'xhigh' }}
+      MODEL_VERBOSITY: ${{ vars.VERBOSITY_WORKFLOW_HEAL || 'low' }}
+      OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_MAX_LINEAGE_DEPTH: ${{ vars.WORKFLOW_HEAL_MAX_LINEAGE_DEPTH || '3' }}
+      WORKFLOW_HEAL_MAX_OPEN_ISSUES: ${{ vars.WORKFLOW_HEAL_MAX_OPEN_ISSUES || '10' }}
+      WORKFLOW_HEAL_MAX_ISSUES_PER_DAY: ${{ vars.WORKFLOW_HEAL_MAX_ISSUES_PER_DAY || '20' }}
+      WORKFLOW_HEAL_TARGET_BRANCH: ${{ vars.WORKFLOW_HEAL_TARGET_BRANCH || 'stable' }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Create runtime workspace
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/workflow-heal-intake-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
+          echo "WORKFLOW_HEAL_PAYLOAD_FILE=${RUNTIME_DIR}/payload_raw.json" >> "$GITHUB_ENV"
+
+      - name: Materialize the report payload
+        id: payload
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # TRUST BOUNDARY: all three sources are external to this run. They are
+          # bound as env (never interpolated into the script) and re-validated
+          # by scripts/workflow_failure_heal.py before any field is used.
+          CLIENT_PAYLOAD_JSON: ${{ toJson(github.event.client_payload) }}
+          WORKFLOW_RUN_JSON: ${{ toJson(github.event.workflow_run) }}
+          DISPATCH_PAYLOAD_JSON: ${{ inputs.payload_json }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          case "${EVENT_NAME}" in
+            repository_dispatch)
+              printf '%s' "${CLIENT_PAYLOAD_JSON}" > "${WORKFLOW_HEAL_PAYLOAD_FILE}"
+              ;;
+            workflow_run)
+              printf '%s' "${WORKFLOW_RUN_JSON}" > "${RUNTIME_DIR}/workflow_run.json"
+              python3 scripts/workflow_failure_heal.py build-run-payload \
+                --repo "${GITHUB_REPOSITORY}" \
+                --workflow-run-json "${RUNTIME_DIR}/workflow_run.json" \
+                > "${WORKFLOW_HEAL_PAYLOAD_FILE}"
+              ;;
+            workflow_dispatch)
+              printf '%s' "${DISPATCH_PAYLOAD_JSON}" > "${WORKFLOW_HEAL_PAYLOAD_FILE}"
+              ;;
+            *)
+              echo "::error::Unsupported event ${EVENT_NAME}"
+              exit 1
+              ;;
+          esac
+          if ! jq -e 'type == "object"' "${WORKFLOW_HEAL_PAYLOAD_FILE}" >/dev/null 2>&1; then
+            echo "::error::Payload is not a JSON object"
+            exit 1
+          fi
+          echo "source_repo=$(jq -r '.source_repo // ""' "${WORKFLOW_HEAL_PAYLOAD_FILE}" | tr -cd 'A-Za-z0-9_./-' | head -c 120)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Codex CLI
+        uses: ./.github/actions/install-codex
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Create Codex config
+        run: |
+          set -euo pipefail
+          source scripts/codex_helpers.sh
+          codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
+
+      - name: Run workflow failure heal intake
+        run: |
+          set -euo pipefail
+          bash scripts/workflow_failure_heal_intake.sh
+
+      - name: Notify on intake workflow failure
+        if: ${{ failure() }}
+        env:
+          SOURCE_REPO: ${{ steps.payload.outputs.source_repo }}
+        run: |
+          set -euo pipefail
+          source scripts/tg_helpers.sh 2>/dev/null || true
+          type tg_send_msg >/dev/null 2>&1 || exit 0
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          notification="Workflow Failure Heal Intake workflow itself failed (report from '${SOURCE_REPO:-unknown}')."
+          tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true

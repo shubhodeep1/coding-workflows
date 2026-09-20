@@ -1,0 +1,178 @@
+---
+name: AI Workflow Failure Heal (Reusable)
+
+# Reports a human-needed escalation (ai:needs-human and the terminal latch
+# labels) to coding-workflows so its intake workflow can diagnose the failure
+# and open a heal issue for the AI pipeline. Consumers call this through the
+# `ai-workflow-failure-heal.yml` wrapper on `issues: labeled` /
+# `pull_request: labeled`; coding-workflows itself calls it through
+# `internal-workflow-failure-heal.yml`. See README "Workflow Failure Heal".
+#
+# The reporter never diagnoses and never opens issues: it links the failed
+# runs, records the release pin the wrappers use, and sends one
+# `repository_dispatch` (event type `workflow-failure-heal`) upstream.
+
+"on":
+  workflow_call:
+    inputs:
+      issue_number:
+        description: "Escalated issue or pull request number"
+        required: false
+        type: string
+        default: ""
+      label:
+        description: "Escalation label that was applied"
+        required: false
+        type: string
+        default: ""
+      is_pull_request:
+        description: "true when the labeled object is a pull request"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      GH_PAT:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+
+jobs:
+  report:
+    # Cost gate: enabled by default; a repo opts OUT via WORKFLOW_HEAL_ENABLED=false.
+    # Only the human-needed escalation labels proceed (the wrapper filters the
+    # same set; this predicate is the defense-in-depth copy — keep both in sync
+    # with HUMAN_NEEDED_LABELS in scripts/workflow_failure_heal.py).
+    if: >-
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
+      inputs.issue_number != '' &&
+      contains(fromJson('["ai:needs-human","ai:check-triage-escalated","ai:destructive-blocked","ai:scope-blocked","ai:harness-broken","ai:resolver-escalated","ai:security-pass-failed"]'), inputs.label)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      # One in-flight report per repo + issue; a second label event on the same
+      # issue queues and then no-ops via the intake's fingerprint dedup.
+      group: ai-workflow-heal-report-${{ github.repository }}-${{ inputs.issue_number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_ISSUE_NUMBER: ${{ inputs.issue_number }}
+      WORKFLOW_HEAL_LABEL: ${{ inputs.label }}
+      WORKFLOW_HEAL_IS_PULL_REQUEST: ${{ inputs.is_pull_request }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          if ! [[ "${WORKFLOW_HEAL_ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid issue number"
+            exit 1
+          fi
+          case "${WORKFLOW_HEAL_LABEL}" in
+            ai:needs-human|ai:check-triage-escalated|ai:destructive-blocked|ai:scope-blocked|ai:harness-broken|ai:resolver-escalated|ai:security-pass-failed) ;;
+            *)
+              echo "::error::Unsupported escalation label"
+              exit 1
+              ;;
+          esac
+          printf 'Workflow failure heal report for %s #%s (label %s, pull_request=%s)\n' \
+            "${GITHUB_REPOSITORY}" "${WORKFLOW_HEAL_ISSUE_NUMBER}" "${WORKFLOW_HEAL_LABEL}" "${WORKFLOW_HEAL_IS_PULL_REQUEST}"
+
+      - name: Checkout repository (wrapper pins)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Resolve workflow support ref
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        id: checkout_support_source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Checkout workflow support source fallback
+        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Stage workflow support files
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ ! -d .codex-workflow-src ]; then
+            echo "::error::Failed to checkout workflow support source"
+            exit 1
+          fi
+          mkdir -p scripts
+
+          _fetched=()
+          for f in gh_helpers.sh tg_helpers.sh workflow_failure_heal.py workflow_failure_heal_report.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
+              exit 1
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched+=("${f}")
+          done
+
+          if [ "${{ github.repository }}" != "${wf_source}" ]; then
+            {
+              echo "# Auto-generated by coding-workflows — DO NOT EDIT"
+              echo "# Prevents runtime-fetched support scripts from being committed."
+              printf '%s\n' "${_fetched[@]}" .gitignore
+            } > scripts/.gitignore
+          fi
+
+          rm -rf .codex-workflow-src
+
+      - name: Create runtime workspace
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/workflow-heal-report-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
+
+      - name: Report the escalation to coding-workflows
+        run: |
+          set -euo pipefail
+          bash scripts/workflow_failure_heal_report.sh
+
+      - name: Notify on report workflow failure
+        if: ${{ failure() }}
+        run: |
+          set -euo pipefail
+          source scripts/tg_helpers.sh 2>/dev/null || true
+          type tg_send_msg >/dev/null 2>&1 || exit 0
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          notification="AI Workflow Failure Heal report workflow itself failed for ${GITHUB_REPOSITORY} #${WORKFLOW_HEAL_ISSUE_NUMBER} (label '${WORKFLOW_HEAL_LABEL}')."
+          tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
