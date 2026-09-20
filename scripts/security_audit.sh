@@ -1511,8 +1511,8 @@ guard_deletion_pattern = re.compile(
 cross_file_guard_deletion_pattern = re.compile(
 	r"(?ix)(?:"
 	r"^\s*@\s*(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*\b"
-	r"|^\s*(?:await\s+)?(?:[A-Za-z_]\w*\.)*(?:auth\w*|authori[sz]\w*|login_required|check_\w+|verify_\w+|require_\w+|enforce_\w+|ensure_\w+|can_\w+|rate_limit\w*)\s*\("
-	r"|^\s*(?:if|elif|while|assert|return|raise)\b[^\n]*\b(?:authori[sz]\w*|permission\w*|privilege\w*|access[_ -]?control|entitlement|is_admin|is_authenticated|login_required|forbidden)\b"
+	r"|^\s*(?:await\s+)?(?:[A-Za-z_]\w*\.)*(?:auth\w*|authori[sz]\w*|login_required|check_\w+|verify_\w+|require_\w+|enforce_\w+|ensure_\w+|has_\w+|can_\w+|rate_limit\w*)\s*\("
+	r"|^\s*(?:if|elif|while|assert|return|raise)\b[^\n]*\b(?:authori[sz]\w*|permission\w*|privilege\w*|access[_ -]?control|entitlement|is_admin|is_authenticated|login_required|forbidden|(?:has|can|may)_\w+)\b"
 	r")"
 )
 access_control_finding_pattern = re.compile(

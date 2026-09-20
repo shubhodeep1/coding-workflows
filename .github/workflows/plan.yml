@@ -1616,8 +1616,8 @@ jobs:
           FILES_SECTION_FILE="${RUNTIME_DIR}/files_section.txt"
           perl -ne '
             BEGIN { $in = 0; $neg = 0 }
-            if (/^\s{0,3}#{1,6}\s*Files\b[^\n]*\bchange\b/i) { $in = 1; $neg = 0; next; }
-            if ($in && /^\s{0,3}#{1,6}\s+\S/) { $in = 0; $neg = 0; }
+            if (/^\s{0,3}(?:#{1,6}\s*|\d+[.)]\s+)Files\b[^\n]*\bchange\b[.:]?\s*$/i) { $in = 1; $neg = 0; next; }
+            if ($in && (m{^\s{0,3}#{1,6}\s+\S} || /^\s{0,3}\d+[.)]\s+[^`]+[.:]\s*$/)) { $in = 0; $neg = 0; }
             next unless $in;
             if (/^\s*(?:\*\*|__)?\s*(?:no|not|none|nothing|unchanged)\b/i
                 && /(?:chang|modif|edit|touch|affect|updat)/i) { $neg = 1; next; }

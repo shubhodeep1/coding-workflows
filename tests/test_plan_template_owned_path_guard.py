@@ -130,7 +130,7 @@ def _run_guard(
 
 
 def _plan_listing(path: str) -> str:
-	return f"## Files likely to change\n- `{path}`\n\n## Current behavior\nUnchanged.\n"
+	return f"1. Files likely to change.\n- `{path}`\n\n2. Current behavior.\nUnchanged.\n"
 
 
 def _generated_advisory_body(path: str = "src/security.py") -> str:
@@ -156,7 +156,7 @@ def test_generated_security_advisory_plan_is_exactly_scoped() -> None:
 
 
 def test_generated_security_advisory_rejects_extra_plan_path_or_untrusted_author() -> None:
-	plan_text = "## Files likely to change\n- `src/security.py`\n- `README.md`\n"
+	plan_text = "1. Files likely to change.\n- `src/security.py`\n- `README.md`\n\n2. Current behavior.\n"
 	returncode, output = _run_guard(
 		plan_text,
 		FETCHED_HELPERS,

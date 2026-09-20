@@ -12,6 +12,8 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
@@ -1284,7 +1286,13 @@ def test_security_audit_deleted_guard_keeps_unchanged_sink_blocking() -> None:
 	assert payload["advisory_findings"] == []
 
 
-def test_security_audit_cross_file_deleted_guard_keeps_sink_blocking() -> None:
+@pytest.mark.parametrize(
+	"deleted_guard_line",
+	("@tenant_gate", "if has_access(user):", "if user.can_view:"),
+)
+def test_security_audit_cross_file_deleted_guard_keeps_sink_blocking(
+	deleted_guard_line: str,
+) -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-cross-file-guard-") as fixture_td:
 		tmp_path = Path(fixture_td)
 		repo_dir = tmp_path / "repo"
@@ -1306,10 +1314,11 @@ def test_security_audit_cross_file_deleted_guard_keeps_sink_blocking() -> None:
 			).stdout.strip()
 
 		fixture_git("init", "-q")
-		(repo_dir / "auth.py").write_text(
-			"@tenant_gate\ndef enforce_access(user):\n\treturn True\n",
-			encoding="utf-8",
-		)
+		if deleted_guard_line.startswith("@"):
+			guarded_auth_source = f"{deleted_guard_line}\ndef enforce_access(user):\n\treturn True\n"
+		else:
+			guarded_auth_source = f"def enforce_access(user):\n\t{deleted_guard_line}\n\t\treturn True\n\treturn False\n"
+		(repo_dir / "auth.py").write_text(guarded_auth_source, encoding="utf-8")
 		views_lines = ["def privileged_action(user):", "\treturn mutate_money_state()"]
 		views_lines.extend(f"FILLER_{line_number} = {line_number}" for line_number in range(3, 21))
 		(repo_dir / "views.py").write_text("\n".join(views_lines) + "\n", encoding="utf-8")
