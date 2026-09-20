@@ -20,7 +20,9 @@ flowchart LR
   ready --> merged["ai:merged"]
 
   security_entry["judge complete"] --> security_pass["ai:security-pass"]
-  security_pass -->|clean current-head audit| validating["ai:validating"]
+  security_pass -->|clean current-head audit or clean sync rebind| validating["ai:validating"]
+  security_pass -->|pre-existing-code findings only| advisory_followups["non-blocking ai:security follow-ups"]
+  advisory_followups --> validating
   security_pass -->|findings| security_pass_fixing["ai:security-pass-fixing"]
   security_pass_fixing -->|fix issue merged, re-audit| security_pass
   security_pass -->|budget exhausted, judge accepts all| validating
@@ -53,6 +55,10 @@ Happy path
 
 Security-pass gate (default on, before validation or finalization)
   judge complete -> ai:security-pass -> clean -> ai:validating
+  ai:security-pass -> clean default-branch sync merge -> rebind pass to new head
+    without another model run
+  ai:security-pass -> findings only on code older than the project merge-base
+    -> bounded non-blocking ai:security follow-ups -> ai:validating
   judge complete -> ai:security-pass -> findings -> ai:security-pass-fixing
     -> fix issue merged -> ai:security-pass (delta re-audit: files changed since
        the last audited commit + files of prior findings + the previous fix

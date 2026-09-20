@@ -91,6 +91,9 @@ declare -gA _ENSURED_LABELS_CACHE=()
 # Marker-search results are cached per tracking issue so accepted findings pay
 # at most one reconciliation lookup per poller process, not one per finding.
 declare -gA _SECURITY_PASS_ADVISORY_SEARCH_CACHE=()
+# Successful creates remain visible within this process even if state persistence
+# fails; callers still require durable state before draining the backlog.
+declare -gA _SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE=()
 
 # _gh_url constructs a full GitHub URL for the current repository.
 _gh_url() {
@@ -1335,6 +1338,29 @@ if ! [[ "${SECURITY_PASS_CONFIDENCE_GATE}" =~ ^[0-9]+$ ]] \
   || [ "${SECURITY_PASS_CONFIDENCE_GATE}" -gt 10 ]; then
   echo "::warning::SECURITY_PASS_CONFIDENCE_GATE must be an integer from 1 to 10; defaulting to 8"
   SECURITY_PASS_CONFIDENCE_GATE="8"
+fi
+
+SECURITY_PASS_LINE_OWNERSHIP="${SECURITY_PASS_LINE_OWNERSHIP:-project-lines}"
+case "${SECURITY_PASS_LINE_OWNERSHIP}" in
+  project-lines|file)
+    ;;
+  *)
+    echo "::warning::SECURITY_PASS_LINE_OWNERSHIP must be project-lines or file; defaulting to project-lines"
+    SECURITY_PASS_LINE_OWNERSHIP="project-lines"
+    ;;
+esac
+
+SECURITY_PASS_OWNERSHIP_CONTEXT_LINES="${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES:-3}"
+if ! [[ "${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" =~ ^[0-9]+$ ]] \
+  || [ "${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" -gt 50 ]; then
+  echo "::warning::SECURITY_PASS_OWNERSHIP_CONTEXT_LINES must be an integer from 0 to 50; defaulting to 3"
+  SECURITY_PASS_OWNERSHIP_CONTEXT_LINES="3"
+fi
+
+SECURITY_PASS_ADVISORY_FOLLOWUP_CAP="${SECURITY_PASS_ADVISORY_FOLLOWUP_CAP:-5}"
+if ! [[ "${SECURITY_PASS_ADVISORY_FOLLOWUP_CAP}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::SECURITY_PASS_ADVISORY_FOLLOWUP_CAP must be a non-negative integer; defaulting to 5"
+  SECURITY_PASS_ADVISORY_FOLLOWUP_CAP="5"
 fi
 
 # Cap on how many times a security-pass fix issue that ended in
@@ -4650,6 +4676,28 @@ ensure_security_pass_state_fields() {
         | .[-100:]
       else [] end
     )
+    | .security_pass_advisory_backlog = (
+      if (.security_pass_advisory_backlog | type) == "array" then
+        .security_pass_advisory_backlog
+        | map(select(
+          type == "object"
+          and (.finding_id | type) == "string" and (.finding_id | length) > 0
+          and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
+          and (.severity | IN("critical", "high", "medium", "low"))
+          and (.confidence | type) == "number" and (.confidence | floor) == .confidence and .confidence >= 1 and .confidence <= 10
+          and (.file | type) == "string"
+          and ((.file | gsub("^\\./"; "")) | length > 0)
+          and ((.file | gsub("^\\./"; "")) != ".")
+          and ((.file | startswith("/")) | not)
+          and ((.file | split("/") | index("..")) == null)
+          and (.line | type) == "number" and (.line | floor) == .line and .line > 0
+          and (.exploit_scenario | type) == "string" and (.exploit_scenario | length) > 0
+          and (.recommendation | type) == "string" and (.recommendation | length) > 0
+          and (.audited_head_sha | type) == "string" and (.audited_head_sha | test("^[0-9a-fA-F]{7,40}$"))
+        ))
+        | .[-100:]
+      else [] end
+    )
     | .security_pass_followup_issues = (
       if (.security_pass_followup_issues | type) == "array" then
         .security_pass_followup_issues
@@ -4706,6 +4754,62 @@ security_pass_current_head_is_valid() {
     .security_pass_status == "passed"
     and .security_pass_head_sha == $head_sha
   ' "${STATE_FILE}" >/dev/null 2>&1
+}
+
+# security_pass_rebind_if_no_new_project_lines <head_sha> <merge_base_sha>
+#
+# A clean pass is still valid after a default->integration sync merge when the
+# only commits outside the old audited/default histories are merge commits with
+# no combined diff.  Parent counts and combined diffs are derived from local git
+# objects; any missing object, empty range, non-merge commit, conflict-resolution
+# hunk, or git error fails closed to the ordinary model re-audit.
+security_pass_rebind_if_no_new_project_lines() {
+  local head_sha="$1"
+  local merge_base_sha="$2"
+  local last_audited_sha commits_file commit_line commit_sha parents_line combined_diff_file
+
+  last_audited_sha="$(jq -r '.security_pass_last_audited_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  [ -n "${last_audited_sha}" ] || return 1
+  git cat-file -e "${last_audited_sha}^{commit}" 2>/dev/null || return 1
+  git cat-file -e "${head_sha}^{commit}" 2>/dev/null || return 1
+  git cat-file -e "${merge_base_sha}^{commit}" 2>/dev/null || return 1
+  git merge-base --is-ancestor "${last_audited_sha}" "${head_sha}" 2>/dev/null || return 1
+
+  commits_file="${RUNTIME_DIR}/security_pass_rebind_commits_${TRACKING_NUM}.txt"
+  combined_diff_file="${RUNTIME_DIR}/security_pass_rebind_diff_${TRACKING_NUM}.txt"
+  if ! git rev-list "${head_sha}" "^${last_audited_sha}" "^${merge_base_sha}" > "${commits_file}" 2>/dev/null; then
+    return 1
+  fi
+  [ -s "${commits_file}" ] || return 1
+
+  while IFS= read -r commit_line; do
+    [ -n "${commit_line}" ] || return 1
+    commit_sha="${commit_line%% *}"
+    parents_line="$(git rev-list --parents -n 1 "${commit_sha}" 2>/dev/null)" || return 1
+    # A merge has at least two parents; --cc covers ordinary and octopus merges.
+    if [ "$(printf '%s\n' "${parents_line}" | awk '{print NF}')" -lt 3 ]; then
+      return 1
+    fi
+    if ! git show --format= --cc --no-ext-diff --no-textconv "${commit_sha}" > "${combined_diff_file}" 2>/dev/null; then
+      return 1
+    fi
+    [ ! -s "${combined_diff_file}" ] || return 1
+  done < "${commits_file}"
+
+  if ! jq --arg head_sha "${head_sha}" '
+    .status = (if .status == "security-pass" then "in_progress" else .status end)
+    | .security_pass_status = "passed"
+    | .security_pass_head_sha = $head_sha
+    | .security_pass_last_audited_sha = $head_sha
+    | .security_pass_active_fix_issues = []
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    rm -f "${STATE_FILE}.tmp"
+    return 1
+  fi
+  reconcile_tracking_body_after_security_pass_transition
+  post_state_comment || true
+  echo "SECURITY_PASS_REBOUND tracking_issue=${TRACKING_NUM} from=${last_audited_sha} to=${head_sha} reason=no_new_project_lines"
+  return 0
 }
 
 # reconcile_tracking_body_after_security_pass_transition
@@ -5445,7 +5549,7 @@ PY
   fi
   post_tracking_comment "## 🔒 Project security pass blocked
 
-The security pass found blocking issues and ${security_pass_fix_action} #${issue_number} for cycle $((completed_cycles + 1))/${MAX_SECURITY_PASS_CYCLES}. Completion will resume only after its PR merges and a clean re-audit passes."
+The security pass found blocking issues and ${security_pass_fix_action} #${issue_number} for cycle $((completed_cycles + 1))/${MAX_SECURITY_PASS_CYCLES}. Completion will resume only after its PR merges and a clean re-audit passes.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
   COMPLETION_STATUS_STATE_CHANGED="false"
   update_completion_status_comment "waiting" \
     "## Completion status"$'\n\n'"**State:** \`security-pass-fixing\`"$'\n\n'"Security-pass fix issue #${issue_number} is in the normal delivery pipeline. Completion remains gated until it merges and a clean current-head re-audit passes." \
@@ -5591,12 +5695,15 @@ PY
 # bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
 # severity, justification, source, waived_by, waived_at_cycle, issue}.
 security_pass_record_waivers() {
-  local waivers_json="$1"
-  if ! jq --argjson waivers "${waivers_json}" '
-    (.security_pass_waived_findings // []) as $existing
-    | ($waivers | map(.finding_id)) as $ids
+  local waivers_json="$1" waivers_file
+  waivers_file="${RUNTIME_DIR}/security_pass_waivers_${TRACKING_NUM}.json"
+  printf '%s\n' "${waivers_json}" > "${waivers_file}"
+  if ! jq --slurpfile waivers "${waivers_file}" '
+    ($waivers[0] // []) as $waiver_rows
+    | (.security_pass_waived_findings // []) as $existing
+    | ($waiver_rows | map(.finding_id)) as $ids
     | .security_pass_waived_findings = (
-        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waivers) | .[-100:]
+        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waiver_rows) | .[-100:]
       )
     | .security_pass_reported_findings = (
         [(.security_pass_reported_findings // [])[] | select((.finding_id | IN($ids[])) | not)]
@@ -5631,10 +5738,16 @@ create_security_pass_advisory_followup() {
   # the body tells the pipeline the cited code is already on the default
   # branch; empty on the legacy judge-time filing path.
   local merged_pr="${6:-}"
-  local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
+  local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json advisory_cache_key
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
   [ -n "${finding_id}" ] || return 0
+  advisory_cache_key="${TRACKING_NUM}:${finding_id}"
+  existing_issue="${_SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]:-}"
+  if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
+    SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
+    return 0
+  fi
   existing_issue="$(jq -r --arg id "${finding_id}" '
     [(.security_pass_followup_issues // [])[] | select(.finding_id == $id) | .issue] | last // empty
   ' "${STATE_FILE}" 2>/dev/null || true)"
@@ -5705,7 +5818,14 @@ lines = [
 	f"<!-- security-pass-advisory:{tracking_issue}:{finding_id} -->",
 	f"Refs #{tracking_issue}",
 	"",
-	f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}` and accepted as a known risk by {accepted_by} after the consolidated fix-cycle budget was spent. The project completes without this fix; address it through the normal issue pipeline.",
+	(
+		f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}`. "
+		"This code predates the project (older than the project's merge-base); the finding was routed as an advisory by line ownership, not accepted by a judge. "
+		"The cited location already exists on the default branch; plan and implement this issue against the default branch. "
+		"The project completes without this fix; address it through the normal issue pipeline."
+		if source == "preexisting"
+		else f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}` and accepted as a known risk by {accepted_by} after the consolidated fix-cycle budget was spent. The project completes without this fix; address it through the normal issue pipeline."
+	),
 	"",
 ]
 if merged_pr.isdigit():
@@ -5758,6 +5878,7 @@ PY
     echo "::warning::Could not create the advisory follow-up issue for security-pass finding ${finding_id} on tracking issue #${TRACKING_NUM}; the waiver stands without a follow-up issue."
     return 0
   fi
+  _SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]="${issue_number}"
   if ! jq --arg id "${finding_id}" --argjson issue "${issue_number}" '
     .security_pass_followup_issues = (((.security_pass_followup_issues // []) + [{finding_id: $id, issue: $issue}]) | .[-100:])
     | .security_pass_waived_findings = [
@@ -5770,6 +5891,67 @@ PY
   fi
   echo "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=${TRACKING_NUM} finding=${finding_id} issue=${issue_number} source=${source}"
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${issue_number}"
+  return 0
+}
+
+# security_pass_file_advisory_findings <integration_branch> <head_sha>
+#
+# File a bounded oldest-first slice of pre-existing-line findings.  The cap is
+# shared across repeated calls for one tracking issue in the same poll process,
+# so completion and merged-state retry paths cannot exceed the per-tick API
+# budget.  Failed creates remain queued; marker/state dedupe in the existing
+# create helper reconciles lost responses.  Returns 0 always.
+security_pass_file_advisory_findings() {
+  local integration_branch="$1"
+  local head_sha="$2"
+  local attempted_this_tick remaining_cap pending_json row_json finding_json finding_id audited_head_sha justification
+  local queued_count routed_count filed_count=0 filed_issues
+
+  attempted_this_tick="${SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK:-0}"
+  [[ "${attempted_this_tick}" =~ ^[0-9]+$ ]] || attempted_this_tick=0
+  remaining_cap=$((SECURITY_PASS_ADVISORY_FOLLOWUP_CAP - attempted_this_tick))
+  if [ "${remaining_cap}" -lt 0 ]; then
+    remaining_cap=0
+  fi
+  pending_json="$(jq -c --argjson cap "${remaining_cap}" '(.security_pass_advisory_backlog // [])[0:$cap]' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+
+  while IFS= read -r row_json; do
+    [ -n "${row_json}" ] || continue
+    SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK=$(( ${SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK:-0} + 1 ))
+    finding_json="$(printf '%s' "${row_json}" | jq -c 'del(.audited_head_sha)')"
+    finding_id="$(printf '%s' "${row_json}" | jq -r '.finding_id')"
+    audited_head_sha="$(printf '%s' "${row_json}" | jq -r '.audited_head_sha // empty')"
+    [ -n "${audited_head_sha}" ] || audited_head_sha="${head_sha}"
+    justification="The cited line predates this project's merge-base and already exists on the default branch; routed as a non-blocking advisory by line ownership."
+    create_security_pass_advisory_followup "${finding_json}" "${integration_branch}" "${audited_head_sha}" "${justification}" "preexisting"
+    if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]] \
+      && jq -e --arg id "${finding_id}" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
+        any((.security_pass_followup_issues // [])[]; .finding_id == $id and .issue == $issue)
+      ' "${STATE_FILE}" >/dev/null 2>&1; then
+      filed_count=$((filed_count + 1))
+      SECURITY_PASS_ADVISORY_FILED_ISSUES="${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}${SECURITY_PASS_ADVISORY_FILED_ISSUES:+, }#${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+      security_pass_mark_followup_merge_checked "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" || \
+        echo "::warning::Could not record pre-existing-code advisory follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER} as merge-checked on tracking issue #${TRACKING_NUM}."
+      if ! jq --arg id "${finding_id}" '
+        .security_pass_advisory_backlog = [(.security_pass_advisory_backlog // [])[] | select(.finding_id != $id)]
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+        rm -f "${STATE_FILE}.tmp"
+        echo "::warning::Could not remove filed pre-existing-code advisory ${finding_id} from the backlog for tracking issue #${TRACKING_NUM}; marker dedupe will reconcile it next tick."
+      fi
+    fi
+  done < <(printf '%s' "${pending_json}" | jq -c '.[]')
+
+  queued_count="$(jq -r '.security_pass_advisory_backlog // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${queued_count}" =~ ^[0-9]+$ ]] || queued_count=0
+  routed_count="${SECURITY_PASS_ADVISORY_ROUTED_COUNT:-0}"
+  [[ "${routed_count}" =~ ^[0-9]+$ ]] || routed_count=0
+  if [ "${routed_count}" -eq 0 ]; then
+    routed_count="${filed_count}"
+  fi
+  filed_issues="${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}"
+  if [ "${routed_count}" -gt 0 ]; then
+    SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX=" ${routed_count} finding(s) on pre-existing code were routed as non-blocking \`ai:security\` follow-ups: ${filed_issues:-none filed this tick} (${queued_count} still queued)."
+  fi
   return 0
 }
 
@@ -6360,7 +6542,7 @@ run_security_pass_inline() {
   local verified_analysis_sha="${4:-}"
   local verified_recheck_refspec="${5:-}"
   local prior_security_status current_integration_ref current_head_sha current_default_ref merge_base_sha
-  local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model
+  local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model security_pass_advisory_backlog_file
   local required_security_asset
 
   prior_security_status="$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
@@ -6393,31 +6575,11 @@ run_security_pass_inline() {
     return 1
   fi
   if security_pass_current_head_is_valid "${current_head_sha}"; then
-    return 0
-  fi
-  # A recorded clean pass that no longer matches the current head means new
-  # commits landed after that audit -- a `chore: sync <default> into
-  # <integration>` merge, a resolver/judge conflict resolution, or a fix PR.
-  # `security_pass_cycle` bounds *persistent* findings: consecutive fix cycles
-  # that failed to clear the same audit.  A proven-clean audit breaks that
-  # chain, so carrying the spent budget across the invalidation terminalizes
-  # the project on the first finding in the newly-arrived code without ever
-  # granting it a fix cycle.  Incident: project #3965 passed at 75048a2c with
-  # the budget already at 3/3, a routine `chore: sync main into
-  # orchestrator/project-3965` merge advanced the head to 56f71c8f, and the
-  # re-audit's 2 findings went straight to security_pass_terminal_failure with
-  # zero cycles spent on them.  Completion still requires a clean SHA-bound
-  # pass at the current head (security_pass_current_head_is_valid above), so a
-  # fresh budget cannot let unaudited code through -- it only restores the fix
-  # loop those findings are entitled to.
-  if [ "${prior_security_status}" = "passed" ]; then
-    if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
-      && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
-      echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
-    else
-      rm -f "${STATE_FILE}.tmp"
-      echo "::warning::Could not reset the security-pass fix-cycle budget for tracking issue #${TRACKING_NUM} after the audited head advanced to ${current_head_sha}; the previous budget stands."
+    security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
     fi
+    return 0
   fi
 
   for required_security_asset in \
@@ -6461,6 +6623,29 @@ run_security_pass_inline() {
   if [ -z "${merge_base_sha}" ]; then
     security_pass_fail_closed "engine_unavailable" "No merge base exists between the default branch and integration head." "${prior_security_status}"
     return 1
+  fi
+
+  if [ "${prior_security_status}" = "passed" ] \
+    && security_pass_rebind_if_no_new_project_lines "${current_head_sha}" "${merge_base_sha}"; then
+    security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
+    fi
+    return 0
+  fi
+
+  # A recorded clean pass that cannot be safely rebound means project-owned
+  # commits may have landed after that audit. `security_pass_cycle` bounds
+  # persistent findings, so start a fresh fix budget before the mandatory
+  # re-audit. Completion still requires a clean SHA-bound result at this head.
+  if [ "${prior_security_status}" = "passed" ]; then
+    if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
+      && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
+    else
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::Could not reset the security-pass fix-cycle budget for tracking issue #${TRACKING_NUM} after the audited head advanced to ${current_head_sha}; the previous budget stands."
+    fi
   fi
 
   # Delta re-audit.  Every earlier audit of this project already covered the
@@ -6611,7 +6796,7 @@ run_security_pass_inline() {
     rm -f "${security_pass_fix_cycle_diffs_file}"
     security_pass_fix_cycle_diffs_file=""
   fi
-  echo "SECURITY_PASS_SCOPE tracking_issue=${TRACKING_NUM} mode=${security_pass_audit_scope_mode} reason=${security_pass_audit_scope_reason} base_sha=${merge_base_sha} since_sha=${security_pass_audit_since_sha:-none} head_sha=${current_head_sha} prior_findings=${security_pass_prior_findings_count} waived_findings=${security_pass_waived_findings_count} fix_cycle_diff_entries=${security_pass_fix_cycle_diff_entries} fix_cycle_diff_files=${security_pass_fix_cycle_diff_files}"
+  echo "SECURITY_PASS_SCOPE tracking_issue=${TRACKING_NUM} mode=${security_pass_audit_scope_mode} reason=${security_pass_audit_scope_reason} base_sha=${merge_base_sha} since_sha=${security_pass_audit_since_sha:-none} head_sha=${current_head_sha} prior_findings=${security_pass_prior_findings_count} waived_findings=${security_pass_waived_findings_count} fix_cycle_diff_entries=${security_pass_fix_cycle_diff_entries} fix_cycle_diff_files=${security_pass_fix_cycle_diff_files} ownership=${SECURITY_PASS_LINE_OWNERSHIP} context=${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}"
 
   context_file="${RUNTIME_DIR}/security_pass_project_${TRACKING_NUM}.txt"
   findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.json"
@@ -6647,6 +6832,8 @@ run_security_pass_inline() {
     SECURITY_AUDIT_PRIOR_FINDINGS="${security_pass_prior_findings_file}" \
     SECURITY_AUDIT_WAIVED_FINDINGS="${security_pass_waived_findings_file}" \
     SECURITY_AUDIT_FIX_CYCLE_DIFFS="${security_pass_fix_cycle_diffs_file}" \
+    SECURITY_AUDIT_LINE_OWNERSHIP="${SECURITY_PASS_LINE_OWNERSHIP}" \
+    SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES="${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" \
     SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
@@ -6660,6 +6847,16 @@ run_security_pass_inline() {
   fi
 
   if ! jq -e '
+    def valid_finding:
+      (.finding_id | type) == "string" and (.finding_id | length) > 0
+      and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
+      and (.severity == "critical" or .severity == "high" or .severity == "medium" or .severity == "low")
+      and (.confidence | type) == "number"
+      and (.confidence | floor) == .confidence and .confidence >= 1 and .confidence <= 10
+      and (.file | type) == "string" and (.file | length) > 0
+      and (.line | type) == "number" and (.line | floor) == .line and .line > 0
+      and (.exploit_scenario | type) == "string" and (.exploit_scenario | length) > 0
+      and (.recommendation | type) == "string" and (.recommendation | length) > 0;
     .schema_version == "security_audit_findings.v1"
     and (.findings | type) == "array"
     and (.counts | type) == "object"
@@ -6674,16 +6871,17 @@ run_security_pass_inline() {
       .counts.suppressed_out_of_scope,
       .counts.suppressed_waived
     ][]; (type == "number") and (floor == .) and . >= 0)
-    and all(.findings[];
-      (.finding_id | type) == "string" and (.finding_id | length) > 0
-      and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
-      and (.severity == "critical" or .severity == "high" or .severity == "medium" or .severity == "low")
-      and (.confidence | type) == "number"
-      and (.confidence | floor) == .confidence and .confidence >= 1 and .confidence <= 10
-      and (.file | type) == "string" and (.file | length) > 0
-      and (.line | type) == "number" and (.line | floor) == .line and .line > 0
-      and (.exploit_scenario | type) == "string" and (.exploit_scenario | length) > 0
-      and (.recommendation | type) == "string" and (.recommendation | length) > 0)
+    and all(.findings[]; valid_finding)
+    and ((has("advisory_findings") | not)
+      or ((.advisory_findings | type) == "array" and all(.advisory_findings[]; valid_finding)))
+    and ((has("verified_fixed_finding_ids") | not)
+      or ((.verified_fixed_finding_ids | type) == "array"
+        and all(.verified_fixed_finding_ids[]; (type == "string") and (length > 0))))
+    and ((.counts | has("advisory") | not)
+      or ((.counts.advisory | type) == "number"
+        and (.counts.advisory | floor) == .counts.advisory
+        and .counts.advisory >= 0
+        and .counts.advisory == ((.advisory_findings // []) | length)))
   ' "${findings_file}" >/dev/null 2>&1; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit output was missing or invalid." "${prior_security_status}"
     return 1
@@ -6718,6 +6916,50 @@ run_security_pass_inline() {
   security_pass_apply_waivers_to_findings "${findings_file}"
   finding_count="$(jq -r '.findings | length' "${findings_file}")"
   completed_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}")"
+  security_pass_verified_fixed_ids="$(jq -r '(.verified_fixed_finding_ids // []) | join(",")' "${findings_file}")"
+  if [ -n "${security_pass_verified_fixed_ids}" ]; then
+    echo "SECURITY_PASS_VERIFIED_FIXED tracking_issue=${TRACKING_NUM} ids=${security_pass_verified_fixed_ids}"
+  fi
+  security_pass_advisory_count="$(jq -r '(.advisory_findings // []) | length' "${findings_file}")"
+  SECURITY_PASS_ADVISORY_ROUTED_COUNT="${security_pass_advisory_count}"
+  if [ "${security_pass_advisory_count}" -gt 0 ]; then
+    security_pass_advisory_justification="The cited line predates this project's merge-base and already exists on the default branch; routed as a non-blocking advisory by line ownership."
+    security_pass_advisory_waivers="$(jq -c --argjson cycle "${completed_cycles}" --arg justification "${security_pass_advisory_justification}" '
+      [(.advisory_findings // [])[] | {
+        finding_id: .finding_id,
+        file: .file,
+        line: .line,
+        owasp_or_stride_category: .owasp_or_stride_category,
+        severity: .severity,
+        justification: $justification,
+        source: "preexisting",
+        waived_by: "line-ownership",
+        waived_at_cycle: $cycle,
+        issue: null
+      }]
+    ' "${findings_file}")"
+    security_pass_advisory_backlog="$(jq -c --arg head_sha "${current_head_sha}" '
+      [(.advisory_findings // [])[] | . + {audited_head_sha: $head_sha}]
+    ' "${findings_file}")"
+    security_pass_advisory_backlog_file="${RUNTIME_DIR}/security_pass_advisory_backlog_${TRACKING_NUM}.json"
+    printf '%s\n' "${security_pass_advisory_backlog}" > "${security_pass_advisory_backlog_file}"
+    if ! jq --slurpfile backlog "${security_pass_advisory_backlog_file}" '
+      (($backlog[0] // []) | map(.finding_id)) as $ids
+      | .security_pass_advisory_backlog = (
+          [(.security_pass_advisory_backlog // [])[] | select((.finding_id | IN($ids[])) | not)]
+          + ($backlog[0] // [])
+        )
+      | .security_pass_advisory_backlog = .security_pass_advisory_backlog[-100:]
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::Could not persist the pre-existing-code advisory backlog for tracking issue #${TRACKING_NUM}; completion remains non-blocking."
+    fi
+    if ! security_pass_record_waivers "${security_pass_advisory_waivers}"; then
+      echo "::warning::Could not persist the pre-existing-code advisory waivers for tracking issue #${TRACKING_NUM}; completion remains non-blocking."
+    fi
+    echo "SECURITY_PASS_ADVISORY_ROUTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} count=${security_pass_advisory_count} ids=$(printf '%s' "${security_pass_advisory_waivers}" | jq -r 'map(.finding_id) | join(",")')"
+    security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+  fi
   # Record the audited head as the base of the next delta re-audit and
   # remember every blocking finding so the next audit verifies it instead of
   # re-discovering the project.  A clean result clears the memory: nothing is
@@ -6855,6 +7097,10 @@ ensure_security_pass_before_completion() {
     return 1
   fi
   if security_pass_current_head_is_valid "${current_head_sha}"; then
+    security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
+    fi
     return 0
   fi
   run_security_pass_inline \
@@ -11730,7 +11976,7 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
     post_state_comment || true
   fi
-  post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review."
+  post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
   tg_cleanup_msgs "${TRACKING_NUM}"
   MSG="Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
   MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
@@ -16862,6 +17108,10 @@ write_state_snapshot_actions_runs_export || true
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
+  SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK=0
+  SECURITY_PASS_ADVISORY_FILED_ISSUES=""
+  SECURITY_PASS_ADVISORY_ROUTED_COUNT=0
+  SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX=""
   unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
   unset _INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE
   HEALING_NOTES=()
@@ -17223,6 +17473,12 @@ The active security-pass fix cycle continues; the waivers apply from its next re
   fi
 
   if [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
+    security_pass_file_advisory_findings \
+      "${INTEGRATION_BRANCH_TRACKING}" \
+      "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
+    fi
     SECURITY_FIX_ISSUES_JSON="$(jq -c '.security_pass_active_fix_issues // []' "${STATE_FILE}" 2>/dev/null || echo '[]')"
     SECURITY_FIX_ISSUE="$(printf '%s' "${SECURITY_FIX_ISSUES_JSON}" | jq -r '.[0] // empty' 2>/dev/null || echo '')"
     if ! [[ "${SECURITY_FIX_ISSUE}" =~ ^[0-9]+$ ]]; then
@@ -17517,7 +17773,7 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
           set_tracking_phase_label "ai:merged"
           post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
 
-The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored."
+The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
           tg_cleanup_msgs "${TRACKING_NUM}"
           MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
           MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
@@ -17546,9 +17802,10 @@ The orchestrator detected that the integration PR was squash-merged outside the 
   # the merge tick, or follow-ups filed before this check existed), so a
   # parked advisory is never left waiting for a human.
   if [ "$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")" = "merged" ] \
-    && jq -e '
+    && jq -e --arg security_pass_enabled "${ENABLE_SECURITY_PASS}" '
       (((.security_pass_followups_merge_checked // []) | map(select(type == "number"))) as $checked
-      | any((.security_pass_waived_findings // [])[]; (.followup_pending // false) == true and .issue == null and (.finding | type) == "object")
+      | ($security_pass_enabled == "true" and ((.security_pass_advisory_backlog // []) | length) > 0)
+        or any((.security_pass_waived_findings // [])[]; (.followup_pending // false) == true and .issue == null and (.finding | type) == "object")
         or any((.security_pass_followup_issues // [])[]; (.issue | type) == "number" and ((.issue as $row_issue | $checked | index($row_issue)) == null)))
     ' "${STATE_FILE}" >/dev/null 2>&1; then
     security_pass_unblock_filed_advisory_followups \
@@ -17559,6 +17816,11 @@ The orchestrator detected that the integration PR was squash-merged outside the 
       "${INTEGRATION_BRANCH_TRACKING}" \
       "${DEFAULT_BRANCH_TRACKING}" \
       "$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+    if [ "${ENABLE_SECURITY_PASS}" = "true" ]; then
+      security_pass_file_advisory_findings \
+        "${INTEGRATION_BRANCH_TRACKING}" \
+        "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+    fi
     post_state_comment || true
   fi
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
@@ -17612,7 +17874,7 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     post_state_comment || true
     handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:merged"
-    post_tracking_comment "Project completed successfully. Issue kept open for manual review."
+    post_tracking_comment "Project completed successfully. Issue kept open for manual review.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
     tg_cleanup_msgs "${TRACKING_NUM}"
     MSG="✅ Project #${TRACKING_NUM} completed successfully."
     MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
@@ -21864,7 +22126,7 @@ PRs to revert: ${REVERT_COUNT}"
         handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
 
         set_tracking_phase_label "ai:merged"
-        post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s) (${JUDGE_STALL_CYCLES} stall). Issue kept open for manual review."
+        post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s) (${JUDGE_STALL_CYCLES} stall). Issue kept open for manual review.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
 
         tg_cleanup_msgs "${TRACKING_NUM}"
         MSG="Project #${TRACKING_NUM} completed! All waves merged and judge approved."
@@ -21890,7 +22152,7 @@ PRs to revert: ${REVERT_COUNT}"
 
 **Reason:** ${JUDGE_JUSTIFICATION}
 
-All waves have merged and the judge is satisfied. Transitioning to runtime validation (cycle ${VALIDATION_CYCLE}) to confirm correctness before closing."
+All waves have merged and the judge is satisfied. Transitioning to runtime validation (cycle ${VALIDATION_CYCLE}) to confirm correctness before closing.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
 
       jq --argjson cycle "${VALIDATION_CYCLE}" \
         '.status = "validating" |
