@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "Changes to orchestration, review, validation, security-audit, and failure-triage workflows are commonly accompanied by focused tests under tests/. Future plans should treat workflow YAML, shell helpers, prompts, and their contract tests as a coupled change surface.",
+  "fingerprint": "92f64fa7717e9cb2e8e094b70a4ab9989dbd75f841369cfd85ac09370a3a1f30",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35480179414",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35480179414",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4092",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4109",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4127",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4140",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4093",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4112",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4130",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4141"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260920010044_a9633143cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is guarded by repository-level contract tests.",
+  "timestamps": {
+    "created_at": "2026-09-20T01:00:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
