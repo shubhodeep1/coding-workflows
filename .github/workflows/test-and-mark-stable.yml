@@ -114,7 +114,7 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
           when a long single step should extend the wait past the
           inactivity window). The wait loop clamps overrides above
           90 minutes so a typo cannot mask a genuine hang until the
-          180-minute smoke-test job timeout kills the run.
+          300-minute smoke-test job timeout kills the run.
         required: false
         type: number
         default: 75
@@ -2891,8 +2891,17 @@ jobs:
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
 
-            LABELS=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-              --jq '[.labels[].name] | join(",")' || echo "")
+            if ! LABELS=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")'); then
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Review-blocked issue #${ISSUE_NUMBER} labels remained unreadable for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+              echo "::warning::Could not read review-blocked issue #${ISSUE_NUMBER} labels; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
 
             # If rate-limited, skip this cycle (don't corrupt state)
             if [ "$RATE_LIMIT_BACKOFF" -gt 0 ] && [ -z "$LABELS" ]; then

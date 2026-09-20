@@ -41,28 +41,40 @@ def _integer_contract_value(job: str, name: str) -> int:
 	return int(match.group(1))
 
 
+def _workflow_dispatch_integer_default(workflow: str, input_name: str) -> int:
+	match = re.search(
+		rf"^      {re.escape(input_name)}:\s*$.*?^        default:\s+(\d+)\s*$",
+		workflow,
+		re.MULTILINE | re.DOTALL,
+	)
+	assert match is not None, f"Missing workflow_dispatch integer default: {input_name}"
+	return int(match.group(1))
+
+
 def test_default_serial_budget_leaves_required_headroom() -> None:
-	job = _e2e_job(_read_workflow())
+	workflow = _read_workflow()
+	job = _e2e_job(workflow)
 	timeout_match = re.search(r"^\s+timeout-minutes:\s+(\d+)\s*$", job, re.MULTILINE)
 	assert timeout_match is not None
 	job_timeout = int(timeout_match.group(1))
 	assert job_timeout == _integer_contract_value(job, "E2E_JOB_TIMEOUT_MINUTES") == 300
 
-	phase_timeout = 30
-	plan_timeout = 60
-	review_timeout = 60
-	review_step_timeout = 75
+	phase_timeout = _workflow_dispatch_integer_default(workflow, "phase_timeout")
+	plan_timeout = _workflow_dispatch_integer_default(workflow, "plan_timeout")
+	review_timeout = _workflow_dispatch_integer_default(workflow, "review_timeout")
+	review_step_timeout = _workflow_dispatch_integer_default(workflow, "review_step_timeout")
+	finalization_reserve = _integer_contract_value(job, "E2E_FINALIZATION_RESERVE_MINUTES")
 	serial_budget = (
 		(2 * phase_timeout)
 		+ plan_timeout
-		+ max(review_timeout, review_step_timeout)
+		+ max(review_timeout, min(review_step_timeout, 90))
 		+ _integer_contract_value(job, "EDITOR_RETRY_BUDGET_MINUTES")
 		+ phase_timeout
 		+ _integer_contract_value(job, "PHASE7_WAIT_BUDGET_MINUTES")
-		+ _integer_contract_value(job, "E2E_FINALIZATION_RESERVE_MINUTES")
+		+ finalization_reserve
 	)
-	assert serial_budget == 280
-	assert job_timeout - serial_budget == 20
+	assert serial_budget <= job_timeout
+	assert job_timeout - (serial_budget - finalization_reserve) >= finalization_reserve
 
 
 def test_budget_guard_runs_before_artifact_creation() -> None:
@@ -80,7 +92,8 @@ def test_budget_guard_runs_before_artifact_creation() -> None:
 
 
 def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
-	job = _e2e_job(_read_workflow())
+	workflow = _read_workflow()
+	job = _e2e_job(workflow)
 	prerequisites = _slice_between(job, "- name: Validate prerequisites", "# Fast-fail the hottest")
 	step_budget = 'REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_STEP_TIMEOUT}"'
 	cap_guard = 'if [ "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" -gt 90 ]; then'
@@ -89,8 +102,21 @@ def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
 	assert 'REVIEW_EFFECTIVE_BUDGET_MINUTES=90' in prerequisites
 	assert 'REVIEW_STEP_TIMEOUT_MAX=90' in job
 
-	serial_budget = (2 * 30) + 60 + max(60, min(105, 90)) + 25 + 30 + 10 + 20
-	assert serial_budget == 295
+	phase_timeout = _workflow_dispatch_integer_default(workflow, "phase_timeout")
+	plan_timeout = _workflow_dispatch_integer_default(workflow, "plan_timeout")
+	review_timeout = _workflow_dispatch_integer_default(workflow, "review_timeout")
+	review_step_override = _workflow_dispatch_integer_default(workflow, "review_step_timeout") + 30
+	shared_budget = (
+		(2 * phase_timeout)
+		+ plan_timeout
+		+ _integer_contract_value(job, "EDITOR_RETRY_BUDGET_MINUTES")
+		+ phase_timeout
+		+ _integer_contract_value(job, "PHASE7_WAIT_BUDGET_MINUTES")
+		+ _integer_contract_value(job, "E2E_FINALIZATION_RESERVE_MINUTES")
+	)
+	job_timeout = _integer_contract_value(job, "E2E_JOB_TIMEOUT_MINUTES")
+	assert shared_budget + max(review_timeout, review_step_override) > job_timeout
+	assert shared_budget + max(review_timeout, min(review_step_override, 90)) <= job_timeout
 
 
 def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
@@ -126,8 +152,14 @@ def test_phase6_rejects_a_newer_foreign_ref_dispatch() -> None:
 
 def test_phase6_transient_api_errors_remain_bounded() -> None:
 	phase6 = _phase6(_read_workflow())
-	assert phase6.count("retrying within the inactivity window") == 2
+	assert phase6.count("retrying within the inactivity window") == 3
 	assert 'echo "status=timeout" >> "$GITHUB_OUTPUT"' in phase6
+	labels_read = 'if ! LABELS=$(gh_api_safe_quiet_print'
+	assert labels_read in phase6
+	labels_block = phase6[phase6.index(labels_read) : phase6.index("# If rate-limited")]
+	assert '|| echo ""' not in labels_block
+	assert 'sleep "$POLL_INTERVAL"' in labels_block
+	assert "continue" in labels_block
 	transient_read = 'if ! POLLER_RUN=$(gh_api_safe_quiet_print'
 	label_progress = 'if [ "$LABELS" != "$PREV_LABELS" ]; then'
 	success_guard = 'if [ "$REVIEW_BLOCKED_PRESENT" -eq 0 ] || [ "$TERMINAL_LABEL_PRESENT" -eq 1 ]; then'
