@@ -243,3 +243,167 @@ Add `ORCHESTRATOR_ISSUE_TIMING_V1 issue=... phase=... total_ms=... api_calls=...
 - Broad aggregate metrics use the assembled context; detailed model/memory findings use eight complete slow review logs.
 - Ten skipped runs had empty archives; 970 runs were not selected for full-log download.
 - Failure run `35452034565` is missing its failing job log, despite archive status being reported successful.
+
+## Deep Audit — Workflows & Scripts (2026-09-20)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001 — Integration-ref failures silently select the default branch
+- **File path / lines:** `scripts/resolve_integration_ref.sh:51-69`; `.github/workflows/clarify.yml:118-129`; `.github/workflows/plan.yml:181-195`; `.github/workflows/implement.yml:447-458`; `.github/workflows/orchestrate_clarify_respond.yml:172-183`; `.github/workflows/validate.yml:153-164`
+- **Severity:** High
+- **Category tag:** `bug`
+- **Description:** The resolver uses raw `gh api` calls. Any transient issue/branch lookup failure returns non-zero, and all five callers convert every resolver failure into an empty ref, causing checkout of the repository default branch. **Inference:** an orchestrator-managed task can therefore plan, implement, or validate against the wrong branch during a transient GitHub failure.
+- **Recommended fix:** Stage and source `gh_helpers.sh` with the resolver, wrap reads in `gh_retry`, and distinguish “no integration metadata” from “lookup unavailable.” Only the former should select the default branch; transient/auth failures should stop that run so the next trigger retries safely.
+
+#### BUG-002 — Branch-review dedup treats API failure as “no open PR”
+- **File path / lines:** `.github/workflows/internal-review.yml:92-124`; `scripts/review_collect_pr_metadata.sh:174-185`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** The open-PR lookup suppresses errors with `|| echo ""`, then sets `proceed=true` when the result is empty. A transient failure can launch a no-PR branch review while the PR-triggered review is already running. The metadata helper also converts a failed default-branch lookup to literal `main`.
+- **Recommended fix:** Use `gh_retry`; emit `proceed=false` when PR-state retrieval is unconfirmed. Require a validated base ref in branch-review mode instead of falling back to `main`.
+
+Audit checks found no additional actionable secret logging, unsafe issue/PR body interpolation, SC2086/SC2046 violations, YAML parse failures, Bash syntax failures, or Python syntax failures.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001 — Clarify fetches the same comment thread twice
+- **File path / lines:** `.github/workflows/clarify.yml:457-484`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** With semantic caching enabled, the step first fetches 50 comments, then fetches the complete paginated thread from the same endpoint.
+- **Current call count:** 2 logical calls.
+- **Proposed call count:** 1 logical paginated call.
+- **Recommended fix:** Fetch once through `gh_retry_to_file`; derive the bounded 50-comment prompt artifact and full cache history locally.
+
+#### API-002 — PR-context collector bypasses the existing consolidated helper
+- **File path / lines:** `scripts/review_collect_pr_metadata.sh:209-269`; `scripts/gh_helpers.sh:783-899`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** Metadata, issue comments, review comments, optional reviews, and closing issues are fetched separately despite the existing GraphQL-first `gh_pr_with_all_comments` pattern.
+- **Current call count:** 4 normally; 5 with break-glass review retrieval.
+- **Proposed call count:** 1 GraphQL call.
+- **Recommended fix:** Extend `gh_pr_with_all_comments` to return top-level review metadata and `closingIssuesReferences`, then populate all existing artifact files from that result.
+
+#### BATCH-001 — Standalone conflict sweep performs N+1 PR reads
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:22457-22517`
+- **Severity:** High
+- **Category tag:** `api-batching`
+- **Description:** The sweep lists up to 100 open PRs, then fetches each PR individually to obtain mergeability and labels.
+- **Current call count:** `1 + N`, up to 101 logical calls.
+- **Proposed call count:** 1 paginated GraphQL snapshot.
+- **Recommended fix:** Fetch open PR number, refs, head SHA, labels, `mergeable`, and `mergeStateStatus` together. Follow `_fetch_candidate_issue_details_graphql`’s transform-and-cache pattern.
+
+#### BATCH-002 — Standalone issue inventory uses seven label-specific calls
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:15124-15131`; existing pattern at `scripts/orchestrate_poll_process.sh:14225-14264`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** Seven `gh issue list` requests collect one pipeline label each and are merged locally.
+- **Current call count:** 7 logical calls per sweep.
+- **Proposed call count:** 1 GraphQL call with seven aliases.
+- **Recommended fix:** Extend `_fetch_standalone_marker_issues_graphql` or add a sibling helper returning the union of all label queries.
+
+#### BATCH-003 — Security follow-up reconciliation reads each issue separately
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:5861-5946`; batching pattern at `scripts/orchestrate_poll_process.sh:14320-14436`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** Each unchecked follow-up receives an issue GET and, when blocked, a comments GET. `[NEEDS VERIFICATION]`
+- **Current call count:** `R + B` reads, plus up to `B` required comment writes, where `R` is unchecked rows and `B` is blocked rows.
+- **Proposed call count:** `ceil(R/25)` GraphQL reads plus required writes.
+- **Recommended fix:** Extend `_fetch_candidate_issue_details_graphql` with the trusted unblock-marker fields, retaining REST fallback when comment pagination exceeds GraphQL limits.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Context-budget telemetry function is triplicated
+- **File path / lines:** `scripts/review_apply_fixes.sh:164-202`; `scripts/review_run_reviewers.sh:69-107`; `scripts/review_rb_judge.sh:256-294`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** `emit_context_budget_warn_for_prompt` is byte-equivalent across three review paths.
+- **Recommended fix:** Move it to `scripts/review_context_helpers.sh` as `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>` and source it from all three callers.
+
+#### DUP-002 — Workflow metrics duplicate timestamp and percentile utilities
+- **File path / lines:** `scripts/analyze_workflow_logs.py:40-72`; `scripts/collect_workflow_logs.py:96-108`; `scripts/cost_audit.py:283-295`; `scripts/workflow_retro.py:50-99`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** Identical ISO-8601 parsing appears four times; identical percentile interpolation appears twice.
+- **Recommended fix:** Add `scripts/workflow_metrics_utils.py` with `parse_iso8601(value)` and `percentile(values, pct)`, then update the four callers.
+
+#### DUP-003 — Thread-reuse wrappers duplicate an existing helper
+- **File path / lines:** `scripts/review_apply_fixes.sh:680-710`; `scripts/review_conflict_resolve.sh:150-171`; `scripts/validate_process.sh:2890-2911`; canonical helper at `scripts/codex_thread_reuse.sh:407-422`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** Three paths implement identical asset resolution and feature-gate wrappers despite sourcing `codex_thread_reuse.sh`.
+- **Recommended fix:** Call `codex_thread_reuse_resolve_asset <repo_path>` and `codex_thread_reuse_truthy <value>` directly; remove the local wrappers after compatibility review.
+
+#### DUP-004 — Consumer-repository runners duplicate command and registry infrastructure
+- **File path / lines:** `scripts/audit_consumer_drift.py:51-164`; `scripts/validation_refresh_runner.py:96-163,701-723`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** `CommandResult.__str__`, command execution, and target-repository loading have identical implementations.
+- **Recommended fix:** Add `scripts/github_cli_utils.py` exposing `run_command(...) -> CommandResult` and `load_target_repositories(path) -> list[str]`; update both callers.
+
+No workflow pair exceeded the requested 70% similarity threshold.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging block has limited expression headroom
+- **File path / lines:** `.github/workflows/implement.yml:920-1276`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Description:** The parsed `run:` scalar contains `${{ }}` interpolation and is approximately **16,985 characters**, or 80.9% of the 21,000-character limit.
+- **Headroom remaining:** Approximately **4,015 characters**.
+- **Recommended fix:** Extract the support-file staging implementation to `scripts/stage_implement_support.sh`; keep only environment setup and one script invocation in YAML.
+
+No other interpolated `run:` scalar exceeded 15,000 characters. No workflow exceeded 800 KB; the largest remained below 500 KB. No oversized `if:` expression was found.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001 — Log-analysis failure reporting bypasses `gh_retry`
+- **File path / lines:** `.github/workflows/workflow-log-analysis.yml:889-1003`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** The step sources `gh_helpers.sh` but posts its failure comment and label through raw `gh issue`/`gh label` commands. Transient failures can lose the diagnostic marker and failure label.
+- **Recommended fix:** Use `gh_retry` for idempotent label operations. Replace the comment write with a marker-keyed upsert so retries cannot create duplicates.
+
+#### DEAD-001 — Poller contains unreferenced internal functions
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:11266-11274,12876-12895,13005-13015`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `get_last_validation_run_conclusion`, `read_standalone_state_json`, and `stall_recovery_action_is_terminal` have definitions but no repository call sites.
+- **Recommended fix:** Remove them in a reviewed compatibility cleanup, or wire them into their intended paths and add direct tests if they remain contractual.
+
+#### DEAD-002 — Reviewer script retains unread variables and an uncalled mutator
+- **File path / lines:** `scripts/review_run_reviewers.sh:753-761,3562-3571`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE`, `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE`, and `reviewer_patch_reasoning_config_file` are never read or called.
+- **Recommended fix:** Remove these internals after the §6 compatibility review, or document them as deliberate shims and add targeted shellcheck suppressions.
+
+#### SHELL-001 — Single-element loops trigger SC2043
+- **File path / lines:** `scripts/stage_workflow_support.sh:136-146,213-225`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** Two `for` loops iterate over one literal filename, obscuring control flow and producing SC2043 warnings.
+- **Recommended fix:** Replace each loop with a direct variable assignment and retain the existing fallback/install logic.
+
+No exact TODO, FIXME, HACK, or XXX debt markers were found in scoped files.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, BATCH-001 |
+| Medium | 8 | BUG-002, API-001, API-002, BATCH-002, BATCH-003, DUP-001, EXPR-001, CONSIST-001 |
+| Low | 6 | DUP-002, DUP-003, DUP-004, DEAD-001, DEAD-002, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 7 | Medium |
+| API call optimization | 4–6 | Medium |
+| Code modularization | 12–15 | Large |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 5–7 | Medium |
