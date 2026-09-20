@@ -936,6 +936,9 @@ RB_LINKED_ISSUES_GRAPHQL_JSON="$(gh_retry gh api graphql \
 	-F number="${PR_NUMBER}" \
 	-f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { baseRefName closingIssuesReferences(first: 50) { nodes { number body labels(first: 100) { nodes { name } pageInfo { hasNextPage } } } } } } }' || true)"
 PR_BASE_REF="$(printf '%s' "${RB_LINKED_ISSUES_GRAPHQL_JSON}" | jq -r '.data.repository.pullRequest.baseRefName // ""' 2>/dev/null || true)"
+if [ -z "${PR_BASE_REF}" ]; then
+	PR_BASE_REF="$(printf '%s\n' "${_pr_meta}" | jq -r '.base.ref // ""' 2>/dev/null || true)"
+fi
 ISSUE_NUMBERS="$(printf '%s' "${RB_LINKED_ISSUES_GRAPHQL_JSON}" | jq -r '
 	.data.repository.pullRequest.closingIssuesReferences.nodes[]?
 	| select(try ((type == "object") and ((.number | type) == "number")) catch false)

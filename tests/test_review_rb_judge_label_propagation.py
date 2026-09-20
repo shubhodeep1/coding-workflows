@@ -1221,6 +1221,7 @@ def _run_linked_issue_hydration(
 	issue_responses: dict[str, dict] | None = None,
 	fallback_numbers: list[int] | None = None,
 	graphql_failure: bool = False,
+	pr_meta: dict | None = None,
 ) -> dict:
 	"""Execute the real GraphQL discovery and issue hydration block."""
 	block = _extract_linked_issue_hydration_block()
@@ -1251,7 +1252,7 @@ extract_repo_scoped_issue_refs_from_text() {{ :; }}
 
 REPOSITORY="owner/repo"
 PR_NUMBER="42"
-_pr_meta='{{}}'
+_pr_meta="${{PR_META_INPUT}}"
 
 {block}
 
@@ -1260,6 +1261,7 @@ _pr_meta='{{}}'
   printf 'FIRST_ISSUE_BODY=%s\n' "${{FIRST_ISSUE_BODY}}"
   printf 'FIRST_ISSUE_LINEAGE_BODY=%s\n' "${{FIRST_ISSUE_LINEAGE_BODY}}"
   printf 'FIRST_ISSUE_LABELS_JSON=%s\n' "${{FIRST_ISSUE_LABELS_JSON}}"
+  printf 'PR_BASE_REF=%s\n' "${{PR_BASE_REF}}"
 }} > "${{CAPTURE_FILE}}"
 """
 		script_path = runtime_dir / "graphql_hydration_harness.sh"
@@ -1270,6 +1272,7 @@ _pr_meta='{{}}'
 			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
 			"MOCK_GH_STATE_FILE": str(gh_state_file),
 			"LINKED_ISSUE_FALLBACK_NUMBERS_JSON": json.dumps(fallback_numbers or []),
+			"PR_META_INPUT": json.dumps(pr_meta or {}),
 			"CAPTURE_FILE": str(capture_file),
 		}
 		proc = subprocess.run(
@@ -1338,6 +1341,7 @@ def test_complete_graphql_node_avoids_issue_rest_read() -> None:
 		"FIRST_ISSUE_BODY": "Build feature X.",
 		"FIRST_ISSUE_LINEAGE_BODY": "Build feature X.",
 		"FIRST_ISSUE_LABELS_JSON": '["ai:orchestrator-managed","ai:closed"]',
+		"PR_BASE_REF": "",
 	}
 	assert len(_matching_api_calls(state, "graphql")) == 1
 	assert _matching_api_calls(state, "issues/41") == []
@@ -1408,9 +1412,11 @@ def test_failed_graphql_request_uses_fallback_number_and_rest() -> None:
 		graphql_failure=True,
 		fallback_numbers=[41],
 		issue_responses={"issues/41": {"body": "Fallback after failure", "labels": []}},
+		pr_meta={"base": {"ref": "orchestrator/project-249"}},
 	)
 
 	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Fallback after failure"
+	assert state["_captured"]["PR_BASE_REF"] == "orchestrator/project-249"
 	assert len(_matching_api_calls(state, "graphql")) == 1
 	assert len(_matching_api_calls(state, "issues/41")) == 1
 

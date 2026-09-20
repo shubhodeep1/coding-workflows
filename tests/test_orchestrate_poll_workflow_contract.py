@@ -147,8 +147,9 @@ def test_staged_support_latch_sweep_runs_without_tracking_issues() -> None:
 	step = wf[step_start:step_end]
 	assert "steps.find_tracking.outputs.has_work != 'true'" in step
 	assert "github.repository == 'shubhodeep1/coding-workflows'" in step
+	assert "STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}" in step
 	assert 'STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"' in step
-	assert "run: bash scripts/orchestrate_poll_process.sh" in step
+	assert 'run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh' in step
 	assert 'if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then' in poller
 	assert "release_staged_support_needs_human_latches\n  exit 0" in poller
 
