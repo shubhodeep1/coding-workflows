@@ -382,6 +382,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_serena_stats_emit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
 
       - name: Memory maintenance extraction contract tests
         run: |

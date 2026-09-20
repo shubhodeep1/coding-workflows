@@ -23,6 +23,11 @@ on:
         required: false
         type: string
         default: "15"
+      alert_msg_level:
+        description: Minimum Telegram alert level for this run (empty honours vars.ALERT_MSG_LEVEL; SILENT suppresses all)
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -37,4 +42,5 @@ jobs:
       pr_number: ${{ inputs.pr_number || '0' }}
       compose_file: ${{ inputs.compose_file || 'docker-compose.yml' }}
       validation_timeout: ${{ inputs.validation_timeout || '15' }}
+      alert_msg_level: ${{ inputs.alert_msg_level || '' }}
     secrets: inherit
