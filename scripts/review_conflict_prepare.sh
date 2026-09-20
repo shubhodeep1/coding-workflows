@@ -78,7 +78,16 @@ git reset --hard HEAD 2>/dev/null || true
 # check_workflow_script_refs.py then fails the [ai-merge-resolve]
 # commit because the referenced scripts are missing from disk.
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-  rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh 2>/dev/null || true
+  for _conflict_prepare_cleanup_artifact in \
+    scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py \
+    scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh; do
+    if git ls-files --error-unmatch -- "${_conflict_prepare_cleanup_artifact}" >/dev/null 2>&1; then
+      echo "Preserving repo-tracked path during artifact cleanup: ${_conflict_prepare_cleanup_artifact}"
+      continue
+    fi
+    rm -f -- "${_conflict_prepare_cleanup_artifact}"
+  done
+  unset _conflict_prepare_cleanup_artifact
 fi
 RESOLVE_STASH="$(mktemp -d)"
 for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
