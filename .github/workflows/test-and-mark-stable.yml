@@ -98,7 +98,7 @@ name: Test & Mark Stable Release
           when a long single step should extend the wait past the
           inactivity window). The wait loop clamps overrides above
           90 minutes so a typo cannot mask a genuine hang until the
-          120-minute smoke-test job timeout kills the run.
+          180-minute smoke-test job timeout kills the run.
         required: false
         type: number
         default: 75
@@ -343,7 +343,18 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Job cap must contain the sum of the phase budgets below, not just a
+    # typical run: Phase 4 may legitimately spend its full REVIEW_STEP_TIMEOUT
+    # (75m, clamped at 90m) on one healthy reviewer step, Phases 1-3 plus the
+    # per-phase analysers take ~25m, and Phase 6 then needs its own 30m
+    # PHASE_TIMEOUT window because its poller dispatch queues behind whatever
+    # scheduled poller run holds the ai-orchestrate-poll concurrency group
+    # (and is displaced by any later force-tick dispatch). Raised 120→180
+    # after run 35479338161 (v1.29.7): Phase 4 ran a healthy 75m, Phase 6
+    # started at +99m, and the 120m cap cancelled it at idle 1222s of its
+    # 1800s window — which also skipped "Deep verify" and failed the gate on
+    # "Internals" even though Phase 6's own timeout is scored non-blocking.
+    timeout-minutes: 180
     concurrency:
       group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
       cancel-in-progress: true
@@ -377,7 +388,7 @@ jobs:
       # step ran a healthy 51m and the 50m cap killed the wait 58s before
       # the step completed. The shell validation below clamps overrides
       # above 90m so a typo cannot suppress stall detection until the
-      # 120m e2e-smoke-test job timeout kills the run.
+      # 180m e2e-smoke-test job timeout kills the run.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
@@ -1354,7 +1365,7 @@ jobs:
           [[ "$REVIEW_STEP_TIMEOUT" =~ ^[0-9]+$ ]] && [ "$REVIEW_STEP_TIMEOUT" -gt 0 ] || REVIEW_STEP_TIMEOUT=75
           REVIEW_STEP_TIMEOUT_MAX=90
           if [ "$REVIEW_STEP_TIMEOUT" -gt "$REVIEW_STEP_TIMEOUT_MAX" ]; then
-            echo "::warning::REVIEW_STEP_TIMEOUT=${REVIEW_STEP_TIMEOUT} exceeds ${REVIEW_STEP_TIMEOUT_MAX}m cap; clamping so wait-review still reports genuine stalls before the 120m job timeout"
+            echo "::warning::REVIEW_STEP_TIMEOUT=${REVIEW_STEP_TIMEOUT} exceeds ${REVIEW_STEP_TIMEOUT_MAX}m cap; clamping so wait-review still reports genuine stalls before the 180m job timeout"
             REVIEW_STEP_TIMEOUT="$REVIEW_STEP_TIMEOUT_MAX"
           fi
           STEP_INACTIVITY_LIMIT=$((REVIEW_STEP_TIMEOUT * 60))
