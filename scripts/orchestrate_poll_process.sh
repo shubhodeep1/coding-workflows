@@ -11786,21 +11786,31 @@ comprehensive_promotion_gate_before_final_merge() {
     return 0
   fi
   local metadata_json role promote_sha smoke_sha proving_merge_sha status now
-  metadata_json="$(comprehensive_cycle_metadata_json "${COMMENTS:-[]}")"
-  if [ "$(printf '%s' "${metadata_json}" | jq -r '.lookup_failed // false')" = "true" ]; then
-    now="$(date +%s)"
-    if ! comprehensive_promotion_hold_or_fail marker_lookup_unavailable "${now}" \
-      "Project #${TRACKING_NUM}: comprehensive-cycle marker lookup remained unavailable through the hold cap; promotion abandoned, merge proceeds."; then
-      return 1
-    fi
-    return 0
-  fi
-  role="$(printf '%s' "${metadata_json}" | jq -r '.role')"
-  if [ "${role}" != "verifying" ]; then
-    return 0
-  fi
-  status="$(jq -r '.comprehensive_promotion.status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
+  status="$(jq -r '.comprehensive_promotion.status // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
   now="$(date +%s)"
+  case "${status}" in
+    dispatched) ;;
+    deferred|promoted|failed|skipped) return 0 ;;
+    *)
+      metadata_json="$(comprehensive_cycle_metadata_json "${COMMENTS:-[]}")"
+      if [ "$(printf '%s' "${metadata_json}" | jq -r '.lookup_failed // false')" = "true" ]; then
+        if [ "${status}" != "pending" ] && ! printf '%s' "${COMMENTS:-[]}" | jq -e --argjson producer "${COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID}" \
+          'any(.[]?; (.user.id // 0) == $producer and ((.body // "") | test("(?m)^apply-analysis-role: +verifying[ \\t\\r]*$")))' >/dev/null 2>&1; then
+          return 0
+        fi
+        if ! comprehensive_promotion_hold_or_fail marker_lookup_unavailable "${now}" \
+          "Project #${TRACKING_NUM}: comprehensive-cycle marker lookup remained unavailable through the hold cap; promotion abandoned, merge proceeds."; then
+          return 1
+        fi
+        return 0
+      fi
+      role="$(printf '%s' "${metadata_json}" | jq -r '.role')"
+      if [ "${role}" != "verifying" ]; then
+        return 0
+      fi
+      status="pending"
+      ;;
+  esac
   case "${status}" in
     pending)
       promote_sha="$(printf '%s' "${metadata_json}" | jq -r '.promote_sha')"

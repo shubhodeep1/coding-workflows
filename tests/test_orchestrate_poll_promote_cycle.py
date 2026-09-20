@@ -512,6 +512,46 @@ def test_marker_lookup_failure_holds_merge_without_retiring_cycle() -> None:
 	assert "COMPREHENSIVE_MARKER_UNTRUSTED" not in result["stdout"]
 
 
+def test_marker_lookup_failure_does_not_hold_non_verifying_merge() -> None:
+	for scenario, tracking_comments in (
+		("proving", [_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))]),
+		("legacy", []),
+	):
+		result = _run_poller(
+			state=_project_state(),
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_labels=[LABEL],
+			tracking_comments=tracking_comments,
+			issue_labels={10: ["ai:merged"]},
+			prs=[_open_final_pr()],
+			existing_branches=["main", "orchestrator/project-192"],
+			env_overrides={"MOCK_ORCH_STATE_V2_SELECT_FAILURE": "true"},
+		)
+
+		assert result["latest_state"]["final_merge_status"] == "merged", scenario
+		assert "comprehensive_promotion" not in result["latest_state"], scenario
+		assert "COMPREHENSIVE_PROMOTION_HOLD" not in result["stdout"], scenario
+
+
+def test_marker_lookup_failure_preserves_dispatched_promotion() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	first = _verifying_run(_project_state(), compare_commits=commits)
+	assert first["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+
+	second = _verifying_run(
+		first["latest_state"],
+		compare_commits=commits,
+		prs=first["prs"],
+		env_overrides={"MOCK_ORCH_STATE_V2_SELECT_FAILURE": "true"},
+	)
+
+	assert second["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+	assert second["latest_state"]["final_merge_status"] != "merged"
+	assert second["release_dispatches"] == []
+	assert "reason=marker_lookup_unavailable" not in second["stdout"]
+
+
 def test_marker_lookup_failure_defers_completed_callback_without_retiring_cycle() -> None:
 	state = _project_state()
 	state["status"] = "complete"
