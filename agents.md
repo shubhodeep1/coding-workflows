@@ -656,7 +656,10 @@ ID. The validated block is placed ahead of the review-blocked footer
 (`REISSUE_ORCHESTRATOR_METADATA_CARRIED` / `_ABSENT`), and its spot-fix
 `files_touched` allowlist unions the judge's cited files with the closed PR's
 changed files that still exist at its head (`REISSUE_FILES_TOUCHED_UNION`,
-fail-open on a failed `pulls/<n>/files` listing). Incident:
+fail-open on a failed `pulls/<n>/files` listing).
+Before that block is appended, canonical tracking-issue, integration-branch,
+and local-ID lines are removed from the judge-generated issue prose, so only
+the PR-base-validated block can supply successor-adoption lineage. Incident:
 binance-blessings#249 / #294, 2026-09-19. An inconclusive lookup
 (API or parse failure) retains `security-pass-fixing` for retry rather than
 reading a transient read failure as evidence of a failed fix.

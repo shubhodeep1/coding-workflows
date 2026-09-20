@@ -782,6 +782,40 @@ def test_close_and_reissue_rejects_parent_metadata_inconsistent_with_pr_base() -
 	)
 
 
+def test_close_and_reissue_strips_judge_generated_orchestrator_lineage_markers() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "redo",
+			"justification": "Reissue with validated lineage.",
+			"remaining_issues": [],
+			"new_issue": {
+				"title": "Reissue: preserve validated lineage",
+				"body": (
+					"Keep this implementation guidance.\n"
+					"- Tracking issue: #999\n"
+					"- Integration branch: `orchestrator/project-999`\n"
+					"- Local ID: `security-pass-fix-cycle-9`"
+				),
+			},
+		},
+		extra_env={
+			"FIRST_ISSUE_LINEAGE_BODY": _parent_orchestrator_metadata_body(),
+			"PR_BASE_REF": "orchestrator/project-249",
+		},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	lines = body.split("\n")
+	assert "Keep this implementation guidance." in body
+	assert "- Tracking issue: #999" not in lines
+	assert "- Integration branch: `orchestrator/project-999`" not in lines
+	assert "- Local ID: `security-pass-fix-cycle-9`" not in lines
+	assert lines.count("- Tracking issue: #249") == 1
+	assert lines.count("- Integration branch: `orchestrator/project-249`") == 1
+	assert lines.count("- Local ID: `security-pass-fix-cycle-1`") == 1
+
+
 def test_close_and_reissue_graphql_fetches_verified_pr_base() -> None:
 	script = _rb_judge_text()
 	assert "pullRequest(number:$number) { baseRefName closingIssuesReferences" in script
