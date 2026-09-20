@@ -10,6 +10,8 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from scripts.orchestrate_lib import security_finding_defect_fingerprint
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
@@ -1212,16 +1214,21 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	"""Accepted findings reach the prompt as accepted and never reach the output.
 
 	The orchestrator's security-pass exhaustion judge and the operator's
-	`/security-pass-waive` command persist waivers; the engine must drop a
-	re-report by exact id and by location (same file and category within the
-	line window), because the auditor mints a new id every run and fix commits
-	move the cited line.
+	`/security-pass-waive` command persist waivers; the engine must drop only
+	one uniquely matching code-context fingerprint. IDs and nearby lines do not
+	authorize suppression.
 	"""
 	with tempfile.TemporaryDirectory(prefix="security-audit-waived-") as fixture_td:
 		tmp_path = Path(fixture_td)
 		repo_dir, first_sha, second_sha, head_sha = _git_fixture_repo_three_commits(tmp_path)
 		output_path = tmp_path / "findings.json"
 		waived_findings_path = tmp_path / "waived-findings.json"
+		location_fingerprint = security_finding_defect_fingerprint(
+			repo_dir,
+			"file_c.py",
+			1,
+			"A04:2021-Insecure Design / STRIDE: Denial of Service",
+		)
 		waived_findings_path.write_text(
 			json.dumps(
 				[
@@ -1236,6 +1243,7 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 					},
 					{
 						"finding_id": "waived-by-location",
+						"defect_fingerprint": location_fingerprint,
 						"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
 						"file": "./file_c.py",
 						"line": 1,
@@ -1271,20 +1279,23 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
-	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot"]
-	assert payload["counts"]["kept"] == 1
-	assert payload["counts"]["suppressed_waived"] == 3
-	assert "waived-findings=3 (line window 40)" in proc.stdout
+	assert [finding["finding_id"] for finding in payload["findings"]] == [
+		"waived-exact",
+		"different-category-same-spot",
+		"waived-id-only",
+	]
+	assert payload["counts"]["kept"] == 3
+	assert payload["counts"]["suppressed_waived"] == 1
+	assert "waived-findings=1 (exact context fingerprints; line window compatibility value ignored)" in proc.stdout
 	prompt = final_state["codex_stdin"][0]
 	assert prompt.count("=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===") == 1
 	assert prompt.count("=== END UNTRUSTED ACCEPTED FINDINGS ===") == 1
 	accepted_block = prompt.split("=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===\n", 1)[1].split(
 		"=== END UNTRUSTED ACCEPTED FINDINGS ===", 1
 	)[0]
-	assert "- `waived-exact` | A04:2021-Insecure Design | medium | file_b.py:1" in accepted_block
-	assert "Accepted because: Bounded blast radius; tracked [untrusted marker removed] [untrusted marker removed]" in accepted_block
 	assert "- `waived-by-location` | A04:2021-Insecure Design / STRIDE: Denial of Service | unknown | file_c.py:1" in accepted_block
-	assert "- `waived-id-only` | uncategorised | unknown | (location not recorded)" in accepted_block
+	assert "waived-exact" not in accepted_block
+	assert "waived-id-only" not in accepted_block
 	assert "Rules for accepted findings:" not in accepted_block
 	assert "Never report an accepted finding again" in prompt
 	assert "An acceptance covers one location." in prompt

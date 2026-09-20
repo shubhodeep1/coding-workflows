@@ -78,6 +78,8 @@ CYCLE_BASELINE_MARKER="apply-analysis-cycle-baseline-sha"
 # Same setting the poller and the dispatcher use: only marker comments from
 # github-actions[bot] or these author_associations are cycle state.
 COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
+COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID="41898282"
+COMPREHENSIVE_CYCLE_MARKER_HELPER="${COMPREHENSIVE_CYCLE_MARKER_HELPER:-${SCRIPT_DIR}/orchestrate_state_v2.py}"
 
 for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 	if [ -z "${!required_env:-}" ]; then
@@ -223,7 +225,7 @@ resolve_tag_commit()
 # author_association counts; a stray comment cannot fake a completed cycle.
 last_cycle_baseline_sha()
 {
-	local query numbers issue_number sha
+	local query numbers issue_number sha comments_file selected_file
 	query="repo:${GITHUB_REPOSITORY} is:issue label:ai:orchestrator-tracking in:comments \"${CYCLE_BASELINE_MARKER}:\""
 	if ! numbers="$(gh_retry gh api -X GET search/issues -f "q=${query}" -f sort=created -f order=desc -f per_page=10 2>/dev/null | jq -r '.items[]?.number | select(. != null)')"; then
 		return 2
@@ -231,18 +233,30 @@ last_cycle_baseline_sha()
 	[ -n "${numbers}" ] || return 0
 	while IFS= read -r issue_number; do
 		[[ "${issue_number}" =~ ^[0-9]+$ ]] || continue
-		if ! sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" \
-			| jq -r --arg m "${CYCLE_BASELINE_MARKER}" --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
-				($trusted | split(",") | map(ascii_upcase | gsub("^\\s+|\\s+$"; ""))) as $ok
-				| [.[]? | select((.user.login // "") == "github-actions[bot]" or (((.author_association // "") | ascii_upcase) as $a | $ok | index($a)) != null)
-					| .body // "" | capture("(?m)^" + $m + ": (?<sha>[0-9a-f]{40})")? | .sha] | last // empty')"; then
+		comments_file="$(mktemp)"
+		selected_file="$(mktemp)"
+		if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" > "${comments_file}"; then
+			rm -f "${comments_file}" "${selected_file}"
 			return 2
 		fi
+		if ! PYTHONDONTWRITEBYTECODE=1 python3 "${COMPREHENSIVE_CYCLE_MARKER_HELPER}" select-comprehensive-marker \
+			--comments-json "${comments_file}" \
+			--repository "${GITHUB_REPOSITORY}" \
+			--producer-id "${COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID}" \
+			--out-file "${selected_file}" >/dev/null 2>&1; then
+			rm -f "${comments_file}" "${selected_file}"
+			return 2
+		fi
+		sha="$(jq -r '.marker.cycle_baseline_sha // ""' "${selected_file}" 2>/dev/null || true)"
+		untrusted_marker="$(jq -r '.untrusted_marker // false' "${selected_file}" 2>/dev/null || echo false)"
+		rm -f "${comments_file}" "${selected_file}"
 		if [ -n "${sha}" ]; then
 			printf '%s\n' "${sha}"
 			return 0
 		fi
-		echo "::warning::Tracking issue #${issue_number} matched the cycle-baseline marker only in comments from untrusted authors; ignoring it." >&2
+		if [ "${untrusted_marker}" = "true" ]; then
+			echo "::warning::Tracking issue #${issue_number} matched the cycle-baseline marker only in unauthenticated comments; ignoring it." >&2
+		fi
 	done <<< "${numbers}"
 	return 0
 }
@@ -269,6 +283,12 @@ require_code_changes()
 
 if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
 	skip_cycle disabled
+fi
+if [ -z "${ORCHESTRATOR_STATE_AUTH_KEYRING:-}" ] || [ ! -f "${COMPREHENSIVE_CYCLE_MARKER_HELPER}" ]; then
+	fail_cycle marker_auth_unavailable
+fi
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${COMPREHENSIVE_CYCLE_MARKER_HELPER}" validate-keyring >/dev/null; then
+	fail_cycle marker_auth_unavailable
 fi
 
 # 1. Another cycle job still running (the schedule fired while a previous
@@ -351,6 +371,7 @@ deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_WAIT_SECS ))
 gate_run_id=""
 gate_conclusion=""
 gate_head_sha=""
+gate_actor_id=""
 while [ "$(date +%s)" -lt "${deadline}" ]; do
 	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
 	runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue
@@ -359,10 +380,11 @@ while [ "$(date +%s)" -lt "${deadline}" ]; do
 		[ -n "${gate_run_id}" ] || continue
 		echo "Smoke gate run: ${gate_run_id}"
 	fi
-	run_state="$(printf '%s' "${runs_json}" | jq -r --argjson id "${gate_run_id}" '[.workflow_runs[]? | select(.id == $id)] | first | ((.status // "") + " " + (.conclusion // "") + " " + (.head_sha // ""))')"
+	run_state="$(printf '%s' "${runs_json}" | jq -r --argjson id "${gate_run_id}" '[.workflow_runs[]? | select(.id == $id)] | first | ((.status // "") + " " + (.conclusion // "") + " " + (.head_sha // "") + " " + ((.actor.id // 0) | tostring))')"
 	run_status="$(printf '%s' "${run_state}" | cut -d' ' -f1)"
 	run_conclusion="$(printf '%s' "${run_state}" | cut -d' ' -f2)"
 	gate_head_sha="$(printf '%s' "${run_state}" | cut -d' ' -f3)"
+	gate_actor_id="$(printf '%s' "${run_state}" | cut -d' ' -f4)"
 	if [ "${run_status}" = "completed" ]; then
 		gate_conclusion="${run_conclusion}"
 		break
@@ -377,6 +399,9 @@ if [ -z "${gate_conclusion}" ]; then
 fi
 if [ "${gate_conclusion}" != "success" ]; then
 	fail_cycle smoke_gate_failed "run=${gate_run_id} conclusion=${gate_conclusion}"
+fi
+if ! [[ "${gate_actor_id}" =~ ^[1-9][0-9]*$ ]]; then
+	fail_cycle smoke_gate_metadata_invalid "run=${gate_run_id} actor_id=missing"
 fi
 # The gate checked out whatever main was when its run started; that commit,
 # not the tip read before dispatch, is what was smoke-tested. Anything that
@@ -406,6 +431,9 @@ fi
 dispatch_output="$(APPLY_ANALYSIS_ROLE=proving \
 	APPLY_ANALYSIS_CYCLE_BASELINE_SHA="${main_tip}" \
 	APPLY_ANALYSIS_SMOKE_SHA="${smoke_sha}" \
+	APPLY_ANALYSIS_DISPATCHER_RUN_ID="${GITHUB_RUN_ID}" \
+	APPLY_ANALYSIS_SMOKE_RUN_ID="${gate_run_id}" \
+	APPLY_ANALYSIS_SMOKE_ACTOR_ID="${gate_actor_id}" \
 	GITHUB_SHA="${smoke_sha}" \
 	GITHUB_OUTPUT="" \
 	bash "${APPLY_ANALYSIS_DISPATCHER}")"

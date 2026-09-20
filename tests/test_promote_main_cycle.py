@@ -8,6 +8,9 @@ import os
 import stat
 import subprocess
 import tempfile
+import base64
+import hashlib
+import hmac
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -16,6 +19,43 @@ SCRIPT = REPO_ROOT / "scripts" / "promote_main_cycle.sh"
 TIP = "1" * 40
 TAG_COMMIT = "2" * 40
 OLD_BASELINE = "3" * 40
+MARKER_KEY = b"k" * 32
+MARKER_KEYRING = json.dumps({
+	"schema_version": "orchestrator_state_auth_keyring.v1",
+	"active_key_id": "test-key",
+	"keys": [{"key_id": "test-key", "key_base64": base64.b64encode(MARKER_KEY).decode("ascii")}],
+})
+
+
+def _signed_cycle_comment(baseline_sha: str) -> dict:
+	document = {
+		"schema_version": "comprehensive_cycle_marker.v1", "algorithm": "hmac-sha256",
+		"key_id": "test-key", "producer_id": 41898282, "repository": "owner/repo",
+		"source_doc": "analysis/workflow-optimization-test.md", "role": "proving",
+		"dispatcher_run_id": 42, "smoke_run_id": 500, "smoke_actor_id": 1234,
+		"smoke_workflow_path": ".github/workflows/test-and-mark-stable.yml",
+		"smoke_event": "workflow_dispatch",
+		"smoke_display_title": "Test & Mark Stable Release [cycle:42]",
+		"smoke_inputs": {"gate_only": "true", "gate_cycle_id": "42"},
+		"smoke_conclusion": "success", "smoke_head_sha": TIP,
+		"cycle_baseline_sha": baseline_sha, "promote_sha": "", "proving_merge_sha": "",
+		"signature": "0" * 64,
+	}
+	unsigned = dict(document)
+	unsigned.pop("signature")
+	message = b"coding-workflows/comprehensive-cycle-marker/v1\n" + json.dumps(
+		unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+	).encode()
+	document["signature"] = hmac.new(MARKER_KEY, message, hashlib.sha256).hexdigest()
+	return {
+		"body": (
+			"apply-analysis-source-doc: analysis/workflow-optimization-test.md\n"
+			"<!-- COMPREHENSIVE_CYCLE_MARKER_V1\n"
+			+ json.dumps(document, sort_keys=True, separators=(",", ":"))
+			+ "\nCOMPREHENSIVE_CYCLE_MARKER_V1 -->"
+		),
+		"user": {"login": "github-actions[bot]", "id": 41898282},
+	}
 
 MOCK_GH = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -64,6 +104,8 @@ if args[:1] == ["api"]:
         state["gate_tick"] = tick + 1
         seq = state.get("gate_runs_sequence") or []
         runs = seq[min(tick, len(seq) - 1)] if seq else []
+        for run in runs:
+            run.setdefault("actor", {"id": 1234})
         respond({"workflow_runs": runs})
     save(); sys.stderr.write("unexpected api path " + path + "\n"); sys.exit(1)
 if args[:2] == ["workflow", "run"]:
@@ -139,6 +181,7 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[sub
 			"STUB_ENV_OUT": str(env_out),
 			"PROMOTE_CYCLE_GATE_POLL_SECS": "1",
 			"PROMOTE_CYCLE_GATE_WAIT_SECS": "6",
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": MARKER_KEYRING,
 			"PYTHONDONTWRITEBYTECODE": "1",
 		}
 	)
@@ -226,6 +269,7 @@ def test_no_code_change_since_last_cycle_baseline_skips() -> None:
 		"compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), OLD_BASELINE: _compare(["analysis/a.md"])},
 		"last_cycle_issue": 900,
 		"last_cycle_baseline": OLD_BASELINE,
+		"cycle_comments": [_signed_cycle_comment(OLD_BASELINE)],
 	}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), state)
@@ -240,7 +284,7 @@ def test_non_marker_comments_do_not_break_last_cycle_baseline_lookup() -> None:
 		"last_cycle_baseline": OLD_BASELINE,
 		"cycle_comments": [
 			{"body": "unrelated orchestrator state", "user": {"login": "github-actions[bot]"}},
-			{"body": f"apply-analysis-cycle-baseline-sha: {OLD_BASELINE}", "user": {"login": "shubhodeep1"}, "author_association": "OWNER"},
+			_signed_cycle_comment(OLD_BASELINE),
 			{"body": "another progress comment", "user": {"login": "github-actions[bot]"}},
 		],
 	}
@@ -259,11 +303,16 @@ def test_untrusted_baseline_marker_comment_is_ignored() -> None:
 		"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])},
 		"last_cycle_issue": 900,
 		"last_cycle_baseline": TIP,
-		"cycle_comments": [{"body": f"apply-analysis-cycle-baseline-sha: {TIP}", "user": {"login": "stranger"}, "author_association": "NONE"}],
+		"cycle_comments": [{
+			"body": f"apply-analysis-source-doc: analysis/forged.md\napply-analysis-cycle-baseline-sha: {TIP}",
+			"user": {"login": "stranger", "id": 999},
+			"author_association": "MEMBER",
+		}],
+		"gate_runs_sequence": GATE_SUCCESS,
 	}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, _final, _ = _run(Path(tmp), state)
-	assert "only in comments from untrusted authors" in proc.stderr
+	assert "only in unauthenticated comments" in proc.stderr
 	assert "reason=no_code_changes_since_last_cycle" not in proc.stdout
 	# The tick got past the baseline guard and on to the smoke gate.
 	assert "Dispatching test-and-mark-stable.yml on main with gate_only=true" in proc.stdout

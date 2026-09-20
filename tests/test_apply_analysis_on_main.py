@@ -12,6 +12,9 @@ import json
 import os
 import subprocess
 import tempfile
+import base64
+import hashlib
+import hmac
 from pathlib import Path
 
 import yaml
@@ -19,6 +22,55 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "apply_analysis_on_main.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "promote-main-to-stable.yml"
+MARKER_KEY = b"k" * 32
+MARKER_KEYRING = json.dumps({
+	"schema_version": "orchestrator_state_auth_keyring.v1",
+	"active_key_id": "test-key",
+	"keys": [{"key_id": "test-key", "key_base64": base64.b64encode(MARKER_KEY).decode("ascii")}],
+})
+
+
+def _signed_marker_comment(source_doc: str) -> dict:
+	document = {
+		"schema_version": "comprehensive_cycle_marker.v1",
+		"algorithm": "hmac-sha256",
+		"key_id": "test-key",
+		"producer_id": 41898282,
+		"repository": "owner/repo",
+		"source_doc": source_doc,
+		"role": "proving",
+		"dispatcher_run_id": 42,
+		"smoke_run_id": 500,
+		"smoke_actor_id": 1234,
+		"smoke_workflow_path": ".github/workflows/test-and-mark-stable.yml",
+		"smoke_event": "workflow_dispatch",
+		"smoke_display_title": "Test & Mark Stable Release [cycle:42]",
+		"smoke_inputs": {"gate_only": "true", "gate_cycle_id": "42"},
+		"smoke_conclusion": "success",
+		"smoke_head_sha": "b" * 40,
+		"cycle_baseline_sha": "c" * 40,
+		"promote_sha": "",
+		"proving_merge_sha": "",
+		"signature": "0" * 64,
+	}
+	unsigned = dict(document)
+	unsigned.pop("signature")
+	payload = json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+	document["signature"] = hmac.new(
+		MARKER_KEY,
+		b"coding-workflows/comprehensive-cycle-marker/v1\n" + payload,
+		hashlib.sha256,
+	).hexdigest()
+	return {
+		"body": (
+			f"apply-analysis-source-doc: {source_doc}\n"
+			"<!-- COMPREHENSIVE_CYCLE_MARKER_V1\n"
+			+ json.dumps(document, sort_keys=True, separators=(",", ":"))
+			+ "\nCOMPREHENSIVE_CYCLE_MARKER_V1 -->"
+		),
+		"user": {"login": "github-actions[bot]", "id": 41898282},
+		"author_association": "NONE",
+	}
 
 MOCK_GH = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -83,6 +135,10 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, docs: list[s
 	(repo / "analysis").mkdir()
 	# The script cds to its own parent's parent, so install it inside the temp repo.
 	(repo / "scripts" / "apply_analysis_on_main.sh").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+	(repo / "scripts" / "orchestrate_state_v2.py").write_text(
+		(REPO_ROOT / "scripts" / "orchestrate_state_v2.py").read_text(encoding="utf-8"),
+		encoding="utf-8",
+	)
 	for doc in docs or []:
 		(repo / doc).write_text("# rec\n", encoding="utf-8")
 	if report is not None:
@@ -106,6 +162,11 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, docs: list[s
 			"GITHUB_RUN_ID": "42",
 			"GITHUB_REF_NAME": "main",
 			"GITHUB_OUTPUT": str(output_file),
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": MARKER_KEYRING,
+			"APPLY_ANALYSIS_CYCLE_BASELINE_SHA": "c" * 40,
+			"APPLY_ANALYSIS_SMOKE_SHA": "b" * 40,
+			"APPLY_ANALYSIS_SMOKE_RUN_ID": "500",
+			"APPLY_ANALYSIS_SMOKE_ACTOR_ID": "1234",
 			"PYTHONDONTWRITEBYTECODE": "1",
 		}
 	)
@@ -164,6 +225,7 @@ def test_dispatches_oldest_unprocessed_doc_bound_by_label_and_marker_inputs() ->
 	state = {
 		"open_tracking": [_tracking(3)],
 		"search_hits": {"analysis/workflow-optimization-2026-08-30.md": 1},
+		"issue_comments": [_signed_marker_comment("analysis/workflow-optimization-2026-08-30.md")],
 	}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(
@@ -260,7 +322,11 @@ def test_list_only_reports_unprocessed_docs_without_dispatching() -> None:
 		"analysis/workflow-optimization-2026-09-03.md",
 	]
 	report = "- `analysis/workflow-optimization-2026-08-30.md`\n"
-	state = {"open_tracking": [_tracking(7, "ai:comprehensive-test-pending")], "search_hits": {"analysis/workflow-optimization-2026-09-01.md": 1}}
+	state = {
+		"open_tracking": [_tracking(7, "ai:comprehensive-test-pending")],
+		"search_hits": {"analysis/workflow-optimization-2026-09-01.md": 1},
+		"issue_comments": [_signed_marker_comment("analysis/workflow-optimization-2026-09-01.md")],
+	}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state, docs=docs, report=report, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
 	assert proc.returncode == 0, proc.stderr
@@ -313,6 +379,7 @@ def test_promote_workflow_cycle_job_runs_the_cycle_script_daily() -> None:
 	assert "bash scripts/promote_main_cycle.sh" in run_step["run"]
 	assert run_step["env"]["PROMOTE_CYCLE_ENABLED"] == "${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}"
 	assert run_step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT || github.token }}"
+	assert run_step["env"]["ORCHESTRATOR_STATE_AUTH_KEYRING"] == "${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}"
 	promote = wf["jobs"]["promote"]
 	assert promote["if"] == "github.event_name == 'workflow_dispatch'"
 	assert promote["concurrency"] == {"group": "promote-main-to-stable", "cancel-in-progress": False}
@@ -352,6 +419,8 @@ def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
 	assert "TRACKING_LABELS_INPUT: ${{ inputs.tracking_labels }}" in text
 	assert "source scripts/label_helpers.sh" in text.split("- name: Create tracking issue", 1)[1]
 	assert "TRACKING_ISSUE_COMMENT_POSTED" in text
+	assert "TRACKING_COMMENT_TOKEN: ${{ github.token }}" in text
+	assert 'GH_TOKEN="${TRACKING_COMMENT_TOKEN}" gh_retry gh api' in text
 	# Bindings are all-or-nothing: a failed label or marker comment closes the
 	# freshly created issue and fails the run so the dispatcher can retry.
 	create_step = text.split("- name: Create tracking issue", 1)[1].split("- name: Create integration branch", 1)[0]

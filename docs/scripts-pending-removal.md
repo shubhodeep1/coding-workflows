@@ -62,7 +62,8 @@ Copy this block when adding a new entry:
   - `gh workflow view promote-main-to-stable.yml -R shubhodeep1/coding-workflows` confirms the daily schedule still exists and the `cycle` job still runs `scripts/promote_main_cycle.sh`.
   - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:orchestrator-tracking,ai:comprehensive-test-pending"` returns `[]` (no proving or verifying run in flight).
   - `git ls-remote origin refs/heads/main 'refs/tags/stable^{}'` shows no code change on `main` since the tag, or a replacement promotion path is live.
-  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_orchestrate_poll_promote_cycle.py` returns exit code 0.
+  - `gh secret list -R shubhodeep1/coding-workflows | grep '^ORCHESTRATOR_STATE_AUTH_KEYRING'` returns exactly one configured signing secret before any cycle remains enabled.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_orchestrate_state_comprehensive_marker.py tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_orchestrate_poll_promote_cycle.py` returns exit code 0, proving signature, immutable producer-ID, smoke-run metadata, and tamper checks.
 - **Owner:** @shubhodeep1
 
 ### `scripts/auto_release_stable.sh` + `.github/workflows/auto-release-stable.yml`

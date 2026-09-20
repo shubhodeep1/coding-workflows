@@ -1479,6 +1479,7 @@ COMPREHENSIVE_CYCLE_BOT_LOGINS="${COMPREHENSIVE_CYCLE_BOT_LOGINS:-github-actions
 # orchestrator posts them with GH_PAT, i.e. as the repository owner) or from
 # github-actions[bot]; a marker from anyone else is ignored and reported.
 COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
+COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID="41898282"
 # Poll ticks a proving run's completion may retry a transient verifying-run
 # dispatch (another project in flight, orchestrator run in flight, guard
 # unavailable) before giving up.
@@ -5837,12 +5838,11 @@ security_pass_findings_rows_json() {
 # security_pass_apply_waivers_to_findings <findings_file>
 #
 # Poller-side enforcement of security_pass_waived_findings on an engine
-# result: drops re-reports of accepted findings (exact finding_id, or the
-# same file and category within SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of
-# the waived line) and rewrites the findings file in place with the kept
-# rows and an updated counts.kept / counts.suppressed_waived.  The engine
+# result: drops a re-report only when exactly one current finding and one
+# persisted waiver share the same valid defect_fingerprint, then rewrites the
+# findings file in place with the kept rows and updated counts. The engine
 # applies the same rule when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this
-# keeps an older staged engine honest.  Fail-open: any error leaves the file
+# keeps an older staged engine honest. Fail-open: any error leaves the file
 # untouched and logs a warning.
 security_pass_apply_waivers_to_findings() {
   local findings_file="$1"
@@ -5850,50 +5850,46 @@ security_pass_apply_waivers_to_findings() {
   waived_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
   [[ "${waived_count}" =~ ^[0-9]+$ ]] || waived_count=0
   [ "${waived_count}" -gt 0 ] || return 0
-  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}" <<'PY'
+  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" <<'PY'
 from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from pathlib import Path
+
+sys.path.insert(0, sys.argv[3])
+from orchestrate_lib import is_security_finding_defect_fingerprint  # noqa: E402
 
 findings_path = Path(sys.argv[1])
 state_path = Path(sys.argv[2])
-line_window = int(sys.argv[3])
 
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
 waivers = [row for row in state.get("security_pass_waived_findings", []) if isinstance(row, dict)]
 
-
-def norm_category(value: object) -> str:
-	return " ".join(str(value or "").lower().split())
-
-
-def waiver_for(finding: dict) -> str | None:
-	finding_id = str(finding.get("finding_id") or "")
-	for waiver in waivers:
-		waived_id = str(waiver.get("finding_id") or "")
-		if waived_id and waived_id == finding_id:
-			return waived_id
-		waived_line = waiver.get("line")
-		if (
-			str(waiver.get("file") or "")
-			and str(waiver.get("file") or "") == str(finding.get("file") or "")
-			and norm_category(waiver.get("owasp_or_stride_category"))
-			and norm_category(waiver.get("owasp_or_stride_category")) == norm_category(finding.get("owasp_or_stride_category"))
-			and isinstance(waived_line, int)
-			and not isinstance(waived_line, bool)
-			and abs(int(waived_line) - int(finding.get("line") or 0)) <= line_window
-		):
-			return waived_id or "(unnamed waiver)"
-	return None
+findings = [row for row in payload.get("findings", []) if isinstance(row, dict)]
+finding_fingerprints = Counter(
+	str(row.get("defect_fingerprint"))
+	for row in findings
+	if is_security_finding_defect_fingerprint(row.get("defect_fingerprint"))
+)
+waiver_fingerprints = Counter(
+	str(row.get("defect_fingerprint"))
+	for row in waivers
+	if is_security_finding_defect_fingerprint(row.get("defect_fingerprint"))
+)
 
 
 kept: list[dict] = []
 suppressed: list[str] = []
-for finding in payload.get("findings", []):
-	if isinstance(finding, dict) and waiver_for(finding) is not None:
+for finding in findings:
+	defect_fingerprint = finding.get("defect_fingerprint")
+	if (
+		is_security_finding_defect_fingerprint(defect_fingerprint)
+		and finding_fingerprints[str(defect_fingerprint)] == 1
+		and waiver_fingerprints[str(defect_fingerprint)] == 1
+	):
 		suppressed.append(str(finding.get("finding_id") or "?"))
 		continue
 	kept.append(finding)
@@ -5921,21 +5917,26 @@ PY
 
 # security_pass_record_waivers <waivers_json_array>
 #
-# Upsert waiver rows (by finding_id) into security_pass_waived_findings,
-# drop the same ids from security_pass_reported_findings so the next delta
-# audit does not ask the engine to re-verify them, and keep the array
-# bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
-# severity, justification, source, waived_by, waived_at_cycle, issue}.
+# Upsert waiver rows by defect_fingerprint, drop the same fingerprints from
+# security_pass_reported_findings so the next delta audit does not ask the
+# engine to re-verify them, and keep the array bounded.
 security_pass_record_waivers() {
   local waivers_json="$1"
+  if ! printf '%s' "${waivers_json}" | jq -e '
+      type == "array" and length > 0
+      and all(.[]; (.defect_fingerprint | type) == "string" and (.defect_fingerprint | test("^security_defect_context\\.v1:[0-9a-f]{64}$")))
+      and ((map(.defect_fingerprint) | unique | length) == length)
+    ' >/dev/null 2>&1; then
+    return 1
+  fi
   if ! jq --argjson waivers "${waivers_json}" '
     (.security_pass_waived_findings // []) as $existing
-    | ($waivers | map(.finding_id)) as $ids
+    | ($waivers | map(.defect_fingerprint)) as $fingerprints
     | .security_pass_waived_findings = (
-        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waivers) | .[-100:]
+        ([$existing[] | select(((.defect_fingerprint // "") | IN($fingerprints[])) | not)] + $waivers) | .[-100:]
       )
     | .security_pass_reported_findings = (
-        [(.security_pass_reported_findings // [])[] | select((.finding_id | IN($ids[])) | not)]
+        [(.security_pass_reported_findings // [])[] | select(((.defect_fingerprint // "") | IN($fingerprints[])) | not)]
       )
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     rm -f "${STATE_FILE}.tmp"
@@ -6549,6 +6550,7 @@ ${decisions_table}}"
       --argjson defer "$([ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ] && echo true || echo false)" '
       [.decisions[] | select(.action == "accept_with_followup") | {
         finding_id: .finding.finding_id,
+        defect_fingerprint: .finding.defect_fingerprint,
         file: .finding.file,
         line: .finding.line,
         owasp_or_stride_category: .finding.owasp_or_stride_category,
@@ -7001,6 +7003,9 @@ run_security_pass_inline() {
       --phase "orchestrate-security-pass" \
       --stderr-file "${audit_error_file}" \
       -- bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/security_audit.sh" "${context_file}"; then
+    if [ -s "${audit_error_file}" ]; then
+      echo "::warning::Security-pass audit command failed: $(head -c 500 "${audit_error_file}" | tr '\n' ' ')"
+    fi
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
     return 1
   fi
@@ -7022,6 +7027,8 @@ run_security_pass_inline() {
     ][]; (type == "number") and (floor == .) and . >= 0)
     and all(.findings[];
       (.finding_id | type) == "string" and (.finding_id | length) > 0
+      and (.defect_fingerprint | type) == "string"
+      and (.defect_fingerprint | test("^security_defect_context\\.v1:[0-9a-f]{64}$"))
       and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
       and (.severity == "critical" or .severity == "high" or .severity == "medium" or .severity == "low")
       and (.confidence | type) == "number"
@@ -11412,22 +11419,65 @@ extract_comprehensive_release_metadata() {
 # ai:comprehensive-test-pending without a marker (legacy callback path).
 comprehensive_cycle_metadata_json() {
   local comments_json="$1"
-  printf '%s' "${comments_json}" | jq -c --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
-    def line($body; $key): (($body | capture("(?m)^" + $key + ": (?<v>[^\r\n]+)")? // {v: ""}) | .v | gsub("^\\s+|\\s+$"; ""));
-    def is_marker: ((.body // "") | test("(?m)^apply-analysis-source-doc: "));
-    def trusted: (((.author_association // "") as $a | ($trusted | split(",") | map(gsub("^\\s+|\\s+$"; "")) | index($a)) != null)
-                  or ((.user.login // "") == "github-actions[bot]"));
-    ([ .[] | select(is_marker and trusted) | .body ] | last // "") as $body
-    | ([ .[] | select(is_marker and (trusted | not)) ] | length > 0) as $untrusted
+  local comments_file selected_file
+  comments_file="$(mktemp)"
+  selected_file="$(mktemp)"
+  printf '%s' "${comments_json}" > "${comments_file}"
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" select-comprehensive-marker \
+    --comments-json "${comments_file}" \
+    --repository "${GITHUB_REPOSITORY}" \
+    --producer-id "${COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID}" \
+    --out-file "${selected_file}" >/dev/null 2>&1; then
+    rm -f "${comments_file}" "${selected_file}"
+    echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","dispatcher_run_id":0,"smoke_run_id":0,"smoke_actor_id":0,"untrusted_marker":true}'
+    return 0
+  fi
+  jq -c '
+    (.marker // {}) as $marker
     | {
-        role: line($body; "apply-analysis-role"),
-        doc: line($body; "apply-analysis-source-doc"),
-        baseline_sha: line($body; "apply-analysis-cycle-baseline-sha"),
-        smoke_sha: line($body; "apply-analysis-smoke-sha"),
-        promote_sha: line($body; "apply-analysis-promote-sha"),
-        proving_merge_sha: line($body; "apply-analysis-proving-merge-sha"),
-        untrusted_marker: $untrusted
-      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","untrusted_marker":false}'
+        role: ($marker.role // ""),
+        doc: ($marker.source_doc // ""),
+        baseline_sha: ($marker.cycle_baseline_sha // ""),
+        smoke_sha: ($marker.smoke_head_sha // ""),
+        promote_sha: ($marker.promote_sha // ""),
+        proving_merge_sha: ($marker.proving_merge_sha // ""),
+        dispatcher_run_id: ($marker.dispatcher_run_id // 0),
+        smoke_run_id: ($marker.smoke_run_id // 0),
+        smoke_actor_id: ($marker.smoke_actor_id // 0),
+        smoke_workflow_path: ($marker.smoke_workflow_path // ""),
+        smoke_event: ($marker.smoke_event // ""),
+        smoke_display_title: ($marker.smoke_display_title // ""),
+        smoke_conclusion: ($marker.smoke_conclusion // ""),
+        smoke_inputs: ($marker.smoke_inputs // {}),
+        untrusted_marker: (.untrusted_marker // false)
+      }
+  ' "${selected_file}" 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","dispatcher_run_id":0,"smoke_run_id":0,"smoke_actor_id":0,"untrusted_marker":true}'
+  rm -f "${comments_file}" "${selected_file}"
+}
+
+# comprehensive_smoke_run_verified <cycle_metadata_json>
+# Re-fetch the one signed smoke run and verify the API-reported workflow,
+# event, display-title/input correlation, conclusion, actor, and tested head.
+comprehensive_smoke_run_verified() {
+  local metadata_json="$1"
+  local smoke_run_id run_json
+  smoke_run_id="$(printf '%s' "${metadata_json}" | jq -r '.smoke_run_id // 0')"
+  [[ "${smoke_run_id}" =~ ^[1-9][0-9]*$ ]] || return 1
+  if ! run_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${smoke_run_id}")"; then
+    return 1
+  fi
+  printf '%s' "${run_json}" | jq -e --argjson marker "${metadata_json}" '
+    (.path // "") == $marker.smoke_workflow_path
+    and (.event // "") == $marker.smoke_event
+    and (.display_title // "") == $marker.smoke_display_title
+    and (.conclusion // "") == $marker.smoke_conclusion
+    and (.head_sha // "") == $marker.smoke_sha
+    and (.actor.id // 0) == $marker.smoke_actor_id
+    and $marker.smoke_inputs == {
+      gate_only: "true",
+      gate_cycle_id: ($marker.dispatcher_run_id | tostring)
+    }
+  ' >/dev/null 2>&1
 }
 
 # comprehensive_stable_tag_commit
@@ -11626,6 +11676,9 @@ dispatch_comprehensive_verification_run() {
   dispatch_output="$(APPLY_ANALYSIS_ROLE=verifying \
     APPLY_ANALYSIS_CYCLE_BASELINE_SHA="$(printf '%s' "${metadata_json}" | jq -r '.baseline_sha')" \
     APPLY_ANALYSIS_SMOKE_SHA="$(printf '%s' "${metadata_json}" | jq -r '.smoke_sha')" \
+    APPLY_ANALYSIS_DISPATCHER_RUN_ID="$(printf '%s' "${metadata_json}" | jq -r '.dispatcher_run_id')" \
+    APPLY_ANALYSIS_SMOKE_RUN_ID="$(printf '%s' "${metadata_json}" | jq -r '.smoke_run_id')" \
+    APPLY_ANALYSIS_SMOKE_ACTOR_ID="$(printf '%s' "${metadata_json}" | jq -r '.smoke_actor_id')" \
     APPLY_ANALYSIS_PROMOTE_SHA="${main_tip}" \
     APPLY_ANALYSIS_PROVING_MERGE_SHA="${proving_merge_sha}" \
     APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE="${TRACKING_NUM}" \
@@ -11740,6 +11793,13 @@ comprehensive_promotion_gate_before_final_merge() {
 
 This verifying run's marker comment lacks \`apply-analysis-promote-sha\` / \`apply-analysis-smoke-sha\`, so the poller cannot pin a promotion. The final merge proceeds; promote by hand with promote-main-to-stable.yml if wanted."
         tg_notify "Project #${TRACKING_NUM}: verifying run lacks cycle SHAs; promotion skipped, merge proceeds." "CRITICAL"
+        return 0
+      fi
+      if ! comprehensive_smoke_run_verified "${metadata_json}"; then
+        if ! comprehensive_promotion_hold_or_fail smoke_run_verification_unavailable "${now}" \
+          "Project #${TRACKING_NUM}: the signed smoke-run evidence could not be verified through the Actions API within the hold cap; promotion abandoned, merge proceeds."; then
+          return 1
+        fi
         return 0
       fi
       local untested_json untested_rc
@@ -17987,8 +18047,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   # still in security_pass_reported_findings.  In terminal
   # ai:security-pass-failed the loop is then reset and re-audited exactly like
   # /re-security-pass; in security-pass-fixing the waivers only persist and
-  # apply from the running cycle's next re-audit.  OWNER/MEMBER/COLLABORATOR
-  # humans only.  A `<!-- security-pass-waive-dedup:<comment-id> -->` marker
+  # apply from the running cycle's next re-audit. Human callers must have a
+  # current API-verified maintain/admin role, and every id must resolve once
+  # to a fingerprinted finding reported at the current integration head. A
+  # `<!-- security-pass-waive-dedup:<comment-id> -->` marker
   # (also posted on rejection) stops the same comment from being re-evaluated.
   if { [ "${PROJECT_STATUS}" = "failed" ] && has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; } \
     || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
@@ -18012,8 +18074,8 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       SECURITY_PASS_WAIVE_AUTHOR="$(printf '%s' "${SECURITY_PASS_WAIVE_COMMENT_JSON}" | jq -r '.user.login // ""' 2>/dev/null || echo "")"
       SECURITY_PASS_WAIVE_REJECT_REASON=""
       if ! printf '%s' "${SECURITY_PASS_WAIVE_COMMENT_JSON}" | jq -e '
-        ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
-        and ((.user.type // "") != "Bot")
+        ((.user.type // "") == "User")
+        and ((.user.login // "") | test("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"))
         and (((.user.login // "") | endswith("[bot]")) | not)
       ' >/dev/null 2>&1; then
         SECURITY_PASS_WAIVE_REJECT_REASON="author"
@@ -18032,13 +18094,57 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
           || [ "$(printf '%s' "${SECURITY_PASS_WAIVE_TOKENS_JSON}" | jq -r 'unique | length')" != "$(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length')" ]; }; then
         SECURITY_PASS_WAIVE_REJECT_REASON="format"
       fi
+      if [ -z "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
+        SECURITY_PASS_WAIVE_AUTHOR_URI="$(printf '%s' "${SECURITY_PASS_WAIVE_AUTHOR}" | jq -sRr @uri)"
+        if ! SECURITY_PASS_WAIVE_ROLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/collaborators/${SECURITY_PASS_WAIVE_AUTHOR_URI}/permission" --jq '.role_name // ""')"; then
+          echo "::warning::Could not verify repository permission for /security-pass-waive comment ${SECURITY_PASS_WAIVE_COMMENT_ID}; leaving the command unmarked for retry."
+          continue
+        fi
+        if [ "${SECURITY_PASS_WAIVE_ROLE}" != "maintain" ] && [ "${SECURITY_PASS_WAIVE_ROLE}" != "admin" ]; then
+          SECURITY_PASS_WAIVE_REJECT_REASON="permission"
+        fi
+      fi
+      if [ -z "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
+        SECURITY_PASS_WAIVE_CURRENT_HEAD="$(_branch_head_sha "${INTEGRATION_BRANCH_TRACKING}" || true)"
+        SECURITY_PASS_WAIVE_AUDITED_HEAD="$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+        if [ -z "${SECURITY_PASS_WAIVE_CURRENT_HEAD}" ]; then
+          echo "::warning::Could not resolve the current integration head for /security-pass-waive comment ${SECURITY_PASS_WAIVE_COMMENT_ID}; leaving the command unmarked for retry."
+          continue
+        fi
+        if [ "${SECURITY_PASS_WAIVE_AUDITED_HEAD}" != "${SECURITY_PASS_WAIVE_CURRENT_HEAD}" ]; then
+          SECURITY_PASS_WAIVE_REJECT_REASON="stale_head"
+        fi
+      fi
+      SECURITY_PASS_WAIVE_MATCHES_JSON='[]'
+      if [ -z "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
+        SECURITY_PASS_WAIVE_MATCHES_JSON="$(jq -c --argjson ids "${SECURITY_PASS_WAIVE_IDS_JSON}" '
+          (.security_pass_reported_findings // []) as $reported
+          | [
+              $ids[] as $id
+              | ([$reported[] | select(.finding_id == $id)]) as $matches
+              | {id: $id, count: ($matches | length), finding: ($matches[0] // null)}
+            ]
+        ' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+        if ! printf '%s' "${SECURITY_PASS_WAIVE_MATCHES_JSON}" | jq -e --argjson expected "$(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length')" '
+          length == $expected
+          and all(.[];
+            .count == 1
+            and (.finding.defect_fingerprint | type) == "string"
+            and (.finding.defect_fingerprint | test("^security_defect_context\\.v1:[0-9a-f]{64}$")))
+          and ((map(.finding.defect_fingerprint) | unique | length) == length)
+        ' >/dev/null 2>&1; then
+          SECURITY_PASS_WAIVE_REJECT_REASON="finding_match"
+        fi
+      fi
       if [ -n "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
         echo "SECURITY_PASS_WAIVE_REJECTED tracking_issue=${TRACKING_NUM} comment=${SECURITY_PASS_WAIVE_COMMENT_ID} reason=${SECURITY_PASS_WAIVE_REJECT_REASON}"
-        if [ "${SECURITY_PASS_WAIVE_REJECT_REASON}" = "author" ]; then
-          SECURITY_PASS_WAIVE_REJECT_TEXT="only a human repository OWNER, MEMBER, or COLLABORATOR may waive security-pass findings"
-        else
-          SECURITY_PASS_WAIVE_REJECT_TEXT="expected \`/security-pass-waive <finding_id> [<finding_id> ...]\` with ids made of letters, digits, \`.\`, \`_\` and \`-\` (at most 121 characters each)"
-        fi
+        case "${SECURITY_PASS_WAIVE_REJECT_REASON}" in
+          author) SECURITY_PASS_WAIVE_REJECT_TEXT="only a human GitHub user may request a security-pass waiver" ;;
+          permission) SECURITY_PASS_WAIVE_REJECT_TEXT="the caller's current repository role is not \`maintain\` or \`admin\`" ;;
+          stale_head) SECURITY_PASS_WAIVE_REJECT_TEXT="the reported findings are not bound to the current integration head" ;;
+          finding_match) SECURITY_PASS_WAIVE_REJECT_TEXT="every id must uniquely identify a currently reported finding with a valid, distinct defect fingerprint" ;;
+          *) SECURITY_PASS_WAIVE_REJECT_TEXT="expected \`/security-pass-waive <finding_id> [<finding_id> ...]\` with ids made of letters, digits, \`.\`, \`_\` and \`-\` (at most 121 characters each)" ;;
+        esac
         post_tracking_comment "<!-- security-pass-waive-dedup:${SECURITY_PASS_WAIVE_COMMENT_ID} -->
 
 ## ⛔ Security-pass waiver not applied
@@ -18046,18 +18152,18 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was not applied: ${SECURITY_PASS_WAIVE_REJECT_TEXT}."
       else
         echo "  /security-pass-waive requested for project #${TRACKING_NUM} by ${SECURITY_PASS_WAIVE_AUTHOR}: $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'join(" ")')"
-        SECURITY_PASS_WAIVERS_JSON="$(jq -c --argjson ids "${SECURITY_PASS_WAIVE_IDS_JSON}" --arg by "${SECURITY_PASS_WAIVE_AUTHOR}" '
-          (.security_pass_reported_findings // []) as $reported
-          | (.security_pass_cycle // 0) as $cycle
+        SECURITY_PASS_WAIVERS_JSON="$(jq -c --argjson matches "${SECURITY_PASS_WAIVE_MATCHES_JSON}" --arg by "${SECURITY_PASS_WAIVE_AUTHOR}" '
+          (.security_pass_cycle // 0) as $cycle
           | [
-              $ids[] as $id
-              | ([$reported[] | select(.finding_id == $id)] | last) as $known
+              $matches[]
+              | .finding as $known
               | {
-                  finding_id: $id,
-                  file: ($known.file // ""),
-                  line: ($known.line // 0),
-                  owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
-                  severity: ($known.severity // ""),
+                  finding_id: $known.finding_id,
+                  defect_fingerprint: $known.defect_fingerprint,
+                  file: $known.file,
+                  line: $known.line,
+                  owasp_or_stride_category: $known.owasp_or_stride_category,
+                  severity: $known.severity,
                   justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
                   source: "operator",
                   waived_by: $by,
@@ -18101,7 +18207,7 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
               SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` ($(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.file + ":" + (.line | tostring)')${SECURITY_PASS_WAIVE_ROW_ISSUE:+; follow-up #${SECURITY_PASS_WAIVE_ROW_ISSUE}})"
             fi
           else
-            SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` (not among the reported findings; matched by exact id only)"
+            SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` ($(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.file + ":" + (.line | tostring)'))"
           fi
         done < <(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c '.[]')
         echo "SECURITY_PASS_WAIVED tracking_issue=${TRACKING_NUM} source=operator by=${SECURITY_PASS_WAIVE_AUTHOR} ids=$(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'join(",")')"

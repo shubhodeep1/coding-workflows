@@ -9,6 +9,9 @@ mocked `gh` from test_orchestrate_poll_process.py.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import stat
 import tempfile
 from pathlib import Path
@@ -23,9 +26,41 @@ HUMAN_SHA = "e" * 40
 BOT_SHA = "f" * 40
 
 LABEL = "ai:comprehensive-test-pending"
+DISPATCHER_RUN_ID = 777
+SMOKE_RUN_ID = 500
+SMOKE_ACTOR_ID = 1234
+MARKER_KEY = b"a" * 32
 
 
 def _marker(role: str, **extra: str) -> str:
+	marker_document = {
+		"schema_version": "comprehensive_cycle_marker.v1",
+		"algorithm": "hmac-sha256",
+		"key_id": "active",
+		"producer_id": 41898282,
+		"repository": "owner/repo",
+		"source_doc": "analysis/workflow-optimization-2026-09-01.md",
+		"role": role,
+		"dispatcher_run_id": DISPATCHER_RUN_ID,
+		"smoke_run_id": SMOKE_RUN_ID,
+		"smoke_actor_id": SMOKE_ACTOR_ID,
+		"smoke_workflow_path": ".github/workflows/test-and-mark-stable.yml",
+		"smoke_event": "workflow_dispatch",
+		"smoke_display_title": f"Test & Mark Stable Release [cycle:{DISPATCHER_RUN_ID}]",
+		"smoke_inputs": {"gate_only": "true", "gate_cycle_id": str(DISPATCHER_RUN_ID)},
+		"smoke_conclusion": "success",
+		"smoke_head_sha": extra.get("smoke_sha", SMOKE_SHA),
+		"cycle_baseline_sha": extra.get("cycle_baseline_sha", BASELINE_SHA),
+		"promote_sha": extra.get("promote_sha", ""),
+		"proving_merge_sha": extra.get("proving_merge_sha", ""),
+		"signature": "0" * 64,
+	}
+	unsigned_document = dict(marker_document)
+	unsigned_document.pop("signature")
+	message = b"coding-workflows/comprehensive-cycle-marker/v1\n" + json.dumps(
+		unsigned_document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+	).encode()
+	marker_document["signature"] = hmac.new(MARKER_KEY, message, hashlib.sha256).hexdigest()
 	lines = [
 		"<!-- apply-analysis-source-doc -->",
 		"## Apply-analysis dispatch",
@@ -36,17 +71,23 @@ def _marker(role: str, **extra: str) -> str:
 	for key, value in extra.items():
 		lines.append(f"apply-analysis-{key.replace('_', '-')}: {value}")
 	lines.append("")
+	lines.extend([
+		"<!-- COMPREHENSIVE_CYCLE_MARKER_V1",
+		json.dumps(marker_document, sort_keys=True, separators=(",", ":")),
+		"COMPREHENSIVE_CYCLE_MARKER_V1 -->",
+		"",
+	])
 	lines.append("Dispatched by the promote cycle.")
 	return "\n".join(lines)
 
 
 def _trusted(marker: str) -> dict:
-	"""The orchestrator posts the marker with GH_PAT, i.e. as the repository owner."""
-	return {"body": marker, "author_association": "OWNER", "user": {"login": "shubhodeep1"}}
+	"""The orchestrator posts the marker with github.token as Actions bot."""
+	return {"body": marker, "author_association": "NONE", "user": {"login": "github-actions[bot]", "id": 41898282}}
 
 
 def _untrusted(marker: str) -> dict:
-	return {"body": marker, "author_association": "CONTRIBUTOR", "user": {"login": "drive-by"}}
+	return {"body": marker, "author_association": "MEMBER", "user": {"login": "member", "id": 999}}
 
 
 def _open_final_pr(number: int = 360) -> dict:
@@ -158,7 +199,22 @@ def test_proving_run_retries_when_default_branch_ref_is_unavailable() -> None:
 
 
 def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None, tag_commit: str = "9" * 40, untrusted_marker: bool = False, env_overrides: dict | None = None, compare_status_by_range: dict | None = None, extra_store: dict | None = None):
-	extra = {"compare_commits_detail": compare_commits, "tag_refs": {"stable": {"type": "tag", "sha": "8" * 40}}, "tag_objects": {"8" * 40: tag_commit}}
+	extra = {
+		"compare_commits_detail": compare_commits,
+		"tag_refs": {"stable": {"type": "tag", "sha": "8" * 40}},
+		"tag_objects": {"8" * 40: tag_commit},
+		"action_runs_by_id": {
+			str(SMOKE_RUN_ID): {
+				"id": SMOKE_RUN_ID,
+				"path": ".github/workflows/test-and-mark-stable.yml",
+				"event": "workflow_dispatch",
+				"display_title": f"Test & Mark Stable Release [cycle:{DISPATCHER_RUN_ID}]",
+				"conclusion": "success",
+				"head_sha": SMOKE_SHA,
+				"actor": {"id": SMOKE_ACTOR_ID},
+			},
+		},
+	}
 	if commit_files:
 		extra["commit_files"] = commit_files
 	if compare_status_by_range:
@@ -346,6 +402,30 @@ def test_stable_tag_lookup_failure_holds_instead_of_recording_no_tag() -> None:
 	assert result["latest_state"]["final_merge_status"] != "merged"
 	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"
 	assert isinstance(result["latest_state"]["comprehensive_promotion"]["gate_started_at"], int)
+
+
+def test_smoke_run_api_head_mismatch_holds_without_promotion() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	mismatched_run = {
+		str(SMOKE_RUN_ID): {
+			"id": SMOKE_RUN_ID,
+			"path": ".github/workflows/test-and-mark-stable.yml",
+			"event": "workflow_dispatch",
+			"display_title": f"Test & Mark Stable Release [cycle:{DISPATCHER_RUN_ID}]",
+			"conclusion": "success",
+			"head_sha": HUMAN_SHA,
+			"actor": {"id": SMOKE_ACTOR_ID},
+		},
+	}
+	result = _verifying_run(
+		_project_state(),
+		compare_commits=commits,
+		extra_store={"action_runs_by_id": mismatched_run},
+	)
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"
+	assert result["latest_state"]["final_merge_status"] != "merged"
+	assert result["release_dispatches"] == []
+	assert "reason=smoke_run_verification_unavailable" in result["stdout"]
 
 
 def test_untrusted_marker_never_promotes_or_dispatches() -> None:

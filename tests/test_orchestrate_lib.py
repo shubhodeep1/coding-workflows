@@ -155,6 +155,40 @@ def _write_json(path: Path, data: dict) -> None:
 		json.dump(data, f)
 
 
+def test_security_finding_defect_fingerprint_binds_context_path_and_category(tmp_path: Path) -> None:
+	first_file = tmp_path / "first.py"
+	second_file = tmp_path / "second.py"
+	content = "before\nvulnerable_call()\nafter\n"
+	first_file.write_text(content, encoding="utf-8")
+	second_file.write_text(content, encoding="utf-8")
+
+	base = orchestrate_lib.security_finding_defect_fingerprint(
+		tmp_path, "./first.py", 2, " A01:  Broken Access Control "
+	)
+	assert base == orchestrate_lib.security_finding_defect_fingerprint(
+		tmp_path, "first.py", 2, "a01: broken access control"
+	)
+	assert base != orchestrate_lib.security_finding_defect_fingerprint(
+		tmp_path, "second.py", 2, "a01: broken access control"
+	)
+	assert base != orchestrate_lib.security_finding_defect_fingerprint(
+		tmp_path, "first.py", 2, "A04: Insecure Design"
+	)
+	assert orchestrate_lib.is_security_finding_defect_fingerprint(base)
+
+	first_file.write_text("before\nsafer_call()\nafter\n", encoding="utf-8")
+	assert base != orchestrate_lib.security_finding_defect_fingerprint(
+		tmp_path, "first.py", 2, "A01: Broken Access Control"
+	)
+
+
+def test_security_finding_defect_fingerprint_excludes_line_number(tmp_path: Path) -> None:
+	(tmp_path / "same.py").write_text("x\nx\nx\nx\nx\nx\n", encoding="utf-8")
+	first = orchestrate_lib.security_finding_defect_fingerprint(tmp_path, "same.py", 3, "A04")
+	second = orchestrate_lib.security_finding_defect_fingerprint(tmp_path, "same.py", 4, "A04")
+	assert first == second
+
+
 def _make_decomposition(
 	issues: list[dict] | None = None,
 	edges: list[dict] | None = None,

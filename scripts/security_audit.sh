@@ -246,11 +246,11 @@ fi
 # the orchestrator's security-pass exhaustion judge accepted as known risks
 # for the audited project (findings-json mode only).  They are appended to the
 # prompt as accepted findings the model must not report again, and the
-# post-filter drops any re-report deterministically: an exact `finding_id`
-# match, or the same file and category within
-# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line (model-generated
-# ids drift between runs and fix commits move lines).  Counted as
-# `suppressed_waived`.  Malformed input fails closed like prior findings.
+# post-filter drops a re-report only when exactly one current finding and one
+# waiver share the same versioned code-context fingerprint. Legacy rows
+# without a fingerprint remain valid state but cannot suppress anything.
+# Counted as `suppressed_waived`. Malformed input fails closed like prior
+# findings.
 SECURITY_AUDIT_WAIVED_FINDINGS="${SECURITY_AUDIT_WAIVED_FINDINGS:-}"
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
 	echo "SECURITY_AUDIT_WAIVED_FINDINGS is only valid in findings-json mode" >&2
@@ -988,9 +988,9 @@ fi
 
 # --- Waived findings: normalize + render the prompt section ----------------
 # Accepted findings never enter scope on their own (they are not to be
-# re-audited); they are listed for the model as accepted and enforced by the
-# post-filter below.  Validation fails closed: the file comes from the
-# orchestrator's own state or an operator command it already validated.
+# re-audited); fingerprinted rows are listed for the model as accepted and
+# enforced by the post-filter below. Legacy fingerprint-less rows are retained
+# in orchestrator state but omitted here so they cannot authorize suppression.
 WAIVED_FINDINGS_COUNT=0
 : > "${WAIVED_FINDINGS_PROMPT_FILE}"
 printf '[]\n' > "${WAIVED_FINDINGS_NORMALIZED_FILE}"
@@ -1002,6 +1002,7 @@ if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -1033,12 +1034,16 @@ def text_field(finding: dict, key: str) -> str:
 
 normalized: list[dict] = []
 prompt_lines: list[str] = []
+fingerprint_re = re.compile(r"^security_defect_context\.v1:[0-9a-f]{64}$")
 for index, finding in enumerate(waived_findings):
 	if not isinstance(finding, dict):
 		raise SystemExit(f"waived finding #{index} must be an object")
 	finding_id = text_field(finding, "finding_id")
 	if not finding_id:
 		raise SystemExit(f"waived finding #{index} is missing its finding_id")
+	defect_fingerprint = finding.get("defect_fingerprint")
+	if not isinstance(defect_fingerprint, str) or fingerprint_re.fullmatch(defect_fingerprint) is None:
+		continue
 	relative_file = ""
 	file_value = finding.get("file")
 	if isinstance(file_value, str) and file_value.strip():
@@ -1058,6 +1063,7 @@ for index, finding in enumerate(waived_findings):
 	normalized.append(
 		{
 			"finding_id": finding_id,
+			"defect_fingerprint": defect_fingerprint,
 			"file": relative_file,
 			"line": line_number,
 			"owasp_or_stride_category": category,
@@ -1087,7 +1093,7 @@ PY
 		exit 1
 	fi
 	[[ "${WAIVED_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || WAIVED_FINDINGS_COUNT=0
-	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (line window ${SECURITY_AUDIT_WAIVER_LINE_WINDOW})"
+	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (exact context fingerprints; line window compatibility value ignored)"
 fi
 
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
@@ -1183,12 +1189,21 @@ python3 - \
 	"${AUDIT_SCOPE_MODE}" \
 	"${CHANGED_FILES_FILE}" \
 	"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
-	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" <<'PY'
+	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" \
+	"${SECURITY_AUDIT_SUPPORT_DIR}/scripts" <<'PY'
 from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from pathlib import Path, PurePosixPath
+
+sys.path.insert(0, sys.argv[11])
+from orchestrate_lib import (  # noqa: E402
+	OrchestrateError,
+	is_security_finding_defect_fingerprint,
+	security_finding_defect_fingerprint,
+)
 
 repo_root = Path(sys.argv[1]).resolve()
 codex_output_path = Path(sys.argv[2])
@@ -1200,6 +1215,7 @@ audit_scope_mode = sys.argv[7]
 changed_files_path = Path(sys.argv[8])
 waived_findings_path = Path(sys.argv[9])
 waiver_line_window = int(sys.argv[10])
+_ = waiver_line_window  # Compatibility input; line proximity no longer authorizes suppression.
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -1351,10 +1367,20 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		return None, f"{finding_id}: file is empty and cannot back a concrete line reference"
 	if line > line_count:
 		return None, f"{finding_id}: line {line} exceeds file length {line_count}"
+	try:
+		defect_fingerprint = security_finding_defect_fingerprint(
+			repo_root,
+			normalized_file,
+			line,
+			category,
+		)
+	except OrchestrateError as exc:
+		fail(f"{finding_id}: unable to fingerprint defect context: {exc}")
 
 	return (
 		{
 			"finding_id": finding_id,
+			"defect_fingerprint": defect_fingerprint,
 			"owasp_or_stride_category": category,
 			"severity": severity,
 			"confidence": confidence,
@@ -1395,33 +1421,6 @@ if not isinstance(waived_findings_input, list):
 	fail("waived findings must be a JSON array")
 
 
-def matching_waiver(finding: dict[str, object]) -> str | None:
-	"""Return the waived finding_id this finding re-reports, if any.
-
-	Exact id first; otherwise the same file and category within the line
-	window of the waived line, because the auditor mints a new id on every
-	run and a fix commit shifts the cited line.
-	"""
-	finding_id = str(finding.get("finding_id") or "")
-	finding_file = str(finding.get("file") or "")
-	finding_category = " ".join(str(finding.get("owasp_or_stride_category") or "").lower().split())
-	finding_line = int(finding.get("line") or 0)
-	for waiver in waived_findings_input:
-		if not isinstance(waiver, dict):
-			continue
-		waived_id = str(waiver.get("finding_id") or "")
-		if waived_id and waived_id == finding_id:
-			return waived_id
-		waived_file = str(waiver.get("file") or "")
-		waived_category = " ".join(str(waiver.get("owasp_or_stride_category") or "").lower().split())
-		waived_line = waiver.get("line")
-		if not waived_file or not waived_category or not isinstance(waived_line, int) or isinstance(waived_line, bool) or waived_line < 1:
-			continue
-		if waived_file == finding_file and waived_category == finding_category and abs(waived_line - finding_line) <= waiver_line_window:
-			return waived_id or "(unnamed waiver)"
-	return None
-
-
 if not isinstance(raw_findings, list):
 	fail("security-audit Codex output must be a JSON array")
 
@@ -1432,6 +1431,12 @@ low_confidence_findings: list[str] = []
 out_of_scope_findings: list[str] = []
 waived_findings: list[dict[str, str]] = []
 seen_ids: set[str] = set()
+waiver_fingerprint_counts = Counter(
+	str(waiver.get("defect_fingerprint"))
+	for waiver in waived_findings_input
+	if isinstance(waiver, dict) and is_security_finding_defect_fingerprint(waiver.get("defect_fingerprint"))
+)
+candidate_findings: list[dict[str, object]] = []
 
 for raw_finding in raw_findings:
 	normalized_finding, error_message = normalize_finding(raw_finding)
@@ -1453,8 +1458,21 @@ for raw_finding in raw_findings:
 	if rule_id is not None:
 		excluded_findings.append({"finding_id": finding_id, "rule_id": rule_id})
 		continue
-	waived_id = matching_waiver(normalized_finding)
-	if waived_id is not None:
+	candidate_findings.append(normalized_finding)
+
+finding_fingerprint_counts = Counter(
+	str(finding["defect_fingerprint"])
+	for finding in candidate_findings
+)
+for normalized_finding in candidate_findings:
+	finding_id = str(normalized_finding["finding_id"])
+	defect_fingerprint = str(normalized_finding["defect_fingerprint"])
+	if finding_fingerprint_counts[defect_fingerprint] == 1 and waiver_fingerprint_counts[defect_fingerprint] == 1:
+		waived_id = next(
+			str(waiver.get("finding_id") or "(unnamed waiver)")
+			for waiver in waived_findings_input
+			if isinstance(waiver, dict) and waiver.get("defect_fingerprint") == defect_fingerprint
+		)
 		waived_findings.append({"finding_id": finding_id, "waived_finding_id": waived_id})
 		continue
 	kept_findings.append(normalized_finding)

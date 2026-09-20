@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
@@ -70,11 +70,99 @@ TRACKING_BODY_ISSUE_LINE_RE = re.compile(
 )
 TRACKING_BODY_WAVE_HEADING_RE = re.compile(r"^### Wave (?P<wave>\d+)\s*$")
 TRACKING_BODY_CHECKED_STATUSES: set[str] = {"merged", "closed", "skipped"}
+SECURITY_DEFECT_CONTEXT_SCHEMA_VERSION = "security_defect_context.v1"
+SECURITY_DEFECT_CONTEXT_DOMAIN = b"coding-workflows/security-defect-context/v1"
+SECURITY_DEFECT_CONTEXT_RADIUS = 2
+SECURITY_DEFECT_CONTEXT_MAX_LINE_CHARS = 16_384
+SECURITY_DEFECT_FINGERPRINT_RE = re.compile(r"^security_defect_context\.v1:[0-9a-f]{64}$")
 
 
 def tracking_body_sync_hash(body: str) -> str:
 	"""Return the stable hash used to cache live tracking-body sync state."""
 	return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def security_finding_defect_fingerprint(
+	repo_root: Path,
+	repository_path: str,
+	line: int,
+	category: str,
+) -> str:
+	"""Bind a security finding to its repository path, class, and exact code context.
+
+	The cited line number selects a fixed five-line window but is deliberately
+	not part of the digest. This keeps the identity stable across unrelated line
+	shifts while making one waiver ambiguous when the same vulnerable context is
+	present more than once.
+	"""
+	if not isinstance(repository_path, str) or not repository_path.strip() or len(repository_path) > 512:
+		raise OrchestrateError("security finding path is invalid")
+	if not isinstance(line, int) or isinstance(line, bool) or line < 1:
+		raise OrchestrateError("security finding line must be a positive integer")
+	if not isinstance(category, str):
+		raise OrchestrateError("security finding category is invalid")
+	normalized_category = " ".join(category.lower().split())
+	if not normalized_category or len(normalized_category) > 512:
+		raise OrchestrateError("security finding category is invalid")
+
+	candidate_path = PurePosixPath(repository_path.strip().replace("\\", "/"))
+	while candidate_path.parts and candidate_path.parts[0] == ".":
+		candidate_path = PurePosixPath(*candidate_path.parts[1:])
+	if candidate_path.is_absolute() or ".." in candidate_path.parts:
+		raise OrchestrateError("security finding path must be repository-relative")
+	normalized_path = candidate_path.as_posix()
+	if normalized_path in ("", "."):
+		raise OrchestrateError("security finding path must resolve to a repository file")
+
+	resolved_root = repo_root.resolve(strict=True)
+	resolved_path = (resolved_root / normalized_path).resolve(strict=True)
+	try:
+		resolved_path.relative_to(resolved_root)
+	except ValueError as exc:
+		raise OrchestrateError("security finding path escapes repository root") from exc
+	if not resolved_path.is_file():
+		raise OrchestrateError("security finding path is not a file")
+
+	window_start = max(1, line - SECURITY_DEFECT_CONTEXT_RADIUS)
+	window_end = line + SECURITY_DEFECT_CONTEXT_RADIUS
+	context_lines: list[dict[str, Any]] = []
+	line_exists = False
+	try:
+		with resolved_path.open("r", encoding="utf-8", errors="replace", newline=None) as source_file:
+			for current_line, source_line in enumerate(source_file, start=1):
+				if current_line > window_end:
+					break
+				if current_line < window_start:
+					continue
+				line_text = source_line.rstrip("\r\n")
+				if len(line_text) > SECURITY_DEFECT_CONTEXT_MAX_LINE_CHARS:
+					raise OrchestrateError("security finding context line is too long")
+				context_lines.append({"offset": current_line - line, "text": line_text})
+				line_exists = line_exists or current_line == line
+	except OSError as exc:
+		raise OrchestrateError("security finding file is unreadable") from exc
+	if not line_exists:
+		raise OrchestrateError("security finding line exceeds file length")
+
+	canonical_context = {
+		"schema_version": SECURITY_DEFECT_CONTEXT_SCHEMA_VERSION,
+		"file": normalized_path,
+		"category": normalized_category,
+		"context": context_lines,
+	}
+	canonical_bytes = json.dumps(
+		canonical_context,
+		ensure_ascii=False,
+		sort_keys=True,
+		separators=(",", ":"),
+	).encode("utf-8")
+	digest = hashlib.sha256(SECURITY_DEFECT_CONTEXT_DOMAIN + b"\n" + canonical_bytes).hexdigest()
+	return f"{SECURITY_DEFECT_CONTEXT_SCHEMA_VERSION}:{digest}"
+
+
+def is_security_finding_defect_fingerprint(value: object) -> bool:
+	"""Return whether *value* is a canonical v1 defect fingerprint."""
+	return isinstance(value, str) and SECURITY_DEFECT_FINGERPRINT_RE.fullmatch(value) is not None
 
 
 # ---------------------------------------------------------------------------

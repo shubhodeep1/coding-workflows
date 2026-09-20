@@ -996,6 +996,7 @@ jobs:
         id: tracking_issue
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_COMMENT_TOKEN: ${{ github.token }}
           TRACKING_LABELS_INPUT: ${{ inputs.tracking_labels }}
           TRACKING_COMMENT_INPUT: ${{ inputs.tracking_comment }}
         run: |
@@ -1048,7 +1049,7 @@ jobs:
             done
           fi
           if [ -z "${_binding_failed_stage}" ] && [ -n "${TRACKING_COMMENT_INPUT:-}" ]; then
-            if gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+            if GH_TOKEN="${TRACKING_COMMENT_TOKEN}" gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
               -f body="${TRACKING_COMMENT_INPUT}" >/dev/null; then
               echo "TRACKING_ISSUE_COMMENT_POSTED tracking_issue=${TRACKING_ISSUE_NUMBER}"
             else
