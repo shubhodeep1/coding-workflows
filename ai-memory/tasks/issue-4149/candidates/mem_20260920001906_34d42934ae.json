@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4148` at `9ad9f8edeed97862b6433a048d3dc2b9a13e0004` (matches integration metadata).\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: The acceptance criteria explicitly require a one-file, two-line replacement. Expanding scope would violate the no-additional-files constraint.\n\n## Automation impact\n\n- Existing file only; no new script or subsystem.\n- Scheduler/PR-push wiring: none required.\n- Supervisor: not required.\n- Database gate: not applicable.\n- Future-removal registry entry: not required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace its current three lines with exactly:\n    1. `status: ok`\n    2. `decompose-run: 35478030497`\n  - Preserve one terminal newline without a blank third line.\n\n## Functions or modules\n\nNone. This is a static canary fixture update.\n\n## Data structures affected\n\nThe text fixture changes from three key-value records to the required two-record format.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the complete fixture content\n\n- **Chosen:** Rewrite the target file as the exact required two-line payload.\n- **Alternatives considered:** Modify only the existing run identifier or retain the `updated-by` record.\n- **Why:** Both alternatives violate the exact-content acceptance criteria.\n\n## Security considerations\n\n- No endpoint, authorization surface, external input, secrets, or money-handling path is affected.\n- The implementation must remain confined to the declared file to prevent unintended repository changes.\n\n## Risks and edge cases\n\n- An accidental blank third line would violate the requirement.\n- Retaining either `run_id: 26151428977` or `updated-by: ai-pipeline` would fail acceptance.\n- The current file has three lines, so a full content replacement is required.\n- Any additional changed file is out of scope.\n\n## Testing considerations\n\n- Verify the file has exactly two logical lines.\n- Compare both lines byte-for-byte with the requested values.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n- Confirm the diff contains no unrelated reformatting.\n- No broader test suite is necessary for this fixture-only edit.\n\n## Pre-execution self-check\n\n- Clarification response is sufficient.\n- Planning and integration refs match.\n- Target file exists and its current content was verified.\n- Scope is implementation-ready and estimated below five minutes.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "73a5f8a7639451f94a5db9d54cd9e8830ba0ab454a8bfb29168e3e947b1ac98d",
+  "lineage": {
+    "issue_number": 4149,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35478249672",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35478249672",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4149"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260920001906_34d42934ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4149,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35478249672"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4149",
+  "timestamps": {
+    "created_at": "2026-09-20T00:19:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
