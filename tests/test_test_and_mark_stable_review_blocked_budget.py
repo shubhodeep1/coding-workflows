@@ -79,6 +79,20 @@ def test_budget_guard_runs_before_artifact_creation() -> None:
 	assert 'if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then' in job
 
 
+def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
+	job = _e2e_job(_read_workflow())
+	prerequisites = _slice_between(job, "- name: Validate prerequisites", "# Fast-fail the hottest")
+	step_budget = 'REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_STEP_TIMEOUT}"'
+	cap_guard = 'if [ "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" -gt 90 ]; then'
+	review_max = 'if [ "${REVIEW_TIMEOUT}" -gt "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" ]; then'
+	assert prerequisites.index(step_budget) < prerequisites.index(cap_guard) < prerequisites.index(review_max)
+	assert 'REVIEW_EFFECTIVE_BUDGET_MINUTES=90' in prerequisites
+	assert 'REVIEW_STEP_TIMEOUT_MAX=90' in job
+
+	serial_budget = (2 * 30) + 60 + max(60, min(105, 90)) + 25 + 30 + 10 + 20
+	assert serial_budget == 295
+
+
 def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
 	job = _e2e_job(_read_workflow())
 	assert "DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))" in job
@@ -115,6 +129,10 @@ def test_phase6_transient_api_errors_remain_bounded() -> None:
 	assert phase6.count("retrying within the inactivity window") == 2
 	assert 'echo "status=timeout" >> "$GITHUB_OUTPUT"' in phase6
 	transient_read = 'if ! POLLER_RUN=$(gh_api_safe_quiet_print'
+	label_progress = 'if [ "$LABELS" != "$PREV_LABELS" ]; then'
+	success_guard = 'if [ "$REVIEW_BLOCKED_PRESENT" -eq 0 ] || [ "$TERMINAL_LABEL_PRESENT" -eq 1 ]; then'
+	assert phase6.index(label_progress) < phase6.index(transient_read)
+	assert phase6.index(success_guard) < phase6.index(transient_read)
 	read_complete = 'POLLER_STATUS=$(printf'
 	read_block = phase6[phase6.index(transient_read) : phase6.index(read_complete)]
 	assert 'echo "status=poller_failed"' not in read_block
