@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `5570973fb7e28c2b91188daa217ec3e47d8fb8d5` on `orchestrator/project-4156` (matches integration metadata).\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing canary fixture `tests/e2e_smoke_canary_b.txt`\n\nScope-mode justification: This is a complete, surgical two-line fixture update. Expanding scope would violate the explicit single-file acceptance criterion and provide no correctness benefit.\n\n## Automation and lifecycle\n\n- Change type: modify existing code only; no new script.\n- Entry point: existing `.github/workflows/internal-implement.yml` approval flow invoking `.github/workflows/implement.yml`; unchanged.\n- Scheduler wiring: none required.\n- Supervisor: none required.\n- Database work/gate: none.\n- Removal registry: not applicable.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary_b.txt`\n  - Preserve line 1 as `status: ok`.\n  - Replace line 2 with `decompose-run: 35479338161`.\n  - Ensure exactly two lines and no additional content.\n\nNo changelog, documentation, workflow, or contract-test files should change.\n\n## Functions or modules to implement\n\nNone. This is a static test-fixture content update.\n\n## Data structures affected\n\n- The two-line plain-text canary record.\n- Only the `decompose-run` scalar changes from `25567947079` to `35479338161`.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Perform an exact single-file replacement\n\n- **Chosen:** Update only the second line of `tests/e2e_smoke_canary_b.txt`, retaining the exact required two-line format.\n- **Alternatives considered:** Recreate the file, update related canaries, or add validation code/tests.\n- **Why:** The file already has the correct structure and first line. A one-line replacement is the smallest safe change and satisfies the explicit no-other-files constraint.\n\n## Security considerations\n\n- Trust boundary: the issue-provided run identifier enters only a non-secret test fixture.\n- Authorization: no endpoint, worker, or externally callable surface is added.\n- Validation: verify the identifier is copied exactly as the required decimal string.\n- Abuse cases: prevent accidental extra lines, edits to the primary canary, unrelated repository changes, or inclusion of sensitive data.\n\n## Risks and edge cases\n\n- Trailing or blank extra lines could violate the exact two-line requirement.\n- Editing the primary canary would violate the independence requirement.\n- Repository inspection confirms the target exists with two lines; only its current second-line run ID differs. No issue/codebase conflict was found.\n\n## Testing considerations\n\n1. Compare the complete file contents against:\n   `status: ok\\ndecompose-run: 35479338161\\n`\n2. Verify the file contains exactly two lines.\n3. Run `git diff --check`.\n4. Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary_b.txt`.\n5. No broader test suite is necessary for this fixture-only change.\n\n## Assumptions and missing context\n\n- The auto-answer confirms no additional clarification is required.\n- No missing implementation context was identified.\n- Existing unrelated files must remain untouched.\n\n## Pre-execution self-check\n\n- Planning ref matches the integration branch.\n- Target file and current discrepancy were verified.\n- The plan satisfies the exact-content and single-file scope requirements.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3ec0212601cad55325f2fa115ae3c56d37dab264079c288d8a54416f0f9c8575",
+  "lineage": {
+    "issue_number": 4158,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35479570685",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35479570685",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4158"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260920004922_20d8f0bdcb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4158,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35479570685"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4158",
+  "timestamps": {
+    "created_at": "2026-09-20T00:49:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
