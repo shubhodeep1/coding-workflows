@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "Merged fixes repeatedly target orchestrate polling, state resolution, retries, stale review heads, blocked reviews, and fallback payloads. Planning changes to asynchronous workflow coordination should account for persisted state, idempotent polling, retry semantics, current commit/PR identity, and tests for failure and fallback paths.",
+  "fingerprint": "7bdc28952c260502a7292b1b10ef0bbd81f7ac8ba0fc26a272aa0eb4781af369",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35479014990",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35479014990",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4092",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4109",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4127",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4140",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4093",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4112",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4130",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4141"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260920003726_754fcf4d9d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestration polling and state transitions are treated as explicit contracts, including stale-head and retry handling.",
+  "timestamps": {
+    "created_at": "2026-09-20T00:37:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
