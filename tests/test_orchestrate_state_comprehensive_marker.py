@@ -127,3 +127,26 @@ def test_comprehensive_marker_rejects_tampering_and_unsigned_legacy(tmp_path: Pa
 	returncode, legacy = _select(tmp_path, [unsigned])
 	assert returncode == 0
 	assert legacy == {"marker": None, "untrusted_marker": True}
+
+
+def test_comprehensive_marker_rejects_oversized_comments_before_parsing(tmp_path: Path) -> None:
+	comments_path = tmp_path / "oversized-comments.json"
+	output_path = tmp_path / "selected.json"
+	with comments_path.open("wb") as comments_file:
+		comments_file.truncate(32 * 1024 * 1024 + 1)
+	result = subprocess.run(
+		[
+			"python3", str(HELPER), "select-comprehensive-marker",
+			"--comments-json", str(comments_path),
+			"--repository", "owner/repo",
+			"--producer-id", str(PRODUCER_ID),
+			"--out-file", str(output_path),
+		],
+		check=False,
+		env=_environment(),
+		capture_output=True,
+		text=True,
+	)
+	assert result.returncode == 2
+	assert "comments JSON is invalid" in result.stderr
+	assert not output_path.exists()

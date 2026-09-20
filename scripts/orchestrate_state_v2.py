@@ -837,8 +837,11 @@ def cmd_select_comprehensive_marker(args: argparse.Namespace) -> int:
 		print(f"comprehensive marker selection failed: {context_error}", file=sys.stderr)
 		return 2
 	try:
-		comments = json.loads(Path(args.comments_json).read_text(encoding="utf-8"))
-	except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+		comments_path = Path(args.comments_json)
+		if comments_path.stat().st_size > 32 * 1024 * 1024:
+			raise ValueError("comments payload is oversized")
+		comments = json.loads(comments_path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
 		print("comprehensive marker selection failed: comments JSON is invalid", file=sys.stderr)
 		return 2
 	if not isinstance(comments, list) or len(comments) > 10_000:

@@ -474,6 +474,9 @@ def test_untrusted_marker_never_promotes_or_dispatches() -> None:
 	assert LABEL in result["tracking_labels"]
 	assert "COMPREHENSIVE_MARKER_UNTRUSTED" in result["stdout"]
 	assert "alerted=false" in result["stdout"]
+	tracking_bodies = [comment.get("body", "") for comment in result["issues"]["192"]["comments"]]
+	assert any("automated promote cycle" in body for body in tracking_bodies)
+	assert all("post the marker from a trusted account" not in body for body in tracking_bodies)
 	# A later tick neither re-alerts nor consumes the label.
 	second = _verifying_run(result["latest_state"], compare_commits=commits, untrusted_marker=True)
 	assert "alerted=true" in second["stdout"]

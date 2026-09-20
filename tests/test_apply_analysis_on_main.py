@@ -284,7 +284,7 @@ def test_untrusted_marker_comment_does_not_mark_a_doc_as_dispatched() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state, docs=docs)
 	assert proc.returncode == 0, proc.stderr + proc.stdout
-	assert "only in a comment from an untrusted author" in proc.stderr
+	assert "only in unauthenticated comments" in proc.stderr
 	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md" in proc.stdout
 	assert len(final["dispatches"]) == 1
 
@@ -419,6 +419,7 @@ def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
 	inputs = orchestrate["on"]["workflow_call"]["inputs"]
 	assert inputs["tracking_labels"]["default"] == ""
 	assert inputs["tracking_comment"]["default"] == ""
+	assert orchestrate["on"]["workflow_call"]["secrets"]["ORCHESTRATOR_STATE_AUTH_KEYRING"]["required"] is False
 	internal = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "internal-orchestrate.yml").read_text(encoding="utf-8"))
 	assert internal["jobs"]["orchestrate"]["with"]["tracking_labels"] == "${{ inputs.tracking_labels }}"
 	assert internal["jobs"]["orchestrate"]["with"]["tracking_comment"] == "${{ inputs.tracking_comment }}"
@@ -427,10 +428,15 @@ def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
 	assert "source scripts/label_helpers.sh" in text.split("- name: Create tracking issue", 1)[1]
 	assert "TRACKING_ISSUE_COMMENT_POSTED" in text
 	assert "TRACKING_COMMENT_TOKEN: ${{ github.token }}" in text
+	assert "TRACKING_COMMENT_CALLER_ACTOR_ID: ${{ github.actor_id }}" in text
+	assert "orchestrate_lib.py orchestrate_state_v2.py render_prompt.sh" in text
 	assert 'GH_TOKEN="${TRACKING_COMMENT_TOKEN}" gh_retry gh api' in text
 	# Bindings are all-or-nothing: a failed label or marker comment closes the
 	# freshly created issue and fails the run so the dispatcher can retry.
 	create_step = text.split("- name: Create tracking issue", 1)[1].split("- name: Create integration branch", 1)[0]
+	assert 'orchestrate_state_v2.py" select-comprehensive-marker' in create_step
+	assert ".marker.smoke_actor_id // 0" in create_step
+	assert '_binding_failed_stage="comment-auth"' in create_step
 	assert "TRACKING_ISSUE_BINDING_FAILED" in create_step
 	assert "gh issue close" in create_step
 	assert '--remove-label "${TRACKING_LABELS_INPUT}"' in create_step

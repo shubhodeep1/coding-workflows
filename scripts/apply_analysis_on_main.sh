@@ -93,9 +93,9 @@ APPLY_ANALYSIS_DOC_GLOB="${APPLY_ANALYSIS_DOC_GLOB:-analysis/workflow-optimizati
 APPLY_ANALYSIS_REPORT_PATH="${APPLY_ANALYSIS_REPORT_PATH:-analysis/recommendation-processing-report.md}"
 APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE="${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE:-internal-orchestrate.yml}"
 APPLY_ANALYSIS_TRACKING_LABEL="${APPLY_ANALYSIS_TRACKING_LABEL:-ai:comprehensive-test-pending}"
-# Same setting the poller uses for its marker parser: comment authors whose
-# author_association is listed (plus github-actions[bot]) may vouch that a
-# doc was dispatched before. Anyone else's comment is ignored.
+# Compatibility-only setting retained for existing workflow inputs. Signed
+# marker selection requires the immutable Actions producer ID; author
+# association grants no authority.
 COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
 COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID="41898282"
 COMPREHENSIVE_CYCLE_MARKER_HELPER="${COMPREHENSIVE_CYCLE_MARKER_HELPER:-${SCRIPT_DIR}/orchestrate_state_v2.py}"
@@ -200,9 +200,9 @@ trusted_marker_comment_present()
 
 # doc_dispatched_before <path>
 # 0 when a tracking issue (open or closed) carries this doc's marker in a
-# comment from a trusted author, 1 when none does, 2 when the lookup failed.
+# producer-authenticated signed comment, 1 when none does, 2 when lookup failed.
 # The search only finds candidates (it matches any comment body); the
-# author check on each candidate is what makes the answer trustworthy, so a
+# signature and immutable producer-ID check make the answer trustworthy, so a
 # stray comment cannot make the dispatcher skip a doc forever.
 doc_dispatched_before()
 {
@@ -225,7 +225,7 @@ doc_dispatched_before()
 			rc=$?
 		fi
 		[ "${rc}" -eq 2 ] && return 2
-		echo "::warning::Tracking issue #${issue_number} carries the marker for ${doc_path} only in a comment from an untrusted author; ignoring it." >&2
+		echo "::warning::Tracking issue #${issue_number} carries the marker for ${doc_path} only in unauthenticated comments; ignoring it." >&2
 	done <<< "${numbers}"
 	return 1
 }

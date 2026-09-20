@@ -75,8 +75,9 @@ PROMOTE_CYCLE_TRACKING_LABEL="${PROMOTE_CYCLE_TRACKING_LABEL:-ai:comprehensive-t
 APPLY_ANALYSIS_DISPATCHER="${APPLY_ANALYSIS_DISPATCHER:-${SCRIPT_DIR}/apply_analysis_on_main.sh}"
 GITHUB_RUN_ID="${GITHUB_RUN_ID:-0}"
 CYCLE_BASELINE_MARKER="apply-analysis-cycle-baseline-sha"
-# Same setting the poller and the dispatcher use: only marker comments from
-# github-actions[bot] or these author_associations are cycle state.
+# Compatibility-only setting retained for existing workflow inputs. Signed
+# marker selection requires the immutable Actions producer ID; author
+# association grants no authority.
 COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
 COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID="41898282"
 COMPREHENSIVE_CYCLE_MARKER_HELPER="${COMPREHENSIVE_CYCLE_MARKER_HELPER:-${SCRIPT_DIR}/orchestrate_state_v2.py}"
@@ -221,8 +222,8 @@ resolve_tag_commit()
 # last_cycle_baseline_sha: the baseline SHA recorded by the most recent
 # cycle (any outcome), or empty. Exit 2 when the search failed.
 # The search matches any comment body, so each candidate issue's comments
-# are re-read and only a marker posted by github-actions[bot] or a trusted
-# author_association counts; a stray comment cannot fake a completed cycle.
+# are re-read and only a producer-authenticated signed marker counts; a stray
+# comment cannot fake a completed cycle.
 last_cycle_baseline_sha()
 {
 	local query numbers issue_number sha comments_file selected_file

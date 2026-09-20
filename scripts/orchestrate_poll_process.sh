@@ -1475,9 +1475,9 @@ fi
 # Bot logins whose non-code commits may land on main during a cycle without
 # deferring the promotion (comma-separated).
 COMPREHENSIVE_CYCLE_BOT_LOGINS="${COMPREHENSIVE_CYCLE_BOT_LOGINS:-github-actions[bot]}"
-# Marker comments are trusted only from these author associations (the
-# orchestrator posts them with GH_PAT, i.e. as the repository owner) or from
-# github-actions[bot]; a marker from anyone else is ignored and reported.
+# Compatibility-only setting retained for existing workflow inputs. Marker
+# authority now requires the immutable Actions producer ID and a valid
+# keyring signature; author association grants no authority.
 COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
 COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID="41898282"
 # Poll ticks a proving run's completion may retry a transient verifying-run
@@ -12016,11 +12016,11 @@ The proving run merged, but the verifying run could not be dispatched (${verific
         ;;
     esac
   elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_marker')" = "true" ]; then
-    # A marker comment from an untrusted author with no trusted one: never
-    # dispatch or promote on its say-so, and never consume the cycle either.
+    # Marker evidence that fails producer or signature authentication must
+    # never dispatch or promote, and must not consume the cycle either.
     # The callback stays unhandled and the label stays on, so the issue
-    # keeps the daily cycle held (cycle_in_flight) until a human either
-    # posts a trusted marker or removes the label. Alert once, not per tick.
+    # keeps the daily cycle held (cycle_in_flight) until an operator removes
+    # the label to abandon or restart the cycle. Alert once, not per tick.
     local untrusted_alerted
     untrusted_alerted="$(jq -r '.comprehensive_release_callback.untrusted_marker_alerted // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
     echo "COMPREHENSIVE_MARKER_UNTRUSTED tracking_issue=${TRACKING_NUM} alerted=${untrusted_alerted}"
@@ -12031,8 +12031,8 @@ The proving run merged, but the verifying run could not be dispatched (${verific
       post_state_comment || true
       post_tracking_comment "## ⚠️ Untrusted apply-analysis marker
 
-This tracking issue carries \`ai:comprehensive-test-pending\` but its only apply-analysis marker comment was posted by an author outside \`${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}\`. The poller does not dispatch or promote on it, and it keeps the label so no new promote cycle starts until a human resolves this: post the marker from a trusted account, or remove \`ai:comprehensive-test-pending\` to abandon the cycle. Nothing is promoted."
-      tg_notify "Project #${TRACKING_NUM}: apply-analysis marker from an untrusted author ignored; cycle held human-gated (label kept), no verifying run, no promotion." "CRITICAL"
+This tracking issue carries \`ai:comprehensive-test-pending\`, but its apply-analysis marker failed producer-ID or keyring-signature authentication. The poller does not dispatch or promote on it. Remove \`ai:comprehensive-test-pending\` to abandon the cycle; to retry, remove the label and let the automated promote cycle create a new tracking issue with a producer-bound, signed marker. Nothing is promoted."
+      tg_notify "Project #${TRACKING_NUM}: apply-analysis marker authentication failed; cycle held (label kept), remove the label to abandon or retry through the automated promote cycle." "CRITICAL"
     fi
     return 0
   elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.role')" = "verifying" ]; then
