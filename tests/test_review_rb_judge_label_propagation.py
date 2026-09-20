@@ -796,10 +796,12 @@ def test_close_and_reissue_strips_judge_generated_orchestrator_lineage_markers()
 					"Keep this implementation guidance and metadata explanation.\n"
 					"**Orchestrator metadata** (do not edit)\n"
 					"- Tracking issue: #999\n"
-					"- Integration branch: `orchestrator/project-999`\n"
-					"- Local ID: `security-pass-fix-cycle-9`\n"
-					"- Priority: 9\n"
-					"- Managed by: AI Orchestrator"
+					"**Tracking issue:** #998\n"
+					"Integration branch: main\n"
+					"  - Integration branch: `orchestrator/project-999`\n"
+					"**Local ID:** security-pass-fix-cycle-9\n"
+					"Priority: 9\n"
+					"**Managed by:** AI Orchestrator"
 				),
 			},
 		},
@@ -813,9 +815,12 @@ def test_close_and_reissue_strips_judge_generated_orchestrator_lineage_markers()
 	assert "Keep this implementation guidance and metadata explanation." in body
 	assert lines.count("**Orchestrator metadata** (do not edit)") == 1
 	assert "- Tracking issue: #999" not in lines
-	assert "- Integration branch: `orchestrator/project-999`" not in lines
-	assert "- Local ID: `security-pass-fix-cycle-9`" not in lines
-	assert "- Priority: 9" not in lines
+	assert "**Tracking issue:** #998" not in lines
+	assert "Integration branch: main" not in lines
+	assert "  - Integration branch: `orchestrator/project-999`" not in lines
+	assert "**Local ID:** security-pass-fix-cycle-9" not in lines
+	assert "Priority: 9" not in lines
+	assert "**Managed by:** AI Orchestrator" not in lines
 	assert lines.count("- Tracking issue: #249") == 1
 	assert lines.count("- Integration branch: `orchestrator/project-249`") == 1
 	assert lines.count("- Local ID: `security-pass-fix-cycle-1`") == 1

@@ -15316,6 +15316,7 @@ release_staged_support_needs_human_latches() {
   local latched_issues latched_count latched_idx issue_num issue_labels_json
   local comments_json latch_record latch_idx latch_created_at latch_actor_login
   local needs_human_events_json current_needs_human_event release_marker release_body
+  local release_reconcile_comments_json
   local refreshed_issue_labels_json refreshed_needs_human_event
   if ! latched_issues="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai%3Aneeds-human&per_page=100" \
     | jq -s 'add // [] | map(select(.pull_request == null))' 2>/dev/null)"; then
@@ -15423,21 +15424,32 @@ release_staged_support_needs_human_latches() {
       echo "::warning::Could not release the ai:needs-human latch on #${issue_num}; leaving it for the next tick."
       continue
     fi
-    release_body="/approved
+    release_body="/approved [auto-approved-by-plan]
 
 ${release_marker}
 _Orchestrator: released the \`ai:needs-human\` latch that the staged-support restore failure set. The workflow engine now running (\`${ORCHESTRATOR_ENGINE_SHA}\`) restores support helpers to the branch version before the editor runs and commits the editor's own edits as plain branch edits, so the re-base conflict that halted this issue no longer occurs. Re-approving automatically so implementation resumes without a human; if it halts again on this engine the latch stays for a human._"
     if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${release_body}" >/dev/null 2>&1; then
-      echo "::warning::The /approved comment failed after releasing the ai:needs-human latch on #${issue_num}; restoring the latch."
-      if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-        --remove-label "ai:awaiting-approval" --add-label "ai:needs-human" >/dev/null 2>&1; then
-        echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=approval_comment_failed_latch_restored"
+      release_reconcile_comments_json=""
+      if release_reconcile_comments_json="$(_staged_support_comments_for_guard "${issue_num}" '[]' 'false')" \
+        && printf '%s' "${release_reconcile_comments_json}" | jq -e --arg marker "${release_marker}" '
+          any(.[];
+            (((.user.login // "") | test("\\[bot\\]$")) or
+             ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))) and
+            ((.body // "") | contains($marker)))
+        ' >/dev/null 2>&1; then
+        echo "::warning::The /approved response was lost for #${issue_num}, but its trusted release marker is present; treating the write as successful."
       else
-        echo "::warning::Could not restore ai:needs-human on #${issue_num} after the /approved comment failed; operator attention is required."
-        echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=approval_comment_failed_compensation_failed"
-        tg_notify_issue "${issue_num}" "CRITICAL: staged-support latch release was only partially applied. The /approved comment and ai:needs-human restoration both failed; ai:awaiting-approval remains, but managed and standalone stall recovery will not auto-approve while the staged-support latch marker is unresolved." "CRITICAL"
+        echo "::warning::The /approved comment failed after releasing the ai:needs-human latch on #${issue_num}; restoring the latch."
+        if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label "ai:awaiting-approval" --add-label "ai:needs-human" >/dev/null 2>&1; then
+          echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=approval_comment_failed_latch_restored"
+        else
+          echo "::warning::Could not restore ai:needs-human on #${issue_num} after the /approved comment failed; operator attention is required."
+          echo "STAGED_SUPPORT_LATCH_SKIP issue=${issue_num} reason=approval_comment_failed_compensation_failed"
+          tg_notify_issue "${issue_num}" "CRITICAL: staged-support latch release was only partially applied. The /approved comment and ai:needs-human restoration both failed; ai:awaiting-approval remains, but managed and standalone stall recovery will not auto-approve while the staged-support latch marker is unresolved." "CRITICAL"
+        fi
+        continue
       fi
-      continue
     fi
     echo "STAGED_SUPPORT_LATCH_RELEASED issue=${issue_num} engine_sha=${ORCHESTRATOR_ENGINE_SHA}"
     tg_notify_issue "${issue_num}" "Released the ai:needs-human latch on issue #${issue_num}: the staged-support re-base conflict that halted it is fixed in workflow engine ${ORCHESTRATOR_ENGINE_SHA}. Re-approved for implementation." "WARNING"

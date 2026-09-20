@@ -2727,12 +2727,12 @@ import re
 import sys
 
 canonical_line_patterns = (
-    r"\*\*Orchestrator metadata\*\*(?: \(do not edit\))?",
-    r"- Tracking issue: #\d+",
-    r"- Integration branch: `[^`]+`",
-    r"- Local ID: `[^`]+`",
-    r"- Priority: \d+",
-    r"- Managed by: .+",
+    r"\s*\*\*Orchestrator metadata\*\*(?:\s*\(do not edit\))?\s*",
+    r"\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#\d+\s*",
+    r"\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*[^`\n]+?\s*`?\s*",
+    r"\s*(?:-\s*)?(?:\*\*Local ID:\*\*|Local ID:)\s*`?\s*[^`\n]+?\s*`?\s*",
+    r"\s*(?:-\s*)?(?:\*\*Priority:\*\*|Priority:)\s*\d+\s*",
+    r"\s*(?:-\s*)?(?:\*\*Managed by:\*\*|Managed by:)\s*.+\s*",
 )
 for body_line in sys.stdin.read().splitlines():
     if not any(re.fullmatch(line_pattern, body_line) for line_pattern in canonical_line_patterns):

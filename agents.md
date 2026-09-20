@@ -265,8 +265,9 @@ a new value, add it to the appropriate overrides file with a
   so clearing that latch and later setting another human gate cannot reuse the stale marker.
   Immediately before changing labels, the sweep re-reads the paginated live labels and latest
   latch event; a changed or unreadable latch, or a residual `ai:implementing` label, skips release
-  for that tick. A failed `/approved` write restores
-  `ai:needs-human`; if that compensation also fails, the unresolved latch marker blocks
+  for that tick. A failed `/approved` response triggers a paginated history check; a trusted
+  release marker confirms an accepted write, while a confirmed failure restores
+  `ai:needs-human`. If that compensation also fails, the unresolved latch marker blocks
   managed and standalone auto-approval and raises a CRITICAL alert. Those recovery guards use
   the batched comment cache only when it explicitly reports an available array with fewer than
   100 entries; a missing/partial field or a full window triggers a paginated history read, and

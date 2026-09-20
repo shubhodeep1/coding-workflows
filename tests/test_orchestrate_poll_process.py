@@ -722,6 +722,7 @@ def _run_poller(
 	mock_stall_judge_json: dict | None = None,
 	fail_issue_comment_get_after: dict[int, int] | None = None,
 	fail_issue_comment_post_for: list[int] | None = None,
+	fail_issue_comment_post_after_write_for: list[int] | None = None,
 	fail_issue_get_for: list[int] | None = None,
 	fail_issue_edit_for: list[int] | None = None,
 	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
@@ -813,6 +814,7 @@ def _run_poller(
 	mock_stall_judge_json = mock_stall_judge_json or {}
 	fail_issue_comment_get_after = fail_issue_comment_get_after or {}
 	fail_issue_comment_post_for = fail_issue_comment_post_for or []
+	fail_issue_comment_post_after_write_for = fail_issue_comment_post_after_write_for or []
 	fail_issue_get_for = fail_issue_get_for or []
 	fail_issue_edit_for = fail_issue_edit_for or []
 	fail_issue_edit_on_calls = fail_issue_edit_on_calls or {}
@@ -1163,6 +1165,7 @@ def _run_poller(
 			"timeline_fail_for_issues": [int(x) for x in timeline_fail_for_issues],
 			"fail_issue_comment_get_after": {str(k): int(v) for k, v in fail_issue_comment_get_after.items()},
 			"fail_issue_comment_post_for": [int(x) for x in fail_issue_comment_post_for],
+			"fail_issue_comment_post_after_write_for": [int(x) for x in fail_issue_comment_post_after_write_for],
 			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
 			"fail_issue_edit_for": [int(x) for x in fail_issue_edit_for],
 			"fail_issue_edit_on_calls": {str(k): [int(call) for call in calls] for k, calls in fail_issue_edit_on_calls.items()},
@@ -2067,6 +2070,10 @@ if args[0] == 'api':
 			'user': {'login': 'github-actions[bot]'},
 			'html_url': f'https://github.com/owner/repo/issues/{m.group(1)}#issuecomment-{cid}',
 		})
+		if int(m.group(1)) in set(store.get('fail_issue_comment_post_after_write_for', [])):
+			save()
+			print('forced lost comment response after write', file=sys.stderr)
+			sys.exit(1)
 		save()
 		print(json.dumps({'id': cid}))
 		sys.exit(0)
@@ -4839,6 +4846,7 @@ def _run_latch_release_tick(
 	gql_comments_unavailable_for: list[int] | None = None,
 	fail_issue_comment_get_after: dict[int, int] | None = None,
 	fail_issue_comment_post_for: list[int] | None = None,
+	fail_issue_comment_post_after_write_for: list[int] | None = None,
 	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
 	fail_needs_human_issue_list: bool = False,
 ) -> dict:
@@ -4866,6 +4874,7 @@ def _run_latch_release_tick(
 		mock_gh_issue_list_label_filter=True,
 		fail_issue_comment_get_after=fail_issue_comment_get_after,
 		fail_issue_comment_post_for=fail_issue_comment_post_for,
+		fail_issue_comment_post_after_write_for=fail_issue_comment_post_after_write_for,
 		fail_issue_edit_on_calls=fail_issue_edit_on_calls,
 		fail_needs_human_issue_list=fail_needs_human_issue_list,
 		env_overrides=latch_env_overrides,
@@ -4896,6 +4905,7 @@ def test_staged_support_needs_human_latch_released_once_per_engine() -> None:
 		if comment["body"].startswith("/approved")
 	]
 	assert len(release_comments) == 1
+	assert release_comments[0].startswith("/approved [auto-approved-by-plan]")
 	assert f"<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict engine={engine_sha} -->" in release_comments[0]
 	combined_log = first["stdout"] + first["stderr"]
 	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" in combined_log
@@ -5154,6 +5164,19 @@ def test_staged_support_latch_release_is_source_only_and_compensates_comment_fai
 	combined_log = comment_failed["stdout"] + comment_failed["stderr"]
 	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=approval_comment_failed_latch_restored" in combined_log
 	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" not in combined_log
+
+	response_lost = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+		fail_issue_comment_post_after_write_for=[700],
+	)
+	response_lost_labels = response_lost["issues"]["700"]["labels"]
+	assert "ai:needs-human" not in response_lost_labels
+	assert "ai:awaiting-approval" in response_lost_labels
+	response_lost_log = response_lost["stdout"] + response_lost["stderr"]
+	assert "trusted release marker is present; treating the write as successful" in response_lost_log
+	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" in response_lost_log
 
 	double_failure = _run_latch_release_tick(
 		issue_labels=["ai:needs-human"],
