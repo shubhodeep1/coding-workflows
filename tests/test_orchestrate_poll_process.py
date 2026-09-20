@@ -946,6 +946,7 @@ def _run_poller(
 			).stdout.strip(),
 		}
 		integration_head_sha = sandbox_sha_aliases["__integration_head__"]
+		branch_ref_shas = {"orchestrator/project-192": integration_head_sha, **branch_ref_shas}
 		integration_tree_sha = subprocess.run(
 			["git", "-C", str(sandbox), "rev-parse", f"{integration_head_sha}^{{tree}}"],
 			check=True,
@@ -1619,6 +1620,7 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
 			i += 2
 			continue
 		i += 1
+	created_pr_head_sha = store.get('branch_ref_shas', {}).get(head)
 	race_pr = store.get('mock_pr_create_race_pr')
 	if isinstance(race_pr, dict) and race_pr.get('baseRefName') == base and race_pr.get('headRefName') == head:
 		existing = None
@@ -1640,6 +1642,8 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
 				'title': race_pr.get('title', title),
 				'body': race_pr.get('body', body),
 			}
+			if created_pr_head_sha:
+				existing['headSha'] = created_pr_head_sha
 			store.setdefault('prs', []).append(existing)
 			save()
 		print('a pull request already exists for this branch pair', file=sys.stderr)
@@ -1657,6 +1661,8 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
 		'title': title,
 		'body': body,
 	}
+	if created_pr_head_sha:
+		pr['headSha'] = created_pr_head_sha
 	store.setdefault('prs', []).append(pr)
 	save()
 	print(f'https://github.com/owner/repo/pull/{next_num}')
@@ -6751,6 +6757,9 @@ def test_sync_contract_list_union_mixed_conflict_falls_through_to_resolver():
 
 	assert result["sync_contract_tip_parent_count"] == 1
 	assert len(result["review_dispatches"]) == 1
+	created_final_pr = next(pr for pr in result["prs"] if pr["headRefName"] == "orchestrator/project-192")
+	assert created_final_pr["headSha"] == result["branch_ref_shas"]["orchestrator/project-192"]
+	assert re.fullmatch(r"[0-9a-f]{40}", created_final_pr["headSha"])
 	assert result["latest_state"]["sync"]["last_sync_outcome"] == "conflict"
 	tracking_bodies = [comment.get("body", "") for comment in result["issues"]["192"]["comments"]]
 	assert any("## ⚠️ Integration sync conflict" in body for body in tracking_bodies)
