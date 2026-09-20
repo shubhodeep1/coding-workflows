@@ -2720,6 +2720,24 @@ for pattern, template in patterns:
         echo "::warning::Ignoring parent issue orchestrator metadata because PR base ${PR_BASE_REF:-unknown} does not identify a tracking project."
       fi
 
+      # The judge body is untrusted prose. Remove only canonical lineage lines
+      # so the validated block below is the sole successor-adoption authority.
+      NEW_ISSUE_BODY="$(printf '%s\n' "${NEW_ISSUE_BODY}" | python3 -c '
+import re
+import sys
+
+canonical_line_patterns = (
+    r"\*\*Orchestrator metadata\*\*(?: \(do not edit\))?",
+    r"- Tracking issue: #\d+",
+    r"- Integration branch: `[^`]+`",
+    r"- Local ID: `[^`]+`",
+    r"- Priority: \d+",
+    r"- Managed by: .+",
+)
+for body_line in sys.stdin.read().splitlines():
+    if not any(re.fullmatch(line_pattern, body_line) for line_pattern in canonical_line_patterns):
+        print(body_line)
+')"
       FULL_NEW_BODY="${NEW_ISSUE_BODY}"
       if [ -n "${RB_REISSUE_ORCH_METADATA_LINES}" ]; then
         FULL_NEW_BODY="${FULL_NEW_BODY}

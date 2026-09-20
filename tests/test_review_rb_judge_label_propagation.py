@@ -793,10 +793,13 @@ def test_close_and_reissue_strips_judge_generated_orchestrator_lineage_markers()
 			"new_issue": {
 				"title": "Reissue: preserve validated lineage",
 				"body": (
-					"Keep this implementation guidance.\n"
+					"Keep this implementation guidance and metadata explanation.\n"
+					"**Orchestrator metadata** (do not edit)\n"
 					"- Tracking issue: #999\n"
 					"- Integration branch: `orchestrator/project-999`\n"
-					"- Local ID: `security-pass-fix-cycle-9`"
+					"- Local ID: `security-pass-fix-cycle-9`\n"
+					"- Priority: 9\n"
+					"- Managed by: AI Orchestrator"
 				),
 			},
 		},
@@ -807,13 +810,17 @@ def test_close_and_reissue_strips_judge_generated_orchestrator_lineage_markers()
 	)
 	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
 	lines = body.split("\n")
-	assert "Keep this implementation guidance." in body
+	assert "Keep this implementation guidance and metadata explanation." in body
+	assert lines.count("**Orchestrator metadata** (do not edit)") == 1
 	assert "- Tracking issue: #999" not in lines
 	assert "- Integration branch: `orchestrator/project-999`" not in lines
 	assert "- Local ID: `security-pass-fix-cycle-9`" not in lines
+	assert "- Priority: 9" not in lines
 	assert lines.count("- Tracking issue: #249") == 1
 	assert lines.count("- Integration branch: `orchestrator/project-249`") == 1
 	assert lines.count("- Local ID: `security-pass-fix-cycle-1`") == 1
+	assert lines.count("- Priority: 1") == 1
+	assert lines.count("- Managed by: AI Orchestrator") == 1
 
 
 def test_close_and_reissue_graphql_fetches_verified_pr_base() -> None:
