@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "Recent merged work repeatedly tightened boundaries around review automation, security audits, Git authentication, immutable references, process isolation, and PR/head ownership. Changes in one automation layer often require corresponding updates in shared helpers, workflow files, documentation, prompts, and regression tests.",
+  "fingerprint": "bfa1a30554aa477850c74711b936da80acb10cba68ad30f6fd493b474ee25110",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35479014990",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35479014990",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4092",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4109",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4127",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4140",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4093",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4112",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4130",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4141"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260920003446_daff4107fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Security hardening is a recurring cross-cutting concern spanning workflows, scripts, prompts, and shared helpers.",
+  "timestamps": {
+    "created_at": "2026-09-20T00:34:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
