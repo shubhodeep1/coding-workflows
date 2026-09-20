@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What specific improvement should be implemented?\nChoices:\nA: Provide the affected workflow/file, current behavior, expected behavior, and acceptance criteria. (RECOMMENDED)\nB: Link a failing run, issue, or PR and describe the desired outcome.\nC: Name the pipeline phase to improve and provide a measurable goal.",
+  "fingerprint": "06715f85f579e8274b41cdb8054b5989667423f744b097e2ba5378006774f0b7",
+  "lineage": {
+    "issue_number": 4154,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35479390620",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35479390620",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260920004349_eb1001de25",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4154,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35479390620"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4154 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-20T00:43:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
