@@ -2753,6 +2753,13 @@ if [ "${MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL:-false}" = "true" ]; then
 		fi
 	done
 fi
+if [ "${MOCK_SECURITY_PASS_ADVISORY_STATE_PERSIST_FAIL:-false}" = "true" ]; then
+	for jq_argument in "$@"; do
+		case "${jq_argument}" in
+			*"security_pass_followup_issues = ((("*) exit 1 ;;
+		esac
+	done
+fi
 exec "${REAL_JQ_BIN}" "$@"
 ''',
 		)
@@ -4242,10 +4249,31 @@ def test_security_pass_valid_head_persists_advisory_backlog_drain() -> None:
 	assert result["latest_state"] == result["state_on_disk"]
 
 
+def test_security_pass_clean_octopus_merge_rebinds_without_model_run() -> None:
+	result = _run_poller(
+		state=_passed_security_state_for_rebind(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:planning"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		branch_ref_shas={
+			"main": "__advanced_default_head__",
+			"orchestrator/project-192": "__octopus_sync_merge__",
+		},
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert result["security_audit_capture"] is None
+	assert result["latest_state"]["security_pass_status"] == "passed"
+	assert "SECURITY_PASS_REBOUND tracking_issue=192" in combined_log
+	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" not in combined_log
+
+
 def test_security_pass_evil_merge_and_non_merge_commit_fall_through_to_audit() -> None:
 	for integration_head, default_head in (
 		("__evil_sync_merge__", "__advanced_default_head__"),
-		("__octopus_sync_merge__", "__advanced_default_head__"),
 		("__advanced_integration_head__", "__default_head__"),
 	):
 		result = _run_poller(
@@ -4405,6 +4433,60 @@ def test_security_pass_advisory_cap_zero_and_create_failure_leave_nonblocking_ba
 		assert result["latest_state"]["security_pass_status"] == "passed"
 		assert len(result["latest_state"]["security_pass_advisory_backlog"]) == 1
 		assert result.get("created_issues", []) == []
+
+
+def test_security_pass_advisory_state_persist_failure_keeps_backlog() -> None:
+	state = _base_state(status="security-pass")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_additive_payload(advisory_findings=[_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_ADVISORY_STATE_PERSIST_FAIL": "true"},
+	)
+
+	latest_state = result["latest_state"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert latest_state["security_pass_status"] == "passed"
+	assert [row["finding_id"] for row in latest_state["security_pass_advisory_backlog"]] == ["SEC-TEST-1"]
+	assert latest_state["security_pass_followup_issues"] == []
+	assert latest_state["security_pass_followups_merge_checked"] == []
+	assert latest_state == result["state_on_disk"]
+	assert len(result["created_issues"]) == 1
+	assert "could not persist it in state" in combined_log
+	assert any(
+		"none filed this tick (1 still queued)" in comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+	)
+
+	retry_result = _run_poller(
+		state=latest_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:planning"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		search_issue_items=[
+			{
+				"number": 900,
+				"title": result["issues"]["900"]["title"],
+				"body": result["issues"]["900"]["body"],
+				"state": "open",
+			}
+		],
+	)
+
+	assert retry_result.get("created_issues", []) == []
+	assert retry_result["latest_state"]["security_pass_advisory_backlog"] == []
+	assert retry_result["latest_state"]["security_pass_followup_issues"] == [
+		{"finding_id": "SEC-TEST-1", "issue": 900}
+	]
+	assert retry_result["latest_state"]["security_pass_followups_merge_checked"] == [900]
 
 
 def test_security_pass_blocking_comment_names_routed_advisory_followup() -> None:

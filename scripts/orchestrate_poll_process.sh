@@ -91,6 +91,9 @@ declare -gA _ENSURED_LABELS_CACHE=()
 # Marker-search results are cached per tracking issue so accepted findings pay
 # at most one reconciliation lookup per poller process, not one per finding.
 declare -gA _SECURITY_PASS_ADVISORY_SEARCH_CACHE=()
+# Successful creates remain visible within this process even if state persistence
+# fails; callers still require durable state before draining the backlog.
+declare -gA _SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE=()
 
 # _gh_url constructs a full GitHub URL for the current repository.
 _gh_url() {
@@ -4741,8 +4744,8 @@ security_pass_rebind_if_no_new_project_lines() {
     [ -n "${commit_line}" ] || return 1
     commit_sha="${commit_line%% *}"
     parents_line="$(git rev-list --parents -n 1 "${commit_sha}" 2>/dev/null)" || return 1
-    # Only the ordinary two-parent sync-merge shape is safe to inspect with --cc.
-    if [ "$(printf '%s\n' "${parents_line}" | awk '{print NF}')" -ne 3 ]; then
+    # A merge has at least two parents; --cc covers ordinary and octopus merges.
+    if [ "$(printf '%s\n' "${parents_line}" | awk '{print NF}')" -lt 3 ]; then
       return 1
     fi
     if ! git show --format= --cc --no-ext-diff --no-textconv "${commit_sha}" > "${combined_diff_file}" 2>/dev/null; then
@@ -5693,10 +5696,16 @@ create_security_pass_advisory_followup() {
   # the body tells the pipeline the cited code is already on the default
   # branch; empty on the legacy judge-time filing path.
   local merged_pr="${6:-}"
-  local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
+  local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json advisory_cache_key
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
   [ -n "${finding_id}" ] || return 0
+  advisory_cache_key="${TRACKING_NUM}:${finding_id}"
+  existing_issue="${_SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]:-}"
+  if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
+    SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
+    return 0
+  fi
   existing_issue="$(jq -r --arg id "${finding_id}" '
     [(.security_pass_followup_issues // [])[] | select(.finding_id == $id) | .issue] | last // empty
   ' "${STATE_FILE}" 2>/dev/null || true)"
@@ -5827,6 +5836,7 @@ PY
     echo "::warning::Could not create the advisory follow-up issue for security-pass finding ${finding_id} on tracking issue #${TRACKING_NUM}; the waiver stands without a follow-up issue."
     return 0
   fi
+  _SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]="${issue_number}"
   if ! jq --arg id "${finding_id}" --argjson issue "${issue_number}" '
     .security_pass_followup_issues = (((.security_pass_followup_issues // []) + [{finding_id: $id, issue: $issue}]) | .[-100:])
     | .security_pass_waived_findings = [
@@ -5872,7 +5882,10 @@ security_pass_file_advisory_findings() {
     [ -n "${audited_head_sha}" ] || audited_head_sha="${head_sha}"
     justification="The cited line predates this project's merge-base and already exists on the default branch; routed as a non-blocking advisory by line ownership."
     create_security_pass_advisory_followup "${finding_json}" "${integration_branch}" "${audited_head_sha}" "${justification}" "preexisting"
-    if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+    if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]] \
+      && jq -e --arg id "${finding_id}" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
+        any((.security_pass_followup_issues // [])[]; .finding_id == $id and .issue == $issue)
+      ' "${STATE_FILE}" >/dev/null 2>&1; then
       filed_count=$((filed_count + 1))
       SECURITY_PASS_ADVISORY_FILED_ISSUES="${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}${SECURITY_PASS_ADVISORY_FILED_ISSUES:+, }#${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
       security_pass_mark_followup_merge_checked "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" || \
