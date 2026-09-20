@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "The repository maintains behavioral parity across many similar AI workflow entry points.",
   "timestamps": {
     "created_at": "2026-09-20T00:36:06Z",
