@@ -24,6 +24,18 @@ security_audit_run_isolated_python() {
 		python3 -I -B "$@"
 }
 
+security_audit_run_isolated_support_command() {
+	env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE="1" \
+		PYTHON_ISOLATED_MODE="true" \
+		"$@"
+}
+
 security_audit_flag_enabled() {
 	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on)
@@ -344,10 +356,11 @@ cd "${REPO_ROOT}"
 # byte-identical to the pre-consumer behaviour.
 SECURITY_AUDIT_SUPPORT_DIR="${SECURITY_AUDIT_SUPPORT_DIR:-${REPO_ROOT}}"
 SECURITY_AUDIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if ! SECURITY_AUDIT_SUPPORT_DIR="$(cd "${SECURITY_AUDIT_SUPPORT_DIR}" 2>/dev/null && pwd -P)"; then
+if ! SECURITY_AUDIT_CANONICAL_SUPPORT_DIR="$(cd "${SECURITY_AUDIT_SUPPORT_DIR}" 2>/dev/null && pwd -P)"; then
 	security_audit_emit_failure "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}" "support directory is unavailable"
 	exit 1
 fi
+SECURITY_AUDIT_SUPPORT_DIR="${SECURITY_AUDIT_CANONICAL_SUPPORT_DIR}"
 security_audit_require_directory "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}"
 security_audit_require_file "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/orchestrate_lib.py"
 security_audit_require_cmd realpath
@@ -1140,7 +1153,7 @@ security_audit_require_directory "prompt-preflight" "${SECURITY_AUDIT_RUNTIME_DI
 security_audit_require_writable_destination "prompt-preflight" "${RENDERED_PROMPT_FILE}"
 security_audit_require_writable_destination "prompt-preflight" "${RENDER_PROMPT_ERROR_FILE}"
 
-if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_PROMPT_PATH}" \
+if security_audit_run_isolated_support_command bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_PROMPT_PATH}" \
 		> "${RENDERED_PROMPT_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
 	:
 else
@@ -1152,7 +1165,7 @@ fi
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	printf '%s\n' '{{REFERENCE_SECURITY_MONEY_LENS}}' > "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}"
-	if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" \
+	if security_audit_run_isolated_support_command bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" \
 			> "${SECURITY_AUDIT_MONEY_LENS_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
 		:
 	else

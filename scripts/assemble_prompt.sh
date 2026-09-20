@@ -101,6 +101,13 @@ else
 	exit 1
 fi
 
+declare -a ASSEMBLE_PROMPT_PYTHON_ARGS=()
+case "${PYTHON_ISOLATED_MODE:-false}" in
+	1|true|TRUE|yes|YES|on|ON)
+		ASSEMBLE_PROMPT_PYTHON_ARGS=(-I -B)
+		;;
+esac
+
 if ! RENDER_PROMPT_PY="$(resolve_render_prompt_py)"; then
 	echo "render_prompt.py not found for ${PROMPT_FILE}" >&2
 	exit 1
@@ -108,7 +115,7 @@ fi
 
 ASSEMBLY_SOURCE_FILE="$(resolve_assembly_source_path "${PROMPT_FILE}")"
 
-exec "${PYTHON_BIN}" "${RENDER_PROMPT_PY}" \
+exec "${PYTHON_BIN}" "${ASSEMBLE_PROMPT_PYTHON_ARGS[@]}" "${RENDER_PROMPT_PY}" \
 	"${ASSEMBLY_SOURCE_FILE}" \
 	--legacy-mode-name "${MODE_NAME}" \
 	--assemble-only

@@ -22,6 +22,9 @@ CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "security-audit.yml"
 INTERNAL_CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "internal-clarify.yml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "security_audit.sh"
+CODEX_HELPERS_PATH = REPO_ROOT / "scripts" / "codex_helpers.sh"
+RENDER_PROMPT_PATH = REPO_ROOT / "scripts" / "render_prompt.sh"
+ASSEMBLE_PROMPT_PATH = REPO_ROOT / "scripts" / "assemble_prompt.sh"
 _SANITIZED_GIT_ENV_KEYS = ("BASH_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX")
 
 
@@ -154,7 +157,12 @@ def _install_security_audit_support_tree(base_dir: Path, *, failure_mode: str) -
 	if failure_mode == "render_failure":
 		_write_exec(
 			render_helper_path,
-			'#!/usr/bin/env bash\nprintf \'%s\' "${MOCK_RENDER_STDERR:-}" >&2\nexit 23\n',
+			(
+				"#!/usr/bin/env bash\n"
+				"printf '%s\\n' 'test-token Chief Security Officer' >&2\n"
+				"printf '%s\\n' 'bash: /safe/missing-template: No such file or directory' >&2\n"
+				"exit 23\n"
+			),
 		)
 	elif failure_mode != "missing_render_helper":
 		render_helper_path.symlink_to(REPO_ROOT / "scripts" / "render_prompt.sh")
@@ -429,6 +437,9 @@ def test_security_audit_reusable_concurrency_group_differs_from_consumer_wrapper
 
 def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None:
 	content = SCRIPT_PATH.read_text(encoding="utf-8")
+	codex_helpers_content = CODEX_HELPERS_PATH.read_text(encoding="utf-8")
+	render_prompt_content = RENDER_PROMPT_PATH.read_text(encoding="utf-8")
+	assemble_prompt_content = ASSEMBLE_PROMPT_PATH.read_text(encoding="utf-8")
 	assert '--sandbox read-only' in content
 	assert 'gh_retry gh issue list' in content
 	assert 'gh_retry gh issue create' in content
@@ -457,8 +468,14 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 		), '\t\tpython3 -I -B "$@"')
 	]
 	assert '(cd "${SECURITY_AUDIT_RUNTIME_DIR}" && security_audit_run_isolated_python - \\' in content
+	assert content.count("security_audit_run_isolated_support_command bash") == 2
 	assert 'security_audit_require_file "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/orchestrate_lib.py"' in content
 	assert '"${SECURITY_AUDIT_ORCHESTRATE_LIB_DIR}" <<\'PY\'' in content
+	assert 'python3 -I -B "${broker_path}"' in codex_helpers_content
+	assert not re.search(r"\bpython3\s+(?:-c\b|-(?:\s|$))", codex_helpers_content)
+	assert codex_helpers_content.count("_codex_helpers_run_isolated_python") == 5
+	assert 'RENDER_PROMPT_PYTHON_ARGS=(-I -B)' in render_prompt_content
+	assert 'ASSEMBLE_PROMPT_PYTHON_ARGS=(-I -B)' in assemble_prompt_content
 
 
 def test_security_audit_uses_workflow_editor_model_with_stable_fallback() -> None:
@@ -612,6 +629,25 @@ def test_security_audit_missing_render_helper_reports_sanitized_context() -> Non
 		path_suffix="scripts/render_prompt.sh",
 	)
 	assert proc.returncode == 1
+	assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_missing_support_directory_reports_original_path() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-missing-support-") as td:
+		tmp_path = Path(td)
+		missing_support_path = tmp_path / "missing-support"
+		proc, final_state = _run_security_audit(
+			{},
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"SECURITY_AUDIT_SUPPORT_DIR": str(missing_support_path),
+			},
+		)
+
+	assert proc.returncode == 1
+	assert "phase=support-preflight" in proc.stderr
+	assert str(missing_support_path) in proc.stderr
 	assert final_state.get("codex_calls", []) == []
 
 
@@ -884,6 +920,7 @@ def test_security_audit_isolated_python_blocks_checkout_startup_forgery_and_loca
 		repo_dir, first_sha, head_sha = _git_fixture_repo(tmp_path)
 		output_path = tmp_path / "findings.json"
 		local_import_marker = tmp_path / "checkout-orchestrate-lib-imported"
+		startup_marker = tmp_path / "checkout-startup-hook-imported"
 		(repo_dir / "orchestrate_lib.py").write_text(
 			"from pathlib import Path\n"
 			f"Path({str(local_import_marker)!r}).write_text('imported', encoding='utf-8')\n"
@@ -896,6 +933,7 @@ def test_security_audit_isolated_python_blocks_checkout_startup_forgery_and_loca
 			"import os\n"
 			"import sys\n"
 			"from pathlib import Path\n"
+			f"Path({str(startup_marker)!r}).write_text('imported', encoding='utf-8')\n"
 			"if sys.argv[0] in {'-', '-c'} and os.environ.get('FORGED_OUTPUT_PATH'):\n"
 			"\tdef forge_output():\n"
 			"\t\tPath(os.environ['FORGED_OUTPUT_PATH']).write_text(json.dumps({\n"
@@ -928,6 +966,7 @@ def test_security_audit_isolated_python_blocks_checkout_startup_forgery_and_loca
 	assert [finding["finding_id"] for finding in payload["findings"]] == ["real-finding"]
 	assert payload["counts"]["kept"] == 1
 	assert not local_import_marker.exists()
+	assert not startup_marker.exists()
 
 
 def test_security_audit_explicit_diff_scope_filters_changed_files() -> None:

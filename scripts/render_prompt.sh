@@ -187,7 +187,7 @@ cleanup_temp_files()
 collect_prompt_placeholders()
 {
 	local placeholder_source_file="$1"
-	"${PYTHON_BIN}" - <<'PY' "${placeholder_source_file}"
+	"${PYTHON_BIN}" "${RENDER_PROMPT_PYTHON_ARGS[@]}" - <<'PY' "${placeholder_source_file}"
 import pathlib
 import re
 import sys
@@ -218,6 +218,13 @@ else
 	exit 1
 fi
 
+declare -a RENDER_PROMPT_PYTHON_ARGS=()
+case "${PYTHON_ISOLATED_MODE:-false}" in
+	1|true|TRUE|yes|YES|on|ON)
+		RENDER_PROMPT_PYTHON_ARGS=(-I -B)
+		;;
+esac
+
 if ! RENDER_PROMPT_PY="$(resolve_render_prompt_py)"; then
 	echo "render_prompt.py not found for ${PROMPT_FILE}" >&2
 	exit 1
@@ -247,7 +254,7 @@ declare -A RENDER_VARS_SEEN=()
 declare -a RENDER_ARGS=()
 
 RENDER_ARGS=(
-	"${PYTHON_BIN}" "${RENDER_PROMPT_PY}" "${RENDER_INPUT_FILE}"
+	"${PYTHON_BIN}" "${RENDER_PROMPT_PYTHON_ARGS[@]}" "${RENDER_PROMPT_PY}" "${RENDER_INPUT_FILE}"
 	--legacy-mode-name "${MODE_NAME}"
 )
 

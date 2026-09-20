@@ -440,6 +440,7 @@ emit_judge_lessons_learned_records() {
   local pr_number="${3:-}"
   local judge_json="${4:-}"
   local telemetry_json=""
+  local memory_git_auth_entry="GH_TOKEN="
 
   if ! is_truthy "${AI_MEMORY_ENABLED:-true}" || ! is_truthy "${LESSONS_LEARNED_ENABLED:-true}"; then
     return 0
@@ -448,10 +449,20 @@ emit_judge_lessons_learned_records() {
   if ! command -v python3 >/dev/null 2>&1; then
     return 0
   fi
+  if [ -n "${GH_PAT:-}" ]; then
+    memory_git_auth_entry="GH_PAT=${GH_PAT}"
+  elif [ -n "${GH_TOKEN:-}" ]; then
+    memory_git_auth_entry="GH_TOKEN=${GH_TOKEN}"
+  fi
 
-  telemetry_json="$(printf '%s\n' "${judge_json}" | {
+  telemetry_json="$({
     poller_run_isolated_python \
       "ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR=${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" \
+      "${memory_git_auth_entry}" \
+      "AI_MEMORY_BRANCH=${AI_MEMORY_BRANCH:-ai-memory}" \
+      "AI_MEMORY_ROOT=${AI_MEMORY_ROOT:-ai-memory}" \
+      "AI_MEMORY_PUSH_RETRIES=${AI_MEMORY_PUSH_RETRIES:-16}" \
+      "JUDGE_LESSONS_JSON=${judge_json}" \
       -- - "${PWD}" "${source_name}" "${issue_number}" "${pr_number}" <<'PY'
 import json
 import os
@@ -482,7 +493,7 @@ memory_branch = str(os.environ.get("AI_MEMORY_BRANCH", "ai-memory") or "ai-memor
 memory_root_relative = str(os.environ.get("AI_MEMORY_ROOT", "ai-memory") or "ai-memory").strip() or "ai-memory"
 push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 16
 
-payload = json.loads(sys.stdin.read())
+payload = json.loads(os.environ.get("JUDGE_LESSONS_JSON", ""))
 lessons_raw = payload.get("lessons_learned") if isinstance(payload, dict) else None
 if lessons_raw is None:
     lessons = []

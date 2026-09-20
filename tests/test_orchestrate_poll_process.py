@@ -445,6 +445,80 @@ def test_poller_inline_python_is_centralized_and_ignores_checkout_startup_hooks(
 	assert not startup_marker.exists()
 
 
+def test_judge_lessons_learned_isolated_python_forwards_memory_configuration() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper_start = script.index("poller_run_isolated_python() {")
+	helper_end = script.index("\npoller_run_readonly_model()", helper_start)
+	is_truthy_start = script.index("is_truthy() {")
+	emit_start = script.index("emit_judge_lessons_learned_records() {")
+	emit_end = script.index("\n_state_snapshot_json_object_or_empty()", emit_start)
+
+	with tempfile.TemporaryDirectory(prefix="poller-lessons-memory-env-") as td:
+		tmp_path = Path(td)
+		captured_environment_path = tmp_path / "captured-memory-environment.json"
+		(tmp_path / "ai_memory_lib.py").write_text(
+			"import json\n"
+			"import os\n"
+			"from pathlib import Path\n"
+			"\n"
+			"def resolve_memory_root_dir(clone_dir, relative):\n"
+			"\treturn clone_dir / relative\n"
+			"\n"
+			"def record_lessons_learned(*args, **kwargs):\n"
+			"\treturn [{'record_id': 'test-record'}]\n"
+			"\n"
+			"def persist_memory_operation(repo_root, *, memory_branch, memory_root_relative, push_retries, **kwargs):\n"
+			f"\tPath({str(captured_environment_path)!r}).write_text(json.dumps({{\n"
+			"\t\t'gh_pat': os.environ.get('GH_PAT'),\n"
+			"\t\t'gh_token_present': 'GH_TOKEN' in os.environ,\n"
+			"\t\t'memory_branch': memory_branch,\n"
+			"\t\t'memory_root_relative': memory_root_relative,\n"
+			"\t\t'push_retries': push_retries,\n"
+			"\t}), encoding='utf-8')\n"
+			"\treturn {'operation_result': {'records': [{'record_id': 'test-record'}]}, 'did_push': True}\n",
+			encoding="utf-8",
+		)
+		shell_source = (
+			script[helper_start:helper_end]
+			+ "\n"
+			+ script[is_truthy_start:emit_start]
+			+ script[emit_start:emit_end]
+			+ "\nemit_judge_lessons_learned_records test-judge 42 43 "
+			+ "'{\"lessons_learned\":[{\"lesson\":\"keep auth\"}]}'\n"
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"AI_MEMORY_BRANCH": "custom-memory-branch",
+				"AI_MEMORY_ROOT": "custom-memory-root",
+				"AI_MEMORY_PUSH_RETRIES": "7",
+				"GH_PAT": "preferred-token",
+				"GH_TOKEN": "secondary-token",
+				"ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR": str(tmp_path),
+			}
+		)
+		proc = subprocess.run(
+			["bash", "--noprofile", "--norc", "-c", shell_source],
+			cwd=tmp_path,
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+		captured_environment = json.loads(captured_environment_path.read_text(encoding="utf-8"))
+
+	assert proc.returncode == 0, proc.stderr
+	assert '"count": 1' in proc.stderr, proc.stderr
+	assert '"did_push": true' in proc.stderr, proc.stderr
+	assert captured_environment == {
+		"gh_pat": "preferred-token",
+		"gh_token_present": False,
+		"memory_branch": "custom-memory-branch",
+		"memory_root_relative": "custom-memory-root",
+		"push_retries": 7,
+	}
+
+
 def test_judge_reasoning_effort_uses_configured_value_without_downgrade():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))' in script
