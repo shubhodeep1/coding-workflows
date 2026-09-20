@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml: lines 1429-1435 and lines 1467-1471 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The new hard wall-clock cap for the wait-review phase defaults to max(60, 75) = 75 minutes and fires regardless of activity, so healthy review phases that legitimately span sequential reviewer/editor runs can be terminated.\n  WHY: A healthy review run can reach REVIEW_PHASE_DEADLINE and fail the release gate despite continuous progress; the same 75-minute term is also used in the Validate-prerequisites serial-budget formula.\n- .github/workflows/test-and-mark-stable.yml: lines 2896-2900, lines 2964-2968, and lines 2976-2980 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k3]\n  PROBLEM: The label-read, pinned-run fetch, and malformed pinned-run payload timeout paths write status=timeout and exit 1, skipping Deep verify while the final summary reports RB Sim as non-blocking and Internals as failed.\n  WHY: A persistent GitHub API outage causes the release gate to fail with misleading attribution to the skipped Deep verify step; severity disagreement (deepseek: MAJOR, kimi: NIT) resolved using the highest severity.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml: lines 2896-2900 (new label-read exit-1 path) and lines 2964-2980 (pre-existing pinned-run exit-1 paths) | severity=MAJOR | confidence=4\n  PROBLEM: When the label API read, pinned-run fetch, or pinned-run payload validation exhausts the inactivity timer, the step writes `status=timeout` to `GITHUB_OUTPUT` and `exit 1`, skipping the deep-verify step and Phase 7.\n  WHY: The verify step prints `RB Sim ..... WARN (timed out \u2014 non-blocking)` while simultaneously printing `Internals .. FAILED` because `deep_passed` is empty from the skipped step, misattributing a persistent API outage to deep verification.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/test-and-mark-stable.yml: lines 1429-1435 (REVIEW_PHASE_WALL_BUDGET_MINUTES = max(REVIEW_TIMEOUT, clamped REVIEW_STEP_TIMEOUT)) and lines 1467-1471 (hard exit 1 when NOW >= REVIEW_PHASE_DEADLINE) | severity=MAJOR | confidence=4\n  PROBLEM: The new hard wall-clock cap for the wait-review phase defaults to max(60, 75) = 75 minutes and fires regardless of activity.\n  WHY: A healthy review run can reach REVIEW_PHASE_DEADLINE mid-flight, causing the release gate to block on a healthy pipeline; the same miscalibrated 75m term is baked into the Validate-prerequisites serial-budget formula.\n- .github/workflows/test-and-mark-stable.yml: lines 2896-2900 (labels read), lines 2964-2968 (pinned-run read), and lines 2976-2980 (malformed pinned-run payload) \u2014 all write status=timeout to GITHUB_OUTPUT immediately followed by exit 1 | severity=NIT | confidence=3\n  PROBLEM: These three new hard-fail paths write the same status=timeout value as the established inactivity-timeout path but exit 1 instead of 0.\n  WHY: Deep verify is skipped, then Verify all phases passed reports Internals FAILED while RB Sim reports WARN (timed out \u2014 non-blocking), misattributing a persistent Phase 6 API-read outage.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml: lines 1429-1435 (REVIEW_PHASE_WALL_BUDGET_MINUTES = max(REVIEW_TIMEOUT, clamped REVIEW_STEP_TIMEOUT)) and lines 1467-1471 (hard exit 1 when NOW >= REVIEW_PHASE_DEADLINE) | severity=MAJOR | confidence=4\n  PROBLEM: The new hard wall-clock cap for the review wait phase defaults to max(60, 75) = 75 minutes and fires regardless of activity.\n  WHY: A healthy review run can reach REVIEW_PHASE_DEADLINE mid-flight, causing the release gate to block on a healthy pipeline; the same miscalibrated 75-minute term is baked into the Validate-prerequisites serial-budget formula.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8e41baea2cac1015e3141a4fc483e18c5e6db9710d46c4449327082bf7466245",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4168,
+    "run_id": "35499000201",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35499000201",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260920094219_43888c187b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4168,
+    "run_id": "35499000201"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-20T09:42:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
