@@ -167,9 +167,9 @@ def test_implement_workflow_stages_and_guards_all_codex_launches() -> None:
 	summary_block = _step_run_text(IMPLEMENT_WORKFLOW, "Generate AI issue summary for PR comment")
 
 	assert "workspace_safety_check.sh" in stage_block
-	assert "bash scripts/workspace_safety_check.sh" in implement_block
-	assert "bash scripts/workspace_safety_check.sh" in repair_block
-	assert "bash scripts/workspace_safety_check.sh" in summary_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/workspace_safety_check.sh"' in implement_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/workspace_safety_check.sh"' in repair_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/workspace_safety_check.sh"' in summary_block
 
 
 def test_ci_and_release_gate_run_workspace_safety_check_tests() -> None:
@@ -189,8 +189,9 @@ def test_review_workflow_bootstraps_and_restages_workspace_safety_helper() -> No
 
 def test_validate_process_guards_codex_attempts_and_short_circuits_exit_78() -> None:
 	text = VALIDATE_PROCESS.read_text(encoding="utf-8")
-	assert 'WORKSPACE_SAFETY_CHECK_HELPER=""' in text
-	assert '".codex-workflow-src/scripts/workspace_safety_check.sh"' in text
+	assert 'WORKSPACE_SAFETY_CHECK_HELPER="${_validate_script_dir}/workspace_safety_check.sh"' in text
+	assert 'WORKSPACE_SAFETY_CHECK_HELPER=""' not in text
+	assert '".codex-workflow-src/scripts/workspace_safety_check.sh"' not in text
 	assert '".codex-workflow-src-main/scripts/workspace_safety_check.sh"' not in text
 	assert 'bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?' in text
 	assert 'local exit_code="${5:-1}"' in text

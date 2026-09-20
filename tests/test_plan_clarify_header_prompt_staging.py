@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression guard: prompts/header.txt is staged before it is rendered.
+"""Regression guard: prompts/header.txt is immutable before it is rendered.
 
 Reported from consumer run 28221091844 (shubhodeep1/binance-blessings,
 issue #220): the AI Plan phase failed before posting the implementation plan
@@ -8,28 +8,19 @@ with
   Prompt file not found: prompts/header.txt
   ##[error]Process completed with exit code 1.
 
-plan.yml's staged runner and clarify.yml assemble the Codex prompt with
+plan.yml's staged runner and clarify.yml now assemble the Codex prompt with
 
   REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" \
-    bash scripts/render_prompt.sh prompts/header.txt
+    bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" \
+      "${SUPPORT_PROMPTS_DIR}/header.txt"
 
-render_prompt.sh resolves the bare ``prompts/header.txt`` path relative to the
-working tree and runs ``[ -f prompts/header.txt ]`` *before* delegating to
-render_prompt.py, so the fragment must be staged into ./prompts/ alongside the
-staged scripts/. PR #3411 added the render invocation to both workflows but the
-"Stage workflow support files" step never copied prompts/header.txt out of the
-.codex-workflow-src support checkout, so the first executing plan run after the
-@stable wrapper bump failed deterministically at the static file-existence
-check. header.txt carries only the {{REPO_LEARNINGS}} placeholder (resolved
-from the REPO_LEARNINGS env var) and has no contract, so staging the single
-file is sufficient.
+The immutable-bundle manifest must contain the fragment and callers must render
+the absolute support path, so a checkout copy cannot shadow it.
 
 Two kinds of tests pin the fix:
 
 1. A static contract: every reusable workflow or staged runner that renders
-   ``render_prompt.sh prompts/header.txt`` has workflow staging for
-   prompts/header.txt from the immutable .codex-workflow-src checkout and a
-   hard error when it is unavailable.
+   the header lists it in immutable support and uses SUPPORT_PROMPTS_DIR.
 
 2. A behavioural test that reproduces the runtime layout (scripts/ staged,
    prompts/ absent from the working tree), runs the staging block, and asserts
@@ -56,7 +47,7 @@ HEADER_PROMPT = REPO_ROOT / "prompts" / "header.txt"
 
 # The bare-path render invocation that requires prompts/header.txt on disk.
 HEADER_RENDER_RE = re.compile(
-	r"\bbash\s+scripts/render_prompt\.sh\s+prompts/header\.txt\b"
+	r'\bbash\s+(?:scripts/render_prompt\.sh|"\$\{[A-Za-z0-9_]+\}/render_prompt\.sh")\s+(?:prompts/header\.txt|"\$\{SUPPORT_PROMPTS_DIR(?::\?[^}]*)?\}/header\.txt")'
 )
 
 
@@ -104,40 +95,21 @@ def test_render_callers_stage_header_prompt() -> None:
 	)
 	for yml in callers:
 		text = yml.read_text(encoding="utf-8")
-		assert "mkdir -p prompts" in text, (
-			f"{yml.name}: renders prompts/header.txt but never `mkdir -p prompts`"
+		assert '"prompts/header.txt"' in text, (
+			f"{yml.name}: immutable support manifest omits prompts/header.txt"
 		)
-		assert 'install -m 0644 "${src}" prompts/header.txt' in text, (
-			f"{yml.name}: renders prompts/header.txt but never installs it into "
-			f"the working tree"
-		)
-		assert 'src=".codex-workflow-src/prompts/header.txt"' in text, (
-			f"{yml.name}: header staging is missing the primary support-source path"
+		assert '"${SUPPORT_PROMPTS_DIR}/header.txt"' in text, (
+			f"{yml.name}: header render does not use immutable support"
 		)
 		assert '.codex-workflow-src-main/prompts/header.txt' not in text, (
 			f"{yml.name}: header staging must not use a mutable main snapshot"
 		)
-		assert (
-			"::error::Failed to stage required file prompts/header.txt" in text
-		), (
-			f"{yml.name}: header staging must hard-fail when the fragment is "
-			f"unavailable (it is required for prompt assembly)"
-		)
-		assert re.search(
-			r'echo "::error::Failed to stage required file prompts/header\.txt"\n\s+exit 1',
-			text,
-		), (
-			f"{yml.name}: header staging must exit immediately when the immutable "
-			f"support checkout lacks the fragment"
-		)
 
 	plan_workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	plan_runner_text = PLAN_RUNNER.read_text(encoding="utf-8")
-	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in plan_workflow_text
-	assert 'install -m 0644 "${src}" prompts/header.txt' in plan_workflow_text
-	assert 'src=".codex-workflow-src/prompts/header.txt"' in plan_workflow_text
+	assert "for f in gh_helpers.sh emit_event.sh emit_event.py run_plan_codex.sh render_prompt.sh" in plan_workflow_text
+	assert '"prompts/header.txt"' in plan_workflow_text
 	assert '.codex-workflow-src-main/prompts/header.txt' not in plan_workflow_text
-	assert "::error::Failed to stage required file prompts/header.txt" in plan_workflow_text
 	assert HEADER_RENDER_RE.search(plan_runner_text)
 
 

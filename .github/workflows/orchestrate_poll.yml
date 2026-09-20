@@ -127,14 +127,24 @@ jobs:
         run: |
           set -euo pipefail
 
-          src=".codex-workflow-src/scripts/gh_helpers.sh"
-          if [ ! -f "${src}" ]; then
-            echo "::error::Missing required support script gh_helpers.sh in shubhodeep1/coding-workflows@${SCRIPT_REF}"
-            exit 1
-          fi
-
-          mkdir -p scripts
-          install -m 0755 "${src}" scripts/gh_helpers.sh
+          gh_retry_immutable_support_manifest="${RUNNER_TEMP}/poll-gh-retry-immutable-support-manifest.json"
+          gh_retry_immutable_support_root="${RUNNER_TEMP}/poll-gh-retry-immutable-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          jq -n '{
+            required_scripts: [
+              "scripts/gh_helpers.sh",
+              "scripts/emit_event.sh",
+              "scripts/emit_event.py"
+            ],
+            executable_files: [
+              "scripts/gh_helpers.sh",
+              "scripts/emit_event.sh",
+              "scripts/emit_event.py"
+            ]
+          }' > "${gh_retry_immutable_support_manifest}"
+          WORKFLOW_SUPPORT_REF="${SCRIPT_REF}" bash ".codex-workflow-src/scripts/stage_workflow_support.sh" immutable-bundle \
+            --manifest "${gh_retry_immutable_support_manifest}" \
+            --source-root ".codex-workflow-src" \
+            --destination-root "${gh_retry_immutable_support_root}"
 
       - name: Find active tracking issues
         id: find_tracking
@@ -142,7 +152,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           # Find all open issues with the orchestrator tracking label
@@ -299,7 +309,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_helpers.sh model_provider_broker.py codex_heartbeat.sh security_audit.sh sync_contract_list_union.py worktree_registry.sh worktree_gc.sh; do
+          for f in gh_helpers.sh emit_event.sh emit_event.py pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py targeted_file_context.py write_codex_config.sh codex_helpers.sh model_provider_broker.py codex_heartbeat.sh security_audit.sh sync_contract_list_union.py verify_integration_fingerprints.py validate_editor_audit.sh worktree_registry.sh worktree_gc.sh install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
@@ -337,26 +347,6 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
-          for f in install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do
-            src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ]; then
-              echo "::warning::Optional Semble support script ${f} is unavailable on ${SCRIPT_REF} in the checked-out support sources; legacy path remains active."
-              continue
-            fi
-            install -m 0755 "${src}" "scripts/${f}"
-            _fetched_scripts+=("${f}")
-          done
-
-          for f in emit_event.sh emit_event.py; do
-            src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ]; then
-              echo "::notice::Optional events mirror helper ${f} is unavailable on ${SCRIPT_REF}; stable text-prefix mirroring remains disabled."
-              continue
-            fi
-            install -m 0755 "${src}" "scripts/${f}"
-            _fetched_scripts+=("${f}")
-          done
-
           for f in transcript_archive.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
@@ -374,13 +364,6 @@ jobs:
               install -m 0644 "${src}" "ai-memory/schemas/${sf}"
             fi
           done
-
-          # WORKFLOW.md overlay is opt-in by file presence; absent file must
-          # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
-            --repo-root "${GITHUB_WORKSPACE}" \
-            --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
-            --github-env "${GITHUB_ENV}"
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
@@ -445,10 +428,59 @@ jobs:
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
           if [ -f "${catalog_src}" ]; then
             install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
-            _fetched_scripts+=(codex_model_catalog.json)
           else
             echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
           fi
+
+          poll_immutable_support_manifest="${RUNNER_TEMP}/poll-immutable-support-manifest.json"
+          poll_immutable_support_root="${RUNNER_TEMP}/poll-immutable-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s\n' "${_fetched_scripts[@]}" | jq -Rsc '
+            split("\n") | map(select(length > 0) | "scripts/" + .)
+            | {
+                required_scripts: .,
+                executable_files: .,
+                required_prompts: [
+                  "prompts/mode-judge.txt",
+                  "prompts/mode-judge-review-blocked.txt",
+                  "prompts/mode-judge-stall-recovery.txt",
+                  "prompts/mode-security-audit.txt",
+                  "prompts/_identity_recall.txt",
+                  "prompts/_prelude_common.txt",
+                  "prompts/_prelude_semble.txt",
+                  "prompts/_prelude_output_contract.txt",
+                  "prompts/_templates/mode-judge.txt",
+                  "prompts/_templates/mode-judge-review-blocked.txt",
+                  "prompts/_templates/mode-judge-stall-recovery.txt",
+                  "prompts/_templates/mode-orchestrate-poll-judge.txt",
+                  "prompts/_templates/mode-security-audit.txt",
+                  "prompts/references/security-money-lens.txt",
+                  "prompts/_nag_reminders.txt"
+                ],
+                required_files: [
+                  "scripts/security_audit_fp_exclusions.json",
+                  "scripts/sync_contract_list_union.requirements.txt",
+                  ".github/ai/orchestrate_schema.v1.json",
+                  ".github/ai/label_contract.v1.json",
+                  "ai-memory/schemas/workflow_overlay.v1.json",
+                  "unattended_system_instructions.md",
+                  "ai_pipeline.md",
+                  "agents.md"
+                ],
+                model_catalog_path: "scripts/codex_model_catalog.json"
+              }
+          ' > "${poll_immutable_support_manifest}"
+          WORKFLOW_SUPPORT_REF="${SCRIPT_REF}" bash ".codex-workflow-src/scripts/stage_workflow_support.sh" immutable-bundle \
+            --manifest "${poll_immutable_support_manifest}" \
+            --source-root ".codex-workflow-src" \
+            --destination-root "${poll_immutable_support_root}"
+          echo "PYTHONPATH=${poll_immutable_support_root}/scripts" >> "$GITHUB_ENV"
+
+          # WORKFLOW.md overlay is opt-in by file presence; absent file must
+          # stay a no-op while valid prompt overrides flow through render_prompt.py.
+          PYTHONDONTWRITEBYTECODE=1 python3 "${poll_immutable_support_root}/scripts/load_workflow_overlay.py" \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --schema-path "${poll_immutable_support_root}/ai-memory/schemas/workflow_overlay.v1.json" \
+            --github-env "${GITHUB_ENV}"
 
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -457,17 +489,6 @@ jobs:
               printf '%s\n' "${_fetched_scripts[@]}" .gitignore
             } > scripts/.gitignore
           fi
-
-          for f in unattended_system_instructions.md ai_pipeline.md; do
-            if [ ! -f "${f}" ]; then
-              src=".codex-workflow-src/${f}"
-              if [ ! -f "${src}" ]; then
-                echo "::error::Failed to stage required file ${f}"
-                exit 1
-              fi
-              install -m 0644 "${src}" "${f}"
-            fi
-          done
 
 
       - name: Prepare isolated contract-list union Python
@@ -478,7 +499,7 @@ jobs:
           union_venv="${RUNTIME_DIR}/sync-contract-list-union-venv"
           union_python="${union_venv}/bin/python"
           unavailable_python="${RUNTIME_DIR}/sync-contract-list-union-unavailable"
-          requirements_file="scripts/sync_contract_list_union.requirements.txt"
+          requirements_file="${SUPPORT_SCRIPTS_DIR}/sync_contract_list_union.requirements.txt"
 
           disable_list_union_python() {
             echo "SYNC_CONTRACT_LIST_UNION_PYTHON=${unavailable_python}" >> "$GITHUB_ENV"
@@ -525,12 +546,12 @@ jobs:
           set -euo pipefail
           echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
 
-          if [ ! -f scripts/install_semble.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/install_semble.sh" ]; then
             echo "::warning::Optional Semble installer is unavailable on ${SCRIPT_REF} (scripts/install_semble.sh missing from staged workflow support files); leaving Semble disabled for this poll run."
             exit 0
           fi
 
-          if ! bash scripts/install_semble.sh; then
+          if ! bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"; then
             echo "::warning::Semble install helper failed; leaving Semble disabled for this poll run."
             echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
             exit 0
@@ -553,7 +574,7 @@ jobs:
           # exits 0, leaving Semble disabled for this poll run. Wrapper
           # output is mirrored to ${RUNTIME_DIR}/semble_index.log for
           # post-mortem grepping (kept for log-analysis parity).
-          if [ -f scripts/build_semble_wrapper.sh ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh" ]; then
             # The wrapper is documented "always exit 0" (every failure path
             # routes through mark_unavailable() which exits 0), so the prior
             # `if !` check was dead code. Gate the diagnostic tail on the
@@ -565,7 +586,7 @@ jobs:
             # stderr before any cleanup runs, so it's always present in the
             # captured log on failure.
             SEMBLE_INDEX_PATH="${semble_index_path}" \
-              bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+              bash "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
             if grep -q '^build_semble_wrapper: Semble wrapper unavailable:' "${RUNTIME_DIR}/semble_index.log" 2>/dev/null; then
               tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
             fi
@@ -582,12 +603,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          if [ ! -f scripts/memory_helpers.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
             echo "::warning::memory helpers not found; skipping poll start event"
             exit 0
           fi
 
-          source scripts/memory_helpers.sh || true
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" || true
           memory_ensure_branch
           memory_record_run_event \
             --run-id "${GITHUB_RUN_ID}" \
@@ -714,14 +735,14 @@ jobs:
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
         run: |
           set -euo pipefail
-          source scripts/codex_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
           MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${WORKFLOW_EDITOR_MODEL:+,${WORKFLOW_EDITOR_MODEL}}" model_provider_broker_start
           trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
           model_provider_broker_prepare_codex_writer "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT_JUDGE}" "$(pwd)"
-          bash scripts/orchestrate_poll_process.sh
+          bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_poll_process.sh"
 
       - name: Run worktree registry GC
-        run: bash scripts/worktree_gc.sh
+        run: bash "${SUPPORT_SCRIPTS_DIR}/worktree_gc.sh"
 
       - name: Build state snapshot
         if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
@@ -731,7 +752,7 @@ jobs:
           SNAPSHOT_DIR="${RUNTIME_DIR}/state-snapshot"
           mkdir -p "${SNAPSHOT_DIR}"
 
-          python3 scripts/build_state_snapshot.py \
+          python3 "${SUPPORT_SCRIPTS_DIR}/build_state_snapshot.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
             --tracking-issues-file "${RUNTIME_DIR}/tracking_issues.json" \
             --trackers-dir "${RUNTIME_DIR}/state_snapshot_trackers" \
@@ -852,12 +873,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          if [ ! -f scripts/memory_helpers.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
             echo "::warning::memory helpers not found; skipping poll end event"
             exit 0
           fi
 
-          source scripts/memory_helpers.sh || true
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" || true
 
           if [ "${{ job.status }}" = "success" ]; then
             EVENT_STATUS="ok"
@@ -892,12 +913,12 @@ jobs:
           # tail; only the workflow name, failing step name, and run
           # URL are sent.
           set -uo pipefail
-          if [ ! -f scripts/tg_helpers.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
             echo "::warning::tg_helpers.sh not found; cannot send job-failure TG alert"
             exit 0
           fi
           # shellcheck disable=SC1091
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
 
           run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           workflow_name="${GITHUB_WORKFLOW:-orchestrate_poll}"

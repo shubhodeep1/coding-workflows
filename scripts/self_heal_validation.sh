@@ -22,6 +22,7 @@
 #   SELF_HEAL_ATTEMPT          — current attempt count (0-based, pre-increment)
 #   MAX_SELF_HEAL_ATTEMPTS     — budget for this validate_process.sh invocation
 #   SELF_HEAL_PATCHES_FILE     — JSONL ledger of accumulated patches
+#   SELF_HEAL_PROMPT_OVERRIDE_DIR — runner-owned prompt overlay used after patching
 #   SELF_HEAL_FAILURE_PHASE    — string tag ("generate"|"preflight"|"render"|"canary"|"diagnose"|"runtime"|"discover")
 #   MODEL_EDITOR               — OpenRouter model slug for the self-heal LLM call
 #   OPENROUTER_API_KEY         — for codex exec
@@ -36,33 +37,36 @@ set -euo pipefail
 : "${SELF_HEAL_ATTEMPT:?SELF_HEAL_ATTEMPT is required}"
 : "${MAX_SELF_HEAL_ATTEMPTS:?MAX_SELF_HEAL_ATTEMPTS is required}"
 : "${SELF_HEAL_PATCHES_FILE:?SELF_HEAL_PATCHES_FILE is required}"
+: "${SELF_HEAL_PROMPT_OVERRIDE_DIR:?SELF_HEAL_PROMPT_OVERRIDE_DIR is required}"
+: "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}"
 : "${SELF_HEAL_FAILURE_PHASE:=unknown}"
 : "${MODEL_EDITOR:?MODEL_EDITOR is required}"
 : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
 
 command -v jq >/dev/null 2>&1 || { echo "self-heal: jq is required" >&2; exit 2; }
 command -v patch >/dev/null 2>&1 || { echo "self-heal: patch is required" >&2; exit 2; }
+SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source gh_helpers.sh for sanitize_codex_prompt_file (best-effort —
 # the call site below guards via `command -v`).
-if [ -f "scripts/gh_helpers.sh" ]; then
+if [ -f "${SELF_HEAL_SCRIPT_DIR}/gh_helpers.sh" ]; then
 	# shellcheck source=gh_helpers.sh
 	# shellcheck disable=SC1091
-	source scripts/gh_helpers.sh 2>/dev/null || true
+	source "${SELF_HEAL_SCRIPT_DIR}/gh_helpers.sh"
 fi
 
 SEMBLE_HELPERS_AVAILABLE="false"
 # shellcheck source=semble_helpers.sh
-if [ -f "scripts/semble_helpers.sh" ]; then
+if [ -f "${SELF_HEAL_SCRIPT_DIR}/semble_helpers.sh" ]; then
 	# shellcheck disable=SC1091
-	if source scripts/semble_helpers.sh; then
+	if source "${SELF_HEAL_SCRIPT_DIR}/semble_helpers.sh"; then
 		if type semble_query_block >/dev/null 2>&1; then
 			SEMBLE_HELPERS_AVAILABLE="true"
 		else
 			echo "self-heal: semble_helpers.sh did not expose semble_query_block; continuing without Semble context" >&2
 		fi
 	else
-		echo "self-heal: failed to source scripts/semble_helpers.sh; continuing without Semble context" >&2
+		echo "self-heal: failed to source immutable Semble helpers; continuing without Semble context" >&2
 	fi
 fi
 
@@ -83,7 +87,6 @@ SELF_HEAL_OUTPUT_FILE="${RUNTIME_DIR}/validate_self_heal_output.txt"
 SELF_HEAL_LOG_FILE="${RUNTIME_DIR}/validate_self_heal.log"
 SELF_HEAL_DECISION_FILE="${RUNTIME_DIR}/validate_self_heal_decision.json"
 SELF_HEAL_PATCH_TMP="${RUNTIME_DIR}/validate_self_heal_patch.diff"
-SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ ! -f "${SELF_HEAL_SCRIPT_DIR}/codex_helpers.sh" ]; then
 	echo "self-heal: codex_helpers.sh is required for brokered model execution" >&2
 	exit 2
@@ -103,20 +106,12 @@ if [ -z "${MODEL_PROVIDER_BROKER_TOKEN:-}" ] || [ -z "${MODEL_PROVIDER_BROKER_BA
 	export MODEL_PROVIDER_BROKER_AGENT_HOME
 	model_provider_broker_start
 	SELF_HEAL_STARTED_MODEL_PROVIDER_BROKER="true"
-	model_provider_broker_prepare_codex_writer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" "${MODEL_REASONING_EFFORT:-xhigh}" "$(pwd)"
+	model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR:-openai/gpt-5.6-sol}" "${MODEL_REASONING_EFFORT:-xhigh}" "$(pwd)"
 fi
 CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_stall_guard.sh"
-LEDGER_SUBSTATE_HELPER=""
-for _ledger_candidate in \
-	"${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh" \
-	"scripts/ledger_emit_substate.sh" \
-	".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
-	if [ -f "${_ledger_candidate}" ]; then
-		LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
-		break
-	fi
-done
+LEDGER_SUBSTATE_HELPER="${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh"
+[ -f "${LEDGER_SUBSTATE_HELPER}" ] || LEDGER_SUBSTATE_HELPER=""
 SELF_HEAL_STALL_STATE=""
 
 emit_self_heal_substate()
@@ -330,16 +325,20 @@ run_self_heal_codex()
 	local stderr_tmp="$1"
 	local stall_status_file=""
 	local rc=0
+	local -a self_heal_codex_argv=()
 
 	SELF_HEAL_STALL_STATE=""
+	model_provider_broker_unprivileged_argv_into self_heal_codex_argv nobody \
+		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
+		--skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only || return $?
 	if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
 		stall_status_file="$(mktemp /tmp/self_heal_stall_status.XXXXXX)"
 		set +e
-		model_provider_broker_exec_sanitized "${CODEX_STALL_GUARD_HELPER}" \
+		"${CODEX_STALL_GUARD_HELPER}" \
 			--phase validate_self_heal \
 			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
 			--status-file "${stall_status_file}" \
-			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" 2> "${stderr_tmp}"
+			-- "${self_heal_codex_argv[@]}" < "${SELF_HEAL_PROMPT_FILE}" 2> "${stderr_tmp}"
 		rc=$?
 		set -e
 		if SELF_HEAL_STALL_STATE="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
@@ -350,13 +349,13 @@ run_self_heal_codex()
 		rm -f "${stall_status_file}"
 		return "${rc}"
 	elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-		model_provider_broker_exec_sanitized "${CODEX_HEARTBEAT_HELPER}" \
+		"${CODEX_HEARTBEAT_HELPER}" \
 			--phase validate_self_heal \
 			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
 			--stderr-file "${stderr_tmp}" \
-			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}"
+			-- "${self_heal_codex_argv[@]}" < "${SELF_HEAL_PROMPT_FILE}"
 	else
-		model_provider_broker_exec_sanitized codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
+		"${self_heal_codex_argv[@]}" < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
 	fi
 }
 
@@ -369,6 +368,25 @@ fi
 # ---------------------------------------------------------------
 # Compose the self-heal prompt
 # ---------------------------------------------------------------
+self_heal_prompt_override_root="$(dirname -- "${SELF_HEAL_PROMPT_OVERRIDE_DIR}")"
+mkdir -p "${SELF_HEAL_PROMPT_OVERRIDE_DIR}"
+chmod 0700 "${self_heal_prompt_override_root}" "${SELF_HEAL_PROMPT_OVERRIDE_DIR}"
+for self_heal_prompt_name in "${ALLOWED_TARGETS[@]}"; do
+	self_heal_prompt_source="${SUPPORT_PROMPTS_DIR}/${self_heal_prompt_name}"
+	self_heal_prompt_override="${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${self_heal_prompt_name}"
+	if [ ! -f "${self_heal_prompt_source}" ] || [ -L "${self_heal_prompt_source}" ]; then
+		echo "self-heal: immutable prompt source is missing or symlinked: ${self_heal_prompt_source}" >&2
+		exit 2
+	fi
+	if [ -L "${self_heal_prompt_override}" ]; then
+		echo "self-heal: refusing symlinked prompt override: ${self_heal_prompt_override}" >&2
+		exit 2
+	fi
+	if [ ! -f "${self_heal_prompt_override}" ]; then
+		install -m 0600 "${self_heal_prompt_source}" "${self_heal_prompt_override}"
+	fi
+done
+
 self_heal_semble_query="$(build_self_heal_semble_query || true)"
 self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 {
@@ -376,7 +394,7 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 	echo
 	echo "=== SELF-HEAL TASK ==="
 	echo
-	SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt
+	SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash "${SELF_HEAL_SCRIPT_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/mode-validate-self-heal.txt"
 	echo
 	echo "=== SELF-HEAL ATTEMPT ==="
 	echo "attempt_number: $((SELF_HEAL_ATTEMPT + 1))"
@@ -394,9 +412,9 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 	echo "Note: keep diffs anchored to the literal file text shown here; some prompts intentionally contain the runtime placeholder {{SERENA_TOOL_HINTS}}."
 	echo
 	for _target in "${ALLOWED_TARGETS[@]}"; do
-		if [ -f "prompts/${_target}" ]; then
+		if [ -f "${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${_target}" ]; then
 			echo "--- prompts/${_target} ---"
-			cat "prompts/${_target}"
+			cat "${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${_target}"
 			echo
 			echo "--- end prompts/${_target} ---"
 			echo
@@ -544,6 +562,17 @@ if ! is_allowed_target "${DECISION_TARGET}"; then
 	exit 2
 fi
 
+# Template-mode validation no longer renders the generate/fix-harness prompts,
+# so patching either one cannot affect the immediate re-exec.
+case "${DECISION_TARGET}" in
+	mode-validate-discover.txt|mode-validate-diagnose.txt)
+		;;
+	*)
+		echo "self-heal: refusing — target_prompt '${DECISION_TARGET}' is not consumed by the current validation rerun" >&2
+		exit 1
+		;;
+esac
+
 # Write patch to a tmp file and validate.
 printf '%s\n' "${DECISION_PATCH}" > "${SELF_HEAL_PATCH_TMP}"
 
@@ -611,9 +640,9 @@ if grep -E '^(\+\+\+|---) ' "${SELF_HEAL_PATCH_TMP}" | grep -vE "${_expected_re}
 fi
 
 # Dry-run the patch.
-if ! patch --dry-run -p1 -N -s < "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+if ! (cd "${self_heal_prompt_override_root}" && patch --dry-run -p1 -N -s < "${SELF_HEAL_PATCH_TMP}") >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
 	# Try git apply as a fallback (handles different whitespace tolerances).
-	if ! git apply --check "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+	if ! (cd "${self_heal_prompt_override_root}" && git apply --check "${SELF_HEAL_PATCH_TMP}") >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
 		echo "self-heal: refusing — patch does not apply cleanly to prompts/${DECISION_TARGET}" >&2
 		exit 2
 	fi
@@ -630,19 +659,19 @@ fi
 # Without this, a model-produced idempotent patch would burn a self-heal
 # attempt without changing the prompt, and the re-exec would hit the
 # same failure and repeat — silently draining MAX_SELF_HEAL_ATTEMPTS.
-_target_file="prompts/${DECISION_TARGET}"
+_target_file="${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${DECISION_TARGET}"
 _hash_before=""
 if [ -f "${_target_file}" ]; then
 	_hash_before="$(sha256sum "${_target_file}" | awk '{print $1}')"
 fi
 
 if [ "${_APPLY_WITH_GIT}" = "true" ]; then
-	if ! git apply "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+	if ! (cd "${self_heal_prompt_override_root}" && git apply "${SELF_HEAL_PATCH_TMP}") >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
 		echo "self-heal: git apply failed after dry-run succeeded (race)" >&2
 		exit 2
 	fi
 else
-	if ! patch -p1 -N -s < "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+	if ! (cd "${self_heal_prompt_override_root}" && patch -p1 -N -s < "${SELF_HEAL_PATCH_TMP}") >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
 		echo "self-heal: patch -p1 failed after dry-run succeeded (race)" >&2
 		exit 2
 	fi

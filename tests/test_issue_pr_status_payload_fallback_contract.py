@@ -14,6 +14,14 @@ def _workflow_text() -> str:
 	return WORKFLOW.read_text(encoding="utf-8")
 
 
+def test_issue_status_stages_complete_transitive_support_closure() -> None:
+	text = _workflow_text()
+	assert "gh_helpers.sh emit_event.sh emit_event.py" in text
+	assert "ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py memory_injection_patterns.py" in text
+	assert "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true" in text
+	assert "AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true" in text
+
+
 def _step_script(step_name: str) -> str:
 	text = _workflow_text()
 	step_marker = f"      - name: {step_name}\n"
@@ -112,10 +120,10 @@ def test_configured_telegram_paths_require_staged_immutable_helper() -> None:
 		assert config_gate in step
 		assert trusted_gate in step
 		assert "Trusted issue-status Telegram support is unavailable" in step
-		assert "source scripts/tg_helpers.sh" in step
+		assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"' in step
 		assert f"declare -F {function_name}" in step
 		assert f"{function_name} is missing from trusted Telegram support" in step
-		assert step.index(config_gate) < step.index(trusted_gate) < step.index("source scripts/tg_helpers.sh")
+		assert step.index(config_gate) < step.index(trusted_gate) < step.index('source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"')
 		assert 'script_ref="stable"' not in step
 		assert "git clone" not in step
 

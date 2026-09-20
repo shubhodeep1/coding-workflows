@@ -140,19 +140,17 @@ jobs:
           git -C "${resolver_stage_primary}" remote add origin "${resolver_repo_url}"
           if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>"${resolver_clone_log}" \
             || ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
-            echo "::warning::Failed to stage canonical integration resolver at immutable ref ${resolver_ref}; falling back to default branch."
+            echo "::error::Failed to stage canonical integration resolver at immutable ref ${resolver_ref}."
             if [ -s "${resolver_clone_log}" ]; then
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
             fi
-            echo "ref=" >> "$GITHUB_OUTPUT"
-            exit 0
+            exit 1
           fi
           resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
 
           if [ ! -f "${resolver_script}" ]; then
-            echo "::warning::Canonical integration resolver script not found in staged source; falling back to default branch."
-            echo "ref=" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::error::Canonical integration resolver script not found in staged source."
+            exit 1
           fi
 
           chmod +x "${resolver_script}"
@@ -164,8 +162,8 @@ jobs:
           })"; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::Canonical integration resolver failed; falling back to default branch."
-            echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "::error::Canonical integration resolver failed."
+            exit 1
           fi
 
       - name: Checkout repository
@@ -299,6 +297,9 @@ jobs:
               "scripts/ai_memory_lib.py",
               "scripts/memory_injection_patterns.py",
               "scripts/openrouter_prompt_cache.py",
+              "scripts/semantic_cache.py",
+              "scripts/emit_event.sh",
+              "scripts/emit_event.py",
               "scripts/write_codex_config.sh",
               "scripts/codex_helpers.sh",
               "scripts/model_provider_broker.py",
@@ -307,15 +308,32 @@ jobs:
               "scripts/write_guard.sh",
               "scripts/workspace_init.sh",
               "scripts/workspace_safety_check.sh",
-              "scripts/run_workspace_hook.sh"
-            ],
-            "optional_preserve_scripts_before_templates": [
+              "scripts/run_workspace_hook.sh",
               "scripts/render_prompt.py",
-              "scripts/render_validation_templates.py"
+              "scripts/render_validation_templates.py",
+              "scripts/codex_heartbeat.sh",
+              "scripts/codex_stall_guard.sh",
+              "scripts/codex_thread_reuse.sh",
+              "scripts/install_semble.sh",
+              "scripts/semble_helpers.sh",
+              "scripts/build_semble_wrapper.sh",
+              "scripts/self_heal_validation.sh",
+              "scripts/setup_serena.sh",
+              "scripts/serena_stats_emit.py",
+              "scripts/mcp_handshake_probe.py",
+              "scripts/transcript_archive.sh",
+              "scripts/ledger_emit_substate.sh"
             ],
+            "optional_preserve_scripts_before_templates": [],
             "optional_preserve_files_before_templates": [
-              ".github/ai/write_guards.v1.json",
-              "scripts/templates/slot_manifest.schema.json"
+              ".github/ai/write_guards.v1.json"
+            ],
+            "required_files": [
+              "scripts/templates/slot_manifest.schema.json",
+              "ai-memory/schemas/workflow_overlay.v1.json",
+              "unattended_system_instructions.md",
+              "ai_pipeline.md",
+              "agents.md"
             ],
             "optional_copy_files": [
               "workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
@@ -393,27 +411,15 @@ jobs:
               "ai-memory/schemas/workflow_overlay.v1.json"
             ],
             "model_catalog_path": "scripts/codex_model_catalog.json",
-            "optional_preserve_scripts_after_schemas": [
-              "scripts/codex_heartbeat.sh",
-              "scripts/codex_stall_guard.sh",
-              "scripts/codex_thread_reuse.sh",
-              "scripts/install_semble.sh",
-              "scripts/semble_helpers.sh",
-              "scripts/build_semble_wrapper.sh",
-              "scripts/self_heal_validation.sh",
-              "scripts/setup_serena.sh",
-              "scripts/serena_stats_emit.py",
-              "scripts/mcp_handshake_probe.py",
-              "scripts/transcript_archive.sh",
-              "scripts/emit_event.sh",
-              "scripts/emit_event.py"
-            ],
+            "optional_preserve_scripts_after_schemas": [],
             "serena_template_path": "scripts/templates/serena_project.yml.j2",
             "required_prompts": [
               "prompts/mode-validate-generate.txt",
               "prompts/mode-validate-diagnose.txt",
               "prompts/mode-validate-discover.txt",
               "prompts/mode-validate-fix-harness.txt",
+              "prompts/mode-validate-self-heal.txt",
+              "prompts/mode-validate-self-heal-continuation.txt",
               "prompts/_prelude_common.txt",
               "prompts/_prelude_common_large.txt",
               "prompts/_prelude_common_xl.txt",
@@ -425,21 +431,15 @@ jobs:
               "prompts/_templates/mode-validate-diagnose.txt",
               "prompts/_templates/mode-validate-discover.txt",
               "prompts/_templates/mode-validate-fix-harness.txt",
+              "prompts/_templates/mode-validate-self-heal.txt",
+              "prompts/_templates/mode-validate-self-heal-continuation.txt",
+              "prompts/contracts/mode-validate-self-heal.yml",
+              "prompts/contracts/mode-validate-self-heal-continuation.yml",
               "prompts/references/output-contract.txt",
               "prompts/references/verification-loop.txt",
               "prompts/references/validate-output-contract.txt"
             ],
-            "optional_preserve_files_after_prompts": [
-              "prompts/mode-validate-self-heal.txt",
-              "prompts/mode-validate-self-heal-continuation.txt",
-              "prompts/_templates/mode-validate-self-heal.txt",
-              "prompts/_templates/mode-validate-self-heal-continuation.txt",
-              "prompts/contracts/mode-validate-self-heal-continuation.yml"
-            ],
-            "required_root_files_if_missing": [
-              "unattended_system_instructions.md",
-              "ai_pipeline.md"
-            ],
+            "optional_preserve_files_after_prompts": [],
             "optional_root_files_if_missing": [
               ".github/ai/label_contract.v1.json"
             ]
@@ -448,7 +448,14 @@ jobs:
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
-          WORKFLOW_SUPPORT_REF="${helper_ref}" bash "${helper_path}" validate --manifest "${manifest_path}"
+          validate_immutable_support_root="${RUNNER_TEMP}/validate-immutable-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          WORKFLOW_SUPPORT_REF="${helper_ref}" bash "${helper_path}" immutable-bundle \
+            --manifest "${manifest_path}" \
+            --source-root "${helper_stage_dir}" \
+            --destination-root "${validate_immutable_support_root}"
+          SUPPORT_SCRIPTS_DIR="${validate_immutable_support_root}/scripts" \
+            WORKFLOW_SUPPORT_REF="${helper_ref}" bash "${helper_path}" validate --manifest "${manifest_path}"
+          echo "PYTHONPATH=${validate_immutable_support_root}/scripts" >> "$GITHUB_ENV"
       - name: Initialize workspace metadata
         id: workspace_meta
         env:
@@ -472,7 +479,7 @@ jobs:
           WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true" \
           WORKSPACE_ISSUE_IDENTIFIER="${workspace_identifier}" \
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
-            bash scripts/workspace_init.sh metadata
+            bash "${SUPPORT_SCRIPTS_DIR}/workspace_init.sh" metadata
 
       - name: Restore reusable workspace cache
         if: steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
@@ -505,7 +512,7 @@ jobs:
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
           WORKSPACE_FINGERPRINT="${{ steps.workspace_meta.outputs.workspace_fingerprint }}" \
           WORKSPACE_CACHE_MATCHED_KEY="${workspace_cache_matched_key}" \
-            bash scripts/workspace_init.sh metadata
+            bash "${SUPPORT_SCRIPTS_DIR}/workspace_init.sh" metadata
 
       - name: Finalize workspace contents
         run: |
@@ -514,7 +521,7 @@ jobs:
           WORKSPACE_PATH="${{ steps.workspace_state.outputs.workspace_path }}" \
           WORKSPACE_REUSE_ENABLED="${{ steps.workspace_state.outputs.workspace_reuse_enabled }}" \
           WORKSPACE_CACHE_RESTORE_STATE="${{ steps.workspace_state.outputs.workspace_cache_restore_state }}" \
-            bash scripts/workspace_init.sh finalize
+            bash "${SUPPORT_SCRIPTS_DIR}/workspace_init.sh" finalize
 
       - name: Activate workspace shell context
         run: |
@@ -535,7 +542,7 @@ jobs:
         id: workspace_after_create_hook
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh validate after_create
+          bash "${SUPPORT_SCRIPTS_DIR}/run_workspace_hook.sh" validate after_create
 
       - name: Initialize Serena runtime state
         run: |
@@ -612,7 +619,7 @@ jobs:
             exit 0
           fi
 
-          source scripts/gh_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 
           # Audit note: validate.yml's existing GitHub calls resolve the
           # integration branch and record memory events, but none expose the
@@ -658,7 +665,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --ensure-branch --require memory_record_run_event
 
           issue_number="${TRACKING_ISSUE}"
@@ -685,7 +692,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -f "scripts/render_validation_templates.py" ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/render_validation_templates.py" ]; then
             python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
           else
             echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
@@ -769,12 +776,12 @@ jobs:
             exit 0
           fi
 
-          if [ ! -f "scripts/install_semble.sh" ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/install_semble.sh" ]; then
             echo "::notice::scripts/install_semble.sh is unavailable; validation will continue without Semble."
             exit 0
           fi
 
-          if ! bash scripts/install_semble.sh; then
+          if ! bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"; then
             echo "::warning::scripts/install_semble.sh exited non-zero; validation will continue without Semble."
           fi
 
@@ -791,7 +798,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f "scripts/semble_helpers.sh" ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
             echo "::notice::scripts/semble_helpers.sh is unavailable; validation prompts will continue without Semble context."
             {
               echo "SEMBLE_INDEX_AVAILABLE=false"
@@ -808,10 +815,10 @@ jobs:
           # handled here (older @stable refs may not yet ship the script);
           # all other errors are handled inside the script (writes
           # SEMBLE_INDEX_AVAILABLE=false on any error and exits 0).
-          if [ -f scripts/build_semble_wrapper.sh ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh" ]; then
             SEMBLE_INDEX_PATH="${RUNTIME_DIR}/.semble-index" \
             SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" \
-              bash scripts/build_semble_wrapper.sh
+              bash "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"
           else
             echo "::notice::scripts/build_semble_wrapper.sh is unavailable; validation prompts will continue without Semble context."
             {
@@ -824,7 +831,7 @@ jobs:
         id: workspace_before_run_hook
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh validate before_run
+          bash "${SUPPORT_SCRIPTS_DIR}/run_workspace_hook.sh" validate before_run
 
       - name: Run validation process
         id: validate_run
@@ -850,13 +857,13 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
-          bash scripts/validate_process.sh
+          bash "${SUPPORT_SCRIPTS_DIR}/validate_process.sh"
 
       - name: Run workspace after_run hook
         if: always() && steps.validate_run.outcome != 'skipped'
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh validate after_run
+          bash "${SUPPORT_SCRIPTS_DIR}/run_workspace_hook.sh" validate after_run
 
       - name: Collect validation status
         id: collect_status
@@ -920,7 +927,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f scripts/serena_stats_emit.py ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/serena_stats_emit.py" ]; then
             echo "::notice::serena_stats_emit.py is unavailable; skipping Serena stats emission."
             exit 0
           fi
@@ -939,7 +946,7 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"
+          PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/serena_stats_emit.py" "${serena_stat_args[@]}"
 
       - name: Record validation candidate
         if: always()
@@ -954,7 +961,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --require memory_record_candidate
 
           issue_number="${TRACKING_ISSUE}"
@@ -1074,7 +1081,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --require memory_record_run_event
 
           issue_number="${TRACKING_ISSUE}"
@@ -1135,7 +1142,7 @@ jobs:
             exit 0
           fi
 
-          bash scripts/orchestrate_force_tick.sh \
+          bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh" \
             --repo "${{ github.repository }}" \
             --tracking-issue "${TRACKING_ISSUE}" \
             --issue "${TRACKING_ISSUE}" \
@@ -1147,7 +1154,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh validate before_remove
+          bash "${SUPPORT_SCRIPTS_DIR}/run_workspace_hook.sh" validate before_remove
 
       - name: Enforce validation outcome
         if: always()

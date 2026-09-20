@@ -129,8 +129,8 @@ def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> Non
 	helper = _helper_text()
 	for snippet in (
 		"WORKFLOW.md overlay is opt-in by file presence",
-		"python3 scripts/load_workflow_overlay.py",
-		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
+		'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"',
+		'--schema-path "${support_root_dir}/ai-memory/schemas/workflow_overlay.v1.json"',
 		'--github-env "${GITHUB_ENV}"',
 	):
 		assert snippet in helper
@@ -249,6 +249,56 @@ def test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metach
 		assert not marker_path.exists()
 
 
+def test_immutable_support_bundle_enforces_dependency_closure_and_path_safety() -> None:
+	helper = _helper_text()
+	assert "stage_immutable_support_bundle()" in helper
+	assert "scripts/emit_event.sh scripts/emit_event.py" in helper
+	assert "scripts/openrouter_prompt_cache.py scripts/semantic_cache.py scripts/memory_injection_patterns.py" in helper
+	assert "Immutable support dependency escapes source checkout" in helper
+	assert "Immutable support dependency must be a regular non-symlink file" in helper
+	assert "Immutable support staging requires WORKFLOW_SUPPORT_REF to be a 40-character commit SHA" in helper
+	assert 'chmod 0555 "${temporary_root}"' in helper
+	assert helper.index('chmod 0555 "${temporary_root}"') < helper.index('chown -R root:root "${temporary_root}"')
+	assert helper.index('chmod 0555 "${temporary_root}"') < helper.index('sudo -n chown -R root:root "${temporary_root}"')
+	immutable_sudo_failure_block = helper.split("Immutable support staging requires root ownership", 1)[1].split("return 1", 1)[0]
+	assert 'chmod u+w "${temporary_root}"' in immutable_sudo_failure_block
+	assert immutable_sudo_failure_block.index('chmod u+w "${temporary_root}"') < immutable_sudo_failure_block.index('rm -rf -- "${temporary_root}"')
+	assert 'GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true' in helper
+	assert 'AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true' in helper
+
+
+def test_validate_support_manifest_requires_memory_and_event_dependencies() -> None:
+	wf = _workflow_text()
+	for required_path in (
+		'"scripts/semantic_cache.py"',
+		'"scripts/memory_injection_patterns.py"',
+		'"scripts/emit_event.sh"',
+		'"scripts/emit_event.py"',
+		'"scripts/self_heal_validation.sh"',
+		'"scripts/semble_helpers.sh"',
+		'"scripts/setup_serena.sh"',
+		'"scripts/ledger_emit_substate.sh"',
+		'"scripts/templates/slot_manifest.schema.json"',
+		'"ai-memory/schemas/workflow_overlay.v1.json"',
+		'"unattended_system_instructions.md"',
+		'"ai_pipeline.md"',
+		'"prompts/mode-validate-self-heal.txt"',
+		'"prompts/mode-validate-self-heal-continuation.txt"',
+		'"prompts/contracts/mode-validate-self-heal.yml"',
+	):
+		assert required_path in wf
+	validate_process = (REPO_ROOT / "scripts" / "validate_process.sh").read_text(encoding="utf-8")
+	assert 'model_provider_broker_prepare_codex_readonly nobody' in validate_process
+	assert 'source "${_validate_script_dir}/gh_helpers.sh"' in validate_process
+	assert 'source "${_validate_script_dir}/tg_helpers.sh"' in validate_process
+	assert 'bash "${_validate_script_dir}/self_heal_validation.sh"' in validate_process
+	assert 'candidate="${VALIDATE_SUPPORT_ROOT}/${repo_path}"' in validate_process
+	assert 'cat "${VALIDATE_SUPPORT_ROOT}/unattended_system_instructions.md"' in validate_process
+	assert 'exec bash "${VALIDATION_TRUSTED_DRIVER}" "$@"' in validate_process
+	assert "exec bash scripts/validate_driver.sh" not in validate_process
+	assert "source scripts/gh_helpers.sh" not in validate_process
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
 	test_validate_runtime_action_comes_from_validated_workflow_sha()
@@ -263,6 +313,8 @@ def main() -> int:
 	test_run_validation_repo_checks_override_preserves_quoted_arguments()
 	test_run_validation_repo_checks_override_preserves_env_prefix_assignments()
 	test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metacharacters()
+	test_immutable_support_bundle_enforces_dependency_closure_and_path_safety()
+	test_validate_support_manifest_requires_memory_and_event_dependencies()
 	return 0
 
 

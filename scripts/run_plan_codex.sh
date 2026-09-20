@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source scripts/gh_helpers.sh 2>/dev/null || true
+_run_plan_scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "${GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false}" = "true" ]; then
+	source "${_run_plan_scripts_dir}/gh_helpers.sh"
+else
+	source "${_run_plan_scripts_dir}/gh_helpers.sh" 2>/dev/null || true
+fi
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-source scripts/codex_helpers.sh
+source "${_run_plan_scripts_dir}/codex_helpers.sh"
 TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"
 
 PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-plan-inline.txt"
@@ -232,9 +237,9 @@ EOF
   # Inject the configurable tool call budget before the static heredoc
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
   echo
-  bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+  bash "${_run_plan_scripts_dir}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"
   echo
-  REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash scripts/render_prompt.sh prompts/header.txt
+  REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash "${_run_plan_scripts_dir}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/header.txt"
   echo
   echo "=== AI MEMORY CONTEXT ==="
   cat "${RUNTIME_DIR}/memory_context.txt"

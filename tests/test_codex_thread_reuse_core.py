@@ -538,7 +538,8 @@ def test_implement_workflow_contains_thread_reuse_wiring() -> None:
 	assert "mode-implement-repair-continuation.txt mode-implement-diagnose-continuation.txt mode-validate-self-heal-continuation.txt" in text
 	assert "mode-implement-repair-continuation.yml mode-implement-diagnose-continuation.yml mode-validate-self-heal-continuation.yml" in text
 	assert "name: Probe Codex thread-reuse support" in text
-	assert "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?" in text
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/codex_thread_reuse.sh" direct-run || cmd_rc=$?' in text
+	assert '--process-group-file "${implement_process_group_file}"' in text
 	assert 'CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ==="' in text
 	assert "codex_thread_reuse_install_wrapper" in text
 	assert "=== IMPLEMENT FAILURE DIAGNOSIS TASK ===" in text
@@ -548,13 +549,15 @@ def test_implement_workflow_contains_thread_reuse_wiring() -> None:
 def test_validate_process_contains_thread_reuse_wiring() -> None:
 	text = VALIDATE_PROCESS.read_text(encoding="utf-8")
 	assert 'CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"' in text
-	assert 'CODEX_THREAD_REUSE_HELPER=""' in text
-	assert '"scripts/codex_thread_reuse.sh"' in text
+	assert 'CODEX_THREAD_REUSE_HELPER="${_validate_script_dir}/codex_thread_reuse.sh"' in text
+	assert 'CODEX_THREAD_REUSE_HELPER=""' not in text
 	assert "resolve_validate_thread_reuse_asset()" in text
 	assert "validate_thread_reuse_enabled()" in text
 	assert 'CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true"' in text
 	assert 'bash "${CODEX_THREAD_REUSE_HELPER}" direct-run' in text
 	assert "prompts/mode-validate-self-heal-continuation.txt" in text
+	assert 'candidate="${VALIDATE_SUPPORT_ROOT}/${repo_path}"' in text
+	assert '"${repo_path}" \\' not in text
 	assert "=== SELF-HEAL TASK ===" in text
 	assert "=== SELF-HEAL ATTEMPT ===" in text
 	assert 'PATH="${heal_path}" \\' in text

@@ -215,9 +215,11 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
 	assert 'check_soft_file "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"' in preflight_block
 	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_helper
-	assert "for f in emit_event.sh emit_event.py; do" in stage_helper
+	assert "emit_event.sh" in required_bootstrap_line
+	assert "emit_event.py" in required_bootstrap_line
+	assert "semantic_cache.py" in required_bootstrap_line
 	assert "for f in transcript_archive.sh; do" in stage_helper
-	assert 'Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled.' in stage_helper
+	assert "Required bootstrap script '${f}' is missing from immutable support source" in stage_helper
 	assert 'Optional transcript archive helper ${f} is unavailable in checked-out support sources; transcript archiving remains disabled.' in stage_helper
 	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_helper

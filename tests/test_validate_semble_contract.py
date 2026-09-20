@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 import contextlib
 from pathlib import Path
@@ -33,11 +34,10 @@ STAGED_REQUIRED_VALIDATE_PROMPTS = (
 	"prompts/mode-validate-diagnose.txt",
 	"prompts/mode-validate-discover.txt",
 	"prompts/mode-validate-fix-harness.txt",
-)
-OPTIONAL_PRESERVED_VALIDATE_PROMPTS = (
 	"prompts/mode-validate-self-heal.txt",
 	"prompts/mode-validate-self-heal-continuation.txt",
 )
+OPTIONAL_PRESERVED_VALIDATE_PROMPTS: tuple[str, ...] = ()
 REQUIRED_VALIDATE_ASSEMBLY_ASSETS = (
 	"prompts/_prelude_common.txt",
 	"prompts/_prelude_common_large.txt",
@@ -49,11 +49,12 @@ REQUIRED_VALIDATE_ASSEMBLY_ASSETS = (
 	"prompts/_templates/mode-validate-diagnose.txt",
 	"prompts/_templates/mode-validate-discover.txt",
 	"prompts/_templates/mode-validate-fix-harness.txt",
-)
-OPTIONAL_VALIDATE_ASSEMBLY_ASSETS = (
 	"prompts/_templates/mode-validate-self-heal.txt",
 	"prompts/_templates/mode-validate-self-heal-continuation.txt",
+	"prompts/contracts/mode-validate-self-heal.yml",
+	"prompts/contracts/mode-validate-self-heal-continuation.yml",
 )
+OPTIONAL_VALIDATE_ASSEMBLY_ASSETS: tuple[str, ...] = ()
 STAGED_VALIDATE_WORKSPACE_PROMPTS = STAGED_REQUIRED_VALIDATE_PROMPTS + OPTIONAL_PRESERVED_VALIDATE_PROMPTS
 RENDER_PROMPT_MODULE_NAME = "_validate_semble_render_prompt"
 REFERENCE_PATH_RE = re.compile(r"(?P<path>[^\s'\"]*/prompts/references/[^\s:'\"]+\.txt)")
@@ -200,6 +201,7 @@ def test_validate_manifest_stages_prompt_assembly_assets() -> None:
 	for repo_path in OPTIONAL_VALIDATE_ASSEMBLY_ASSETS:
 		assert repo_path in optional_preserve, repo_path
 		assert (REPO_ROOT / repo_path).is_file(), repo_path
+	assert optional_preserve == []
 
 
 def test_validate_prompts_include_serena_placeholder() -> None:
@@ -209,6 +211,8 @@ def test_validate_prompts_include_serena_placeholder() -> None:
 
 def test_validate_workflow_lists_semble_support_files_in_helper_manifest() -> None:
 	wf = _workflow_text()
+	required_support_scripts = _manifest_string_array("required_scripts")
+	optional_support_scripts = _manifest_string_array("optional_preserve_scripts_after_schemas")
 	required_snippets = [
 		'helper_path="${helper_stage_dir}/scripts/stage_workflow_support.sh"',
 		'bash "${helper_path}" validate --manifest "${manifest_path}"',
@@ -219,6 +223,14 @@ def test_validate_workflow_lists_semble_support_files_in_helper_manifest() -> No
 	]
 	for snippet in required_snippets:
 		assert snippet in wf, f"validate.yml missing snippet: {snippet}"
+	for required_support_path in (
+		"scripts/install_semble.sh",
+		"scripts/semble_helpers.sh",
+		"scripts/build_semble_wrapper.sh",
+		"scripts/self_heal_validation.sh",
+	):
+		assert required_support_path in required_support_scripts
+		assert required_support_path not in optional_support_scripts
 
 
 def test_validate_workflow_lists_serena_support_files_in_helper_manifest() -> None:
@@ -258,11 +270,11 @@ def test_validate_workflow_bootstraps_and_exports_semble_state() -> None:
 	assert "uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78" in wf
 	assert "- name: Install semble\n        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'" in wf
 	assert 'echo "::notice::VALIDATION_USE_SEMBLE is not true; skipping Semble install."' in wf
-	assert "bash scripts/install_semble.sh" in wf
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"' in wf
 	assert "- name: Build semble index" in _workflow_text()
 	# Inline BM25 wrapper extracted to scripts/build_semble_wrapper.sh; the
 	# in-workflow body now delegates to that script via a one-liner.
-	assert "bash scripts/build_semble_wrapper.sh" in wf
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"' in wf
 	assert 'SEMBLE_INDEX_PATH="${RUNTIME_DIR}/.semble-index" \\' in wf
 	assert 'SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" \\' in wf
 	assert "- name: Emit Serena stats" in wf
@@ -303,12 +315,15 @@ def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:
 	assert 'ensure_serena_bootstrap()' in text
 	assert 'if ! env_is_truthy "${SERENA_ENABLED:-false}"; then\n    emit_serena_fallback "${serena_phase}" "disabled"\n    clear_stale_serena_codex_config' in text
 	assert 'echo "::notice::scripts/setup_serena.sh is unavailable; validation will continue without Serena."\n    emit_serena_fallback "${serena_phase}" "setup-failure"\n    clear_stale_serena_codex_config' in text
-	assert 'SERENA_FALLBACK_TARGET="validate" SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" bash scripts/setup_serena.sh' in text
+	assert 'SERENA_FALLBACK_TARGET="validate" SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" bash "${_validate_script_dir}/setup_serena.sh"' in text
 	assert 'echo "::warning::scripts/setup_serena.sh exited non-zero; validation will continue without Serena."\n    emit_serena_fallback "${serena_phase}" "setup-failure"\n    clear_stale_serena_codex_config' in text
 	assert 'DISCOVER_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "discover" || true)"' in text
-	assert 'SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-discover.txt' in text
+	assert 'SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "$(resolve_validate_prompt_source \'mode-validate-discover.txt\')"' in text
 	assert 'DIAGNOSE_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "diagnose" || true)"' in text
-	assert 'SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-diagnose.txt' in text
+	assert 'SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "$(resolve_validate_prompt_source \'mode-validate-diagnose.txt\')"' in text
+	assert 'local override_candidate="${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${prompt_name}"' in text
+	assert 'local immutable_candidate="${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/${prompt_name}"' in text
+	assert 'render_prompt.sh" prompts/mode-validate-' not in text
 	assert 'ensure_serena_bootstrap "${phase}"' in text
 	assert 'ensure_serena_bootstrap "discover"' in text
 	assert 'ensure_serena_bootstrap "diagnose"' in text
@@ -322,7 +337,7 @@ def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:
 
 def test_validate_process_includes_discover_and_diagnose_semble_hooks() -> None:
 	text = _validate_process_text()
-	assert 'if source scripts/semble_helpers.sh; then' in text
+	assert 'if source "${_validate_script_dir}/semble_helpers.sh"; then' in text
 	assert 'build_validate_discover_semble_query()' in text
 	assert 'build_validate_diagnose_semble_query()' in text
 	assert 'append_validate_semble_context()' in text
@@ -334,14 +349,52 @@ def test_validate_process_includes_discover_and_diagnose_semble_hooks() -> None:
 	assert 'archive_transcript "${GITHUB_RUN_ID:-local-run}" "validate-diagnose" "${DIAGNOSE_OUTPUT_FILE}"' in text
 
 
+def test_self_heal_prompt_override_is_consumed_after_reexec() -> None:
+	text = _validate_process_text()
+	resolver_match = re.search(
+		r"resolve_validate_prompt_source\(\) \{.*?\n\}",
+		text,
+		re.DOTALL,
+	)
+	assert resolver_match is not None
+
+	with TemporaryDirectory(prefix="validate-self-heal-overlay-") as temp_dir:
+		temp_root = Path(temp_dir)
+		immutable_dir = temp_root / "immutable"
+		override_dir = temp_root / "overrides" / "prompts"
+		immutable_dir.mkdir()
+		override_dir.mkdir(parents=True)
+		for prompt_name in ("mode-validate-discover.txt", "mode-validate-diagnose.txt"):
+			(immutable_dir / prompt_name).write_text("immutable\n", encoding="utf-8")
+			(override_dir / prompt_name).write_text("immutable\nhealed\n", encoding="utf-8")
+
+			result = subprocess.run(
+				["bash", "-s"],
+				input=(
+					"set -euo pipefail\n"
+					f"SELF_HEAL_PROMPT_OVERRIDE_DIR={override_dir!s}\n"
+					f"SUPPORT_PROMPTS_DIR={immutable_dir!s}\n"
+					+ resolver_match.group(0)
+					+ f"\nresolved=$(resolve_validate_prompt_source '{prompt_name}')\n"
+					+ 'cat "${resolved}"\n'
+				),
+				capture_output=True,
+				text=True,
+				check=False,
+			)
+			assert result.returncode == 0, result.stderr
+			assert result.stdout == "immutable\nhealed\n"
+
+
 def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 	text = _self_heal_text()
-	assert 'if source scripts/semble_helpers.sh; then' in text
+	assert 'if source "${SELF_HEAL_SCRIPT_DIR}/semble_helpers.sh"; then' in text
 	assert 'source "${SELF_HEAL_SCRIPT_DIR}/codex_helpers.sh"' in text
 	assert 'model_provider_broker_start' in text
-	assert 'model_provider_broker_prepare_codex_writer' in text
+	assert 'model_provider_broker_prepare_codex_readonly nobody' in text
 	assert 'trap cleanup_self_heal_model_provider_broker EXIT' in text
-	assert 'model_provider_broker_exec_sanitized' in text
+	assert 'model_provider_broker_unprivileged_argv_into self_heal_codex_argv nobody' in text
+	assert '--sandbox danger-full-access' not in text
 	assert text.index('trap cleanup_self_heal_model_provider_broker EXIT') < text.index('model_provider_broker_start')
 	assert 'SELF_HEAL_SEMBLE_MAX_CHUNKS="${SELF_HEAL_SEMBLE_MAX_CHUNKS:-3}"' in text
 	assert 'build_self_heal_semble_query()' in text
@@ -350,9 +403,15 @@ def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 	assert 'if semble_query_block "${query_text}" "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" "Validate Self-Heal Context"; then' in text
 	assert 'self_heal_semble_query="$(build_self_heal_semble_query || true)"' in text
 	assert 'self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"' in text
-	assert 'SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt' in text
+	assert 'SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash "${SELF_HEAL_SCRIPT_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/mode-validate-self-heal.txt"' in text
 	assert 'CURRENT VALIDATION PROMPT FILES (raw on-disk contents with any prior self-heal patches already applied)' in text
-	assert 'cat "prompts/${_target}"' in text
+	assert 'install -m 0600 "${self_heal_prompt_source}" "${self_heal_prompt_override}"' in text
+	assert 'cat "${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${_target}"' in text
+	assert '_target_file="${SELF_HEAL_PROMPT_OVERRIDE_DIR}/${DECISION_TARGET}"' in text
+	assert 'cd "${self_heal_prompt_override_root}" && patch -p1 -N -s' in text
+	assert 'mode-validate-discover.txt|mode-validate-diagnose.txt)' in text
+	assert "is not consumed by the current validation rerun" in text
+	assert "Template-mode reruns consume local self-heal overrides only" in _read(REPO_ROOT / "prompts" / "mode-validate-self-heal.txt")
 	assert 'bash scripts/render_prompt.sh "prompts/${_target}"' not in text
 	assert 'append_self_heal_semble_context "${self_heal_semble_query}"' in text
 
@@ -369,6 +428,7 @@ def main() -> int:
 		test_shared_wrapper_script_owns_bm25_implementation,
 		test_validate_process_includes_serena_bootstrap_and_prompt_hooks,
 		test_validate_process_includes_discover_and_diagnose_semble_hooks,
+		test_self_heal_prompt_override_is_consumed_after_reexec,
 		test_self_heal_includes_semble_and_serena_prompt_hooks,
 	):
 		try:

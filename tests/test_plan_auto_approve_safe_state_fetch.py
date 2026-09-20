@@ -27,7 +27,7 @@ def _step_block(text: str, step_name: str) -> str:
 def test_auto_approve_step_uses_safe_issue_state_fetch() -> None:
 	block = _step_block(_workflow_text(), "Auto-approve clear plan")
 
-	assert 'source scripts/gh_helpers.sh 2>/dev/null || true' in block
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' in block
 	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' in block
 	assert 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {' in block
 	assert 'if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then' in block

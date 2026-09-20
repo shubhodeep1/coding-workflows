@@ -3,11 +3,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="${GITHUB_WORKSPACE:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 cd "${REPO_ROOT}"
 
-source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
+if [ "${GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false}" = "true" ]; then
+	source "${SCRIPT_DIR}/gh_helpers.sh"
+else
+	source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
+fi
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 require_env() {
@@ -110,7 +114,7 @@ if [ -f "${SCRIPT_DIR}/memory_helpers.sh" ]; then
 		fi
 
 		if [ -f "${SCRIPT_DIR}/ai_memory_lib.py" ]; then
-			CLARIFY_HASH="$(printf '%s' "${CLARIFICATION_TEXT}" | python3 -c 'from scripts.ai_memory_lib import compute_normalized_sha256; import sys; print(compute_normalized_sha256(sys.stdin.read()))' 2>/dev/null || true)"
+			CLARIFY_HASH="$(printf '%s' "${CLARIFICATION_TEXT}" | python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); from ai_memory_lib import compute_normalized_sha256; print(compute_normalized_sha256(sys.stdin.read()))' "${SCRIPT_DIR}" 2>/dev/null || true)"
 			if [ -z "${CLARIFY_HASH}" ]; then
 				echo "::warning::Failed to compute CLARIFY_HASH; continuing with empty hash."
 			fi
@@ -164,7 +168,7 @@ if [ "${LOOP_BLOCKED}" != "true" ] && [ "${SKIP_AUTO_ANSWER}" != "true" ]; then
 fi
 
 if [ -f "${SCRIPT_DIR}/ai_memory_lib.py" ]; then
-	ANSWER_HASH="$(printf '%s' "${ANSWERS_BODY}" | python3 -c 'from scripts.ai_memory_lib import compute_normalized_sha256; import sys; print(compute_normalized_sha256(sys.stdin.read()))' 2>/dev/null || true)"
+	ANSWER_HASH="$(printf '%s' "${ANSWERS_BODY}" | python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); from ai_memory_lib import compute_normalized_sha256; print(compute_normalized_sha256(sys.stdin.read()))' "${SCRIPT_DIR}" 2>/dev/null || true)"
 	if [ -z "${ANSWER_HASH}" ]; then
 		echo "::warning::Failed to compute ANSWER_HASH; continuing with empty hash."
 	fi
