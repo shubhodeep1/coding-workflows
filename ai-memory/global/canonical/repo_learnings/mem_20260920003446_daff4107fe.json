@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Security hardening is a recurring cross-cutting concern spanning workflows, scripts, prompts, and shared helpers.",
   "timestamps": {
     "created_at": "2026-09-20T00:34:46Z",
