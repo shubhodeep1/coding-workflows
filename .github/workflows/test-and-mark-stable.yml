@@ -114,7 +114,7 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
           when a long single step should extend the wait past the
           inactivity window). The wait loop clamps overrides above
           90 minutes so a typo cannot mask a genuine hang until the
-          180-minute smoke-test job timeout kills the run.
+          300-minute smoke-test job timeout kills the run.
         required: false
         type: number
         default: 75
@@ -373,18 +373,10 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    # Job cap must contain the sum of the phase budgets below, not just a
-    # typical run: Phase 4 may legitimately spend its full REVIEW_STEP_TIMEOUT
-    # (75m, clamped at 90m) on one healthy reviewer step, Phases 1-3 plus the
-    # per-phase analysers take ~25m, and Phase 6 then needs its own 30m
-    # PHASE_TIMEOUT window because its poller dispatch queues behind whatever
-    # scheduled poller run holds the ai-orchestrate-poll concurrency group
-    # (and is displaced by any later force-tick dispatch). Raised 120→180
-    # after run 35479338161 (v1.29.7): Phase 4 ran a healthy 75m, Phase 6
-    # started at +99m, and the 120m cap cancelled it at idle 1222s of its
-    # 1800s window — which also skipped "Deep verify" and failed the gate on
-    # "Internals" even though Phase 6's own timeout is scored non-blocking.
-    timeout-minutes: 180
+    # The conservative serial-budget check in Validate prerequisites must stay
+    # aligned with this hard runner limit. Defaults reserve 20 minutes for deep
+    # verification, analysers, aggregation, and unconditional cleanup.
+    timeout-minutes: 300
     concurrency:
       group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
       cancel-in-progress: true
@@ -418,8 +410,13 @@ jobs:
       # step ran a healthy 51m and the 50m cap killed the wait 58s before
       # the step completed. The shell validation below clamps overrides
       # above 90m so a typo cannot suppress stall detection until the
-      # 180m e2e-smoke-test job timeout kills the run.
+      # e2e-smoke-test job timeout kills the run.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
+      E2E_JOB_TIMEOUT_MINUTES: 300
+      REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
+      EDITOR_RETRY_BUDGET_MINUTES: 25
+      PHASE7_WAIT_BUDGET_MINUTES: 10
+      E2E_FINALIZATION_RESERVE_MINUTES: 20
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
       # / poll review_autofix runs. Defaults to the source repo's
@@ -456,12 +453,44 @@ jobs:
             echo "::error::test_repo must match owner/repo."
             exit 1
           fi
-          for timeout_value in "${PHASE_TIMEOUT}" "${PLAN_PHASE_TIMEOUT}" "${REVIEW_TIMEOUT}" "${REVIEW_STEP_TIMEOUT}"; do
+          for timeout_value in \
+            "${PHASE_TIMEOUT}" \
+            "${PLAN_PHASE_TIMEOUT}" \
+            "${REVIEW_TIMEOUT}" \
+            "${REVIEW_STEP_TIMEOUT}" \
+            "${E2E_JOB_TIMEOUT_MINUTES}" \
+            "${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}" \
+            "${EDITOR_RETRY_BUDGET_MINUTES}" \
+            "${PHASE7_WAIT_BUDGET_MINUTES}" \
+            "${E2E_FINALIZATION_RESERVE_MINUTES}"; do
             if ! [[ "${timeout_value}" =~ ^[0-9]+$ ]] || [ "${timeout_value}" -lt 1 ]; then
-              echo "::error::phase, plan, review, and review-step timeouts must be positive integers."
+              echo "::error::E2E timeout budgets must be positive integers."
               exit 1
             fi
           done
+          REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_STEP_TIMEOUT}"
+          if [ "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" -gt 90 ]; then
+            REVIEW_EFFECTIVE_BUDGET_MINUTES=90
+          fi
+          REVIEW_EFFECTIVE_BUDGET_MINUTES=$((REVIEW_EFFECTIVE_BUDGET_MINUTES + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))
+          if [ "${REVIEW_TIMEOUT}" -gt "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" ]; then
+            REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_TIMEOUT}"
+          fi
+          E2E_SERIAL_BUDGET_MINUTES=$((
+            (2 * PHASE_TIMEOUT) +
+            PLAN_PHASE_TIMEOUT +
+            REVIEW_EFFECTIVE_BUDGET_MINUTES +
+            EDITOR_RETRY_BUDGET_MINUTES +
+            PHASE_TIMEOUT +
+            PHASE7_WAIT_BUDGET_MINUTES +
+            E2E_FINALIZATION_RESERVE_MINUTES
+          ))
+          echo "E2E conservative serial budget: ${E2E_SERIAL_BUDGET_MINUTES}/${E2E_JOB_TIMEOUT_MINUTES} minutes"
+          if [ "${E2E_SERIAL_BUDGET_MINUTES}" -gt "${E2E_JOB_TIMEOUT_MINUTES}" ]; then
+            echo "::error::Configured E2E phase budgets require ${E2E_SERIAL_BUDGET_MINUTES}m, exceeding the ${E2E_JOB_TIMEOUT_MINUTES}m job timeout."
+            echo "::error::Budget = 2*phase(${PHASE_TIMEOUT}) + plan(${PLAN_PHASE_TIMEOUT}) + max(review=${REVIEW_TIMEOUT}, min(review-step=${REVIEW_STEP_TIMEOUT}, cap=90) + handoff=${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}) + editor-retry(${EDITOR_RETRY_BUDGET_MINUTES}) + phase-6(${PHASE_TIMEOUT}) + phase-7(${PHASE7_WAIT_BUDGET_MINUTES}) + finalization(${E2E_FINALIZATION_RESERVE_MINUTES})."
+            exit 1
+          fi
           echo "Target repo: ${TEST_REPO}"
           echo "Phase timeout: ${PHASE_TIMEOUT} minutes"
           echo "Review workflow file: ${REVIEW_WORKFLOW_FILE}"
@@ -1395,12 +1424,19 @@ jobs:
           [[ "$REVIEW_STEP_TIMEOUT" =~ ^[0-9]+$ ]] && [ "$REVIEW_STEP_TIMEOUT" -gt 0 ] || REVIEW_STEP_TIMEOUT=75
           REVIEW_STEP_TIMEOUT_MAX=90
           if [ "$REVIEW_STEP_TIMEOUT" -gt "$REVIEW_STEP_TIMEOUT_MAX" ]; then
-            echo "::warning::REVIEW_STEP_TIMEOUT=${REVIEW_STEP_TIMEOUT} exceeds ${REVIEW_STEP_TIMEOUT_MAX}m cap; clamping so wait-review still reports genuine stalls before the 180m job timeout"
+            echo "::warning::REVIEW_STEP_TIMEOUT=${REVIEW_STEP_TIMEOUT} exceeds ${REVIEW_STEP_TIMEOUT_MAX}m cap; clamping so wait-review still reports genuine stalls before the job timeout"
             REVIEW_STEP_TIMEOUT="$REVIEW_STEP_TIMEOUT_MAX"
           fi
           STEP_INACTIVITY_LIMIT=$((REVIEW_STEP_TIMEOUT * 60))
           echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
-          LAST_ACTIVITY=$(date +%s)
+          REVIEW_PHASE_WALL_BUDGET_MINUTES=$((REVIEW_STEP_TIMEOUT + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))
+          if [ "$REVIEW_TIMEOUT" -gt "$REVIEW_PHASE_WALL_BUDGET_MINUTES" ]; then
+            REVIEW_PHASE_WALL_BUDGET_MINUTES="$REVIEW_TIMEOUT"
+          fi
+          REVIEW_PHASE_STARTED_AT=$(date +%s)
+          REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))
+          echo "Review total wall-clock budget: ${REVIEW_PHASE_WALL_BUDGET_MINUTES} minutes"
+          LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
           PREV_STATE=""
           LAST_STEP_GUARD_RUN_ID=""
           LAST_STEP_GUARD_NAME=""
@@ -1431,6 +1467,11 @@ jobs:
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
+            if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then
+              echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
 
             # Find the review workflow run for this PR's head branch
             PR_BRANCH="ai/issue-${ISSUE_NUMBER}"
@@ -2312,13 +2353,14 @@ jobs:
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          # 25 minutes (was 10 min; raised after run 25371432937 timed out
+          # EDITOR_RETRY_BUDGET_MINUTES defaults to 25 (was 10; raised after
+          # run 25371432937 timed out
           # during the retry's reviewer pass — full review_autofix pipeline
           # is 6 reviewers + consolidator + editor + conflict resolver and
           # observed to take ~20 min wall time, so 600s reliably truncated
           # genuine successful retries. 25 min keeps the upper bound below
           # the orchestrator phase budget while covering the observed P95).
-          DEADLINE=$(( $(date +%s) + 1500 ))
+          DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))
           RETRY_RUN_ID=""
           RETRY_STATUS=""
           RETRY_CONCL=""
@@ -2714,13 +2756,115 @@ jobs:
 
           echo "Posted orchestrator state to tracking issue #${TRACKING_NUMBER}"
 
-          # 6d: Trigger the poller workflow
+          # 6d: Trigger the poller workflow and pin the exact run registered by
+          # this dispatch. A later scheduled/manual poller must never replace
+          # the run whose status and logs this phase attributes to Phase 6.
+          RATE_LIMIT_BACKOFF=0
+          . ./scripts/comprehensive_test_and_release_gh_api.sh
+
+          REGISTERED_POLLER_RUN_ID=""
+          POLLER_DISPATCH_REF="ai/issue-${ISSUE_NUMBER}"
+          dispatch_and_register_poller()
+          {
+            local workflow_file="$1"
+            local baseline_id=""
+            local registration_deadline
+            local runs_json=""
+            local candidate_query=""
+            local candidate_count=""
+            local candidate_id=""
+            local dispatch_started_epoch=""
+
+            # GitHub's workflow_dispatch API returns 204/no run id. The old
+            # broad actions/runs lookup could select a peer poller, so this is
+            # intentionally scoped to the unique smoke-test issue branch.
+            candidate_query="repos/${TEST_REPO}/actions/workflows/${workflow_file}/runs?event=workflow_dispatch&branch=${POLLER_DISPATCH_REF}&per_page=10"
+            if ! baseline_id=$(gh_api_safe_quiet_print "${candidate_query}" \
+              --jq '.workflow_runs[0].id // 0'); then
+              echo "  Poller wrapper ${workflow_file} is unavailable for snapshot/dispatch."
+              return 1
+            fi
+            if ! [[ "${baseline_id}" =~ ^[0-9]+$ ]]; then
+              echo "::error::Malformed pre-dispatch run id for ${workflow_file}: '${baseline_id}'"
+              return 2
+            fi
+
+            dispatch_started_epoch=$(date +%s)
+            if ! gh workflow run "${workflow_file}" --repo "${TEST_REPO}" --ref "${POLLER_DISPATCH_REF}" 2>/dev/null; then
+              echo "  Poller wrapper ${workflow_file} could not be dispatched."
+              return 1
+            fi
+
+            registration_deadline=$(( $(date +%s) + 90 ))
+            while [ "$(date +%s)" -lt "${registration_deadline}" ]; do
+              if ! runs_json=$(gh_api_safe_quiet_print "${candidate_query}"); then
+                echo "::warning::Could not list post-dispatch runs for ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
+              fi
+              if ! printf '%s' "${runs_json}" \
+                | jq -se 'length == 1 and (.[0] | type == "object" and (.workflow_runs | type == "array"))' \
+                >/dev/null 2>&1; then
+                echo "::warning::Malformed run-list payload for ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
+              fi
+
+              candidate_count=$(printf '%s' "${runs_json}" \
+                | jq -r \
+                  --arg dispatch_ref "${POLLER_DISPATCH_REF}" \
+                  --argjson baseline_id "${baseline_id}" \
+                  --argjson dispatch_started_epoch "${dispatch_started_epoch}" \
+                  '[.workflow_runs[] | select(.event == "workflow_dispatch" and .id > $baseline_id and .head_branch == $dispatch_ref and ((.created_at | fromdateiso8601? // 0) >= ($dispatch_started_epoch - 5)))] | length' \
+                2>/dev/null || echo "")
+              if ! [[ "${candidate_count}" =~ ^[0-9]+$ ]]; then
+                echo "::warning::Malformed candidate count while registering ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
+              fi
+              if [ "${candidate_count}" -gt 1 ]; then
+                echo "::error::Ambiguous ${workflow_file} registration: ${candidate_count} branch-scoped runs appeared after baseline ${baseline_id}."
+                return 2
+              fi
+              if [ "${candidate_count}" -eq 1 ]; then
+                candidate_id=$(printf '%s' "${runs_json}" \
+                  | jq -r \
+                    --arg dispatch_ref "${POLLER_DISPATCH_REF}" \
+                    --argjson baseline_id "${baseline_id}" \
+                    --argjson dispatch_started_epoch "${dispatch_started_epoch}" \
+                    '.workflow_runs[] | select(.event == "workflow_dispatch" and .id > $baseline_id and .head_branch == $dispatch_ref and ((.created_at | fromdateiso8601? // 0) >= ($dispatch_started_epoch - 5))) | .id' \
+                  2>/dev/null || echo "")
+                if ! [[ "${candidate_id}" =~ ^[0-9]+$ ]] || [ "${candidate_id}" -lt 1 ]; then
+                  echo "::error::Registered ${workflow_file} run id is not a positive integer: '${candidate_id}'"
+                  return 2
+                fi
+                REGISTERED_POLLER_RUN_ID="${candidate_id}"
+                return 0
+              fi
+              sleep 5
+            done
+
+            echo "::error::${workflow_file} dispatch did not register a branch-scoped run within 90 seconds."
+            return 2
+          }
+
           echo "Triggering orchestrator poller..."
           POLLER_WORKFLOW="internal-orchestrate-poll.yml"
-          if ! gh workflow run "${POLLER_WORKFLOW}" --repo "${TEST_REPO}" 2>/dev/null; then
-            # Try the consumer wrapper name
+          if dispatch_and_register_poller "${POLLER_WORKFLOW}"; then
+            :
+          else
+            POLLER_REGISTRATION_RC=$?
+            if [ "${POLLER_REGISTRATION_RC}" -eq 2 ]; then
+              exit 1
+            fi
             POLLER_WORKFLOW="ai-orchestrate-poll.yml"
-            if ! gh workflow run "${POLLER_WORKFLOW}" --repo "${TEST_REPO}" 2>/dev/null; then
+            if dispatch_and_register_poller "${POLLER_WORKFLOW}"; then
+              :
+            else
+              POLLER_REGISTRATION_RC=$?
+              if [ "${POLLER_REGISTRATION_RC}" -eq 2 ]; then
+                exit 1
+              fi
               echo "::warning::Could not trigger poller workflow. Skipping review-blocked verification."
               echo "status=skipped" >> "$GITHUB_OUTPUT"
               # Cleanup tracking issue
@@ -2730,7 +2874,13 @@ jobs:
             fi
           fi
 
-          echo "Poller triggered. Waiting for it to process the review-blocked issue..."
+          POLLER_RUN_ID="${REGISTERED_POLLER_RUN_ID}"
+          if ! [[ "${POLLER_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${POLLER_RUN_ID}" -lt 1 ]; then
+            echo "::error::Phase 6 did not register a positive poller run id."
+            exit 1
+          fi
+          echo "poller_run_id=${POLLER_RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "Poller run #${POLLER_RUN_ID} registered from ${POLLER_WORKFLOW}. Waiting for it to process the review-blocked issue..."
 
           # 6e: Wait for the poller to handle the review-blocked issue
           # The poller should: invoke judge → merge/fix/close_and_reissue
@@ -2739,15 +2889,24 @@ jobs:
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
           PREV_LABELS=""
-          RATE_LIMIT_BACKOFF=0
-          . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
 
-            LABELS=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-              --jq '[.labels[].name] | join(",")' || echo "")
+            if ! LABELS=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")'); then
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Review-blocked issue #${ISSUE_NUMBER} labels remained unreadable for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
+              fi
+              echo "::warning::Could not read review-blocked issue #${ISSUE_NUMBER} labels; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
 
             # If rate-limited, skip this cycle (don't corrupt state)
             if [ "$RATE_LIMIT_BACKOFF" -gt 0 ] && [ -z "$LABELS" ]; then
@@ -2755,31 +2914,8 @@ jobs:
               continue
             fi
 
-            # Also check poller workflow run status for activity detection
-            POLLER_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?per_page=5&event=workflow_dispatch" \
-              --jq "[.workflow_runs[] | select(.name | test(\"Orchestrate.*Poll|Poll\"; \"i\"))] | sort_by(.created_at) | last" || echo "")
-            POLLER_STATUS="unknown"
-            POLLER_CONCLUSION="null"
-            if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
-              POLLER_STATUS=$(echo "${POLLER_RUN}" | jq -r '.status // "unknown"')
-              POLLER_CONCLUSION=$(echo "${POLLER_RUN}" | jq -r '.conclusion // "null"')
-            fi
-
-            CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
-
-            # Capture the latest poller run id (used by the per-phase
-            # soft-error analyser invocation below to ingest the poller's
-            # logs as the `orchestrate_poll` phase artifact).
-            if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
-              POLLER_LATEST_ID=$(echo "${POLLER_RUN}" | jq -r '.id // empty')
-              if [ -n "${POLLER_LATEST_ID}" ]; then
-                echo "poller_run_id=${POLLER_LATEST_ID}" >> "$GITHUB_OUTPUT"
-              fi
-            fi
-
-            # Reset inactivity timer only when LABELS change (not poller
-            # status alone — poller runs starting/completing would otherwise
-            # reset the timer indefinitely while labels remain stuck).
+            # Label progress and terminal success remain authoritative even
+            # when the separate Actions run endpoint is temporarily unreadable.
             if [ "$LABELS" != "$PREV_LABELS" ]; then
               if [ -n "$PREV_LABELS" ]; then
                 echo "  ↻ Label change detected — resetting inactivity timer"
@@ -2788,8 +2924,6 @@ jobs:
               IDLE=0
               PREV_LABELS="$LABELS"
             fi
-            # Still track full state for debug logging
-            PREV_STATE="$CUR_STATE"
 
             # Success: poller has driven the review-blocked issue to a
             # terminal state. Two shapes are accepted:
@@ -2827,6 +2961,43 @@ jobs:
                 -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
               exit 0
             fi
+
+            # Observe only the run pinned immediately after this phase's
+            # dispatch. Never substitute a newer scheduled/manual poller.
+            if ! POLLER_RUN=$(gh_api_safe_quiet_print \
+              "repos/${TEST_REPO}/actions/runs/${POLLER_RUN_ID}"); then
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Pinned poller run #${POLLER_RUN_ID} remained unreadable for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
+              fi
+              echo "::warning::Could not read pinned poller run #${POLLER_RUN_ID}; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
+            if ! printf '%s' "${POLLER_RUN}" \
+              | jq -se 'length == 1 and (.[0] | type == "object" and (.status | type == "string") and ((.conclusion == null) or (.conclusion | type == "string")))' \
+              >/dev/null 2>&1; then
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Pinned poller run #${POLLER_RUN_ID} returned malformed payloads for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
+              fi
+              echo "::warning::Pinned poller run #${POLLER_RUN_ID} returned a malformed payload; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
+            POLLER_STATUS=$(printf '%s' "${POLLER_RUN}" | jq -r '.status')
+            POLLER_CONCLUSION=$(printf '%s' "${POLLER_RUN}" | jq -r '.conclusion // "null"')
+
+            CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
+
+            # Still track full state for debug logging
+            PREV_STATE="$CUR_STATE"
 
             # Check if the poller workflow failed
             if [ "${POLLER_STATUS}" = "completed" ] && [ "${POLLER_CONCLUSION}" = "failure" ]; then
@@ -3141,10 +3312,10 @@ jobs:
             EXISTING_STATUS=$(echo "${EXISTING}" | jq -r '.status // ""')
             EXISTING_CONCLUSION=$(echo "${EXISTING}" | jq -r '.conclusion // ""')
             echo "  found pre-existing cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS}, conclusion=${EXISTING_CONCLUSION}"
-            # Match the open-PR poll budget (600s) so a slow/queued run
+            # Match the open-PR poll budget so a slow/queued run
             # doesn't flake the smoke test if it would have eventually
             # succeeded.
-            WAIT_DEADLINE=$(( $(date +%s) + 600 ))
+            WAIT_DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
             while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
               sleep 5
               # Fetch once, then parse locally. A transient failure still
@@ -3156,7 +3327,7 @@ jobs:
               echo "  cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS:-?}, conclusion=${EXISTING_CONCLUSION:-?}"
             done
             if [ "${EXISTING_STATUS}" != "completed" ]; then
-              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} did not complete within 600s (status=${EXISTING_STATUS:-?})"
+              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${EXISTING_STATUS:-?})"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               echo "cancel_run_id=${EXISTING_RUN_ID}" >> "$GITHUB_OUTPUT"
               exit 1
@@ -3192,7 +3363,7 @@ jobs:
           # observed to lag 2-3 seconds under heavy queue load. Sleep 5s
           # before the first poll so we don't false-fail by reading the
           # `actions/workflows/.../runs` index before the cancel run has
-          # been created. The 600s overall budget below absorbs this.
+          # been created. The named Phase 7 budget below absorbs this.
           sleep 5
 
           # Wait for a new cancel-on-close run to register and complete.
@@ -3201,8 +3372,8 @@ jobs:
           # seconds to index the new run. Poll fast for the first 30s
           # to catch quick runs (the cancel job is short — it only
           # cancels other workflows), then back off to a slower cadence
-          # to ride out longer execution. Total budget unchanged at 600s.
-          DEADLINE=$(( $(date +%s) + 600 ))
+          # to ride out longer execution. Total budget defaults to 10m.
+          DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
           POLL_START=$(date +%s)
           NEW_RUN_ID=""
           NEW_CONCLUSION=""
@@ -3678,6 +3849,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_review_blocked_budget.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
