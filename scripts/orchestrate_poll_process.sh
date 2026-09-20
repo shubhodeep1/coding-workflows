@@ -15611,7 +15611,7 @@ PY
           "${issue_num}" "${comments_json}" "true")"; then
         echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_comments_unavailable phase=${phase} action=none"
         continue
-      elif [ "${_standalone_staged_support_cache_available}" != "complete" ] \
+      elif [ "${_standalone_staged_support_cache_available}" = "false" ] \
         && ! comments_json="$(_staged_support_comments_for_guard \
           "${issue_num}" "${comments_json}" "false")"; then
         echo "STALL_SKIP issue=${issue_num} reason=staged_support_latch_comments_unavailable phase=${phase} action=none"

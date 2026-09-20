@@ -5298,6 +5298,18 @@ def test_staged_support_guards_refetch_when_graphql_comments_are_unavailable() -
 	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
 
 
+def test_standalone_staged_support_guard_reuses_conclusive_comment_cache() -> None:
+	result = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval"],
+		issue_comments=["routine comment"],
+		env_overrides={},
+		fail_issue_comment_get_after={700: 0},
+	)
+
+	assert not any("/issues/700/comments?" in path for path in result["api_calls"])
+	assert "reason=staged_support_latch_comments_unavailable" not in result["stdout"] + result["stderr"]
+
+
 def test_staged_support_guards_fetch_full_history_when_cache_is_at_limit() -> None:
 	latch_comment = _staged_support_latch_comment()
 	latch_comment["body"] = (
@@ -5314,6 +5326,7 @@ def test_staged_support_guards_fetch_full_history_when_cache_is_at_limit() -> No
 	standalone_log = standalone["stdout"] + standalone["stderr"]
 	assert "STALL_SKIP issue=700 reason=staged_support_latch_release_incomplete" in standalone_log
 	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
+	assert sum("/issues/700/comments?" in path for path in standalone["api_calls"]) == 1
 
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
