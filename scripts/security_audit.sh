@@ -1375,7 +1375,7 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 			category,
 		)
 	except OrchestrateError as exc:
-		fail(f"{finding_id}: unable to fingerprint defect context: {exc}")
+		return None, f"{finding_id}: unable to fingerprint defect context: {exc}"
 
 	return (
 		{

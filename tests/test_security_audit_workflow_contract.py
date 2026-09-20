@@ -1301,6 +1301,35 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	assert "An acceptance covers one location." in prompt
 
 
+def test_security_audit_rejects_unfingerprintable_finding_without_aborting() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-fingerprint-invalid-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, _second_sha, head_sha = _git_fixture_repo_three_commits(tmp_path)
+		output_path = tmp_path / "findings.json"
+		(repo_dir / "file_c.py").write_text("x" * 16_385 + "\n", encoding="utf-8")
+		findings = [
+			_finding_payload("invalid-context", file_path="file_c.py"),
+			_finding_payload("valid-context", file_path="file_b.py"),
+		]
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps(findings),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			},
+		)
+
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["valid-context"]
+	assert payload["counts"]["suppressed_invalid"] == 1
+
+
 def test_security_audit_waived_findings_fail_closed_on_malformed_input() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-waived-bad-") as fixture_td:
 		tmp_path = Path(fixture_td)

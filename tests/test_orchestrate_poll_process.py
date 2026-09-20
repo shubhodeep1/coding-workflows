@@ -5858,6 +5858,15 @@ def test_security_pass_waive_command_rejects_bots_unauthorized_roles_and_malform
 		),
 		(
 			{
+				"body": "/security-pass-waive SEC-OLD",
+				"author_association": "NONE",
+				"user": {"login": "outside-user", "type": "User"},
+			},
+			"permission",
+			{"maintainer": "maintain"},
+		),
+		(
+			{
 				"body": "/security-pass-waive SEC-OLD ../etc/passwd",
 				"author_association": "MEMBER",
 				"user": {"login": "octocat", "type": "User"},
@@ -5953,18 +5962,22 @@ def test_security_pass_waive_command_rejects_unknown_findings_atomically() -> No
 
 
 def test_security_pass_waive_permission_lookup_failure_remains_pending() -> None:
+	state = _security_pass_waive_failed_state()
+	state["status"] = "security-pass-fixing"
+	state["security_pass_status"] = "blocked"
+	state["security_pass_active_fix_issues"] = [700]
 	result = _run_poller(
-		state=_security_pass_waive_failed_state(),
+		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
 		security_audit_payload=_security_audit_findings_payload(),
-		tracking_labels=["ai:security-pass-failed"],
+		tracking_labels=["ai:security-pass-fixing"],
 		tracking_comments=[{
 			"body": "/security-pass-waive SEC-OLD",
 			"user": {"login": "octocat", "type": "User"},
 		}],
-		issue_labels={10: ["ai:merged"]},
+		issue_labels={700: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		collaborator_roles={"octocat": "maintain"},
 		fail_collaborator_permission_for=["octocat"],
@@ -5972,6 +5985,36 @@ def test_security_pass_waive_permission_lookup_failure_remains_pending() -> None
 	assert result["latest_state"]["security_pass_waived_findings"] == []
 	combined_log = result["stdout"] + result["stderr"]
 	assert "leaving the command unmarked for retry" in combined_log
+	assert "Security-pass fix issue #700 remains in progress." in combined_log
+	assert "security-pass-waive-dedup:" not in "\n".join(
+		comment["body"] for comment in result["issues"]["192"]["comments"]
+	)
+
+
+def test_security_pass_waive_head_lookup_failure_does_not_skip_fix_processing() -> None:
+	state = _security_pass_waive_failed_state()
+	state["status"] = "security-pass-fixing"
+	state["security_pass_status"] = "blocked"
+	state["security_pass_active_fix_issues"] = [700]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:security-pass-fixing"],
+		tracking_comments=[{
+			"body": "/security-pass-waive SEC-OLD",
+			"user": {"login": "octocat", "type": "User"},
+		}],
+		issue_labels={700: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		collaborator_roles={"octocat": "maintain"},
+		fail_branch_ref_after={"orchestrator/project-192": 0},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Could not resolve the current integration head" in combined_log
+	assert "Security-pass fix issue #700 remains in progress." in combined_log
 	assert "security-pass-waive-dedup:" not in "\n".join(
 		comment["body"] for comment in result["issues"]["192"]["comments"]
 	)

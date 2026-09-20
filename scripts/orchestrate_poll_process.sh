@@ -18096,11 +18096,15 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       fi
       if [ -z "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
         SECURITY_PASS_WAIVE_AUTHOR_URI="$(printf '%s' "${SECURITY_PASS_WAIVE_AUTHOR}" | jq -sRr @uri)"
-        if ! SECURITY_PASS_WAIVE_ROLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/collaborators/${SECURITY_PASS_WAIVE_AUTHOR_URI}/permission" --jq '.role_name // ""')"; then
-          echo "::warning::Could not verify repository permission for /security-pass-waive comment ${SECURITY_PASS_WAIVE_COMMENT_ID}; leaving the command unmarked for retry."
-          continue
+        if ! SECURITY_PASS_WAIVE_ROLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/collaborators/${SECURITY_PASS_WAIVE_AUTHOR_URI}/permission" --jq '.role_name // ""' 2>&1)"; then
+          if printf '%s' "${SECURITY_PASS_WAIVE_ROLE}" | grep -Eqi '(^gh: Not Found|HTTP 404|404 Not Found|status code 404|\bnot found\b)'; then
+            SECURITY_PASS_WAIVE_REJECT_REASON="permission"
+          else
+            echo "::warning::Could not verify repository permission for /security-pass-waive comment ${SECURITY_PASS_WAIVE_COMMENT_ID}; leaving the command unmarked for retry."
+            SECURITY_PASS_WAIVE_REJECT_REASON="retry"
+          fi
         fi
-        if [ "${SECURITY_PASS_WAIVE_ROLE}" != "maintain" ] && [ "${SECURITY_PASS_WAIVE_ROLE}" != "admin" ]; then
+        if [ -z "${SECURITY_PASS_WAIVE_REJECT_REASON}" ] && [ "${SECURITY_PASS_WAIVE_ROLE}" != "maintain" ] && [ "${SECURITY_PASS_WAIVE_ROLE}" != "admin" ]; then
           SECURITY_PASS_WAIVE_REJECT_REASON="permission"
         fi
       fi
@@ -18109,9 +18113,8 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         SECURITY_PASS_WAIVE_AUDITED_HEAD="$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
         if [ -z "${SECURITY_PASS_WAIVE_CURRENT_HEAD}" ]; then
           echo "::warning::Could not resolve the current integration head for /security-pass-waive comment ${SECURITY_PASS_WAIVE_COMMENT_ID}; leaving the command unmarked for retry."
-          continue
-        fi
-        if [ "${SECURITY_PASS_WAIVE_AUDITED_HEAD}" != "${SECURITY_PASS_WAIVE_CURRENT_HEAD}" ]; then
+          SECURITY_PASS_WAIVE_REJECT_REASON="retry"
+        elif [ "${SECURITY_PASS_WAIVE_AUDITED_HEAD}" != "${SECURITY_PASS_WAIVE_CURRENT_HEAD}" ]; then
           SECURITY_PASS_WAIVE_REJECT_REASON="stale_head"
         fi
       fi
@@ -18136,7 +18139,9 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
           SECURITY_PASS_WAIVE_REJECT_REASON="finding_match"
         fi
       fi
-      if [ -n "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
+      if [ "${SECURITY_PASS_WAIVE_REJECT_REASON}" = "retry" ]; then
+        :
+      elif [ -n "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
         echo "SECURITY_PASS_WAIVE_REJECTED tracking_issue=${TRACKING_NUM} comment=${SECURITY_PASS_WAIVE_COMMENT_ID} reason=${SECURITY_PASS_WAIVE_REJECT_REASON}"
         case "${SECURITY_PASS_WAIVE_REJECT_REASON}" in
           author) SECURITY_PASS_WAIVE_REJECT_TEXT="only a human GitHub user may request a security-pass waiver" ;;
