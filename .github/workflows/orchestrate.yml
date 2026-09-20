@@ -1415,7 +1415,7 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
