@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "Recent merged work repeatedly updates workflow definitions, helper scripts, prompts, authentication helpers, reviewer logic, and documentation together. Security-related plans should inspect the complete execution path and preserve equivalent protections across all workflow variants.",
+  "fingerprint": "4cdf40c10ce9a062545490a60a1c613b2468dafa4ba292d406b8cc07c581ce32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35480179414",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35480179414",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4092",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4109",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4127",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4140",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4093",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4112",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4130",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4141"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260920010218_6a4b9336f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Security hardening in this repository is cross-cutting rather than isolated to one workflow.",
+  "timestamps": {
+    "created_at": "2026-09-20T01:02:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
