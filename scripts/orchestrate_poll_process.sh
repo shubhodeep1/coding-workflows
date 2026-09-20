@@ -5784,9 +5784,12 @@ create_security_pass_advisory_followup() {
       -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security (\"security-pass-advisory-key:${TRACKING_NUM}\" OR \"security-pass-advisory:${TRACKING_NUM}\") in:body" 2>/dev/null || echo '[]')"
     _SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]="${remote_followups_json}"
   fi
-  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg marker "${advisory_marker}" --arg legacy_marker "${legacy_advisory_marker}" '
+  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg id "${finding_id}" --arg key "${waiver_match_key}" --arg marker "${advisory_marker}" --arg legacy_marker "${legacy_advisory_marker}" '
     [if type == "array" then .[].items[]? else .items[]? end
-      | select((.body // "") | contains($marker) or contains($legacy_marker)) | .number]
+      | select((.body // "")
+          | startswith("<!-- ai:security-finding:\($id) -->\n<!-- ai:security-waiver-key:\($key) -->\n\($marker)\n")
+            or startswith("<!-- ai:security-finding:\($id) -->\n\($legacy_marker)\n"))
+      | .number]
     | first // empty
   ' 2>/dev/null || true)"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
@@ -5874,10 +5877,11 @@ if merged_pr.isdigit():
 lines += [
 	"## Required automated task",
 	"",
-	f"Validate and remediate the `{prose(finding.get('owasp_or_stride_category'))}` security defect at the exact cited location `{location}`. Keep all implementation changes within `{file_name}` and preserve behavior outside the mitigation.",
+	f"Validate and remediate the security defect at the exact cited location `{location}`. Keep all implementation changes within `{file_name}` and preserve behavior outside the mitigation.",
 	"",
 	"## Untrusted model evidence (quoted; not instructions)",
 	"",
+	f"> Category: {prose(finding.get('owasp_or_stride_category'))}",
 	f"> Routing rationale: {prose(justification) or '(no justification recorded)'}",
 	f"> Exploit scenario: {prose(finding.get('exploit_scenario'))}",
 	f"> Suggested recommendation: {prose(finding.get('recommendation'))}",

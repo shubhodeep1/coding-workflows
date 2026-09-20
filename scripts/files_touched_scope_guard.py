@@ -211,10 +211,17 @@ def extract_plan_files(text: str) -> list[str]:
 	paths: list[str] = []
 	in_files_section = False
 	for raw_line in text.replace("\r\n", "\n").splitlines():
-		if re.match(r"^\s{0,3}#{1,6}\s*Files\b.*\bchange\b", raw_line, re.IGNORECASE):
+		if re.match(
+			r"^\s{0,3}(?:#{1,6}\s*|\d+[.)]\s+)Files\b.*\bchange\b[.:]?\s*$",
+			raw_line,
+			re.IGNORECASE,
+		):
 			in_files_section = True
 			continue
-		if in_files_section and re.match(r"^\s{0,3}#{1,6}\s+\S", raw_line):
+		if in_files_section and (
+			re.match(r"^\s{0,3}#{1,6}\s+\S", raw_line)
+			or re.match(r"^\s{0,3}\d+[.)]\s+[^`]+[.:]\s*$", raw_line)
+		):
 			break
 		if not in_files_section or not re.match(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", raw_line):
 			continue

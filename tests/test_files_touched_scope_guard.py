@@ -288,6 +288,16 @@ def test_generated_advisory_scope_matches_only_the_exact_cited_path() -> None:
 	assert out.split() == ["src/security.py"]
 
 
+def test_generated_advisory_plan_parser_accepts_numbered_contract() -> None:
+	plan = (
+		"1. Files likely to change.\n"
+		"- `src/security.py`\n\n"
+		"2. Functions/modules to implement.\n"
+		"- `README.md` is mentioned only outside the files section.\n"
+	)
+	assert guard.extract_plan_files(plan) == ["src/security.py"]
+
+
 # --------------------------------------------------------------------------
 # Layer 2 — extract-and-run the real guard fragments
 # --------------------------------------------------------------------------
@@ -315,12 +325,17 @@ def _run_fragment(
 	label: str = "commit",
 	issue_author_association: str = "OWNER",
 	issue_author_login: str = "octocat",
+	helper_source: str | None = None,
 ) -> tuple[int, str, str]:
 	fragment = _scope_fragment(label)
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		(tdp / "scripts").mkdir()
-		shutil.copy(GUARD_SCRIPT, tdp / "scripts" / "files_touched_scope_guard.py")
+		helper_path = tdp / "scripts" / "files_touched_scope_guard.py"
+		if helper_source is None:
+			shutil.copy(GUARD_SCRIPT, helper_path)
+		else:
+			helper_path.write_text(helper_source, encoding="utf-8")
 		git_env = {
 			key: value
 			for key, value in os.environ.items()
@@ -421,6 +436,18 @@ def test_generated_advisory_accepts_exact_github_actions_bot_identity() -> None:
 	)
 	assert rc == 0, log
 	assert "scope_violation_blocked" not in gh_output
+
+
+@pytest.mark.parametrize("label", ("preflight", "commit"))
+def test_generated_advisory_helper_failure_fails_closed(label: str) -> None:
+	rc, gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label=label,
+		helper_source="raise RuntimeError('validator crashed')\n",
+	)
+	assert rc == 1, log
+	assert "scope_violation_blocked=generated-security-advisory" in gh_output
 
 
 def _strip_comments(fragment: str) -> str:

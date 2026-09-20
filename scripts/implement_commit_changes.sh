@@ -497,6 +497,12 @@ else
       if [ "${generated_security_advisory}" = "true" ]; then scope_rc=30; else scope_rc=127; fi
     fi
     rm -f "${scope_staged_file}"
+    if [ "${generated_security_advisory}" = "true" ]; then
+      case "${scope_rc}" in
+        0|20|30) ;;
+        *) scope_rc=30 ;;
+      esac
+    fi
     case "${scope_rc}" in
       0)
         echo "files_touched scope guard: all staged paths fall within the issue allowlist."
