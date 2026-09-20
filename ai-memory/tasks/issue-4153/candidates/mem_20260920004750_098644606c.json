@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `5570973fb7e28c2b91188daa217ec3e47d8fb8d5`\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`\n\nScope-mode justification: The complete implementation is a single exact-content update with no additional dependency or interface. Per \u00a76 priorities, correctness outweighs speed; validating all three lines avoids leaving unintended content while respecting the one-file constraint.\n\n## Automation integration\n\n- Change type: modify existing content only; no new script.\n- Scheduler/PR-push entry point: none required.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Future-removal registry: not applicable.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Preserve lines 1 and 3.\n  - Replace line 2 with `run_id: alt-35479338161`.\n  - Ensure the file contains exactly the requested three lines.\n- No changelog fragment or other file may be changed.\n\n## Functions or modules to implement\n\nNone. This is a static canary fixture update.\n\n## Data structures affected\n\nThe three-line text fixture changes from run ID `26151428977` to `alt-35479338161`.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Enforce the complete three-line fixture\n\n- **Chosen:** Verify the entire file exactly matches the requested three lines.\n- **Alternatives considered:** Patch only the run ID without checking surrounding or trailing content.\n- **Why:** The issue explicitly requires exact content, and full validation adds negligible cost while preventing hidden extra-line drift.\n\n## Security considerations\n\n- No endpoint, authorization surface, external service, money state, or secret is involved.\n- Treat the requested run ID as a literal value, not executable input.\n- Validate that no additional lines or injected content are present.\n- Confirm no unrelated or sensitive files enter the diff.\n\n## Risks and edge cases\n\n- Extra blank lines or trailing content would violate the exact-content requirement.\n- The existing file is present and clean; only its second line currently differs.\n- Integration branch metadata was absent, but the supplied and verified checkout both identify `main`; no conflicting integration branch was declared.\n\n## Testing considerations\n\n1. Compare the file byte-for-byte against the expected three-line content.\n2. Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n3. Confirm the diff changes only the run ID line.\n4. No broader test suite is necessary for this static canary update.\n\n## Pre-execution self-check\n\n- Clarification answer maps to the clear-status auto-answer; no unresolved question remains.\n- The target file exists.\n- The requested value and one-file scope are unambiguous.\n- No code, workflow, schema, documentation, or scheduler changes are required.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1aa4f09344d26b8d82f376b88fff6e09982d54ac3fbdabac23ec7a8d39b44476",
+  "lineage": {
+    "issue_number": 4153,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35479499718",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35479499718",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4153"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260920004750_098644606c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4153,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35479499718"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4153",
+  "timestamps": {
+    "created_at": "2026-09-20T00:47:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
