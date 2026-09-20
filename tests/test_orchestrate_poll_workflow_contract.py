@@ -128,6 +128,9 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 def test_security_pass_recovery_log_prefixes_are_registered() -> None:
 	agents_text = AGENTS_MD.read_text(encoding="utf-8")
 	for prefix in (
+		"REISSUE_FILES_TOUCHED_UNION",
+		"REISSUE_ORCHESTRATOR_METADATA_CARRIED",
+		"REISSUE_ORCHESTRATOR_METADATA_ABSENT",
 		"SECURITY_PASS_AUTO_RESET",
 		"SECURITY_PASS_AUTO_RESET_SKIPPED",
 		"STAGED_SUPPORT_LATCH_RELEASED",
