@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review and orchestration flows must remain tied to the current commit or PR head.",
   "timestamps": {
     "created_at": "2026-09-20T01:03:53Z",
