@@ -237,7 +237,7 @@ def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() ->
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_block
 	assert workflow.find("- name: Create Codex config") < workflow.find("- name: Setup Serena")
 	assert workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena")
-	assert 'bash "${SUPPORT_SCRIPTS_DIR}/implement_commit_changes.sh"' in commit_step
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
 	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in _commit_helper_text()
 
 
@@ -258,7 +258,7 @@ def test_emit_serena_stats_runs_before_cleanup_and_scans_implement_logs() -> Non
 	stats_block = _step_run_text("Emit Serena stats")
 	assert stats_step.get("if") == "always() && env.SKIP_IMPLEMENT != 'true'"
 	assert stats_step.get("continue-on-error") is True
-	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/serena_stats_emit.py" "${serena_stat_args[@]}"' in stats_block
+	assert 'python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/serena_stats_emit.py" "${serena_stat_args[@]}"' in stats_block
 	assert "post_codex_repair_log_attempt_*.txt" in stats_block
 	assert workflow.find("- name: Emit Serena stats") < workflow.find("- name: Cleanup temporary artifacts")
 

@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import unittest
 from pathlib import Path
 
 import pytest
@@ -404,11 +405,13 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 		if "gh_retry gh api" in line and '"search/issues"' in line
 	]
 
-	assert len(parameterized_search_calls) == 4
+	assert len(parameterized_search_calls) == 5
 	assert all("--method GET" in call for call in parameterized_search_calls)
-	assert sum("--paginate" in call for call in parameterized_search_calls) == 2
+	assert sum("--paginate" in call for call in parameterized_search_calls) == 3
 
-	# Preserve the two marker-search fallbacks and their paginated aggregation.
+	# Preserve the advisory reconciliation search and the two marker-search
+	# fallbacks, including their paginated aggregation.
+	assert '-f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security security-pass-advisory:${TRACKING_NUM} in:body"' in poller_source_text
 	assert '-f per_page=100 -f q="${q_state}"' in poller_source_text
 	assert '-f per_page=100 -f q="${q_clarify}"' in poller_source_text
 	assert "jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]'" in poller_source_text
@@ -424,7 +427,7 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 def test_judge_context_issue_numbers_are_normalized_without_globbing():
 	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	block_start_marker = '  MERGED_PR_SUMMARIES=""\n  OPEN_PR_SUMMARIES=""\n'
-	block_end_marker = '  unset _sorted_issue_nums _issue_status\n'
+	block_end_marker = '  unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left\n'
 	block_start_index = poller_source_text.index(block_start_marker)
 	block_end_index = poller_source_text.index(block_end_marker, block_start_index)
 	production_block = poller_source_text[
@@ -437,12 +440,21 @@ def test_judge_context_issue_numbers_are_normalized_without_globbing():
 		# unquoted shell expansion in the production block.
 		(worktree / "3").touch()
 		(worktree / "17").touch()
+		# The block reads each issue's wave status from STATE_FILE before the
+		# PR lookup (merged PRs are collected first, then open ones); an empty
+		# wave keeps every issue on the open pass, in sorted order.
+		state_file = worktree / "state.json"
+		state_file.write_text(json.dumps({"waves": [{"issues": []}]}), encoding="utf-8")
 		runner = worktree / "run-normalization.sh"
 		runner.write_text(
 			"#!/usr/bin/env bash\n"
 			"set -euo pipefail\n"
 			"LOOKUP_LOG=\"${1}\"\n"
 			"ISSUE_NUMS=\"${2-}\"\n"
+			f"STATE_FILE={str(state_file)!r}\n"
+			"WAVE_IDX=0\n"
+			"JUDGE_PR_DIFF_MAX_BYTES=65536\n"
+			"JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=524288\n"
 			"_issue_cross_ref_pr_number_last()\n"
 			"{\n"
 			"  printf '%s\\n' \"${1}\" >> \"${LOOKUP_LOG}\"\n"
@@ -520,6 +532,7 @@ def _security_audit_findings_payload(findings: list[dict] | None = None) -> dict
 			"suppressed_invalid": 0,
 			"suppressed_low_confidence": 0,
 			"suppressed_out_of_scope": 0,
+			"suppressed_waived": 0,
 		},
 	}
 
@@ -782,6 +795,7 @@ def _run_poller(
 	fail_issue_comment_get_after: dict[int, int] | None = None,
 	fail_issue_get_for: list[int] | None = None,
 	fail_issue_edit_for: list[int] | None = None,
+	fail_issue_close_for: list[int] | None = None,
 	fail_branch_ref_after: dict[str, int] | None = None,
 	fail_branch_ref_not_found_after: dict[str, int] | None = None,
 	mock_actions_runs_cache_get_json: dict | None = None,
@@ -840,6 +854,7 @@ def _run_poller(
 	sync_contract_list_union_timeout: bool = False,
 	issue_create_base_url: str = "https://github.com/owner/repo",
 	env_overrides: dict[str, str] | None = None,
+	mock_store_extra: dict | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -881,6 +896,7 @@ def _run_poller(
 	fail_issue_comment_get_after = fail_issue_comment_get_after or {}
 	fail_issue_get_for = fail_issue_get_for or []
 	fail_issue_edit_for = fail_issue_edit_for or []
+	fail_issue_close_for = fail_issue_close_for or []
 	fail_branch_ref_after = fail_branch_ref_after or {}
 	fail_branch_ref_not_found_after = fail_branch_ref_not_found_after or {}
 	mock_actions_runs_cache_get_json = mock_actions_runs_cache_get_json or {}
@@ -963,6 +979,32 @@ def _run_poller(
 			text=True,
 			env=_git_test_env(),
 		).stdout.strip()
+
+		# `__advanced_integration_head_with_fix__` is an integration-head child
+		# whose tree differs: one new file and one modified file, the shape of
+		# a merged security-fix PR, so fix-cycle diff tests see real hunks.
+		fix_index_file = tmp / "fix-index"
+		fix_git_env = {**_git_test_env(), "GIT_INDEX_FILE": str(fix_index_file)}
+
+		def _fix_git(*args: str, stdin: str | None = None) -> str:
+			return subprocess.run(
+				["git", "-C", str(sandbox), *args],
+				check=True,
+				capture_output=True,
+				text=True,
+				env=fix_git_env,
+				input=stdin,
+			).stdout.strip()
+
+		_fix_git("read-tree", integration_tree_sha)
+		fix_new_blob = _fix_git("hash-object", "-w", "--stdin", stdin="def _season_pool_settlement_readiness(pool):\n\treturn pool.closed\n")
+		fix_modified_blob = _fix_git("hash-object", "-w", "--stdin", stdin="integration-branch-only-symbol\nsecurity-fix-marker\n")
+		_fix_git("update-index", "--add", "--cacheinfo", f"100644,{fix_new_blob},scripts/season_pool.py")
+		_fix_git("update-index", "--add", "--cacheinfo", f"100644,{fix_modified_blob},.orchestrator_judge_context_sentinel.txt")
+		fix_tree_sha = _fix_git("write-tree")
+		sandbox_sha_aliases["__advanced_integration_head_with_fix__"] = _fix_git(
+			"commit-tree", fix_tree_sha, "-p", integration_head_sha, "-m", "security fix",
+		)
 
 		def _resolve_sandbox_sha_alias(raw_sha: str) -> str:
 			return sandbox_sha_aliases.get(str(raw_sha), str(raw_sha))
@@ -1060,8 +1102,22 @@ def _run_poller(
 				"  'output_mode': os.environ.get('SECURITY_AUDIT_OUTPUT_MODE'),\n"
 				"  'diff_base': os.environ.get('SECURITY_AUDIT_DIFF_BASE'),\n"
 				"  'diff_head': os.environ.get('SECURITY_AUDIT_DIFF_HEAD'),\n"
+				"  'diff_since': os.environ.get('SECURITY_AUDIT_DIFF_SINCE'),\n"
+				"  'prior_findings': (\n"
+				"    json.loads(Path(os.environ['SECURITY_AUDIT_PRIOR_FINDINGS']).read_text(encoding='utf-8'))\n"
+				"    if os.environ.get('SECURITY_AUDIT_PRIOR_FINDINGS') else None\n"
+				"  ),\n"
+				"  'waived_findings': (\n"
+				"    json.loads(Path(os.environ['SECURITY_AUDIT_WAIVED_FINDINGS']).read_text(encoding='utf-8'))\n"
+				"    if os.environ.get('SECURITY_AUDIT_WAIVED_FINDINGS') else None\n"
+				"  ),\n"
+				"  'fix_cycle_diffs': (\n"
+				"    json.loads(Path(os.environ['SECURITY_AUDIT_FIX_CYCLE_DIFFS']).read_text(encoding='utf-8'))\n"
+				"    if os.environ.get('SECURITY_AUDIT_FIX_CYCLE_DIFFS') else None\n"
+				"  ),\n"
 				"  'confidence_gate': os.environ.get('SECURITY_AUDIT_CONFIDENCE_GATE'),\n"
 				"  'model': os.environ.get('WORKFLOW_EDITOR_MODEL'),\n"
+				"  'tracking_body': json.loads(Path(os.environ['GH_MOCK_STORE']).read_text(encoding='utf-8'))['issues']['192']['body'],\n"
 				"}), encoding='utf-8')\n"
 				"PY\n"
 				f"if [ {int(security_audit_exit_code)} -ne 0 ]; then exit {int(security_audit_exit_code)}; fi\n"
@@ -1104,7 +1160,26 @@ def _run_poller(
 			str(tracking_num): {
 				"labels": list(tracking_labels),
 				"comments": [
-					_comment_entry({"body": _state_comment(state), "user": {"login": "github-actions[bot]"}}, 1, tracking_num),
+					_comment_entry(
+						{
+							# Sandbox SHA aliases (`__integration_head__`, ...) are
+							# resolved in the seeded security-pass pointers so a test
+							# can point state at a real ancestor of the audited head.
+							"body": _state_comment(
+								{
+									**state,
+									**{
+										pointer_key: _resolve_sandbox_sha_alias(str(state[pointer_key]))
+										for pointer_key in ("security_pass_last_audited_sha", "security_pass_head_sha")
+										if isinstance(state.get(pointer_key), str)
+									},
+								}
+							),
+							"user": {"login": "github-actions[bot]"},
+						},
+						1,
+						tracking_num,
+					),
 					*[
 						_comment_entry(comment_body, idx + 2, tracking_num)
 						for idx, comment_body in enumerate(tracking_comments)
@@ -1180,6 +1255,7 @@ def _run_poller(
 			"fail_issue_comment_get_after": {str(k): int(v) for k, v in fail_issue_comment_get_after.items()},
 			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
 			"fail_issue_edit_for": [int(x) for x in fail_issue_edit_for],
+			"fail_issue_close_for": [int(x) for x in fail_issue_close_for],
 			"fail_branch_ref_after": {str(k): int(v) for k, v in fail_branch_ref_after.items()},
 			"fail_branch_ref_not_found_after": {str(k): int(v) for k, v in fail_branch_ref_not_found_after.items()},
 			"mock_actions_runs_cache_get_json": mock_actions_runs_cache_get_json,
@@ -1229,6 +1305,8 @@ def _run_poller(
 			"fail_security_pass_managed_issue_lookup": bool(fail_security_pass_managed_issue_lookup),
 			"security_pass_managed_issue_pages_raw": security_pass_managed_issue_pages_raw,
 		}
+		if mock_store_extra:
+			store.update(mock_store_extra)
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
 		(runtime_dir / "tracking_issues.json").write_text(
@@ -1481,7 +1559,7 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		store['review_dispatches'].append({'workflow': wf, 'pr_number': pr_number, 'ref': ref})
 		save()
 		sys.exit(0)
-	if wf == 'test-and-mark-stable.yml':
+	if wf in ('test-and-mark-stable.yml', 'promote-main-to-stable.yml'):
 		if store.get('fail_release_dispatch'):
 			print('dispatch failed', file=sys.stderr)
 			sys.exit(1)
@@ -1753,6 +1831,10 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'edit':
 
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'close':
 	num = args[2]
+	if int(num) in set(store.get('fail_issue_close_for', [])):
+		save()
+		print('forced issue close failure', file=sys.stderr)
+		sys.exit(1)
 	issue = get_issue(num)
 	issue['closed'] = True
 	store['closed_issues'].append(int(num))
@@ -1906,9 +1988,13 @@ if args[0] == 'api':
 								'repository': pr_repository,
 								'state': pr_state,
 								'merged': bool(pr.get('merged', False)),
-								'mergedAt': pr.get('merged_at', None),
-								'headRefName': pr.get('headRefName', ''),
-								'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
+								'labels': {
+									'nodes': [{'name': label} for label in pr.get('labels', [])],
+								},
+					'mergedAt': pr.get('merged_at', None),
+					'headRefName': pr.get('headRefName', ''),
+					'baseRefName': pr.get('baseRefName', ''),
+					'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
 								'mergeable': pr.get('mergeable', None),
 								'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
 								'mergeCommit': {
@@ -1942,6 +2028,7 @@ if args[0] == 'api':
 			managed_issue_payload = {
 				'number': int(managed_issue_num),
 				'body': managed_issue_data.get('body', ''),
+				'labels': [{'name': label} for label in managed_issue_data.get('labels', [])],
 			}
 			if managed_issue_data.get('pull_request'):
 				managed_issue_payload['pull_request'] = managed_issue_data['pull_request']
@@ -2006,6 +2093,7 @@ if args[0] == 'api':
 		if 'is:issue' in q:
 			items = [item for item in items if 'pull_request' not in item]
 		result = {'total_count': len(items), 'incomplete_results': False, 'items': items}
+		save()
 		if jq:
 			import subprocess as _sp
 			p = _sp.run(['jq', '-rc', jq], input=json.dumps(result), capture_output=True, text=True)
@@ -2181,6 +2269,7 @@ if args[0] == 'api':
 			print(p.stdout, end='')
 		else:
 			print(json.dumps({'body': issue.get('body', ''), 'state': issue_state}))
+		save()
 		sys.exit(0)
 
 	m = re.search(r'/pulls/(\d+)$', path)
@@ -2243,6 +2332,9 @@ if args[0] == 'api':
 		if pr is None:
 			print('{}')
 			sys.exit(0)
+		if any('application/vnd.github.diff' in arg for arg in args) and 'diff' in pr:
+			print(pr.get('diff', ''), end='')
+			sys.exit(0)
 		if method == 'PATCH':
 			payload = {}
 			if input_file:
@@ -2297,6 +2389,8 @@ if args[0] == 'api':
 				'mergeable_state': pr.get('mergeable_state', ''),
 				'merged': pr.get('merged', False),
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
+				'merge_commit_sha': pr.get('merge_commit_sha'),
+				'labels': [{'name': label} for label in pr.get('labels', [])],
 				'title': pr.get('title', ''),
 				'body': pr.get('body', ''),
 				'labels': [{'name': label} for label in pr.get('labels', [])],
@@ -2440,6 +2534,35 @@ if args[0] == 'api':
 		print(json.dumps({'ref': ref, 'object': {'sha': sha or 'mocksha'}}))
 		sys.exit(0)
 
+	m_tag_ref = re.search(r'/git/ref/tags/([^/]+)$', path)
+	if m_tag_ref:
+		if store.get('tag_ref_lookup_error'):
+			print('HTTP 503 simulated tag lookup failure', file=sys.stderr)
+			sys.exit(1)
+		tag_entry = (store.get('tag_refs') or {}).get(m_tag_ref.group(1))
+		if not tag_entry:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		payload = {'ref': 'refs/tags/' + m_tag_ref.group(1), 'object': {'type': tag_entry.get('type', 'commit'), 'sha': tag_entry['sha']}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
+	m_tag_obj = re.search(r'/git/tags/([0-9a-f]{40})$', path)
+	if m_tag_obj:
+		commit = (store.get('tag_objects') or {}).get(m_tag_obj.group(1))
+		if not commit:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		payload = {'object': {'type': 'commit', 'sha': commit}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
 	m = re.search(r'/git/ref/heads/(.+)$', path)
 	if m:
 		encoded_branch = m.group(1)
@@ -2509,6 +2632,18 @@ if args[0] == 'api':
 			print(json.dumps(events))
 		sys.exit(0)
 
+	m_commit = re.search(r'/commits/([0-9a-f]{40})$', path)
+	if m_commit:
+		files = [{'filename': f} for f in (store.get('commit_files') or {}).get(m_commit.group(1), [])]
+		payload = {'sha': m_commit.group(1), 'files': files}
+		if jq:
+			import subprocess as _sp
+			p = _sp.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
+
 	m = re.search(r'/commits/([^/]+)/check-runs(\?.*)?$', path)
 	if m:
 		sha = m.group(1)
@@ -2550,6 +2685,8 @@ if args[0] == 'api':
 		else:
 			ahead_by = int(store.get('compare_ahead_by', 0))
 		compare_payload = {'ahead_by': ahead_by, 'behind_by': 0}
+		_range = path.split('/compare/', 1)[1]
+		compare_payload['status'] = (store.get('compare_status_by_range') or {}).get(_range) or ('identical' if ahead_by == 0 else 'ahead')
 		# Optional commit topology for the backpressure work-commit count:
 		# 'compare_commit_parent_counts' is a list of per-commit parent
 		# counts (1 = squash/regular commit, 2 = merge commit such as the
@@ -2558,7 +2695,10 @@ if args[0] == 'api':
 		# and falls back to raw ahead_by — the pre-existing semantics that
 		# older tests pin.
 		parent_counts = store.get('compare_commit_parent_counts')
-		if parent_counts is not None:
+		if store.get('compare_commits_detail') is not None:
+			compare_payload['commits'] = list(store['compare_commits_detail'])
+			compare_payload['total_commits'] = int(store.get('compare_total_commits', len(compare_payload['commits'])))
+		elif parent_counts is not None:
 			compare_payload['commits'] = [
 				{'sha': 'c%04d' % idx, 'parents': [{'sha': 'p%d' % j} for j in range(int(n))]}
 				for idx, n in enumerate(parent_counts)
@@ -2650,9 +2790,12 @@ if args[0] == 'api':
 		sys.stdout.write(output)
 		sys.exit(0)
 
-	m = re.search(r'/actions/workflows/[^/]+/runs', path)
+	m = re.search(r'/actions/workflows/([^/]+)/runs', path)
 	if m:
 		runs = store.get('validation_workflow_runs', [])
+		by_file = store.get('workflow_runs_by_file') or {}
+		if m.group(1) in by_file:
+			runs = by_file[m.group(1)]
 		result = {'workflow_runs': runs, 'total_count': len(runs)}
 		if jq:
 			import subprocess as _sp
@@ -2671,9 +2814,12 @@ sys.exit(1)
 		_write_exec(bin_dir / "gh", gh_mock)
 
 		real_git = shutil.which("git")
+		real_jq = shutil.which("jq")
 		real_python = shutil.which("python3")
 		real_timeout = shutil.which("timeout")
 		assert real_git is not None
+		if real_jq is None:
+			raise unittest.SkipTest("jq binary not available in test environment")
 		assert real_python is not None
 		if (sync_contract_list_union_fixture or sync_contract_list_union_timeout) and real_timeout is None:
 			pytest.skip("GNU timeout is required for deterministic contract-list union tests")
@@ -2792,6 +2938,20 @@ if args and args[0] == 'fetch':
 
 proc = subprocess.run([real_git, *args])
 sys.exit(proc.returncode)
+''',
+		)
+
+		_write_exec(
+			bin_dir / "jq",
+r'''#!/usr/bin/env bash
+if [ "${MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL:-false}" = "true" ]; then
+	for jq_argument in "$@"; do
+		if [ "${jq_argument}" = "reissues" ]; then
+			exit 1
+		fi
+	done
+fi
+exec "${REAL_JQ_BIN}" "$@"
 ''',
 		)
 
@@ -3328,6 +3488,7 @@ sys.exit(proc.returncode)
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
+				"REAL_JQ_BIN": real_jq,
 				"REAL_PYTHON_BIN": real_python,
 				"REAL_TIMEOUT_BIN": real_timeout or "",
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
@@ -3341,7 +3502,13 @@ sys.exit(proc.returncode)
 		if codex_touch_file:
 			touch_path = Path(codex_touch_file)
 			if not touch_path.is_absolute():
-				touch_path = runtime_dir / touch_path
+				# Relative paths resolve inside the sandbox git repo, which is
+				# the poller's cwd and the checkout the judge edits. Resolving
+				# them against runtime_dir (outside the repo) meant the mock
+				# judge never changed a tracked tree; the follow-up-PR tests
+				# then only saw a dirty tree because the consumer artifact
+				# cleanup used to delete tracked files (fixed in #4033).
+				touch_path = sandbox / touch_path
 			env["MOCK_CODEX_TOUCH_FILE"] = str(touch_path)
 		if mock_orch_state_v2_pack_mode:
 			env["MOCK_ORCH_STATE_V2_PACK_MODE"] = mock_orch_state_v2_pack_mode
@@ -3386,6 +3553,10 @@ sys.exit(proc.returncode)
 		result["stderr"] = proc.stderr
 		judge_prompt_path = runtime_dir / "judge_prompt.txt"
 		result["judge_prompt"] = judge_prompt_path.read_text(encoding="utf-8") if judge_prompt_path.exists() else ""
+		result["rb_judge_prompts"] = {
+			path.stem.removeprefix("rb_judge_prompt_"): path.read_text(encoding="utf-8")
+			for path in runtime_dir.glob("rb_judge_prompt_*.txt")
+		}
 		result["security_audit_capture"] = (
 			json.loads(security_audit_capture.read_text(encoding="utf-8"))
 			if security_audit_capture.exists()
@@ -3483,9 +3654,32 @@ def test_security_pass_flag_off_releases_security_owned_states() -> None:
 
 def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None:
 	prior_alert_marker = "<!-- tg_cleanup:501,502 -->"
+	tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `pending`
+- Completed fix cycles: 0
+- Audited integration SHA: `none`
+- Active fix issue: none
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
 	state = _base_state()
 	state["integration_branch"] = "orchestrator/project-192"
-	state["project_body_snapshot"] = "untrusted project snapshot"
+	state["project_body_snapshot"] = tracking_body
+	state["tracking_body_sync_hash"] = hashlib.sha256(tracking_body.encode("utf-8")).hexdigest()
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -3494,6 +3688,7 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 		security_audit_payload=_security_audit_findings_payload(),
 		capture_telegram_calls=True,
 		tracking_comments=[prior_alert_marker],
+		tracking_body=tracking_body,
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		env_overrides={"WORKFLOW_EDITOR_MODEL": "openai/security-test-model"},
@@ -3508,6 +3703,13 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 	assert capture["confidence_gate"] == "8"
 	assert capture["model"] == "openai/security-test-model"
 	assert capture["diff_base"] != capture["diff_head"]
+	assert "- Status: `running`" in capture["tracking_body"]
+	assert "- Status: `pending`" not in capture["tracking_body"]
+	assert "- Audited integration SHA: `none`" in capture["tracking_body"]
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Status: `passed`" in rendered_body
+	assert f"- Audited integration SHA: `{capture['diff_head']}`" in rendered_body
+	assert result["issue_body_edit_calls"][-1] == {"issue": 192, "body": rendered_body}
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_STARTED" in combined_log
 	assert "SECURITY_PASS_CLEAN" in combined_log
@@ -3645,10 +3847,11 @@ def test_security_pass_reuses_matching_open_fix_issue_after_stale_checkpoint() -
 		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
 		issue_labels={
 			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
 			**prefix_collision_issues,
 			901: ["ai:orchestrator-managed"],
 		},
-		issue_bodies={**prefix_collision_bodies, 901: existing_fix_body},
+		issue_bodies={700: existing_fix_body, **prefix_collision_bodies, 901: existing_fix_body},
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -3732,6 +3935,18 @@ def test_security_pass_merged_fix_falls_back_to_rest_when_graphql_is_unavailable
 		gql_mode="error",
 		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
 		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "ai/issue-900",
+				"willCloseTarget": False,
+			},
+		],
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -3740,8 +3955,41 @@ def test_security_pass_merged_fix_falls_back_to_rest_when_graphql_is_unavailable
 	assert "falling back to a direct issue lookup" in result["stdout"] + result["stderr"]
 
 
+def test_security_pass_merged_fix_into_wrong_base_does_not_advance_cycle() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-900",
+				"body": "Fixes #900",
+				"willCloseTarget": True,
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=900 candidate_pr=901 rejected=base_mismatch" in combined, combined
+	assert result["latest_state"]["security_pass_cycle"] == 1
+	assert result["latest_state"]["status"] == "failed"
+	assert "ai:merged" in result["issues"]["900"]["labels"]
+
+
 def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 	prior_alert_marker = "<!-- tg_cleanup:501,502 -->"
+	remaining_security_finding = _security_pass_test_finding()
+	remaining_security_finding["exploit_scenario"] = "Notify @security-team about issue #123."
 	state = _base_state(status="security-pass")
 	state.update(
 		{
@@ -3757,7 +4005,8 @@ def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		env_overrides={"SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED": "false"},
+		security_audit_payload=_security_audit_findings_payload([remaining_security_finding]),
 		capture_telegram_calls=True,
 		tracking_comments=[prior_alert_marker],
 		issue_labels={10: ["ai:merged"]},
@@ -3776,12 +4025,651 @@ def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 		comment_body.startswith(f"{prior_alert_marker[:-4]},") and comment_body.endswith(" -->")
 		for comment_body in tracking_comment_bodies
 	)
+	# Regression for tele-funtoken-msg-scoring#3928: the findings file lives
+	# only in the runner's RUNTIME_DIR, so the exhaustion comment must carry
+	# the remaining findings table or the operator asked to intervene has
+	# nothing to act on.
+	exhaustion_comments = [
+		comment_body
+		for comment_body in tracking_comment_bodies
+		if comment_body.startswith("## ❌ Project security pass exhausted")
+	]
+	assert len(exhaustion_comments) == 1
+	exhaustion_comment = exhaustion_comments[0]
+	assert "still reports 1 blocking finding(s) after 3/3 completed fix cycle(s)" in exhaustion_comment
+	assert "### Remaining blocking findings (integration head `" in exhaustion_comment
+	assert "| ID | Category | Severity | Confidence | Location | Exploit scenario | Recommendation |" in exhaustion_comment
+	assert "| SEC-TEST-1 | A01: Broken Access Control | high | 9 | scripts/example.py:1 |" in exhaustion_comment
+	assert "Notify @\u200bsecurity-team about issue #\u200b123." in exhaustion_comment
+	assert "@security-team" not in exhaustion_comment
+	assert "#123" not in exhaustion_comment
+	assert "Enforce authorisation before the state mutation." in exhaustion_comment
 	assert any(
 		notification["issue"] == "192"
 		and notification["level"] == "CRITICAL"
 		and "security pass FAILED" in notification["message"]
 		for notification in result["telegram_notifications"]
 	)
+
+
+def test_security_pass_head_advance_after_clean_pass_restores_fix_cycle_budget() -> None:
+	"""A clean pass invalidated by new commits gets a fresh bounded fix loop.
+
+	Regression for project #3965: the pass went clean at the audited head with
+	the budget already spent (3/3), a routine `chore: sync main into
+	orchestrator/project-3965` merge advanced the integration head, and the
+	re-audit's findings were terminalized immediately without ever being
+	granted a fix cycle.  `security_pass_cycle` bounds *persistent* findings,
+	so a proven-clean audit must break that chain.
+	"""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "head-audited-before-the-sync-merge",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		capture_telegram_calls=True,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_status"] == "blocked"
+	assert latest_state["security_pass_cycle"] == 0
+	assert latest_state["security_pass_active_fix_issues"] != []
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
+	assert "reason=head_advanced_after_clean_pass" in combined_log
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" not in combined_log
+	assert not any(
+		"security pass FAILED" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
+
+
+def test_security_pass_exhaustion_still_terminalizes_from_blocked_status() -> None:
+	"""The budget reset must not fire for a still-unresolved fix chain.
+
+	Only a recorded clean pass breaks the persistent-findings chain.  A
+	`blocked` prior status means the previous cycle's findings were never
+	cleared, so the spent budget stands and exhaustion still terminalizes.
+	"""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "stale-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		env_overrides={"SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED": "false"},
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_cycle"] == 3
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in combined_log
+	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" not in combined_log
+
+
+def test_security_pass_first_audit_records_delta_pointer_and_findings_memory() -> None:
+	"""A blocked audit records what the next delta re-audit needs.
+
+	Regression for tele-funtoken-msg-scoring#3928, fun-token-multi-chain#471
+	and binance-blessings#249: every re-audit re-scanned the whole
+	merge-base..head range from scratch with no memory of earlier cycles, so
+	each cycle surfaced brand-new findings (no finding_id ever repeated, every
+	fix issue merged) and the budget still exhausted.
+	"""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 0,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert not capture["diff_since"]
+	assert capture["prior_findings"] is None
+	assert capture["fix_cycle_diffs"] is None
+	assert (
+		"SECURITY_PASS_SCOPE tracking_issue=192 mode=full reason=no_prior_audit "
+		f"base_sha={capture['diff_base']} since_sha=none head_sha={capture['diff_head']} prior_findings=0"
+		" waived_findings=0 fix_cycle_diff_entries=0 fix_cycle_diff_files=0"
+	) in combined_log
+	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
+	assert latest_state["security_pass_fix_touched_files"] == []
+	reported = latest_state["security_pass_reported_findings"]
+	assert [finding["finding_id"] for finding in reported] == ["SEC-TEST-1"]
+	assert reported[0]["cycle"] == 1
+	assert reported[0]["file"] == "scripts/example.py"
+	assert reported[0]["line"] == 1
+	assert reported[0]["recommendation"] == "Enforce authorisation before the state mutation."
+	fix_issue = latest_state["security_pass_active_fix_issues"][0]
+	fix_body = result["issues"][str(fix_issue)]["body"]
+	assert "Fix every instance of each finding's defect class across this project's changes" in fix_body
+
+
+def test_security_pass_reaudit_after_merged_fix_is_a_delta_with_prior_findings() -> None:
+	"""After a merged fix the re-audit narrows to the delta and re-verifies findings.
+
+	State carries the head audited before the fix (`__integration_head__`)
+	and the finding that audit reported; the integration branch has since
+	advanced.  The engine must receive the old head as SECURITY_AUDIT_DIFF_SINCE
+	(the explicit range stays merge-base..head) and the recorded finding as
+	SECURITY_AUDIT_PRIOR_FINDINGS.  A clean result empties the memory.
+	"""
+	integration_branch = "orchestrator/project-192"
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": integration_branch,
+			"security_pass_cycle": 1,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+			"security_pass_last_audited_sha": "__integration_head__",
+			"security_pass_reported_findings": [
+				{
+					"cycle": 1,
+					"finding_id": "SEC-TEST-1",
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "high",
+					"confidence": 9,
+					"file": "scripts/example.py",
+					"line": 1,
+					"exploit_scenario": "An unauthorised caller crosses the trust boundary.",
+					"recommendation": "Enforce authorisation before the state mutation.",
+				}
+			],
+			# The head advance here changes no file, so no current-cycle entry
+			# is computed; the carried entry from cycle 0 must still reach the
+			# engine and a clean pass must clear the memory.
+			"security_pass_fix_touched_files": [
+				{"cycle": 0, "since_sha": "a" * 40, "head_sha": "b" * 40, "files": ["scripts/example.py"]},
+			],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", integration_branch],
+		branch_ref_shas={integration_branch: "__advanced_integration_head__"},
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	seeded_state = json.loads(_extract_state_payloads([result["issues"]["192"]["comments"][0]])[0])
+	previously_audited_sha = seeded_state["security_pass_last_audited_sha"]
+	assert re.fullmatch(r"[0-9a-f]{40}", previously_audited_sha)
+	assert capture["diff_head"] != previously_audited_sha
+	assert capture["diff_since"] == previously_audited_sha
+	assert capture["diff_base"] != previously_audited_sha
+	assert [finding["finding_id"] for finding in capture["prior_findings"]] == ["SEC-TEST-1"]
+	assert capture["prior_findings"][0]["cycle"] == 1
+	assert capture["fix_cycle_diffs"] == [
+		{"cycle": 0, "since_sha": "a" * 40, "head_sha": "b" * 40, "files": ["scripts/example.py"]},
+	]
+	assert "fix_cycle_diff_entries=1 fix_cycle_diff_files=1" in combined_log
+	assert "::warning::Could not compute the fix-cycle diff" not in combined_log
+	assert latest_state["security_pass_fix_touched_files"] == []
+	assert (
+		"SECURITY_PASS_SCOPE tracking_issue=192 mode=delta reason=head_advanced_since_last_audit "
+		f"base_sha={capture['diff_base']} since_sha={previously_audited_sha} head_sha={capture['diff_head']} prior_findings=1"
+	) in combined_log
+	assert "SECURITY_PASS_CLEAN" in combined_log
+	assert latest_state["security_pass_cycle"] == 1
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_head_sha"] == capture["diff_head"]
+	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
+	assert latest_state["security_pass_reported_findings"] == []
+
+
+def test_security_pass_reaudit_hands_fix_cycle_diff_to_engine_and_carries_it_once() -> None:
+	"""The re-audit after a merged fix tells the engine which code the fix wrote.
+
+	Regression for tele-funtoken-msg-scoring#4281: every fix issue merged, no
+	finding repeated, and the final finding sat in a readiness predicate that
+	cycle 1's fix created -- cycles 2 and 3 had the file in scope but were
+	never told to audit the fix's new code as fresh attack surface.  The
+	poller now computes the fix-cycle diff entry from the local checkout
+	(range files changed since the last audited commit), carries the previous
+	cycle's entry over exactly once, drops older and malformed entries, and
+	records the current entry with the blocked result.  Everything reaches
+	the engine as SECURITY_AUDIT_FIX_CYCLE_DIFFS.
+	"""
+	integration_branch = "orchestrator/project-192"
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": integration_branch,
+			"security_pass_cycle": 2,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+			"security_pass_last_audited_sha": "__integration_head__",
+			"security_pass_reported_findings": [
+				{
+					"cycle": 1,
+					"finding_id": "SEC-TEST-1",
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "high",
+					"confidence": 9,
+					"file": "scripts/example.py",
+					"line": 1,
+					"exploit_scenario": "An unauthorised caller crosses the trust boundary.",
+					"recommendation": "Enforce authorisation before the state mutation.",
+				}
+			],
+			"security_pass_fix_touched_files": [
+				# Two cycles old: already carried over once, so it is dropped.
+				{"cycle": 0, "since_sha": "0" * 40, "head_sha": "1" * 40, "files": ["scripts/stale.py"]},
+				# Previous cycle: carried over exactly once more.  Files that
+				# are not repository-relative are dropped by the normalizer.
+				{"cycle": 1, "since_sha": "a" * 40, "head_sha": "b" * 40, "files": ["scripts/cycle_one.py", "../escape.py", "/abs.py", ""]},
+				# Malformed rows never reach the engine.
+				"not-an-object",
+				{"cycle": 1, "files": ["scripts/no_shas.py"]},
+				{"cycle": 1, "since_sha": "not-a-sha", "head_sha": "b" * 40, "files": ["scripts/bad_sha.py"]},
+			],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", integration_branch],
+		branch_ref_shas={integration_branch: "__advanced_integration_head_with_fix__"},
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	seeded_state = json.loads(_extract_state_payloads([result["issues"]["192"]["comments"][0]])[0])
+	previously_audited_sha = seeded_state["security_pass_last_audited_sha"]
+	assert capture["diff_since"] == previously_audited_sha
+	assert capture["diff_head"] != previously_audited_sha
+	current_entry = {
+		"cycle": 2,
+		"since_sha": previously_audited_sha,
+		"head_sha": capture["diff_head"],
+		"files": [".orchestrator_judge_context_sentinel.txt", "scripts/season_pool.py"],
+	}
+	carried_entry = {"cycle": 1, "since_sha": "a" * 40, "head_sha": "b" * 40, "files": ["scripts/cycle_one.py"]}
+	assert capture["fix_cycle_diffs"] == [carried_entry, current_entry]
+	assert (
+		"SECURITY_PASS_SCOPE tracking_issue=192 mode=delta reason=head_advanced_since_last_audit "
+		f"base_sha={capture['diff_base']} since_sha={previously_audited_sha} head_sha={capture['diff_head']} prior_findings=1"
+		" waived_findings=0 fix_cycle_diff_entries=2 fix_cycle_diff_files=3"
+	) in combined_log
+	assert "::warning::Could not compute the fix-cycle diff" not in combined_log
+	assert "::warning::Could not export the fix-cycle diff entries" not in combined_log
+	# Blocked result: the current entry is remembered for the next re-audit,
+	# the previous cycle's entry stays for its one carry-over, older rows go.
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_status"] == "blocked"
+	assert latest_state["security_pass_fix_touched_files"] == [carried_entry, current_entry]
+	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
+
+
+def test_security_pass_head_advance_after_clean_pass_reaudits_only_the_delta() -> None:
+	"""A clean pass invalidated by new commits re-audits from the passed SHA.
+
+	The passed SHA is the last audited commit, so only the commits that
+	arrived afterwards (sync merge, resolver merge, fix PR) need auditing.
+	Legacy state that passed before `security_pass_last_audited_sha` existed
+	falls back to `security_pass_head_sha`, and the budget reset still fires.
+	"""
+	integration_branch = "orchestrator/project-192"
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": integration_branch,
+			"security_pass_cycle": 3,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "__integration_head__",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", integration_branch],
+		branch_ref_shas={integration_branch: "__advanced_integration_head__"},
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	seeded_state = json.loads(_extract_state_payloads([result["issues"]["192"]["comments"][0]])[0])
+	passed_sha = seeded_state["security_pass_head_sha"]
+	assert re.fullmatch(r"[0-9a-f]{40}", passed_sha)
+	assert capture["diff_head"] != passed_sha
+	assert capture["diff_since"] == passed_sha
+	assert capture["prior_findings"] is None
+	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
+	assert f"mode=delta reason=head_advanced_since_last_audit base_sha={capture['diff_base']} since_sha={passed_sha}" in combined_log
+	assert latest_state["security_pass_cycle"] == 0
+	assert latest_state["security_pass_status"] == "blocked"
+	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
+	assert [finding["finding_id"] for finding in latest_state["security_pass_reported_findings"]] == ["SEC-TEST-1"]
+
+
+def test_security_pass_unusable_last_audited_sha_falls_back_to_full_range() -> None:
+	"""A rewritten or unknown last-audited pointer never narrows the audit."""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+			"security_pass_last_audited_sha": "not-a-commit-in-this-repository",
+			"security_pass_reported_findings": [
+				{"cycle": 1, "finding_id": "SEC-OLD", "file": "scripts/example.py", "line": 1},
+			],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert not capture["diff_since"]
+	# Memory still travels with a full-range audit: the findings are what the
+	# engine must verify, whichever files end up in scope.
+	assert [finding["finding_id"] for finding in capture["prior_findings"]] == ["SEC-OLD"]
+	assert "mode=full reason=last_audited_sha_not_ancestor_of_head" in combined_log
+	assert result["latest_state"]["security_pass_last_audited_sha"] == capture["diff_head"]
+	assert result["latest_state"]["security_pass_reported_findings"] == []
+
+
+def test_security_pass_terminal_failure_rerenders_tracking_body_security_block() -> None:
+	"""The tracking body must not keep advertising a clean pass after exhaustion.
+
+	Regression for #3965: the security-pass transitions all `continue` before
+	the tick-level body reconcile sites, so the issue body froze at the last
+	clean pass (`Status: passed`) while the label read
+	`ai:security-pass-failed` and state recorded `failed` at a newer SHA.
+	"""
+	stale_passed_sha = "75048a2c94dd77e94ccdfd5bc1f47062cfe196df"
+	tracking_body = f"""## Project: Test Project
+
+Summary text.
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `passed`
+- Completed fix cycles: 3
+- Audited integration SHA: `{stale_passed_sha}`
+- Active fix issue: none
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	state = _base_state(status="security-pass")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"project_body_snapshot": tracking_body,
+			"tracking_body_sync_hash": hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
+			"security_pass_cycle": 3,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+		}
+	)
+	first = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		env_overrides={"SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED": "false"},
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		tracking_labels=["ai:orchestrator-tracking", "ai:security-pass"],
+		tracking_body=tracking_body,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = first["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
+	failed_sha = latest_state["security_pass_head_sha"]
+	assert failed_sha and failed_sha != stale_passed_sha
+	assert "ai:security-pass-failed" in first["tracking_labels"]
+
+	rendered_body = first["issues"]["192"]["body"]
+	assert "- Status: `failed`" in rendered_body
+	assert "- Status: `passed`" not in rendered_body
+	assert f"- Audited integration SHA: `{failed_sha}`" in rendered_body
+	assert stale_passed_sha not in rendered_body
+	assert "- Completed fix cycles: 3" in rendered_body
+	assert rendered_body.count("<!-- orchestrator:security-pass -->") == 1
+	assert first["issue_body_edit_calls"][-1] == {"issue": 192, "body": rendered_body}
+	assert latest_state["tracking_body_sync_hash"] == hashlib.sha256(rendered_body.encode("utf-8")).hexdigest()
+
+	first_tracking_comments = [
+		dict(comment)
+		for comment in first["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	second = _run_poller(
+		state=latest_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		env_overrides={"SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED": "false"},
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		tracking_labels=first["tracking_labels"],
+		tracking_comments=first_tracking_comments,
+		tracking_body=rendered_body,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert second["latest_state"]["status"] == "failed"
+	assert second["issues"]["192"]["body"] == rendered_body
+	assert second["issue_body_edit_calls"] == []
+
+
+def test_security_pass_blocked_transition_rerenders_tracking_body_security_block() -> None:
+	"""The `blocked` transition is stale in the same way as terminal failure."""
+	tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `passed`
+- Completed fix cycles: 0
+- Audited integration SHA: `stale-passed-head`
+- Active fix issue: none
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	state = _base_state(status="security-pass")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"project_body_snapshot": tracking_body,
+			"tracking_body_sync_hash": hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
+			"security_pass_cycle": 0,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		tracking_labels=["ai:orchestrator-tracking", "ai:security-pass"],
+		tracking_body=tracking_body,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_status"] == "blocked"
+	fix_issues = latest_state["security_pass_active_fix_issues"]
+	assert len(fix_issues) == 1
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Status: `blocked`" in rendered_body
+	assert "- Status: `passed`" not in rendered_body
+	assert f"- Active fix issue: #{fix_issues[0]}" in rendered_body
+	assert "stale-passed-head" not in rendered_body
+	assert result["issue_body_edit_calls"][-1] == {"issue": 192, "body": rendered_body}
+
+
+def test_security_pass_fail_closed_without_integration_branch_rerenders_tracking_body() -> None:
+	"""A fail-closed transition with no integration branch must still re-render.
+
+	The body render reads only state; the reconcile's two arguments feed the
+	readiness refresh, which guards itself.  Gating the wrapper on a non-empty
+	integration branch or final PR would silently skip exactly this path.
+	"""
+	tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `passed`
+- Completed fix cycles: 0
+- Audited integration SHA: `stale-passed-head`
+- Active fix issue: none
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	state = _base_state(status="security-pass")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state.update(
+		{
+			"integration_branch": "",
+			"final_merge_pr": None,
+			"project_body_snapshot": tracking_body,
+			"tracking_body_sync_hash": hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
+			"security_pass_cycle": 0,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "stale-passed-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:orchestrator-tracking", "ai:security-pass"],
+		tracking_body=tracking_body,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_head_sha"] == ""
+	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Status: `failed`" in rendered_body
+	assert "- Status: `passed`" not in rendered_body
+	assert "- Audited integration SHA: `none`" in rendered_body
+	assert "stale-passed-head" not in rendered_body
+	assert result["issue_body_edit_calls"][-1] == {"issue": 192, "body": rendered_body}
 
 
 def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
@@ -3793,6 +4681,13 @@ def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 			"security_pass_status": "failed",
 			"security_pass_active_fix_issues": [],
 			"security_pass_head_sha": "old-head",
+			"security_pass_last_audited_sha": "old-head",
+			"security_pass_reported_findings": [
+				{"cycle": 3, "finding_id": "SEC-OLD", "file": "scripts/example.py", "line": 1},
+			],
+			"security_pass_fix_touched_files": [
+				{"cycle": 3, "since_sha": "a" * 40, "head_sha": "b" * 40, "files": ["scripts/example.py"]},
+			],
 		}
 	)
 	result = _run_poller(
@@ -3812,9 +4707,1240 @@ def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 	assert latest_state["security_pass_cycle"] == 0
 	assert latest_state["security_pass_status"] == "passed"
 	assert latest_state["security_pass_head_sha"] != "old-head"
+	# The reset restarts the bounded loop from a full-range audit: the
+	# operator claims the exhaustion findings are addressed, so neither the
+	# failed head nor its findings narrow or steer the re-audit.
+	capture = result["security_audit_capture"]
+	assert not capture["diff_since"]
+	assert capture["prior_findings"] is None
+	assert capture["fix_cycle_diffs"] is None
+	assert latest_state["security_pass_fix_touched_files"] == []
+	assert "mode=full reason=no_prior_audit" in result["stdout"] + result["stderr"]
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
 	assert any("re-security-pass-dedup:" in comment["body"] for comment in result["issues"]["192"]["comments"])
 	assert result["git_fetch_calls"]["refs/heads/main:refs/remotes/origin/main"] >= 1
+
+
+def test_security_pass_cycle_exhaustion_drops_oversized_findings_table_by_bytes() -> None:
+	"""The exhaustion comment budgets the findings table in bytes, not characters.
+
+	``post_tracking_comment`` refuses bodies over GitHub's 65536-byte limit using
+	``wc -c``, so a table of ~31k two-byte characters (under 60000 characters but
+	over 60000 bytes) must fall back to the count-only comment instead of losing
+	the whole terminal-transition record.
+	"""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+		}
+	)
+	oversized_finding = _security_pass_test_finding()
+	oversized_finding["exploit_scenario"] = "\u00e9" * 31000
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		env_overrides={"SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED": "false"},
+		security_audit_payload=_security_audit_findings_payload([oversized_finding]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in result["stdout"] + result["stderr"]
+	assert "exceeds the comment budget" in result["stdout"] + result["stderr"]
+	exhaustion_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## \u274c Project security pass exhausted")
+	]
+	assert len(exhaustion_comments) == 1
+	assert "still reports 1 blocking finding(s) after 3/3 completed fix cycle(s)" in exhaustion_comments[0]
+	assert "### Remaining blocking findings" not in exhaustion_comments[0]
+	assert "| SEC-TEST-1 |" not in exhaustion_comments[0]
+
+
+def _security_pass_exhausted_state(**overrides) -> dict:
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+		}
+	)
+	state.update(overrides)
+	return state
+
+
+def _security_pass_second_test_finding() -> dict:
+	return {
+		"finding_id": "SEC-TEST-2",
+		"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
+		"severity": "medium",
+		"confidence": 9,
+		"file": "scripts/example.py",
+		"line": 1,
+		"exploit_scenario": "An authenticated caller can grow a bounded ledger. Ping @ops about #77.",
+		"recommendation": "Rate-limit the endpoint.",
+	}
+
+
+def _security_pass_judge_verdict(*decisions: tuple[str, str]) -> dict:
+	return {
+		"status": "decided",
+		"summary": "Verified against the code at the audited head. Ping @security about #55.",
+		"decisions": [
+			{"finding_id": finding_id, "action": action, "justification": f"{finding_id}: {action} because the code path is bounded (#9)."}
+			for finding_id, action in decisions
+		],
+	}
+
+
+def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> None:
+	"""Budget spent, every remaining finding accepted: the pass completes.
+
+	Regression for tele-funtoken-msg-scoring#3955 and #4281: three merged fix
+	cycles, no finding ever repeated, and the project still stopped in
+	ai:security-pass-failed until a human commented /re-security-pass.  The
+	exhaustion judge now records each accepted finding as a waiver, files a
+	non-blocking ai:security follow-up, and lets completion continue.
+	"""
+	remaining = _security_pass_test_finding()
+	remaining["exploit_scenario"] = "Notify @security-team about issue #123."
+	result = _run_poller(
+		state=_security_pass_exhausted_state(
+			security_pass_reported_findings=[
+				{
+					"cycle": 2,
+					"finding_id": "SEC-FIXED-EARLIER",
+					"file": "scripts/old_example.py",
+					"line": 7,
+				}
+			]
+		),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([remaining]),
+		capture_telegram_calls=True,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"), ("unknown-id", "fail"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_head_sha"] == capture["diff_head"]
+	assert latest_state["security_pass_cycle"] == 3
+	assert latest_state["security_pass_judge_rounds"] == 1
+	assert latest_state["security_pass_reported_findings"] == []
+	waived = latest_state["security_pass_waived_findings"]
+	assert [row["finding_id"] for row in waived] == ["SEC-TEST-1"]
+	assert waived[0]["source"] == "judge"
+	assert waived[0]["file"] == "scripts/example.py"
+	assert waived[0]["line"] == 1
+	assert waived[0]["owasp_or_stride_category"] == "A01: Broken Access Control"
+	assert waived[0]["waived_at_cycle"] == 3
+	created = result.get("created_issues", [])
+	assert len(created) == 1
+	assert created[0]["labels"] == ["ai:security"]
+	assert created[0]["title"] == "[security-pass] Advisory: SEC-TEST-1 (high, scripts/example.py:1)"
+	advisory_body = result["issues"][str(created[0]["number"])]["body"]
+	assert "<!-- ai:security-finding:SEC-TEST-1 -->" in advisory_body
+	assert "<!-- security-pass-advisory:192:SEC-TEST-1 -->" in advisory_body
+	assert "Refs #192" in advisory_body
+	assert "Notify @​security-team about issue #​123." in advisory_body
+	assert "@security-team" not in advisory_body
+	# Deferred filing (SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED default): the
+	# advisory is filed by the final-merge arm of this same tick, after the
+	# integration branch landed on the default branch, and its body says so.
+	assert "has since merged into the default branch via PR #" in advisory_body
+	assert "Plan and implement this issue against the default branch." in advisory_body
+	assert waived[0]["issue"] == created[0]["number"]
+	assert "followup_pending" not in waived[0]
+	assert "finding" not in waived[0]
+	assert latest_state["security_pass_followup_issues"] == [{"finding_id": "SEC-TEST-1", "issue": created[0]["number"]}]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=1" in combined_log
+	assert "accepted=1 keep_fixing=0 failed=0" in combined_log
+	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=judge round=1 ids=SEC-TEST-1" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-TEST-1 source=judge reason=integration_branch_not_merged" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=192 finding=SEC-TEST-1 issue={created[0]['number']} source=judge" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192" in combined_log
+	assert "filed=1 pending=1" in combined_log
+	assert combined_log.index("SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED") < combined_log.index("SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED")
+	assert "SECURITY_PASS_CLEAN tracking_issue=192" in combined_log
+	assert "reason=exhaustion_judge_accepted accepted=1" in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	judge_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 1)")
+	]
+	assert len(judge_comments) == 1
+	assert "accepted every remaining finding as a known risk" in judge_comments[0]
+	assert "follow-up issues will be filed once `orchestrator/project-192` merges into the default branch" in judge_comments[0]
+	assert f"#{created[0]['number']}" not in judge_comments[0]
+	filed_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## 🔐 Security-pass advisory follow-ups filed")
+	]
+	assert len(filed_comments) == 1
+	assert f"- `SEC-TEST-1` → #{created[0]['number']}" in filed_comments[0]
+	assert "| SEC-TEST-1 | high | scripts/example.py:1 | accept_with_followup |" in judge_comments[0]
+	assert "Ping @​security about #​55." in judge_comments[0]
+	assert not any("Project security pass exhausted" in comment["body"] for comment in result["issues"]["192"]["comments"])
+	assert any(
+		notification["issue"] == "192"
+		and notification["level"] == "WARNING"
+		and "exhaustion judge accepted 1 remaining finding(s)" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
+
+
+def test_security_pass_advisory_followup_kill_switch_files_at_judge_time() -> None:
+	"""SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED=false restores judge-time filing."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), _security_pass_second_test_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED": "false",
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	created = result.get("created_issues", [])
+	assert [issue["labels"] for issue in created] == [["ai:security"], ["ai:clarification", "ai:orchestrator-managed"]]
+	assert created[0]["title"] == "[security-pass] Advisory: SEC-TEST-2 (medium, scripts/example.py:1)"
+	advisory_body = result["issues"][str(created[0]["number"])]["body"]
+	assert "has since merged into the default branch" not in advisory_body
+	waived = latest_state["security_pass_waived_findings"]
+	assert waived[0]["issue"] == created[0]["number"]
+	assert "followup_pending" not in waived[0]
+	assert "finding" not in waived[0]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED" not in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=192 finding=SEC-TEST-2 issue={created[0]['number']} source=judge" in combined_log
+	judge_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 1)")
+	]
+	assert len(judge_comments) == 1
+	assert f"follow-ups: #{created[0]['number']}" in judge_comments[0]
+
+
+def test_security_pass_deferred_advisory_followups_file_when_final_merge_lands() -> None:
+	"""Pending waiver rows from an earlier tick are filed by the final-merge arm.
+
+	Regression for #4090 / #4091 (project #3965): the advisories were filed
+	at judge time against `main`, which did not yet contain the code the
+	findings cite (`scripts/model_provider_broker.py` existed only on
+	`orchestrator/project-3965`), so the standalone planner emitted
+	`BLOCKED: PR #3968 is still open` and both issues sat in ai:blocked.
+	"""
+	state = _base_state(status="in_progress")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_waived_findings": [
+				{
+					"finding_id": "SEC-DEFERRED",
+					"file": "scripts/example.py",
+					"line": 1,
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "high",
+					"justification": "Bounded by the broker; tracked as a follow-up.",
+					"source": "judge",
+					"waived_by": "security-pass-exhaustion-judge",
+					"waived_at_cycle": 3,
+					"issue": None,
+					"followup_pending": True,
+					"audited_head_sha": "deadbeefcafe",
+					"finding": _security_pass_test_finding() | {"finding_id": "SEC-DEFERRED"},
+				},
+				{
+					"finding_id": "SEC-ALREADY-FILED",
+					"file": "scripts/example.py",
+					"line": 2,
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "low",
+					"justification": "Filed earlier.",
+					"source": "judge",
+					"waived_by": "security-pass-exhaustion-judge",
+					"waived_at_cycle": 3,
+					"issue": 850,
+				},
+			],
+			"security_pass_followup_issues": [{"finding_id": "SEC-ALREADY-FILED", "issue": 850}],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["final_merge_status"] == "merged"
+	final_pr = latest_state["final_merge_pr"]
+	created = result.get("created_issues", [])
+	assert len(created) == 1
+	assert created[0]["labels"] == ["ai:security"]
+	assert created[0]["title"] == "[security-pass] Advisory: SEC-DEFERRED (high, scripts/example.py:1)"
+	advisory_body = result["issues"][str(created[0]["number"])]["body"]
+	assert "<!-- security-pass-advisory:192:SEC-DEFERRED -->" in advisory_body
+	assert "for integration branch `orchestrator/project-192` at `deadbeefcafe`" in advisory_body
+	assert f"has since merged into the default branch via PR #{final_pr}" in advisory_body
+	waived = {row["finding_id"]: row for row in latest_state["security_pass_waived_findings"]}
+	assert waived["SEC-DEFERRED"]["issue"] == created[0]["number"]
+	assert "followup_pending" not in waived["SEC-DEFERRED"]
+	assert "finding" not in waived["SEC-DEFERRED"]
+	assert waived["SEC-ALREADY-FILED"]["issue"] == 850
+	assert {row["finding_id"]: row["issue"] for row in latest_state["security_pass_followup_issues"]} == {
+		"SEC-ALREADY-FILED": 850,
+		"SEC-DEFERRED": created[0]["number"],
+	}
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=192 finding=SEC-DEFERRED issue={created[0]['number']} source=judge" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192 final_pr={final_pr} default_branch=main filed=1 pending=1" in combined_log
+	filed_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## 🔐 Security-pass advisory follow-ups filed")
+	]
+	assert len(filed_comments) == 1
+	assert f"via PR #{final_pr}" in filed_comments[0]
+	assert f"- `SEC-DEFERRED` → #{created[0]['number']}" in filed_comments[0]
+
+
+def test_security_pass_deferred_advisory_followup_retries_on_completed_tick() -> None:
+	"""A pending row from a failed merge-tick create retries after completion."""
+	state = _base_state(status="complete")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"final_merge_pr": 300,
+			"final_merge_status": "merged",
+			"security_pass_waived_findings": [
+				{
+					"finding_id": "SEC-RETRY",
+					"file": "scripts/example.py",
+					"line": 1,
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "high",
+					"justification": "Retry the advisory after a transient create failure.",
+					"source": "judge",
+					"waived_by": "security-pass-exhaustion-judge",
+					"waived_at_cycle": 3,
+					"issue": None,
+					"followup_pending": True,
+					"audited_head_sha": "deadbeefcafe",
+					"finding": _security_pass_test_finding() | {"finding_id": "SEC-RETRY"},
+				}
+			],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	created = result.get("created_issues", [])
+	assert len(created) == 1
+	assert created[0]["labels"] == ["ai:security"]
+	assert latest_state["security_pass_waived_findings"][0]["issue"] == created[0]["number"]
+	assert "followup_pending" not in latest_state["security_pass_waived_findings"][0]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192 final_pr=300 default_branch=main filed=1 pending=1" in combined_log
+
+
+def test_security_pass_advisory_followup_reconciles_remote_marker_before_create() -> None:
+	"""A lost create response/state write must not duplicate the advisory."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		search_issue_items=[
+			{
+				"number": 955,
+				"body": "<!-- security-pass-advisory:192:SEC-TEST-1 -->",
+				"state": "open",
+			}
+		],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert result.get("created_issues", []) == []
+	assert latest_state["security_pass_followup_issues"] == [{"finding_id": "SEC-TEST-1", "issue": 955}]
+	assert latest_state["security_pass_waived_findings"][0]["issue"] == 955
+	assert result["api_calls"].count("search/issues") == 1
+
+
+def test_security_pass_exhaustion_judge_keep_fixing_creates_consolidated_fix_issue() -> None:
+	"""A keep_fixing verdict grants one more cycle for exactly those findings."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), _security_pass_second_test_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_status"] == "blocked"
+	assert latest_state["security_pass_cycle"] == 3
+	assert latest_state["security_pass_judge_rounds"] == 1
+	waived = latest_state["security_pass_waived_findings"]
+	assert [row["finding_id"] for row in waived] == ["SEC-TEST-2"]
+	# The accepted finding's advisory is deferred until the integration
+	# branch merges: the waiver row carries the finding payload and the
+	# pending flag, and no ai:security issue exists yet.
+	assert waived[0]["issue"] is None
+	assert waived[0]["followup_pending"] is True
+	assert waived[0]["finding"]["finding_id"] == "SEC-TEST-2"
+	assert waived[0]["audited_head_sha"] == result["security_audit_capture"]["diff_head"]
+	assert [row["finding_id"] for row in latest_state["security_pass_reported_findings"]] == ["SEC-TEST-1"]
+	created = result.get("created_issues", [])
+	assert [issue["labels"] for issue in created] == [["ai:clarification", "ai:orchestrator-managed"]]
+	assert created[0]["title"] == "[security-pass] Project #192 fix cycle 4"
+	fix_body = result["issues"][str(created[0]["number"])]["body"]
+	assert "| SEC-TEST-1 |" in fix_body
+	assert "| SEC-TEST-2 |" not in fix_body
+	assert "- Local ID: `security-pass-fix-cycle-4`" in fix_body
+	assert latest_state["security_pass_active_fix_issues"] == [created[0]["number"]]
+	assert result["tracking_labels"] == ["ai:security-pass-fixing"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "accepted=1 keep_fixing=1 failed=0" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-TEST-2 source=judge reason=integration_branch_not_merged" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED" not in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=192" in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	judge_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 1)")
+	]
+	assert len(judge_comments) == 1
+	assert "granted one more consolidated fix cycle for 1 finding(s)" in judge_comments[0]
+	assert "| SEC-TEST-1 | high | scripts/example.py:1 | keep_fixing |" in judge_comments[0]
+	assert "| SEC-TEST-2 | medium | scripts/example.py:1 | accept_with_followup |" in judge_comments[0]
+
+
+def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories() -> None:
+	"""Past MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS (default 2), keep_fixing becomes accept_with_followup.
+
+	Regression for #3965: the judge was consulted twice on a 5-cycle budget
+	and granted "one more" consolidated cycle both times (cycles 6 and 7),
+	and nothing bounded the sequence.  Round 3 now converts every
+	keep_fixing decision to a deferred advisory so the project completes
+	without a human; `fail` verdicts are unaffected.
+	"""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), _security_pass_second_test_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_judge_rounds"] == 3
+	assert latest_state["security_pass_reported_findings"] == []
+	assert latest_state["security_pass_active_fix_issues"] == []
+	waived = {row["finding_id"]: row for row in latest_state["security_pass_waived_findings"]}
+	assert set(waived) == {"SEC-TEST-1", "SEC-TEST-2"}
+	assert waived["SEC-TEST-1"]["justification"].startswith(
+		"[keep_fixing capped after 2 judge round(s); converted to advisory follow-up] SEC-TEST-1: keep_fixing"
+	)
+	assert waived["SEC-TEST-2"]["justification"].startswith("SEC-TEST-2: accept_with_followup")
+	# Both advisories are filed by the final-merge arm of the same tick; no
+	# consolidated fix issue is created.
+	created = result.get("created_issues", [])
+	assert sorted(issue["labels"] for issue in created) == [["ai:security"], ["ai:security"]]
+	assert {issue["title"] for issue in created} == {
+		"[security-pass] Advisory: SEC-TEST-1 (high, scripts/example.py:1)",
+		"[security-pass] Advisory: SEC-TEST-2 (medium, scripts/example.py:1)",
+	}
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert "ai:security-pass-fixing" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
+	assert "accepted=2 keep_fixing=0 failed=0" in combined_log
+	assert "SECURITY_PASS_CLEAN tracking_issue=192" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	# Advisories filed by this tick's final-merge arm are recorded as
+	# merge-checked at creation, so no follow-up is read back.
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in combined_log
+	assert sorted(latest_state["security_pass_followups_merge_checked"]) == sorted(issue["number"] for issue in created)
+	judge_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")
+	]
+	assert len(judge_comments) == 1
+	assert "The judge accepted every remaining finding as a known risk" in judge_comments[0]
+	assert (
+		"1 of them were `keep_fixing` decisions converted to advisories because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent."
+		in judge_comments[0]
+	)
+	assert "| SEC-TEST-1 | high | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
+
+
+def test_security_pass_exhaustion_judge_keep_fixing_allowed_within_cap() -> None:
+	"""Round 2 with the default cap of 2 still grants the consolidated fix cycle."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=1),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"))),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_judge_rounds"] == 2
+	assert len(latest_state["security_pass_active_fix_issues"]) == 1
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in combined_log
+	assert "accepted=0 keep_fixing=1 failed=0" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=192" in combined_log
+
+
+def test_security_pass_exhaustion_judge_keep_fixing_cap_zero_is_unbounded() -> None:
+	"""MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=0 restores the unbounded keep_fixing loop."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=7),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS": "0",
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"))),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_judge_rounds"] == 8
+	assert len(latest_state["security_pass_active_fix_issues"]) == 1
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=192" in combined_log
+
+
+def test_security_pass_final_merge_reanswers_advisory_followups_parked_in_ai_blocked() -> None:
+	"""Advisories filed before the merge and parked in ai:blocked get one /answer at final merge.
+
+	Regression for #4090 / #4091 (project #3965): both were filed at judge
+	time, the planner answered `BLOCKED: PR #3968 is still open`, and
+	standalone stall recovery skips ai:blocked by design, so they waited for
+	a human `/answer`.  The final-merge arm now re-answers each follow-up at
+	most once (`security_pass_followups_merge_checked`), never touches issues
+	that are not blocked or closed, and leaves the follow-up rows' shape alone.
+	"""
+	state = _base_state(status="in_progress")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_followup_issues": [
+				{"finding_id": "SEC-PARKED", "issue": 850},
+				{"finding_id": "SEC-PLANNED", "issue": 851},
+				{"finding_id": "SEC-CLOSED", "issue": 852},
+				{"finding_id": "SEC-CHECKED", "issue": 853},
+			],
+			"security_pass_followups_merge_checked": [853],
+		}
+	)
+	labels = {
+		10: ["ai:merged"],
+		850: ["ai:security", "ai:blocked"],
+		851: ["ai:security", "ai:planning"],
+		852: ["ai:security", "ai:blocked"],
+		853: ["ai:security", "ai:blocked"],
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["final_merge_status"] == "merged"
+	final_pr = latest_state["final_merge_pr"]
+
+	def _answers(issue_number: int) -> list[str]:
+		return [
+			comment["body"]
+			for comment in result["issues"][str(issue_number)]["comments"]
+			if comment["body"].startswith("/answer [auto-answered-by-poller]")
+		]
+
+	parked_answers = _answers(850)
+	assert len(parked_answers) == 1
+	assert f"`orchestrator/project-192` has merged into `main` via PR #{final_pr}" in parked_answers[0]
+	assert "parked this issue in `ai:blocked` no longer holds" in parked_answers[0]
+	assert "<!-- security-pass-advisory-unblock:192:850 -->" in parked_answers[0]
+	assert _answers(851) == []
+	assert _answers(852) == []
+	assert _answers(853) == []
+	# Row shape is untouched; the check is recorded in a separate list.
+	assert latest_state["security_pass_followup_issues"] == [
+		{"finding_id": "SEC-PARKED", "issue": 850},
+		{"finding_id": "SEC-PLANNED", "issue": 851},
+		{"finding_id": "SEC-CLOSED", "issue": 852},
+		{"finding_id": "SEC-CHECKED", "issue": 853},
+	]
+	assert latest_state["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=192 finding=SEC-PARKED issue=850 final_pr={final_pr} outcome=answered" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=192 finding=SEC-PLANNED issue=851 final_pr={final_pr} outcome=not_blocked" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=192 finding=SEC-CLOSED issue=852 final_pr={final_pr} outcome=closed" in combined_log
+	assert "issue=853" not in combined_log
+	replanned_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## 🔓 Security-pass advisory follow-ups re-planned")
+	]
+	assert len(replanned_comments) == 1
+	assert f"via PR #{final_pr}" in replanned_comments[0]
+	assert "- `SEC-PARKED` → #850" in replanned_comments[0]
+	assert "SEC-PLANNED" not in replanned_comments[0]
+
+	# A later completed tick re-enters the merged arm but every row is
+	# already checked: no second /answer, no second tracking comment.
+	second = _run_poller(
+		state=latest_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert second["latest_state"]["final_merge_status"] == "merged"
+	assert second["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert not any(
+		comment["body"].startswith("/answer [auto-answered-by-poller]")
+		for comment in second["issues"]["850"]["comments"]
+	)
+	assert not any(
+		comment["body"].startswith("## 🔓 Security-pass advisory follow-ups re-planned")
+		for comment in second["issues"]["192"]["comments"]
+	)
+	second_log = second["stdout"] + second["stderr"]
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in second_log
+
+	# A public commenter can copy both the command prefix and predictable
+	# marker, but an untrusted author association must not suppress the real
+	# poller answer or mark the follow-up checked without posting it.
+	retry_state_after_forged_marker = json.loads(json.dumps(latest_state))
+	retry_state_after_forged_marker["security_pass_followups_merge_checked"] = [851, 852, 853]
+	retry_after_forged_marker = _run_poller(
+		state=retry_state_after_forged_marker,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_comments={
+			850: [
+				{
+					"body": parked_answers[0],
+					"author_association": "CONTRIBUTOR",
+					"user": {"login": "drive-by", "type": "User"},
+				}
+			]
+		},
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert len(
+		[
+			comment["body"]
+			for comment in retry_after_forged_marker["issues"]["850"]["comments"]
+			if comment["body"].startswith("/answer [auto-answered-by-poller]")
+		]
+	) == 2
+	assert retry_after_forged_marker["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert "outcome=answered" in retry_after_forged_marker["stdout"] + retry_after_forged_marker["stderr"]
+
+	# Simulate the POST succeeding while the local merge-checked state write
+	# was lost. The durable comment marker suppresses a duplicate /answer even
+	# if the issue still carries ai:blocked when the next tick starts. The
+	# persisted comment is a trusted User comment, matching the GH_PAT path.
+	retry_state_after_lost_mark = json.loads(json.dumps(latest_state))
+	retry_state_after_lost_mark["security_pass_followups_merge_checked"] = [851, 852, 853]
+	retry_after_lost_mark = _run_poller(
+		state=retry_state_after_lost_mark,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_comments={
+			850: [
+				{
+					"body": parked_answers[0],
+					"author_association": "OWNER",
+					"user": {"login": "octocat", "type": "User"},
+				}
+			]
+		},
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	retry_answer_comments = [
+		comment["body"]
+		for comment in retry_after_lost_mark["issues"]["850"]["comments"]
+		if comment["body"].startswith("/answer [auto-answered-by-poller]")
+	]
+	assert retry_answer_comments == parked_answers
+	assert retry_after_lost_mark["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert not any(
+		comment["body"].startswith("## 🔓 Security-pass advisory follow-ups re-planned")
+		for comment in retry_after_lost_mark["issues"]["192"]["comments"]
+	)
+	assert "outcome=answered" in retry_after_lost_mark["stdout"] + retry_after_lost_mark["stderr"]
+
+
+def test_security_pass_exhaustion_judge_fail_verdict_terminalizes_with_verdict_comment() -> None:
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		capture_telegram_calls=True,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "fail"))),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_judge_rounds"] == 1
+	assert latest_state["security_pass_waived_findings"] == []
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result.get("created_issues", []) == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert "accepted=0 keep_fixing=0 failed=1" in combined_log
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in combined_log
+	comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	judge_comments = [body for body in comment_bodies if body.startswith("## ⚖️ Security-pass exhaustion judge (round 1)")]
+	assert len(judge_comments) == 1
+	assert "1 finding(s) need a human" in judge_comments[0]
+	assert "| SEC-TEST-1 | high | scripts/example.py:1 | fail |" in judge_comments[0]
+	assert any(body.startswith("## ❌ Project security pass exhausted") for body in comment_bodies)
+	assert any(
+		notification["issue"] == "192" and notification["level"] == "CRITICAL" and "security pass FAILED" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
+
+
+def test_security_pass_exhaustion_judge_rejects_mixed_fail_verdict() -> None:
+	"""A project-wide fail decision cannot silently discard partial actions."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), _security_pass_second_test_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "fail"), ("SEC-TEST-2", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_judge_rounds"] == 0
+	assert latest_state["security_pass_waived_findings"] == []
+	assert result.get("created_issues", []) == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert "fail cannot be mixed with non-fail actions" in combined_log
+	assert "SECURITY_PASS_JUDGE_FAILED tracking_issue=192 reason=invalid_verdict round=1" in combined_log
+	assert "SECURITY_PASS_JUDGE_DECIDED" not in combined_log
+
+
+def test_security_pass_exhaustion_judge_invalid_verdict_falls_back_to_terminal_failure() -> None:
+	"""An unusable verdict (missing decision, bad action) never passes anything."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), _security_pass_second_test_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			# SEC-TEST-2 has no decision and SEC-TEST-1 uses an unknown action.
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				{"status": "decided", "decisions": [{"finding_id": "SEC-TEST-1", "action": "merge"}]}
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_judge_rounds"] == 0
+	assert latest_state["security_pass_waived_findings"] == []
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result.get("created_issues", []) == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_FAILED tracking_issue=192 reason=invalid_verdict round=1" in combined_log
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in combined_log
+	assert "SECURITY_PASS_JUDGE_DECIDED" not in combined_log
+
+
+def test_security_pass_exhaustion_judge_kill_switch_and_round_cap_keep_terminal_failure() -> None:
+	verdict = json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup")))
+	disabled = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": verdict,
+			"SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED": "false",
+		},
+	)
+	assert disabled["latest_state"]["status"] == "failed"
+	assert disabled["tracking_labels"] == ["ai:security-pass-failed"]
+	assert "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=192 reason=disabled" in disabled["stdout"] + disabled["stderr"]
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in disabled["stdout"] + disabled["stderr"]
+
+	capped = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": verdict,
+			"MAX_SECURITY_PASS_JUDGE_ROUNDS": "2",
+		},
+	)
+	assert capped["latest_state"]["status"] == "failed"
+	assert capped["latest_state"]["security_pass_judge_rounds"] == 2
+	assert "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=192 reason=rounds_exhausted rounds=2 cap=2" in capped["stdout"] + capped["stderr"]
+
+	unbounded = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=7),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": verdict},
+	)
+	assert unbounded["latest_state"]["status"] == "complete"
+	assert unbounded["latest_state"]["security_pass_judge_rounds"] == 8
+	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=8" in unbounded["stdout"] + unbounded["stderr"]
+
+
+def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() -> None:
+	"""A waiver reaches the engine as accepted and is enforced poller-side too.
+
+	The mock engine ignores SECURITY_AUDIT_WAIVED_FINDINGS (an older staged
+	engine would), so the re-reports below prove the poller's own suppression:
+	exact id, and same file + category within the line window under a new id.
+	"""
+	state = _security_pass_exhausted_state(
+		security_pass_cycle=0,
+		security_pass_waived_findings=[
+			{
+				"finding_id": "SEC-TEST-1",
+				"file": "scripts/example.py",
+				"line": 1,
+				"owasp_or_stride_category": "A01: Broken Access Control",
+				"severity": "high",
+				"source": "judge",
+			},
+			{
+				"finding_id": "OLD-DOS",
+				"file": "scripts/example.py",
+				"line": 30,
+				"owasp_or_stride_category": "a04:2021-insecure design / stride: denial of service",
+				"source": "operator",
+			},
+		],
+	)
+	renamed_dos = _security_pass_second_test_finding()
+	renamed_dos["finding_id"] = "NEW-DOS-ID"
+	survivor = _security_pass_second_test_finding()
+	survivor["finding_id"] = "SURVIVOR"
+	survivor["owasp_or_stride_category"] = "A07: Identification and Authentication Failures"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(), renamed_dos, survivor]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	capture = result["security_audit_capture"]
+	assert [row["finding_id"] for row in capture["waived_findings"]] == ["SEC-TEST-1", "OLD-DOS"]
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert [row["finding_id"] for row in latest_state["security_pass_reported_findings"]] == ["SURVIVOR"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "waived_findings=2" in combined_log
+	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=2 ids=SEC-TEST-1,NEW-DOS-ID" in combined_log
+	assert "SECURITY_PASS_BLOCKED tracking_issue=192" in combined_log
+	assert "findings=1 cycle=0" in combined_log
+	created = result.get("created_issues", [])
+	assert len(created) == 1
+	fix_body = result["issues"][str(created[0]["number"])]["body"]
+	assert "| SURVIVOR |" in fix_body
+	assert "| SEC-TEST-1 |" not in fix_body
+	assert "| NEW-DOS-ID |" not in fix_body
+
+
+def _security_pass_waive_failed_state() -> dict:
+	state = _base_state(status="failed")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_judge_rounds": 1,
+			"security_pass_status": "failed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "old-head",
+			"security_pass_last_audited_sha": "old-head",
+			"security_pass_reported_findings": [
+				{
+					"cycle": 3,
+					"finding_id": "SEC-OLD",
+					"owasp_or_stride_category": "A04:2021-Insecure Design",
+					"severity": "medium",
+					"confidence": 9,
+					"file": "scripts/example.py",
+					"line": 1,
+					"exploit_scenario": "Ledger growth by an authenticated caller.",
+					"recommendation": "Rate-limit it.",
+				},
+			],
+		}
+	)
+	return state
+
+
+def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudits() -> None:
+	result = _run_poller(
+		state=_security_pass_waive_failed_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		capture_telegram_calls=True,
+		tracking_labels=["ai:security-pass-failed"],
+		tracking_comments=[
+			{
+				"body": "/security-pass-waive SEC-OLD\tunknown.id-1  \nAccepted after review.",
+				"author_association": "OWNER",
+				"user": {"login": "octocat", "type": "User"},
+			}
+		],
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	# Same tick shape as /re-security-pass: the reset re-audits and the tick
+	# ends; completion runs on the next poll with the pass already recorded.
+	assert latest_state["status"] == "in_progress"
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_cycle"] == 0
+	assert latest_state["security_pass_judge_rounds"] == 0
+	assert latest_state["security_pass_reported_findings"] == []
+	waived = {row["finding_id"]: row for row in latest_state["security_pass_waived_findings"]}
+	assert set(waived) == {"SEC-OLD", "unknown.id-1"}
+	assert waived["SEC-OLD"]["source"] == "operator"
+	assert waived["SEC-OLD"]["waived_by"] == "octocat"
+	assert waived["SEC-OLD"]["file"] == "scripts/example.py"
+	assert waived["SEC-OLD"]["line"] == 1
+	assert waived["unknown.id-1"]["file"] == ""
+	# Operator waivers defer their advisory follow-up the same way the judge
+	# does: the known finding keeps its payload and pending flag, an id that
+	# matched nothing gets no follow-up at all, and no issue is filed until
+	# the integration branch merges.
+	assert result.get("created_issues", []) == []
+	assert waived["SEC-OLD"]["issue"] is None
+	assert waived["SEC-OLD"]["followup_pending"] is True
+	assert waived["SEC-OLD"]["finding"]["finding_id"] == "SEC-OLD"
+	assert waived["SEC-OLD"]["audited_head_sha"] == "old-head"
+	assert "followup_pending" not in waived["unknown.id-1"]
+	assert "finding" not in waived["unknown.id-1"]
+	capture = result["security_audit_capture"]
+	assert [row["finding_id"] for row in capture["waived_findings"]] == ["SEC-OLD", "unknown.id-1"]
+	assert not capture["diff_since"]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=operator by=octocat ids=SEC-OLD,unknown.id-1" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-OLD source=operator reason=integration_branch_not_merged" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED" not in combined_log
+	assert "SECURITY_PASS_WAIVE_REJECTED" not in combined_log
+	assert "mode=full reason=no_prior_audit" in combined_log
+	comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	ack_comments = [body for body in comment_bodies if body.startswith("<!-- security-pass-waive-dedup:")]
+	assert len(ack_comments) == 1
+	assert "## ✅ Security-pass findings waived" in ack_comments[0]
+	assert "- `SEC-OLD` (scripts/example.py:1; follow-up issue filed once the integration branch merges into the default branch)" in ack_comments[0]
+	assert "- `unknown.id-1` (not among the reported findings; matched by exact id only)" in ack_comments[0]
+	assert "The bounded security-pass fix loop was reset." in ack_comments[0]
+	assert any(
+		notification["issue"] == "192" and notification["level"] == "WARNING" and "/security-pass-waive" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
+
+
+def test_security_pass_waive_command_rejects_bots_and_malformed_ids() -> None:
+	for comment, reason in (
+		(
+			{
+				"body": "/security-pass-waive SEC-OLD",
+				"author_association": "OWNER",
+				"user": {"login": "helper[bot]", "type": "Bot"},
+			},
+			"author",
+		),
+		(
+			{
+				"body": "/security-pass-waive SEC-OLD",
+				"author_association": "CONTRIBUTOR",
+				"user": {"login": "drive-by", "type": "User"},
+			},
+			"author",
+		),
+		(
+			{
+				"body": "/security-pass-waive SEC-OLD ../etc/passwd",
+				"author_association": "MEMBER",
+				"user": {"login": "octocat", "type": "User"},
+			},
+			"format",
+		),
+		(
+			{
+				"body": "/security-pass-waive",
+				"author_association": "COLLABORATOR",
+				"user": {"login": "octocat", "type": "User"},
+			},
+			"format",
+		),
+	):
+		result = _run_poller(
+			state=_security_pass_waive_failed_state(),
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload(),
+			tracking_labels=["ai:security-pass-failed"],
+			tracking_comments=[comment],
+			issue_labels={10: ["ai:merged"]},
+			existing_branches=["main", "orchestrator/project-192"],
+		)
+		latest_state = result["latest_state"]
+		assert latest_state["status"] == "failed", reason
+		assert latest_state["security_pass_waived_findings"] == [], reason
+		assert result["tracking_labels"] == ["ai:security-pass-failed"], reason
+		assert result.get("created_issues", []) == [], reason
+		assert result["security_audit_capture"] is None, reason
+		combined_log = result["stdout"] + result["stderr"]
+		assert f"SECURITY_PASS_WAIVE_REJECTED tracking_issue=192 comment=2 reason={reason}" in combined_log
+		assert "SECURITY_PASS_WAIVED " not in combined_log
+		rejections = [
+			body
+			for body in (c["body"] for c in result["issues"]["192"]["comments"])
+			if body.startswith("<!-- security-pass-waive-dedup:2 -->")
+		]
+		assert len(rejections) == 1, reason
+		assert "## ⛔ Security-pass waiver not applied" in rejections[0]
+
+
+def test_security_pass_waive_command_after_dedup_marker_is_ignored() -> None:
+	result = _run_poller(
+		state=_security_pass_waive_failed_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:security-pass-failed"],
+		tracking_comments=[
+			{
+				"body": "/security-pass-waive SEC-OLD",
+				"author_association": "OWNER",
+				"user": {"login": "octocat", "type": "User"},
+			},
+			"<!-- security-pass-waive-dedup:2 -->\n\n## ✅ Security-pass findings waived",
+		],
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["security_audit_capture"] is None
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_WAIVED" not in combined_log
+	assert "SECURITY_PASS_WAIVE_REJECTED" not in combined_log
+
+
+def test_security_pass_waive_command_in_fixing_state_persists_without_reset() -> None:
+	state = _security_pass_fixing_state(
+		security_pass_reported_findings=[
+			{
+				"cycle": 1,
+				"finding_id": "SEC-FIXING",
+				"owasp_or_stride_category": "A04:2021-Insecure Design",
+				"severity": "medium",
+				"confidence": 9,
+				"file": "scripts/example.py",
+				"line": 1,
+				"exploit_scenario": "Bounded ledger growth.",
+				"recommendation": "Rate-limit it.",
+			},
+		]
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:security-pass-fixing"],
+		tracking_comments=[
+			{
+				"body": "/security-pass-waive SEC-FIXING",
+				"author_association": "MEMBER",
+				"user": {"login": "octocat", "type": "User"},
+			}
+		],
+		issue_labels={700: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_status"] == "blocked"
+	assert latest_state["security_pass_cycle"] == 1
+	assert latest_state["security_pass_active_fix_issues"] == [700]
+	assert [row["finding_id"] for row in latest_state["security_pass_waived_findings"]] == ["SEC-FIXING"]
+	assert latest_state["security_pass_reported_findings"] == []
+	assert result["security_audit_capture"] is None
+	assert result.get("created_issues", []) == []
+	assert latest_state["security_pass_waived_findings"][0]["followup_pending"] is True
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=operator by=octocat ids=SEC-FIXING" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-FIXING source=operator" in combined_log
+	assert "Security-pass fix issue #700 remains in progress." in combined_log
+	ack_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("<!-- security-pass-waive-dedup:")
+	]
+	assert len(ack_comments) == 1
+	assert "The active security-pass fix cycle continues" in ack_comments[0]
 
 
 def test_security_pass_invalid_engine_output_fails_closed() -> None:
@@ -3835,6 +5961,31 @@ def test_security_pass_invalid_engine_output_fails_closed() -> None:
 	assert result["latest_state"]["security_pass_head_sha"] == ""
 	assert result["tracking_labels"] == ["ai:security-pass"]
 	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_invalid_suppressed_waived_count_fails_closed() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	for invalid_value in (None, "not-an-integer"):
+		payload = _security_audit_findings_payload()
+		if invalid_value is None:
+			payload["counts"].pop("suppressed_waived")
+		else:
+			payload["counts"]["suppressed_waived"] = invalid_value
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=payload,
+			issue_labels={10: ["ai:merged"]},
+			existing_branches=["main", "orchestrator/project-192"],
+		)
+
+		assert result["latest_state"]["status"] == "security-pass"
+		assert result["latest_state"]["security_pass_status"] == "failed"
+		assert result["tracking_labels"] == ["ai:security-pass"]
+		assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
 
 
 def test_security_pass_closed_fix_without_merged_pr_terminalizes_recoverably() -> None:
@@ -3898,10 +6049,34 @@ def test_security_pass_closed_fix_adopts_stall_recovery_successor() -> None:
 	predecessor and the whole project was failed out from under a live
 	successor that later merged.
 	"""
+	tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `blocked`
+- Completed fix cycles: 1
+- Audited integration SHA: `audited-head`
+- Active fix issue: #900
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
 	state = _base_state(status="security-pass-fixing")
 	state.update(
 		{
 			"integration_branch": "orchestrator/project-192",
+			"project_body_snapshot": tracking_body,
+			"tracking_body_sync_hash": hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
 			"security_pass_cycle": 1,
 			"security_pass_status": "blocked",
 			"security_pass_active_fix_issues": [900],
@@ -3920,6 +6095,7 @@ def test_security_pass_closed_fix_adopts_stall_recovery_successor() -> None:
 		},
 		issue_bodies={901: _security_pass_reissued_fix_body(192, 2, 900)},
 		issue_closed={900: True},
+		tracking_body=tracking_body,
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -3935,6 +6111,13 @@ def test_security_pass_closed_fix_adopts_stall_recovery_successor() -> None:
 		"closed_issue=900 successor=901" in combined_log
 	)
 	assert "SECURITY_PASS_FAILED" not in combined_log
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Active fix issue: #901" in rendered_body
+	assert "- Active fix issue: #900" not in rendered_body
+	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
+	assert result["latest_state"]["tracking_body_sync_hash"] == hashlib.sha256(
+		rendered_body.encode("utf-8")
+	).hexdigest()
 	tracking_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]]
 	assert any("re-issued as #901" in body for body in tracking_comments)
 	assert not any("/re-security-pass" in body for body in tracking_comments)
@@ -4055,6 +6238,672 @@ def test_security_pass_fix_successor_malformed_state_is_inconclusive() -> None:
 		assert result.returncode == 0, result.stderr
 		assert result.stdout.splitlines() == ["2", "2"]
 		assert not api_call_path.exists()
+
+def _security_pass_fixing_state_with_closed_fix_issue() -> dict:
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	return state
+
+
+def test_security_pass_closed_fix_with_timeline_merged_pr_evidence_advances_cycle() -> None:
+	"""Regression for tele-funtoken-msg-scoring#4379 / project #3928.
+
+	The fix PR merged into the integration branch, so the candidate-details
+	GraphQL batch carries no linked_pr for it (``willCloseTarget`` is false
+	for PRs into a non-default base), and the review-blocked judge's
+	post-merge phase swap had replaced the PR-close handler's ``ai:merged``
+	with ``ai:ready-to-merge``.  The closed fix issue must still count as
+	merged through the timeline evidence the cache-miss path already used,
+	instead of failing the project as closed-without-merge."""
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:ready-to-merge", "ai:orchestrator-managed"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "ai/issue-900",
+				"willCloseTarget": False,
+				"mergeable": None,
+				"mergeable_state": "unknown",
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_FIX_MERGED_EVIDENCE tracking_issue=192 issue=900 source=timeline" in combined, combined
+	assert "reason=fix_issue_closed_without_merged_pr" not in combined, combined
+	assert result["latest_state"]["status"] != "failed", result["latest_state"]
+	assert result["latest_state"]["security_pass_cycle"] == 2
+	assert result["latest_state"]["security_pass_active_fix_issues"] == []
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	security_fix_labels = result["issues"]["900"]["labels"]
+	assert "ai:merged" in security_fix_labels, security_fix_labels
+	assert "ai:ready-to-merge" not in security_fix_labels, security_fix_labels
+
+
+def test_security_pass_closed_fix_with_mention_only_merged_pr_still_fails() -> None:
+	"""A merged PR that merely mentions the fix issue is not evidence."""
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:ready-to-merge"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "claude/unrelated-investigation",
+				"headRefFromApi": "claude/unrelated-investigation",
+				"body": "Refs #900",
+				"willCloseTarget": False,
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=900 candidate_pr=901 rejected=not_implementation_pr" in combined, combined
+	assert "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr" in combined, combined
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+
+
+def test_security_pass_closed_fix_timeline_evidence_rejects_wrong_base() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		gql_mode="error",
+		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-900",
+				"body": "Fixes #900",
+				"willCloseTarget": False,
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "falling back to a direct issue lookup" in combined, combined
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=900 candidate_pr=901 rejected=base_mismatch" in combined, combined
+	assert "SECURITY_PASS_FIX_MERGED_EVIDENCE" not in combined, combined
+	assert result["latest_state"]["security_pass_cycle"] == 1
+	assert result["latest_state"]["status"] == "failed"
+	assert "ai:merged" in result["issues"]["900"]["labels"]
+
+
+def test_security_pass_closed_fix_evidence_lookup_failure_retains_fixing_state() -> None:
+	"""A timeline lookup failure is not a verdict: keep security-pass-fixing
+	and retry on the next poll instead of terminalizing the project."""
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:ready-to-merge"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "ai/issue-900",
+				"willCloseTarget": False,
+			},
+		],
+		timeline_fail_for_issues=[900],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "merged-PR evidence lookup failed; retaining fixing state" in combined, combined
+	assert "reason=fix_issue_closed_without_merged_pr" not in combined, combined
+	assert result["latest_state"]["status"] == "security-pass-fixing"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [900]
+
+
+def _security_pass_fix_issue_body(tracking_issue: int, cycle: int) -> str:
+	"""Body create_security_pass_fix_issue writes for a consolidated fix issue.
+
+	Both durable orchestrator markers (`- Tracking issue:` and `- Local ID:`)
+	must survive a re-issue verbatim: they are what the managed-issue dedup
+	in create_security_pass_fix_issue keys on.
+	"""
+	return f"""Refs #{tracking_issue}
+
+The mandatory project security pass found the following blocking issues. Address every row through the normal clarify, plan, implement, and review pipeline.
+
+| ID | Category | Severity | Confidence | Location | Exploit scenario | Recommendation |
+|---|---|---|---:|---|---|---|
+| finding-1 | A01:2021-Broken Access Control | high | 9 | app.py:1 | scenario | recommendation |
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #{tracking_issue}
+- Integration branch: `orchestrator/project-{tracking_issue}`
+- Local ID: `security-pass-fix-cycle-{cycle}`
+- Priority: 1
+- Managed by: AI Orchestrator
+"""
+
+
+def _security_pass_post_codex_fixup_comment(source_issue: int, fixup_issue: int) -> str:
+	"""The comment implement.yml leaves on a source issue it failed in post-Codex validation."""
+	return (
+		"## Post-Codex validation diagnosed follow-up fixes\n\n"
+		"Codex diagnose failed or returned invalid JSON. Fallback fix-up issue created with raw captured diagnostics.\n\n"
+		"Failed step: Enforce syntax validation outcome\n\n"
+		"Created fix-up issues:\n"
+		f"- #{fixup_issue}\n\n"
+		"<!-- IMPLEMENT_FIXUP_BLOCKERS_V1\n"
+		f'{{"fixup_issue_numbers":[{fixup_issue}],"blocks_source_issue":{source_issue}}}\n'
+		"IMPLEMENT_FIXUP_BLOCKERS_V1 -->"
+	)
+
+
+def _security_pass_fixing_state(**overrides) -> dict:
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [700],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	state.update(overrides)
+	return state
+
+
+def test_security_pass_implementation_failed_fix_with_resolved_blockers_is_reissued() -> None:
+	"""An open fix issue that implement.yml failed in post-Codex validation
+	must be closed and re-issued once its blocker fix-ups are closed.
+
+	Regression for tele-funtoken-msg-scoring#3928: security-pass fix issue
+	#4055 ended in ai:implementation-failed, its fallback fix-up #4101 merged
+	within the hour, and the poller then logged "remains in progress" on
+	every cycle. Wave issues are re-issued by the WAVE_STATUS loop and
+	standalone stall recovery skips ai:implementation-failed, so nothing
+	ever re-dispatched the security fix.
+	"""
+	result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			701: ["ai:merged", "ai:implement-fix-up"],
+		},
+		issue_closed={701: True},
+		issue_comments={700: [_security_pass_post_codex_fixup_comment(700, 701)]},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert len(result.get("created_issues", [])) == 1
+	created = result["created_issues"][0]
+	new_issue_num = created["number"]
+	assert created["title"] == "[security-pass] Project #192 fix cycle 2"
+	assert created["labels"] == ["ai:clarification", "ai:orchestrator-managed"]
+	assert result["closed_issues"] == [700]
+	old_labels = result["issues"]["700"]["labels"]
+	assert "ai:closed" in old_labels
+	assert "ai:implementation-failed" not in old_labels
+
+	new_body = result["issues"][str(new_issue_num)]["body"]
+	assert "- Tracking issue: #192" in new_body
+	assert "- Local ID: `security-pass-fix-cycle-2`" in new_body
+	assert "Re-issued from #700" in new_body
+	assert "failed during post-Codex syntax/validation checks" in new_body
+	assert "- #701" in new_body
+
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		assert persisted_state["status"] == "security-pass-fixing"
+		assert persisted_state["security_pass_status"] == "blocked"
+		assert persisted_state["security_pass_cycle"] == 1
+		assert persisted_state["security_pass_active_fix_issues"] == [new_issue_num]
+		assert persisted_state["security_pass_fix_reissue_count"] == 1
+		assert "security_pass_fix_defer" not in persisted_state
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert result["security_audit_capture"] is None
+	combined_log = result["stdout"] + result["stderr"]
+	assert (
+		"SECURITY_PASS_FIX_ISSUE_REISSUED tracking_issue=192 failed_issue=700 "
+		f"successor={new_issue_num} mode=post-codex-validation reissue=1/2" in combined_log
+	)
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	assert "remains in progress" not in combined_log
+	tracking_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert new_issue_num != 700
+	assert any(f"re-issued as #{new_issue_num}" in body for body in tracking_comments)
+	assert any("(fix cycle 2/3)" in body and "(re-issue 1/2)" in body for body in tracking_comments)
+	assert not any("/re-security-pass" in body for body in tracking_comments)
+
+
+def test_security_pass_reissued_fix_rerenders_tracking_body_security_block() -> None:
+	"""The re-issue transition must re-render the tracking body like the
+	successor-adoption transition does, so `Active fix issue` never points
+	at the closed predecessor."""
+	tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `blocked`
+- Completed fix cycles: 1
+- Audited integration SHA: `audited-head`
+- Active fix issue: #700
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	state = _security_pass_fixing_state(
+		project_body_snapshot=tracking_body,
+		tracking_body_sync_hash=hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			701: ["ai:merged", "ai:implement-fix-up"],
+		},
+		issue_closed={701: True},
+		issue_comments={700: [_security_pass_post_codex_fixup_comment(700, 701)]},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		tracking_body=tracking_body,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert len(result.get("created_issues", [])) == 1
+	new_issue_num = result["created_issues"][0]["number"]
+	assert new_issue_num != 700
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [new_issue_num]
+	rendered_body = result["issues"]["192"]["body"]
+	assert f"- Active fix issue: #{new_issue_num}" in rendered_body
+	assert "- Active fix issue: #700" not in rendered_body
+	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
+	assert result["latest_state"]["tracking_body_sync_hash"] == hashlib.sha256(
+		rendered_body.encode("utf-8")
+	).hexdigest()
+
+
+def test_security_pass_implementation_failed_fix_with_open_blockers_defers_reissue() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			701: ["ai:implementing", "ai:implement-fix-up"],
+		},
+		issue_comments={700: [_security_pass_post_codex_fixup_comment(700, 701)]},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		assert persisted_state["status"] == "security-pass-fixing"
+		assert persisted_state["security_pass_active_fix_issues"] == [700]
+		assert persisted_state["security_pass_fix_defer"]["issue"] == 700
+		assert "#701=open" in persisted_state["security_pass_fix_defer"]["summary"]
+		assert persisted_state["security_pass_fix_defer"]["security_pass_defer_count"] == 1
+		assert persisted_state["security_pass_fix_defer"]["security_pass_defer_escalated"] is False
+		assert "security_pass_fix_reissue_count" not in persisted_state
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Deferring security-pass fix reissue for #700" in combined_log
+	assert "blocker fix-up issue(s) still open" in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_REISSUED" not in combined_log
+
+
+def test_security_pass_implementation_failed_fix_defer_escalates_at_wave_ceiling() -> None:
+	defer_summary = "700|#701=open |blocker fix-up issue(s) still open"
+	result = _run_poller(
+		state=_security_pass_fixing_state(
+			security_pass_fix_defer={
+				"issue": 700,
+				"summary": defer_summary,
+				"security_pass_defer_count": 4,
+				"security_pass_defer_escalated": False,
+			},
+		),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			701: ["ai:implementing", "ai:implement-fix-up"],
+		},
+		issue_comments={700: [_security_pass_post_codex_fixup_comment(700, 701)]},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MAX_IMPL_FAILED_DEFER_CYCLES": "5"},
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	assert "ai:needs-human" in result["issues"]["700"]["labels"]
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		defer_state = persisted_state["security_pass_fix_defer"]
+		assert defer_state["summary"] == defer_summary
+		assert defer_state["security_pass_defer_count"] == 5
+		assert defer_state["security_pass_defer_escalated"] is True
+	combined_log = result["stdout"] + result["stderr"]
+	assert "cycle=5/5; escalated=true" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_REISSUED" not in combined_log
+
+
+def test_security_pass_blocker_free_post_codex_failure_escalates_at_existing_cap() -> None:
+	"""Diagnose outcomes without fix-up issues must not defer silently forever."""
+	defer_summary = "700||post-codex blocker metadata missing or malformed"
+	result = _run_poller(
+		state=_security_pass_fixing_state(
+			security_pass_fix_defer={
+				"issue": 700,
+				"summary": defer_summary,
+				"security_pass_defer_count": 4,
+				"security_pass_defer_escalated": False,
+			},
+		),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_comments={
+			700: ["## Post-Codex validation harness error\n\nNo blocker issue was created."],
+		},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert "ai:needs-human" in result["issues"]["700"]["labels"]
+	defer_state = result["latest_state"]["security_pass_fix_defer"]
+	assert defer_state == {
+		"issue": 700,
+		"summary": defer_summary,
+		"security_pass_defer_count": 5,
+		"security_pass_defer_escalated": True,
+	}
+	assert any(
+		"Security-pass implementation-failed deferral escalated" in comment["body"]
+		for comment in result["issues"]["700"]["comments"]
+	)
+	assert "cycle=5/5; escalated=true" in result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_FIX_ISSUE_REISSUED" not in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_reissue_adopts_existing_successor_without_duplicate() -> None:
+	existing_successor_body = (
+		_security_pass_fix_issue_body(192, 2)
+		+ "\n---\n\n**Re-issued from #700**\n"
+	)
+	result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			900: ["ai:clarification", "ai:orchestrator-managed"],
+		},
+		issue_bodies={
+			700: _security_pass_fix_issue_body(192, 2),
+			900: existing_successor_body,
+		},
+		fail_issue_close_for=[700],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	assert "ai:closed" in result["issues"]["700"]["labels"]
+	assert "ai:implementation-failed" not in result["issues"]["700"]["labels"]
+	assert "ai:orchestrator-managed" not in result["issues"]["700"]["labels"]
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [900]
+	assert result["latest_state"]["security_pass_fix_reissue_count"] == 1
+	combined_log = result["stdout"] + result["stderr"]
+	assert "successor #900 already exists for failed issue #700" in combined_log
+	assert "successor=900 mode=no-op-implementation reissue=1/2" in combined_log
+
+
+def test_security_pass_reissue_state_persist_failure_adopts_successor_next_poll() -> None:
+	failed_result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL": "true"},
+	)
+
+	assert len(failed_result.get("created_issues", [])) == 1
+	untracked_successor_num = failed_result["created_issues"][0]["number"]
+	assert failed_result["closed_issues"] == []
+	assert failed_result["issues"]["700"]["closed"] is False
+	assert failed_result["issues"][str(untracked_successor_num)]["closed"] is False
+	assert failed_result["latest_state"]["security_pass_active_fix_issues"] == [700]
+	assert "security_pass_fix_reissue_count" not in failed_result["latest_state"]
+	assert (
+		f"Security-pass successor #{untracked_successor_num} could not be persisted "
+		"for tracking issue #192" in failed_result["stdout"] + failed_result["stderr"]
+	)
+
+	successor_labels = failed_result["issues"][str(untracked_successor_num)]["labels"]
+	retry_result = _run_poller(
+		state=failed_result["state_on_disk"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			untracked_successor_num: successor_labels,
+		},
+		issue_bodies={
+			700: _security_pass_fix_issue_body(192, 2),
+			untracked_successor_num: failed_result["issues"][str(untracked_successor_num)]["body"],
+		},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert retry_result.get("created_issues", []) == []
+	assert retry_result["closed_issues"] == [700]
+	assert retry_result["latest_state"]["security_pass_active_fix_issues"] == [untracked_successor_num]
+	assert retry_result["latest_state"]["security_pass_fix_reissue_count"] == 1
+	retry_log = retry_result["stdout"] + retry_result["stderr"]
+	assert f"successor #{untracked_successor_num} already exists for failed issue #700" in retry_log
+	assert f"successor={untracked_successor_num} mode=no-op-implementation reissue=1/2" in retry_log
+
+
+def test_security_pass_implementation_failed_noop_fix_is_reissued_with_noop_guidance() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert len(result.get("created_issues", [])) == 1
+	new_issue_num = result["created_issues"][0]["number"]
+	assert result["closed_issues"] == [700]
+	new_body = result["issues"][str(new_issue_num)]["body"]
+	assert "- Local ID: `security-pass-fix-cycle-2`" in new_body
+	assert "produced no repository changes" in new_body
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [new_issue_num]
+	assert result["latest_state"]["security_pass_fix_reissue_count"] == 1
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"successor={new_issue_num} mode=no-op-implementation reissue=1/2" in combined_log
+	assert sum(path.endswith("/issues/700") for path in result["api_calls"]) == 1
+
+
+def test_security_pass_implementation_failed_reissue_cap_terminalizes_recoverably() -> None:
+	exhausted_tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `blocked`
+- Completed fix cycles: 1
+- Audited integration SHA: `audited-head`
+- Active fix issue: #700
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	result = _run_poller(
+		state=_security_pass_fixing_state(
+			security_pass_fix_reissue_count=2,
+			project_body_snapshot=exhausted_tracking_body,
+			tracking_body_sync_hash=hashlib.sha256(exhausted_tracking_body.encode("utf-8")).hexdigest(),
+		),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		tracking_body=exhausted_tracking_body,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == [700]
+	assert "ai:closed" in result["issues"]["700"]["labels"]
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		assert persisted_state["status"] == "failed"
+		assert persisted_state["security_pass_status"] == "failed"
+		assert persisted_state["security_pass_active_fix_issues"] == []
+		assert "security_pass_fix_reissue_count" not in persisted_state
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result["security_audit_capture"] is None
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Status: `failed`" in rendered_body
+	assert "- Active fix issue: none" in rendered_body
+	assert "- Active fix issue: #700" not in rendered_body
+	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
+	assert result["latest_state"]["tracking_body_sync_hash"] == hashlib.sha256(
+		rendered_body.encode("utf-8")
+	).hexdigest()
+	combined_log = result["stdout"] + result["stderr"]
+	assert (
+		"SECURITY_PASS_FAILED reason=fix_issue_implementation_failed_reissues_exhausted "
+		"tracking_issue=192 issue=700 reissues=2 cap=2" in combined_log
+	)
+	tracking_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert any("/re-security-pass" in body for body in tracking_comments)
+
+
+def test_security_pass_reissue_cap_close_failure_retains_fixing_state() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state(security_pass_fix_reissue_count=2),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		fail_issue_close_for=[700],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	assert "ai:closed" in result["issues"]["700"]["labels"]
+	assert "ai:implementation-failed" not in result["issues"]["700"]["labels"]
+	assert "ai:orchestrator-managed" not in result["issues"]["700"]["labels"]
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == []
+	assert "security_pass_fix_reissue_count" not in result["latest_state"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Could not close exhausted security-pass fix issue #700" in combined_log
+	assert "SECURITY_PASS_FAILED" in combined_log
 
 
 def test_security_pass_judge_validation_route_blocks_then_clean_pass_dispatches() -> None:
@@ -4587,6 +7436,28 @@ def test_security_pass_deleted_branch_rejects_inconsistent_final_pr_metadata() -
 
 
 def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() -> None:
+	tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `passed`
+- Completed fix cycles: 0
+- Audited integration SHA: `stale-passed-head`
+- Active fix issue: none
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
 	final_pr = {
 		"number": 401,
 		"state": "closed",
@@ -4601,6 +7472,10 @@ def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() ->
 			"integration_branch": "orchestrator/project-192",
 			"final_merge_pr": 401,
 			"final_merge_status": "pending",
+			"project_body_snapshot": tracking_body,
+			"tracking_body_sync_hash": hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
+			"security_pass_status": "passed",
+			"security_pass_head_sha": "stale-passed-head",
 		}
 	)
 	result = _run_poller(
@@ -4609,6 +7484,7 @@ def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() ->
 		max_validate_cycles="3",
 		enable_security_pass="true",
 		security_audit_payload=_security_audit_findings_payload(),
+		tracking_body=tracking_body,
 		issue_labels={10: ["ai:merged"]},
 		prs=[final_pr],
 		existing_branches=["main"],
@@ -4620,6 +7496,12 @@ def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() ->
 	assert result["latest_state"]["security_pass_status"] == "pending"
 	assert result["latest_state"]["final_merge_status"] == "pending"
 	assert result["security_audit_capture"] is not None
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Status: `pending`" in rendered_body
+	assert "- Status: `passed`" not in rendered_body
+	assert "- Audited integration SHA: `none`" in rendered_body
+	assert "stale-passed-head" not in rendered_body
+	assert result["issue_body_edit_calls"][-1] == {"issue": 192, "body": rendered_body}
 	assert "SECURITY_PASS_BLOCKED tracking_issue=192 reason=head_changed_during_audit" in result["stdout"] + result["stderr"]
 
 
@@ -5407,12 +8289,46 @@ def test_comprehensive_pending_complete_dispatches_release_with_metadata():
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert dispatch["version_tag"] == "v9.9.9"
 	assert dispatch["test_repo"] == "owner/release-tests"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
+def test_comprehensive_pending_complete_honours_legacy_release_workflow_override():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 353,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"COMPREHENSIVE_RELEASE_WORKFLOW_FILE": "test-and-mark-stable.yml",
+			"COMPREHENSIVE_RELEASE_WORKFLOW_REF": "stable",
+		},
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert len(result["release_dispatches"]) == 1
+	dispatch = result["release_dispatches"][0]
+	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
+	assert dispatch["dry_run"] == "false"
 
 
 def test_comprehensive_pending_complete_dispatches_release_without_optional_metadata():
@@ -5440,8 +8356,8 @@ def test_comprehensive_pending_complete_dispatches_release_without_optional_meta
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert "version_tag" not in dispatch
 	assert "test_repo" not in dispatch
@@ -5473,8 +8389,8 @@ def test_comprehensive_pending_already_complete_dispatches_release():
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
 
@@ -5923,6 +8839,71 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
 	assert followup_prs == []
 	assert "invalid, oversized, or disallowed decision" in (result["stdout"] + result["stderr"])
+
+
+def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	huge_line = "rb-bundle-" + ("x" * 5000)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 77},
+		prs=[{
+			"number": 77,
+			"state": "open",
+			"merged": False,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "ordinary PR body",
+			"diff": huge_line,
+		}],
+		codex_json={
+			"action": "fix",
+			"justification": "apply fixes",
+			"fix_description": "none",
+			"remaining_issues_summary": "none",
+		},
+		env_overrides={"JUDGE_PR_DIFF_MAX_BYTES": "2000"},
+	)
+	prompt = result["rb_judge_prompts"]["10"]
+	assert "[NOTE: PR diff is " in prompt
+	assert "after the 1000-line cap; truncated to a prefix within 2000 bytes" in prompt
+	assert "x" * 2001 not in prompt
+	assert "Review-blocked judge prompt size: " in result["stdout"]
+	assert "JUDGE_PR_DIFF_MAX_BYTES=2000" in result["stdout"]
+
+
+def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_bodies={10: "oversized-review-blocked-body-" + ("x" * 1_048_576)},
+		issue_linked_prs={10: 77},
+		prs=[{
+			"number": 77,
+			"state": "open",
+			"merged": False,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	stdout = result["stdout"]
+	assert "Review-blocked judge prompt for issue #10 exceeds codex's 1048576-character stdin cap; skipping 2 attempts" in stdout
+	assert "Review-blocked judge attempt " not in stdout
+	assert "::warning::Review-blocked judge failed for issue #10" in stdout
 
 
 def test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable():
@@ -9104,6 +12085,35 @@ def test_standalone_conflict_sweep_keeps_ai_issue_branch_behavior():
 	assert result["review_dispatches"] == []
 
 
+def test_standalone_conflict_sweep_skips_merge_train_queued_prs():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 417},
+		prs=[
+			{
+				"number": 417,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"headSha": "sha417",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"labels": ["ai:merge-queued"],
+			},
+		],
+	)
+	assert result["update_branch_calls"] == [], result["stdout"]
+	assert result["review_dispatches"] == []
+	assert "Issue #10: PR #417 is ai:merge-queued (merge train); skipping conflict dispatch until released." in result["stdout"]
+	assert "PR #417 is ai:merge-queued (merge train); skipping conflict dispatch" in result["stdout"]
+
+
 def test_standalone_conflict_sweep_skips_closed_pr_on_detail_fetch():
 	state = _base_state(status="complete")
 	prs = [
@@ -9220,6 +12230,88 @@ def test_standalone_conflict_sweep_consumes_budget_after_override_cap():
 	assert standalone_state["phase_attempts"]["ai:done"] == 1
 	assert standalone_state["conflict_override_count"]["sha416"] == 3
 	assert len([d for d in result["review_dispatches"] if str(d.get("pr_number")) == "416"]) == 1
+
+
+def test_standalone_stall_recovery_skips_merge_train_queued_pr_without_judge():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 2,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 418},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 418,
+				"body": "Closes #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-501",
+				"headRefFromApi": "ai/issue-501",
+				"headSha": "sha418",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"labels": ["ai:merge-queued"],
+			},
+		],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 2
+	assert result.get("git_push_calls", []) == []
+	assert result["review_dispatches"] == []
+	assert "reason=merge_train_queued pr=418 phase=ai:done action=run_stall_judge" in result["stdout"]
+	assert not any(
+		"Stall Judge" in str(comment.get("body", ""))
+		for comment in result["issues"]["501"]["comments"]
+	)
+
+
+def test_standalone_stall_recovery_reconciles_merged_pr_with_stale_merge_train_label():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 2,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 419},
+		mock_gh_issue_list_label_filter=True,
+		prs=[{
+			"number": 419,
+			"body": "Closes #501",
+			"state": "closed",
+			"merged": True,
+			"merged_at": "2026-09-07T21:30:00Z",
+			"headRefName": "ai/issue-501",
+			"labels": ["ai:merge-queued"],
+		}],
+	)
+	assert "ai:merged" in result["issues"]["501"]["labels"]
+	assert "linked PR #419 is MERGED" in result["stdout"]
+	assert "reason=merge_train_queued pr=419" not in result["stdout"]
 
 
 def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
@@ -11216,6 +14308,158 @@ def test_judge_prompt_includes_harness_validation_context():
 	assert "Latest validation raw status: harness_error" in prompt
 	assert "Harness-broken label present: true" in prompt
 	assert "Judge note: the latest validation failure is classified as a harness/infrastructure defect" in prompt
+
+
+def test_judge_prompt_caps_embedded_pr_diffs_by_bytes():
+	"""Regression for tele-funtoken-msg-scoring#3928 / run 35425771769: a
+	merged PR whose diff is a handful of huge single lines passes the
+	500-line cap untouched, and two such PRs pushed the judge prompt past
+	codex's 1,048,576-character stdin cap. JUDGE_PR_DIFF_MAX_BYTES must cut
+	each diff, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES must bound the sum across the
+	prompt (merged PRs first, sorted issue order), every cut must be
+	labelled for the judge, and the poller must log the prompt size."""
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 3
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": 10, "status": "merged"},
+		{"id": "issue-2", "github_issue": 11, "status": "merged"},
+		{"id": "issue-3", "github_issue": 12, "status": "merged"},
+	]
+	state["issue_number_map"] = {"issue-1": 10, "issue-2": 11, "issue-3": 12}
+	# One "diff" line far larger than the per-PR cap, like a minified bundle.
+	huge_line = "bundle-" + ("x" * 5000)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"], 11: ["ai:merged"], 12: ["ai:merged"]},
+		issue_linked_prs={10: 77, 11: 78, 12: 79},
+		prs=[
+			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "body": huge_line},
+			{"number": 78, "state": "closed", "merged": True, "headRefName": "ai/issue-11", "body": huge_line},
+			{"number": 79, "state": "closed", "merged": True, "headRefName": "ai/issue-12", "body": huge_line},
+		],
+		codex_json={
+			"status": "in_progress",
+			"justification": "wave verified",
+			"assessment": "ok",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+		env_overrides={
+			"JUDGE_PR_DIFF_MAX_BYTES": "2000",
+			"JUDGE_PR_DIFFS_TOTAL_MAX_BYTES": "2500",
+		},
+	)
+	prompt = result["judge_prompt"]
+	assert "--- PR #77 (Issue #10) ---" in prompt
+	assert "--- PR #78 (Issue #11) ---" in prompt
+	assert "--- PR #79 (Issue #12) ---" in prompt
+	merged_block = prompt.partition("=== MERGED PR DIFFS (truncated; cache-stable) ===")[2].partition("=== WAVE 1 COMPLETION STATUS ===")[0]
+	# Per-PR cap: the first PR gets the full 2000 bytes, the second only the
+	# 500 bytes left in the shared budget, and the third is elided outright.
+	assert "truncated to a prefix within 2000 bytes (JUDGE_PR_DIFF_MAX_BYTES=2000, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)" in merged_block
+	assert "truncated to a prefix within 500 bytes (JUDGE_PR_DIFF_MAX_BYTES=2000, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)" in merged_block
+	assert "[NOTE: PR diff elided — the shared judge PR-diff budget (JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500 bytes) is exhausted" in merged_block
+	# The sum of embedded diff bytes never exceeds the shared budget; the
+	# 5 KB single lines are gone, only headers and notes remain on top.
+	assert len(merged_block.encode("utf-8")) < 2500 + 1500, len(merged_block)
+	assert merged_block.count("bundle-") == 2
+	assert "x" * 2001 not in merged_block
+	# Merged-first ordering by issue number: PR #77 must precede #78 and #79.
+	assert merged_block.index("--- PR #77 ") < merged_block.index("--- PR #78 ") < merged_block.index("--- PR #79 ")
+	stdout = result["stdout"]
+	assert "Judge context: PR #77 (issue #10) diff truncated from" in stdout
+	assert "Judge context: PR #79 (issue #12) diff elided — JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500 budget exhausted" in stdout
+	assert "Judge prompt size: " in stdout
+	assert "characters; codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=2000, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)." in stdout
+	assert "::warning::Judge prompt for #192" not in stdout
+	assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_judge_diff_truncation_failure_is_reported_to_caller():
+	"""The caller must be able to elide a diff when both truncators fail."""
+	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	block_start_index = poller_source_text.index("_judge_truncate_pr_diff_file()\n")
+	block_end_marker = "\n}\n\nextract_judge_json_with_status()"
+	block_end_index = poller_source_text.index(block_end_marker, block_start_index) + 3
+	function_source = poller_source_text[block_start_index:block_end_index]
+	with tempfile.TemporaryDirectory() as td:
+		test_root = Path(td)
+		fake_bin = test_root / "bin"
+		fake_bin.mkdir()
+		_write_exec(fake_bin / "python3", "#!/usr/bin/env bash\nexit 1\n")
+		_write_exec(fake_bin / "head", "#!/usr/bin/env bash\nexit 1\n")
+		diff_path = test_root / "pr.diff"
+		diff_path.write_bytes(b"x" * 100)
+		runner_path = test_root / "run.sh"
+		runner_path.write_text(
+			"#!/usr/bin/env bash\n"
+			f"{function_source}\n"
+			"_judge_truncate_pr_diff_file \"$1\" 10\n"
+			"printf '%s' \"$?\"\n",
+			encoding="utf-8",
+		)
+		proc = subprocess.run(
+			["bash", str(runner_path), str(diff_path)],
+			check=True,
+			capture_output=True,
+			text=True,
+			env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+		)
+		assert proc.stdout == "1"
+		assert diff_path.read_bytes() == b"x" * 100
+	assert 'if _judge_truncate_pr_diff_file "${_pr_diff_capped_tmp}" "${_pr_diff_allowance}"; then' in poller_source_text
+	assert "eliding ${_pr_diff_bytes} bytes instead of embedding an over-budget payload" in poller_source_text
+
+
+def test_judge_prompt_over_character_cap_skips_codex_attempts():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["project_body_snapshot"] = "oversized-project-body-" + ("x" * 1_048_576)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"]},
+	)
+	stdout = result["stdout"]
+	assert "exceeds codex's 1048576-character stdin cap; skipping 2 attempts" in stdout
+	assert "Judge attempt " not in stdout
+	assert "::error::Judge failed for tracking issue #192" in stdout
+
+
+def test_judge_prompt_keeps_small_pr_diffs_intact_under_default_byte_caps():
+	"""Ordinary diffs sit far below the default caps and must be embedded
+	verbatim, with no truncation note and no budget log line."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 77},
+		prs=[
+			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "body": "ordinary small diff"},
+		],
+		codex_json={
+			"status": "in_progress",
+			"justification": "wave verified",
+			"assessment": "ok",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	prompt = result["judge_prompt"]
+	assert "--- PR #77 (Issue #10) ---" in prompt
+	assert "ordinary small diff" in prompt
+	assert "[NOTE: PR diff" not in prompt
+	assert "Judge context: PR #77" not in result["stdout"]
+	assert "JUDGE_PR_DIFF_MAX_BYTES=65536, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=524288" in result["stdout"]
 
 
 def test_judge_repeat_fingerprint_penalty_is_suppressed_after_harness_error():
@@ -13485,6 +16729,79 @@ def test_retrigger_review_redispatches_when_last_autofix_concluded_failure():
 		f"expected review_autofix redispatch for PR 77 after last run concluded failure; "
 		f"got: {result.get('review_dispatches')}"
 	)
+
+
+def test_retrigger_review_skips_merge_train_queued_pr_without_consuming_stall_budget():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 87},
+		prs=[
+			{
+				"number": 87,
+				"body": "Closes #10",
+				"state": "open",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"headSha": "sha87",
+				"baseRefName": "main",
+				"labels": ["ai:merge-queued"],
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0
+	assert result.get("git_push_calls", []) == []
+	assert result["review_dispatches"] == []
+	assert "reason=merge_train_queued pr=87 phase=ai:done action=retrigger_review" in result["stdout"]
+
+
+def test_managed_stall_recovery_reconciles_merged_pr_with_stale_merge_train_label():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 88},
+		prs=[{
+			"number": 88,
+			"body": "Closes #10",
+			"state": "closed",
+			"merged": True,
+			"merged_at": "2026-09-07T21:30:00Z",
+			"headRefName": "ai/issue-10",
+			"labels": ["ai:merge-queued"],
+		}],
+	)
+	assert "ai:merged" in result["issues"]["10"]["labels"]
+	assert "ai:done" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["status"] == "merged"
+	assert "reason=merge_train_queued pr=88" not in result["stdout"]
+
+
+def test_linked_pr_graphql_queries_request_full_label_page():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	candidate_helper = script.split("_fetch_candidate_issue_details_graphql()", 1)[1].split("_fetch_linked_pr_status_graphql()", 1)[0]
+	linked_status_helper = script.split("_fetch_linked_pr_status_graphql()", 1)[1].split("_single_issue_linked_pr_status_graphql()", 1)[0]
+	assert "labels(first: 100) { nodes { name } }" in candidate_helper
+	assert "labels(first: 100) { nodes { name } }" in linked_status_helper
 
 
 def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure():
@@ -19162,6 +22479,7 @@ def _run_selected_tests(
 ) -> int:
 	passed = 0
 	failed = 0
+	skipped = 0
 	results: list[tuple[str, int, str]] = []
 	runner_output = sys.stdout
 	for func in test_funcs:
@@ -19202,6 +22520,9 @@ def _run_selected_tests(
 		status = "pass"
 		try:
 			func()
+		except unittest.SkipTest as exc:
+			failure = exc
+			status = "skip"
 		except Exception as exc:
 			failure = exc
 			status = "fail"
@@ -19220,7 +22541,10 @@ def _run_selected_tests(
 		elapsed_ms = _test_elapsed_ms(started_at)
 		results.append((name, elapsed_ms, status))
 		_emit_test_runner_event("complete", name, elapsed_ms, status, runner_output)
-		if failure is None:
+		if status == "skip":
+			print(f"  SKIP  {name}: {failure}", file=runner_output, flush=True)
+			skipped += 1
+		elif failure is None:
 			print(f"  PASS  {name}", file=runner_output, flush=True)
 			passed += 1
 		else:
@@ -19235,8 +22559,11 @@ def _run_selected_tests(
 			"slowest", name, elapsed_ms, status, runner_output, rank=rank
 		)
 
+	summary = f"{passed} passed, {failed} failed"
+	if skipped:
+		summary += f", {skipped} skipped"
 	print(
-		f"\n{passed} passed, {failed} failed, {passed + failed} total",
+		f"\n{summary}, {passed + failed + skipped} total",
 		file=runner_output,
 		flush=True,
 	)
@@ -19257,10 +22584,13 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	def synthetic_failure():
 		raise RuntimeError("synthetic failure")
 
+	def synthetic_skip():
+		raise unittest.SkipTest("synthetic skip")
+
 	output = io.StringIO()
 	with contextlib.redirect_stdout(output):
 		exit_code = _run_selected_tests(
-			[synthetic_fast, synthetic_slow, synthetic_failure],
+			[synthetic_fast, synthetic_slow, synthetic_failure, synthetic_skip],
 			heartbeat_interval_sec=0.005,
 			slowest_limit=2,
 		)
@@ -19270,7 +22600,8 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	assert "  PASS  synthetic_fast" in lines
 	assert "  PASS  synthetic_slow" in lines
 	assert "  FAIL  synthetic_failure: synthetic failure" in lines
-	assert lines[-1] == "2 passed, 1 failed, 3 total"
+	assert "  SKIP  synthetic_skip: synthetic skip" in lines
+	assert lines[-1] == "2 passed, 1 failed, 1 skipped, 4 total"
 
 	events = [
 		json.loads(line.removeprefix(_TEST_RUNNER_EVENT_PREFIX))
@@ -19281,6 +22612,7 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 		("synthetic_fast", "pass"),
 		("synthetic_slow", "pass"),
 		("synthetic_failure", "fail"),
+		("synthetic_skip", "skip"),
 	):
 		test_events = [
 			event
@@ -19315,7 +22647,7 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	)
 	synthetic_thread_names = {
 		f"{_TEST_RUNNER_HEARTBEAT_THREAD_PREFIX}{test_name}"
-		for test_name in ("synthetic_fast", "synthetic_slow", "synthetic_failure")
+		for test_name in ("synthetic_fast", "synthetic_slow", "synthetic_failure", "synthetic_skip")
 	}
 	assert not any(
 		thread.name in synthetic_thread_names

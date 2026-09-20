@@ -16,6 +16,8 @@ from typing import Any
 
 CONTRACT_PATH_RE = re.compile(r"^db/contracts/[^/]+\.ya?ml$")
 LIST_ITEM_RE = re.compile(r"^([ \t]+)- \S.*(?:\r?\n)?$")
+# Compatibility constant retained for the captured issue #3966 contract.
+TOP_LEVEL_KEY_RE = re.compile(r"^([^\s:#][^:]*):(?:\s*(?:#.*)?)?(?:\r?\n)?$")
 MARKER_RE = re.compile(r"^(?:<<<<<<<|=======|>>>>>>>)", re.MULTILINE)
 ALLOWED_KEYS = {"read_entrypoints", "write_entrypoints"}
 MAX_INPUT_BYTES = 1_048_576

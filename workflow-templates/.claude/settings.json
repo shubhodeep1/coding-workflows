@@ -40,6 +40,16 @@
             "timeout": 90
           }
         ]
+      },
+      {
+        "matcher": "mcp__.*__subscribe_pr_activity",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pr_watch_guard.py",
+            "timeout": 30
+          }
+        ]
       }
     ]
   }

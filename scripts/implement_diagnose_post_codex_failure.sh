@@ -405,7 +405,7 @@ EOF
 fi
 
 DIAGNOSE_MODE_PROMPT="${DIAGNOSE_MODE_PROMPT_TEMPLATE}"
-if [ -s "${DIAGNOSE_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" ]; then
+if ensure_diagnose_asset "${DIAGNOSE_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "scripts/render_prompt.sh"; then
   DIAGNOSE_RENDERED_PROMPT="${RUNTIME_DIR}/mode-implement-diagnose.rendered.txt"
   DIAGNOSE_SERENA_TOOL_HINTS=""
   if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then

@@ -103,6 +103,13 @@ env:
   MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS || '16777216' }}
   MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS || '1677721600' }}
   MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD || '' }}
+  # Resolve base-branch conflicts BEFORE the reviewer/editor spend when the
+  # pre-review merge-topology gate sees a content conflict (default on).
+  PRE_REVIEW_CONFLICT_RESOLVE_ENABLED: ${{ vars.PRE_REVIEW_CONFLICT_RESOLVE_ENABLED || 'true' }}
+  # Merge train: queue an ai/issue-* PR behind older open ai/issue-* PRs on
+  # the same base that edit the same files (scripts/review_merge_train.sh).
+  MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
+  MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
   OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
@@ -188,6 +195,8 @@ env:
   CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'true' }}
   CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}
   CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
+  LEDGER_TOKENS_LOG_MAX_BYTES: ${{ vars.LEDGER_TOKENS_LOG_MAX_BYTES || '1048576' }}
+  LEDGER_EMIT_TIMEOUT_SECONDS: ${{ vars.LEDGER_EMIT_TIMEOUT_SECONDS || '120' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}
   REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
@@ -254,6 +263,7 @@ jobs:
       claude_branch_review: ${{ steps.evaluate.outputs.claude_branch_review }}
       force_full_review_tier: ${{ steps.evaluate.outputs.force_full_review_tier }}
       head_ref: ${{ steps.evaluate.outputs.head_ref }}
+      head_sha: ${{ steps.evaluate.outputs.head_sha }}
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
       post_merge_validate_context_definitely_empty: ${{ steps.evaluate.outputs.post_merge_validate_context_definitely_empty }}
@@ -273,6 +283,14 @@ jobs:
           PR_BODY: ${{ inputs.pr_body }}
           AUTOFIX_SKIP_SELF_TRIGGERED: ${{ vars.AUTOFIX_SKIP_SELF_TRIGGERED }}
           AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
+          # Terminal same-head skip (workflow_dispatch only). Default on;
+          # set vars.AUTOFIX_SKIP_TERMINAL_SAME_HEAD=false to restore the
+          # unconditional re-dispatch behaviour. See the block below.
+          AUTOFIX_SKIP_TERMINAL_SAME_HEAD: ${{ vars.AUTOFIX_SKIP_TERMINAL_SAME_HEAD }}
+          # Same expression as the retrigger_guard step: a stall-poller
+          # force_rb_judge dispatch must never be swallowed by the terminal
+          # same-head skip (it runs only the review-blocked judge).
+          FORCE_RB_JUDGE: ${{ (inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true') && 'true' || 'false' }}
           # Deterministic pre-review skip (CLAUDE.md §4: env vars get defaults).
           # Skip the reviewer panel + editor cycle when:
           #   * AUTOFIX_SKIP_DOC_ONLY=true (default) AND every changed file
@@ -323,6 +341,7 @@ jobs:
           pr_deletions=""
           pr_mergeable=""
           pr_mergeable_state=""
+          pr_head_sha_gate=""
           pr_title_cached="${PR_TITLE:-}"
           pr_body_cached="${PR_BODY:-}"
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -352,11 +371,12 @@ jobs:
             # small-diff branch and adds no new API call for the conflict
             # check.
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
               pr_head_ref="$(printf '%s' "${_pr_gate}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
+              pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
               pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
               pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
               pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
@@ -513,6 +533,193 @@ jobs:
                   fi
                   ;;
               esac
+            fi
+          fi
+
+          # ----- Terminal same-head skip (workflow_dispatch only) -----
+          # The partial-finalize path caps same-head resume rounds at
+          # REVIEW_MAX_RESUME_ROUNDS and marks the cycle terminal
+          # (`resume_state=no_progress` or `round_budget_exhausted`,
+          # `resume_should_continue=false`) in the machine-readable block of
+          # its `<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->` PR comment, keyed on
+          # `head_sha=`. Nothing else in the run can make progress on that
+          # head, yet the review_autofix_sweep cron re-dispatches every open
+          # PR every 30 minutes: after PR #4077 went terminal on 0d30bc69
+          # (2026-09-12T15:55Z) the sweep dispatched ~25 more same-head runs
+          # over the next 12.5 hours, each restoring the cached terminal
+          # state and exiting neutral after ~6 minutes of runner setup.
+          # Skip those dispatches here, before the codex-agent job starts.
+          #
+          # Scope and fail-open rules:
+          #   * workflow_dispatch only. pull_request events either carry a
+          #     new head (the marker no longer matches) or are the
+          #     opened/reopened/ready_for_review events that are never
+          #     skipped; leaving them untouched keeps this guard narrow. A
+          #     reusable workflow retains its caller's `github` context, so
+          #     the sweep's internal-review.yml dispatch reaches this block
+          #     with EVENT_NAME=workflow_dispatch.
+          #   * force_rb_judge dispatches (stall poller) bypass the skip.
+          #   * `[force-review]` in the title or the `force-review` label
+          #     bypasses the skip, mirroring the deterministic-skip override.
+          #   * Only a PR GitHub reports as mergeable=true is skipped: a
+          #     conflicted (or not-yet-computed) PR stays on codex-agent so
+          #     the "Detect merge conflicts" step + resolver can still run
+          #     on the same head.
+          #   * A comments API failure or an unparseable marker logs
+          #     AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED and runs normally.
+          #   * vars.AUTOFIX_SKIP_TERMINAL_SAME_HEAD=false disables the check.
+          # Cost (CLAUDE.md §15): head_sha rides on the existing /pulls fetch
+          # above. The authenticated marker author cannot be derived from that
+          # response or the comments response, so eligible dispatches issue one
+          # GET /user plus one paginated GET /issues/{n}/comments. Both calls
+          # are skipped unless every earlier gate passed and the PR is mergeable.
+          if [ "${SHOULD_RUN}" = "true" ] \
+            && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
+            && [ "${AUTOFIX_SKIP_TERMINAL_SAME_HEAD:-true}" != "false" ] \
+            && [ "${FORCE_RB_JUDGE:-false}" != "true" ] \
+            && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            terminal_force_review="false"
+            if printf '%s' "${pr_title_cached}" | grep -Fq "[force-review]"; then
+              terminal_force_review="true"
+            fi
+            case ",${pr_labels}," in
+              *,force-review,*) terminal_force_review="true" ;;
+            esac
+            if [ "${terminal_force_review}" = "true" ]; then
+              echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate:-unknown} reason=force_review_marker"
+            elif [ "${pr_mergeable}" != "true" ]; then
+              echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate:-unknown} reason=mergeable_not_true mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown}"
+            elif [ -z "${pr_head_sha_gate}" ]; then
+              echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED pr=${PR_NUMBER} head_sha=unknown reason=head_sha_unavailable"
+            else
+              terminal_marker_author_login=""
+              # The existing PR and comments calls do not expose the identity
+              # authenticated by GH_PAT, so this lookup cannot be merged into
+              # either response. Resolve it once for this gate evaluation.
+              if ! terminal_marker_author_login="$(gh api user --jq '.login // ""' 2>/dev/null)"; then
+                terminal_marker_author_login=""
+              fi
+              if [ -z "${terminal_marker_author_login}" ]; then
+                echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=marker_author_unavailable"
+              else
+                # Keep only marker comments (id, author, created_at, body) so
+                # the parser below can authenticate the workflow-owned state.
+                partial_marker_comments_json=""
+                if ! partial_marker_comments_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+                  -f per_page=100 \
+                  --jq '[.[] | select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) | {id: .id, author_login: (.user.login // ""), created_at: (.created_at // ""), body: (.body // "")}]' \
+                  2>/dev/null | jq -c -s 'add // []' 2>/dev/null)"; then
+                  partial_marker_comments_json=""
+                fi
+                if [ -z "${partial_marker_comments_json}" ]; then
+                  echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error"
+                else
+                  terminal_decision=""
+                  if ! terminal_decision="$(PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" GATE_MARKER_AUTHOR_LOGIN="${terminal_marker_author_login}" python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          # Decide whether the newest REVIEW_AUTOFIX_PARTIAL_V1 marker for the
+          # current head SHA says the same-head resume cycle is terminal.
+          # Output is KEY=VALUE lines consumed by the shell below; every value
+          # is reduced to [A-Za-z0-9_.-] so it is safe inside a log line.
+          head_sha = (os.environ.get("GATE_HEAD_SHA") or "").strip().lower()
+          bot_login = (os.environ.get("GATE_BOT_LOGIN") or "").strip().lower()
+          marker_author_login = (os.environ.get("GATE_MARKER_AUTHOR_LOGIN") or "").strip().lower()
+          try:
+              comments = json.loads(os.environ.get("PARTIAL_MARKER_COMMENTS_JSON") or "[]")
+          except (TypeError, ValueError):
+              raise SystemExit(2)
+          if not isinstance(comments, list):
+              raise SystemExit(2)
+
+          field_re = re.compile(r"^\s*([a-z_]+)=(.*?)\s*$")
+
+          def marker_fields(body: object) -> dict[str, str]:
+              fields: dict[str, str] = {}
+              in_block = False
+              for line in str(body or "").splitlines():
+                  if line.strip().startswith("```"):
+                      in_block = not in_block
+                      continue
+                  if not in_block:
+                      continue
+                  match = field_re.match(line)
+                  if match:
+                      fields.setdefault(match.group(1), match.group(2).strip())
+              return fields
+
+          def clean(value: object) -> str:
+              return re.sub(r"[^A-Za-z0-9_.-]", "", str(value or "")) or "unknown"
+
+          latest_key = None
+          latest_fields: dict[str, str] = {}
+          latest_id = ""
+          matching = 0
+          untrusted_markers = 0
+          commit_bot_markers = 0
+          for comment in comments:
+              if not isinstance(comment, dict):
+                  continue
+              fields = marker_fields(comment.get("body"))
+              if fields.get("partial_finalize") != "true":
+                  continue
+              if not head_sha or fields.get("head_sha", "").strip().lower() != head_sha:
+                  continue
+              author_login = str(comment.get("author_login") or "").strip().lower()
+              if not marker_author_login or author_login != marker_author_login:
+                  untrusted_markers += 1
+                  if bot_login and author_login == bot_login:
+                      commit_bot_markers += 1
+                  continue
+              matching += 1
+              try:
+                  comment_id = int(comment.get("id") or 0)
+              except (TypeError, ValueError):
+                  comment_id = 0
+              key = (str(comment.get("created_at") or ""), comment_id)
+              if latest_key is None or key > latest_key:
+                  latest_key = key
+                  latest_fields = fields
+                  latest_id = str(comment_id)
+
+          terminal = "false"
+          if matching and latest_fields.get("resume_should_continue", "").strip().lower() == "false":
+              terminal = "true"
+          print(f"terminal={terminal}")
+          print(f"matching_markers={matching}")
+          print(f"untrusted_markers={untrusted_markers}")
+          print(f"commit_bot_markers={commit_bot_markers}")
+          print(f"resume_state={clean(latest_fields.get('resume_state'))}")
+          print(f"resume_round={clean(latest_fields.get('resume_round'))}")
+          print(f"resume_round_limit={clean(latest_fields.get('resume_round_limit'))}")
+          print(f"marker_comment_id={clean(latest_id)}")
+          PY
+                  )"; then
+                    terminal_decision=""
+                  fi
+                  if [ -z "${terminal_decision}" ]; then
+                    echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=parse_error"
+                  else
+                    terminal_same_head="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "terminal" { print $2 }' | tail -n 1)"
+                    terminal_matching_markers="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "matching_markers" { print $2 }' | tail -n 1)"
+                    terminal_untrusted_markers="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "untrusted_markers" { print $2 }' | tail -n 1)"
+                    terminal_commit_bot_markers="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "commit_bot_markers" { print $2 }' | tail -n 1)"
+                    terminal_resume_state="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_state" { print $2 }' | tail -n 1)"
+                    terminal_resume_round="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_round" { print $2 }' | tail -n 1)"
+                    terminal_resume_round_limit="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_round_limit" { print $2 }' | tail -n 1)"
+                    terminal_marker_comment_id="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "marker_comment_id" { print $2 }' | tail -n 1)"
+                    if [ "${terminal_same_head}" = "true" ]; then
+                      SHOULD_RUN="false"
+                      SKIP_REASON="terminal_same_head"
+                      echo "AUTOFIX_GATE_SKIP reason=terminal_same_head pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} marker_comment_id=${terminal_marker_comment_id} mergeable=${pr_mergeable}"
+                    elif [ "${terminal_matching_markers:-0}" != "0" ] || [ "${terminal_untrusted_markers:-0}" != "0" ]; then
+                      echo "AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} matching_markers=${terminal_matching_markers:-0} untrusted_markers=${terminal_untrusted_markers:-0} commit_bot_markers=${terminal_commit_bot_markers:-0} marker_author_login=${terminal_marker_author_login}"
+                    fi
+                  fi
+                fi
+              fi
             fi
           fi
 
@@ -883,6 +1090,10 @@ jobs:
           # empty value as "unknown" and fall through (the empty string
           # never matches any suppressor regex, so auto-merge runs as before).
           echo "head_ref=${pr_head_ref}" >> "${GITHUB_OUTPUT}"
+          # Bind downstream deterministic-skip merge authorization to the
+          # exact head evaluated by this gate. Consumers fail closed when the
+          # authenticated PR metadata did not provide a head SHA.
+          echo "head_sha=${pr_head_sha_gate}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
           echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
@@ -1134,6 +1345,9 @@ jobs:
       # (invalid PR number); the suppressor treats empty as "unknown" and
       # falls through to the regular auto-merge call.
       PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}
+      # Exact PR head whose diff authorized this deterministic skip. Every
+      # merge-capable path below is bound to it and refuses an empty value.
+      PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
     steps:
       - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
         run: |
@@ -1163,7 +1377,104 @@ jobs:
             gh_retry gh label create "${label}" --repo "${repo}" --color "${color}" --description "${desc}" >/dev/null 2>&1 || true
           }
 
-          # 1) PR-side audit label. Color + description mirror the central
+          write_deterministic_skip_summary()
+          {
+            {
+              echo "## Deterministic skip gate fired"
+              echo ""
+              echo "- **PR:** #${PR_NUMBER}"
+              echo "- **Skip reason:** \`${DET_SKIP_REASON}\`"
+              echo "- **Reviewer panel + editor cycle:** SKIPPED"
+              echo "- **Auto-merge:** ${auto_merge_summary}"
+              echo ""
+              echo "To force a full review on a future run, add the \`force-review\` label to the PR or include \`[force-review]\` in the title, then re-trigger the workflow."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          }
+
+          deterministic_skip_head_is_current()
+          {
+            local ready_label_current_head_sha=""
+            if [ -z "${PR_HEAD_SHA}" ]; then
+              return 1
+            fi
+            # The gate snapshot cannot prove freshness on paths that
+            # intentionally skip gh pr merge, so those paths refresh only the
+            # head SHA instead of adding another call to the normal merge path.
+            if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null)"; then
+              echo "::warning::Could not refresh the current head for PR #${PR_NUMBER}; refusing deterministic-skip merge-authorization labels."
+              return 1
+            fi
+            if [ -z "${ready_label_current_head_sha}" ] || [ "${ready_label_current_head_sha}" != "${PR_HEAD_SHA}" ]; then
+              echo "::warning::PR #${PR_NUMBER} no longer points at gate-observed head ${PR_HEAD_SHA}; refusing deterministic-skip merge-authorization labels for current head ${ready_label_current_head_sha:-unknown}."
+              return 1
+            fi
+            return 0
+          }
+
+          # 1) Authorize auto-merge for the exact head evaluated by the gate.
+          # Merge-authorization labels are applied only after this succeeds, so
+          # a concurrent push cannot leave ai:ready-to-merge on an unreviewed head.
+          auto_merge_ready_labels_allowed="false"
+          auto_merge_summary="disabled by ENABLE_AUTO_MERGE"
+          if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
+            if deterministic_skip_head_is_current; then
+              auto_merge_ready_labels_allowed="true"
+            fi
+            echo "Auto-merge disabled (ENABLE_AUTO_MERGE != true) — leaving PR for manual merge."
+          elif ! [[ "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            auto_merge_summary="REFUSED (gate-observed head SHA unavailable or malformed)"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=head_sha_unavailable"
+            echo "::warning::Gate-observed head SHA is unavailable or malformed for PR #${PR_NUMBER}. Failing closed: refusing deterministic-skip auto-merge enablement without a --match-head-commit guard."
+          elif [ -n "${PR_HEAD_REF}" ] && printf '%s\n' "${PR_HEAD_REF}" | grep -Eq '^auto/forward-merge-stable-'; then
+            # Mirror of the forward-merge-fallback handling in the codex-agent
+            # "Enable auto-merge on PR" step. Defense in depth: a tiny
+            # forward-merge fallback PR (e.g. one that just happens to fall
+            # under AUTOFIX_SKIP_MAX_ADDITIONS / _DELETIONS) short-circuits
+            # through this deterministic-skip-merge path before the codex-agent
+            # path runs, so the same merge-commit auto-merge (or its opt-out)
+            # must be applied here too — otherwise the `--squash --auto` tail
+            # below would strip stable's ancestry. See the longer comment block
+            # on this exact regex in the "Enable auto-merge on PR" step for the
+            # full rationale (promote-main-to-stable.yml ancestry check,
+            # "Create a merge commit" requirement, etc.).
+            if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
+              echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=merge_commit"
+              if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
+                auto_merge_ready_labels_allowed="true"
+                auto_merge_summary="ENABLED (merge commit)"
+                echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
+              else
+                auto_merge_summary="FAILED to enable merge-commit auto-merge (see warnings above)"
+                echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Check that 'Allow merge commits' and 'Allow auto-merge' are enabled in repo settings and branch protection is configured. The PR remains open for manual 'Create a merge commit'."
+              fi
+            else
+              if deterministic_skip_head_is_current; then
+                auto_merge_ready_labels_allowed="true"
+              fi
+              auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
+              echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed on the deterministic-skip path. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
+            fi
+          else
+            echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=squash"
+            if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
+              auto_merge_ready_labels_allowed="true"
+              auto_merge_summary="ENABLED (squash)"
+              echo "Auto-merge enabled. PR will merge once all required checks pass."
+            else
+              auto_merge_summary="FAILED to enable (see warnings above)"
+              echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."
+            fi
+          fi
+
+          if [ "${auto_merge_ready_labels_allowed}" != "true" ]; then
+            echo "Merge authorization was not established for the gate-observed head; skipping ai:review-skipped and ai:ready-to-merge labels."
+            write_deterministic_skip_summary
+            exit 0
+          fi
+
+          # 2) PR-side audit label. Color + description mirror the central
           # catalog in scripts/label_helpers.sh so `ensure_label_exists`
           # produces an identical label regardless of which job creates it
           # first. This job intentionally does not load label_helpers.sh
@@ -1175,7 +1486,7 @@ jobs:
             echo "::warning::Failed to add ai:review-skipped label to PR #${PR_NUMBER}."
           fi
 
-          # 2) Linked-issue resolution: GraphQL `closingIssuesReferences`
+          # 3) Linked-issue resolution: GraphQL `closingIssuesReferences`
           # ONLY. We deliberately do NOT fall back to the body/title regex
           # used by post-merge-validate-dispatch and the codex-agent
           # `Mark linked issues ready to merge` step, because the
@@ -1219,57 +1530,8 @@ jobs:
             echo "No linked issues found via closingIssuesReferences for PR #${PR_NUMBER} — skipping issue labeling. PR will still be labeled ai:review-skipped and auto-merge will be enabled."
           fi
 
-          # 3) Auto-merge (mirrors codex-agent's "Enable auto-merge on PR" step)
-          auto_merge_summary="disabled by ENABLE_AUTO_MERGE"
-          if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
-            echo "Auto-merge disabled (ENABLE_AUTO_MERGE != true) — leaving PR for manual merge."
-          elif [ -n "${PR_HEAD_REF}" ] && printf '%s\n' "${PR_HEAD_REF}" | grep -Eq '^auto/forward-merge-stable-'; then
-            # Mirror of the forward-merge-fallback handling in the codex-agent
-            # "Enable auto-merge on PR" step. Defense in depth: a tiny
-            # forward-merge fallback PR (e.g. one that just happens to fall
-            # under AUTOFIX_SKIP_MAX_ADDITIONS / _DELETIONS) short-circuits
-            # through this deterministic-skip-merge path before the codex-agent
-            # path runs, so the same merge-commit auto-merge (or its opt-out)
-            # must be applied here too — otherwise the `--squash --auto` tail
-            # below would strip stable's ancestry. See the longer comment block
-            # on this exact regex in the "Enable auto-merge on PR" step for the
-            # full rationale (promote-main-to-stable.yml ancestry check,
-            # "Create a merge commit" requirement, etc.).
-            if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
-              echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
-              if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto; then
-                auto_merge_summary="ENABLED (merge commit)"
-                echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
-              else
-                auto_merge_summary="FAILED to enable merge-commit auto-merge (see warnings above)"
-                echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Check that 'Allow merge commits' and 'Allow auto-merge' are enabled in repo settings and branch protection is configured. The PR remains open for manual 'Create a merge commit'."
-              fi
-            else
-              auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
-              echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed on the deterministic-skip path. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
-            fi
-          else
-            echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
-            if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto; then
-              auto_merge_summary="ENABLED (squash)"
-              echo "Auto-merge enabled. PR will merge once all required checks pass."
-            else
-              auto_merge_summary="FAILED to enable (see warnings above)"
-              echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."
-            fi
-          fi
-
           # 4) Workflow run summary
-          {
-            echo "## Deterministic skip gate fired"
-            echo ""
-            echo "- **PR:** #${PR_NUMBER}"
-            echo "- **Skip reason:** \`${DET_SKIP_REASON}\`"
-            echo "- **Reviewer panel + editor cycle:** SKIPPED"
-            echo "- **Auto-merge:** ${auto_merge_summary}"
-            echo ""
-            echo "To force a full review on a future run, add the \`force-review\` label to the PR or include \`[force-review]\` in the title, then re-trigger the workflow."
-          } >> "${GITHUB_STEP_SUMMARY}"
+          write_deterministic_skip_summary
 
   codex-agent:
     needs: gate
@@ -2079,13 +2341,50 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
+          # The path list is hashed into the actions/cache *version*, so it
+          # must be byte-identical across runs. The per-run workspace path
+          # (`<runner.temp>/workspaces/<pr>-<run_id>-<run_attempt>`) is not,
+          # which made every restore miss its predecessor's save. Cache a
+          # run-independent staging dir instead; the adjacent stage-in /
+          # stage-out steps copy between it and the workspace.
           path: |
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
-            ${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_issue_ledger/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_runtime/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
+
+      - name: Stage restored review-issue ledger into workspace
+        if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ -z "${RUNNER_TEMP:-}" ]; then
+            echo "::warning::RUNNER_TEMP is unset; skipping review-issue ledger cache stage-in."
+            exit 0
+          fi
+          ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          if [ -z "${ledger_cache_workspace_root}" ]; then
+            echo "::warning::workspace_path is empty; skipping review-issue ledger cache stage-in."
+            exit 0
+          fi
+          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${PR_NUMBER}"
+          ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
+          ledger_cache_restored_entries=0
+          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
+            if [ -d "${ledger_cache_staging_root}/${ledger_cache_rel}" ]; then
+              mkdir -p "${ledger_cache_workspace_root}/${ledger_cache_rel}"
+              cp -a "${ledger_cache_staging_root}/${ledger_cache_rel}/." "${ledger_cache_workspace_root}/${ledger_cache_rel}/"
+              ledger_cache_restored_entries=$((ledger_cache_restored_entries + 1))
+            fi
+          done
+          if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}" ]; then
+            mkdir -p "$(dirname "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}")"
+            cp -a "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}" "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}"
+            ledger_cache_restored_entries=$((ledger_cache_restored_entries + 1))
+          fi
+          echo "REVIEW_LEDGER_CACHE_STAGE_IN restored_entries=${ledger_cache_restored_entries} staging_root=${ledger_cache_staging_root} workspace_root=${ledger_cache_workspace_root}"
 
       - name: Restore same-head partial resume state
         if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
@@ -2410,6 +2709,11 @@ jobs:
           HEAD_REF="$(jq -r '.headRefName' "${PR_META_FILE}")"
           HEAD_REPO="$(jq -r '.headRepoFullName' "${PR_META_FILE}")"
 
+          # Capture the commit actually checked out before any non-push exit.
+          # Live PR metadata may already point at a newer, unreviewed head.
+          INITIAL_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
+          echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"
+
           if [ -z "${HEAD_REF}" ] || [ "${HEAD_REF}" = "null" ]; then
             echo "Unable to determine PR head branch"
             exit 1
@@ -2544,7 +2848,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
-          FORCE_RB_JUDGE: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge)) && 'true' || 'false' }}
+          FORCE_RB_JUDGE: ${{ (inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true') && 'true' || 'false' }}
           # Orchestrator PR autofix flow (see README §"Orchestrator PR autofix flow"):
           # When enabled, classify the PR by base/head branch for orchestrator-
           # side observability and the orch_final cap bypass:
@@ -3192,12 +3496,46 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: df -h /
 
+      - name: Merge-train gate (queue behind older overlapping PRs)
+        # scripts/review_merge_train.sh gate: an ai/issue-* PR whose changed
+        # files overlap an OLDER open ai/issue-* PR on the same base is
+        # labelled ai:merge-queued and this run soft-exits (via the existing
+        # AUTOFIX_STALE_BASE_SKIP path) instead of spending reviewers, editor
+        # and resolver on a head that the older PR's merge will conflict
+        # again. cancel_on_pr_close.yml (on close) and orchestrate_poll.yml
+        # (every tick) release the queue. Fail-open: any API failure or a
+        # missing script continues to the reviewer path. MERGE_TRAIN_ENABLED
+        # is evaluated by the script (true/1/yes/on, case-insensitive), not
+        # here, so this gate and the release paths in orchestrate_poll.yml /
+        # cancel_on_pr_close.yml read the repo variable the same way.
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CAN_PUSH == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.FORCE_RB_JUDGE != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_merge_train.sh" ]; then
+            echo "::warning::review_merge_train.sh missing from support scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); merge-train gate fail-open."
+            exit 0
+          fi
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
+            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
+          fi
+          _mt_rc=0
+          bash "${SUPPORT_SCRIPTS_DIR}/review_merge_train.sh" gate || _mt_rc=$?
+          if [ "${_mt_rc}" -ne 0 ]; then
+            echo "::warning::review_merge_train.sh gate exited ${_mt_rc}; continuing to reviewer path (fail-open)."
+          fi
+
       - name: Pre-review deterministic merge-topology gate
         # Fail open on ambiguous git/API errors so reviewer/editor work is only
         # skipped for deterministic stale-base or structurally unmergeable PRs.
-        # Ordinary content conflicts continue to the existing late
-        # Detect merge conflicts + resolver path below.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        # Ordinary content conflicts hand off to the Detect merge conflicts +
+        # resolver tail BEFORE the reviewer/editor spend when
+        # PRE_REVIEW_CONFLICT_RESOLVE_ENABLED=true (default); otherwise they
+        # continue to the reviewers and the late resolver path as before.
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_MERGE_QUEUED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
@@ -3451,11 +3789,35 @@ jobs:
               echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=clean_or_up_to_date action=continue"
             fi
           else
-            echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=content_conflict action=continue"
+            # Pre-review conflict resolution (default on): the base already
+            # conflicts with this head, so a reviewer pass (35-96 min on the
+            # 2026-09-07 runs) and an editor commit would only be redone
+            # after the resolver merges the base in. Hand off to the
+            # existing "Detect merge conflicts" -> resolver -> push ->
+            # re-trigger tail now and skip the reviewer/editor phase; the
+            # re-dispatched run reviews the merged head instead.
+            _pre_review_unmerged="$(git ls-files --unmerged 2>/dev/null | awk '{print $4}' | sort -u | paste -sd, - || true)"
+            case "$(printf '%s' "${PRE_REVIEW_CONFLICT_RESOLVE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on)
+                if [ "${CAN_PUSH:-false}" = "true" ]; then
+                  echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=content_conflict action=pre_review_resolve unmerged=${_pre_review_unmerged:-unknown}"
+                  echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"
+                  echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+                  echo "AUTOFIX_PRE_REVIEW_RESOLVE=true" >> "$GITHUB_ENV"
+                  echo "AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED=${_pre_review_unmerged}" >> "$GITHUB_ENV"
+                else
+                  echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=content_conflict action=continue reason=cannot_push unmerged=${_pre_review_unmerged:-unknown}"
+                fi
+                ;;
+              *)
+                echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=content_conflict action=continue reason=pre_review_resolve_disabled unmerged=${_pre_review_unmerged:-unknown}"
+                ;;
+            esac
+            unset _pre_review_unmerged
           fi
 
       - name: Run reviewer models
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         id: reviewers
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3489,7 +3851,7 @@ jobs:
           exit "${reviewers_rc}"
 
       - name: Upload per-reviewer logs (always)
-        if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
@@ -3503,7 +3865,7 @@ jobs:
           retention-days: 7
 
       - name: Post AI Materiality Advisory comment
-        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3562,7 +3924,7 @@ jobs:
           rm -f "${payload}"
 
       - name: Record reviewer consensus candidate in memory (fail-open)
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         run: |
           set +e
 
@@ -3649,7 +4011,7 @@ jobs:
         # GitHub API glitch never silently drops a review.
         # Claude-branch-review mode never runs the editor, so this
         # check (and the API calls it makes) is unnecessary.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         id: pre_editor_stale_base_gate
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3685,13 +4047,13 @@ jobs:
           esac
 
       - name: Switch reasoning effort for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         run: |
           set -euo pipefail
           echo "OpenCode editor attempts use reasoning variant ${EDITOR_REASONING_EFFORT}; no shared config mutation is required."
 
       - name: Setup Serena for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -3718,7 +4080,7 @@ jobs:
           fi
 
       - name: Apply fixes with editor model
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         env:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
@@ -3736,6 +4098,25 @@ jobs:
           # riding along in the commit.
           # Consumer repos use per-file exclusions from scripts/.gitignore
           # so consumer-owned scripts (e.g. scripts/security/*.js) are staged.
+          #
+          # Both repo kinds: record which paths are ALREADY untracked before
+          # the editor runs.  scripts/review_commit_changes.sh uses this in
+          # consumer repos to tell an editor-created file (new since this
+          # snapshot: keep and stage it) from a pre-existing stray or
+          # runtime leftover (remove it).  Without it the consumer cleanup
+          # deleted every new file, which turned any review round whose fix
+          # was a new file (a db/contracts/*.yml contract, a regression
+          # test) into a deterministic EDITOR_CHANGES_LOST dead end
+          # (tele-funtoken-msg-scoring#4287).
+          PRE_EDITOR_UNTRACKED_FILE="${RUNTIME_DIR}/pre_editor_untracked.txt"
+          if git ls-files --others --exclude-standard -z | sort -zu > "${PRE_EDITOR_UNTRACKED_FILE}.tmp" \
+              && mv -f -- "${PRE_EDITOR_UNTRACKED_FILE}.tmp" "${PRE_EDITOR_UNTRACKED_FILE}"; then
+            echo "Pre-editor untracked snapshot captured: $(tr -cd '\0' < "${PRE_EDITOR_UNTRACKED_FILE}" | wc -c | tr -d '[:space:]') paths"
+          else
+            rm -f -- "${PRE_EDITOR_UNTRACKED_FILE}.tmp" "${PRE_EDITOR_UNTRACKED_FILE}"
+            echo "::warning::Pre-editor untracked snapshot capture failed; legacy delete-all fallback will apply."
+          fi
+          echo "PRE_EDITOR_UNTRACKED_FILE=${PRE_EDITOR_UNTRACKED_FILE}" >> "$GITHUB_ENV"
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
             PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
             : > "${PRE_EDITOR_STATE_FILE}"
@@ -3897,7 +4278,7 @@ jobs:
           fi
 
       - name: Decide partial-finalize validation/push safety
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         run: |
           set -euo pipefail
 
@@ -3950,7 +4331,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Commit changes
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         id: commit_changes
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -3959,7 +4340,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
 
       - name: Run interim judge
-        if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         env:
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -3968,7 +4349,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_judge_interim.sh"
 
       - name: Synthesize behavioural smoke
-        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         continue-on-error: true
         env:
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
@@ -3983,19 +4364,58 @@ jobs:
       # any per-round judge-interim artifact above. Runs even if the apply,
       # commit, or interim-judge path failed partway so cross-iteration state
       # remains best-effort and fail-open.
+      - name: Stage review-issue ledger for cache save
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ -z "${RUNNER_TEMP:-}" ]; then
+            echo "::warning::RUNNER_TEMP is unset; skipping review-issue ledger cache stage-out."
+            exit 0
+          fi
+          ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          if [ -z "${ledger_cache_workspace_root}" ]; then
+            echo "::warning::workspace_path is empty; skipping review-issue ledger cache stage-out."
+            exit 0
+          fi
+          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${PR_NUMBER}"
+          ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
+          rm -rf "${ledger_cache_staging_root}"
+          mkdir -p "${ledger_cache_staging_root}"
+          ledger_cache_staged_entries=0
+          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
+            if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
+              mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
+              cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
+              ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+            fi
+          done
+          if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" ]; then
+            mkdir -p "$(dirname "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}")"
+            cp -a "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
+          echo "REVIEW_LEDGER_CACHE_STAGE_OUT staged_entries=${ledger_cache_staged_entries} staging_root=${ledger_cache_staging_root} workspace_root=${ledger_cache_workspace_root}"
+
       - name: Save review-issue ledger
         if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
+          # The path list is hashed into the actions/cache *version*, so it
+          # must be byte-identical across runs. The per-run workspace path
+          # (`<runner.temp>/workspaces/<pr>-<run_id>-<run_attempt>`) is not,
+          # which made every restore miss its predecessor's save. Cache a
+          # run-independent staging dir instead; the adjacent stage-in /
+          # stage-out steps copy between it and the workspace.
           path: |
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
-            ${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_issue_ledger/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_runtime/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Post editor summary comment
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -4125,7 +4545,7 @@ jobs:
         # DID land real source-file edits.  Running this detector against
         # such a commit produces a false-positive EDITOR_CHANGES_LOST alert
         # (bitsafe.io PR #177 / run 25653654000).
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         run: |
           set -euo pipefail
 
@@ -4364,7 +4784,11 @@ jobs:
         # short-circuit independently on `max_iterations_reached != 'true'`,
         # so leaving the env var unset on these runs does not relax any
         # auto-merge safety.
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        # The disposition checks are cheap and must still classify refusal and
+        # recoverable editor failures when too little hard-timeout headroom
+        # remains for the full validation/publish tail. Soft-deadline and
+        # reviewer-phase partial finalizes retain the existing skip behavior.
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true' || (env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))) && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         run: |
           set -euo pipefail
 
@@ -4377,6 +4801,16 @@ jobs:
           # alerts, operators) distinguish "model refused — re-run" from
           # generic "no-op suspicious — manual review".
           EDITOR_NOOP_REFUSAL="false"
+          # Additive recoverable-failure signal (CLAUDE.md §6 — add
+          # alongside, never rename). Set when the summary is the
+          # `recoverable_failure` partial-finalize fallback that
+          # review_apply_fixes.sh writes after every editor attempt
+          # failed (provider/broker error, timeout, empty output). Lets
+          # the Telegram step say "editor failed on every attempt" with
+          # the real provider error instead of the generic "editor
+          # claimed no changes needed" wording, which is wrong for this
+          # case: the editor never produced output at all.
+          EDITOR_NOOP_RECOVERABLE_FAILURE="false"
 
           if [ ! -s "${EDITOR_SUMMARY_FILE:-}" ]; then
             echo "::warning::Editor summary file is missing or empty — editor never produced output."
@@ -4395,15 +4829,47 @@ jobs:
             # When the editor model returns a safety-policy refusal,
             # review_apply_fixes.sh writes "Runtime failure path: -
             # model refused (safety filter)" into the fallback summary
-            # alongside the existing failure markers. Check 1 above
-            # already set EDITOR_NOOP_SUSPICIOUS=true via the existing
-            # markers (which the refusal fallback preserves verbatim for
-            # lockstep — see probably_unnecessary_but_read_if_stuck.md
-            # §20.10). This additive check sets EDITOR_NOOP_REFUSAL=true
-            # so a more specific alert can be surfaced downstream.
+            # (§20.10). Set both flags here because the partial-finalize
+            # refusal summary does not carry Check 1's failure markers,
+            # and Check 2 is skipped when REVIEWERS_SUCCESSFUL=0. The
+            # refusal flag selects the more specific downstream alert.
             if grep -qiE 'model refused \(safety filter\)' "${EDITOR_SUMMARY_FILE}"; then
               echo "::notice::Editor returned a safety-policy refusal — re-run is likely to succeed once the provider-side cache expires."
+              EDITOR_NOOP_SUSPICIOUS="true"
               EDITOR_NOOP_REFUSAL="true"
+            fi
+
+            # ── Check 1c: Detect recoverable-failure partial-finalize sentinel ──
+            # When all editor attempts fail, review_apply_fixes.sh writes
+            # the recoverable_failure partial-finalize summary whose
+            # "Runtime failure path:" line carries the sentinel below.
+            # This is the same class of failure Check 1 exists for (the
+            # editor never completed a validated review), so it sets
+            # EDITOR_NOOP_SUSPICIOUS=true itself instead of relying on
+            # Check 2: Check 2 runs only when REVIEWERS_SUCCESSFUL > 0, and
+            # the editor can run with zero successful reviewers when every
+            # reviewer slot was skipped fail-open (skipped_open /
+            # skipped_unmapped, scripts/review_run_reviewers.sh) — in that
+            # state the summary used to leave EDITOR_NOOP_SUSPICIOUS=false,
+            # so the "Telegram editor-noop-suspicious warning" alert never
+            # fired and the merge-conflict detect/resolver chain gated on
+            # `EDITOR_NOOP_SUSPICIOUS != 'true'` still ran with nothing to
+            # land (§20.10). With reviewers > 0 the result is unchanged
+            # (Check 2 flagged the fallback-only audit section anyway).
+            # The additive flag classifies the cause for the alert.
+            # Observed on PR #4077 (runs 34692519987, 34700918528,
+            # 34702442346): the editor's broker returned HTTP 429 on every
+            # attempt and the operator was told the editor "claimed no
+            # changes needed". The sentinel must stay verbatim in lockstep
+            # with review_apply_fixes.sh (tests/test_review_autofix_editor_noop_cascade_contract.py).
+            # The soft-deadline fallback summary ("partial finalize
+            # requested at the soft deadline before another editor
+            # attempt") is deliberately NOT matched here: it means the run
+            # budget was exhausted, not that the editor failed.
+            if grep -qiE 'partial finalize requested after a recoverable editor failure' "${EDITOR_SUMMARY_FILE}"; then
+              echo "::notice::Editor stopped after a recoverable failure on every attempt — no editor output was produced; see the editor step log for the provider error."
+              EDITOR_NOOP_SUSPICIOUS="true"
+              EDITOR_NOOP_RECOVERABLE_FAILURE="true"
             fi
 
             # ── Check 2: Reviewer audit sanity ──
@@ -4433,6 +4899,7 @@ jobs:
 
           echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
           echo "EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL}" >> "$GITHUB_ENV"
+          echo "EDITOR_NOOP_RECOVERABLE_FAILURE=${EDITOR_NOOP_RECOVERABLE_FAILURE}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
         # The pre-review gate above only short-circuits deterministic stale/
@@ -5026,7 +5493,10 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          # CONFLICT_RESOLVED_ALERT_LEVEL is a step-scoped override for this
+          # one ping (same pattern as PR_PROCESSED_ALERT_LEVEL); it falls back
+          # to the global ALERT_MSG_LEVEL, then DEBUG.
+          ALERT_MSG_LEVEL: ${{ vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -5034,6 +5504,9 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           MSG="Merge conflicts resolved automatically"
+          if [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" = "true" ]; then
+            MSG+=" (pre-review; reviewers re-dispatched on the merged head)"
+          fi
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}"
           if [ -n "${ISSUE_NUM}" ]; then
@@ -5043,6 +5516,37 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
+
+      - name: Enable auto-merge on PR
+        # Clean-review-tail gate: did_commit=false OR LEDGER_ONLY_COMMIT_STRICT=true.
+        # The STRICT flag means "only the review-issue ledger was committed";
+        # the non-strict LEDGER_ONLY_COMMIT also fires on the audit-convergence
+        # branch in scripts/review_commit_changes.sh, which can be true on a
+        # commit that DID land real source-file edits. Reading the loose flag
+        # here caused PR #2542 to auto-merge at the pre-edit head SHA f11d6dc
+        # while the editor's productive commit 005824e (real edits to
+        # review_autofix.yml + README.md) was still local: the auto-merge step
+        # fires before "Push all pending commits" by design (see :4436-4440
+        # comment), and GitHub squashed the old head before the new commit
+        # reached the remote. With STRICT, an audit-converged commit that
+        # contains real edits blocks auto-merge here; the synchronize event
+        # from the deferred push then triggers a fresh review_autofix
+        # iteration on the new tip (the gate job checks
+        # `${AUTOFIX_SKIP_SELF_TRIGGERED:-false}`, so the default is `false`
+        # and the [ai-autofix] synchronize is NOT skipped). The autofix loop now actually "keeps going
+        # until there are no edits" instead of converging on a stale head.
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          # When 'true' (default), forward-merge fallback PRs auto-merge via a
+          # real merge commit instead of being suppressed for manual merge.
+          # See the forward-merge-fallback branch below for the full rationale.
+          FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
+          ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
+          INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
+        run: |
+          bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 
       - name: Mark linked issues ready to merge
         # Clean-review-tail gate: did_commit=false OR LEDGER_ONLY_COMMIT_STRICT=true.
@@ -5055,7 +5559,7 @@ jobs:
         # head f11d6dc while editor commit 005824e was still local) and the
         # docstring at scripts/review_commit_changes.sh:32-41 for the same
         # rationale that already governs EDITOR_CHANGES_LOST at :3315-3326.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        if: "success() && env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true' && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -5210,6 +5714,7 @@ jobs:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
+          ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
           set -euo pipefail
           # Graceful-degradation wrapper.  The judge has two recognised
@@ -5436,36 +5941,6 @@ jobs:
           if ! gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null; then
             echo "::warning::Failed to post review-blocked comment on PR #${PR_NUMBER}."
           fi
-
-      - name: Enable auto-merge on PR
-        # Clean-review-tail gate: did_commit=false OR LEDGER_ONLY_COMMIT_STRICT=true.
-        # The STRICT flag means "only the review-issue ledger was committed";
-        # the non-strict LEDGER_ONLY_COMMIT also fires on the audit-convergence
-        # branch in scripts/review_commit_changes.sh, which can be true on a
-        # commit that DID land real source-file edits. Reading the loose flag
-        # here caused PR #2542 to auto-merge at the pre-edit head SHA f11d6dc
-        # while the editor's productive commit 005824e (real edits to
-        # review_autofix.yml + README.md) was still local: the auto-merge step
-        # fires before "Push all pending commits" by design (see :4436-4440
-        # comment), and GitHub squashed the old head before the new commit
-        # reached the remote. With STRICT, an audit-converged commit that
-        # contains real edits blocks auto-merge here; the synchronize event
-        # from the deferred push then triggers a fresh review_autofix
-        # iteration on the new tip (the gate job checks
-        # `${AUTOFIX_SKIP_SELF_TRIGGERED:-false}`, so the default is `false`
-        # and the [ai-autofix] synchronize is NOT skipped). The autofix loop now actually "keeps going
-        # until there are no edits" instead of converging on a stale head.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
-          # When 'true' (default), forward-merge fallback PRs auto-merge via a
-          # real merge commit instead of being suppressed for manual merge.
-          # See the forward-merge-fallback branch below for the full rationale.
-          FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
-          ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
-        run: |
-          bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 
       - name: Push all pending commits
         # Deferred push: autofix commits and/or conflict resolution commits
@@ -6236,15 +6711,54 @@ jobs:
           echo "AUTOFIX_PARTIAL_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
           echo "AUTOFIX_RESUME_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
 
+      - name: Stage review-issue ledger for partial finalize cache save
+        if: always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ -z "${RUNNER_TEMP:-}" ]; then
+            echo "::warning::RUNNER_TEMP is unset; skipping review-issue ledger cache stage-out."
+            exit 0
+          fi
+          ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          if [ -z "${ledger_cache_workspace_root}" ]; then
+            echo "::warning::workspace_path is empty; skipping review-issue ledger cache stage-out."
+            exit 0
+          fi
+          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${PR_NUMBER}"
+          ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
+          rm -rf "${ledger_cache_staging_root}"
+          mkdir -p "${ledger_cache_staging_root}"
+          ledger_cache_staged_entries=0
+          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
+            if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
+              mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
+              cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
+              ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+            fi
+          done
+          if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" ]; then
+            mkdir -p "$(dirname "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}")"
+            cp -a "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
+          echo "REVIEW_LEDGER_CACHE_STAGE_OUT staged_entries=${ledger_cache_staged_entries} staging_root=${ledger_cache_staging_root} workspace_root=${ledger_cache_workspace_root}"
+
       - name: Save review-issue ledger after partial finalize
         if: always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
+          # The path list is hashed into the actions/cache *version*, so it
+          # must be byte-identical across runs. The per-run workspace path
+          # (`<runner.temp>/workspaces/<pr>-<run_id>-<run_attempt>`) is not,
+          # which made every restore miss its predecessor's save. Cache a
+          # run-independent staging dir instead; the adjacent stage-in /
+          # stage-out steps copy between it and the workspace.
           path: |
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
-            ${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_issue_ledger/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_runtime/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Telegram success
@@ -6439,6 +6953,19 @@ jobs:
               BODY="⚠️ **Editor changes lost** — the editor reported making changes but no commit was produced."
               BODY+=$'\n\n'
               BODY+="Auto-merge has been **blocked**. Automated retry could not continue safely because the retry budget is unavailable or exhausted."
+              # Name the editor-created paths the commit step dropped (with
+              # the policy reason) so the cause is visible on the PR instead
+              # of only deep in the run log.
+              if [ -s "${REVIEW_REMOVED_NEW_FILES_FILE:-}" ]; then
+                BODY+=$'\n\n'
+                BODY+="The commit step removed these newly created paths before staging (path — reason):"
+                BODY+=$'\n'
+                while IFS=$'\t' read -r removed_path removed_reason; do
+                  [ -n "${removed_path}" ] || continue
+                  BODY+="- \`${removed_path}\` — ${removed_reason:-removed}"
+                  BODY+=$'\n'
+                done < <(head -n 20 "${REVIEW_REMOVED_NEW_FILES_FILE}")
+              fi
               BODY+=$'\n'
               BODY+="**Next steps:** re-run the review workflow manually or apply the changes from the editor summary above."
               BODY+=$'\n\n'
@@ -6504,6 +7031,56 @@ jobs:
             BODY+="This is typically transient. Re-running the AI Review workflow after the provider-side prompt cache expires usually clears it; manual review is only needed if the refusal recurs."
             BODY+=$'\n'
             BODY+="Auto-merge has been **blocked**."
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+          elif [ "${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}" = "true" ]; then
+            # Every editor attempt failed and review_apply_fixes.sh wrote
+            # the recoverable_failure partial-finalize summary (validator
+            # Check 1c). The editor produced no output, so "claimed no
+            # changes needed" would misdirect the operator; name the
+            # attempt count and the final attempt's provider error
+            # instead. Observed on PR #4077 (runs 34692519987,
+            # 34700918528, 34702442346): the broker answered HTTP 429 on
+            # every attempt for 21 consecutive runs while the alert kept
+            # asking for a "manual review or re-run". The attempt stderr
+            # files are the editor_attempt_<n>.err copies the retry loop
+            # leaves in PREVIOUS_REVIEWS_DIR; only the final `Error:` line
+            # (or the last opencode level=ERROR value) is quoted, clipped
+            # to 240 characters, never the whole stderr.
+            editor_attempts=0
+            editor_last_error=""
+            if [ -n "${PREVIOUS_REVIEWS_DIR:-}" ] && [ -d "${PREVIOUS_REVIEWS_DIR}" ]; then
+              editor_attempts="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | wc -l | tr -d '[:space:]' || true)"
+              last_err_file="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
+              if [ -n "${last_err_file}" ] && [ -s "${last_err_file}" ]; then
+                editor_last_error="$(grep -aE '^Error: ' "${last_err_file}" | tail -n 1 | tr -d '\r\140' | cut -c1-240 || true)"
+                if [ -z "${editor_last_error}" ]; then
+                  editor_last_error="$(grep -aoE 'level=ERROR .*error="[^"]*"' "${last_err_file}" | tail -n 1 | sed -E 's/.*error="([^"]*)".*/\1/' | tr -d '\140' | cut -c1-240 || true)"
+                fi
+              fi
+            fi
+            [ -n "${editor_last_error}" ] || editor_last_error="not captured — see the editor step log of the linked run"
+            attempts_label="every attempt"
+            if [ "${editor_attempts:-0}" -eq 1 ] 2>/dev/null; then
+              attempts_label="1 attempt"
+            elif [ "${editor_attempts:-0}" -gt 1 ] 2>/dev/null; then
+              attempts_label="all ${editor_attempts} attempts"
+            fi
+            MSG="⚠️ Editor failed on ${attempts_label}: #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="No editor output was produced (recoverable failure). Last provider error: ${editor_last_error}"
+            MSG+=$'\n'
+            MSG+="Auto-merge blocked. Re-dispatch happens automatically; if the same error recurs the cause needs a fix, not a re-run."
+            MSG+=$'\n'
+            MSG+="PR: ${PR_URL}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+
+            BODY="⚠️ **Editor no-op suspicious** — the editor failed on ${attempts_label} and produced no output (recoverable failure), so no fix was applied this pass."
+            BODY+=$'\n\n'
+            BODY+="Last provider error from the final attempt: \`${editor_last_error}\`"
+            BODY+=$'\n\n'
+            BODY+="Auto-merge has been **blocked**. The review run is re-dispatched automatically; if the same error recurs, inspect the editor step log of the linked run — a re-run will not clear a deterministic failure."
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
           else
             MSG="⚠️ Editor no-op suspicious: #${PR_NUMBER}"
@@ -7554,10 +8131,21 @@ jobs:
               editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "failed", "failure_class": "changes_lost"}
           elif bool_env("EDITOR_NOOP_SUSPICIOUS"):
               editor_phase_state = "completed"
+              # Additive classification (CLAUDE.md §6): "refusal" keeps
+              # precedence, "recoverable_failure" is new for the
+              # EDITOR_NOOP_RECOVERABLE_FAILURE flag set by the validator's
+              # Check 1c (every editor attempt failed, no editor output),
+              # and "unexpected_noop" stays the fallback value unchanged.
+              if bool_env("EDITOR_NOOP_REFUSAL"):
+                  editor_noop_failure_class = "refusal"
+              elif bool_env("EDITOR_NOOP_RECOVERABLE_FAILURE"):
+                  editor_noop_failure_class = "recoverable_failure"
+              else:
+                  editor_noop_failure_class = "unexpected_noop"
               editor_slot = {
                   "attempt_count": max(editor_attempt_count, 1),
                   "status": "failed",
-                  "failure_class": "refusal" if bool_env("EDITOR_NOOP_REFUSAL") else "unexpected_noop",
+                  "failure_class": editor_noop_failure_class,
               }
           elif editor_attempt_count > 0 or editor_summary_exists:
               editor_phase_state = "completed"
@@ -7709,6 +8297,11 @@ jobs:
                   return "editor_changes_lost"
               if bool_env("EDITOR_NOOP_SUSPICIOUS") and bool_env("EDITOR_NOOP_REFUSAL"):
                   return "editor_noop_refusal"
+              # Additive outcome (CLAUDE.md §6): refusal keeps precedence
+              # above; the generic editor_noop_suspicious value below is
+              # unchanged for runs without either specific flag.
+              if bool_env("EDITOR_NOOP_SUSPICIOUS") and bool_env("EDITOR_NOOP_RECOVERABLE_FAILURE"):
+                  return "editor_noop_recoverable_failure"
               if bool_env("EDITOR_NOOP_SUSPICIOUS"):
                   return "editor_noop_suspicious"
               if max_iterations_reached and not skip_judge:

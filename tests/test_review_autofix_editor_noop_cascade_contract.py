@@ -33,7 +33,10 @@ prompt copies, and success-path cleanup of the per-attempt prompt file.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -954,10 +957,10 @@ def test_noop_warning_refusal_branch_preserves_poller_literal() -> None:
 	force-merge)."""
 	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
 	body_prefix = f'BODY="{NOOP_WARNING_LITERAL}'
-	assert block.count(body_prefix) == 2, (
-		f"Both branches must keep {body_prefix!r} so the poller recovery "
-		f"sweep still detects refusal-caused noop PRs. Found "
-		f"{block.count(body_prefix)} matching BODY assignment(s)."
+	assert block.count(body_prefix) == 3, (
+		f"All three branches (refusal, recoverable failure, generic) must keep "
+		f"{body_prefix!r} so the poller recovery sweep still detects "
+		f"noop PRs. Found {block.count(body_prefix)} matching BODY assignment(s)."
 	)
 
 
@@ -975,6 +978,280 @@ def test_noop_warning_generic_branch_preserved() -> None:
 		"Generic-branch PR-comment causes list must be preserved (additive "
 		"change)."
 	)
+
+
+RECOVERABLE_FAILURE_SENTINEL_TEXT = "partial finalize requested after a recoverable editor failure"
+RECOVERABLE_FAILURE_VALIDATOR_NOTICE = "::notice::Editor stopped after a recoverable failure on every attempt"
+VALIDATOR_STEP_NAME = "Validate editor no-op disposition"
+
+
+def _step_run_script(block: str) -> str:
+	"""Return the de-indented bash body of a step block's `run: |` key with
+	every `${{ ... }}` expression replaced by a literal placeholder so the
+	body can be executed by bash outside Actions."""
+	marker = "run: |"
+	start = block.find(marker)
+	assert start != -1, "Step block has no `run: |` body."
+	body_lines = block[start + len(marker):].splitlines()[1:]
+	indented = [line for line in body_lines if line.strip()]
+	assert indented, "Step run body is empty."
+	indent = min(len(line) - len(line.lstrip(" ")) for line in indented)
+	script = "\n".join(line[indent:] if line.strip() else "" for line in body_lines)
+	return re.sub(r"\$\{\{[^}]*\}\}", "ACTIONS_EXPR", script) + "\n"
+
+
+def test_validator_sets_editor_noop_recoverable_failure_alongside_suspicious() -> None:
+	"""The validator must set `EDITOR_NOOP_RECOVERABLE_FAILURE` additively
+	alongside `EDITOR_NOOP_SUSPICIOUS` / `EDITOR_NOOP_REFUSAL` (CLAUDE.md §6)
+	and export it via GITHUB_ENV without touching the existing exports."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	assert 'EDITOR_NOOP_RECOVERABLE_FAILURE="false"' in block
+	assert 'echo "EDITOR_NOOP_RECOVERABLE_FAILURE=${EDITOR_NOOP_RECOVERABLE_FAILURE}" >> "$GITHUB_ENV"' in block
+	assert 'echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"' in block
+	assert 'echo "EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL}" >> "$GITHUB_ENV"' in block
+
+
+def test_validator_greps_for_recoverable_failure_sentinel_in_lockstep() -> None:
+	"""Check 1c must grep the exact sentinel that the recoverable_failure
+	fallback summary in review_apply_fixes.sh writes; a paraphrase on
+	either side silently drops the failure-specific alert."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	assert f"grep -qiE '{RECOVERABLE_FAILURE_SENTINEL_TEXT}'" in block
+	assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE in block
+	script = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	assert f"- {RECOVERABLE_FAILURE_SENTINEL_TEXT}" in script, (
+		"review_apply_fixes.sh must keep the recoverable-failure sentinel "
+		"verbatim on the fallback summary's `Runtime failure path:` line."
+	)
+	assert RUNBOOK.read_text(encoding="utf-8").count("EDITOR_NOOP_RECOVERABLE_FAILURE") >= 2
+
+
+def test_validator_check_1c_sets_suspicious_without_touching_check_1() -> None:
+	"""Check 1c must set `EDITOR_NOOP_SUSPICIOUS="true"` itself (the editor
+	can run with REVIEWERS_SUCCESSFUL=0, where Check 2 is skipped), while the
+	refusal Check 1b must independently set SUSPICIOUS for the same zero-reviewer
+	case. The Check 1 regex and warning literal stay byte-for-byte (CLAUDE.md
+	§6). The soft-deadline fallback sentinel must not be grepped: it means
+	budget exhaustion, not an editor failure."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	check_1b_start = block.index("Check 1b: Detect refusal-specific sentinel")
+	check_1c_start = block.index("Check 1c: Detect recoverable-failure partial-finalize sentinel")
+	check_1b_segment = block[check_1b_start:check_1c_start]
+	check_2_start = block.index("Check 2: Reviewer audit sanity", check_1c_start)
+	check_1c_segment = block[check_1c_start:check_2_start]
+	assert f"grep -qiE '{REFUSAL_SENTINEL_TEXT.replace('(', chr(92) + '(').replace(')', chr(92) + ')')}'" in check_1b_segment
+	assert 'EDITOR_NOOP_SUSPICIOUS="true"' in check_1b_segment
+	assert 'EDITOR_NOOP_REFUSAL="true"' in check_1b_segment
+	assert f"grep -qiE '{RECOVERABLE_FAILURE_SENTINEL_TEXT}'" in check_1c_segment
+	assert 'EDITOR_NOOP_SUSPICIOUS="true"' in check_1c_segment
+	assert 'EDITOR_NOOP_RECOVERABLE_FAILURE="true"' in check_1c_segment
+	assert "partial finalize requested at the soft deadline" not in check_1c_segment.split("grep -qiE")[1].split("\n")[0]
+	assert "grep -qiE 'editor failed before producing|unavailable \\(editor fallback\\)'" in block
+	assert VALIDATOR_WARNING_LITERAL in block
+	assert 'if [ "${EDITOR_NOOP_SUSPICIOUS}" = "false" ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then' in block
+
+
+def test_validator_gate_runs_for_editor_partial_finalize_without_validation_tail() -> None:
+	"""The workflow gate must keep cheap editor-summary classification reachable
+	when a late refusal or recoverable failure leaves too little time for the
+	validation tail, without reclassifying soft-deadline budget exhaustion."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	if_line = next(line.strip() for line in block.splitlines() if line.strip().startswith("if:"))
+	gate_start = if_line.index("(env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED")
+	gate_end = if_line.index(" && env.AUTOFIX_RESUME_TERMINAL", gate_start)
+	partial_finalize_gate = if_line[gate_start:gate_end]
+	gate_cases = (
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure"}, True),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "refusal"}, True),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline"}, False),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "reviewers", "AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure"}, False),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "true", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "reviewers", "AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline"}, True),
+	)
+	for gate_env, expected_result in gate_cases:
+		def replace_gate_comparison(match: re.Match[str]) -> str:
+			actual_value = gate_env[match.group(1)]
+			return str(actual_value == match.group(3) if match.group(2) == "==" else actual_value != match.group(3))
+
+		python_gate = re.sub(r"env\.([A-Z0-9_]+)\s*(==|!=)\s*'([^']*)'", replace_gate_comparison, partial_finalize_gate)
+		python_gate = python_gate.replace("||", "or").replace("&&", "and")
+		assert re.fullmatch(r"[() TrueFalsorand]+", python_gate), python_gate
+		assert eval(python_gate, {"__builtins__": {}}, {}) is expected_result, gate_env
+
+
+def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> None:
+	"""Execute the validator step body against the real fallback summary
+	shapes at two reviewer counts.
+
+	REVIEWERS_SUCCESSFUL=6: the recoverable_failure summary is flagged by
+	Check 1c and the refusal summary by Check 1b before Check 2 can run:
+	SUSPICIOUS true for both, only the matching specific flag set.
+
+	REVIEWERS_SUCCESSFUL=0: Check 2 is skipped. The editor still runs in that
+	state when every reviewer slot was skipped fail-open (`skipped_open` /
+	`skipped_unmapped` in scripts/review_run_reviewers.sh exit 0 with
+	REVIEWERS_SUCCESSFUL=0, and the editor step's `if:` has no reviewer-count
+	clause), so Checks 1b and 1c must set SUSPICIOUS=true on their own for the
+	refusal and recoverable_failure summaries — otherwise the Telegram/PR-comment
+	alert never fires and the resolver chain gated on
+	`EDITOR_NOOP_SUSPICIOUS != 'true'` runs with nothing to land."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	script = _step_run_script(block)
+	fixtures = {
+		"recoverable": (
+			"Changes made:\n- none (editor requested partial finalize after a recoverable failure before another validated attempt completed)\n\n"
+			"Review file issue audit:\n- none (editor stopped after a recoverable failure before another validated attempt completed)\n\n"
+			"Regression fingerprint:\n- unavailable (partial finalize after recoverable editor failure)\n\n"
+			f"Runtime failure path:\n- {RECOVERABLE_FAILURE_SENTINEL_TEXT} before another validated attempt\n"
+		),
+		"refusal": (
+			"Changes made:\n- none (editor returned a safety-policy refusal before another validated attempt could complete)\n\n"
+			"Review file issue audit:\n- none (editor stopped after a safety-policy refusal before another validated attempt could complete)\n\n"
+			"Regression fingerprint:\n- unavailable (partial finalize after safety-policy refusal)\n\n"
+			f"Runtime failure path:\n- {REFUSAL_SENTINEL_TEXT}\n"
+		),
+	}
+	expectations = {
+		("recoverable", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+		("refusal", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
+		("recoverable", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+		("refusal", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
+	}
+	for (name, reviewers_successful), expected_exports in expectations.items():
+		case_label = f"{name}@reviewers={reviewers_successful}"
+		summary_file = tmp_path / f"{name}_{reviewers_successful}_summary.txt"
+		summary_file.write_text(fixtures[name], encoding="utf-8")
+		github_env = tmp_path / f"{name}_{reviewers_successful}_github_env"
+		github_env.write_text("", encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", script],
+			cwd=REPO_ROOT,
+			env={
+				"PATH": os.environ["PATH"],
+				"EDITOR_SUMMARY_FILE": str(summary_file),
+				"REVIEWERS_SUCCESSFUL": reviewers_successful,
+				"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+				"GITHUB_ENV": str(github_env),
+			},
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		assert result.returncode == 0, f"validator body failed for {case_label}: {result.stderr}"
+		exported = dict(line.split("=", 1) for line in github_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+		for key, expected in expected_exports.items():
+			assert exported.get(key) == expected, f"{case_label}: expected {key}={expected}, got {exported}"
+		# Check 1's legacy regex must not match either partial-finalize
+		# summary shape: the zero-reviewer recoverable case is flagged by
+		# Check 1c alone, never by the Check 1 warning the e2e poller greps.
+		assert VALIDATOR_WARNING_LITERAL not in result.stdout, case_label
+		if name == "recoverable":
+			assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE in result.stdout, case_label
+			assert REFUSAL_VALIDATOR_NOTICE not in result.stdout, case_label
+		else:
+			assert REFUSAL_VALIDATOR_NOTICE in result.stdout, case_label
+			assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE not in result.stdout, case_label
+
+
+def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_path: Path) -> None:
+	"""Execute the warning step body with stubbed Telegram/GitHub helpers:
+	the recoverable-failure branch must report the attempt count and the
+	final attempt's `Error:` line (clipped) in both the Telegram message and
+	the PR comment, keep the poller literal in the comment, and never quote
+	earlier attempts' errors."""
+	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
+	assert '"${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}" = "true"' in block
+	script = _step_run_script(block)
+	support_dir = tmp_path / "support"
+	support_dir.mkdir()
+	(support_dir / "tg_helpers.sh").write_text(
+		'tg_send_tracked() { printf \'%s\\n\' "$2" > "${TG_CAPTURE_FILE}"; }\n', encoding="utf-8"
+	)
+	(support_dir / "gh_helpers.sh").write_text(
+		'gh_retry() { shift; printf \'%s\\n\' "$@" > "${GH_CAPTURE_FILE}"; }\n', encoding="utf-8"
+	)
+	previous_reviews = tmp_path / "previous_reviews"
+	previous_reviews.mkdir()
+	(previous_reviews / "editor_attempt_1.err").write_text("Error: first attempt failure\n", encoding="utf-8")
+	(previous_reviews / "editor_attempt_2.err").write_text("Error: second attempt failure\n", encoding="utf-8")
+	(previous_reviews / "editor_attempt_3.err").write_text(
+		"opencode_agent_start role=writer\n"
+		'timestamp=2026-09-12T15:54:08.842Z level=ERROR message="stream error" error.error="AI_APICallError: broker request or output-token limit reached"\n'
+		"Error: broker request or `output-token` limit reached\n"
+		"timestamp=2026-09-12T15:54:08.860Z level=INFO message=\"disposing instance\"\n",
+		encoding="utf-8",
+	)
+	tg_capture = tmp_path / "tg.txt"
+	gh_capture = tmp_path / "gh.txt"
+	warning_env = {
+		"PATH": os.environ["PATH"],
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"PREVIOUS_REVIEWS_DIR": str(previous_reviews),
+		"EDITOR_NOOP_SUSPICIOUS": "true",
+		"EDITOR_NOOP_REFUSAL": "false",
+		"EDITOR_NOOP_RECOVERABLE_FAILURE": "true",
+		"PR_NUMBER": "4077",
+		"TG_CAPTURE_FILE": str(tg_capture),
+		"GH_CAPTURE_FILE": str(gh_capture),
+	}
+	result = subprocess.run(
+		["bash", "-eo", "pipefail", "-c", script],
+		cwd=REPO_ROOT,
+		env=warning_env,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert result.returncode == 0, f"warning step body failed: {result.stderr}"
+	telegram_message = tg_capture.read_text(encoding="utf-8")
+	assert "Editor failed on all 3 attempts: #4077" in telegram_message
+	assert "Last provider error: Error: broker request or output-token limit reached" in telegram_message
+	assert "second attempt failure" not in telegram_message
+	assert "Editor claimed no changes needed" not in telegram_message
+	pr_comment = gh_capture.read_text(encoding="utf-8")
+	assert NOOP_WARNING_LITERAL in pr_comment
+	assert "failed on all 3 attempts" in pr_comment
+	assert "broker request or output-token limit reached" in pr_comment
+
+	for editor_attempt_error_file in previous_reviews.glob("editor_attempt_*.err"):
+		editor_attempt_error_file.unlink()
+	(previous_reviews / "editor_attempt_1.err").write_text(
+		'timestamp=2026-09-12T15:54:08.842Z level=ERROR message="stream error" error.error="AI_APICallError: structured `fallback` failure"\n',
+		encoding="utf-8",
+	)
+	result = subprocess.run(
+		["bash", "-eo", "pipefail", "-c", script],
+		cwd=REPO_ROOT,
+		env=warning_env,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert result.returncode == 0, f"warning step failed for structured fallback: {result.stderr}"
+	telegram_message = tg_capture.read_text(encoding="utf-8")
+	assert "Editor failed on 1 attempt: #4077" in telegram_message
+	assert "Last provider error: AI_APICallError: structured fallback failure" in telegram_message
+	pr_comment = gh_capture.read_text(encoding="utf-8")
+	assert "failed on 1 attempt" in pr_comment
+	assert "AI_APICallError: structured fallback failure" in pr_comment
+
+	for editor_attempt_error_file in previous_reviews.glob("editor_attempt_*.err"):
+		editor_attempt_error_file.unlink()
+	result = subprocess.run(
+		["bash", "-eo", "pipefail", "-c", script],
+		cwd=REPO_ROOT,
+		env=warning_env,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert result.returncode == 0, f"warning step failed without stderr artifacts: {result.stderr}"
+	telegram_message = tg_capture.read_text(encoding="utf-8")
+	assert "Editor failed on every attempt: #4077" in telegram_message
+	assert "Last provider error: not captured" in telegram_message
+	pr_comment = gh_capture.read_text(encoding="utf-8")
+	assert NOOP_WARNING_LITERAL in pr_comment
+	assert "failed on every attempt" in pr_comment
+	assert "Last provider error from the final attempt: `not captured" in pr_comment
 
 
 if __name__ == "__main__":
@@ -1009,4 +1286,11 @@ if __name__ == "__main__":
 	test_noop_warning_refusal_branch_emits_refusal_specific_text()
 	test_noop_warning_refusal_branch_preserves_poller_literal()
 	test_noop_warning_generic_branch_preserved()
+	test_validator_sets_editor_noop_recoverable_failure_alongside_suspicious()
+	test_validator_greps_for_recoverable_failure_sentinel_in_lockstep()
+	test_validator_check_1c_sets_suspicious_without_touching_check_1()
+	test_validator_gate_runs_for_editor_partial_finalize_without_validation_tail()
+	with tempfile.TemporaryDirectory() as temporary_test_directory:
+		test_validator_classifies_recoverable_failure_summary(Path(temporary_test_directory))
+		test_noop_warning_step_branches_on_recoverable_failure_with_last_error(Path(temporary_test_directory))
 	print("All EDITOR_NOOP_SUSPICIOUS cascade-guard contract tests passed.")

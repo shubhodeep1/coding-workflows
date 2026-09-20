@@ -120,7 +120,12 @@ security_audit_append_prompt_context() {
 	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
 		if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
 			echo "Audit scope override: INCREMENTAL — explicit diff range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}; the checked-out HEAD may be a non-default branch." || return 1
-			echo "Files changed in the explicit range (every finding MUST cite one of these files):" || return 1
+			if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ]; then
+				echo "Delta re-audit: an earlier audit already covered this range up to commit ${AUDIT_SCOPE_SINCE_SHA}. Only range files changed since that commit, plus files cited by previously reported findings and files written by recent fix cycles, are in scope." || return 1
+				echo "Files in scope (every finding MUST cite one of these files):" || return 1
+			else
+				echo "Files changed in the explicit range (every finding MUST cite one of these files):" || return 1
+			fi
 		else
 			echo "Audit scope: INCREMENTAL — commits ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA} on the default branch." || return 1
 			echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return 1
@@ -138,6 +143,39 @@ security_audit_append_prompt_context() {
 		echo || return 1
 		echo "Project-pass security and money-handling lens:" || return 1
 		cat "${SECURITY_AUDIT_MONEY_LENS_FILE}" || return 1
+		if [ -s "${PRIOR_FINDINGS_PROMPT_FILE}" ]; then
+			echo || return 1
+			echo "Previously reported findings for this project (earlier fix cycles; their fixes have merged into the audited head):" || return 1
+			echo "=== BEGIN UNTRUSTED PRIOR FINDINGS ===" || return 1
+			cat "${PRIOR_FINDINGS_PROMPT_FILE}" || return 1
+			echo "=== END UNTRUSTED PRIOR FINDINGS ===" || return 1
+			echo "Rules for previously reported findings:" || return 1
+			echo "- Verify each one against the current code. If it is still exploitable, re-emit it with the SAME finding_id and the current line number." || return 1
+			echo "- If it is resolved, omit it. Never report a resolved finding again under a new finding_id." || return 1
+			echo "- Report every remaining instance of the same defect class in the scoped files (sibling code paths, other venues, adapters, handlers) as its own finding. The fix loop converges only when a class is cleared, not one line." || return 1
+		fi
+		if [ -s "${FIX_CYCLE_DIFFS_PROMPT_FILE}" ]; then
+			echo || return 1
+			echo "Newly introduced code since the last audit (written by the merged security-fix PR of the previous fix cycle and by any sync merges; the cycle before it is carried over once more). Shown as unified diff hunks per fix cycle:" || return 1
+			echo "=== BEGIN UNTRUSTED FIX-CYCLE CODE ===" || return 1
+			cat "${FIX_CYCLE_DIFFS_PROMPT_FILE}" || return 1
+			echo "=== END UNTRUSTED FIX-CYCLE CODE ===" || return 1
+			echo "Rules for newly introduced code:" || return 1
+			echo "- Audit this code as FRESH attack surface for NEW defect classes. A fix written under time pressure is the most likely place for a hole that no earlier finding describes; a finding here needs its own new finding_id." || return 1
+			echo "- Pay particular attention to readiness and state-transition predicates (is-settled, is-final, can-claim, may-refund, ready-to-pay), money-state transitions (debit, credit, payout, settlement, refund, pool distribution), and idempotency fences (unique keys, tombstones, TTLs, once-only guards) that the fix added or changed. Check that every predicate is complete, that every transition is atomic and authorised, and that every fence actually blocks the retry it exists for." || return 1
+			echo "- Do not limit yourself to the previously reported finding ids or their defect classes. The rules for previously reported findings still apply to those findings; this section adds to them, it does not replace them." || return 1
+			echo "- The hunks are for orientation only. Read the current file for surrounding context before concluding, and cite the current line number in the checked-out file." || return 1
+		fi
+		if [ -s "${WAIVED_FINDINGS_PROMPT_FILE}" ]; then
+			echo || return 1
+			echo "Accepted findings for this project (reviewed and waived as known risks; they are tracked in non-blocking follow-up issues):" || return 1
+			echo "=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===" || return 1
+			cat "${WAIVED_FINDINGS_PROMPT_FILE}" || return 1
+			echo "=== END UNTRUSTED ACCEPTED FINDINGS ===" || return 1
+			echo "Rules for accepted findings:" || return 1
+			echo "- Never report an accepted finding again, neither under its finding_id nor under a new one, for the same location or the same defect at that location." || return 1
+			echo "- An acceptance covers one location. Other locations in the scoped files remain in scope." || return 1
+		fi
 		if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
 			echo || return 1
 			echo "=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===" || return 1
@@ -181,6 +219,78 @@ if { [ -n "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -z "${SECURITY_AUDIT_DIFF_HEAD}" 
 		|| { [ -z "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -n "${SECURITY_AUDIT_DIFF_HEAD}" ]; }; then
 	echo "SECURITY_AUDIT_DIFF_BASE and SECURITY_AUDIT_DIFF_HEAD must be supplied together" >&2
 	exit 1
+fi
+
+# Optional delta narrowing for the explicit range: when set, only files that
+# also changed in SECURITY_AUDIT_DIFF_SINCE..SECURITY_AUDIT_DIFF_HEAD stay in
+# scope, so a re-audit after a merged fix looks at the fix (plus any prior
+# findings, below) instead of re-sampling the whole project range.  The
+# explicit range remains the scope contract: a file changed only by commits
+# that were already on the base side of the range never enters scope.
+SECURITY_AUDIT_DIFF_SINCE="${SECURITY_AUDIT_DIFF_SINCE:-}"
+if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ] && [ -z "${SECURITY_AUDIT_DIFF_BASE}" ]; then
+	echo "SECURITY_AUDIT_DIFF_SINCE requires SECURITY_AUDIT_DIFF_BASE and SECURITY_AUDIT_DIFF_HEAD" >&2
+	exit 1
+fi
+# Optional JSON array of findings reported by earlier audits of the same
+# project (findings-json mode only).  Their files are added to the audit
+# scope and the list is appended to the prompt so the model verifies each one
+# against the current code and reports remaining instances of the same class
+# instead of re-discovering the project from scratch.
+SECURITY_AUDIT_PRIOR_FINDINGS="${SECURITY_AUDIT_PRIOR_FINDINGS:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+	echo "SECURITY_AUDIT_PRIOR_FINDINGS is only valid in findings-json mode" >&2
+	exit 1
+fi
+# Optional JSON array of findings that an operator (`/security-pass-waive`) or
+# the orchestrator's security-pass exhaustion judge accepted as known risks
+# for the audited project (findings-json mode only).  They are appended to the
+# prompt as accepted findings the model must not report again, and the
+# post-filter drops any re-report deterministically: an exact `finding_id`
+# match, or the same file and category within
+# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line (model-generated
+# ids drift between runs and fix commits move lines).  Counted as
+# `suppressed_waived`.  Malformed input fails closed like prior findings.
+SECURITY_AUDIT_WAIVED_FINDINGS="${SECURITY_AUDIT_WAIVED_FINDINGS:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
+	echo "SECURITY_AUDIT_WAIVED_FINDINGS is only valid in findings-json mode" >&2
+	exit 1
+fi
+SECURITY_AUDIT_WAIVER_LINE_WINDOW="${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}"
+if ! [[ "${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" =~ ^[0-9]+$ ]]; then
+	echo "SECURITY_AUDIT_WAIVER_LINE_WINDOW must be a non-negative integer" >&2
+	exit 1
+fi
+# Optional JSON array of fix-cycle diff entries (findings-json mode only),
+# produced by the orchestrator from the local checkout:
+#   [{"cycle": <int>, "since_sha": "<sha>", "head_sha": "<sha>", "files": [..]}]
+# Each entry describes the code one security-fix cycle wrote (the commits
+# between the head audited before the fix merged and the head audited after
+# it).  Its files join the audit scope and its added/modified hunks are
+# appended to the prompt as newly introduced code the model must audit as
+# fresh attack surface for NEW defect classes -- not only for the previously
+# reported finding ids.  Without this, re-audits verified the old findings
+# and looked for more of the same class, so tele-funtoken-msg-scoring#4281
+# exhausted its budget on a readiness predicate that cycle 1's fix created
+# and cycles 2 and 3 never audited as new code.  Hunks are capped by
+# SECURITY_AUDIT_FIX_DIFF_MAX_LINES / SECURITY_AUDIT_FIX_DIFF_MAX_BYTES;
+# over the cap the remaining files are listed by name only.  Everything here
+# fails OPEN: a missing or malformed file, an unresolvable SHA, or a git
+# failure logs a warning and the audit runs exactly as it did before.
+SECURITY_AUDIT_FIX_CYCLE_DIFFS="${SECURITY_AUDIT_FIX_CYCLE_DIFFS:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
+	echo "SECURITY_AUDIT_FIX_CYCLE_DIFFS is only valid in findings-json mode" >&2
+	exit 1
+fi
+SECURITY_AUDIT_FIX_DIFF_MAX_LINES="${SECURITY_AUDIT_FIX_DIFF_MAX_LINES:-1200}"
+if ! [[ "${SECURITY_AUDIT_FIX_DIFF_MAX_LINES}" =~ ^[0-9]+$ ]]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_FIX_DIFF_MAX_LINES must be a non-negative integer; defaulting to 1200"
+	SECURITY_AUDIT_FIX_DIFF_MAX_LINES="1200"
+fi
+SECURITY_AUDIT_FIX_DIFF_MAX_BYTES="${SECURITY_AUDIT_FIX_DIFF_MAX_BYTES:-96000}"
+if ! [[ "${SECURITY_AUDIT_FIX_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_FIX_DIFF_MAX_BYTES must be a non-negative integer; defaulting to 96000"
+	SECURITY_AUDIT_FIX_DIFF_MAX_BYTES="96000"
 fi
 
 # Skip the whole audit when HEAD matches the last audited commit recorded on
@@ -300,6 +410,16 @@ TRACKER_BODY_WITH_SHA_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-issue-body-wit
 SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/security-money-lens.txt"
 SECURITY_AUDIT_MONEY_LENS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/rendered-security-money-lens.txt"
 FINDINGS_PACKAGE_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/findings-package-error.txt"
+DELTA_CHANGED_FILES_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/delta-changed-files.txt"
+PRIOR_FINDINGS_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-scope.txt"
+PRIOR_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-prompt.txt"
+PRIOR_FINDINGS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-error.txt"
+WAIVED_FINDINGS_NORMALIZED_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings.json"
+WAIVED_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings-prompt.txt"
+WAIVED_FINDINGS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings-error.txt"
+FIX_CYCLE_DIFFS_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/fix-cycle-diffs-scope.txt"
+FIX_CYCLE_DIFFS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/fix-cycle-diffs-prompt.txt"
+FIX_CYCLE_DIFFS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/fix-cycle-diffs-error.txt"
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if [ -z "${SECURITY_AUDIT_FINDINGS_OUT}" ]; then
@@ -309,6 +429,18 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	security_audit_require_writable_destination "findings-output-preflight" "${SECURITY_AUDIT_FINDINGS_OUT}"
 	if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
 		security_audit_require_file "project-spec-preflight" "${SECURITY_AUDIT_PROJECT_SPEC_PATH}"
+	fi
+	if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+		security_audit_require_file "prior-findings-preflight" "${SECURITY_AUDIT_PRIOR_FINDINGS}"
+	fi
+	if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
+		security_audit_require_file "waived-findings-preflight" "${SECURITY_AUDIT_WAIVED_FINDINGS}"
+	fi
+	if [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ] && [ ! -f "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
+		# Fail open (unlike prior/waived findings): the newly-introduced-code
+		# section is an aid, never a gate, so its absence must not stop the audit.
+		echo "::warning::security-audit: SECURITY_AUDIT_FIX_CYCLE_DIFFS file is missing; the audit runs without the newly introduced code section"
+		SECURITY_AUDIT_FIX_CYCLE_DIFFS=""
 	fi
 fi
 
@@ -446,6 +578,32 @@ if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
 	fi
 	AUDIT_SCOPE_MODE="incremental"
 	AUDIT_SCOPE_REASON="${CHANGED_FILE_COUNT} files in explicit range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}"
+	if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ]; then
+		# Delta narrowing: keep only range files that also changed since the
+		# last audited commit.  Fails closed on an unusable SINCE commit so a
+		# stale or rewritten pointer never silently widens or empties scope.
+		if ! AUDIT_SCOPE_SINCE_SHA="$(git rev-parse --verify --end-of-options "${SECURITY_AUDIT_DIFF_SINCE}^{commit}" 2>/dev/null)"; then
+			security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_SINCE}" "SECURITY_AUDIT_DIFF_SINCE does not resolve to a commit"
+			exit 1
+		fi
+		if ! git merge-base --is-ancestor "${AUDIT_SCOPE_SINCE_SHA}" "${AUDIT_SCOPE_HEAD_SHA}" 2>/dev/null; then
+			security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_SINCE}..${SECURITY_AUDIT_DIFF_HEAD}" "SECURITY_AUDIT_DIFF_SINCE is not an ancestor of the diff head"
+			exit 1
+		fi
+		if ! git diff --name-only "${AUDIT_SCOPE_SINCE_SHA}..${AUDIT_SCOPE_HEAD_SHA}" -- > "${DELTA_CHANGED_FILES_FILE}"; then
+			security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_SINCE}..${SECURITY_AUDIT_DIFF_HEAD}" "unable to derive delta changed-file scope"
+			exit 1
+		fi
+		if ! grep -Fxf "${DELTA_CHANGED_FILES_FILE}" "${CHANGED_FILES_FILE}" > "${CHANGED_FILES_FILE}.delta" 2>/dev/null; then
+			# grep exits 1 on an empty intersection; that is a legitimate
+			# (narrow) scope, not an error.
+			: > "${CHANGED_FILES_FILE}.delta"
+		fi
+		mv "${CHANGED_FILES_FILE}.delta" "${CHANGED_FILES_FILE}"
+		DELTA_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" 2>/dev/null || true)"
+		[[ "${DELTA_FILE_COUNT}" =~ ^[0-9]+$ ]] || DELTA_FILE_COUNT=0
+		AUDIT_SCOPE_REASON="${DELTA_FILE_COUNT} of ${CHANGED_FILE_COUNT} files in explicit range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA} changed since last audited commit ${AUDIT_SCOPE_SINCE_SHA}"
+	fi
 elif [ -z "${HEAD_SHA}" ]; then
 	AUDIT_SCOPE_REASON="checkout is not a git repository; scope gates fail open to a full audit"
 elif [ -n "${LAST_AUDITED_SHA}" ]; then
@@ -484,6 +642,453 @@ elif [ -n "${LAST_AUDITED_SHA}" ]; then
 	fi
 fi
 echo "security-audit: scope=${AUDIT_SCOPE_MODE} (${AUDIT_SCOPE_REASON})"
+
+# --- Prior findings: extend scope + render the prompt section ---------------
+# Findings reported by earlier audits of this project keep their files in
+# scope (so a still-present finding can be re-emitted through the incremental
+# post-filter) and are listed for the model to verify.  Validation fails
+# closed: the file is produced by the orchestrator from its own state, so a
+# malformed one signals a caller bug, not an audit result.
+PRIOR_FINDINGS_COUNT=0
+: > "${PRIOR_FINDINGS_SCOPE_FILE}"
+: > "${PRIOR_FINDINGS_PROMPT_FILE}"
+if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+	if ! PRIOR_FINDINGS_COUNT="$(python3 - \
+		"${REPO_ROOT}" \
+		"${SECURITY_AUDIT_PRIOR_FINDINGS}" \
+		"${PRIOR_FINDINGS_SCOPE_FILE}" \
+		"${PRIOR_FINDINGS_PROMPT_FILE}" 2> "${PRIOR_FINDINGS_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path, PurePosixPath
+
+repo_root = Path(sys.argv[1]).resolve()
+prior_findings_path = Path(sys.argv[2])
+scope_path = Path(sys.argv[3])
+prompt_path = Path(sys.argv[4])
+
+try:
+	prior_findings = json.loads(prior_findings_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+	raise SystemExit(f"unable to load prior findings: {exc}")
+if not isinstance(prior_findings, list):
+	raise SystemExit("prior findings must be a JSON array")
+
+
+def text_field(finding: dict, key: str) -> str:
+	value = finding.get(key)
+	if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+		return ""
+	sanitized_prompt_value = " ".join(str(value).split()).replace("`", "")
+	for untrusted_fence in (
+		"=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ===",
+		"=== BEGIN UNTRUSTED FIX-CYCLE CODE ===", "=== END UNTRUSTED FIX-CYCLE CODE ===",
+		"=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ===",
+	):
+		sanitized_prompt_value = sanitized_prompt_value.replace(untrusted_fence, "[untrusted marker removed]")
+	return sanitized_prompt_value
+
+
+scope_files: list[str] = []
+prompt_lines: list[str] = []
+for index, finding in enumerate(prior_findings):
+	if not isinstance(finding, dict):
+		raise SystemExit(f"prior finding #{index} must be an object")
+	file_value = finding.get("file")
+	if not isinstance(file_value, str) or not file_value.strip():
+		raise SystemExit(f"prior finding #{index} is missing its file")
+	relative_file_path = PurePosixPath(file_value.strip())
+	if relative_file_path.is_absolute() or ".." in relative_file_path.parts:
+		raise SystemExit(f"prior finding #{index} cites a non-repository path")
+	relative_file = relative_file_path.as_posix()
+	if not relative_file or relative_file == ".":
+		raise SystemExit(f"prior finding #{index} cites a non-repository path")
+	try:
+		resolved = (repo_root / relative_file).resolve()
+		resolved.relative_to(repo_root)
+	except (OSError, ValueError):
+		raise SystemExit(f"prior finding #{index} cites a path outside the repository")
+	# A deleted file cannot carry a finding any more; it stays in the prompt
+	# list (the model may confirm the removal) but never enters scope.
+	if resolved.is_file() and relative_file not in scope_files:
+		scope_files.append(relative_file)
+	finding_id = text_field(finding, "finding_id") or f"prior-finding-{index + 1}"
+	line_value = finding.get("line")
+	location = relative_file
+	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
+		location = f"{relative_file}:{line_value}"
+	cycle_value = finding.get("cycle")
+	cycle_note = ""
+	if isinstance(cycle_value, int) and not isinstance(cycle_value, bool) and cycle_value > 0:
+		cycle_note = f" (reported in fix cycle {cycle_value})"
+	prompt_lines.append(
+		"- `{id}`{cycle} | {category} | {severity} | confidence {confidence} | {location}\n"
+		"  Exploit scenario: {exploit}\n"
+		"  Recommendation given: {recommendation}".format(
+			id=finding_id,
+			cycle=cycle_note,
+			category=text_field(finding, "owasp_or_stride_category") or "uncategorised",
+			severity=text_field(finding, "severity") or "unknown",
+			confidence=text_field(finding, "confidence") or "?",
+			location=location,
+			exploit=text_field(finding, "exploit_scenario") or "(not recorded)",
+			recommendation=text_field(finding, "recommendation") or "(not recorded)",
+		)
+	)
+
+scope_path.write_text("".join(f"{path}\n" for path in scope_files), encoding="utf-8")
+prompt_path.write_text("".join(f"{line}\n" for line in prompt_lines), encoding="utf-8")
+print(len(prior_findings))
+PY
+	)"; then
+		security_audit_emit_path_diagnostic "${PRIOR_FINDINGS_ERROR_FILE}"
+		security_audit_emit_failure "prior-findings" "${SECURITY_AUDIT_PRIOR_FINDINGS}" "$(head -n1 "${PRIOR_FINDINGS_ERROR_FILE}" 2>/dev/null || echo 'prior findings could not be processed')"
+		exit 1
+	fi
+	[[ "${PRIOR_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || PRIOR_FINDINGS_COUNT=0
+	PRIOR_FINDINGS_SCOPE_COUNT="$(grep -c . "${PRIOR_FINDINGS_SCOPE_FILE}" 2>/dev/null || true)"
+	[[ "${PRIOR_FINDINGS_SCOPE_COUNT}" =~ ^[0-9]+$ ]] || PRIOR_FINDINGS_SCOPE_COUNT=0
+	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ] && [ "${PRIOR_FINDINGS_SCOPE_COUNT}" -gt 0 ]; then
+		cat "${CHANGED_FILES_FILE}" "${PRIOR_FINDINGS_SCOPE_FILE}" | grep . | sort -u > "${CHANGED_FILES_FILE}.union"
+		mv "${CHANGED_FILES_FILE}.union" "${CHANGED_FILES_FILE}"
+	fi
+	echo "security-audit: prior-findings=${PRIOR_FINDINGS_COUNT} (${PRIOR_FINDINGS_SCOPE_COUNT} cited files kept in scope)"
+fi
+
+# --- Fix-cycle diffs: extend scope + render newly introduced code ------------
+# Each entry names the code one fix cycle wrote (since_sha..head_sha, files).
+# Files join the incremental scope so a hole in a file that no finding ever
+# cited stays auditable for one more cycle, and the added/modified hunks are
+# rendered for the prompt under the line/byte caps.  Everything fails open: a
+# broken entry is skipped with a warning and the audit proceeds without it.
+FIX_CYCLE_DIFFS_SUMMARY=""
+: > "${FIX_CYCLE_DIFFS_SCOPE_FILE}"
+: > "${FIX_CYCLE_DIFFS_PROMPT_FILE}"
+if [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
+	if FIX_CYCLE_DIFFS_SUMMARY="$(python3 - \
+		"${REPO_ROOT}" \
+		"${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" \
+		"${FIX_CYCLE_DIFFS_SCOPE_FILE}" \
+		"${FIX_CYCLE_DIFFS_PROMPT_FILE}" \
+		"${SECURITY_AUDIT_FIX_DIFF_MAX_LINES}" \
+		"${SECURITY_AUDIT_FIX_DIFF_MAX_BYTES}" 2> "${FIX_CYCLE_DIFFS_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+
+repo_root = Path(sys.argv[1]).resolve()
+entries_path = Path(sys.argv[2])
+scope_path = Path(sys.argv[3])
+prompt_path = Path(sys.argv[4])
+max_lines = int(sys.argv[5])
+max_bytes = int(sys.argv[6])
+
+SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+FENCES = (
+	"=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ===",
+	"=== BEGIN UNTRUSTED FIX-CYCLE CODE ===", "=== END UNTRUSTED FIX-CYCLE CODE ===",
+	"=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ===",
+)
+MAX_FILES_PER_ENTRY = 200
+
+
+def warn(message: str) -> None:
+	print(f"fix-cycle-diffs: {message}", file=sys.stderr)
+
+
+def sanitize(text: str) -> str:
+	for fence in FENCES:
+		text = text.replace(fence, "[untrusted marker removed]")
+	return text
+
+
+def git(*args: str) -> str | None:
+	try:
+		completed = subprocess.run(
+			["git", *args],
+			cwd=repo_root,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			check=False,
+		)
+	except (OSError, ValueError) as exc:
+		warn(f"git {' '.join(args[:2])} failed: {exc}")
+		return None
+	if completed.returncode != 0:
+		return None
+	return completed.stdout
+
+
+def relative_repo_file(index: int, value: object) -> str | None:
+	if not isinstance(value, str) or not value.strip():
+		warn(f"entry #{index} lists a non-string file; skipped")
+		return None
+	candidate = PurePosixPath(value.strip())
+	if candidate.is_absolute() or ".." in candidate.parts:
+		warn(f"entry #{index} lists a non-repository path; skipped")
+		return None
+	relative = candidate.as_posix()
+	if relative.startswith("./"):
+		relative = relative[2:]
+	if not relative or relative == ".":
+		warn(f"entry #{index} lists a non-repository path; skipped")
+		return None
+	try:
+		(repo_root / relative).resolve().relative_to(repo_root)
+	except (OSError, ValueError):
+		warn(f"entry #{index} lists a path outside the repository; skipped")
+		return None
+	return relative
+
+
+try:
+	entries = json.loads(entries_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+	raise SystemExit(f"unable to load fix-cycle diffs: {exc}")
+if not isinstance(entries, list):
+	raise SystemExit("fix-cycle diffs must be a JSON array")
+
+scope_files: list[str] = []
+prompt_blocks: list[str] = []
+entry_count = 0
+hunk_files = 0
+omitted_files = 0
+used_lines = 0
+used_bytes = 0
+over_budget = False
+
+for index, entry in enumerate(entries):
+	if not isinstance(entry, dict):
+		warn(f"entry #{index} is not an object; skipped")
+		continue
+	raw_files = entry.get("files")
+	if not isinstance(raw_files, list):
+		warn(f"entry #{index} has no files array; skipped")
+		continue
+	files: list[str] = []
+	for raw_file in raw_files[:MAX_FILES_PER_ENTRY]:
+		relative = relative_repo_file(index, raw_file)
+		if relative and relative not in files:
+			files.append(relative)
+	if len(raw_files) > MAX_FILES_PER_ENTRY:
+		warn(f"entry #{index} lists {len(raw_files)} files; only the first {MAX_FILES_PER_ENTRY} are used")
+	if not files:
+		warn(f"entry #{index} has no usable files; skipped")
+		continue
+	entry_count += 1
+	cycle = entry.get("cycle")
+	cycle_label = "Head advance after a clean pass"
+	if isinstance(cycle, int) and not isinstance(cycle, bool) and cycle > 0:
+		cycle_label = f"Fix cycle {cycle}"
+	since_sha = entry.get("since_sha")
+	head_sha = entry.get("head_sha")
+	range_ok = False
+	range_note = ""
+	if not (isinstance(since_sha, str) and SHA_RE.match(since_sha) and isinstance(head_sha, str) and SHA_RE.match(head_sha)):
+		range_note = "commit range not recorded; files listed by name"
+		since_sha = head_sha = ""
+	else:
+		since_resolved = git("rev-parse", "--verify", "--end-of-options", f"{since_sha}^{{commit}}")
+		head_resolved = git("rev-parse", "--verify", "--end-of-options", f"{head_sha}^{{commit}}")
+		if since_resolved is None or head_resolved is None:
+			range_note = "commit range does not resolve in this checkout; files listed by name"
+		elif git("merge-base", "--is-ancestor", since_resolved.strip(), head_resolved.strip()) is None:
+			range_note = "recorded since-commit is not an ancestor of the recorded head; files listed by name"
+		else:
+			range_ok = True
+			since_sha = since_resolved.strip()
+			head_sha = head_resolved.strip()
+	if range_note:
+		warn(f"entry #{index} ({cycle_label.lower()}): {range_note}")
+	for relative in files:
+		if (repo_root / relative).is_file() and relative not in scope_files:
+			scope_files.append(relative)
+	header = f"{cycle_label}"
+	if range_ok:
+		header += f" -- commits {since_sha[:12]}..{head_sha[:12]}"
+	header += f"; files: {', '.join(files)}"
+	if range_note:
+		header += f" ({range_note})"
+	lines = [sanitize(header)]
+	if range_ok:
+		for relative in files:
+			diff_text = git(
+				"diff", "--no-color", "--no-ext-diff", "--unified=3", "--diff-filter=AM",
+				f"{since_sha}..{head_sha}", "--", relative,
+			)
+			if diff_text is None:
+				warn(f"entry #{index}: git diff failed for {relative}; listed by name")
+				lines.append(f"--- {relative}: hunks unavailable (git diff failed; file is in scope by name) ---")
+				continue
+			diff_text = sanitize(diff_text.rstrip("\n"))
+			if not diff_text:
+				lines.append(f"--- {relative}: no added or modified hunks in this range ---")
+				continue
+			diff_lines = diff_text.count("\n") + 1
+			diff_bytes = len(diff_text.encode("utf-8"))
+			if over_budget or used_lines + diff_lines > max_lines or used_bytes + diff_bytes > max_bytes:
+				over_budget = True
+				omitted_files += 1
+				lines.append(f"--- {relative}: hunks omitted (size cap reached; file is in scope by name, read it directly) ---")
+				continue
+			used_lines += diff_lines
+			used_bytes += diff_bytes
+			hunk_files += 1
+			lines.append(f"--- {relative} ---")
+			lines.append(diff_text)
+	prompt_blocks.append(sanitize("\n".join(lines)))
+
+if omitted_files:
+	prompt_blocks.append(
+		f"Hunks omitted for {omitted_files} file(s): the fix-cycle diff exceeded the cap "
+		f"(SECURITY_AUDIT_FIX_DIFF_MAX_LINES={max_lines}, SECURITY_AUDIT_FIX_DIFF_MAX_BYTES={max_bytes}). "
+		"Those files are in scope by name; read them directly."
+	)
+	warn(
+		f"hunks omitted for {omitted_files} file(s) over the cap "
+		f"(lines {max_lines}, bytes {max_bytes}); they are in scope by name only"
+	)
+
+scope_path.write_text("".join(f"{path}\n" for path in scope_files), encoding="utf-8")
+prompt_path.write_text("".join(f"{block}\n\n" for block in prompt_blocks), encoding="utf-8")
+print(
+	f"fix-cycle-diffs={entry_count} entries ({len(scope_files)} files kept in scope, "
+	f"hunks for {hunk_files} files: {used_lines} lines, {used_bytes} bytes, {omitted_files} files over the cap)"
+)
+PY
+	)"; then
+		if [ -s "${FIX_CYCLE_DIFFS_ERROR_FILE}" ]; then
+			while IFS= read -r fix_cycle_diffs_warning_line; do
+				[ -n "${fix_cycle_diffs_warning_line}" ] || continue
+				echo "::warning::security-audit: ${fix_cycle_diffs_warning_line}"
+			done < "${FIX_CYCLE_DIFFS_ERROR_FILE}"
+		fi
+		FIX_CYCLE_DIFFS_SCOPE_COUNT="$(grep -c . "${FIX_CYCLE_DIFFS_SCOPE_FILE}" 2>/dev/null || true)"
+		[[ "${FIX_CYCLE_DIFFS_SCOPE_COUNT}" =~ ^[0-9]+$ ]] || FIX_CYCLE_DIFFS_SCOPE_COUNT=0
+		if [ "${AUDIT_SCOPE_MODE}" = "incremental" ] && [ "${FIX_CYCLE_DIFFS_SCOPE_COUNT}" -gt 0 ]; then
+			cat "${CHANGED_FILES_FILE}" "${FIX_CYCLE_DIFFS_SCOPE_FILE}" | grep . | sort -u > "${CHANGED_FILES_FILE}.union"
+			mv "${CHANGED_FILES_FILE}.union" "${CHANGED_FILES_FILE}"
+		fi
+		echo "security-audit: ${FIX_CYCLE_DIFFS_SUMMARY}"
+	else
+		# Fail open: the section is an aid, never a gate.
+		echo "::warning::security-audit: fix-cycle diffs could not be processed ($(head -n1 "${FIX_CYCLE_DIFFS_ERROR_FILE}" 2>/dev/null || echo 'unknown error')); the audit runs without the newly introduced code section"
+		: > "${FIX_CYCLE_DIFFS_SCOPE_FILE}"
+		: > "${FIX_CYCLE_DIFFS_PROMPT_FILE}"
+	fi
+fi
+
+# --- Waived findings: normalize + render the prompt section ----------------
+# Accepted findings never enter scope on their own (they are not to be
+# re-audited); they are listed for the model as accepted and enforced by the
+# post-filter below.  Validation fails closed: the file comes from the
+# orchestrator's own state or an operator command it already validated.
+WAIVED_FINDINGS_COUNT=0
+: > "${WAIVED_FINDINGS_PROMPT_FILE}"
+printf '[]\n' > "${WAIVED_FINDINGS_NORMALIZED_FILE}"
+if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
+	if ! WAIVED_FINDINGS_COUNT="$(python3 - \
+		"${SECURITY_AUDIT_WAIVED_FINDINGS}" \
+		"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
+		"${WAIVED_FINDINGS_PROMPT_FILE}" 2> "${WAIVED_FINDINGS_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path, PurePosixPath
+
+waived_findings_path = Path(sys.argv[1])
+normalized_path = Path(sys.argv[2])
+prompt_path = Path(sys.argv[3])
+
+try:
+	waived_findings = json.loads(waived_findings_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+	raise SystemExit(f"unable to load waived findings: {exc}")
+if not isinstance(waived_findings, list):
+	raise SystemExit("waived findings must be a JSON array")
+
+
+def text_field(finding: dict, key: str) -> str:
+	value = finding.get(key)
+	if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+		return ""
+	sanitized_prompt_value = " ".join(str(value).split()).replace("`", "")
+	for untrusted_fence in (
+		"=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ===",
+		"=== BEGIN UNTRUSTED FIX-CYCLE CODE ===", "=== END UNTRUSTED FIX-CYCLE CODE ===",
+		"=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ===",
+	):
+		sanitized_prompt_value = sanitized_prompt_value.replace(untrusted_fence, "[untrusted marker removed]")
+	return sanitized_prompt_value
+
+
+normalized: list[dict] = []
+prompt_lines: list[str] = []
+for index, finding in enumerate(waived_findings):
+	if not isinstance(finding, dict):
+		raise SystemExit(f"waived finding #{index} must be an object")
+	finding_id = text_field(finding, "finding_id")
+	if not finding_id:
+		raise SystemExit(f"waived finding #{index} is missing its finding_id")
+	relative_file = ""
+	file_value = finding.get("file")
+	if isinstance(file_value, str) and file_value.strip():
+		relative_file_path = PurePosixPath(file_value.strip())
+		if relative_file_path.is_absolute() or ".." in relative_file_path.parts:
+			raise SystemExit(f"waived finding #{index} cites a non-repository path")
+		relative_file = relative_file_path.as_posix()
+		if relative_file.startswith("./"):
+			relative_file = relative_file[2:]
+		if not relative_file or relative_file == ".":
+			raise SystemExit(f"waived finding #{index} cites a non-repository path")
+	line_value = finding.get("line")
+	line_number = 0
+	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
+		line_number = line_value
+	category = text_field(finding, "owasp_or_stride_category")
+	normalized.append(
+		{
+			"finding_id": finding_id,
+			"file": relative_file,
+			"line": line_number,
+			"owasp_or_stride_category": category,
+		}
+	)
+	location = relative_file or "(location not recorded)"
+	if relative_file and line_number:
+		location = f"{relative_file}:{line_number}"
+	prompt_lines.append(
+		"- `{id}` | {category} | {severity} | {location}\n"
+		"  Accepted because: {reason}".format(
+			id=finding_id,
+			category=category or "uncategorised",
+			severity=text_field(finding, "severity") or "unknown",
+			location=location,
+			reason=text_field(finding, "justification") or "(not recorded)",
+		)
+	)
+
+normalized_path.write_text(json.dumps(normalized, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+prompt_path.write_text("".join(f"{line}\n" for line in prompt_lines), encoding="utf-8")
+print(len(normalized))
+PY
+	)"; then
+		security_audit_emit_path_diagnostic "${WAIVED_FINDINGS_ERROR_FILE}"
+		security_audit_emit_failure "waived-findings" "${SECURITY_AUDIT_WAIVED_FINDINGS}" "$(head -n1 "${WAIVED_FINDINGS_ERROR_FILE}" 2>/dev/null || echo 'waived findings could not be processed')"
+		exit 1
+	fi
+	[[ "${WAIVED_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || WAIVED_FINDINGS_COUNT=0
+	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (line window ${SECURITY_AUDIT_WAIVER_LINE_WINDOW})"
+fi
 
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
 SECURITY_AUDIT_PROMPT_PATH="${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"
@@ -576,7 +1181,9 @@ python3 - \
 	"${FILTERED_FINDINGS_FILE}" \
 	"${FILTER_SUMMARY_FILE}" \
 	"${AUDIT_SCOPE_MODE}" \
-	"${CHANGED_FILES_FILE}" <<'PY'
+	"${CHANGED_FILES_FILE}" \
+	"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
+	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -591,6 +1198,8 @@ filtered_findings_path = Path(sys.argv[5])
 summary_path = Path(sys.argv[6])
 audit_scope_mode = sys.argv[7]
 changed_files_path = Path(sys.argv[8])
+waived_findings_path = Path(sys.argv[9])
+waiver_line_window = int(sys.argv[10])
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -781,6 +1390,37 @@ def matching_exclusion_rule(finding: dict[str, object], rules: list[dict[str, ob
 
 raw_findings = load_json(codex_output_path, label="Codex output")
 exclusion_rules = normalize_exclusions(load_json(exclusions_path, label="security-audit exclusions"))
+waived_findings_input = load_json(waived_findings_path, label="waived findings") if waived_findings_path.is_file() else []
+if not isinstance(waived_findings_input, list):
+	fail("waived findings must be a JSON array")
+
+
+def matching_waiver(finding: dict[str, object]) -> str | None:
+	"""Return the waived finding_id this finding re-reports, if any.
+
+	Exact id first; otherwise the same file and category within the line
+	window of the waived line, because the auditor mints a new id on every
+	run and a fix commit shifts the cited line.
+	"""
+	finding_id = str(finding.get("finding_id") or "")
+	finding_file = str(finding.get("file") or "")
+	finding_category = " ".join(str(finding.get("owasp_or_stride_category") or "").lower().split())
+	finding_line = int(finding.get("line") or 0)
+	for waiver in waived_findings_input:
+		if not isinstance(waiver, dict):
+			continue
+		waived_id = str(waiver.get("finding_id") or "")
+		if waived_id and waived_id == finding_id:
+			return waived_id
+		waived_file = str(waiver.get("file") or "")
+		waived_category = " ".join(str(waiver.get("owasp_or_stride_category") or "").lower().split())
+		waived_line = waiver.get("line")
+		if not waived_file or not waived_category or not isinstance(waived_line, int) or isinstance(waived_line, bool) or waived_line < 1:
+			continue
+		if waived_file == finding_file and waived_category == finding_category and abs(waived_line - finding_line) <= waiver_line_window:
+			return waived_id or "(unnamed waiver)"
+	return None
+
 
 if not isinstance(raw_findings, list):
 	fail("security-audit Codex output must be a JSON array")
@@ -790,6 +1430,7 @@ invalid_findings: list[dict[str, str]] = []
 excluded_findings: list[dict[str, str]] = []
 low_confidence_findings: list[str] = []
 out_of_scope_findings: list[str] = []
+waived_findings: list[dict[str, str]] = []
 seen_ids: set[str] = set()
 
 for raw_finding in raw_findings:
@@ -811,6 +1452,10 @@ for raw_finding in raw_findings:
 	rule_id = matching_exclusion_rule(normalized_finding, exclusion_rules)
 	if rule_id is not None:
 		excluded_findings.append({"finding_id": finding_id, "rule_id": rule_id})
+		continue
+	waived_id = matching_waiver(normalized_finding)
+	if waived_id is not None:
+		waived_findings.append({"finding_id": finding_id, "waived_finding_id": waived_id})
 		continue
 	kept_findings.append(normalized_finding)
 
@@ -836,10 +1481,12 @@ summary_path.write_text(
 			"suppressed_excluded": len(excluded_findings),
 			"suppressed_invalid": len(invalid_findings),
 			"suppressed_out_of_scope": len(out_of_scope_findings),
+			"suppressed_waived": len(waived_findings),
 			"low_confidence_finding_ids": low_confidence_findings,
 			"excluded": excluded_findings,
 			"invalid": invalid_findings,
 			"out_of_scope_finding_ids": out_of_scope_findings,
+			"waived": waived_findings,
 		},
 		ensure_ascii=True,
 		indent=2,
@@ -872,6 +1519,7 @@ count_keys = (
 	"suppressed_invalid",
 	"suppressed_low_confidence",
 	"suppressed_out_of_scope",
+	"suppressed_waived",
 )
 
 

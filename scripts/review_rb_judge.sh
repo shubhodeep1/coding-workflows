@@ -802,16 +802,18 @@ echo "judge_skip_reason=" >> "$GITHUB_OUTPUT"
 
 # _resilient_phase_swap <issue_number> <target_label>
 #
-# Atomically swap AI phase labels on an issue via REST API GET+PUT,
-# avoiding the `gh issue edit --remove-label` failure mode where a
-# label that does not exist as a repo label definition aborts the
-# entire command.  Falls back to POST (add-only) on PUT failure.
-# API calls: 2 (GET + PUT) happy path, 3 on fallback.
+# Swap AI phase labels without letting a concurrent terminal label be
+# removed by a stale full-label PUT. Non-terminal targets are added first,
+# then only phase labels observed by the initial GET are removed; a final
+# GET reconciles terminal precedence. GitHub exposes no conditional label
+# mutation, so the existing GET cannot safely support a full replacement.
+# API calls: terminal target 2 (GET + PUT); non-terminal target 3 plus one
+# DELETE per observed old phase, and one more DELETE when a terminal race wins.
 _resilient_phase_swap()
 {
 	local _rps_issue="$1" _rps_target="$2"
 	local _rps_phases='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
-	local _rps_cur _rps_new
+	local _rps_cur _rps_new _rps_phase _rps_terminal
 	if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
 		echo "::warning::_resilient_phase_swap: GET labels failed for #${_rps_issue} — falling back to POST add." >&2
@@ -821,6 +823,50 @@ _resilient_phase_swap()
 		return 1
 	fi
 	_rps_cur="${_rps_cur:-[]}"
+	# Never downgrade a terminal phase.  The PR-close handler
+	# (issue_pr_status.yml) labels the linked issue ai:merged as soon as
+	# the PR merges, and this judge runs its swap only AFTER the merge
+	# (and, for merge_with_followup, after follow-up creation), so the
+	# two race.  tele-funtoken-msg-scoring#4379: ai:merged landed at
+	# 14:18:39, this swap replaced it with ai:ready-to-merge at ~14:18:45,
+	# and the orchestrator's security-pass check then read the closed
+	# issue as "closed without a merged PR" and failed project #3928.
+	# A terminal label is only ever replaced by another terminal label.
+	_rps_terminal="$(printf '%s\n' "${_rps_cur}" | jq -r --arg t "${_rps_target}" '
+		if ($t == "ai:merged" or $t == "ai:closed") then empty
+		else (map(select(. == "ai:merged" or . == "ai:closed")) | first // empty)
+		end' 2>/dev/null || echo "")"
+	if [ -n "${_rps_terminal}" ]; then
+		echo "_resilient_phase_swap: issue #${_rps_issue} already carries terminal label ${_rps_terminal}; not swapping to ${_rps_target}."
+		return 0
+	fi
+	if [ "${_rps_target}" != "ai:merged" ] && [ "${_rps_target}" != "ai:closed" ]; then
+		if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			-f "labels[]=${_rps_target}" >/dev/null 2>&1; then
+			echo "::warning::_resilient_phase_swap: POST add failed for #${_rps_issue}." >&2
+			return 1
+		fi
+		while IFS= read -r _rps_phase; do
+			[ -n "${_rps_phase}" ] || continue
+			gh_retry gh api -X DELETE "repos/${REPOSITORY}/issues/${_rps_issue}/labels/$(printf '%s' "${_rps_phase}" | jq -sRr @uri)" >/dev/null 2>&1 \
+				|| echo "::warning::_resilient_phase_swap: could not remove prior phase ${_rps_phase} from #${_rps_issue}." >&2
+		done < <(printf '%s\n' "${_rps_cur}" | jq -r --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
+			'.[] | select(. as $label | ($p | index($label)) != null and . != $t and . != "ai:merged" and . != "ai:closed")')
+		if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+			echo "::warning::_resilient_phase_swap: terminal reconciliation GET failed for #${_rps_issue}; target was added without deleting any terminal label." >&2
+			return 0
+		fi
+		_rps_terminal="$(printf '%s\n' "${_rps_cur:-[]}" | jq -r 'map(select(. == "ai:merged" or . == "ai:closed")) | first // empty' 2>/dev/null || echo "")"
+		if [ -n "${_rps_terminal}" ]; then
+			if gh_retry gh api -X DELETE "repos/${REPOSITORY}/issues/${_rps_issue}/labels/$(printf '%s' "${_rps_target}" | jq -sRr @uri)" >/dev/null 2>&1; then
+				echo "_resilient_phase_swap: terminal label ${_rps_terminal} appeared while swapping #${_rps_issue}; removed non-terminal target ${_rps_target}."
+			else
+				echo "::warning::_resilient_phase_swap: terminal ${_rps_terminal} won for #${_rps_issue}, but removing ${_rps_target} failed." >&2
+			fi
+		fi
+		return 0
+	fi
 	_rps_new="$(printf '%s\n' "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
 		'(. - $p) + [$t] | unique')"
 	if printf '{"labels":%s}' "${_rps_new}" | \
@@ -938,6 +984,7 @@ unset _pr_meta
 
 FIRST_ISSUE=""
 FIRST_ISSUE_BODY=""
+FIRST_ISSUE_LINEAGE_BODY=""
 # Labels of the parent (FIRST_ISSUE) issue. Complete GraphQL nodes avoid
 # a redundant REST GET; incomplete nodes retain the existing REST fallback.
 FIRST_ISSUE_LABELS_JSON="[]"
@@ -978,6 +1025,7 @@ while IFS= read -r issue_number; do
   BODY="$(printf '%s' "${ISSUE_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
   if [ -z "${FIRST_ISSUE}" ]; then
     FIRST_ISSUE="${issue_number}"
+    FIRST_ISSUE_LINEAGE_BODY="${BODY}"
     FIRST_ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_META_JSON}" | jq -c '[(.labels // [])[]?.name]' 2>/dev/null || echo '[]')"
   fi
   if [ -z "${FIRST_ISSUE_BODY}" ]; then
@@ -1100,6 +1148,10 @@ fi
 if [ -z "${POST_REVIEW_HEAD_REF}" ]; then
   POST_REVIEW_HEAD_REF="${TARGET_BRANCH:-}"
 fi
+# The checked-out commit is the code snapshot the judge can inspect. Live PR
+# metadata may advance after checkout, so it is not merge authorization.
+RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
+POST_REVIEW_HEAD_SHA="${RB_JUDGED_HEAD_SHA}"
 RB_PENDING_APPROVAL_REQUEST=""
 RB_PENDING_DECISION_JSON=""
 RB_APPROVAL_PRODUCER_JSON="{}"
@@ -1109,9 +1161,9 @@ RB_APPROVAL_PRODUCER_ID=""
 RB_APPROVAL_PRODUCER_JSON="$(gh_retry gh api user 2>/dev/null || echo '{}')"
 RB_APPROVAL_PRODUCER_ID="$(printf '%s' "${RB_APPROVAL_PRODUCER_JSON}" | jq -r '.id // empty' 2>/dev/null || true)"
 if command -v review_blocked_find_pending_request >/dev/null 2>&1 \
-  && [ -n "${POST_REVIEW_HEAD_SHA}" ] \
+  && [ -n "${RB_JUDGED_HEAD_SHA}" ] \
   && [[ "${RB_APPROVAL_PRODUCER_ID}" =~ ^[1-9][0-9]*$ ]]; then
-  RB_PENDING_APPROVAL_REQUEST="$(review_blocked_find_pending_request "${PR_COMMENTS}" "${PR_NUMBER}" "${POST_REVIEW_HEAD_SHA}" "${RB_APPROVAL_PRODUCER_ID}" || true)"
+  RB_PENDING_APPROVAL_REQUEST="$(review_blocked_find_pending_request "${PR_COMMENTS}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${RB_APPROVAL_PRODUCER_ID}" || true)"
   if [ -n "${RB_PENDING_APPROVAL_REQUEST}" ]; then
     RB_PENDING_DECISION_JSON="$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -c '.decision // empty' 2>/dev/null || true)"
   fi
@@ -1136,6 +1188,7 @@ trap 'model_provider_broker_stop >/dev/null 2>&1 || true; _cleanup_prompt_budget
 
 {
   printf '%s\n' 'Review-blocked judge context.'
+  printf 'Evaluated head SHA: %s\n' "${RB_JUDGED_HEAD_SHA:-unknown}"
   if [ -n "${FIRST_ISSUE_BODY}" ]; then
     append_review_rb_semble_query_section "Issue body:" "${FIRST_ISSUE_BODY}" 2500
   else
@@ -1709,7 +1762,7 @@ if [ -n "${RB_PENDING_DECISION_JSON}" ]; then
 elif ! post_review_blocked_assessment \
     "${RB_JUDGE_COMMENT_FILE}" \
     "${RB_OUTBOUND_REVIEW_STATE}" \
-    "${POST_REVIEW_HEAD_SHA}" \
+    "${RB_JUDGED_HEAD_SHA}" \
     "${POST_REVIEW_HEAD_REF}"; then
   echo "::warning::Could not publish review-blocked judge assessment; terminal approval requests will not be created without it."
   case "${RB_ACTION}" in
@@ -1733,7 +1786,7 @@ case "${RB_ACTION}" in
       echo "judge_skip_reason=approval_producer_unresolved" >> "$GITHUB_OUTPUT"
       exit 0
     fi
-    if ! [[ "${POST_REVIEW_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+    if ! [[ "${RB_JUDGED_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
       echo "::warning::Current PR head SHA is unavailable or invalid; refusing terminal approval request."
       echo "judge_skip_reason=approval_head_unresolved" >> "$GITHUB_OUTPUT"
       exit 0
@@ -1745,7 +1798,7 @@ case "${RB_ACTION}" in
       && [ "$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -r '.action // empty')" = "${RB_ACTION}" ]; then
       RB_APPROVAL_REQUEST="${RB_PENDING_APPROVAL_REQUEST}"
     else
-      RB_APPROVAL_REQUEST="$(review_blocked_build_approval_request "${PR_NUMBER}" "${FIRST_ISSUE:-0}" "${POST_REVIEW_HEAD_SHA}" "${JUDGE_JSON}")"
+      RB_APPROVAL_REQUEST="$(review_blocked_build_approval_request "${PR_NUMBER}" "${FIRST_ISSUE:-0}" "${RB_JUDGED_HEAD_SHA}" "${JUDGE_JSON}")"
       if ! review_blocked_post_approval_request "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST}"; then
         echo "::warning::Could not publish review-blocked approval request; refusing terminal action."
         echo "judge_skip_reason=approval_request_publish_failed" >> "$GITHUB_OUTPUT"
@@ -1801,7 +1854,7 @@ case "${RB_ACTION}" in
       fi
     done
     RB_MERGE_CONFIRMED=false
-    if [ "${RB_MERGE_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+    if [ "${RB_MERGE_HEAD_SHA}" != "${RB_JUDGED_HEAD_SHA}" ]; then
       echo "::warning::Approved merge refused because PR #${PR_NUMBER} head changed after the decision."
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=skip" >> "$GITHUB_OUTPUT"
@@ -1992,12 +2045,32 @@ __EDIT_DISCIPLINE__
             : # self-repo or unknown — keep files; consumer-repo-only cleanup
             ;;
           *)
-            rm -f ./pre_assembled_static.txt
-            rm -f unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md
-            rm -f scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
-            rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py
-            rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh
-            rm -rf ai-memory
+            # Never delete a path the consumer repo actually TRACKS.
+            # The staging pass below runs `git add -u`, which records a
+            # working-tree deletion as a real deletion in the commit and
+            # silently drops a repo-owned file.  A consumer repo may own a
+            # root-level `agents.md` (CLAUDE.md §22.C / §24.F record
+            # DigitalOcean and Cloudflare resource IDs there), which collides
+            # with the workflow-staged artifact of the same name.  Same bug
+            # class as PRs #917/#931 and as the binance-blessings PR #255
+            # incident fixed in scripts/review_conflict_resolve.sh.
+            # Mirrors the guard in scripts/review_commit_changes.sh.
+            for _rb_cleanup_artifact in \
+              pre_assembled_static.txt unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md \
+              scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json \
+              scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py \
+              scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh \
+              ai-memory; do
+              if git ls-files --error-unmatch -- "${_rb_cleanup_artifact}" >/dev/null 2>&1; then
+                echo "Preserving repo-tracked path during artifact cleanup: ${_rb_cleanup_artifact}"
+                if [ "${_rb_cleanup_artifact}" = "pre_assembled_static.txt" ]; then
+                  git restore --source=HEAD --worktree -- "${_rb_cleanup_artifact}"
+                fi
+                continue
+              fi
+              rm -rf -- "${_rb_cleanup_artifact}"
+            done
+            unset _rb_cleanup_artifact
             ;;
         esac
         unset _rb_origin_url
@@ -2186,8 +2259,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # where a permanently-red environmental check (which can never go
         # green) kept the judge refusing the merge, the issue stuck in
         # ai:review-blocked, and stall recovery re-firing forever.
-        if [ -z "${PR_HEAD_SHA}" ]; then
-          echo "::warning::PR #${PR_NUMBER} head SHA could not be resolved from the PR JSON — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving linked issues in ai:review-blocked."
+        if ! [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::warning::PR #${PR_NUMBER} evaluated head SHA could not be resolved from the judge checkout — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving linked issues in ai:review-blocked."
           echo "judge_skip_reason=unresolved_head_sha" >> "$GITHUB_OUTPUT"
         else
           # PR_CHECKS_SELF_RUN_ID excludes this script's own still-
@@ -2204,7 +2277,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
           _checks_reason="check_runs_query_failed"
           if command -v _pr_checks_completed >/dev/null 2>&1; then
             if PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_CHECKS_SELF_RUN_ID="${GITHUB_RUN_ID:-}" \
-                 _pr_checks_completed "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF}"; then
+                 _pr_checks_completed "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then
               _checks_ok="true"
             else
               case "${PR_CHECKS_LAST_REASON:-}" in
@@ -2217,10 +2290,10 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
           fi
           if [ "${_checks_ok}" != "true" ]; then
             if [ "${_checks_reason}" = "check_runs_query_failed" ]; then
-              echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
+              echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=check_runs_query_failed" >> "$GITHUB_OUTPUT"
             else
-              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped/cancelled (non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped/cancelled (non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
               echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
@@ -2236,7 +2309,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             # gh_retry — see the `merge)` branch for the rationale
             # (best-effort, non-transient failure backoff cost).
             #
-            # `--match-head-commit "${POST_REVIEW_HEAD_SHA}"` binds the
+            # `--match-head-commit "${RB_JUDGED_HEAD_SHA}"` binds the
             # merge to the approved head SHA. If a
             # concurrent push lands between the poll and this merge,
             # GitHub rejects it — preventing unjudged code from
@@ -2244,7 +2317,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             # head equality check above guarantees we never
             # fall back to an unbound merge: the check-runs gate
             # requires PR_HEAD_SHA, so reaching here means it's set.
-            _match_head_arg=(--match-head-commit "${POST_REVIEW_HEAD_SHA}")
+            _match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")
             if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash "${_match_head_arg[@]}" 2>/dev/null; then
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"
@@ -2274,6 +2347,72 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # time the follow-up's clarify / planner phases run (modulo
         # the orphan-hedge case above, which is documented in the
         # warning).
+        # Carry the parent's orchestrator lineage so plan.yml /
+        # implement.yml (scripts/resolve_integration_ref.sh) check the
+        # follow-up out on the project's integration branch instead of
+        # the default branch.  Without these two lines the resolver
+        # falls back to main: tele-funtoken-msg-scoring#4386 planned
+        # against main and Codex emitted "BLOCKED: integration branch
+        # mismatch"; binance-blessings#290 implemented against main,
+        # where the file the follow-up had to restore already existed,
+        # while the real gap sat on orchestrator/project-249.
+        # Source order: the parent issue's own metadata first, then the
+        # PR base branch when it is an orchestrator integration branch.
+        RB_FOLLOWUP_TRACKING_ISSUE=""
+        RB_FOLLOWUP_INTEGRATION_BRANCH=""
+        RB_FOLLOWUP_PARENT_DECLARED_DEFAULT="false"
+        if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
+          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+import re, sys
+body = sys.stdin.read()
+m = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
+print(m.group(1).strip() if m else "")
+' 2>/dev/null || echo "")"
+          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+import re, sys
+body = sys.stdin.read()
+m = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE)
+print(m.group(1) if m else "")
+' 2>/dev/null || echo "")"
+        fi
+        if [ "${RB_FOLLOWUP_INTEGRATION_BRANCH}" = "(default branch)" ]; then
+          RB_FOLLOWUP_INTEGRATION_BRANCH=""
+          RB_FOLLOWUP_PARENT_DECLARED_DEFAULT="true"
+        elif [ -n "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] \
+          && { [[ "${RB_FOLLOWUP_INTEGRATION_BRANCH}" == -* ]] || ! git check-ref-format "refs/heads/${RB_FOLLOWUP_INTEGRATION_BRANCH}" >/dev/null 2>&1; }; then
+          echo "::warning::Ignoring invalid Integration branch metadata on parent issue #${FIRST_ISSUE:-?}; falling back to the PR base."
+          RB_FOLLOWUP_INTEGRATION_BRANCH=""
+          RB_FOLLOWUP_TRACKING_ISSUE=""
+        fi
+        if [ "${RB_FOLLOWUP_PARENT_DECLARED_DEFAULT}" != "true" ] \
+          && [ -z "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] && [ -n "${PR_BASE_REF:-}" ]; then
+          RB_FOLLOWUP_PATTERN_MATCH_RC=0
+          printf '%s\n' "${PR_BASE_REF}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" || RB_FOLLOWUP_PATTERN_MATCH_RC=$?
+          if [ "${RB_FOLLOWUP_PATTERN_MATCH_RC}" -eq 2 ]; then
+            echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}); PR base ${PR_BASE_REF} follow-up will resolve to the default branch unless parent metadata supplies lineage." >&2
+          elif [ "${RB_FOLLOWUP_PATTERN_MATCH_RC}" -eq 0 ]; then
+            RB_FOLLOWUP_INTEGRATION_BRANCH="${PR_BASE_REF}"
+            if [ -z "${RB_FOLLOWUP_TRACKING_ISSUE}" ] && [[ "${PR_BASE_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+              RB_FOLLOWUP_TRACKING_ISSUE="${BASH_REMATCH[1]}"
+            fi
+          fi
+        fi
+        RB_FOLLOWUP_LINEAGE_LINES=""
+        if [[ "${RB_FOLLOWUP_TRACKING_ISSUE}" =~ ^[0-9]+$ ]]; then
+          RB_FOLLOWUP_LINEAGE_LINES="${RB_FOLLOWUP_LINEAGE_LINES}
+- Tracking issue: #${RB_FOLLOWUP_TRACKING_ISSUE}"
+        fi
+        if [ -n "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+          RB_FOLLOWUP_LINEAGE_LINES="${RB_FOLLOWUP_LINEAGE_LINES}
+- Integration branch: ${RB_FOLLOWUP_INTEGRATION_BRANCH}"
+        fi
+        if [ -n "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+          echo "Follow-up lineage: tracking issue #${RB_FOLLOWUP_TRACKING_ISSUE:-none}, integration branch ${RB_FOLLOWUP_INTEGRATION_BRANCH:-none}."
+        elif [[ "${RB_FOLLOWUP_TRACKING_ISSUE}" =~ ^[0-9]+$ ]]; then
+          echo "Follow-up lineage: tracking issue #${RB_FOLLOWUP_TRACKING_ISSUE}; no integration branch, so the follow-up will resolve to the default branch."
+        else
+          echo "Follow-up lineage: no Integration branch / Tracking issue metadata on parent #${FIRST_ISSUE:-?} and PR base ${PR_BASE_REF:-?} is not an orchestrator integration branch; follow-up will resolve to the default branch."
+        fi
         FULL_FOLLOWUP_BODY="${FOLLOWUP_BODY}
 
 <!-- review-blocked-approval-request:${RB_APPROVAL_REQUEST_ID:-not-applicable} -->
@@ -2282,7 +2421,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
 **Merge-with-followup metadata**
 - Source PR: #${PR_NUMBER} (review-blocked judge merged with deferred gap tracked here)
 - Parent issue: ${FIRST_ISSUE:+#${FIRST_ISSUE}}
-- Type: review-blocked-followup"
+- Type: review-blocked-followup${RB_FOLLOWUP_LINEAGE_LINES}"
 
         # Apply ai:clarification immediately at creation time so the
         # follow-up enters the pipeline without waiting for the

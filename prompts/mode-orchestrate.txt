@@ -84,8 +84,14 @@ Single-repo invariant:
 File partitioning (prevents merge conflicts between parallel siblings):
 - For every issue, populate `files_touched` with every literal repo-
   relative path you expect the implementer to create / modify / delete.
-  Exact paths only — no globs. Be conservative; omit files you're
-  uncertain about rather than guessing.
+  Exact paths only — no globs. Be conservative about extra files you are
+  unsure of, but NEVER leave `files_touched` empty and never omit it "so
+  the phases can run in parallel": an issue with an empty list is treated
+  as unknown scope and is serialized behind EVERY other sibling in its
+  wave (partition guard type `unknown_scope`), which is slower than an
+  honest list. When several phases must edit the same files (a shared
+  module, README.md, a db/contracts file), list them and declare
+  `dependency_edges` so the phases run one after another.
 - Two sibling issues in the SAME wave (neither depends on the other)
   MUST NOT share any entry in `files_touched`. If two tasks both need to
   edit the same file, declare an explicit `dependency_edges` entry so

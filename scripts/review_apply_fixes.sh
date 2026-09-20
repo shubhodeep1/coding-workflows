@@ -1739,7 +1739,7 @@ You may modify files outside the patch only if ALL conditions are true:
 - the changed code directly depends on that file
 - runtime behavior would break without modification
 - the modification required is minimal
-- the file already exists in the repository (do not create new files)
+- the file already exists in the repository, or creating it is covered by the FILE CREATION POLICY below
 
 SYSTEM COMPATIBILITY CHECK
 When applying fixes verify that the change does not break other modules.
@@ -1770,14 +1770,17 @@ Do not modify infrastructure code including:
 unless the pull request itself modifies those files.
 
 FILE CREATION POLICY
-Do not create new files unless absolutely required to fix a broken import or dependency.
-Do not create:
-- new tests
-- new utilities
-- new modules
-- new configuration systems
-- new documentation
-unless the original PR explicitly requires them.
+Create a new file only when one of these applies:
+- it is required to fix a broken import or dependency
+- a reviewer finding you are applying, or the original PR's scope, requires it
+- a repository convention documented in CLAUDE.md / agents.md / AGENTS.md requires it for
+  the change being fixed (for example a per-collection contract under
+  db/contracts/, a changelog fragment under changelog.d/, or a regression test
+  for a defect you fixed)
+Otherwise do not create new utilities, modules, configuration systems, or
+documentation. Every file you create must be listed by path under
+"Changes made:" and "Files changed / commit status:" so the commit step can
+account for it.
 
 EDITOR EXECUTION GUARDRAILS
 you may read and modify repository files directly as needed
@@ -2469,9 +2472,14 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   _hb_tmpdir=""
   _hb_fifo=""
 
-  # The watchdog exits on its own (143/142) after its kill sequence, so it is
-  # usually gone by the time we reap it; an unguarded `kill` here aborted the
-  # whole editor loop under `set -e` (AI Review run 34397466777, PR #4072).
+  # The watchdog subshell exits on its own (143/142/144) after it kills the
+  # editor, so by the time the editor process is reaped the watchdog may
+  # already be gone and this `kill` returns 1 (ESRCH). Under `set -e` an
+  # unguarded failure here aborted the whole script: no retry attempt, no
+  # fallback summary, no archived editor stderr, and the run surfaced as
+  # an "editor produced no output" empty-noop (run 34397466777 on PR
+  # #4071, wall-time kill on attempt 1). Reaping a watchdog that has
+  # already exited is the expected outcome on every watchdog-kill path.
   kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
   if [ -n "${process_group_file}" ]; then

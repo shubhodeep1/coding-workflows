@@ -171,7 +171,7 @@ def test_fresh_in_progress_ai_review_is_detected():
 
 
 def test_completed_runs_are_ignored():
-	"""Only in_progress/queued runs block the push; a completed run does not."""
+	"""Only in_progress/queued/pending runs block; a completed run does not."""
 	payload = json.dumps([_run("AI Review", databaseId=9, status="completed")])
 	assert _run_id(payload) == ""
 
@@ -209,6 +209,23 @@ def test_queued_run_with_null_started_at_coalesces_to_created_at():
 	createdAt and still treat a fresh queued review run as blocking."""
 	payload = json.dumps([_run("Review Autofix", databaseId=7, status="queued", startedAt=None)])
 	assert _run_id(payload) == "7"
+
+
+def test_pending_review_run_is_detected():
+	"""A concurrency-held pending review is active and must block recovery."""
+	payload = json.dumps([_run("Review Autofix", databaseId=8, status="pending", startedAt=None)])
+	assert _run_id(payload) == "8"
+
+
+def test_direct_check_miss_diagnostic_contract_stays_on_stderr():
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	for outcome in ("listing_unavailable", "no_fresh_review_run"):
+		expected = (
+			'echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} '
+			'runs=${_di_runs_total} live=${_di_runs_live} matched=0 '
+			f'outcome={outcome}" >&2'
+		)
+		assert expected in source, f"missing stderr diagnostic contract for {outcome}"
 
 
 def test_workflow_name_field_matches_when_display_name_differs():

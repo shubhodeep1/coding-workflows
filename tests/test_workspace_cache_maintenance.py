@@ -144,16 +144,26 @@ def test_workspace_init_keeps_reuse_enabled_for_explicit_review_identifier() -> 
 
 
 def test_review_autofix_retargets_review_runtime_cache_into_workspace() -> None:
+	# The cache path list is hashed into the actions/cache version, so it must
+	# not embed the per-run workspace path (`<pr>-<run_id>-<run_attempt>`);
+	# the stage-in / stage-out steps copy between the run-independent staging
+	# dir and the workspace instead.
 	restore_step = _step(REVIEW_WORKFLOW, 'Restore review-issue ledger')
 	save_step = _step(REVIEW_WORKFLOW, 'Save review-issue ledger')
+	stage_in_step = _step(REVIEW_WORKFLOW, 'Stage restored review-issue ledger into workspace')
+	stage_out_step = _step(REVIEW_WORKFLOW, 'Stage review-issue ledger for cache save')
 
 	for step in (restore_step, save_step):
 		with_block = step.get('with', {})
 		assert with_block.get('path') == (
-			'${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/\n'
-			'${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/\n'
-			'${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}\n'
+			'${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_issue_ledger/\n'
+			'${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_runtime/\n'
+			'${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/${{ env.REVIEW_LEDGER_PATH }}\n'
 		)
+	for step in (stage_in_step, stage_out_step):
+		run_text = str(step.get('run', ''))
+		assert 'ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"' in run_text
+		assert 'ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${PR_NUMBER}"' in run_text
 
 
 def test_removal_registry_documents_workspace_cache_maintenance_workflow() -> None:

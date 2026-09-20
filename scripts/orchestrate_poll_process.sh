@@ -99,6 +99,9 @@ fi
 # persistent on the repo side, so caching within a single orchestrator
 # invocation is safe and collapses dozens of API calls into a handful.
 declare -gA _ENSURED_LABELS_CACHE=()
+# Marker-search results are cached per tracking issue so accepted findings pay
+# at most one reconciliation lookup per poller process, not one per finding.
+declare -gA _SECURITY_PASS_ADVISORY_SEARCH_CACHE=()
 
 # _gh_url constructs a full GitHub URL for the current repository.
 _gh_url() {
@@ -253,6 +256,45 @@ worktree_registry_deregister() {
 	[ -n "${name}" ] || return 0
 	[ -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/worktree_registry.sh" ] || return 0
 	bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/worktree_registry.sh" deregister "${name}" || true
+}
+
+# _judge_truncate_pr_diff_file — Truncate a PR diff file in place to at
+# most <max_bytes> bytes on a UTF-8 character boundary. Mirrors the
+# RB_JUDGE_PR_DIFF_MAX_BYTES truncation in scripts/review_rb_judge.sh.
+# Falls back to a raw `head -c` prefix when python3 is unavailable
+# (sanitize_codex_prompt_file strips an invalid trailing byte later).
+# Returns non-zero when neither truncation path can safely replace the file.
+# Input: path, positive integer byte cap. Issues no GitHub API calls.
+_judge_truncate_pr_diff_file()
+{
+	local diff_path="$1"
+	local max_bytes="$2"
+	local truncated_tmp
+
+	[ -f "${diff_path}" ] || return 1
+	[[ "${max_bytes}" =~ ^[1-9][0-9]*$ ]] || return 1
+	truncated_tmp="$(mktemp)" || return 1
+	if PYTHONDONTWRITEBYTECODE=1 python3 - "${diff_path}" "${max_bytes}" > "${truncated_tmp}" 2>/dev/null <<'PY'
+import sys
+
+cap = int(sys.argv[2])
+read_cap = cap + 1 if cap > 0 else 0
+with open(sys.argv[1], 'rb') as fh:
+    data = fh.read(read_cap)
+if cap > 0 and len(data) > cap:
+    i = cap
+    while i > 0 and (data[i] & 0xC0) == 0x80:
+        i -= 1
+    data = data[:i]
+sys.stdout.buffer.write(data)
+PY
+	then
+		mv -f "${truncated_tmp}" "${diff_path}" && return 0
+	elif head -c "${max_bytes}" "${diff_path}" > "${truncated_tmp}" 2>/dev/null; then
+		mv -f "${truncated_tmp}" "${diff_path}" && return 0
+	fi
+	rm -f "${truncated_tmp}"
+	return 1
 }
 
 extract_judge_json_with_status() {
@@ -1348,10 +1390,10 @@ if is_truthy "${ENABLE_SECURITY_PASS_RAW}"; then
   ENABLE_SECURITY_PASS="true"
 fi
 
-MAX_SECURITY_PASS_CYCLES="${MAX_SECURITY_PASS_CYCLES:-3}"
+MAX_SECURITY_PASS_CYCLES="${MAX_SECURITY_PASS_CYCLES:-5}"
 if ! [[ "${MAX_SECURITY_PASS_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_SECURITY_PASS_CYCLES}" -lt 1 ]; then
-  echo "::warning::MAX_SECURITY_PASS_CYCLES must be a positive integer; defaulting to 3"
-  MAX_SECURITY_PASS_CYCLES="3"
+  echo "::warning::MAX_SECURITY_PASS_CYCLES must be a positive integer; defaulting to 5"
+  MAX_SECURITY_PASS_CYCLES="5"
 fi
 
 SECURITY_PASS_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE:-8}"
@@ -1360,6 +1402,105 @@ if ! [[ "${SECURITY_PASS_CONFIDENCE_GATE}" =~ ^[0-9]+$ ]] \
   || [ "${SECURITY_PASS_CONFIDENCE_GATE}" -gt 10 ]; then
   echo "::warning::SECURITY_PASS_CONFIDENCE_GATE must be an integer from 1 to 10; defaulting to 8"
   SECURITY_PASS_CONFIDENCE_GATE="8"
+fi
+
+# Cap on how many times a security-pass fix issue that ended in
+# ai:implementation-failed may be closed and re-issued within one fix
+# cycle before the pass fails closed (recoverable via /re-security-pass).
+# Mirrors MAX_IMPL_NOOP_REISSUES for wave issues.
+MAX_SECURITY_PASS_FIX_REISSUES="${MAX_SECURITY_PASS_FIX_REISSUES:-2}"
+if ! [[ "${MAX_SECURITY_PASS_FIX_REISSUES}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::MAX_SECURITY_PASS_FIX_REISSUES must be a non-negative integer; defaulting to 2"
+  MAX_SECURITY_PASS_FIX_REISSUES="2"
+fi
+
+# Exhaustion judge: when MAX_SECURITY_PASS_CYCLES is spent with findings still
+# open, an autonomous judge decides per finding whether to accept it as a
+# tracked known risk, run one more consolidated fix cycle, or fail the pass
+# for a human (see security_pass_exhaustion_judge).  `false` restores the
+# pre-judge behaviour: terminal ai:security-pass-failed on exhaustion.
+# MAX_SECURITY_PASS_JUDGE_ROUNDS bounds how many times the judge is consulted
+# per project; 0 (default) is unbounded, so the judge decides every time.
+if is_truthy "${SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED:-true}"; then
+  SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED="true"
+else
+  SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED="false"
+fi
+MAX_SECURITY_PASS_JUDGE_ROUNDS="${MAX_SECURITY_PASS_JUDGE_ROUNDS:-0}"
+if ! [[ "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::MAX_SECURITY_PASS_JUDGE_ROUNDS must be a non-negative integer; defaulting to 0 (unbounded)"
+  MAX_SECURITY_PASS_JUDGE_ROUNDS="0"
+fi
+# MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS bounds how many judge rounds per project
+# may end in `keep_fixing`.  From the next round on, every keep_fixing
+# decision is converted to accept_with_followup (the finding becomes a
+# tracked, non-blocking advisory filed after the merge) so the loop converges
+# without a human; `fail` is untouched.  Project #3965 ran 7 fix cycles on a
+# 5-cycle budget because rounds 1 and 2 each granted "one more" cycle and
+# nothing bounded the sequence.  Unlike MAX_SECURITY_PASS_JUDGE_ROUNDS, which
+# terminalizes for a human, this cap keeps the project unattended.  0 =
+# unbounded (legacy behaviour).
+MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS="${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS:-2}"
+if ! [[ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS must be a non-negative integer; defaulting to 2"
+  MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS="2"
+fi
+
+# Comprehensive release callback target (README 12f).  A tracking issue that
+# carries ai:comprehensive-test-pending (applied by orchestrate.yml from the
+# promote cycle's tracking_labels input) dispatches this workflow to promote.  The default promotes the default branch to stable
+# (fast-forward + full release gate); the pre-2026-09 target
+# test-and-mark-stable.yml on `stable` stays selectable for a stable-only
+# patch release.
+COMPREHENSIVE_RELEASE_WORKFLOW_FILE="${COMPREHENSIVE_RELEASE_WORKFLOW_FILE:-promote-main-to-stable.yml}"
+COMPREHENSIVE_RELEASE_WORKFLOW_REF="${COMPREHENSIVE_RELEASE_WORKFLOW_REF:-main}"
+if ! [[ "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+  echo "::warning::COMPREHENSIVE_RELEASE_WORKFLOW_FILE must be a workflow filename; defaulting to promote-main-to-stable.yml"
+  COMPREHENSIVE_RELEASE_WORKFLOW_FILE="promote-main-to-stable.yml"
+fi
+if [ -z "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" ] || [[ "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" =~ [[:space:]] ]]; then
+  echo "::warning::COMPREHENSIVE_RELEASE_WORKFLOW_REF must be a single ref name; defaulting to main"
+  COMPREHENSIVE_RELEASE_WORKFLOW_REF="main"
+fi
+# Promote cycle (README 12f): the proving run's completion dispatches the
+# verifying run through the same dispatcher the daily cycle uses, and the
+# verifying run's ready-to-merge point promotes the pinned commit while its
+# own final merge is held until the release run finishes (or this cap).
+APPLY_ANALYSIS_DISPATCHER="${APPLY_ANALYSIS_DISPATCHER:-scripts/apply_analysis_on_main.sh}"
+COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS="${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS:-21600}"
+if ! [[ "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" =~ ^[0-9]+$ ]] || [ "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" -lt 60 ]; then
+  echo "::warning::COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS must be an integer >= 60; defaulting to 21600"
+  COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS="21600"
+fi
+# Bot logins whose non-code commits may land on main during a cycle without
+# deferring the promotion (comma-separated).
+COMPREHENSIVE_CYCLE_BOT_LOGINS="${COMPREHENSIVE_CYCLE_BOT_LOGINS:-github-actions[bot]}"
+# Marker comments are trusted only from these author associations (the
+# orchestrator posts them with GH_PAT, i.e. as the repository owner) or from
+# github-actions[bot]; a marker from anyone else is ignored and reported.
+COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
+# Poll ticks a proving run's completion may retry a transient verifying-run
+# dispatch (another project in flight, orchestrator run in flight, guard
+# unavailable) before giving up.
+COMPREHENSIVE_VERIFICATION_RETRY_MAX="${COMPREHENSIVE_VERIFICATION_RETRY_MAX:-24}"
+if ! [[ "${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::COMPREHENSIVE_VERIFICATION_RETRY_MAX must be a non-negative integer; defaulting to 24"
+  COMPREHENSIVE_VERIFICATION_RETRY_MAX="24"
+fi
+
+# Advisory follow-ups for accepted (waived) findings are filed only after the
+# project's integration branch has merged into the default branch.  Filing
+# them at judge time pointed the standalone clarify/plan pipeline at a
+# default branch that did not yet contain the cited code: #4090 and #4091
+# (project #3965) were planned against `main` while
+# `scripts/model_provider_broker.py` existed only on
+# `orchestrator/project-3965`, the planner emitted `BLOCKED: PR #3968 is
+# still open`, and both issues sat in ai:blocked waiting for a human.
+# `false` restores judge-time filing.
+if is_truthy "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED:-true}"; then
+  SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED="true"
+else
+  SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED="false"
 fi
 
 if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
@@ -1589,6 +1730,33 @@ JUDGE_REPEAT_FINGERPRINT_MAX="${JUDGE_REPEAT_FINGERPRINT_MAX:-2}"
 if ! [[ "${JUDGE_REPEAT_FINGERPRINT_MAX}" =~ ^[0-9]+$ ]] || [ "${JUDGE_REPEAT_FINGERPRINT_MAX}" -lt 1 ]; then
   echo "::warning::JUDGE_REPEAT_FINGERPRINT_MAX must be a positive integer; defaulting to 2"
   JUDGE_REPEAT_FINGERPRINT_MAX="2"
+fi
+
+# Byte budgets for the PR diffs embedded in the wave judge prompt. codex's
+# `turn/start` stdin envelope is a hard 1,048,576-character cap; the judge
+# prompt already carries ~250 KB of static context (system instructions,
+# README, agents.md, semble prefetch), so the diff blocks must be bounded
+# by bytes, not only by lines. The legacy `head -n 500` line cap alone let
+# tele-funtoken-msg-scoring#3928 (run 35425771769) embed two ~390 KB
+# committed-`dist` refresh PRs whose minified bundles are single 44-66 KB
+# lines; the assembled prompt reached ~1.28 M characters and both judge
+# attempts died with `Input exceeds the maximum length` before the model
+# ran. Same failure class as RB_JUDGE_PR_DIFF_MAX_BYTES in
+# scripts/review_rb_judge.sh, applied here per PR and across the wave.
+#   JUDGE_PR_DIFF_MAX_BYTES        — cap per embedded PR diff (after the
+#                                    500-line cap).
+#   JUDGE_PR_DIFFS_TOTAL_MAX_BYTES — shared budget across every PR diff in
+#                                    the prompt (merged block first, then the
+#                                    open block gets the remainder).
+JUDGE_PR_DIFF_MAX_BYTES="${JUDGE_PR_DIFF_MAX_BYTES:-65536}"
+if ! [[ "${JUDGE_PR_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${JUDGE_PR_DIFF_MAX_BYTES}" -lt 1 ]; then
+  echo "::warning::JUDGE_PR_DIFF_MAX_BYTES must be a positive integer; defaulting to 65536"
+  JUDGE_PR_DIFF_MAX_BYTES="65536"
+fi
+JUDGE_PR_DIFFS_TOTAL_MAX_BYTES="${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES:-524288}"
+if ! [[ "${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}" -lt 1 ]; then
+  echo "::warning::JUDGE_PR_DIFFS_TOTAL_MAX_BYTES must be a positive integer; defaulting to 524288"
+  JUDGE_PR_DIFFS_TOTAL_MAX_BYTES="524288"
 fi
 
 # Recovery-budget accounting for judge failures whose normalized fingerprint
@@ -3603,8 +3771,10 @@ has_label() {
 
 validation_fix_issue_has_merged_pr_evidence() {
   local issue_num="$1"
+  local expected_base="${2:-}"
   local timeline_json
   local validation_merged_pr_candidates validation_candidate_pr validation_candidate_pr_json
+  local validation_candidate_base
   local validation_pr_lookup_failed=false
 
   if ! timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}")"; then
@@ -3636,6 +3806,13 @@ validation_fix_issue_has_merged_pr_evidence() {
       validation_pr_lookup_failed=true
       echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=pr_fetch_failed" >&2
       continue
+    fi
+    if [ -n "${expected_base}" ]; then
+      validation_candidate_base="$(printf '%s' "${validation_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+      if [ -z "${validation_candidate_base}" ] || [ "${validation_candidate_base}" != "${expected_base}" ]; then
+        echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=base_mismatch" >&2
+        continue
+      fi
     fi
     if _pr_json_is_issue_implementation_pr "${issue_num}" "${validation_candidate_pr_json}"; then
       return 0
@@ -4785,6 +4962,76 @@ ensure_security_pass_state_fields() {
     )
     | .security_pass_head_sha = (
       if (.security_pass_head_sha | type) == "string" then .security_pass_head_sha else "" end
+    )
+    | .security_pass_last_audited_sha = (
+      if (.security_pass_last_audited_sha | type) == "string" then .security_pass_last_audited_sha else "" end
+    )
+    | .security_pass_reported_findings = (
+      if (.security_pass_reported_findings | type) == "array" then
+        .security_pass_reported_findings
+        | map(select(
+          type == "object"
+          and (.file | type) == "string"
+          and ((.file | gsub("^\\./"; "")) | length > 0)
+          and ((.file | gsub("^\\./"; "")) != ".")
+          and ((.file | startswith("/")) | not)
+          and ((.file | split("/") | index("..")) == null)
+        ))
+      else [] end
+    )
+    | .security_pass_waived_findings = (
+      if (.security_pass_waived_findings | type) == "array" then
+        .security_pass_waived_findings
+        | map(select(type == "object" and (.finding_id | type) == "string" and (.finding_id | length) > 0))
+        | .[-100:]
+      else [] end
+    )
+    | .security_pass_followup_issues = (
+      if (.security_pass_followup_issues | type) == "array" then
+        .security_pass_followup_issues
+        | map(select(
+          type == "object"
+          and (.finding_id | type) == "string" and (.finding_id | length) > 0
+          and (.issue | type) == "number" and (.issue | floor) == .issue and .issue > 0
+        ))
+        | .[-100:]
+      else [] end
+    )
+    | .security_pass_followups_merge_checked = (
+      if (.security_pass_followups_merge_checked | type) == "array" then
+        .security_pass_followups_merge_checked
+        | map(select(type == "number" and floor == . and . > 0))
+        | unique
+        | .[-100:]
+      else [] end
+    )
+    | .security_pass_judge_rounds = (
+      if (.security_pass_judge_rounds | type) == "number"
+        and (.security_pass_judge_rounds | floor) == .security_pass_judge_rounds
+        and .security_pass_judge_rounds >= 0
+      then .security_pass_judge_rounds else 0 end
+    )
+    | .security_pass_fix_touched_files = (
+      if (.security_pass_fix_touched_files | type) == "array" then
+        .security_pass_fix_touched_files
+        | map(select(
+          type == "object"
+          and (.cycle | type) == "number" and (.cycle | floor) == .cycle and .cycle >= 0
+          and (.since_sha | type) == "string" and (.since_sha | test("^[0-9a-fA-F]{7,40}$"))
+          and (.head_sha | type) == "string" and (.head_sha | test("^[0-9a-fA-F]{7,40}$"))
+          and (.files | type) == "array"
+        ))
+        | map(.files = (
+          [.files[] | select(
+            type == "string"
+            and ((gsub("^\\./"; "")) | length > 0)
+            and ((gsub("^\\./"; "")) != ".")
+            and ((startswith("/")) | not)
+            and ((split("/") | index("..")) == null)
+          )] | .[0:200]
+        ))
+        | .[-3:]
+      else [] end
     )' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
@@ -4795,6 +5042,42 @@ security_pass_current_head_is_valid() {
     .security_pass_status == "passed"
     and .security_pass_head_sha == $head_sha
   ' "${STATE_FILE}" >/dev/null 2>&1
+}
+
+# reconcile_tracking_body_after_security_pass_transition
+#
+# Re-render the tracking issue body from state after a security-pass state
+# transition so the `<!-- orchestrator:security-pass -->` block matches the
+# label and any alert comment the same transition posts.  The tick-level
+# reconcile sites run only on the merge_conflict and wave-status paths, while
+# security-pass paths otherwise leave the tick or begin a long-running audit
+# before reaching either.  In #3965, the body froze at the last synced clean pass
+# (`Status: passed`, SHA 75048a2c) while the label read
+# ai:security-pass-failed and state recorded `failed` at 56f71c8f.
+#
+# Call it between the state write and post_state_comment so the persisted
+# tracking_body_sync_hash rides the state comment already being posted.
+# The underlying reconcile hash-gates on tracking_body_sync_hash.  With
+# project_body_snapshot present, an unchanged body costs no API call; legacy
+# state without it first fetches the live issue body as its render template.
+# A changed body costs the single `gh issue edit` (plus the existing readiness
+# refresh when a final PR is open).  Fails open -- a render or edit failure is
+# a warning, never a reason to skip the transition.
+#
+# Unlike the tick-level callers this does NOT gate on a non-empty
+# integration branch or final PR: the body render reads only state, and
+# the two arguments feed only the readiness refresh, which already guards
+# itself on a numeric open final PR.  The transitions that fire with no
+# integration branch at all (security_pass_fail_closed "no integration
+# branch to audit") are exactly the ones a guard would silently skip.
+reconcile_tracking_body_after_security_pass_transition() {
+  local transition_final_pr transition_integration_branch
+  transition_final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  transition_integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  [[ "${transition_final_pr}" =~ ^[0-9]+$ ]] || transition_final_pr=""
+  TRACKING_BODY_SYNC_STATE_CHANGED="false"
+  reconcile_tracking_issue_body_from_state "${transition_final_pr}" "${transition_integration_branch}" || true
+  return 0
 }
 
 security_pass_fail_closed() {
@@ -4809,6 +5092,7 @@ security_pass_fail_closed() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass"
   COMPLETION_STATUS_STATE_CHANGED="false"
@@ -4828,25 +5112,101 @@ Completion remains gated. The scheduled poller will retry automatically."
   fi
 }
 
+# Render the kept findings of a findings-JSON security audit as one markdown
+# table (header + one row per finding). Used by both the consolidated fix
+# issue body and the cycle-exhaustion tracking comment so an operator always
+# sees the same rows the poller acted on. Prints the table to stdout; a
+# non-zero exit means the findings file was unreadable or malformed.
+render_security_pass_findings_table() {
+  local findings_file="$1"
+  python3 - "${findings_file}" <<'PY'
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+
+findings_path = Path(sys.argv[1])
+payload = json.loads(findings_path.read_text(encoding="utf-8"))
+findings = payload["findings"]
+
+
+def cell(value: object) -> str:
+	rendered_cell = " ".join(str(value).replace("|", "\\|").split())
+	# Keep audit-generated prose from notifying users or cross-referencing issues.
+	return re.sub(r"#(?=\d)", "#\u200b", rendered_cell.replace("@", "@\u200b"))
+
+
+lines = [
+	"| ID | Category | Severity | Confidence | Location | Exploit scenario | Recommendation |",
+	"|---|---|---|---:|---|---|---|",
+]
+for finding in findings:
+	lines.append(
+		"| "
+		+ " | ".join(
+			[
+				cell(finding["finding_id"]),
+				cell(finding["owasp_or_stride_category"]),
+				cell(finding["severity"]),
+				cell(finding["confidence"]),
+				cell(f"{finding['file']}:{finding['line']}"),
+				cell(finding["exploit_scenario"]),
+				cell(finding["recommendation"]),
+			]
+		)
+		+ " |"
+	)
+sys.stdout.write("\n".join(lines) + "\n")
+PY
+}
+
 security_pass_terminal_failure() {
   local integration_head_sha="$1"
   local finding_count="$2"
   local completed_cycles="$3"
+  local findings_file="${4:-}"
+  local exhausted_findings_table="" exhausted_findings_table_bytes=0
 
   echo "SECURITY_PASS_FAILED reason=cycle_exhausted tracking_issue=${TRACKING_NUM} cycles=${completed_cycles} findings=${finding_count}"
+  # The findings file lives only in the runner's RUNTIME_DIR, so this comment
+  # is the operator's sole record of what still blocks completion. Rendering
+  # is best-effort: a render failure must never stop the terminal transition.
+  if [ -n "${findings_file}" ] && [ -s "${findings_file}" ]; then
+    if ! exhausted_findings_table="$(render_security_pass_findings_table "${findings_file}" 2>/dev/null)"; then
+      exhausted_findings_table=""
+      echo "::warning::Could not render the remaining security-pass findings for tracking issue #${TRACKING_NUM}; the exhaustion comment will carry the count only."
+    else
+      # post_tracking_comment skips bodies over GitHub's 65536-byte limit
+      # outright, measured in bytes (wc -c), so budget the table in bytes
+      # too: ${#var} counts characters and under-reports non-ASCII text.
+      exhausted_findings_table_bytes="$(printf '%s' "${exhausted_findings_table}" | wc -c | tr -d '[:space:]')"
+    fi
+    if [ -n "${exhausted_findings_table}" ] && [ "${exhausted_findings_table_bytes}" -gt 60000 ]; then
+      # A count-only comment beats losing the transition record.
+      exhausted_findings_table=""
+      echo "::warning::Remaining security-pass findings table for tracking issue #${TRACKING_NUM} exceeds the comment budget; the exhaustion comment will carry the count only."
+    fi
+  fi
   jq --arg head_sha "${integration_head_sha}" '
     .status = "failed"
     | .security_pass_status = "failed"
     | .security_pass_head_sha = $head_sha
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
   post_tracking_comment "## ❌ Project security pass exhausted
 
 The security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s).
 
-Manual intervention is required. After addressing the findings, comment \`/re-security-pass\` to reset the bounded fix loop."
+Manual intervention is required. After addressing the findings, comment \`/re-security-pass\` to reset the bounded fix loop. To accept a finding as a known risk instead, comment \`/security-pass-waive <finding_id> [<finding_id> ...]\`; the loop then resets with that finding excluded.${exhausted_findings_table:+
+
+### Remaining blocking findings (integration head \`${integration_head_sha}\`)
+
+${exhausted_findings_table}}"
   set_failed_completion_status_comment \
     "The project security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s). Manual intervention is required; use \`/re-security-pass\` after addressing the findings."
   tg_notify "Project #${TRACKING_NUM} security pass FAILED after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles with ${finding_count} finding(s) remaining. Manual intervention required." "CRITICAL"
@@ -4881,9 +5241,10 @@ Manual intervention is required. After addressing the findings, comment \`/re-se
 # create_security_pass_fix_issue's dedupe lookup already relies on.
 #
 # API cost (§15): one paginated `GET /issues?state=open&labels=
-# ai:orchestrator-managed` page walk, issued only on the
-# closed-without-merged-PR branch — never on an ordinary poll tick, and
-# never once the successor has been adopted into state.  No cycle-local
+# ai:orchestrator-managed` page walk, issued on the
+# closed-without-merged-PR branch or immediately before an implementation-
+# failed reissue — never on an ordinary poll tick, and never once the
+# successor has been adopted into state. No cycle-local
 # cache can serve it: ACTIVE_WORKFLOW_ISSUES holds only
 # workflow-active numbers, _candidate_details_json only known
 # candidates, and STALL_MANAGED_LINKED_PR_CACHE only state-known
@@ -4891,7 +5252,8 @@ Manual intervention is required. After addressing the findings, comment \`/re-se
 # tick that first observes the predecessor closed.
 #
 # Args:
-#   closed_issue_num — the fix issue number recorded in state
+#   closed_issue_num — the predecessor fix issue number recorded in state;
+#                      it may still be open during create/persist retry dedup
 # Stdout:
 #   successor issue number on a confirmed match; empty otherwise
 # Returns:
@@ -4942,7 +5304,7 @@ resolve_security_pass_fix_successor() {
         [
           .[][]
           | select(.pull_request | not)
-          | select(.number != $closed_issue)
+          | select(.number > $closed_issue)
           | select(
               (((.body // "") | split("\n") | index($tracking_marker)) != null)
               and (((.body // "") | split("\n") | index($local_id_marker)) != null)
@@ -4973,6 +5335,7 @@ security_pass_closed_fix_failure() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
   post_tracking_comment "## ❌ Project security-pass fix did not merge
@@ -4983,60 +5346,338 @@ Security-pass fix issue #${issue_number} closed without merged-PR evidence. Comp
   tg_notify "Project #${TRACKING_NUM} security-pass fix issue #${issue_number} closed without a merged PR. Manual correction and /re-security-pass are required." "CRITICAL"
 }
 
+security_pass_fix_reissue_exhausted() {
+  local issue_number="$1"
+  local reissue_count="$2"
+
+  # De-manage the exhausted issue before closing it so a close failure cannot
+  # make a later /re-security-pass adopt this dead issue again.
+  ensure_label_exists "ai:closed"
+  gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+    --remove-label 'ai:implementation-failed' --remove-label 'ai:orchestrator-managed' \
+    --add-label 'ai:closed' 2>/dev/null \
+    || echo "::warning::Could not update terminal labels on exhausted security-pass fix issue #${issue_number}."
+  if ! gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+    -c "Closing: implementation failed again after ${reissue_count} re-issue(s) (MAX_SECURITY_PASS_FIX_REISSUES=${MAX_SECURITY_PASS_FIX_REISSUES}). The project security pass is now failed; address the findings manually, then comment \`/re-security-pass\` on the tracking issue." 2>/dev/null; then
+    echo "::warning::Could not close exhausted security-pass fix issue #${issue_number}; terminalizing the project after removing it from managed-issue reuse."
+  fi
+  if jq '
+    .status = "failed"
+    | .security_pass_status = "failed"
+    | .security_pass_head_sha = ""
+    | .security_pass_active_fix_issues = []
+    | del(.security_pass_fix_reissue_count)
+    | del(.security_pass_fix_defer)
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    :
+  else
+    rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+      --add-label 'ai:implementation-failed' >/dev/null 2>&1 || true
+    echo "::warning::Could not persist terminal project state after exhausting security-pass fix issue #${issue_number}; the next poll will reconcile the terminal issue."
+    return 0
+  fi
+  echo "SECURITY_PASS_FAILED reason=fix_issue_implementation_failed_reissues_exhausted tracking_issue=${TRACKING_NUM} issue=${issue_number} reissues=${reissue_count} cap=${MAX_SECURITY_PASS_FIX_REISSUES}"
+  reconcile_tracking_body_after_security_pass_transition
+  post_state_comment || true
+  set_tracking_phase_label "ai:security-pass-failed"
+  post_tracking_comment "## ❌ Project security-pass fix could not be implemented
+
+Security-pass fix issue #${issue_number} ended in \`ai:implementation-failed\` again after ${reissue_count} re-issue(s) (cap ${MAX_SECURITY_PASS_FIX_REISSUES}). Completion remains gated; address the findings manually, then comment \`/re-security-pass\` to reset the bounded fix loop."
+  set_failed_completion_status_comment \
+    "Security-pass fix issue #${issue_number} failed implementation after ${reissue_count} re-issue(s). Completion remains gated; use \`/re-security-pass\` after addressing the findings manually."
+  tg_notify "Project #${TRACKING_NUM} security-pass fix issue #${issue_number} failed implementation after ${reissue_count} re-issue(s). Manual intervention and /re-security-pass are required." "CRITICAL"
+}
+
+# A security-pass fix issue is orchestrator-managed but lives outside the
+# wave arrays, so neither the wave implementation-failed reissue loop
+# (which iterates WAVE_STATUS) nor standalone stall recovery (which skips
+# ai:implementation-failed) ever touches it once implement.yml fails in
+# post-Codex validation.  Without this handler the project sits in
+# security-pass-fixing forever, logging "remains in progress" every poll
+# (tele-funtoken-msg-scoring#3928 / fix issue #4055, 2026-09-07: the
+# blocker fix-up #4101 merged within an hour, the fix issue was never
+# re-issued).  Mirror the wave path: defer while post-Codex blocker
+# fix-ups are still open, otherwise close the failed issue and re-issue it
+# with the same body (its durable markers keep the successor discoverable)
+# plus reissue guidance, bounded by MAX_SECURITY_PASS_FIX_REISSUES.
+#
+# Always returns 0; the caller continues the tracking-issue loop.
+security_pass_handle_failed_fix_issue() {
+  local issue_number="$1"
+  local comments_json="$2"
+  local fix_comment_json fix_comment_body blockers_json blocker_count
+  local has_post_codex_context="false" mode="no-op-implementation"
+  local defer_reason="" blocker_open_count=0 blocker_unknown_count=0 blocker_status_summary=""
+  local blocker_issue blocker_state blockers_csv defer_signature prev_signature
+  local defer_count prev_count prev_escalated defer_escalated should_escalate
+  local reissue_count issue_title issue_body blockers_md new_body new_issue_url new_issue_num
+  local fix_cycle_label
+
+  if ! printf '%s' "${comments_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    comments_json='[]'
+  fi
+  fix_cycle_label="$(jq -r '((.security_pass_cycle // 0) + 1 | tostring) + "/" + $max' --arg max "${MAX_SECURITY_PASS_CYCLES}" "${STATE_FILE}" 2>/dev/null || echo "?/${MAX_SECURITY_PASS_CYCLES}")"
+
+  if printf '%s' "${comments_json}" | jq -e 'any(.[]; (.body // "") | test("^## Post-Codex validation"))' >/dev/null 2>&1; then
+    has_post_codex_context="true"
+  fi
+  fix_comment_json="$(printf '%s' "${comments_json}" | jq -c '[.[] | select((.body // "") | startswith("## Post-Codex validation diagnosed follow-up fixes"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty' 2>/dev/null || true)"
+  blockers_json='[]'
+  if [ -n "${fix_comment_json}" ]; then
+    fix_comment_body="$(printf '%s' "${fix_comment_json}" | jq -r '.body // ""')"
+    blockers_json="$(extract_fix_issues_from_comment "${fix_comment_body}" | jq -R 'select(length > 0) | tonumber' | jq -s 'unique')"
+  fi
+  blocker_count="$(printf '%s' "${blockers_json}" | jq 'length' 2>/dev/null || echo 0)"
+  [[ "${blocker_count}" =~ ^[0-9]+$ ]] || blocker_count=0
+  if [ "${blocker_count}" -gt 0 ]; then
+    mode="post-codex-validation"
+  elif [ "${has_post_codex_context}" = "true" ]; then
+    mode="post-codex-validation"
+    defer_reason="post-codex blocker metadata missing or malformed"
+  fi
+
+  if [ "${blocker_count}" -gt 0 ]; then
+    while IFS= read -r blocker_issue; do
+      [ -n "${blocker_issue}" ] || continue
+      blocker_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${blocker_issue}" --jq '.state' || echo "")"
+      case "${blocker_state}" in
+        open)
+          blocker_open_count=$((blocker_open_count + 1))
+          blocker_status_summary+="#${blocker_issue}=open "
+          ;;
+        closed)
+          blocker_status_summary+="#${blocker_issue}=closed "
+          ;;
+        *)
+          blocker_unknown_count=$((blocker_unknown_count + 1))
+          blocker_status_summary+="#${blocker_issue}=unknown "
+          ;;
+      esac
+    done < <(printf '%s' "${blockers_json}" | jq -r '.[]')
+    if [ "${blocker_unknown_count}" -gt 0 ]; then
+      defer_reason="blocker status lookup incomplete"
+    elif [ "${blocker_open_count}" -gt 0 ]; then
+      defer_reason="blocker fix-up issue(s) still open"
+    fi
+  fi
+
+  if [ -n "${defer_reason}" ]; then
+    blockers_csv="$(printf '%s' "${blockers_json}" | jq -r 'map("#" + tostring) | join(", ")' 2>/dev/null || echo "")"
+    [ -n "${blockers_csv}" ] || blockers_csv="(none recorded)"
+    defer_signature="${issue_number}|${blocker_status_summary}|${defer_reason}"
+    prev_signature="$(jq -r '.security_pass_fix_defer.summary // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+    prev_count="$(jq -r '.security_pass_fix_defer.security_pass_defer_count // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    prev_escalated="$(jq -r '.security_pass_fix_defer.security_pass_defer_escalated // false' "${STATE_FILE}" 2>/dev/null || echo false)"
+    [[ "${prev_count}" =~ ^[0-9]+$ ]] || prev_count=0
+    if [ "${defer_signature}" = "${prev_signature}" ]; then
+      defer_count=$((prev_count + 1))
+      defer_escalated="${prev_escalated}"
+    else
+      defer_count=1
+      defer_escalated="false"
+    fi
+    should_escalate="false"
+    if [ "${defer_count}" -ge "${MAX_IMPL_FAILED_DEFER_CYCLES}" ] && [ "${defer_escalated}" != "true" ]; then
+      should_escalate="true"
+      defer_escalated="true"
+    fi
+    if jq --arg summary "${defer_signature}" --argjson issue "${issue_number}" \
+      --argjson count "${defer_count}" --argjson escalated "${defer_escalated}" \
+      '.security_pass_fix_defer = {issue: $issue, summary: $summary, security_pass_defer_count: $count, security_pass_defer_escalated: $escalated}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      post_state_comment || true
+    else
+      rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      echo "::warning::Could not persist security-pass fix deferral state for #${issue_number}; retaining fixing state for retry."
+      return 0
+    fi
+    echo "  Deferring security-pass fix reissue for #${issue_number}: mode=${mode}; blockers=${blockers_csv}; statuses=${blocker_status_summary}; reason=${defer_reason}; cycle=${defer_count}/${MAX_IMPL_FAILED_DEFER_CYCLES}; escalated=${defer_escalated}."
+    if [ "${should_escalate}" = "true" ]; then
+      ensure_label_exists "ai:needs-human"
+      gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments" \
+        -f body="$(printf '## Security-pass implementation-failed deferral escalated\n\nThis security-pass fix issue has been deferred for %s consecutive poll cycles with the same blocker status (%s). Blocker fix-ups [%s] are not advancing on their own — escalating to `ai:needs-human` for manual review. Reason: %s.' "${defer_count}" "${blocker_status_summary}" "${blockers_csv}" "${defer_reason}")" >/dev/null 2>&1 || true
+      tg_notify "Security-pass fix reissue for #${issue_number} (project #${TRACKING_NUM}, fix cycle ${fix_cycle_label}) escalated to ai:needs-human after ${defer_count} deferred cycles."$'\n'"Mode: ${mode}"$'\n'"Blockers: ${blockers_csv}"$'\n'"Statuses: ${blocker_status_summary}"$'\n'"Reason: ${defer_reason}"$'\n'"Issue: $(_gh_url "issues/${issue_number}")" "CRITICAL"
+    elif [ "${defer_signature}" != "${prev_signature}" ]; then
+      tg_notify "Security-pass fix issue #${issue_number} (project #${TRACKING_NUM}, fix cycle ${fix_cycle_label}) failed implementation; reissue deferred."$'\n'"Mode: ${mode}"$'\n'"Blockers: ${blockers_csv}"$'\n'"Statuses: ${blocker_status_summary}"$'\n'"Reason: ${defer_reason}"$'\n'"Issue: $(_gh_url "issues/${issue_number}")" "WARNING"
+    fi
+    return 0
+  fi
+
+  reissue_count="$(jq -r '.security_pass_fix_reissue_count // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${reissue_count}" =~ ^[0-9]+$ ]] || reissue_count=0
+  if [ "${reissue_count}" -ge "${MAX_SECURITY_PASS_FIX_REISSUES}" ]; then
+    security_pass_fix_reissue_exhausted "${issue_number}" "${reissue_count}"
+    return 0
+  fi
+
+  # A prior poll may have created the successor and then failed to persist
+  # state. Reuse the durable marker lookup before creating another live issue.
+  new_issue_num=""
+  if new_issue_num="$(resolve_security_pass_fix_successor "${issue_number}")"; then
+    echo "Security-pass successor #${new_issue_num} already exists for failed issue #${issue_number}; adopting it instead of creating a duplicate."
+  else
+    case "$?" in
+      1) new_issue_num="" ;;
+      *)
+        echo "::warning::Could not verify whether a successor already exists for security-pass fix issue #${issue_number}; skipping creation to avoid a duplicate. Will retry next poll."
+        return 0
+        ;;
+    esac
+  fi
+
+  if [ -z "${new_issue_num}" ]; then
+    # The body carries the durable "- Tracking issue" / "- Local ID" markers
+    # that create_security_pass_fix_issue dedups on; copy it verbatim so the
+    # successor stays discoverable, and refuse to re-issue without it.
+    issue_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '{title: (.title // ""), body: (.body // "")}' || echo "")"
+    issue_title="$(printf '%s' "${issue_body}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+    issue_body="$(printf '%s' "${issue_body}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+    if [ -z "${issue_body}" ] || [ "${issue_body}" = "null" ]; then
+      echo "::warning::Security-pass fix issue #${issue_number} body could not be read; retaining fixing state and retrying the re-issue next poll."
+      return 0
+    fi
+    if [ -z "${issue_title}" ] || [ "${issue_title}" = "null" ]; then
+      issue_title="[security-pass] Project #${TRACKING_NUM} fix cycle ${fix_cycle_label%%/*}"
+    fi
+
+    if [ "${mode}" = "post-codex-validation" ]; then
+      blockers_md="$(printf '%s' "${blockers_json}" | jq -r '.[] | "- #\(.)"' 2>/dev/null || echo "")"
+      [ -n "${blockers_md}" ] || blockers_md="- (none recorded)"
+      new_body="$(cat <<REISSUE_EOF
+${issue_body}
+
+---
+
+**⚠️ Re-issued from #${issue_number}** — the previous implementation attempt failed during post-Codex syntax/validation checks.
+
+**Post-Codex blocker context:**
+${blockers_md}
+
+**Guidance for the implementation model:**
+- Review and respect the blocker fix-up outcomes listed above before re-implementing this security fix.
+- Preserve compatibility with those blocker fixes; do not undo or duplicate them.
+- Run syntax/validation checks for changed files before finishing to avoid another post-Codex failure.
+- You MUST create or modify files as described in the approved plan. Do NOT only describe changes.
+REISSUE_EOF
+)"
+    else
+      new_body="$(cat <<REISSUE_EOF
+${issue_body}
+
+---
+
+**⚠️ Re-issued from #${issue_number}** — the previous implementation attempt produced no repository changes.
+
+**Guidance for the implementation model:**
+- You MUST create or modify files as described in the plan. Do NOT just describe changes.
+- Verify your changes exist on disk before finishing (e.g. \`ls -la\` the target path).
+- If a finding genuinely requires no code change, explain why in a comment instead of silently producing no output.
+REISSUE_EOF
+)"
+    fi
+
+    # Create the successor before closing the failed issue: a create failure
+    # then leaves state untouched for a retry, whereas closing first would
+    # hand the next poll a closed issue without merged-PR evidence and fail
+    # the whole pass on a transient API error.
+    ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
+    new_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+      --title "${issue_title}" \
+      --body "${new_body}" \
+      --label "ai:clarification" \
+      --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
+    new_issue_num="$(printf '%s\n' "${new_issue_url}" | grep -oE '/issues/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+    if ! [[ "${new_issue_num}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::Could not create a replacement for security-pass fix issue #${issue_number}; retaining fixing state and retrying next poll."
+      return 0
+    fi
+  fi
+  reissue_count=$((reissue_count + 1))
+  if jq --argjson successor "${new_issue_num}" --argjson reissues "${reissue_count}" '
+    .security_pass_active_fix_issues = [$successor]
+    | .security_pass_fix_reissue_count = $reissues
+    | del(.security_pass_fix_defer)
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    :
+  else
+    rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    echo "::warning::Security-pass successor #${new_issue_num} could not be persisted for tracking issue #${TRACKING_NUM}; the next poll will adopt the existing successor instead of creating another."
+    return 0
+  fi
+
+  ensure_label_exists "ai:closed"
+  gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+    --remove-label 'ai:implementation-failed' --remove-label 'ai:orchestrator-managed' \
+    --add-label 'ai:closed' 2>/dev/null || true
+  if [ "${mode}" = "post-codex-validation" ]; then
+    gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+      -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this security-pass fix is re-issued as #${new_issue_num} with blocker-sequenced guidance." 2>/dev/null \
+      || echo "::warning::Security-pass predecessor #${issue_number} remains open after successor #${new_issue_num} was persisted; close it before using /re-security-pass."
+  else
+    gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+      -c "Closing: implementation produced no changes. Re-issued as #${new_issue_num} with additional guidance." 2>/dev/null \
+      || echo "::warning::Security-pass predecessor #${issue_number} remains open after successor #${new_issue_num} was persisted; close it before using /re-security-pass."
+  fi
+
+  echo "SECURITY_PASS_FIX_ISSUE_REISSUED tracking_issue=${TRACKING_NUM} failed_issue=${issue_number} successor=${new_issue_num} mode=${mode} reissue=${reissue_count}/${MAX_SECURITY_PASS_FIX_REISSUES}"
+  reconcile_tracking_body_after_security_pass_transition
+  post_state_comment || true
+  post_tracking_comment "## 🔁 Security-pass fix issue re-issued
+
+Security-pass fix issue #${issue_number} (fix cycle ${fix_cycle_label}) ended in \`ai:implementation-failed\` (${mode}) and was re-issued as #${new_issue_num} (re-issue ${reissue_count}/${MAX_SECURITY_PASS_FIX_REISSUES}). Tracking the successor; completion remains gated until it merges and a clean re-audit passes."
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  update_completion_status_comment "waiting" \
+    "## Completion status"$'\n\n'"**State:** \`security-pass-fixing\`"$'\n\n'"Security-pass fix issue #${new_issue_num} (re-issued from #${issue_number}) is in the normal delivery pipeline. Completion remains gated until it merges and a clean current-head re-audit passes." \
+    || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
+  tg_notify "Re-issued security-pass fix issue #${issue_number} as #${new_issue_num} (project #${TRACKING_NUM}, fix cycle ${fix_cycle_label}, re-issue ${reissue_count}/${MAX_SECURITY_PASS_FIX_REISSUES})."$'\n'"Mode: ${mode}"$'\n'"Old issue: $(_gh_url "issues/${issue_number}")"$'\n'"New issue: $(_gh_url "issues/${new_issue_num}")" "WARNING"
+  return 0
+}
+
 create_security_pass_fix_issue() {
   local findings_file="$1"
   local completed_cycles="$2"
   local integration_branch="$3"
   local issue_body_file issue_url issue_number local_id security_pass_fix_action
   local security_pass_managed_issues_pages_file security_pass_managed_issues_jq_error_file
+  local findings_table_file
 
   issue_body_file="${RUNTIME_DIR}/security_pass_fix_${TRACKING_NUM}_${completed_cycles}.md"
   local_id="security-pass-fix-cycle-$((completed_cycles + 1))"
-  if ! python3 - "${findings_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
+  findings_table_file="${RUNTIME_DIR}/security_pass_fix_${TRACKING_NUM}_${completed_cycles}.table.md"
+  if ! render_security_pass_findings_table "${findings_file}" > "${findings_table_file}"; then
+    return 1
+  fi
+  if ! python3 - "${findings_table_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
-findings_path = Path(sys.argv[1])
+table_path = Path(sys.argv[1])
 body_path = Path(sys.argv[2])
 tracking_issue = sys.argv[3]
 integration_branch = sys.argv[4]
 local_id = sys.argv[5]
-
-payload = json.loads(findings_path.read_text(encoding="utf-8"))
-findings = payload["findings"]
-
-
-def cell(value: object) -> str:
-	return " ".join(str(value).replace("|", "\\|").split())
-
 
 lines = [
 	f"Refs #{tracking_issue}",
 	"",
 	"The mandatory project security pass found the following blocking issues. Address every row through the normal clarify, plan, implement, and review pipeline.",
 	"",
-	"| ID | Category | Severity | Confidence | Location | Exploit scenario | Recommendation |",
-	"|---|---|---|---:|---|---|---|",
+	"Fix every instance of each finding's defect class across this project's changes, not only the cited line: the re-audit checks sibling code paths (other venues, adapters, handlers, workers) for the same defect and re-opens the loop if any remain.",
+	"",
+	"### Mitigation policy",
+	"",
+	"Implement each mitigation as an automated, deterministic control (unattended_system_instructions.md §20, Automation Bias). A human approval step, an operator-run command, or a manual sign-off is in scope only where the finding's recommendation starts with `HUMAN GATE REQUIRED:`, and then only for the trigger condition it names; otherwise implement an automated equivalent (identity- and provenance-scoped authorization, fail-closed validation, least-privilege tokens, sandboxing) and say so in the PR body.",
+	"",
 ]
-for finding in findings:
-	lines.append(
-		"| "
-		+ " | ".join(
-			[
-				cell(finding["finding_id"]),
-				cell(finding["owasp_or_stride_category"]),
-				cell(finding["severity"]),
-				cell(finding["confidence"]),
-				cell(f"{finding['file']}:{finding['line']}"),
-				cell(finding["exploit_scenario"]),
-				cell(finding["recommendation"]),
-			]
-		)
-		+ " |"
-	)
+lines.extend(table_path.read_text(encoding="utf-8").splitlines())
 lines.extend(
 	[
 		"",
@@ -5087,6 +5728,11 @@ PY
           .[][]
           | select(.pull_request | not)
           | select(
+              ([(.labels // [])[] | if type == "object" then (.name // "") else . end]
+                | map(select(. == "ai:implementation-failed" or . == "ai:closed"))
+                | length) == 0
+            )
+          | select(
               (((.body // "") | split("\n") | index($tracking_marker)) != null)
               and (((.body // "") | split("\n") | index($local_id_marker)) != null)
             )
@@ -5124,7 +5770,10 @@ PY
     .status = "security-pass-fixing"
     | .security_pass_status = "blocked"
     | .security_pass_active_fix_issues = [$issue_number]
+    | del(.security_pass_fix_reissue_count)
+    | del(.security_pass_fix_defer)
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-fixing"
   if [[ "${security_pass_fix_action}" = "created consolidated fix issue" ]]; then
@@ -5141,6 +5790,903 @@ The security pass found blocking issues and ${security_pass_fix_action} #${issue
     post_state_comment || true
   fi
   return 0
+}
+
+
+# ---------------------------------------------------------------------------
+# Security-pass exhaustion judge, waivers, and advisory follow-ups
+# ---------------------------------------------------------------------------
+#
+# The consolidated fix-cycle budget (MAX_SECURITY_PASS_CYCLES) bounds
+# *persistent* findings, but in practice every re-audit after a merged fix
+# reported brand-new findings on the lines the fix itself wrote (a TTL, a
+# tombstone, an expiry path), so tele-funtoken-msg-scoring#3955 and #4281
+# exhausted 3/3 cycles with every fix issue merged and no finding ever
+# repeated, then sat in ai:security-pass-failed until a human commented
+# /re-security-pass.  Instead of terminalizing on sight, the poller now
+# consults an autonomous judge (prompts/mode-judge-security-pass-exhaustion.txt)
+# that decides per remaining finding:
+#
+#   accept_with_followup  -> the finding becomes a waiver in
+#                            security_pass_waived_findings (the engine and the
+#                            poller drop any re-report), a non-blocking
+#                            `ai:security` follow-up issue is filed through the
+#                            normal issue pipeline, and the project completes
+#                            once nothing else blocks.
+#   keep_fixing           -> one more consolidated fix issue is created for
+#                            the keep_fixing rows; after it merges the re-audit
+#                            returns here if findings remain (the judge decides
+#                            every time; MAX_SECURITY_PASS_JUDGE_ROUNDS=0 is
+#                            unbounded).
+#   fail                  -> the existing terminal ai:security-pass-failed path
+#                            runs, with the judge's verdict on the tracking
+#                            issue so the operator knows why.
+#
+# Judge unavailability of any kind (kill switch, missing prompt, codex failure,
+# unparseable or incomplete verdict, round cap) falls back to the terminal
+# failure that existed before the judge -- never to a silent pass.
+# `/security-pass-waive <finding_id>...` lets an operator record the same kind
+# of acceptance by hand.
+
+security_pass_findings_rows_json() {
+  # Print the findings array of a findings-JSON file, or [] when unreadable.
+  local findings_file="$1"
+  jq -c '.findings // []' "${findings_file}" 2>/dev/null || echo '[]'
+}
+
+# security_pass_apply_waivers_to_findings <findings_file>
+#
+# Poller-side enforcement of security_pass_waived_findings on an engine
+# result: drops re-reports of accepted findings (exact finding_id, or the
+# same file and category within SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of
+# the waived line) and rewrites the findings file in place with the kept
+# rows and an updated counts.kept / counts.suppressed_waived.  The engine
+# applies the same rule when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this
+# keeps an older staged engine honest.  Fail-open: any error leaves the file
+# untouched and logs a warning.
+security_pass_apply_waivers_to_findings() {
+  local findings_file="$1"
+  local waived_count suppressed_summary
+  waived_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${waived_count}" =~ ^[0-9]+$ ]] || waived_count=0
+  [ "${waived_count}" -gt 0 ] || return 0
+  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+findings_path = Path(sys.argv[1])
+state_path = Path(sys.argv[2])
+line_window = int(sys.argv[3])
+
+payload = json.loads(findings_path.read_text(encoding="utf-8"))
+state = json.loads(state_path.read_text(encoding="utf-8"))
+waivers = [row for row in state.get("security_pass_waived_findings", []) if isinstance(row, dict)]
+
+
+def norm_category(value: object) -> str:
+	return " ".join(str(value or "").lower().split())
+
+
+def waiver_for(finding: dict) -> str | None:
+	finding_id = str(finding.get("finding_id") or "")
+	for waiver in waivers:
+		waived_id = str(waiver.get("finding_id") or "")
+		if waived_id and waived_id == finding_id:
+			return waived_id
+		waived_line = waiver.get("line")
+		if (
+			str(waiver.get("file") or "")
+			and str(waiver.get("file") or "") == str(finding.get("file") or "")
+			and norm_category(waiver.get("owasp_or_stride_category"))
+			and norm_category(waiver.get("owasp_or_stride_category")) == norm_category(finding.get("owasp_or_stride_category"))
+			and isinstance(waived_line, int)
+			and not isinstance(waived_line, bool)
+			and abs(int(waived_line) - int(finding.get("line") or 0)) <= line_window
+		):
+			return waived_id or "(unnamed waiver)"
+	return None
+
+
+kept: list[dict] = []
+suppressed: list[str] = []
+for finding in payload.get("findings", []):
+	if isinstance(finding, dict) and waiver_for(finding) is not None:
+		suppressed.append(str(finding.get("finding_id") or "?"))
+		continue
+	kept.append(finding)
+
+if suppressed:
+	payload["findings"] = kept
+	counts = payload.setdefault("counts", {})
+	counts["kept"] = len(kept)
+	counts["suppressed_waived"] = int(counts.get("suppressed_waived") or 0) + len(suppressed)
+	findings_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(json.dumps({"count": len(suppressed), "ids": suppressed}))
+PY
+  )"; then
+    echo "::warning::Could not apply security-pass waivers to the audit result for tracking issue #${TRACKING_NUM}; the engine's own suppression stands."
+    return 0
+  fi
+  local suppressed_count suppressed_ids
+  suppressed_count="$(printf '%s' "${suppressed_summary}" | jq -r '.count // 0' 2>/dev/null || echo 0)"
+  suppressed_ids="$(printf '%s' "${suppressed_summary}" | jq -r '.ids // [] | join(",")' 2>/dev/null || true)"
+  if [[ "${suppressed_count}" =~ ^[0-9]+$ ]] && [ "${suppressed_count}" -gt 0 ]; then
+    echo "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=${TRACKING_NUM} count=${suppressed_count} ids=${suppressed_ids}"
+  fi
+  return 0
+}
+
+# security_pass_record_waivers <waivers_json_array>
+#
+# Upsert waiver rows (by finding_id) into security_pass_waived_findings,
+# drop the same ids from security_pass_reported_findings so the next delta
+# audit does not ask the engine to re-verify them, and keep the array
+# bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
+# severity, justification, source, waived_by, waived_at_cycle, issue}.
+security_pass_record_waivers() {
+  local waivers_json="$1"
+  if ! jq --argjson waivers "${waivers_json}" '
+    (.security_pass_waived_findings // []) as $existing
+    | ($waivers | map(.finding_id)) as $ids
+    | .security_pass_waived_findings = (
+        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waivers) | .[-100:]
+      )
+    | .security_pass_reported_findings = (
+        [(.security_pass_reported_findings // [])[] | select((.finding_id | IN($ids[])) | not)]
+      )
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    rm -f "${STATE_FILE}.tmp"
+    return 1
+  fi
+  return 0
+}
+
+# create_security_pass_advisory_followup <finding_json> <integration_branch> <head_sha> <justification> <source>
+#
+# File one non-blocking `ai:security` follow-up issue for an accepted
+# finding and leave its number in SECURITY_PASS_ADVISORY_ISSUE_NUMBER (empty
+# when nothing was filed).  Dedupes on security_pass_followup_issues in
+# state (one cheap jq read, no API call); the body carries the weekly
+# audit's `<!-- ai:security-finding:<id> -->` marker so the scheduled audit's
+# own dedupe recognises it, plus `<!-- security-pass-advisory:<tracking>:<id> -->`.
+# API cost: one paginated reconciliation search per tracking issue per poller
+# process, one `gh issue create` per new accepted finding, and the first cached
+# `gh label create` attempt for `ai:security`. Fail-open: lookup/create failures
+# leave the number empty and the waiver stands.
+create_security_pass_advisory_followup() {
+  local finding_json="$1"
+  local integration_branch="$2"
+  local head_sha="$3"
+  local justification="$4"
+  local source="${5:-judge}"
+  # Optional: the final PR that merged the integration branch into the
+  # default branch.  Set by security_pass_file_deferred_advisory_followups so
+  # the body tells the pipeline the cited code is already on the default
+  # branch; empty on the legacy judge-time filing path.
+  local merged_pr="${6:-}"
+  local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
+  SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
+  finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
+  [ -n "${finding_id}" ] || return 0
+  existing_issue="$(jq -r --arg id "${finding_id}" '
+    [(.security_pass_followup_issues // [])[] | select(.finding_id == $id) | .issue] | last // empty
+  ' "${STATE_FILE}" 2>/dev/null || true)"
+  if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
+    SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
+    return 0
+  fi
+  advisory_marker="<!-- security-pass-advisory:${TRACKING_NUM}:${finding_id} -->"
+  if [ -z "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]+set}" ]; then
+    # The state cache and weekly-audit lookup cannot detect an issue whose
+    # create succeeded but whose response/state write was lost. This single
+    # paginated REST search per tracking issue returns issue number+body and
+    # fails open to an empty cache; subsequent findings reuse the result.
+    remote_followups_json="$(gh_retry gh api --method GET --paginate --slurp "search/issues" \
+      -f per_page=100 \
+      -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security security-pass-advisory:${TRACKING_NUM} in:body" 2>/dev/null || echo '[]')"
+    _SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]="${remote_followups_json}"
+  fi
+  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg marker "${advisory_marker}" '
+    [if type == "array" then .[].items[]? else .items[]? end | select((.body // "") | contains($marker)) | .number]
+    | first // empty
+  ' 2>/dev/null || true)"
+  if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
+    if ! jq --arg id "${finding_id}" --argjson issue "${existing_issue}" '
+      .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(.finding_id != $id)] + [{finding_id: $id, issue: $issue}] | .[-100:])
+      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end]
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::Found advisory follow-up #${existing_issue} for security-pass finding ${finding_id}, but could not reconcile it into state."
+    fi
+    SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
+    return 0
+  fi
+  body_file="${RUNTIME_DIR}/security_pass_advisory_${TRACKING_NUM}_$(printf '%s' "${finding_id}" | tr -c 'A-Za-z0-9._-' '_').md"
+  printf '%s\n' "${finding_json}" > "${body_file}.finding.json"
+  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+
+finding = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+body_path = Path(sys.argv[2])
+tracking_issue = sys.argv[3]
+integration_branch = sys.argv[4] or "(default branch)"
+head_sha = sys.argv[5]
+justification = sys.argv[6]
+source = sys.argv[7]
+merged_pr = sys.argv[8] if len(sys.argv) > 8 else ""
+
+
+def prose(value: object) -> str:
+	text = " ".join(str(value or "").split())
+	# Audit- and judge-generated prose must not notify users or auto-link issues.
+	return re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b"))
+
+
+finding_id = prose(finding.get("finding_id"))
+location = f"{finding.get('file')}:{finding.get('line')}"
+accepted_by = {
+	"judge": "the orchestrator's security-pass exhaustion judge",
+	"operator": "an operator (`/security-pass-waive`)",
+}.get(source, source)
+lines = [
+	f"<!-- ai:security-finding:{finding_id} -->",
+	f"<!-- security-pass-advisory:{tracking_issue}:{finding_id} -->",
+	f"Refs #{tracking_issue}",
+	"",
+	f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}` and accepted as a known risk by {accepted_by} after the consolidated fix-cycle budget was spent. The project completes without this fix; address it through the normal issue pipeline.",
+	"",
+]
+if merged_pr.isdigit():
+	lines.extend(
+		[
+			f"The integration branch has since merged into the default branch via PR #{merged_pr}, so the cited location refers to code that is already on the default branch. Plan and implement this issue against the default branch.",
+			"",
+		]
+	)
+lines += [
+	f"**Why it was accepted:** {prose(justification) or '(no justification recorded)'}",
+	"",
+	f"- Finding ID: `{finding_id}`",
+	f"- Category: {prose(finding.get('owasp_or_stride_category'))}",
+	f"- Severity: {prose(finding.get('severity'))}",
+	f"- Confidence: {prose(finding.get('confidence'))}",
+	f"- Location: `{prose(location)}`",
+	"",
+	"### Exploit scenario",
+	"",
+	prose(finding.get("exploit_scenario")),
+	"",
+	"### Recommendation",
+	"",
+	prose(finding.get("recommendation")),
+	"",
+	"### Mitigation policy",
+	"",
+	"Implement the mitigation as an automated, deterministic control (unattended_system_instructions.md §20, Automation Bias). A human approval step, an operator-run command, or a manual sign-off is in scope only where the recommendation starts with `HUMAN GATE REQUIRED:`, and then only for the trigger condition it names; otherwise implement an automated equivalent.",
+	"",
+]
+body_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+title = f"[security-pass] Advisory: {finding_id} ({prose(finding.get('severity'))}, {prose(location)})"
+print(title[:200])
+PY
+  )"; then
+    echo "::warning::Could not render the advisory follow-up body for security-pass finding ${finding_id} on tracking issue #${TRACKING_NUM}; the waiver stands without a follow-up issue."
+    return 0
+  fi
+  ensure_label_exists "ai:security"
+  # Do not retry this non-idempotent mutation. If GitHub accepts the create but
+  # the response is lost, the marker search above reconciles it next poll.
+  issue_url="$(gh issue create \
+    --repo "${GITHUB_REPOSITORY}" \
+    --title "${title}" \
+    --body-file "${body_file}" \
+    --label "ai:security" 2>/dev/null || true)"
+  issue_number="$(printf '%s\n' "${issue_url}" | grep -oE '/issues/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+  if ! [[ "${issue_number}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Could not create the advisory follow-up issue for security-pass finding ${finding_id} on tracking issue #${TRACKING_NUM}; the waiver stands without a follow-up issue."
+    return 0
+  fi
+  if ! jq --arg id "${finding_id}" --argjson issue "${issue_number}" '
+    .security_pass_followup_issues = (((.security_pass_followup_issues // []) + [{finding_id: $id, issue: $issue}]) | .[-100:])
+    | .security_pass_waived_findings = [
+        (.security_pass_waived_findings // [])[]
+        | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
+      ]
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    rm -f "${STATE_FILE}.tmp"
+    echo "::warning::Created advisory follow-up #${issue_number} for security-pass finding ${finding_id}, but could not persist it in state; the body marker will reconcile it next poll."
+  fi
+  echo "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=${TRACKING_NUM} finding=${finding_id} issue=${issue_number} source=${source}"
+  SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${issue_number}"
+  return 0
+}
+
+# security_pass_file_deferred_advisory_followups <integration_branch> <default_branch> <final_pr>
+#
+# File the `ai:security` advisory follow-ups that the exhaustion judge or
+# `/security-pass-waive` deferred (waiver rows carrying `followup_pending`
+# and a `finding` payload) now that the integration branch has merged into
+# the default branch via <final_pr>.  Called from every site that records
+# `final_merge_status = "merged"`, before that site's post_state_comment, so
+# the cleared flags ride the state comment already being posted.  Each row
+# goes through create_security_pass_advisory_followup (its own dedupe, marker
+# reconciliation, and fail-open contract apply); a row whose create fails
+# keeps `followup_pending` and is retried by the next merged-state tick.
+# No GitHub API calls beyond those of create_security_pass_advisory_followup;
+# returns 0 always.
+security_pass_file_deferred_advisory_followups() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr="${3:-}"
+  local pending_json pending_count row_json row_finding row_justification row_source row_head_sha
+  local filed_count=0 filed_lines=""
+  pending_json="$(jq -c '
+    [(.security_pass_waived_findings // [])[]
+      | select((.followup_pending // false) == true and .issue == null and (.finding | type) == "object")]
+  ' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+  pending_count="$(printf '%s' "${pending_json}" | jq -r 'length' 2>/dev/null || echo 0)"
+  [[ "${pending_count}" =~ ^[0-9]+$ ]] || pending_count=0
+  if [ "${pending_count}" -eq 0 ]; then
+    return 0
+  fi
+  while IFS= read -r row_json; do
+    [ -n "${row_json}" ] || continue
+    row_finding="$(printf '%s' "${row_json}" | jq -c '.finding')"
+    row_justification="$(printf '%s' "${row_json}" | jq -r '.justification // ""')"
+    row_source="$(printf '%s' "${row_json}" | jq -r '.source // "judge"')"
+    row_head_sha="$(printf '%s' "${row_json}" | jq -r '.audited_head_sha // ""')"
+    if [ -z "${row_head_sha}" ]; then
+      row_head_sha="$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+    fi
+    create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}"
+    if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+      filed_count=$((filed_count + 1))
+      filed_lines="${filed_lines}"$'\n'"- \`$(printf '%s' "${row_json}" | jq -r '.finding_id')\` → #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+      # Filed after the merge, so it was never parked on it: no GET needed later.
+      security_pass_mark_followup_merge_checked "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" || \
+        echo "::warning::Could not record advisory follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER} as merge-checked on tracking issue #${TRACKING_NUM}; it costs one extra read on the next merged-state tick."
+      # The create path clears the pending fields when it records a new
+      # issue; when it returned an issue it already knew from
+      # security_pass_followup_issues the row would stay pending forever, so
+      # settle it here as well (idempotent).
+      if ! jq --arg id "$(printf '%s' "${row_json}" | jq -r '.finding_id')" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
+        .security_pass_waived_findings = [
+          (.security_pass_waived_findings // [])[]
+          | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
+        ]
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+        rm -f "${STATE_FILE}.tmp"
+        echo "::warning::Could not settle the deferred advisory row for finding $(printf '%s' "${row_json}" | jq -r '.finding_id') on tracking issue #${TRACKING_NUM}; it will be reconciled on the next merged-state tick."
+      fi
+    fi
+  done < <(printf '%s' "${pending_json}" | jq -c '.[]')
+  echo "SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=${TRACKING_NUM} final_pr=${final_pr:-none} default_branch=${default_branch} filed=${filed_count} pending=${pending_count}"
+  if [ "${filed_count}" -gt 0 ]; then
+    post_tracking_comment "## 🔐 Security-pass advisory follow-ups filed
+
+\`${integration_branch}\` has merged into \`${default_branch}\`${final_pr:+ via PR #${final_pr}}, so the ${filed_count} finding(s) the security pass accepted as known risks now have non-blocking \`ai:security\` follow-up issue(s) planned against the default branch:
+${filed_lines}"
+  fi
+  if [ "${filed_count}" -lt "${pending_count}" ]; then
+    echo "::warning::$((pending_count - filed_count)) deferred security-pass advisory follow-up(s) for tracking issue #${TRACKING_NUM} could not be filed this tick; they stay pending and are retried on the next merged-state tick."
+  fi
+  return 0
+}
+
+# security_pass_unblock_filed_advisory_followups <integration_branch> <default_branch> <final_pr>
+#
+# Re-plan the `ai:security` advisory follow-ups that were filed BEFORE the
+# integration branch merged and got parked in `ai:blocked` by the planner
+# ("BLOCKED: PR #<final> is still open": #4090 / #4091 for project #3965,
+# filed at judge time; the same happens with
+# SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED=false).  Standalone stall recovery
+# skips ai:blocked issues by design, so without this step they wait for a
+# human `/answer` forever.  Called from every site that records
+# `final_merge_status = "merged"`, right before
+# security_pass_file_deferred_advisory_followups, so follow-ups filed by
+# that same tick are never examined (the filer also records them as checked).
+#
+# Input: every row of `security_pass_followup_issues` whose issue number is
+# not yet in `security_pass_followups_merge_checked`.  Per row: one `gh api`
+# GET reads the issue state and labels; an open issue carrying `ai:blocked`
+# gets one paginated comments read and, when no trusted User comment carries
+# both the durable unblock marker and the poller's `/answer` prefix, one
+# `/answer [auto-answered-by-poller]` comment
+# (`.github/workflows/plan.yml` moves ai:blocked -> ai:planning on `/answer`).
+# Answered, not-blocked and closed issues alike are then appended to
+# `security_pass_followups_merge_checked` (deduped, last 100 kept), so a
+# successful check costs one issue GET, plus one comments GET and at most one
+# POST when blocked (§15). A failed merge-checked state write may repeat the
+# reads, but the durable comment marker keeps the POST at most once. The row
+# shape of `security_pass_followup_issues` is unchanged.  Audited calls: no earlier
+# call in the final-merge arms reads the follow-up issues' labels (the
+# deferred filer only creates issues) and the candidate-details GraphQL batch
+# is scoped to the stall-recovery candidate set, so this is the smallest call
+# that answers the question.  A failed GET or POST leaves the issue unchecked
+# for the next merged-state tick.  Fail-open, no git operations, returns 0
+# always.
+# Log: SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=<N>
+# finding=<id> issue=<M> final_pr=<PR|none> outcome=answered|not_blocked|closed
+security_pass_unblock_filed_advisory_followups() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr="${3:-}"
+  local rows_json row_count row_json row_issue row_finding issue_json issue_state
+  local answered_count=0 answered_lines="" answer_body outcome advisory_unblock_marker advisory_unblock_comments_json
+  rows_json="$(jq -c '
+    ((.security_pass_followups_merge_checked // []) | map(select(type == "number"))) as $checked
+    | [(.security_pass_followup_issues // [])[]
+        | select((.issue | type) == "number" and ((.issue as $row_issue | $checked | index($row_issue)) == null))]
+  ' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+  row_count="$(printf '%s' "${rows_json}" | jq -r 'length' 2>/dev/null || echo 0)"
+  [[ "${row_count}" =~ ^[0-9]+$ ]] || row_count=0
+  if [ "${row_count}" -eq 0 ]; then
+    return 0
+  fi
+  while IFS= read -r row_json; do
+    [ -n "${row_json}" ] || continue
+    row_issue="$(printf '%s' "${row_json}" | jq -r '.issue')"
+    row_finding="$(printf '%s' "${row_json}" | jq -r '.finding_id // ""')"
+    [[ "${row_issue}" =~ ^[0-9]+$ ]] || continue
+    issue_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${row_issue}" --jq '{state: .state, labels: [.labels[]?.name]}' 2>/dev/null || true)"
+    if [ -z "${issue_json}" ] || ! printf '%s' "${issue_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      echo "::warning::Could not read advisory follow-up #${row_issue} (finding ${row_finding}) for tracking issue #${TRACKING_NUM}; its ai:blocked check is retried on the next merged-state tick."
+      continue
+    fi
+    issue_state="$(printf '%s' "${issue_json}" | jq -r '.state // ""')"
+    outcome="closed"
+    if [ "${issue_state}" = "open" ]; then
+      outcome="not_blocked"
+      if printf '%s' "${issue_json}" | jq -e '(.labels // []) | index("ai:blocked") != null' >/dev/null 2>&1; then
+        advisory_unblock_marker="<!-- security-pass-advisory-unblock:${TRACKING_NUM}:${row_issue} -->"
+        # The issue GET above exposes only the comment count, not bodies; no
+        # existing final-merge call or cycle cache can confirm this marker.
+        if ! advisory_unblock_comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${row_issue}/comments?per_page=100" 2>/dev/null | jq -cs 'add // []')"; then
+          echo "::warning::Could not read comments for advisory follow-up #${row_issue} (finding ${row_finding}) on tracking issue #${TRACKING_NUM}; no duplicate /answer was posted and the check is retried on the next merged-state tick."
+          continue
+        fi
+        answer_body="/answer [auto-answered-by-poller]
+
+_Security-pass advisory follow-up: \`${integration_branch}\` has merged into \`${default_branch}\`${final_pr:+ via PR #${final_pr}}, so the wait-for-merge blocker that parked this issue in \`ai:blocked\` no longer holds. Re-planning against the default branch._
+
+${advisory_unblock_marker}"
+        if ! printf '%s' "${advisory_unblock_comments_json}" | jq -e --arg marker "${advisory_unblock_marker}" '
+          any(.[];
+            (.user.type // "") == "User"
+            and ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+            and ((.body // "") | startswith("/answer [auto-answered-by-poller]") and contains($marker)))
+        ' >/dev/null 2>&1; then
+          # Do not retry this non-idempotent mutation. If GitHub accepts the
+          # comment but its response is lost, the marker reconciles it next tick.
+          if ! gh api "repos/${GITHUB_REPOSITORY}/issues/${row_issue}/comments" -f body="${answer_body}" >/dev/null 2>&1; then
+            echo "::warning::Could not post /answer on advisory follow-up #${row_issue} (finding ${row_finding}) for tracking issue #${TRACKING_NUM}; retried on the next merged-state tick."
+            continue
+          fi
+          answered_count=$((answered_count + 1))
+          answered_lines="${answered_lines}"$'\n'"- \`${row_finding}\` → #${row_issue}"
+        fi
+        outcome="answered"
+      fi
+    fi
+    security_pass_mark_followup_merge_checked "${row_issue}" || \
+      echo "::warning::Could not record the ai:blocked check for advisory follow-up #${row_issue} on tracking issue #${TRACKING_NUM}; it is re-checked on the next merged-state tick."
+    echo "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=${TRACKING_NUM} finding=${row_finding} issue=${row_issue} final_pr=${final_pr:-none} outcome=${outcome}"
+  done < <(printf '%s' "${rows_json}" | jq -c '.[]')
+  if [ "${answered_count}" -gt 0 ]; then
+    post_tracking_comment "## 🔓 Security-pass advisory follow-ups re-planned
+
+\`${integration_branch}\` has merged into \`${default_branch}\`${final_pr:+ via PR #${final_pr}}. ${answered_count} advisory follow-up issue(s) filed before the merge had been parked in \`ai:blocked\` waiting for it; each received an automatic \`/answer\` and re-enters planning against the default branch:
+${answered_lines}"
+  fi
+  return 0
+}
+
+# security_pass_mark_followup_merge_checked <issue_number>
+#
+# Append <issue_number> to `security_pass_followups_merge_checked` (deduped,
+# last 100 kept) so security_pass_unblock_filed_advisory_followups never
+# reads that follow-up again.  Returns 1 when the state write fails.
+security_pass_mark_followup_merge_checked() {
+  local checked_issue="$1"
+  [[ "${checked_issue}" =~ ^[0-9]+$ ]] || return 1
+  if jq --argjson issue "${checked_issue}" '
+    .security_pass_followups_merge_checked = (
+      (((.security_pass_followups_merge_checked // []) | map(select(type == "number"))) + [$issue]) | unique | .[-100:]
+    )
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    return 0
+  fi
+  rm -f "${STATE_FILE}.tmp"
+  return 1
+}
+
+# security_pass_exhaustion_judge <head_sha> <merge_base_sha> <finding_count> <completed_cycles> <findings_file> <integration_branch> [<verified_analysis_ref>]
+#
+# Returns 0 when the judge produced an actionable verdict that this function
+# fully applied, with SECURITY_PASS_JUDGE_OUTCOME set to `passed` (every
+# remaining finding accepted; the pass is recorded clean at <head_sha> and
+# the caller continues to completion) or `fixing` (a consolidated fix issue
+# was created, or the attempt failed closed; the caller returns 1 without
+# terminalizing).  Returns 1 when the caller must run the pre-existing
+# terminal failure: judge disabled, round cap reached, prompt or engine
+# unavailable, unparseable or incomplete verdict, or a `fail` decision.
+security_pass_exhaustion_judge() {
+  local head_sha="$1"
+  local merge_base_sha="$2"
+  local finding_count="$3"
+  local completed_cycles="$4"
+  local findings_file="$5"
+  local integration_branch="$6"
+  local verified_analysis_ref="${7:-}"
+  local judge_rounds judge_round diagnostics prompt_file output_file error_file verdict_file
+  local judge_json judge_success attempt effective_judge_model semble_query_file semble_prefetch static_file
+  local accepted_count fixing_count failed_count decisions_table waivers_json fixing_findings_file
+  local followup_issue followup_issues finding_json finding_id justification summary
+  local keep_fixing_capped keep_fixing_converted capped_suffix
+
+  SECURITY_PASS_JUDGE_OUTCOME=""
+  if [ "${SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED}" != "true" ]; then
+    echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=disabled"
+    return 1
+  fi
+  judge_rounds="$(jq -r '.security_pass_judge_rounds // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${judge_rounds}" =~ ^[0-9]+$ ]] || judge_rounds=0
+  if [ "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" -gt 0 ] && [ "${judge_rounds}" -ge "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" ]; then
+    echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=rounds_exhausted rounds=${judge_rounds} cap=${MAX_SECURITY_PASS_JUDGE_ROUNDS}"
+    return 1
+  fi
+  if [ ! -f prompts/mode-judge-security-pass-exhaustion.txt ] || [ ! -f scripts/write_codex_config.sh ]; then
+    echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=prompt_unavailable"
+    return 1
+  fi
+  judge_round=$((judge_rounds + 1))
+  # keep_fixing is available for the first MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS
+  # rounds; later rounds convert it to accept_with_followup (see below).
+  keep_fixing_capped="false"
+  if [ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" -gt 0 ] && [ "${judge_round}" -gt "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" ]; then
+    keep_fixing_capped="true"
+  fi
+
+  # Diagnostics: everything the judge needs that is not in the checkout.
+  # --slurpfile keeps the findings and state out of argv (MAX_ARG_STRLEN).
+  if ! diagnostics="$(jq -cn \
+    --arg tracking_issue "${TRACKING_NUM}" \
+    --arg integration_branch "${integration_branch}" \
+    --arg head_sha "${head_sha}" \
+    --arg merge_base_sha "${merge_base_sha}" \
+    --argjson completed_cycles "${completed_cycles}" \
+    --argjson max_cycles "${MAX_SECURITY_PASS_CYCLES}" \
+    --argjson judge_round "${judge_round}" \
+    --argjson max_judge_rounds "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" \
+    --argjson max_keep_fixing_rounds "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" \
+    --argjson keep_fixing_available "$([ "${keep_fixing_capped}" = "true" ] && echo false || echo true)" \
+    --slurpfile audit "${findings_file}" \
+    --slurpfile state "${STATE_FILE}" '
+    {
+      tracking_issue: ($tracking_issue | tonumber),
+      project_title: ($state[0].project_title // ""),
+      integration_branch: $integration_branch,
+      integration_head_sha: $head_sha,
+      merge_base_sha: $merge_base_sha,
+      completed_fix_cycles: $completed_cycles,
+      max_fix_cycles: $max_cycles,
+      judge_round: $judge_round,
+      max_judge_rounds: (if $max_judge_rounds == 0 then "unbounded" else $max_judge_rounds end),
+      max_keep_fixing_rounds: (if $max_keep_fixing_rounds == 0 then "unbounded" else $max_keep_fixing_rounds end),
+      keep_fixing_available: $keep_fixing_available,
+      remaining_findings: ($audit[0].findings // []),
+      reported_findings_history: ($state[0].security_pass_reported_findings // []),
+      waived_findings: ($state[0].security_pass_waived_findings // []),
+      advisory_followup_issues: ($state[0].security_pass_followup_issues // []),
+      project_specification: (($state[0].project_body_snapshot // "") | .[0:6000])
+    }' 2>/dev/null)" || [ -z "${diagnostics}" ]; then
+    echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=diagnostics_build_failed"
+    return 1
+  fi
+
+  prompt_file="${RUNTIME_DIR}/security_pass_judge_prompt_${TRACKING_NUM}.txt"
+  output_file="${RUNTIME_DIR}/security_pass_judge_output_${TRACKING_NUM}.txt"
+  error_file="${RUNTIME_DIR}/security_pass_judge_${TRACKING_NUM}.err"
+  verdict_file="${RUNTIME_DIR}/security_pass_judge_verdict_${TRACKING_NUM}.json"
+  semble_query_file="${RUNTIME_DIR}/security_pass_judge_semble_query_${TRACKING_NUM}.txt"
+  static_file="${RUNTIME_DIR}/judge_static.txt"
+  {
+    printf '%s\n' 'Security-pass exhaustion judge context.'
+    append_judge_semble_query_text "Remaining findings:" "$(security_pass_findings_rows_json "${findings_file}")" 7000
+  } > "${semble_query_file}"
+  semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${semble_query_file}" "Security Pass Judge Context")"
+  rm -f "${semble_query_file}"
+  if [ ! -s "${static_file}" ]; then
+    if ! assemble_judge_static_context "${static_file}"; then
+      echo "WARNING: failed to assemble security-pass judge static context; continuing without it" >&2
+      : > "${static_file}"
+    fi
+  fi
+  {
+    cat "${static_file}"
+    echo
+    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE:-60}"
+    echo
+    echo "=== SECURITY PASS EXHAUSTION JUDGE TASK ==="
+    echo
+    SEMBLE_PREFETCH="${semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-security-pass-exhaustion.txt
+    echo
+    echo "=== SECURITY PASS EXHAUSTION DIAGNOSTICS JSON ==="
+    echo
+    echo "${diagnostics}"
+  } > "${prompt_file}"
+
+  effective_judge_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
+  if ! bash scripts/write_codex_config.sh --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}" >/dev/null 2>"${error_file}"; then
+    echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=codex_config_failed"
+    return 1
+  fi
+
+  judge_success="false"
+  for attempt in 1 2; do
+    : > "${output_file}"
+    if [ -n "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
+      printf '%s\n' "${MOCK_SECURITY_PASS_JUDGE_JSON}" > "${output_file}"
+    else
+      sanitize_codex_prompt_file "${prompt_file}"
+      bash scripts/codex_heartbeat.sh \
+        --phase "orchestrate-security-pass-judge" \
+        --stdout-file "${output_file}" \
+        --stderr-file "${error_file}" \
+        -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
+          --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true
+    fi
+    judge_json="$(_robust_parse_json_file "${output_file}")"
+    if [ -n "${judge_json}" ] && printf '%s' "${judge_json}" | jq -e --slurpfile audit "${findings_file}" '
+      (.decisions | type) == "array"
+      and (
+        ([$audit[0].findings[]?.finding_id] | unique) as $ids
+        | ([.decisions[] | select(type == "object") | select((.finding_id | type) == "string") | select(.finding_id | IN($ids[])) | .finding_id] | unique) as $decided
+        | [.decisions[] | select(type == "object") | select((.finding_id | type) == "string") | select(.finding_id | IN($ids[]))] as $known
+        | ($known | length) == ($ids | length)
+          and ($decided | length) == ($ids | length)
+          and all($known[]; .action == "accept_with_followup" or .action == "keep_fixing" or .action == "fail")
+          and ((any($known[]; .action == "fail") | not) or all($known[]; .action == "fail"))
+      )
+    ' >/dev/null 2>&1; then
+      judge_success="true"
+      break
+    fi
+    echo "::warning::Security-pass exhaustion judge attempt ${attempt} for tracking issue #${TRACKING_NUM} returned no usable verdict (every remaining finding needs exactly one valid decision, and fail cannot be mixed with non-fail actions)."
+    if [ -z "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
+      sleep $(( 8 * attempt ))
+    fi
+  done
+  if [ "${judge_success}" != "true" ]; then
+    echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=invalid_verdict round=${judge_round}"
+    return 1
+  fi
+
+  # Normalize the verdict to one decision per remaining finding (the first
+  # decision for an id wins; unknown ids are dropped), and persist the round.
+  printf '%s' "${judge_json}" | jq -c --slurpfile audit "${findings_file}" --argjson cycle "${completed_cycles}" '
+    ($audit[0].findings // []) as $findings
+    | (.decisions // []) as $decisions
+    | {
+        summary: ((.summary // "") | tostring | .[0:1200]),
+        decisions: [
+          $findings[] as $finding
+          | ($decisions | map(select(type == "object" and .finding_id == $finding.finding_id)) | .[0]) as $decision
+          | {
+              finding_id: $finding.finding_id,
+              action: $decision.action,
+              justification: (($decision.justification // "") | tostring | .[0:600]),
+              finding: $finding
+            }
+        ]
+      }
+  ' > "${verdict_file}" 2>/dev/null || { echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=verdict_normalize_failed"; return 1; }
+  jq --argjson round "${judge_round}" '.security_pass_judge_rounds = $round' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  # Convergence backstop: once the judge has had MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS
+  # rounds that could grant another cycle, a keep_fixing decision is converted
+  # to accept_with_followup so the finding becomes a deferred advisory and the
+  # project completes unattended.  A project-wide `fail` verdict never reaches
+  # here with keep_fixing rows (mixed verdicts are rejected above).
+  keep_fixing_converted=0
+  capped_suffix=""
+  if [ "${keep_fixing_capped}" = "true" ]; then
+    keep_fixing_converted="$(jq -r '[.decisions[] | select(.action == "keep_fixing")] | length' "${verdict_file}")"
+    [[ "${keep_fixing_converted}" =~ ^[0-9]+$ ]] || keep_fixing_converted=0
+    if [ "${keep_fixing_converted}" -gt 0 ]; then
+      if ! jq --arg note "[keep_fixing capped after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} judge round(s); converted to advisory follow-up] " '
+        .decisions = [
+          .decisions[]
+          | if .action == "keep_fixing" then (.action = "accept_with_followup" | .justification = ($note + .justification)) else . end
+        ]
+      ' "${verdict_file}" > "${verdict_file}.tmp" || ! mv "${verdict_file}.tmp" "${verdict_file}"; then
+        rm -f "${verdict_file}.tmp"
+        echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=keep_fixing_cap_rewrite_failed round=${judge_round}"
+        return 1
+      fi
+      echo "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=${TRACKING_NUM} round=${judge_round} cap=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} converted=${keep_fixing_converted}"
+      capped_suffix=" ${keep_fixing_converted} of them were \`keep_fixing\` decisions converted to advisories because the keep_fixing round budget (\`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}\`) is spent."
+    fi
+  fi
+
+  accepted_count="$(jq -r '[.decisions[] | select(.action == "accept_with_followup")] | length' "${verdict_file}")"
+  fixing_count="$(jq -r '[.decisions[] | select(.action == "keep_fixing")] | length' "${verdict_file}")"
+  failed_count="$(jq -r '[.decisions[] | select(.action == "fail")] | length' "${verdict_file}")"
+  summary="$(jq -r '.summary' "${verdict_file}")"
+  echo "SECURITY_PASS_JUDGE_DECIDED tracking_issue=${TRACKING_NUM} round=${judge_round} head_sha=${head_sha} accepted=${accepted_count} keep_fixing=${fixing_count} failed=${failed_count}"
+
+  if [ "${failed_count}" -gt 0 ]; then
+    decisions_table="$(render_security_pass_judge_decisions_table "${verdict_file}" 2>/dev/null || true)"
+    post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
+
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge decided that ${failed_count} finding(s) need a human, so the project is terminalized as \`ai:security-pass-failed\`.
+
+**Summary:** $(security_pass_prose "${summary}")
+${decisions_table:+
+${decisions_table}}"
+    return 1
+  fi
+
+  # Accepted findings: waiver rows + advisory follow-ups.  With
+  # SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED (default) the waiver row keeps
+  # the finding payload and a `followup_pending` flag, and
+  # security_pass_file_deferred_advisory_followups files the issue once the
+  # integration branch has merged into the default branch, so the standalone
+  # pipeline plans it against code that exists there.
+  followup_issues=""
+  followup_suffix=""
+  followup_tg_suffix=""
+  if [ "${accepted_count}" -gt 0 ]; then
+    waivers_json="$(jq -c --argjson cycle "${completed_cycles}" --arg head_sha "${head_sha}" \
+      --argjson defer "$([ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ] && echo true || echo false)" '
+      [.decisions[] | select(.action == "accept_with_followup") | {
+        finding_id: .finding.finding_id,
+        file: .finding.file,
+        line: .finding.line,
+        owasp_or_stride_category: .finding.owasp_or_stride_category,
+        severity: .finding.severity,
+        justification: .justification,
+        source: "judge",
+        waived_by: "security-pass-exhaustion-judge",
+        waived_at_cycle: $cycle,
+        issue: null
+      } + (if $defer then {followup_pending: true, audited_head_sha: $head_sha, finding: .finding} else {} end)]' "${verdict_file}")"
+    if ! security_pass_record_waivers "${waivers_json}"; then
+      echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=waiver_state_write_failed round=${judge_round}"
+      return 1
+    fi
+    echo "SECURITY_PASS_WAIVED tracking_issue=${TRACKING_NUM} source=judge round=${judge_round} ids=$(printf '%s' "${waivers_json}" | jq -r 'map(.finding_id) | join(",")')"
+    if [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ]; then
+      while IFS= read -r finding_id; do
+        [ -n "${finding_id}" ] || continue
+        echo "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=${TRACKING_NUM} finding=${finding_id} source=judge reason=integration_branch_not_merged"
+      done < <(printf '%s' "${waivers_json}" | jq -r '.[].finding_id')
+      followup_suffix=" (follow-up issues will be filed once \`${integration_branch}\` merges into the default branch)"
+      followup_tg_suffix=" (follow-ups filed after the final merge)"
+    else
+      while IFS= read -r finding_json; do
+        [ -n "${finding_json}" ] || continue
+        justification="$(printf '%s' "${finding_json}" | jq -r '.justification // ""')"
+        create_security_pass_advisory_followup "$(printf '%s' "${finding_json}" | jq -c '.finding')" "${integration_branch}" "${head_sha}" "${justification}" "judge"
+        followup_issue="${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+        if [[ "${followup_issue}" =~ ^[0-9]+$ ]]; then
+          followup_issues="${followup_issues}${followup_issues:+, }#${followup_issue}"
+        fi
+      done < <(jq -c '.decisions[] | select(.action == "accept_with_followup")' "${verdict_file}")
+      followup_suffix="${followup_issues:+ (follow-ups: ${followup_issues})}"
+      followup_tg_suffix="${followup_issues:+ (follow-ups ${followup_issues})}"
+    fi
+  fi
+
+  decisions_table="$(render_security_pass_judge_decisions_table "${verdict_file}" 2>/dev/null || true)"
+  if [ "${fixing_count}" -gt 0 ]; then
+    post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
+
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge accepted ${accepted_count} finding(s) as known risks${followup_suffix} and granted one more consolidated fix cycle for ${fixing_count} finding(s). The re-audit after that fix merges returns to the judge if findings remain.
+
+**Summary:** $(security_pass_prose "${summary}")
+${decisions_table:+
+${decisions_table}}"
+    fixing_findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.judge_fix.json"
+    jq --slurpfile verdict "${verdict_file}" '
+      ([$verdict[0].decisions[] | select(.action == "keep_fixing") | .finding_id]) as $ids
+      | .findings = [.findings[] | select(.finding_id | IN($ids[]))]
+      | .counts.kept = (.findings | length)
+    ' "${findings_file}" > "${fixing_findings_file}"
+    if [ -n "${verified_analysis_ref}" ] \
+      && ! ensure_security_pass_repair_branch "${integration_branch}" "${head_sha}"; then
+      security_pass_fail_closed "repair_branch_recreate_failed" "The deleted integration branch could not be recreated and verified at the audited final-PR head." "blocked"
+      SECURITY_PASS_JUDGE_OUTCOME="fixing"
+      return 0
+    fi
+    if ! create_security_pass_fix_issue "${fixing_findings_file}" "${completed_cycles}" "${integration_branch}"; then
+      security_pass_fail_closed "fix_issue_create_failed" "The consolidated security-pass fix issue could not be created." "blocked"
+    fi
+    SECURITY_PASS_JUDGE_OUTCOME="fixing"
+    return 0
+  fi
+
+  # Every remaining finding accepted: the audited head is clean by decision.
+  jq --arg head_sha "${head_sha}" '
+    .status = "in_progress"
+    | .security_pass_status = "passed"
+    | .security_pass_head_sha = $head_sha
+    | .security_pass_active_fix_issues = []
+    | .security_pass_reported_findings = []
+    | .security_pass_fix_touched_files = []
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
+  post_state_comment || true
+  post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
+
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remained at integration head \`${head_sha}\`. The judge accepted every remaining finding as a known risk${followup_suffix}; the security pass is recorded clean at this head and completion continues.${capped_suffix} Comment \`/re-security-pass\` to re-run a full audit instead.
+
+**Summary:** $(security_pass_prose "${summary}")
+${decisions_table:+
+${decisions_table}}"
+  echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${head_sha} reason=exhaustion_judge_accepted accepted=${accepted_count}"
+  tg_notify "Project #${TRACKING_NUM} security pass: the exhaustion judge accepted ${accepted_count} remaining finding(s) as known risks after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles${followup_tg_suffix}; completion continues." "WARNING"
+  SECURITY_PASS_JUDGE_OUTCOME="passed"
+  return 0
+}
+
+# Strip notification triggers from judge- or audit-generated prose before it
+# lands in a tracking comment (same rule as render_security_pass_findings_table).
+security_pass_prose() {
+  printf '%s' "${1:-}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import re, sys
+text = " ".join(sys.stdin.read().split())
+sys.stdout.write(re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b")))
+'
+}
+
+render_security_pass_judge_decisions_table() {
+  local verdict_file="$1"
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${verdict_file}" <<'PY'
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+
+verdict = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+
+
+def cell(value: object) -> str:
+	rendered_cell = " ".join(str(value).replace("|", "\\|").split())
+	return re.sub(r"#(?=\d)", "#\u200b", rendered_cell.replace("@", "@\u200b"))
+
+
+lines = [
+	"| ID | Severity | Location | Decision | Justification |",
+	"|---|---|---|---|---|",
+]
+for decision in verdict.get("decisions", []):
+	finding = decision.get("finding") or {}
+	lines.append(
+		"| "
+		+ " | ".join(
+			[
+				cell(decision.get("finding_id")),
+				cell(finding.get("severity")),
+				cell(f"{finding.get('file')}:{finding.get('line')}"),
+				cell(decision.get("action")),
+				cell(decision.get("justification") or ""),
+			]
+		)
+		+ " |"
+	)
+sys.stdout.write("\n".join(lines) + "\n")
+PY
 }
 
 run_security_pass_inline() {
@@ -5184,6 +6730,30 @@ run_security_pass_inline() {
   fi
   if security_pass_current_head_is_valid "${current_head_sha}"; then
     return 0
+  fi
+  # A recorded clean pass that no longer matches the current head means new
+  # commits landed after that audit -- a `chore: sync <default> into
+  # <integration>` merge, a resolver/judge conflict resolution, or a fix PR.
+  # `security_pass_cycle` bounds *persistent* findings: consecutive fix cycles
+  # that failed to clear the same audit.  A proven-clean audit breaks that
+  # chain, so carrying the spent budget across the invalidation terminalizes
+  # the project on the first finding in the newly-arrived code without ever
+  # granting it a fix cycle.  Incident: project #3965 passed at 75048a2c with
+  # the budget already at 3/3, a routine `chore: sync main into
+  # orchestrator/project-3965` merge advanced the head to 56f71c8f, and the
+  # re-audit's 2 findings went straight to security_pass_terminal_failure with
+  # zero cycles spent on them.  Completion still requires a clean SHA-bound
+  # pass at the current head (security_pass_current_head_is_valid above), so a
+  # fresh budget cannot let unaudited code through -- it only restores the fix
+  # loop those findings are entitled to.
+  if [ "${prior_security_status}" = "passed" ]; then
+    if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
+      && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
+    else
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::Could not reset the security-pass fix-cycle budget for tracking issue #${TRACKING_NUM} after the audited head advanced to ${current_head_sha}; the previous budget stands."
+    fi
   fi
 
   for required_security_asset in \
@@ -5229,6 +6799,156 @@ run_security_pass_inline() {
     return 1
   fi
 
+  # Delta re-audit.  Every earlier audit of this project already covered the
+  # range merge-base..<its head>; re-sampling the whole range after each
+  # merged fix hands the model a fresh chance to find something new in code it
+  # has already passed judgement on, so the fix loop never converges.  On
+  # tele-funtoken-msg-scoring#3928, fun-token-multi-chain#471 and
+  # binance-blessings#249 every consolidated fix issue merged, no finding_id
+  # ever repeated across cycles, and all three projects still exhausted
+  # MAX_SECURITY_PASS_CYCLES on findings the previous audit had not reported.
+  # The explicit range stays merge-base..head (the scope contract), and
+  # SECURITY_AUDIT_DIFF_SINCE narrows it to files that changed since the last
+  # audited commit; previously reported findings keep their files in scope
+  # and are handed to the model to verify (SECURITY_AUDIT_PRIOR_FINDINGS).
+  # Legacy state that passed before this field existed falls back to the
+  # passed head SHA, which is exactly the last audited commit.  A missing,
+  # rewritten, or non-ancestor pointer falls back to the full range.
+  security_pass_last_audited_sha="$(jq -r '
+    if (.security_pass_last_audited_sha // "") != "" then .security_pass_last_audited_sha
+    elif (.security_pass_status // "") == "passed" then (.security_pass_head_sha // "")
+    else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+  security_pass_audit_since_sha=""
+  security_pass_audit_scope_mode="full"
+  security_pass_audit_scope_reason="no_prior_audit"
+  if [ -n "${security_pass_last_audited_sha}" ]; then
+    if [ "${security_pass_last_audited_sha}" = "${current_head_sha}" ]; then
+      security_pass_audit_scope_reason="head_unchanged_since_last_audit"
+      security_pass_audit_since_sha="${security_pass_last_audited_sha}"
+      security_pass_audit_scope_mode="delta"
+    elif git cat-file -e "${security_pass_last_audited_sha}^{commit}" 2>/dev/null \
+      && git merge-base --is-ancestor "${security_pass_last_audited_sha}" "${current_head_sha}" 2>/dev/null; then
+      security_pass_audit_since_sha="${security_pass_last_audited_sha}"
+      security_pass_audit_scope_mode="delta"
+      security_pass_audit_scope_reason="head_advanced_since_last_audit"
+    else
+      security_pass_audit_scope_reason="last_audited_sha_not_ancestor_of_head"
+    fi
+  fi
+  security_pass_prior_findings_file="${RUNTIME_DIR}/security_pass_prior_findings_${TRACKING_NUM}.json"
+  rm -f "${security_pass_prior_findings_file}"
+  security_pass_prior_findings_count="$(jq -r '.security_pass_reported_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${security_pass_prior_findings_count}" =~ ^[0-9]+$ ]] || security_pass_prior_findings_count=0
+  if [ "${security_pass_prior_findings_count}" -gt 0 ]; then
+    if ! jq '.security_pass_reported_findings // []' "${STATE_FILE}" > "${security_pass_prior_findings_file}" 2>/dev/null; then
+      rm -f "${security_pass_prior_findings_file}"
+      security_pass_prior_findings_count=0
+      echo "::warning::Could not export the previously reported security-pass findings for tracking issue #${TRACKING_NUM}; the audit runs without them."
+    fi
+  fi
+  if [ "${security_pass_prior_findings_count}" -eq 0 ]; then
+    security_pass_prior_findings_file=""
+  fi
+  # Waived findings (exhaustion judge or /security-pass-waive) travel to the
+  # engine as accepted findings it must not re-report; the poller re-applies
+  # the same suppression on the result (security_pass_apply_waivers_to_findings).
+  security_pass_waived_findings_file="${RUNTIME_DIR}/security_pass_waived_findings_${TRACKING_NUM}.json"
+  rm -f "${security_pass_waived_findings_file}"
+  security_pass_waived_findings_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${security_pass_waived_findings_count}" =~ ^[0-9]+$ ]] || security_pass_waived_findings_count=0
+  if [ "${security_pass_waived_findings_count}" -gt 0 ]; then
+    if ! jq '.security_pass_waived_findings // []' "${STATE_FILE}" > "${security_pass_waived_findings_file}" 2>/dev/null; then
+      rm -f "${security_pass_waived_findings_file}"
+      security_pass_waived_findings_count=0
+      echo "::warning::Could not export the waived security-pass findings for tracking issue #${TRACKING_NUM}; the audit runs without them and the poller re-applies the waivers to its result."
+    fi
+  fi
+  if [ "${security_pass_waived_findings_count}" -eq 0 ]; then
+    security_pass_waived_findings_file=""
+  fi
+  # Fix-cycle diffs: the code the previous fix cycle wrote, handed to the
+  # engine as newly introduced attack surface (SECURITY_AUDIT_FIX_CYCLE_DIFFS).
+  # The delta scope above already keeps files changed since the last audited
+  # commit in scope, and SECURITY_AUDIT_PRIOR_FINDINGS keeps the files of
+  # earlier findings; but nothing told the model that the fix's own new code
+  # is fresh attack surface, and a fix-touched file that no finding cited left
+  # scope after one re-audit.  tele-funtoken-msg-scoring#4281 exhausted 3/3
+  # cycles that way: every fix merged, no finding repeated, and the last
+  # finding sat in `_season_pool_settlement_readiness`, a predicate cycle 1's
+  # fix created and cycles 2 and 3 were never told to audit as new code.
+  # Each entry is {cycle, since_sha, head_sha, files}: the current cycle's
+  # entry is computed here from the local checkout (range files that changed
+  # since the last audited commit, added/modified only, capped at 200) and the
+  # previous cycle's entry is carried over once from
+  # security_pass_fix_touched_files, so fix code stays in scope for one
+  # re-audit beyond the one that follows its merge.  Every step fails open:
+  # a git or jq failure warns and the audit runs exactly as before.
+  security_pass_fix_cycle_diffs_file="${RUNTIME_DIR}/security_pass_fix_cycle_diffs_${TRACKING_NUM}.json"
+  rm -f "${security_pass_fix_cycle_diffs_file}"
+  security_pass_fix_cycle_current_entry="null"
+  security_pass_fix_cycle_current="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${security_pass_fix_cycle_current}" =~ ^[0-9]+$ ]] || security_pass_fix_cycle_current=0
+  security_pass_fix_cycle_diff_entries=0
+  security_pass_fix_cycle_diff_files=0
+  if [ "${security_pass_audit_scope_mode}" = "delta" ] && [ "${security_pass_audit_since_sha}" != "${current_head_sha}" ]; then
+    security_pass_fix_cycle_range_files="${RUNTIME_DIR}/security_pass_fix_cycle_range_${TRACKING_NUM}.txt"
+    security_pass_fix_cycle_since_files="${RUNTIME_DIR}/security_pass_fix_cycle_since_${TRACKING_NUM}.txt"
+    security_pass_fix_cycle_files_file="${RUNTIME_DIR}/security_pass_fix_cycle_files_${TRACKING_NUM}.txt"
+    if git diff --name-only --end-of-options "${merge_base_sha}..${current_head_sha}" -- > "${security_pass_fix_cycle_range_files}" 2>/dev/null \
+      && git diff --name-only --diff-filter=AM --end-of-options "${security_pass_audit_since_sha}..${current_head_sha}" -- > "${security_pass_fix_cycle_since_files}" 2>/dev/null; then
+      { grep -Fxf "${security_pass_fix_cycle_range_files}" "${security_pass_fix_cycle_since_files}" 2>/dev/null || true; } \
+        | grep . | sort -u > "${security_pass_fix_cycle_files_file}" || : > "${security_pass_fix_cycle_files_file}"
+      security_pass_fix_cycle_file_total="$(grep -c . "${security_pass_fix_cycle_files_file}" 2>/dev/null || true)"
+      [[ "${security_pass_fix_cycle_file_total}" =~ ^[0-9]+$ ]] || security_pass_fix_cycle_file_total=0
+      if [ "${security_pass_fix_cycle_file_total}" -gt 200 ]; then
+        head -n 200 "${security_pass_fix_cycle_files_file}" > "${security_pass_fix_cycle_files_file}.capped" \
+          && mv "${security_pass_fix_cycle_files_file}.capped" "${security_pass_fix_cycle_files_file}"
+        echo "::warning::The fix-cycle diff for tracking issue #${TRACKING_NUM} touches ${security_pass_fix_cycle_file_total} files; only the first 200 are handed to the audit as newly introduced code."
+      fi
+      if [ "${security_pass_fix_cycle_file_total}" -gt 0 ]; then
+        if ! security_pass_fix_cycle_current_entry="$(jq -cn \
+          --argjson cycle "${security_pass_fix_cycle_current}" \
+          --arg since_sha "${security_pass_audit_since_sha}" \
+          --arg head_sha "${current_head_sha}" \
+          --rawfile files "${security_pass_fix_cycle_files_file}" '
+          {cycle: $cycle, since_sha: $since_sha, head_sha: $head_sha,
+           files: ($files | split("\n") | map(select(length > 0)))}' 2>/dev/null)"; then
+          security_pass_fix_cycle_current_entry="null"
+          echo "::warning::Could not assemble the fix-cycle diff entry for tracking issue #${TRACKING_NUM}; the re-audit runs without the current cycle's newly introduced code."
+        fi
+      fi
+    else
+      echo "::warning::Could not compute the fix-cycle diff ${security_pass_audit_since_sha}..${current_head_sha} for tracking issue #${TRACKING_NUM}; the re-audit runs without the current cycle's newly introduced code."
+    fi
+  fi
+  if [ "${security_pass_audit_scope_mode}" = "delta" ]; then
+    # Carry the previous cycle's entry over once (cycle >= current - 1); the
+    # current cycle's entry replaces any stale entry recorded for the same
+    # cycle (a re-audit repeated after the head changed during the audit).
+    if jq -c --argjson cycle "${security_pass_fix_cycle_current}" --argjson current "${security_pass_fix_cycle_current_entry}" '
+        [ (.security_pass_fix_touched_files // [])[]
+          | select(type == "object" and (.cycle | type) == "number"
+            and .cycle >= ($cycle - 1)
+            and (if $current == null then true else .cycle != $current.cycle end)) ]
+        + (if $current == null then [] else [$current] end)
+      ' "${STATE_FILE}" > "${security_pass_fix_cycle_diffs_file}" 2>/dev/null; then
+      security_pass_fix_cycle_diff_entries="$(jq -r 'length' "${security_pass_fix_cycle_diffs_file}" 2>/dev/null || echo 0)"
+      [[ "${security_pass_fix_cycle_diff_entries}" =~ ^[0-9]+$ ]] || security_pass_fix_cycle_diff_entries=0
+      security_pass_fix_cycle_diff_files="$(jq -r '[.[].files[]] | length' "${security_pass_fix_cycle_diffs_file}" 2>/dev/null || echo 0)"
+      [[ "${security_pass_fix_cycle_diff_files}" =~ ^[0-9]+$ ]] || security_pass_fix_cycle_diff_files=0
+    else
+      rm -f "${security_pass_fix_cycle_diffs_file}"
+      security_pass_fix_cycle_diff_entries=0
+      security_pass_fix_cycle_diff_files=0
+      echo "::warning::Could not export the fix-cycle diff entries for tracking issue #${TRACKING_NUM}; the re-audit runs without the newly introduced code section."
+    fi
+  fi
+  if [ "${security_pass_fix_cycle_diff_entries}" -eq 0 ]; then
+    rm -f "${security_pass_fix_cycle_diffs_file}"
+    security_pass_fix_cycle_diffs_file=""
+  fi
+  echo "SECURITY_PASS_SCOPE tracking_issue=${TRACKING_NUM} mode=${security_pass_audit_scope_mode} reason=${security_pass_audit_scope_reason} base_sha=${merge_base_sha} since_sha=${security_pass_audit_since_sha:-none} head_sha=${current_head_sha} prior_findings=${security_pass_prior_findings_count} waived_findings=${security_pass_waived_findings_count} fix_cycle_diff_entries=${security_pass_fix_cycle_diff_entries} fix_cycle_diff_files=${security_pass_fix_cycle_diff_files}"
+
   context_file="${RUNTIME_DIR}/security_pass_project_${TRACKING_NUM}.txt"
   findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.json"
   audit_error_file="${RUNTIME_DIR}/security_pass_audit_${TRACKING_NUM}.err"
@@ -5244,6 +6964,7 @@ run_security_pass_inline() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass"
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
@@ -5263,6 +6984,10 @@ run_security_pass_inline() {
     SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
     SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
     SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
+    SECURITY_AUDIT_DIFF_SINCE="${security_pass_audit_since_sha}" \
+    SECURITY_AUDIT_PRIOR_FINDINGS="${security_pass_prior_findings_file}" \
+    SECURITY_AUDIT_WAIVED_FINDINGS="${security_pass_waived_findings_file}" \
+    SECURITY_AUDIT_FIX_CYCLE_DIFFS="${security_pass_fix_cycle_diffs_file}" \
     SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
@@ -5292,7 +7017,8 @@ run_security_pass_inline() {
       .counts.suppressed_excluded,
       .counts.suppressed_invalid,
       .counts.suppressed_low_confidence,
-      .counts.suppressed_out_of_scope
+      .counts.suppressed_out_of_scope,
+      .counts.suppressed_waived
     ][]; (type == "number") and (floor == .) and . >= 0)
     and all(.findings[];
       (.finding_id | type) == "string" and (.finding_id | length) > 0
@@ -5329,21 +7055,67 @@ run_security_pass_inline() {
       | .security_pass_head_sha = ""
       | .security_pass_active_fix_issues = []
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    reconcile_tracking_body_after_security_pass_transition
     post_state_comment || true
     echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=head_changed_during_audit"
     return 1
   fi
 
+  security_pass_apply_waivers_to_findings "${findings_file}"
   finding_count="$(jq -r '.findings | length' "${findings_file}")"
   completed_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}")"
-  jq --arg head_sha "${current_head_sha}" --argjson findings_count "${finding_count}" '
+  # Record the audited head as the base of the next delta re-audit and
+  # remember every blocking finding so the next audit verifies it instead of
+  # re-discovering the project.  A clean result clears the memory: nothing is
+  # outstanding, and the next audit (after a head advance) covers only the new
+  # commits.  Long free-text fields are trimmed so state stays bounded.  The
+  # current cycle's fix-cycle diff entry is remembered the same way so the
+  # next re-audit carries it over once (security_pass_fix_touched_files).
+  jq --arg head_sha "${current_head_sha}" --argjson findings_count "${finding_count}" \
+    --argjson cycle "$((completed_cycles + 1))" --slurpfile audit_result "${findings_file}" \
+    --argjson fix_cycle_entry "${security_pass_fix_cycle_current_entry:-null}" \
+    --argjson fix_cycle_current "${security_pass_fix_cycle_current:-0}" '
     .security_pass_head_sha = $head_sha
+    | .security_pass_last_audited_sha = $head_sha
     | .security_pass_status = (if $findings_count == 0 then "passed" else "blocked" end)
+    | .security_pass_fix_touched_files = (
+        if $findings_count == 0 then []
+        else (
+          [ (.security_pass_fix_touched_files // [])[]
+            | select(type == "object" and (.cycle | type) == "number"
+              and .cycle >= ($fix_cycle_current - 1)
+              and (if $fix_cycle_entry == null then true else .cycle != $fix_cycle_entry.cycle end)) ]
+          + (if $fix_cycle_entry == null then [] else [$fix_cycle_entry] end)
+        ) | .[-3:]
+        end
+      )
+    | .security_pass_reported_findings = (
+        if $findings_count == 0 then []
+        else (
+          ((.security_pass_reported_findings // []) | map(select(type == "object")))
+          + [
+            $audit_result[0].findings[]
+            | {
+                cycle: $cycle,
+                finding_id: .finding_id,
+                owasp_or_stride_category: .owasp_or_stride_category,
+                severity: .severity,
+                confidence: .confidence,
+                file: .file,
+                line: .line,
+                exploit_scenario: ((.exploit_scenario // "") | .[0:600]),
+                recommendation: ((.recommendation // "") | .[0:600])
+              }
+          ]
+        ) | .[-60:]
+        end
+      )
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
   if [ "${finding_count}" -eq 0 ]; then
     jq '.status = "in_progress" | .security_pass_active_fix_issues = []' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    reconcile_tracking_body_after_security_pass_transition
     post_state_comment || true
     echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha}"
     return 0
@@ -5351,7 +7123,22 @@ run_security_pass_inline() {
 
   echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} findings=${finding_count} cycle=${completed_cycles}"
   if [ "${completed_cycles}" -ge "${MAX_SECURITY_PASS_CYCLES}" ]; then
-    security_pass_terminal_failure "${current_head_sha}" "${finding_count}" "${completed_cycles}"
+    # Budget spent: let the exhaustion judge decide before terminalizing.  It
+    # returns 0 only after fully applying a verdict (every finding accepted ->
+    # passed at this head; keep_fixing -> another consolidated fix issue);
+    # anything else keeps the pre-judge terminal failure.
+    SECURITY_PASS_JUDGE_OUTCOME=""
+    if security_pass_exhaustion_judge "${current_head_sha}" "${merge_base_sha}" "${finding_count}" "${completed_cycles}" "${findings_file}" "${integration_branch}" "${verified_analysis_ref}"; then
+      case "${SECURITY_PASS_JUDGE_OUTCOME}" in
+        passed)
+          return 0
+          ;;
+        fixing)
+          return 1
+          ;;
+      esac
+    fi
+    security_pass_terminal_failure "${current_head_sha}" "${finding_count}" "${completed_cycles}" "${findings_file}"
     return 1
   fi
   if [ -n "${verified_analysis_ref}" ] \
@@ -9297,6 +11084,8 @@ finalize_integration_merge_if_needed() {
         jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 		mark_integration_branch_squash_fresh
+        security_pass_unblock_filed_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
+        security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
         post_state_comment || true
         return 0
       fi
@@ -9344,6 +11133,8 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 	mark_integration_branch_squash_fresh
+    security_pass_unblock_filed_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
+    security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     post_state_comment || true
     return 0
   fi
@@ -9423,6 +11214,14 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 1
   fi
 
+  # Promote cycle: a VERIFYING run's ready-to-merge point promotes the pinned
+  # commit and holds this merge until the release finishes (README 12f).
+  if ! comprehensive_promotion_gate_before_final_merge "${final_pr}"; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    echo "  [final-merge] PR #${final_pr} held by the promote cycle. Will retry next poll."
+    return 1
+  fi
+
   local merge_err=""
   if merge_err="$(gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch 2>&1 >/dev/null)"; then
     jq --argjson final_pr "${final_pr}" \
@@ -9435,6 +11234,8 @@ Unable to create or locate the final integration PR from \`${integration_branch}
        .integration_conflict_judge_retry_ts = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 	mark_integration_branch_squash_fresh
+    security_pass_unblock_filed_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
+    security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     post_state_comment || true
     post_tracking_comment "## ✅ Final merge complete
 
@@ -9475,6 +11276,8 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 	mark_integration_branch_squash_fresh
+    security_pass_unblock_filed_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
+    security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     post_state_comment || true
     return 0
   fi
@@ -9600,10 +11403,460 @@ extract_comprehensive_release_metadata() {
   fi
 }
 
+# comprehensive_cycle_metadata_json <comments_json>
+#
+# Reads the apply-analysis marker comment (posted by orchestrate.yml from the
+# dispatcher's tracking_comment input) and prints
+#   {role, doc, baseline_sha, smoke_sha, promote_sha, proving_merge_sha}
+# with "" for anything absent. role is "" for a tracking issue that carries
+# ai:comprehensive-test-pending without a marker (legacy callback path).
+comprehensive_cycle_metadata_json() {
+  local comments_json="$1"
+  printf '%s' "${comments_json}" | jq -c --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
+    def line($body; $key): (($body | capture("(?m)^" + $key + ": (?<v>[^\r\n]+)")? // {v: ""}) | .v | gsub("^\\s+|\\s+$"; ""));
+    def is_marker: ((.body // "") | test("(?m)^apply-analysis-source-doc: "));
+    def trusted: (((.author_association // "") as $a | ($trusted | split(",") | map(gsub("^\\s+|\\s+$"; "")) | index($a)) != null)
+                  or ((.user.login // "") == "github-actions[bot]"));
+    ([ .[] | select(is_marker and trusted) | .body ] | last // "") as $body
+    | ([ .[] | select(is_marker and (trusted | not)) ] | length > 0) as $untrusted
+    | {
+        role: line($body; "apply-analysis-role"),
+        doc: line($body; "apply-analysis-source-doc"),
+        baseline_sha: line($body; "apply-analysis-cycle-baseline-sha"),
+        smoke_sha: line($body; "apply-analysis-smoke-sha"),
+        promote_sha: line($body; "apply-analysis-promote-sha"),
+        proving_merge_sha: line($body; "apply-analysis-proving-merge-sha"),
+        untrusted_marker: $untrusted
+      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","untrusted_marker":false}'
+}
+
+# comprehensive_stable_tag_commit
+# Prints the commit the `stable` tag points at (dereferencing an annotated
+# tag), or "" when the tag cannot be resolved.
+# Prints the commit the `stable` tag points at (dereferencing an annotated
+# tag). Prints nothing and returns 0 when the tag does not exist; returns 2
+# when the lookup itself failed, so callers can tell "no tag yet" from "could
+# not read the tag" and never treat a transient API error as an absent tag.
+comprehensive_stable_tag_commit() {
+  local ref_json object_type object_sha tag_json err_file
+  err_file="$(mktemp)"
+  if ! ref_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable" 2>"${err_file}")"; then
+    if grep -qiE '404|not found' "${err_file}"; then
+      rm -f "${err_file}"
+      return 0
+    fi
+    cat "${err_file}" >&2
+    rm -f "${err_file}"
+    return 2
+  fi
+  rm -f "${err_file}"
+  object_type="$(printf '%s' "${ref_json}" | jq -r '.object.type // empty' 2>/dev/null || true)"
+  object_sha="$(printf '%s' "${ref_json}" | jq -r '.object.sha // empty' 2>/dev/null || true)"
+  if [ "${object_type}" = "tag" ] && [[ "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    if ! tag_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" 2>/dev/null)"; then
+      return 2
+    fi
+    printf '%s' "${tag_json}" | jq -r '.object.sha // empty' 2>/dev/null || return 2
+  elif [ "${object_type}" = "commit" ] && [[ "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    printf '%s\n' "${object_sha}"
+  else
+    return 2
+  fi
+}
+
+# comprehensive_promotion_hold_or_fail <reason> <now_epoch> <alert_text>
+#
+# Shared bounded hold for pre-dispatch checks that could not run this tick
+# (compare or tag lookup unavailable). Returns 1 (hold the merge) until
+# COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS have passed since the first hold,
+# then records the promotion as failed, alerts, and returns 0 (merge proceeds).
+comprehensive_promotion_hold_or_fail() {
+  local reason="$1"
+  local now="$2"
+  local alert_text="$3"
+  local gate_started
+  gate_started="$(jq -r '.comprehensive_promotion.gate_started_at // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  if ! [[ "${gate_started}" =~ ^[0-9]+$ ]]; then
+    jq --argjson t "${now}" '.comprehensive_promotion = {status: "pending", gate_started_at: $t}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} reason=${reason}"
+    return 1
+  fi
+  if [ $((now - gate_started)) -lt "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" ]; then
+    echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} reason=${reason}"
+    return 1
+  fi
+  jq --arg r "${reason}" '.comprehensive_promotion = {status: "failed", reason: ($r + " past the hold cap")}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=${reason}"
+  tg_notify "${alert_text}" "CRITICAL"
+  return 0
+}
+
+# comprehensive_forward_merge_pr_verified <sha> <subject>
+# 0 when the commit is the merge commit of a merged PR whose head branch is
+# auto/forward-merge-stable-* (the forward-merge workflow's fallback PR);
+# the subject alone is never trusted. One PR read.
+comprehensive_forward_merge_pr_verified() {
+  local sha="$1"
+  local subject="$2"
+  local pr_number pr_json
+  pr_number="$(printf '%s' "${subject}" | sed -nE 's/^Merge pull request #([0-9]+) from [^/]+\/auto\/forward-merge-stable-.*/\1/p')"
+  [[ "${pr_number}" =~ ^[0-9]+$ ]] || return 1
+  pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" 2>/dev/null || true)"
+  [ -n "${pr_json}" ] || return 1
+  printf '%s' "${pr_json}" | jq -e --arg sha "${sha}" '
+    ((.merged == true) or (.merged_at != null))
+    and (((.head.ref // .headRefName // "") | test("^auto/forward-merge-stable-")))
+    and ((.merge_commit_sha // "") == $sha)' >/dev/null 2>&1
+}
+
+# comprehensive_cycle_is_code_path <path>
+# Mirrors scripts/promote_main_cycle.sh: 0 when the path counts as code.
+comprehensive_cycle_is_code_path() {
+  case "$1" in
+    CLAUDE.md|*/CLAUDE.md|.claude/*) return 0 ;;
+  esac
+  case "$1" in
+    analysis/*|ai-memory/*|docs/*|tests/e2e_smoke_canary.txt|CHANGELOG.md|*.md) return 1 ;;
+  esac
+  return 0
+}
+
+# comprehensive_untested_commits_json <smoke_sha> <promote_sha> <proving_merge_sha>
+#
+# Prints a JSON array of the commits between the smoke-tested commit and the
+# commit about to be promoted that the cycle did NOT prove: everything except
+# the proving run's own merge, forward-merge PR merges (content already on
+# stable), and commits by COMPREHENSIVE_CYCLE_BOT_LOGINS that touch only
+# non-code paths. Exit 2 when the compare or a commit lookup failed.
+# API calls: 1 compare + 1 per bot commit (§15).
+comprehensive_untested_commits_json() {
+  local smoke_sha="$1"
+  local promote_sha="$2"
+  local proving_merge_sha="${3:-}"
+  local compare_json
+  if ! compare_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${smoke_sha}...${promote_sha}" --jq '{status: (.status // ""), total_commits: (.total_commits // 0), commits: [(.commits // [])[] | {sha: .sha, message: ((.commit.message // "") | split("\n")[0]), author: (.author.login // ""), committer: (.committer.login // "")}]}')"; then
+    return 2
+  fi
+  local listed total compare_status
+  # Only a range that descends from the smoke-tested commit can be judged
+  # by its commit list. `behind` or `diverged` (a reset or rewritten default
+  # branch) lists no commits in the forward direction and would otherwise
+  # read as "nothing untested"; treat it as untested so the promotion defers.
+  compare_status="$(printf '%s' "${compare_json}" | jq -r '.status')"
+  case "${compare_status}" in
+    ahead|identical) ;;
+    *)
+      printf '[{"sha":"","message":"compare status %s: the promotion candidate does not descend from the smoke-tested commit","author":""}]\n' "${compare_status:-unknown}"
+      return 0
+      ;;
+  esac
+  listed="$(printf '%s' "${compare_json}" | jq -r '.commits | length')"
+  total="$(printf '%s' "${compare_json}" | jq -r '.total_commits')"
+  if [ "${listed}" -lt "${total}" ]; then
+    printf '[{"sha":"","message":"compare listed %s of %s commits; treating the range as untested","author":""}]\n' "${listed}" "${total}"
+    return 0
+  fi
+  local untested='[]' row sha message author committer allowed files_json path
+  while IFS= read -r row; do
+    [ -n "${row}" ] || continue
+    sha="$(printf '%s' "${row}" | jq -r '.sha')"
+    message="$(printf '%s' "${row}" | jq -r '.message')"
+    author="$(printf '%s' "${row}" | jq -r '.author')"
+    committer="$(printf '%s' "${row}" | jq -r '.committer')"
+    allowed="false"
+    if [ -n "${proving_merge_sha}" ] && [ "${sha}" = "${proving_merge_sha}" ]; then
+      allowed="true"
+    elif printf '%s' "${message}" | grep -qE '^Merge pull request #[0-9]+ from [^/]+/auto/forward-merge-stable-' \
+      && comprehensive_forward_merge_pr_verified "${sha}" "${message}"; then
+      allowed="true"
+    elif printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${author}," \
+      || printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${committer},"; then
+      if ! files_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '{count: ((.files // []) | length), paths: [(.files // [])[] | .filename, (.previous_filename // empty)]}')"; then
+        return 2
+      fi
+      # The commit endpoint returns at most 300 files per page; a bot commit
+      # that large cannot be proven non-code from one page, so fail closed.
+      if [ "$(printf '%s' "${files_json}" | jq -r '.count')" -ge 300 ]; then
+        echo "::warning::Commit ${sha:0:7} lists 300+ files; treating it as untested rather than trusting a truncated file list." >&2
+        allowed="false"
+      else
+        allowed="true"
+        while IFS= read -r path; do
+          [ -n "${path}" ] || continue
+          if comprehensive_cycle_is_code_path "${path}"; then
+            allowed="false"
+            break
+          fi
+        done < <(printf '%s' "${files_json}" | jq -r '.paths[]')
+      fi
+    fi
+    if [ "${allowed}" != "true" ]; then
+      untested="$(printf '%s' "${untested}" | jq -c --argjson r "${row}" '. + [$r]')"
+    fi
+  done < <(printf '%s' "${compare_json}" | jq -c '.commits[]')
+  printf '%s\n' "${untested}"
+}
+
+# dispatch_comprehensive_verification_run <cycle_metadata_json>
+#
+# Called when the PROVING run of a promote cycle completes (its final PR
+# merged). Runs the dispatcher with role=verifying so the next analysis doc
+# re-proves the pipeline on top of the proving merge; promote_sha is the
+# default branch tip right now. Prints DISPATCHED or SKIPPED reason.
+dispatch_comprehensive_verification_run() {
+  local metadata_json="$1"
+  local default_branch main_tip final_pr proving_merge_sha dispatch_output outcome
+  default_branch="${DEFAULT_BRANCH_TRACKING:-main}"
+  main_tip="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/heads/${default_branch}" --jq '.object.sha // empty' || echo "")"
+  if ! [[ "${main_tip}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "RETRY reason=default_branch_unavailable branch=${default_branch}"
+    return 0
+  fi
+  final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  proving_merge_sha=""
+  if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
+    proving_merge_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merge_commit_sha // empty' || echo "")"
+  fi
+  if [ ! -f "${APPLY_ANALYSIS_DISPATCHER}" ]; then
+    echo "SKIPPED reason=dispatcher_missing path=${APPLY_ANALYSIS_DISPATCHER}"
+    return 0
+  fi
+  dispatch_output="$(APPLY_ANALYSIS_ROLE=verifying \
+    APPLY_ANALYSIS_CYCLE_BASELINE_SHA="$(printf '%s' "${metadata_json}" | jq -r '.baseline_sha')" \
+    APPLY_ANALYSIS_SMOKE_SHA="$(printf '%s' "${metadata_json}" | jq -r '.smoke_sha')" \
+    APPLY_ANALYSIS_PROMOTE_SHA="${main_tip}" \
+    APPLY_ANALYSIS_PROVING_MERGE_SHA="${proving_merge_sha}" \
+    APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE="${TRACKING_NUM}" \
+    GITHUB_REF_NAME="${default_branch}" \
+    GITHUB_SHA="${main_tip}" \
+    GITHUB_OUTPUT="" \
+    bash "${APPLY_ANALYSIS_DISPATCHER}" 2>&1 || true)"
+  printf '%s\n' "${dispatch_output}" | sed 's/^/  [verifying-dispatch] /' >&2
+  outcome="$(printf '%s\n' "${dispatch_output}" | sed -n 's/^APPLY_ANALYSIS_DISPATCHED doc=\([^ ]*\).*/DISPATCHED doc=\1/p' | tail -n 1)"
+  if [ -z "${outcome}" ]; then
+    outcome="SKIPPED reason=$(printf '%s\n' "${dispatch_output}" | sed -n 's/^APPLY_ANALYSIS_SKIPPED reason=\([^ ]*\).*/\1/p' | tail -n 1)"
+    [ "${outcome}" != "SKIPPED reason=" ] || outcome="SKIPPED reason=dispatcher_error"
+  fi
+  # Transient outcomes are retried on later ticks (bounded by
+  # COMPREHENSIVE_VERIFICATION_RETRY_MAX in the caller); terminal ones
+  # (disabled, no_docs, all_docs_processed, dispatcher_missing) are not.
+  case "${outcome}" in
+    "SKIPPED reason=project_in_flight"*|"SKIPPED reason=orchestrate_run_in_flight"*|"SKIPPED reason=guard_unavailable"*|"SKIPPED reason=dispatcher_error"*)
+      outcome="RETRY ${outcome#SKIPPED }"
+      ;;
+  esac
+  printf '%s\n' "${outcome}"
+}
+
+# comprehensive_promotion_release_outcome <dispatched_at_epoch>
+#
+# Prints promoted | failed | pending by reading the release runs created after
+# the promotion was dispatched: a failed promote-main-to-stable run (the
+# fast-forward refused) or a completed test-and-mark-stable run on stable.
+comprehensive_promotion_release_outcome() {
+  local dispatched_at="$1"
+  local promote_sha="${2:-}"
+  local tag_before="${3:-}"
+  local since promote_state gate_state tag_now compare_status
+  # Ground truth first: the promotion succeeded when the stable tag moved
+  # since dispatch and now points at promote_sha or a descendant of it (the
+  # release job commits the changelog assembly on top before tagging). A
+  # concurrent unrelated release cannot satisfy this.
+  tag_now="$(comprehensive_stable_tag_commit 2>/dev/null || true)"
+  if [[ "${tag_now}" =~ ^[0-9a-f]{40}$ ]] && [ "${tag_now}" != "${tag_before}" ] && [[ "${promote_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    compare_status="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${promote_sha}...${tag_now}" --jq '.status // empty' 2>/dev/null || echo "")"
+    case "${compare_status}" in
+      identical|ahead)
+        echo "promoted"
+        return 0
+        ;;
+    esac
+  fi
+  since="$(date -u -d "@${dispatched_at}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "${dispatched_at}" +%Y-%m-%dT%H:%M:%SZ)"
+  promote_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}/runs?per_page=20" 2>/dev/null | jq -r --arg since "${since}" '[.workflow_runs[]? | select(.event == "workflow_dispatch" and .created_at >= $since)] | sort_by(.created_at) | last | ((.status // "") + " " + (.conclusion // ""))' 2>/dev/null || echo "")"
+  case "${promote_state}" in
+    "completed failure"|"completed cancelled"|"completed timed_out"|"completed startup_failure")
+      echo "failed"
+      return 0
+      ;;
+  esac
+  gate_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml/runs?per_page=20" 2>/dev/null | jq -r --arg since "${since}" '[.workflow_runs[]? | select((.head_branch // "") == "stable" and .created_at >= $since)] | sort_by(.created_at) | last | ((.status // "") + " " + (.conclusion // ""))' 2>/dev/null || echo "")"
+  case "${gate_state}" in
+    "completed success") echo "pending" ;;
+    "completed "*) echo "failed" ;;
+    *) echo "pending" ;;
+  esac
+}
+
+# comprehensive_promotion_gate_before_final_merge <final_pr>
+#
+# The VERIFYING run's ready-to-merge point is where the promote cycle
+# promotes. Returns 0 to let the final merge proceed and 1 to hold it for
+# this tick (the caller opts out of the finalize retry budget). State lives
+# under .comprehensive_promotion {status, promote_sha, dispatched_at, reason}.
+#   pending    -> quiescence check between the smoke-tested commit and
+#                 promote_sha; untested commits -> deferred (merge proceeds);
+#                 clean -> dispatch promote-main-to-stable with target_sha and
+#                 hold
+#   dispatched -> promoted / failed (merge proceeds) or still pending (hold),
+#                 bounded by COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS
+# Anything else (deferred, promoted, failed, skipped) merges.
+comprehensive_promotion_gate_before_final_merge() {
+  local final_pr="$1"
+  if ! has_label "${TRACKING_LABELS:-[]}" "ai:comprehensive-test-pending"; then
+    return 0
+  fi
+  local metadata_json role promote_sha smoke_sha proving_merge_sha status now
+  metadata_json="$(comprehensive_cycle_metadata_json "${COMMENTS:-[]}")"
+  role="$(printf '%s' "${metadata_json}" | jq -r '.role')"
+  if [ "${role}" != "verifying" ]; then
+    return 0
+  fi
+  status="$(jq -r '.comprehensive_promotion.status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
+  now="$(date +%s)"
+  case "${status}" in
+    pending)
+      promote_sha="$(printf '%s' "${metadata_json}" | jq -r '.promote_sha')"
+      smoke_sha="$(printf '%s' "${metadata_json}" | jq -r '.smoke_sha')"
+      proving_merge_sha="$(printf '%s' "${metadata_json}" | jq -r '.proving_merge_sha')"
+      if [ "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" != "promote-main-to-stable.yml" ]; then
+        # Only the promote workflow accepts target_sha; any other release
+        # target cannot pin the promotion, so refuse rather than release
+        # whatever main is now.
+        jq --arg wf "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" '.comprehensive_promotion = {status: "failed", reason: ("pinned promotion requires promote-main-to-stable.yml, got " + $wf)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_workflow_not_pinnable workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}"
+        post_tracking_comment "## ❌ Promotion not possible
+
+\`COMPREHENSIVE_RELEASE_WORKFLOW_FILE\` is \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\`, which cannot promote a pinned commit (only promote-main-to-stable.yml takes \`target_sha\`). Nothing is promoted; the final merge proceeds."
+        tg_notify "Project #${TRACKING_NUM}: promotion skipped, ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} cannot pin target_sha." "CRITICAL"
+        return 0
+      fi
+      if ! [[ "${promote_sha}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${smoke_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+        jq '.comprehensive_promotion = {status: "skipped", reason: "marker lacks promote_sha/smoke_sha"}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        echo "COMPREHENSIVE_PROMOTION_SKIPPED tracking_issue=${TRACKING_NUM} reason=missing_marker_shas"
+        post_tracking_comment "## ⏭️ Promotion skipped
+
+This verifying run's marker comment lacks \`apply-analysis-promote-sha\` / \`apply-analysis-smoke-sha\`, so the poller cannot pin a promotion. The final merge proceeds; promote by hand with promote-main-to-stable.yml if wanted."
+        tg_notify "Project #${TRACKING_NUM}: verifying run lacks cycle SHAs; promotion skipped, merge proceeds." "CRITICAL"
+        return 0
+      fi
+      local untested_json untested_rc
+      set +e
+      untested_json="$(comprehensive_untested_commits_json "${smoke_sha}" "${promote_sha}" "${proving_merge_sha}")"
+      untested_rc=$?
+      set -e
+      if [ "${untested_rc}" -ne 0 ]; then
+        if ! comprehensive_promotion_hold_or_fail quiescence_check_unavailable "${now}" \
+          "Project #${TRACKING_NUM}: could not compare ${smoke_sha:0:7}...${promote_sha:0:7} within the hold cap; promotion abandoned, merge proceeds."; then
+          return 1
+        fi
+        return 0
+      fi
+      local untested_count
+      untested_count="$(printf '%s' "${untested_json}" | jq -r 'length')"
+      if [ "${untested_count}" -gt 0 ]; then
+        local untested_md
+        untested_md="$(printf '%s' "${untested_json}" | jq -r '.[] | "- `" + (.sha | .[0:7]) + "` " + (.message | .[0:100]) + (if .author != "" then " (" + .author + ")" else "" end)')"
+        jq --argjson n "${untested_count}" --arg promote "${promote_sha}" '.comprehensive_promotion = {status: "deferred", reason: "untested commits since smoke-tested commit", untested_count: $n, promote_sha: $promote}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+        echo "COMPREHENSIVE_PROMOTION_DEFERRED tracking_issue=${TRACKING_NUM} untested=${untested_count} smoke_sha=${smoke_sha} promote_sha=${promote_sha}"
+        post_tracking_comment "## ⏸️ Promotion deferred
+
+${untested_count} commit(s) landed on \`${DEFAULT_BRANCH_TRACKING:-main}\` between the smoke-tested commit \`${smoke_sha:0:7}\` and the promotion candidate \`${promote_sha:0:7}\` that this cycle did not prove:
+
+${untested_md}
+
+Nothing is promoted. This project's final merge proceeds; the next daily promote cycle starts over from a baseline that includes these commits."
+        tg_notify "Project #${TRACKING_NUM}: promotion deferred, ${untested_count} untested commit(s) on main since ${smoke_sha:0:7}. Next daily cycle re-proves." "WARNING"
+        return 0
+      fi
+      # The pre-dispatch tag position is what later proves the promotion
+      # moved the tag. A lookup failure must not be recorded as "no tag":
+      # hold (bounded) and retry next tick instead.
+      local tag_before tag_before_rc
+      set +e
+      tag_before="$(comprehensive_stable_tag_commit)"
+      tag_before_rc=$?
+      set -e
+      if [ "${tag_before_rc}" -ne 0 ]; then
+        if ! comprehensive_promotion_hold_or_fail stable_tag_lookup_unavailable "${now}" \
+          "Project #${TRACKING_NUM}: could not read the stable tag before dispatching the promotion within the hold cap; promotion abandoned, merge proceeds."; then
+          return 1
+        fi
+        return 0
+      fi
+      local _dispatch_err
+      _dispatch_err="$(mktemp)"
+      if gh_retry gh workflow run "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" --ref "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" -f "target_sha=${promote_sha}" -f "dry_run=false" -f "skip_e2e=false" >/dev/null 2>"${_dispatch_err}"; then
+        rm -f "${_dispatch_err}"
+        jq --arg promote "${promote_sha}" --arg tag_before "${tag_before}" --argjson t "${now}" '.comprehensive_promotion = {status: "dispatched", promote_sha: $promote, dispatched_at: $t, tag_before: $tag_before}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+        echo "COMPREHENSIVE_PROMOTION_DISPATCHED tracking_issue=${TRACKING_NUM} promote_sha=${promote_sha} workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}"
+        post_tracking_comment "## 🚀 Promotion dispatched
+
+Every commit between the smoke-tested commit \`${smoke_sha:0:7}\` and \`${promote_sha:0:7}\` was proven by this cycle. \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\` was dispatched with \`target_sha=${promote_sha}\` (full release gate). This project's final PR #${final_pr} stays unmerged until that release finishes so \`${DEFAULT_BRANCH_TRACKING:-main}\` HEAD is the version under test; hold cap ${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}s."
+        tg_notify "Project #${TRACKING_NUM}: promotion of ${promote_sha:0:7} dispatched; final merge held until the release finishes." "WARNING"
+        return 1
+      fi
+      local _dispatch_msg
+      _dispatch_msg="$(cat "${_dispatch_err}" 2>/dev/null || true)"
+      rm -f "${_dispatch_err}"
+      jq --arg reason "${_dispatch_msg}" '.comprehensive_promotion = {status: "failed", reason: ("dispatch failed: " + $reason)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=dispatch_failed"
+      tg_notify "Project #${TRACKING_NUM}: could not dispatch ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (${_dispatch_msg:-unknown error}); merge proceeds without promotion." "CRITICAL"
+      return 0
+      ;;
+    dispatched)
+      local dispatched_at outcome
+      dispatched_at="$(jq -r '.comprehensive_promotion.dispatched_at // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+      [[ "${dispatched_at}" =~ ^[0-9]+$ ]] || dispatched_at=0
+      promote_sha="$(jq -r '.comprehensive_promotion.promote_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      outcome="$(comprehensive_promotion_release_outcome "${dispatched_at}" "${promote_sha}" "$(jq -r '.comprehensive_promotion.tag_before // ""' "${STATE_FILE}" 2>/dev/null || echo "")")"
+      case "${outcome}" in
+        promoted)
+          jq '.comprehensive_promotion.status = "promoted"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          post_state_comment || true
+          echo "COMPREHENSIVE_PROMOTION_DONE tracking_issue=${TRACKING_NUM} promote_sha=${promote_sha}"
+          post_tracking_comment "## ✅ Promoted
+
+\`${promote_sha:0:7}\` is now \`stable\` (release gate passed). Releasing the hold on final PR #${final_pr}; this project's own merge is covered by the next daily cycle."
+          tg_notify "Project #${TRACKING_NUM}: ${promote_sha:0:7} promoted to stable; verifying merge released." "WARNING"
+          return 0
+          ;;
+        failed)
+          jq '.comprehensive_promotion.status = "failed" | .comprehensive_promotion.reason = "release run failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          post_state_comment || true
+          echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_failed promote_sha=${promote_sha}"
+          post_tracking_comment "## ❌ Promotion failed
+
+The release run for \`${promote_sha:0:7}\` did not succeed; \`stable\` is unchanged. Releasing the hold on final PR #${final_pr}. The next daily cycle retries once \`${DEFAULT_BRANCH_TRACKING:-main}\` carries a new code change."
+          tg_notify "Project #${TRACKING_NUM}: release of ${promote_sha:0:7} failed; stable unchanged, verifying merge released." "CRITICAL"
+          return 0
+          ;;
+      esac
+      if [ $((now - dispatched_at)) -ge "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" ]; then
+        jq '.comprehensive_promotion.status = "failed" | .comprehensive_promotion.reason = "hold cap reached before the release finished"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+        echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=hold_timeout"
+        post_tracking_comment "## ⌛ Promotion hold expired
+
+The release run for \`${promote_sha:0:7}\` did not finish within ${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}s. Releasing the hold on final PR #${final_pr}; check the release run by hand."
+        tg_notify "Project #${TRACKING_NUM}: promotion hold cap reached; verifying merge released, check the release run." "CRITICAL"
+        return 0
+      fi
+      echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} promote_sha=${promote_sha} waited=$((now - dispatched_at))s"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 dispatch_comprehensive_release_workflow() {
   local version_tag="${1:-}"
   local test_repo="${2:-}"
-  local run_args=("test-and-mark-stable.yml" "--repo" "${GITHUB_REPOSITORY}" "--ref" "stable" "-f" "dry_run=false")
+  local run_args=("${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" "--repo" "${GITHUB_REPOSITORY}" "--ref" "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" "-f" "dry_run=false")
 
   if [ -n "${version_tag}" ]; then
     run_args+=("-f" "version_tag=${version_tag}")
@@ -9638,6 +11891,76 @@ handle_comprehensive_release_callback_if_needed() {
   callback_handled="$(jq -r '.comprehensive_release_callback.handled // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
   if [ "${callback_handled}" = "true" ]; then
     echo "Comprehensive release callback already handled for project #${TRACKING_NUM}; skipping dispatch."
+  elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.role')" = "proving" ]; then
+    # Promote cycle, proving run merged: dispatch the verifying run. The
+    # promotion itself happens at the verifying run's ready-to-merge point.
+    local cycle_metadata_json verification_outcome
+    cycle_metadata_json="$(comprehensive_cycle_metadata_json "${comments_json}")"
+    verification_outcome="$(dispatch_comprehensive_verification_run "${cycle_metadata_json}")"
+    if [[ "${verification_outcome}" == RETRY* ]]; then
+      local verification_retries
+      verification_retries="$(jq -r '.comprehensive_release_callback.verification_retries // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+      [[ "${verification_retries}" =~ ^[0-9]+$ ]] || verification_retries=0
+      verification_retries=$((verification_retries + 1))
+      if [ "${verification_retries}" -le "${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" ]; then
+        jq --argjson n "${verification_retries}" '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {verification_retries: $n})' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        # Persist the counter now: the state file is rebuilt from the state
+        # comment on every tick, so an unposted increment would reset to 0.
+        post_state_comment || true
+        echo "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome} retry=${verification_retries}/${COMPREHENSIVE_VERIFICATION_RETRY_MAX}"
+        return 0
+      fi
+      verification_outcome="SKIPPED ${verification_outcome#RETRY } retries_exhausted=${COMPREHENSIVE_VERIFICATION_RETRY_MAX}"
+    fi
+    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg outcome "${verification_outcome}" \
+      '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "proving", verification: $outcome}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    case "${verification_outcome}" in
+      DISPATCHED*)
+        echo "COMPREHENSIVE_VERIFICATION_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome#DISPATCHED }"
+        post_tracking_comment "## 🔁 Verifying run dispatched
+
+The proving run merged. The next analysis doc (${verification_outcome#DISPATCHED doc=}) was handed to the orchestrator as the verifying run; its ready-to-merge point promotes \`${DEFAULT_BRANCH_TRACKING:-main}\` as of this merge to \`stable\`."
+        tg_notify "Project #${TRACKING_NUM} (proving) merged; verifying run dispatched (${verification_outcome#DISPATCHED }). Promotion follows its ready-to-merge." "DEBUG"
+        ;;
+      *)
+        echo "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome}"
+        post_tracking_comment "## ⚠️ Verifying run not dispatched
+
+The proving run merged, but the verifying run could not be dispatched (${verification_outcome}). Nothing is promoted; the next daily promote cycle starts over once \`${DEFAULT_BRANCH_TRACKING:-main}\` carries a new code change and enough analysis docs exist."
+        tg_notify "Project #${TRACKING_NUM} (proving) merged but the verifying run was not dispatched (${verification_outcome}); no promotion this cycle." "CRITICAL"
+        ;;
+    esac
+  elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_marker')" = "true" ]; then
+    # A marker comment from an untrusted author with no trusted one: never
+    # dispatch or promote on its say-so, and never consume the cycle either.
+    # The callback stays unhandled and the label stays on, so the issue
+    # keeps the daily cycle held (cycle_in_flight) until a human either
+    # posts a trusted marker or removes the label. Alert once, not per tick.
+    local untrusted_alerted
+    untrusted_alerted="$(jq -r '.comprehensive_release_callback.untrusted_marker_alerted // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+    echo "COMPREHENSIVE_MARKER_UNTRUSTED tracking_issue=${TRACKING_NUM} alerted=${untrusted_alerted}"
+    if [ "${untrusted_alerted}" != "true" ]; then
+      jq --arg alerted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {role: "untrusted", untrusted_marker_alerted: true, untrusted_marker_alerted_at: $alerted_at})' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
+      post_tracking_comment "## ⚠️ Untrusted apply-analysis marker
+
+This tracking issue carries \`ai:comprehensive-test-pending\` but its only apply-analysis marker comment was posted by an author outside \`${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}\`. The poller does not dispatch or promote on it, and it keeps the label so no new promote cycle starts until a human resolves this: post the marker from a trusted account, or remove \`ai:comprehensive-test-pending\` to abandon the cycle. Nothing is promoted."
+      tg_notify "Project #${TRACKING_NUM}: apply-analysis marker from an untrusted author ignored; cycle held human-gated (label kept), no verifying run, no promotion." "CRITICAL"
+    fi
+    return 0
+  elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.role')" = "verifying" ]; then
+    # Promotion (or its deferral) already happened before this final merge;
+    # the verifying run's own merge never promotes.
+    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "verifying"}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "COMPREHENSIVE_VERIFYING_COMPLETE tracking_issue=${TRACKING_NUM} promotion=$(jq -r '.comprehensive_promotion.status // "none"' "${STATE_FILE}")"
   elif [ "${project_status}" = "complete" ]; then
     local metadata_json
     local version_tag
@@ -9658,7 +11981,7 @@ handle_comprehensive_release_callback_if_needed() {
 
     if dispatch_comprehensive_release_workflow "${version_tag}" "${test_repo}"; then
       msg="Comprehensive release callback dispatched for project #${TRACKING_NUM}."
-      msg+=$'\n'"Workflow: test-and-mark-stable.yml"
+      msg+=$'\n'"Workflow: ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (ref ${COMPREHENSIVE_RELEASE_WORKFLOW_REF})"
       msg+=$'\n'"dry_run: false"
       if [ -n "${version_tag}" ]; then
         msg+=$'\n'"version_tag: ${version_tag}"
@@ -9674,7 +11997,7 @@ handle_comprehensive_release_callback_if_needed() {
       post_state_comment || true
     else
       msg="Comprehensive release callback failed for project #${TRACKING_NUM}."
-      msg+=$'\n'"Workflow: test-and-mark-stable.yml"
+      msg+=$'\n'"Workflow: ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (ref ${COMPREHENSIVE_RELEASE_WORKFLOW_REF})"
       msg+=$'\n'"dry_run: false"
       if [ -n "${COMPREHENSIVE_RELEASE_DISPATCH_ERROR:-}" ]; then
         msg+=$'\n'"Error: ${COMPREHENSIVE_RELEASE_DISPATCH_ERROR}"
@@ -10830,7 +13153,7 @@ prime_phase_concurrency_snapshot() {
 # recovery-push path.
 #
 # Args: $1 = head branch.  Echoes the databaseId of the freshest matching
-# in_progress/queued review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
+# in_progress/queued/pending review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
 # else nothing.  Freshness mirrors build_active_issue_set's review-run window
 # so a review still legitimately editing past STALL_THRESHOLD_MINUTES is not
 # clobbered, while a genuinely hung run older than the review budget does not
@@ -10860,18 +13183,32 @@ _direct_inflight_review_run_on_branch()
 	# so its freshness window is the review-run budget, not the generic stall
 	# threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
 	_di_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
+	# Diagnostics (CLAUDE.md §8): this helper is the last guard before the
+	# destructive empty-commit push and fails open on any error.  Poller
+	# run 35230465327 (tele-funtoken-msg-scoring#4367) pushed onto a
+	# branch whose review run 35226455269 was live, with no trace of why
+	# both the cached scan and this listing came back empty.  Report the
+	# listing outcome on stderr (stdout is the return value) so the next
+	# miss is attributable; the fail-open contract itself is unchanged.
+	local _di_rc=0 _di_runs_total="invalid" _di_runs_live="invalid" _di_match=""
 	_di_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 		--branch "${_di_branch}" \
 		--limit 30 \
 		--json databaseId,status,name,workflowName,startedAt,createdAt \
-		2>/dev/null || echo "")"
-	[ -n "${_di_runs_json}" ] || return 0
-	printf '%s' "${_di_runs_json}" | jq -r \
+		2>/dev/null)" || _di_rc=$?
+	if [ "${_di_rc}" -ne 0 ] || [ -z "${_di_runs_json}" ] \
+		|| ! printf '%s' "${_di_runs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=listing_unavailable" >&2
+		return 0
+	fi
+	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
+	_di_runs_live="$(printf '%s' "${_di_runs_json}" | jq -r '[.[]? | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")] | length' 2>/dev/null || echo "invalid")"
+	_di_match="$(printf '%s' "${_di_runs_json}" | jq -r \
 		--argjson now "${_di_now_epoch}" \
 		--argjson threshold "${_di_stall_secs}" '
 		(if type == "array" then . else [] end)
 		| [ .[]?
-			| select((.status // "") == "in_progress" or (.status // "") == "queued")
+			| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
 			| select(
 				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix"
 				 or (.name // "") == "Internal: AI Review & Autofix" or (.name // "") == "Codex PR Self-Healing Semantic Agent")
@@ -10884,7 +13221,12 @@ _direct_inflight_review_run_on_branch()
 			   else $now end) as $start_epoch
 			| select(($now - $start_epoch) < $threshold)
 		  ] | (.[0].databaseId // empty)
-	' 2>/dev/null || echo ""
+	' 2>/dev/null || echo "")"
+	if [ -z "${_di_match}" ]; then
+		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=no_fresh_review_run" >&2
+		return 0
+	fi
+	printf '%s\n' "${_di_match}"
 }
 
 # Build a set of issue numbers that have *genuinely active* (in_progress or
@@ -11836,6 +14178,11 @@ STALL_EOF
         _rtr_pr_json="${STALL_IMPL_PR_JSON:-}"
         if [ -z "${_rtr_pr_json}" ] || [ "${_rtr_pr_json}" = "{}" ]; then
           _rtr_pr_json="$(_fetch_pr_json "${pr_num}")"
+        fi
+        if _linked_pr_is_merge_queued "${_rtr_pr_json}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=${pr_num} phase=${phase} action=retrigger_review"
+          STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_merge_train"
+          return 1
         fi
         head_ref="$(_jq_field "${_rtr_pr_json}" '.head.ref')"
         _rtr_mergeable="$(_jq_field "${_rtr_pr_json}" '.mergeable' 'true|false')"
@@ -12898,9 +15245,11 @@ _fetch_candidate_issue_details_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
-                    mergedAt
-                    headRefName
-                    headRefOid
+                    labels(first: 100) { nodes { name } }
+	                    mergedAt
+	                    headRefName
+	                    baseRefName
+	                    headRefOid
                     mergeable
                     mergeStateStatus
                     mergeCommit { oid }
@@ -12953,10 +15302,12 @@ _fetch_candidate_issue_details_graphql() {
                       number: .number,
                       state: .state,
                       merged: (.merged // false),
+                      labels: [(.labels.nodes // [])[]?.name],
                       merged_at: (.mergedAt // null),
-                      merge_commit_sha: (.mergeCommit.oid // null),
-                      head_ref: (.headRefName // null),
-                      head_sha: (.headRefOid // null),
+	                      merge_commit_sha: (.mergeCommit.oid // null),
+	                      head_ref: (.headRefName // null),
+	                      base_ref: (.baseRefName // null),
+	                      head_sha: (.headRefOid // null),
                       mergeable: (.mergeable // null),
                       merge_state_status: (.mergeStateStatus // null),
                       headPushedAt: (
@@ -12983,13 +15334,14 @@ _fetch_candidate_issue_details_graphql() {
 # _fetch_linked_pr_status_graphql — Batch-fetch latest-linked-PR state
 # for a list of issue numbers via a single GraphQL query per batch.
 # Lighter than _fetch_candidate_issue_details_graphql (only timeline
-# items, no labels/comments) and used by the orchestrator-managed
+# items and linked-PR labels, no issue labels/comments) and used by the orchestrator-managed
 # stall recovery loop, which already has its own label/state source
 # of truth.
 #
 # Input: JSON array of issue numbers, e.g. "[123, 456]"
 # Output: JSON object keyed by stringified issue number:
-#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"headPushedAt":"ISO8601"|null},
+#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
+#              "labels":[string],"headPushedAt":"ISO8601"|null},
 #     "456": null, ... }
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null).  Consumed by
@@ -13038,6 +15390,7 @@ _fetch_linked_pr_status_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
+                    labels(first: 100) { nodes { name } }
                     repository { nameWithOwner }
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
                   }
@@ -13080,6 +15433,7 @@ _fetch_linked_pr_status_graphql() {
                   number: .number,
                   state: .state,
                   merged: (.merged // false),
+                  labels: [(.labels.nodes // [])[]?.name],
                   headPushedAt: (
                     ((.commits.nodes // [])[0].commit.pushedDate)
                     // ((.commits.nodes // [])[0].commit.committedDate)
@@ -13102,7 +15456,7 @@ _fetch_linked_pr_status_graphql() {
 
 # _single_issue_linked_pr_status_graphql — convenience wrapper around
 # _fetch_linked_pr_status_graphql for cache-miss paths.  Returns the
-# same per-issue JSON entry ({number,state,merged,headPushedAt} or
+# same per-issue JSON entry ({number,state,merged,labels,headPushedAt} or
 # null) while keeping the common path batched.
 _single_issue_linked_pr_status_graphql() {
   local issue_num="$1"
@@ -13114,6 +15468,26 @@ _single_issue_linked_pr_status_graphql() {
   local _single_resp
   _single_resp="$(_fetch_linked_pr_status_graphql "[$issue_num]")"
   printf '%s' "${_single_resp}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null"
+}
+
+# Accept both the batched GraphQL label shape ([string]) and a full REST PR
+# payload ([{name:string}]). Only an explicitly open, unmerged PR can wait in
+# the train; missing/malformed state or labels fail open to normal recovery.
+_linked_pr_is_merge_queued()
+{
+  local linked_json="$1"
+  [ -n "${linked_json}" ] && [ "${linked_json}" != "null" ] && [ "${linked_json}" != "{}" ] || return 1
+  printf '%s' "${linked_json}" | jq -e '
+    select(type == "object")
+    | select(((.state // "") | ascii_downcase) == "open")
+    | select((.merged // false) != true)
+    | [(.labels // [])[]?
+      | if type == "string" then .
+        elif type == "object" then (.name // empty)
+        else empty
+        end]
+    | index("ai:merge-queued") != null
+  ' >/dev/null 2>&1
 }
 
 # _pr_json_closes_issue — conservative closing-keyword check used only
@@ -13848,6 +16222,25 @@ PY
       # falling back to the legacy timeline/body heuristics.
       _std_linked_json="$(_single_issue_linked_pr_status_graphql "${issue_num}")"
     fi
+    if [ "${phase}" = "ai:done" ] && { [ -z "${_std_linked_json}" ] || [ "${_std_linked_json}" = "null" ] || [ "${_std_linked_json}" = "{}" ]; }; then
+      # Batch + single-query miss: reuse the established implementation-PR
+      # resolver before any stall judge, conflict dispatch, or empty commit.
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        _std_linked_json="$(printf '%s' "${STALL_IMPL_PR_JSON}" | jq -c '{
+          number: (.number // null), state: (.state // null), merged: (.merged // false),
+          labels: [(.labels // [])[]? | if type == "object" then (.name // empty) else . end],
+          head_ref: (.head.ref // null), head_sha: (.head.sha // null),
+          mergeable: (.mergeable // null), merge_state_status: (.mergeable_state // null)
+        }' 2>/dev/null || echo "null")"
+      fi
+    fi
+    if [ "${phase}" = "ai:done" ] && _linked_pr_is_merge_queued "${_std_linked_json}"; then
+      echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
     if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
       _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
@@ -14006,6 +16399,7 @@ PY
               _std_conflict_linked="$(printf '%s' "${_std_conflict_pr_json_try}" | jq -c '{
                 number: (.number // null),
                 state: (.state // null),
+                labels: [(.labels // [])[]? | if type == "object" then (.name // empty) else . end],
                 head_ref: (.head.ref // null),
                 head_sha: (.head.sha // null),
                 mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
@@ -14032,6 +16426,14 @@ PY
             fi
           done
         fi
+      fi
+
+      if _linked_pr_is_merge_queued "${_std_conflict_linked}"; then
+        echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_std_conflict_linked}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+        if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+        fi
+        continue
       fi
 
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
@@ -14841,6 +17243,17 @@ recover_stalled_issue() {
   if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
     _fresh_lpr_entry="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null")"
   fi
+  if [ "${phase}" = "ai:done" ] && { [ -z "${_fresh_lpr_entry}" ] || [ "${_fresh_lpr_entry}" = "null" ] || [ "${_fresh_lpr_entry}" = "{}" ]; }; then
+    # Fail-open batch miss: resolve the implementation PR once before a
+    # queued PR can enter the stall judge or recovery executor.
+    if _resolve_issue_implementation_pr "${issue_num}"; then
+      _fresh_lpr_entry="${STALL_IMPL_PR_JSON}"
+    fi
+  fi
+  if [ "${phase}" = "ai:done" ] && _linked_pr_is_merge_queued "${_fresh_lpr_entry}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_fresh_lpr_entry}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+    return 1  # Intentional train wait; do not consume stall budget or alert.
+  fi
   if _check_merged_pr_guard "${issue_num}" "${_fresh_lpr_entry}"; then
     echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
     _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
@@ -15554,7 +17967,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
 			|| has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; }; then
 		echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM} releasing_state=${PROJECT_STATUS}"
-		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = ""' \
+		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_judge_rounds = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = "" | .security_pass_last_audited_sha = "" | .security_pass_reported_findings = [] | .security_pass_fix_touched_files = [] | del(.security_pass_fix_reissue_count) | del(.security_pass_fix_defer)' \
 			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 		post_state_comment || true
 		set_tracking_phase_label "ai:done"
@@ -15564,6 +17977,183 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 	if [ "${PROJECT_STATUS}" = "security-pass" ] || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
 		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
 	fi
+
+  # ---------------------------------------------------------------
+  # /security-pass-waive <finding_id>... — operator acceptance of findings
+  # ---------------------------------------------------------------
+  # Records the named findings as waivers (security_pass_waived_findings);
+  # the engine and the poller drop any re-report of them, and a non-blocking
+  # `ai:security` follow-up is filed for each waiver whose finding rows are
+  # still in security_pass_reported_findings.  In terminal
+  # ai:security-pass-failed the loop is then reset and re-audited exactly like
+  # /re-security-pass; in security-pass-fixing the waivers only persist and
+  # apply from the running cycle's next re-audit.  OWNER/MEMBER/COLLABORATOR
+  # humans only.  A `<!-- security-pass-waive-dedup:<comment-id> -->` marker
+  # (also posted on rejection) stops the same comment from being re-evaluated.
+  if { [ "${PROJECT_STATUS}" = "failed" ] && has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; } \
+    || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
+    SECURITY_PASS_WAIVE_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c '
+      (to_entries
+        | map(select((.value.body // "") | (
+            startswith("<!-- ORCHESTRATOR_STATE_V1")
+            or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
+            or startswith("<!-- security-pass-waive-dedup:")
+        )))
+        | last
+        | .key // -1) as $last_waive_boundary_idx |
+      [to_entries[]
+        | select(.key > $last_waive_boundary_idx and ((.value.body // "") | test("^\\s*/security-pass-waive(\\s|$)"; "m")))
+        | .value
+      ]
+      | last // empty
+    ')"
+    if [ -n "${SECURITY_PASS_WAIVE_COMMENT_JSON}" ] && [ "${SECURITY_PASS_WAIVE_COMMENT_JSON}" != "null" ]; then
+      SECURITY_PASS_WAIVE_COMMENT_ID="$(printf '%s' "${SECURITY_PASS_WAIVE_COMMENT_JSON}" | jq -r '.id // 0' 2>/dev/null || echo 0)"
+      SECURITY_PASS_WAIVE_AUTHOR="$(printf '%s' "${SECURITY_PASS_WAIVE_COMMENT_JSON}" | jq -r '.user.login // ""' 2>/dev/null || echo "")"
+      SECURITY_PASS_WAIVE_REJECT_REASON=""
+      if ! printf '%s' "${SECURITY_PASS_WAIVE_COMMENT_JSON}" | jq -e '
+        ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+        and ((.user.type // "") != "Bot")
+        and (((.user.login // "") | endswith("[bot]")) | not)
+      ' >/dev/null 2>&1; then
+        SECURITY_PASS_WAIVE_REJECT_REASON="author"
+      fi
+      # Ids come from the first `/security-pass-waive` line only; every token
+      # must be a plain finding id, otherwise the whole comment is rejected.
+      SECURITY_PASS_WAIVE_TOKENS_JSON="$(printf '%s' "${SECURITY_PASS_WAIVE_COMMENT_JSON}" | jq -c '
+        (.body // "") | split("\n")
+        | map(select(test("^\\s*/security-pass-waive(\\s|$)"))) | .[0] // ""
+        | sub("^\\s*/security-pass-waive"; "")
+        | [splits("\\s+")] | map(select(length > 0))
+      ' 2>/dev/null || echo '[]')"
+      SECURITY_PASS_WAIVE_IDS_JSON="$(printf '%s' "${SECURITY_PASS_WAIVE_TOKENS_JSON}" | jq -c 'map(select(test("^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$"))) | unique' 2>/dev/null || echo '[]')"
+      if [ -z "${SECURITY_PASS_WAIVE_REJECT_REASON}" ] \
+        && { [ "$(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length')" -eq 0 ] \
+          || [ "$(printf '%s' "${SECURITY_PASS_WAIVE_TOKENS_JSON}" | jq -r 'unique | length')" != "$(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length')" ]; }; then
+        SECURITY_PASS_WAIVE_REJECT_REASON="format"
+      fi
+      if [ -n "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
+        echo "SECURITY_PASS_WAIVE_REJECTED tracking_issue=${TRACKING_NUM} comment=${SECURITY_PASS_WAIVE_COMMENT_ID} reason=${SECURITY_PASS_WAIVE_REJECT_REASON}"
+        if [ "${SECURITY_PASS_WAIVE_REJECT_REASON}" = "author" ]; then
+          SECURITY_PASS_WAIVE_REJECT_TEXT="only a human repository OWNER, MEMBER, or COLLABORATOR may waive security-pass findings"
+        else
+          SECURITY_PASS_WAIVE_REJECT_TEXT="expected \`/security-pass-waive <finding_id> [<finding_id> ...]\` with ids made of letters, digits, \`.\`, \`_\` and \`-\` (at most 121 characters each)"
+        fi
+        post_tracking_comment "<!-- security-pass-waive-dedup:${SECURITY_PASS_WAIVE_COMMENT_ID} -->
+
+## ⛔ Security-pass waiver not applied
+
+The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was not applied: ${SECURITY_PASS_WAIVE_REJECT_TEXT}."
+      else
+        echo "  /security-pass-waive requested for project #${TRACKING_NUM} by ${SECURITY_PASS_WAIVE_AUTHOR}: $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'join(" ")')"
+        SECURITY_PASS_WAIVERS_JSON="$(jq -c --argjson ids "${SECURITY_PASS_WAIVE_IDS_JSON}" --arg by "${SECURITY_PASS_WAIVE_AUTHOR}" '
+          (.security_pass_reported_findings // []) as $reported
+          | (.security_pass_cycle // 0) as $cycle
+          | [
+              $ids[] as $id
+              | ([$reported[] | select(.finding_id == $id)] | last) as $known
+              | {
+                  finding_id: $id,
+                  file: ($known.file // ""),
+                  line: ($known.line // 0),
+                  owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
+                  severity: ($known.severity // ""),
+                  justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
+                  source: "operator",
+                  waived_by: $by,
+                  waived_at_cycle: $cycle,
+                  issue: null,
+                  finding: $known
+                }
+            ]
+        ' "${STATE_FILE}")"
+        # With SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED the row keeps the
+        # finding payload and a followup_pending flag so
+        # security_pass_file_deferred_advisory_followups can file the
+        # advisory after the final merge (same contract as the judge path).
+        if [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ]; then
+          SECURITY_PASS_WAIVERS_STATE_JSON="$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c --arg head_sha "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" '
+            map(if .finding != null then . + {followup_pending: true, audited_head_sha: $head_sha} else del(.finding) end)
+          ')"
+        else
+          SECURITY_PASS_WAIVERS_STATE_JSON="$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c 'map(del(.finding))')"
+        fi
+        if ! security_pass_record_waivers "${SECURITY_PASS_WAIVERS_STATE_JSON}"; then
+          echo "::warning::Could not persist /security-pass-waive for tracking issue #${TRACKING_NUM}; leaving the command unmarked so the next poll retries it."
+          continue
+        fi
+        SECURITY_PASS_WAIVE_LINES=""
+        while IFS= read -r SECURITY_PASS_WAIVE_ROW; do
+          [ -n "${SECURITY_PASS_WAIVE_ROW}" ] || continue
+          SECURITY_PASS_WAIVE_ROW_ID="$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.finding_id')"
+          if printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -e '.finding != null' >/dev/null 2>&1; then
+            if [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ]; then
+              echo "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=${TRACKING_NUM} finding=${SECURITY_PASS_WAIVE_ROW_ID} source=operator reason=integration_branch_not_merged"
+              SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` ($(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.file + ":" + (.line | tostring)'); follow-up issue filed once the integration branch merges into the default branch)"
+            else
+              create_security_pass_advisory_followup \
+                "$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -c '.finding')" \
+                "${INTEGRATION_BRANCH_TRACKING}" \
+                "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" \
+                "$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.justification')" \
+                "operator"
+              SECURITY_PASS_WAIVE_ROW_ISSUE="${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+              SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` ($(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.file + ":" + (.line | tostring)')${SECURITY_PASS_WAIVE_ROW_ISSUE:+; follow-up #${SECURITY_PASS_WAIVE_ROW_ISSUE}})"
+            fi
+          else
+            SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` (not among the reported findings; matched by exact id only)"
+          fi
+        done < <(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c '.[]')
+        echo "SECURITY_PASS_WAIVED tracking_issue=${TRACKING_NUM} source=operator by=${SECURITY_PASS_WAIVE_AUTHOR} ids=$(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'join(",")')"
+        if [ "${PROJECT_STATUS}" = "failed" ]; then
+          # Same reset as /re-security-pass: the waivers survive (the jq below
+          # never touches security_pass_waived_findings) and the next audit
+          # covers the full range with them applied.
+          jq '
+            .status = "security-pass"
+            | .security_pass_cycle = 0
+            | .security_pass_judge_rounds = 0
+            | .security_pass_status = "pending"
+            | .security_pass_active_fix_issues = []
+            | .security_pass_head_sha = ""
+            | .security_pass_last_audited_sha = ""
+            | .security_pass_reported_findings = []
+            | .security_pass_fix_touched_files = []
+            | del(.security_pass_fix_reissue_count)
+            | del(.security_pass_fix_defer)
+          ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          reconcile_tracking_body_after_security_pass_transition
+          post_state_comment || true
+          set_tracking_phase_label "ai:security-pass"
+          post_tracking_comment "<!-- security-pass-waive-dedup:${SECURITY_PASS_WAIVE_COMMENT_ID} -->
+
+## ✅ Security-pass findings waived
+
+\`${SECURITY_PASS_WAIVE_AUTHOR}\` accepted the following finding(s) as known risks for this project; they are excluded from every future audit of this project:
+${SECURITY_PASS_WAIVE_LINES}
+
+The bounded security-pass fix loop was reset. Re-running the mandatory current-head audit."
+          tg_notify "/security-pass-waive: project #${TRACKING_NUM} waived $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length') finding(s) (by ${SECURITY_PASS_WAIVE_AUTHOR}); security-pass state reset and re-running the audit." "WARNING"
+          if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
+            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+          fi
+          ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
+          continue
+        fi
+        reconcile_tracking_body_after_security_pass_transition
+        post_state_comment || true
+        post_tracking_comment "<!-- security-pass-waive-dedup:${SECURITY_PASS_WAIVE_COMMENT_ID} -->
+
+## ✅ Security-pass findings waived
+
+\`${SECURITY_PASS_WAIVE_AUTHOR}\` accepted the following finding(s) as known risks for this project; they are excluded from every future audit of this project:
+${SECURITY_PASS_WAIVE_LINES}
+
+The active security-pass fix cycle continues; the waivers apply from its next re-audit."
+        tg_notify "/security-pass-waive: project #${TRACKING_NUM} waived $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length') finding(s) (by ${SECURITY_PASS_WAIVE_AUTHOR}); the active fix cycle continues." "WARNING"
+      fi
+    fi
+  fi
 
   if [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
     SECURITY_FIX_ISSUES_JSON="$(jq -c '.security_pass_active_fix_issues // []' "${STATE_FILE}" 2>/dev/null || echo '[]')"
@@ -15589,8 +18179,11 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -r '.state')"
         SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -c '.labels')"
         SECURITY_FIX_PR_MERGED="false"
-        if [ "${SECURITY_FIX_STATE}" = "closed" ] && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
-          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}"; then
+        if [ "${SECURITY_FIX_STATE}" = "closed" ]; then
+	          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}" "${INTEGRATION_BRANCH_TRACKING}"; then
+            if ! backfill_validation_fix_issue_merged_label "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_LABELS}"; then
+              echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE}: merged PR detected but ai:merged backfill failed." >&2
+            fi
             SECURITY_FIX_PR_MERGED="true"
           else
             SECURITY_FIX_MERGED_EVIDENCE_RC=$?
@@ -15601,12 +18194,43 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
           fi
         fi
       else
-        SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].state // "open"')"
-        SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -c --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].labels // []')"
-        SECURITY_FIX_PR_MERGED="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.merged // false')"
+	        SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].state // "open"')"
+	        SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -c --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].labels // []')"
+	        SECURITY_FIX_PR_MERGED="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.merged // false')"
+	        SECURITY_FIX_PR_BASE="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.base_ref // ""')"
+	        SECURITY_FIX_PR_NUMBER="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.number // "unknown"')"
+	        if [ "${SECURITY_FIX_PR_MERGED}" = "true" ] \
+	          && { [ -z "${SECURITY_FIX_PR_BASE}" ] || [ "${SECURITY_FIX_PR_BASE}" != "${INTEGRATION_BRANCH_TRACKING}" ]; }; then
+	          echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${SECURITY_FIX_ISSUE} candidate_pr=${SECURITY_FIX_PR_NUMBER} rejected=base_mismatch" >&2
+	          SECURITY_FIX_PR_MERGED="false"
+	        fi
+        # The batch's linked_pr only carries CrossReferencedEvents with
+        # willCloseTarget=true, and GitHub sets that flag only for PRs
+        # into the default branch — so it is null for every fix PR
+        # merged into an integration branch. The ai:merged label is not
+        # evidence here because issue_pr_status may apply it for a PR into
+        # any base. Fall back to the timeline whenever the cache has no
+        # valid integration-base merge. §15: one timeline read plus label
+        # reconciliation, only on this closed + no-valid-cache-evidence corner.
+        if [ "${SECURITY_FIX_STATE}" = "closed" ] \
+          && [ "${SECURITY_FIX_PR_MERGED}" != "true" ]; then
+	          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}" "${INTEGRATION_BRANCH_TRACKING}"; then
+            echo "SECURITY_PASS_FIX_MERGED_EVIDENCE tracking_issue=${TRACKING_NUM} issue=${SECURITY_FIX_ISSUE} source=timeline"
+            if ! backfill_validation_fix_issue_merged_label "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_LABELS}"; then
+              echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE}: merged PR detected but ai:merged backfill failed." >&2
+            fi
+            SECURITY_FIX_PR_MERGED="true"
+          else
+            SECURITY_FIX_MERGED_EVIDENCE_RC=$?
+            if [ "${SECURITY_FIX_MERGED_EVIDENCE_RC}" -eq 2 ]; then
+              echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} merged-PR evidence lookup failed; retaining fixing state."
+              continue
+            fi
+          fi
+        fi
       fi
       if [ "${SECURITY_FIX_STATE}" = "closed" ] \
-        && { [ "${SECURITY_FIX_PR_MERGED}" = "true" ] || has_label "${SECURITY_FIX_LABELS}" "ai:merged"; }; then
+        && [ "${SECURITY_FIX_PR_MERGED}" = "true" ]; then
         SECURITY_PASS_COMPLETED_CYCLES="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
         if ! [[ "${SECURITY_PASS_COMPLETED_CYCLES}" =~ ^[0-9]+$ ]]; then
           SECURITY_PASS_COMPLETED_CYCLES=0
@@ -15650,6 +18274,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
             echo "::warning::Security-pass successor #${SECURITY_FIX_SUCCESSOR} could not be persisted for tracking issue #${TRACKING_NUM}; retaining fixing state for retry."
             continue
           fi
+          reconcile_tracking_body_after_security_pass_transition
           post_state_comment || true
           post_tracking_comment "## 🔁 Security-pass fix issue re-issued
 
@@ -15665,6 +18290,24 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
         fi
         echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=fix_issue_closed_without_merged_pr issue=${SECURITY_FIX_ISSUE}"
         security_pass_closed_fix_failure "${SECURITY_FIX_ISSUE}"
+        continue
+      elif has_label "${SECURITY_FIX_LABELS}" "ai:implementation-failed"; then
+        # Open, but implement.yml failed it in post-Codex validation.  No
+        # other loop re-issues a security-pass fix issue (see
+        # security_pass_handle_failed_fix_issue), so handle it here.  Prefer
+        # the comments the cycle-local GraphQL batch already fetched (§15);
+        # the REST fallback only runs when that batch missed the issue.
+        SECURITY_FIX_COMMENTS_JSON='[]'
+        if printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -e --arg issue "${SECURITY_FIX_ISSUE}" '(.[$issue].comments | type) == "array"' >/dev/null 2>&1; then
+          SECURITY_FIX_COMMENTS_JSON="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -c --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].comments')"
+        elif SECURITY_FIX_COMMENTS_JSON="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${SECURITY_FIX_ISSUE}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+          && printf '%s' "${SECURITY_FIX_COMMENTS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+          :
+        else
+          echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} is implementation-failed but its comments could not be fetched; retaining fixing state for retry."
+          continue
+        fi
+        security_pass_handle_failed_fix_issue "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_COMMENTS_JSON}"
         continue
       else
         echo "Security-pass fix issue #${SECURITY_FIX_ISSUE} remains in progress."
@@ -15800,6 +18443,8 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
             echo "::warning::[external-finalize] failed to persist merged state for PR #${_orch_extfin_pr}; leaving final_merge_status pending."
             continue
           fi
+          security_pass_unblock_filed_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
+          security_pass_file_deferred_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
           post_state_comment || true
           handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
           set_tracking_phase_label "ai:merged"
@@ -15825,6 +18470,29 @@ The orchestrator detected that the integration PR was squash-merged outside the 
   # integration-branch missing/conflict path preempting it.
   if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
     DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  fi
+  # Retry advisory creation on every later merged-state tick. The transition
+  # arms attempt filing immediately, but a transient create failure leaves the
+  # waiver row pending and completed projects otherwise skip the finalizer.
+  # The same tick re-checks follow-ups not yet in
+  # security_pass_followups_merge_checked (a failed read or /answer post on
+  # the merge tick, or follow-ups filed before this check existed), so a
+  # parked advisory is never left waiting for a human.
+  if [ "$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")" = "merged" ] \
+    && jq -e '
+      (((.security_pass_followups_merge_checked // []) | map(select(type == "number"))) as $checked
+      | any((.security_pass_waived_findings // [])[]; (.followup_pending // false) == true and .issue == null and (.finding | type) == "object")
+        or any((.security_pass_followup_issues // [])[]; (.issue | type) == "number" and ((.issue as $row_issue | $checked | index($row_issue)) == null)))
+    ' "${STATE_FILE}" >/dev/null 2>&1; then
+    security_pass_unblock_filed_advisory_followups \
+      "${INTEGRATION_BRANCH_TRACKING}" \
+      "${DEFAULT_BRANCH_TRACKING}" \
+      "$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+    security_pass_file_deferred_advisory_followups \
+      "${INTEGRATION_BRANCH_TRACKING}" \
+      "${DEFAULT_BRANCH_TRACKING}" \
+      "$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+    post_state_comment || true
   fi
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
     && [ "${PROJECT_STATUS}" != "complete" ] \
@@ -16215,13 +18883,23 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
     if [ -n "${RE_SECURITY_PASS_COMMENT_JSON}" ] && [ "${RE_SECURITY_PASS_COMMENT_JSON}" != "null" ]; then
       RE_SECURITY_PASS_COMMENT_ID="$(printf '%s' "${RE_SECURITY_PASS_COMMENT_JSON}" | jq -r '.id // 0' 2>/dev/null || echo 0)"
       echo "  /re-security-pass requested for project #${TRACKING_NUM}. Resetting security-pass state."
+      # A reset is a full restart of the bounded loop: the operator claims
+      # to have addressed the exhaustion findings, so the next audit covers
+      # the whole range again rather than a delta from the failed head.
       jq '
         .status = "security-pass"
         | .security_pass_cycle = 0
+        | .security_pass_judge_rounds = 0
         | .security_pass_status = "pending"
         | .security_pass_active_fix_issues = []
         | .security_pass_head_sha = ""
+        | .security_pass_last_audited_sha = ""
+        | .security_pass_reported_findings = []
+        | .security_pass_fix_touched_files = []
+        | del(.security_pass_fix_reissue_count)
+        | del(.security_pass_fix_defer)
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      reconcile_tracking_body_after_security_pass_transition
       post_state_comment || true
       set_tracking_phase_label "ai:security-pass"
       post_tracking_comment "<!-- re-security-pass-dedup:${RE_SECURITY_PASS_COMMENT_ID} -->
@@ -17446,6 +20124,14 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       echo "  Issue #${ip_issue}: PR #${IP_PR} state=${IP_PR_STATE} mergeable=${IP_MERGEABLE}, skipping."
       continue
     fi
+    # Merge-train queued PRs (scripts/review_merge_train.sh) wait for an
+    # older overlapping PR to merge; resolving their conflicts now would be
+    # redone after that merge. The train releases them (and their review
+    # run resolves the conflict pre-review) once the blockers are gone.
+    if printf '%s' "${_ip_pr_json}" | jq -e '[.labels[]?.name] | index("ai:merge-queued")' >/dev/null 2>&1; then
+      echo "  Issue #${ip_issue}: PR #${IP_PR} is ai:merge-queued (merge train); skipping conflict dispatch until released."
+      continue
+    fi
     echo "  Issue #${ip_issue} has PR #${IP_PR} with merge conflicts. Running Codex conflict resolution..."
 
     _ip_head_sha="$(_jq_field "${_ip_pr_json}" '.head.sha')"
@@ -17722,9 +20408,33 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         fi
       fi
 
-      # Collect full PR context for the judge
-      PR_DIFF="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
-        -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
+      # Collect full PR context for the judge. Apply the same byte cap as the
+      # wave judge because minified single-line diffs defeat the line cap used
+      # when this prompt is rendered below.
+      _rb_pr_diff_tmp="$(mktemp)"
+      _rb_pr_diff_capped_tmp="$(mktemp)"
+      if gh_retry_to_file "${_rb_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
+        -H 'Accept: application/vnd.github.diff'; then
+        head -n 1000 "${_rb_pr_diff_tmp}" > "${_rb_pr_diff_capped_tmp}" 2>/dev/null || printf '%s' '(diff unavailable)' > "${_rb_pr_diff_capped_tmp}"
+        _rb_pr_diff_bytes="$(wc -c < "${_rb_pr_diff_capped_tmp}" 2>/dev/null | tr -cd '0-9' || true)"
+        [[ "${_rb_pr_diff_bytes}" =~ ^[0-9]+$ ]] || _rb_pr_diff_bytes=0
+        if [ "${_rb_pr_diff_bytes}" -gt "${JUDGE_PR_DIFF_MAX_BYTES}" ]; then
+          if _judge_truncate_pr_diff_file "${_rb_pr_diff_capped_tmp}" "${JUDGE_PR_DIFF_MAX_BYTES}"; then
+            PR_DIFF="[NOTE: PR diff is ${_rb_pr_diff_bytes} bytes after the 1000-line cap; truncated to a prefix within ${JUDGE_PR_DIFF_MAX_BYTES} bytes to fit codex stdin (1 MB cap). Read the PR's files directly for the elided tail if needed.]
+$(cat "${_rb_pr_diff_capped_tmp}")"
+          else
+            echo "::warning::Failed to truncate PR #${RB_PR} diff for review-blocked judge; eliding ${_rb_pr_diff_bytes} bytes instead of embedding an over-budget payload." >&2
+            PR_DIFF="[NOTE: PR diff elided because byte truncation failed; ${_rb_pr_diff_bytes} bytes omitted. Read the PR's files directly if this diff matters to the verdict.]"
+          fi
+        else
+          PR_DIFF="$(cat "${_rb_pr_diff_capped_tmp}")"
+        fi
+      else
+        echo "::warning::Failed to fetch PR #${RB_PR} diff for review-blocked judge; falling back to '(diff unavailable)'." >&2
+        PR_DIFF="(diff unavailable)"
+      fi
+      rm -f "${_rb_pr_diff_tmp}" "${_rb_pr_diff_capped_tmp}"
+      unset _rb_pr_diff_tmp _rb_pr_diff_capped_tmp _rb_pr_diff_bytes
       RB_PRELOADED_META="$(echo "${_rb_pr_json}" | jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo '{}')"
       if type gh_pr_with_all_comments >/dev/null 2>&1; then
         RB_PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
@@ -17827,7 +20537,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         echo
         echo "=== PR #${RB_PR} DIFF ==="
         echo
-        head -1000 <<< "${PR_DIFF}"
+        printf '%s\n' "${PR_DIFF}"
         echo
         echo "=== PR #${RB_PR} COMMENTS (editor summaries, reviewer findings) ==="
         echo
@@ -17865,22 +20575,32 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       # Run the judge
       RB_JUDGE_SUCCESS=false
       if [ -n "${RB_PENDING_DECISION_JSON}" ]; then
-        printf '%s\n' "${RB_PENDING_DECISION_JSON}" > "${RB_JUDGE_OUTPUT_FILE}"
+        printf '%s
+' "${RB_PENDING_DECISION_JSON}" > "${RB_JUDGE_OUTPUT_FILE}"
         RB_JUDGE_SUCCESS=true
         echo "  Reusing pending review-blocked approval request; skipping a new model decision."
       else
-      for attempt in 1 2; do
-        echo "  Review-blocked judge attempt ${attempt}/2..."
         sanitize_codex_prompt_file "${RB_JUDGE_PROMPT_FILE}"
-        poller_run_readonly_model "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log" "${MODEL_EDITOR}" || true
-        if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
-          RB_JUDGE_SUCCESS=true
-          break
+        RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
+        [[ "${RB_JUDGE_PROMPT_BYTES}" =~ ^[0-9]+$ ]] || RB_JUDGE_PROMPT_BYTES=0
+        RB_JUDGE_PROMPT_CHARS="$(LC_ALL=C.UTF-8 wc -m < "${RB_JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
+        [[ "${RB_JUDGE_PROMPT_CHARS}" =~ ^[0-9]+$ ]] || RB_JUDGE_PROMPT_CHARS="${RB_JUDGE_PROMPT_BYTES}"
+        echo "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (${RB_JUDGE_PROMPT_CHARS} characters; codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES})."
+        if [ "${RB_JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then
+          echo "::error::Review-blocked judge prompt for issue #${rb_issue} exceeds codex's 1048576-character stdin cap; skipping 2 attempts that would fail before the model runs."
+        else
+          for attempt in 1 2; do
+            echo "  Review-blocked judge attempt ${attempt}/2..."
+            poller_run_readonly_model "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log" "${MODEL_EDITOR}" || true
+            if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
+              RB_JUDGE_SUCCESS=true
+              break
+            fi
+            if [ "${attempt}" -lt 2 ]; then
+              sleep 10
+            fi
+          done
         fi
-        if [ "${attempt}" -lt 2 ]; then
-          sleep 10
-        fi
-      done
       fi
 
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
@@ -19430,6 +22150,16 @@ Manual intervention required." >/dev/null
   #     merged, this block is stable across ticks and extends the
   #     cacheable prefix by the sum of the diffs (typically 5-15 K
   #     tokens for mature projects).
+  #   - Every embedded diff is bounded by bytes as well as by lines:
+  #     JUDGE_PR_DIFF_MAX_BYTES per PR and JUDGE_PR_DIFFS_TOTAL_MAX_BYTES
+  #     across the whole prompt, so the assembled prompt stays under
+  #     codex's 1,048,576-character `turn/start` stdin cap even when a
+  #     PR commits minified bundles (single 40-70 KB lines that the
+  #     500-line cap never trims). The shared budget is consumed in two
+  #     passes — merged PRs first, in sorted issue order, then open PRs
+  #     with whatever remains — so the merged block never depends on an
+  #     in-flight PR's size and stays byte-stable within a wave.
+  #   - API-call count is unchanged: exactly one diff fetch per linked PR.
   MERGED_PR_SUMMARIES=""
   OPEN_PR_SUMMARIES=""
   _sorted_issue_nums="$(
@@ -19438,43 +22168,76 @@ Manual intervention required." >/dev/null
       { grep -E '^[0-9]+$' || true; } |
       sort -un
   )"
-  while IFS= read -r inum; do
-    [ -n "${inum}" ] || continue
-    PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
-    if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
-      # Fetch the diff into a temp file before truncating: piping
-      # gh api directly into `head -500` causes SIGPIPE on gh api once
-      # head has read enough lines, which gh_retry then treats as a
-      # transient failure and retries with exponential backoff.
-      _pr_diff_tmp="$(mktemp)"
-      if gh_retry_to_file "${_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
-        -H 'Accept: application/vnd.github.diff'; then
-        PR_DIFF="$(head -n 500 "${_pr_diff_tmp}" 2>/dev/null || echo "(diff unavailable)")"
-      else
-        echo "::warning::Failed to fetch PR #${PR_NUM} diff for judge context (issue #${inum}); falling back to '(diff unavailable)'." >&2
-        PR_DIFF="(diff unavailable)"
-      fi
-      rm -f "${_pr_diff_tmp}"
-      unset _pr_diff_tmp
+  _judge_pr_diff_budget_left="${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}"
+  for _judge_diff_pass in merged open; do
+    while IFS= read -r inum; do
+      [ -n "${inum}" ] || continue
       _issue_status="$(jq -r --arg num "${inum}" --argjson wi "${WAVE_IDX}" \
         '.waves[$wi].issues[] | select((.github_issue | tostring) == $num) | .status // ""' \
         "${STATE_FILE}" 2>/dev/null | head -n1)"
-      if [ "${_issue_status}" = "merged" ]; then
-        MERGED_PR_SUMMARIES+="
+      if [ "${_judge_diff_pass}" = "merged" ]; then
+        [ "${_issue_status}" = "merged" ] || continue
+      else
+        [ "${_issue_status}" != "merged" ] || continue
+      fi
+      PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
+      if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
+        # Fetch the diff into a temp file before truncating: piping
+        # gh api directly into `head -500` causes SIGPIPE on gh api once
+        # head has read enough lines, which gh_retry then treats as a
+        # transient failure and retries with exponential backoff.
+        _pr_diff_tmp="$(mktemp)"
+        _pr_diff_capped_tmp="$(mktemp)"
+        if gh_retry_to_file "${_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
+          -H 'Accept: application/vnd.github.diff'; then
+          head -n 500 "${_pr_diff_tmp}" > "${_pr_diff_capped_tmp}" 2>/dev/null || printf '%s' "(diff unavailable)" > "${_pr_diff_capped_tmp}"
+          _pr_diff_bytes="$(wc -c < "${_pr_diff_capped_tmp}" 2>/dev/null | tr -cd '0-9' || true)"
+          [[ "${_pr_diff_bytes}" =~ ^[0-9]+$ ]] || _pr_diff_bytes=0
+          _pr_diff_allowance="${JUDGE_PR_DIFF_MAX_BYTES}"
+          if [ "${_judge_pr_diff_budget_left}" -lt "${_pr_diff_allowance}" ]; then
+            _pr_diff_allowance="${_judge_pr_diff_budget_left}"
+          fi
+          if [ "${_pr_diff_bytes}" -le "${_pr_diff_allowance}" ]; then
+            PR_DIFF="$(cat "${_pr_diff_capped_tmp}")"
+            _judge_pr_diff_budget_left=$(( _judge_pr_diff_budget_left - _pr_diff_bytes ))
+          elif [ "${_pr_diff_allowance}" -le 0 ]; then
+            echo "Judge context: PR #${PR_NUM} (issue #${inum}) diff elided — JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES} budget exhausted (${_pr_diff_bytes} bytes omitted)."
+            PR_DIFF="[NOTE: PR diff elided — the shared judge PR-diff budget (JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES} bytes) is exhausted; ${_pr_diff_bytes} bytes omitted. Read the PR's files directly if this diff matters to the verdict.]"
+          else
+            if _judge_truncate_pr_diff_file "${_pr_diff_capped_tmp}" "${_pr_diff_allowance}"; then
+              echo "Judge context: PR #${PR_NUM} (issue #${inum}) diff truncated from ${_pr_diff_bytes} to ${_pr_diff_allowance} bytes (JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES})."
+              PR_DIFF="[NOTE: PR diff is ${_pr_diff_bytes} bytes after the 500-line cap; truncated to a prefix within ${_pr_diff_allowance} bytes (JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}) to fit codex stdin (1 MB cap). Read the PR's files directly for the elided tail if needed.]
+$(cat "${_pr_diff_capped_tmp}")"
+              _judge_pr_diff_budget_left=$(( _judge_pr_diff_budget_left - _pr_diff_allowance ))
+            else
+              echo "::warning::Failed to truncate PR #${PR_NUM} diff for judge context (issue #${inum}); eliding ${_pr_diff_bytes} bytes instead of embedding an over-budget payload." >&2
+              PR_DIFF="[NOTE: PR diff elided because byte truncation failed; ${_pr_diff_bytes} bytes omitted. Read the PR's files directly if this diff matters to the verdict.]"
+            fi
+          fi
+          [ "${_judge_pr_diff_budget_left}" -ge 0 ] || _judge_pr_diff_budget_left=0
+        else
+          echo "::warning::Failed to fetch PR #${PR_NUM} diff for judge context (issue #${inum}); falling back to '(diff unavailable)'." >&2
+          PR_DIFF="(diff unavailable)"
+        fi
+        rm -f "${_pr_diff_tmp}" "${_pr_diff_capped_tmp}"
+        unset _pr_diff_tmp _pr_diff_capped_tmp _pr_diff_bytes _pr_diff_allowance
+        if [ "${_issue_status}" = "merged" ]; then
+          MERGED_PR_SUMMARIES+="
 --- PR #${PR_NUM} (Issue #${inum}) ---
 ${PR_DIFF}
 
 "
-      else
-        OPEN_PR_SUMMARIES+="
+        else
+          OPEN_PR_SUMMARIES+="
 --- PR #${PR_NUM} (Issue #${inum}, status=${_issue_status:-unknown}) ---
 ${PR_DIFF}
 
 "
+        fi
       fi
-    fi
-  done <<< "${_sorted_issue_nums}"
-  unset _sorted_issue_nums _issue_status
+    done <<< "${_sorted_issue_nums}"
+  done
+  unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left
 
   # Fetch CI status on default branch
   DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
@@ -19610,6 +22373,22 @@ ${PR_DIFF}
   } > "${JUDGE_PROMPT_FILE}"
   rm -f "${JUDGE_SEMBLE_QUERY_FILE}"
 
+  # Surface the assembled prompt size before the first codex exec. The
+  # CLI's `turn/start` envelope is a hard 1,048,576-character stdin cap;
+  # a prompt over it fails every attempt identically with an opaque
+  # `Input exceeds the maximum length` on stderr (run 35425771769), so
+  # log the size where the next regression is visible near the top of
+  # the failing job instead of buried behind the echoed prompt.
+  sanitize_codex_prompt_file "${JUDGE_PROMPT_FILE}"
+  JUDGE_PROMPT_BYTES="$(wc -c < "${JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
+  [[ "${JUDGE_PROMPT_BYTES}" =~ ^[0-9]+$ ]] || JUDGE_PROMPT_BYTES=0
+  JUDGE_PROMPT_CHARS="$(LC_ALL=C.UTF-8 wc -m < "${JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
+  [[ "${JUDGE_PROMPT_CHARS}" =~ ^[0-9]+$ ]] || JUDGE_PROMPT_CHARS="${JUDGE_PROMPT_BYTES}"
+  echo "Judge prompt size: ${JUDGE_PROMPT_BYTES} bytes (${JUDGE_PROMPT_CHARS} characters; codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES})."
+  if [ "${JUDGE_PROMPT_CHARS}" -gt 950000 ]; then
+    echo "::warning::Judge prompt for #${TRACKING_NUM} is ${JUDGE_PROMPT_CHARS} characters (${JUDGE_PROMPT_BYTES} bytes); close to or over codex's 1 MB stdin cap. Expect 'Input exceeds the maximum length' judge failures unless JUDGE_PR_DIFF_MAX_BYTES (current: ${JUDGE_PR_DIFF_MAX_BYTES}) / JUDGE_PR_DIFFS_TOTAL_MAX_BYTES (current: ${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}) or the static context (README/agents/system instructions) are tightened."
+  fi
+
   # Run judge via Codex
   JUDGE_SUCCESS=false
   JUDGE_JSON=""
@@ -19620,6 +22399,10 @@ ${PR_DIFF}
     if [ "${judge_nag_attempt_limit}" -gt "${max_attempts}" ]; then
       max_attempts="${judge_nag_attempt_limit}"
     fi
+  fi
+  if [ "${JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then
+    echo "::error::Judge prompt for #${TRACKING_NUM} exceeds codex's 1048576-character stdin cap; skipping ${max_attempts} attempts that would fail before the model runs."
+    max_attempts=0
   fi
   for attempt in $(seq 1 "${max_attempts}"); do
     judge_attempt_prompt_file="${JUDGE_PROMPT_FILE}.attempt_${attempt}"
@@ -20436,6 +23219,10 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_HEAD_REF="$(echo "${S_PR_JSON}" | jq -r '.head.ref // ""')"
 	if [ -z "${S_HEAD_REF}" ] || [ "${S_HEAD_REF}" = "null" ]; then
 		echo "::warning::Standalone PR #${S_PR} has unavailable head ref from API. Skipping conflict dispatch path."
+		continue
+	fi
+	if _linked_pr_is_merge_queued "${S_PR_JSON}"; then
+		echo "  PR #${S_PR} is ai:merge-queued (merge train); skipping standalone conflict recovery until released."
 		continue
 	fi
 

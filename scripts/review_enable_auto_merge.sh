@@ -12,7 +12,12 @@
 #   ENABLE_AUTO_MERGE
 #   FORWARD_MERGE_FALLBACK_AUTO_MERGE
 #   ORCH_INTEGRATION_BRANCH_PATTERN
+#   INITIAL_HEAD_SHA
 #   GH_TOKEN
+#
+# Outputs (via GITHUB_ENV):
+#   AUTO_MERGE_READY_LABELS_ALLOWED — true only when the reviewed head may
+#   receive merge-authorization labels after this helper returns.
 
 set -euo pipefail
 
@@ -22,7 +27,39 @@ source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
+record_auto_merge_ready_labels_allowed()
+{
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		printf 'AUTO_MERGE_READY_LABELS_ALLOWED=%s\n' "$1" >> "${GITHUB_ENV}"
+	fi
+}
+
+record_auto_merge_ready_labels_allowed "false"
+
+reviewed_head_is_current_for_labels()
+{
+	local ready_label_current_head_sha=""
+	if ! [[ "${INITIAL_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "::warning::Reviewed head SHA is unavailable or malformed for PR #${PR_NUMBER}. Failing closed: refusing merge-authorization labels."
+		return 1
+	fi
+	# The full PR-metadata call below is unreachable on these intentional
+	# early-exit paths, so this is the smallest non-duplicative freshness read.
+	if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null)"; then
+		echo "::warning::Could not refresh the current head for PR #${PR_NUMBER}; refusing merge-authorization labels."
+		return 1
+	fi
+	if [ -z "${ready_label_current_head_sha}" ] || [ "${ready_label_current_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then
+		echo "::warning::PR #${PR_NUMBER} no longer points at reviewed head ${INITIAL_HEAD_SHA}. Failing closed: refusing merge-authorization labels for current head ${ready_label_current_head_sha:-unknown}."
+		return 1
+	fi
+	return 0
+}
+
 if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
+	if reviewed_head_is_current_for_labels; then
+		record_auto_merge_ready_labels_allowed "true"
+	fi
 	echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
 	exit 0
 fi
@@ -65,6 +102,9 @@ _label_err_file="$(mktemp 2>/dev/null || echo /dev/null)"
 if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' 2>"${_label_err_file}")"; then
 	[ "${_label_err_file}" = /dev/null ] || rm -f "${_label_err_file}"
 	if printf '%s\n' "${PR_LABELS_RAW}" | grep -qx 'e2e-smoke-test'; then
+		if reviewed_head_is_current_for_labels; then
+			record_auto_merge_ready_labels_allowed "true"
+		fi
 		echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
 		exit 0
 	fi
@@ -139,6 +179,17 @@ if [ -z "${_orch_pr_head_ref}" ]; then
 	exit 0
 fi
 
+_orch_pr_head_sha="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.sha // ""' 2>/dev/null || echo "")"
+if ! [[ "${INITIAL_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=refuse reason=head_sha_unavailable"
+	echo "::warning::Reviewed head SHA is unavailable or malformed for PR #${PR_NUMBER}. Failing closed: refusing auto-merge enablement and merge-authorization labels without a --match-head-commit guard."
+	exit 0
+fi
+if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then
+	echo "::warning::PR #${PR_NUMBER} no longer points at reviewed head ${INITIAL_HEAD_SHA}. Failing closed: refusing auto-merge enablement and merge-authorization labels for current head ${_orch_pr_head_sha:-unknown}."
+	exit 0
+fi
+
 # Scoped opt-out for forward-merge fallback PRs opened by
 # forward-merge-stable-to-main.yml — these are routed AWAY from the
 # `--squash --auto` tail below. Head ref is hard-coded as
@@ -178,12 +229,15 @@ if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq '^auto/forward-merge-stable-'
 	# behaviour of leaving these PRs for a manual merge commit.
 	if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
 		echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}')..."
-		if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto; then
+		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=merge_commit"
+		if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
+			record_auto_merge_ready_labels_allowed "true"
 			echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
 		else
 			echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Check that 'Allow merge commits' and 'Allow auto-merge' are enabled in repo settings and branch protection is configured. The PR remains open for manual 'Create a merge commit'."
 		fi
 	else
+		record_auto_merge_ready_labels_allowed "true"
 		echo "PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise (see promote-main-to-stable.yml:115-126 and the CAUTION banner in the PR body)."
 	fi
 	exit 0
@@ -207,6 +261,7 @@ if [ "${_orch_is_integration_pr}" != "true" ] && [[ "${_orch_pr_head_ref}" =~ ^o
 	_orch_is_integration_pr="true"
 fi
 if [ "${_orch_is_integration_pr}" = "true" ]; then
+	record_auto_merge_ready_labels_allowed "true"
 	if [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
 		_orch_ref_tracking_num="${BASH_REMATCH[1]}"
 		_orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*refs:?[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
@@ -225,7 +280,9 @@ if [ "${_orch_is_integration_pr}" = "true" ]; then
 fi
 
 echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
-if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
+echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=squash"
+if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
+	record_auto_merge_ready_labels_allowed "true"
 	echo "Auto-merge enabled. PR will merge once all required checks pass."
 else
 	echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."

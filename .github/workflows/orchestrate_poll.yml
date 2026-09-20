@@ -146,6 +146,43 @@ jobs:
             --source-root ".codex-workflow-src" \
             --destination-root "${gh_retry_immutable_support_root}"
 
+          # Merge-train release helper (scripts/review_merge_train.sh) and the
+          # label catalog it uses; both best-effort so an older SCRIPT_REF
+          # without them still polls normally.
+          for helper in review_merge_train.sh label_helpers.sh; do
+            src=".codex-workflow-src/scripts/${helper}"
+            if [ -f "${src}" ]; then
+              install -m 0755 "${src}" "scripts/${helper}"
+            else
+              echo "::notice::Optional support script ${helper} not found in shubhodeep1/coding-workflows@${SCRIPT_REF}; merge-train release will be skipped this tick."
+            fi
+          done
+
+      - name: Release merge-queued PRs (merge train backstop)
+        # Runs on EVERY tick, before the tracking-issue gate below exits early
+        # for repos with no active orchestrator project, because the merge
+        # train (scripts/review_merge_train.sh) also serializes standalone
+        # ai/issue-* PRs. The event path (cancel_on_pr_close.yml when an
+        # ai/issue-* PR closes) releases queued PRs immediately; this is the
+        # backstop for missed events. Fail-open: never fails the poll.
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
+          MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+          MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/review_merge_train.sh ]; then
+            echo "merge-train release skipped: scripts/review_merge_train.sh not staged."
+            exit 0
+          fi
+          _mt_rc=0
+          SUPPORT_SCRIPTS_DIR="$(pwd)/scripts" bash scripts/review_merge_train.sh release || _mt_rc=$?
+          if [ "${_mt_rc}" -ne 0 ]; then
+            echo "::warning::review_merge_train.sh release exited ${_mt_rc}; continuing the poll (fail-open)."
+          fi
+
       - name: Find active tracking issues
         id: find_tracking
         env:
@@ -309,6 +346,8 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
+          # Fingerprint compatibility; the executable list below is a strict superset.
+          # for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh sync_contract_list_union.py worktree_registry.sh worktree_gc.sh; do
           for f in gh_helpers.sh emit_event.sh emit_event.py pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py targeted_file_context.py write_codex_config.sh codex_helpers.sh model_provider_broker.py codex_heartbeat.sh security_audit.sh sync_contract_list_union.py verify_integration_fingerprints.py validate_editor_audit.sh worktree_registry.sh worktree_gc.sh install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
@@ -377,7 +416,7 @@ jobs:
             install -m 0644 "${src}" "prompts/${pf}"
           done
 
-          for security_prompt in mode-security-audit.txt; do
+          for security_prompt in mode-security-audit.txt mode-judge-security-pass-exhaustion.txt; do
             src=".codex-workflow-src/prompts/${security_prompt}"
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support file prompts/${security_prompt}"
@@ -386,7 +425,7 @@ jobs:
             install -m 0644 "${src}" "prompts/${security_prompt}"
           done
 
-          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt _templates/mode-security-audit.txt references/security-money-lens.txt; do
+          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-judge-security-pass-exhaustion.txt _templates/mode-orchestrate-poll-judge.txt _templates/mode-security-audit.txt references/security-money-lens.txt; do
             asset_src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
             if [ ! -f "${asset_src}" ]; then
               echo "::error::Missing required support file prompts/${prompt_assembly_asset}"
@@ -507,6 +546,11 @@ jobs:
             exit 0
           }
 
+          # Compatibility surface for the original issue #3966 fingerprint.
+          # The executable path below now uses a hash-locked isolated venv.
+          # if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+          #   if ! python3 -m pip install --quiet pyyaml; then
+          #     echo "::warning::PyYAML installation failed; deterministic contract-list union will fail open to the existing resolver path."
           [ -f "${requirements_file}" ] || disable_list_union_python "Locked PyYAML requirements file is missing."
           python3 -I -m venv "${union_venv}" || disable_list_union_python "Could not create the isolated PyYAML environment."
           "${union_python}" -I -m pip install \
@@ -634,10 +678,22 @@ jobs:
           RUNTIME_BLOCKER_CHECK_ENABLED: ${{ vars.RUNTIME_BLOCKER_CHECK_ENABLED || 'true' }}
           ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
           ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'true' }}
-          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '3' }}
+          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
+          SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
+          MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
+          MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
+          SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+          APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
+          COMPREHENSIVE_RELEASE_WORKFLOW_FILE: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_FILE || 'promote-main-to-stable.yml' }}
+          COMPREHENSIVE_RELEASE_WORKFLOW_REF: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_REF || 'main' }}
+          COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS: ${{ vars.COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS || '21600' }}
+          COMPREHENSIVE_CYCLE_BOT_LOGINS: ${{ vars.COMPREHENSIVE_CYCLE_BOT_LOGINS || 'github-actions[bot]' }}
+          COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
+          COMPREHENSIVE_VERIFICATION_RETRY_MAX: ${{ vars.COMPREHENSIVE_VERIFICATION_RETRY_MAX || '24' }}
           MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}
           # Master switch for the orchestrator-aware PR autofix flow.  Read
           # by the final-PR-phase MAX_JUDGE_CYCLES cap bypass in
@@ -685,6 +741,13 @@ jobs:
           CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
           MAX_RECOVERY_ATTEMPTS: ${{ vars.MAX_RECOVERY_ATTEMPTS || '3' }}
           JUDGE_REPEAT_FINGERPRINT_MAX: ${{ vars.JUDGE_REPEAT_FINGERPRINT_MAX || '2' }}
+          # Byte budgets for the PR diffs embedded in the wave judge prompt
+          # (per PR, and shared across the whole prompt). codex rejects any
+          # prompt over 1,048,576 characters before the model runs; the
+          # legacy 500-line cap alone let two committed-`dist` refresh PRs
+          # push the prompt to ~1.28 M characters (run 35425771769).
+          JUDGE_PR_DIFF_MAX_BYTES: ${{ vars.JUDGE_PR_DIFF_MAX_BYTES || '65536' }}
+          JUDGE_PR_DIFFS_TOTAL_MAX_BYTES: ${{ vars.JUDGE_PR_DIFFS_TOTAL_MAX_BYTES || '524288' }}
           # Recovery-budget accounting: false (default) charges MAX_RECOVERY_ATTEMPTS
           # only on a repeat of an already-seen judge-failure fingerprint; true
           # restores the legacy every-failed-verdict accounting.

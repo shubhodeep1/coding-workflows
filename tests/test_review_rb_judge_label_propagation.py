@@ -347,16 +347,14 @@ if args[:1] == ["api"]:
 		sys.exit(1)
 	api_responses = state.get("api_responses", {}) or {}
 	matched = None
+	api_response_sequences = state.get("api_response_sequences", {}) or {}
+	for pattern, responses in api_response_sequences.items():
+		if pattern and pattern in path and responses:
+			matched = responses.pop(0)
+			break
 	for pattern, resp in api_responses.items():
-		if pattern and pattern in path:
-			if isinstance(resp, list) and resp:
-				sequence_indexes = state.setdefault("api_response_sequence_indexes", {})
-				sequence_index = int(sequence_indexes.get(pattern, 0))
-				matched = resp[min(sequence_index, len(resp) - 1)]
-				if sequence_index < len(resp) - 1:
-					sequence_indexes[pattern] = sequence_index + 1
-			else:
-				matched = resp
+		if matched is None and pattern and pattern in path:
+			matched = resp
 			break
 	save()
 	if matched is not None:
@@ -480,7 +478,7 @@ def _run_close_and_reissue(
 			"state": "open",
 			"head": {"sha": final_close_head_sha or resolved_live_close_head_sha},
 		}
-		mock_state["api_responses"] = {
+		mock_state["api_response_sequences"] = {
 			"pulls/42": [initial_close_response, final_close_response],
 		}
 		mock_state["pr_close_should_fail"] = pr_close_should_fail
@@ -694,6 +692,14 @@ def test_review_autofix_wires_reissue_preserve_baseline_flag_default_true() -> N
 		"review_autofix.yml must pass REISSUE_PRESERVE_BASELINE_ENABLED to the "
 		"review-blocked judge and default it to true (Phase E bake-out complete) so a "
 		"spot-fix verdict preserves the closed PR head unless a repo opts out."
+	)
+
+
+def test_review_autofix_wires_integration_branch_pattern_to_judge() -> None:
+	wf = _review_autofix_text()
+	assert "ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}" in wf, (
+		"review_autofix.yml must pass the configured integration-branch pattern to "
+		"the review-blocked judge's follow-up lineage fallback."
 	)
 
 
@@ -1130,6 +1136,7 @@ _pr_meta='{{}}'
 {{
   printf 'FIRST_ISSUE=%s\n' "${{FIRST_ISSUE}}"
   printf 'FIRST_ISSUE_BODY=%s\n' "${{FIRST_ISSUE_BODY}}"
+  printf 'FIRST_ISSUE_LINEAGE_BODY=%s\n' "${{FIRST_ISSUE_LINEAGE_BODY}}"
   printf 'FIRST_ISSUE_LABELS_JSON=%s\n' "${{FIRST_ISSUE_LABELS_JSON}}"
 }} > "${{CAPTURE_FILE}}"
 """
@@ -1207,6 +1214,7 @@ def test_complete_graphql_node_avoids_issue_rest_read() -> None:
 	assert state["_captured"] == {
 		"FIRST_ISSUE": "41",
 		"FIRST_ISSUE_BODY": "Build feature X.",
+		"FIRST_ISSUE_LINEAGE_BODY": "Build feature X.",
 		"FIRST_ISSUE_LABELS_JSON": '["ai:orchestrator-managed","ai:closed"]',
 	}
 	assert len(_matching_api_calls(state, "graphql")) == 1
@@ -1223,6 +1231,7 @@ def test_complete_graphql_empty_body_preserves_first_issue_labels() -> None:
 
 	assert state["_captured"]["FIRST_ISSUE"] == "41"
 	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Fallback body"
+	assert state["_captured"]["FIRST_ISSUE_LINEAGE_BODY"] == ""
 	assert json.loads(state["_captured"]["FIRST_ISSUE_LABELS_JSON"]) == ["ai:orchestrator-managed"]
 	assert _matching_api_calls(state, "issues/41") == []
 	assert _matching_api_calls(state, "issues/42") == []
@@ -1570,6 +1579,10 @@ def _run_merge_with_followup(
 	issue_create_should_fail: bool = False,
 	check_runs_state: str = "success",  # "success" (all complete + green) or "pending" (one in_progress)
 	enable_xpg_echo: bool = False,
+	first_issue_body: str = "",
+	first_issue_lineage_body: str | None = None,
+	pr_base_ref: str = "",
+	orch_integration_branch_pattern: str = "^orchestrator/project-",
 ) -> dict:
 	"""Run the merge_with_followup branch with a mocked PR mergeability
 	state and judge JSON.  Returns the captured gh-mock state plus the
@@ -1607,6 +1620,8 @@ def _run_merge_with_followup(
 			"merged": pr_merged,
 			"head": {"sha": pr_head_sha},
 		}
+		if pr_base_ref:
+			pr_response["base"] = {"ref": pr_base_ref}
 		# `mergeable: null` is meaningful (mergeability still computing);
 		# emit it explicitly so jq's `// ""` defaults fire.
 		pr_response["mergeable"] = pr_mergeable  # type: ignore[assignment]
@@ -1678,10 +1693,16 @@ def _run_merge_with_followup(
 			"PR_NUMBER": "42",
 			"ISSUE_NUMBERS": "41",
 			"FIRST_ISSUE": "41",
+			"FIRST_ISSUE_BODY": first_issue_body,
+			"FIRST_ISSUE_LINEAGE_BODY": (
+				first_issue_body if first_issue_lineage_body is None else first_issue_lineage_body
+			),
 			"FIRST_ISSUE_LABELS_JSON": json.dumps(parent_label_set),
 			"JUDGE_JSON": judge_json,
 			"RB_ACTION": "merge_with_followup",
 			"ENABLE_AUTO_MERGE": enable_auto_merge,
+			"ORCH_INTEGRATION_BRANCH_PATTERN": orch_integration_branch_pattern,
+			"RB_JUDGED_HEAD_SHA": pr_head_sha,
 			"POST_REVIEW_HEAD_SHA": post_review_head_sha or pr_head_sha,
 			# Speed up both polling loops — one attempt is enough
 			# because the mock returns the configured value
@@ -2230,6 +2251,275 @@ def main() -> int:
 			failed += 1
 	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 	return 1 if failed > 0 else 0
+
+
+# =============================================================================
+# merge_with_followup lineage metadata + terminal-label guard
+# =============================================================================
+#
+# tele-funtoken-msg-scoring#4386 / binance-blessings#290: a follow-up
+# created here carried only Source PR / Parent issue / Type, so
+# scripts/resolve_integration_ref.sh (which reads "Integration branch:" /
+# "Tracking issue:") resolved it to the default branch and plan/implement
+# ran against main instead of the project's integration branch.
+#
+# tele-funtoken-msg-scoring#4379: the post-merge phase swap replaced the
+# PR-close handler's ai:merged with ai:ready-to-merge, and the orchestrator
+# then failed project #3928 as "fix issue closed without a merged PR".
+
+
+def _followup_body_from_state(state: dict) -> str:
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		f"expected exactly one gh issue create call, got {len(creates)}: {creates}"
+	)
+	args = creates[0]
+	return args[args.index("--body") + 1]
+
+
+def test_merge_with_followup_copies_lineage_from_parent_issue_metadata() -> None:
+	"""Parent body carries orchestrator metadata → the follow-up must
+	carry the same Tracking issue / Integration branch lines, in the
+	exact form scripts/resolve_integration_ref.sh parses."""
+	parent_body = (
+		"Refs #4001\n\nFix the thing.\n\n---\n"
+		"**Orchestrator metadata** (do not edit)\n"
+		"- Tracking issue: #4001\n"
+		"- Integration branch: `orchestrator/project-4001`\n"
+		"- Local ID: `security-pass-fix-cycle-2`\n"
+		"- Managed by: AI Orchestrator\n"
+	)
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body=parent_body,
+		pr_base_ref="orchestrator/project-4001",
+	)
+	body = _followup_body_from_state(state)
+	assert "Merge-with-followup metadata" in body
+	assert "- Tracking issue: #4001" in body, body
+	assert "- Integration branch: orchestrator/project-4001" in body, body
+	assert "`orchestrator/project-4001`" not in body, (
+		"integration branch must be emitted without backticks, matching the "
+		f"orchestrator's own follow-up footer; got body:\n{body}"
+	)
+	assert "Follow-up lineage: tracking issue #4001, integration branch orchestrator/project-4001." in state["_stdout"]
+
+
+def test_merge_with_followup_derives_lineage_from_pr_base_branch_fallback() -> None:
+	"""Parent body has no metadata (binance-blessings#288 shape) but the
+	PR base is an orchestrator integration branch → derive both lines
+	from the base branch name."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body="Add replay protection to the router.\n",
+		pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #249" in body, body
+	assert "- Integration branch: orchestrator/project-249" in body, body
+
+
+def test_merge_with_followup_ignores_default_branch_sentinel() -> None:
+	"""Explicit default-branch metadata suppresses a matching PR-base fallback."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body=(
+			"- Tracking issue: #4001\n"
+			"- Integration branch: `(default branch)`\n"
+		),
+		pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #4001" in body, body
+	assert "Integration branch:" not in body, body
+	assert "follow-up will resolve to the default branch" in state["_stdout"]
+
+
+def test_merge_with_followup_honors_custom_integration_branch_pattern() -> None:
+	"""A custom configured pattern still propagates a metadata-less PR base."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body="Parent body without orchestrator metadata.\n",
+		pr_base_ref="custom/integration/249",
+		orch_integration_branch_pattern="^custom/integration/",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Integration branch: custom/integration/249" in body, body
+	assert "Tracking issue:" not in body, body
+
+
+def test_merge_with_followup_parent_metadata_wins_over_pr_base_branch() -> None:
+	"""Both sources present and disagreeing → the parent's own metadata
+	is authoritative (user decision: metadata first, base-branch fallback)."""
+	parent_body = (
+		"Body\n\n- Tracking issue: #4001\n- Integration branch: orchestrator/project-4001\n"
+	)
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body=parent_body,
+		pr_base_ref="orchestrator/project-9999",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #4001" in body, body
+	assert "- Integration branch: orchestrator/project-4001" in body, body
+	assert "project-9999" not in body, body
+
+
+def test_merge_with_followup_ignores_sibling_issue_lineage() -> None:
+	"""The first non-empty requirement body may belong to a sibling issue,
+	but lineage must come from the actual parent or the PR-base fallback."""
+	sibling_body = "- Tracking issue: #4001\n- Integration branch: orchestrator/project-4001\n"
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"], first_issue_body=sibling_body,
+		first_issue_lineage_body="", pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #249" in body and "project-4001" not in body, body
+
+
+def test_merge_with_followup_invalid_parent_branch_uses_pr_base_fallback() -> None:
+	invalid_parent_body = "- Tracking issue: #4001\n- Integration branch: invalid branch\n"
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"], first_issue_body=invalid_parent_body,
+		pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #249" in body and "invalid branch" not in body, body
+	assert "Ignoring invalid Integration branch metadata" in state["_stdout"]
+
+
+def test_merge_with_followup_without_lineage_keeps_body_unchanged() -> None:
+	"""Standalone PR into main with a plain parent → no lineage lines are
+	added and the existing three-line footer is preserved verbatim."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:review-blocked"],
+		first_issue_body="Plain standalone issue body.\n",
+		pr_base_ref="main",
+	)
+	body = _followup_body_from_state(state)
+	assert "Tracking issue:" not in body, body
+	assert "Integration branch:" not in body, body
+	assert body.rstrip().endswith("- Type: review-blocked-followup"), body
+	assert "follow-up will resolve to the default branch" in state["_stdout"]
+
+
+def _extract_resilient_phase_swap() -> str:
+	text = _rb_judge_text()
+	match = re.search(
+		r"(?ms)^_resilient_phase_swap\(\)\n\{\n.*?^\}\n",
+		text,
+	)
+	if not match:
+		raise AssertionError("could not extract _resilient_phase_swap from review_rb_judge.sh")
+	return match.group(0)
+
+
+def _run_resilient_phase_swap(
+	current_labels: list[str],
+	target: str,
+	*,
+	labels_after_mutation: list[str] | None = None,
+) -> dict:
+	"""Run the real _resilient_phase_swap against a mock gh whose GET
+	labels endpoint returns ``current_labels``; returns the mock state
+	plus stdout so callers can assert which label mutations were issued."""
+	fn = _extract_resilient_phase_swap()
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_rps_") as td:
+		tmp_path = Path(td)
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir()
+		gh_state_file = tmp_path / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+		mock_state = {"api_responses": {"issues/41/labels": current_labels}}
+		if labels_after_mutation is not None:
+			mock_state["api_response_sequences"] = {
+				"issues/41/labels": [current_labels, labels_after_mutation],
+			}
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
+		script = tmp_path / "rps_harness.sh"
+		script.write_text(
+			"#!/usr/bin/env bash\nset -euo pipefail\n"
+			"gh_retry() { \"$@\"; }\n"
+			f"{fn}\n"
+			f"_resilient_phase_swap 41 \"{target}\"\n",
+			encoding="utf-8",
+		)
+		env = _sanitized_git_env({
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"REPOSITORY": "owner/repo",
+		})
+		proc = subprocess.run(
+			["bash", str(script)], cwd=str(tmp_path), env=env,
+			text=True, capture_output=True, timeout=60,
+		)
+		assert proc.returncode == 0, f"harness exited {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		state["_stdout"] = proc.stdout
+		return state
+
+
+def _put_label_calls(state: dict) -> list[list[str]]:
+	return [
+		call for call in state.get("api_calls", [])
+		if "PUT" in call and any(arg.endswith("/issues/41/labels") for arg in call)
+	]
+
+
+def _delete_label_calls(state: dict) -> list[list[str]]:
+	return [
+		call for call in state.get("api_calls", [])
+		if "DELETE" in call and any("/issues/41/labels/" in arg for arg in call)
+	]
+
+
+def test_resilient_phase_swap_does_not_downgrade_ai_merged() -> None:
+	"""An issue the PR-close handler already labelled ai:merged must keep
+	it: the swap to ai:ready-to-merge is skipped and no PUT is issued."""
+	state = _run_resilient_phase_swap(
+		["ai:merged", "ai:orchestrator-managed"], "ai:ready-to-merge",
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert "already carries terminal label ai:merged; not swapping to ai:ready-to-merge" in state["_stdout"]
+
+
+def test_resilient_phase_swap_does_not_downgrade_ai_closed() -> None:
+	state = _run_resilient_phase_swap(["ai:closed"], "ai:ready-to-merge")
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert "terminal label ai:closed" in state["_stdout"]
+
+
+def test_resilient_phase_swap_still_swaps_non_terminal_phase() -> None:
+	"""The ordinary case is unchanged: ai:review-blocked → ai:ready-to-merge
+	replaces the phase label and keeps non-phase labels."""
+	state = _run_resilient_phase_swap(
+		["ai:review-blocked", "ai:orchestrator-managed"], "ai:ready-to-merge",
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert any("POST" in call for call in state.get("api_calls", [])), state.get("api_calls")
+	assert any("ai%3Areview-blocked" in arg for call in _delete_label_calls(state) for arg in call)
+	assert "not swapping" not in state["_stdout"]
+
+
+def test_resilient_phase_swap_preserves_terminal_label_added_during_swap() -> None:
+	state = _run_resilient_phase_swap(
+		["ai:review-blocked", "ai:orchestrator-managed"],
+		"ai:ready-to-merge",
+		labels_after_mutation=["ai:merged", "ai:ready-to-merge", "ai:orchestrator-managed"],
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	deletes = _delete_label_calls(state)
+	assert any("ai%3Areview-blocked" in arg for call in deletes for arg in call), deletes
+	assert any("ai%3Aready-to-merge" in arg for call in deletes for arg in call), deletes
+	assert not any("ai%3Amerged" in arg for call in deletes for arg in call), deletes
+	assert "terminal label ai:merged appeared while swapping #41" in state["_stdout"]
+
+
+def test_resilient_phase_swap_allows_terminal_to_terminal() -> None:
+	"""close_and_reissue moves issues to ai:closed; a terminal target is
+	never blocked by the guard."""
+	state = _run_resilient_phase_swap(["ai:merged"], "ai:closed")
+	assert len(_put_label_calls(state)) == 1, state.get("api_calls")
 
 
 if __name__ == "__main__":
