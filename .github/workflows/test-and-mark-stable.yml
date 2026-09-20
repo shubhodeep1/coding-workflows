@@ -1,6 +1,6 @@
 ---
 name: Test & Mark Stable Release
-run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [cycle:{0}]', inputs.gate_cycle_id) || 'Test & Mark Stable Release' }}
+run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [cycle:{0};gate-only:{1};skip-e2e:{2};dry-run:{3};test-repo:{4};review-workflow:{5}]', inputs.gate_cycle_id, inputs.gate_only, inputs.skip_e2e, inputs.dry_run, inputs.test_repo, inputs.review_workflow_file) || 'Test & Mark Stable Release' }}
 
 "on":
   workflow_dispatch:

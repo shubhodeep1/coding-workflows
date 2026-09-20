@@ -405,8 +405,15 @@ jq -n \
 		smoke_actor_id: $smoke_actor_id,
 		smoke_workflow_path: ".github/workflows/test-and-mark-stable.yml",
 		smoke_event: "workflow_dispatch",
-		smoke_display_title: ("Test & Mark Stable Release [cycle:" + ($dispatcher_run_id | tostring) + "]"),
-		smoke_inputs: {gate_only: "true", gate_cycle_id: ($dispatcher_run_id | tostring)},
+		smoke_display_title: ("Test & Mark Stable Release [cycle:" + ($dispatcher_run_id | tostring) + ";gate-only:true;skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]"),
+		smoke_inputs: {
+			gate_only: "true",
+			gate_cycle_id: ($dispatcher_run_id | tostring),
+			skip_e2e: "false",
+			dry_run: "false",
+			test_repo: "",
+			review_workflow_file: "internal-review.yml"
+		},
 		smoke_conclusion: "success",
 		smoke_head_sha: $smoke_head_sha,
 		cycle_baseline_sha: $cycle_baseline_sha,

@@ -11493,7 +11493,11 @@ comprehensive_smoke_run_verified() {
     and (.actor.id // 0) == $marker.smoke_actor_id
     and $marker.smoke_inputs == {
       gate_only: "true",
-      gate_cycle_id: ($marker.dispatcher_run_id | tostring)
+      gate_cycle_id: ($marker.dispatcher_run_id | tostring),
+      skip_e2e: "false",
+      dry_run: "false",
+      test_repo: "",
+      review_workflow_file: "internal-review.yml"
     }
   ' >/dev/null 2>&1
 }

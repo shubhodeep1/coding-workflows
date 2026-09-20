@@ -683,12 +683,19 @@ def _valid_comprehensive_marker_document(document: dict[str, Any]) -> bool:
 		return False
 	if document.get("smoke_event") != "workflow_dispatch" or document.get("smoke_conclusion") != "success":
 		return False
-	expected_title = f"Test & Mark Stable Release [cycle:{document['dispatcher_run_id']}]"
+	expected_title = (
+		f"Test & Mark Stable Release [cycle:{document['dispatcher_run_id']};gate-only:true;"
+		"skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]"
+	)
 	if document.get("smoke_display_title") != expected_title:
 		return False
 	if document.get("smoke_inputs") != {
 		"gate_only": "true",
 		"gate_cycle_id": str(document["dispatcher_run_id"]),
+		"skip_e2e": "false",
+		"dry_run": "false",
+		"test_repo": "",
+		"review_workflow_file": "internal-review.yml",
 	}:
 		return False
 	for sha_field in ("smoke_head_sha", "cycle_baseline_sha"):

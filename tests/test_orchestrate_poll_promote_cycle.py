@@ -30,6 +30,7 @@ DISPATCHER_RUN_ID = 777
 SMOKE_RUN_ID = 500
 SMOKE_ACTOR_ID = 1234
 MARKER_KEY = b"a" * 32
+SMOKE_DISPLAY_TITLE = f"Test & Mark Stable Release [cycle:{DISPATCHER_RUN_ID};gate-only:true;skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]"
 
 
 def _marker(role: str, **extra: str) -> str:
@@ -46,8 +47,15 @@ def _marker(role: str, **extra: str) -> str:
 		"smoke_actor_id": SMOKE_ACTOR_ID,
 		"smoke_workflow_path": ".github/workflows/test-and-mark-stable.yml",
 		"smoke_event": "workflow_dispatch",
-		"smoke_display_title": f"Test & Mark Stable Release [cycle:{DISPATCHER_RUN_ID}]",
-		"smoke_inputs": {"gate_only": "true", "gate_cycle_id": str(DISPATCHER_RUN_ID)},
+		"smoke_display_title": SMOKE_DISPLAY_TITLE,
+		"smoke_inputs": {
+			"gate_only": "true",
+			"gate_cycle_id": str(DISPATCHER_RUN_ID),
+			"skip_e2e": "false",
+			"dry_run": "false",
+			"test_repo": "",
+			"review_workflow_file": "internal-review.yml",
+		},
 		"smoke_conclusion": "success",
 		"smoke_head_sha": extra.get("smoke_sha", SMOKE_SHA),
 		"cycle_baseline_sha": extra.get("cycle_baseline_sha", BASELINE_SHA),
@@ -208,7 +216,7 @@ def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: di
 				"id": SMOKE_RUN_ID,
 				"path": ".github/workflows/test-and-mark-stable.yml",
 				"event": "workflow_dispatch",
-				"display_title": f"Test & Mark Stable Release [cycle:{DISPATCHER_RUN_ID}]",
+				"display_title": SMOKE_DISPLAY_TITLE,
 				"conclusion": "success",
 				"head_sha": SMOKE_SHA,
 				"actor": {"id": SMOKE_ACTOR_ID},
@@ -411,7 +419,7 @@ def test_smoke_run_api_head_mismatch_holds_without_promotion() -> None:
 			"id": SMOKE_RUN_ID,
 			"path": ".github/workflows/test-and-mark-stable.yml",
 			"event": "workflow_dispatch",
-			"display_title": f"Test & Mark Stable Release [cycle:{DISPATCHER_RUN_ID}]",
+			"display_title": SMOKE_DISPLAY_TITLE,
 			"conclusion": "success",
 			"head_sha": HUMAN_SHA,
 			"actor": {"id": SMOKE_ACTOR_ID},
@@ -421,6 +429,30 @@ def test_smoke_run_api_head_mismatch_holds_without_promotion() -> None:
 		_project_state(),
 		compare_commits=commits,
 		extra_store={"action_runs_by_id": mismatched_run},
+	)
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"
+	assert result["latest_state"]["final_merge_status"] != "merged"
+	assert result["release_dispatches"] == []
+	assert "reason=smoke_run_verification_unavailable" in result["stdout"]
+
+
+def test_smoke_run_api_unsafe_gate_inputs_hold_without_promotion() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	unsafe_run = {
+		str(SMOKE_RUN_ID): {
+			"id": SMOKE_RUN_ID,
+			"path": ".github/workflows/test-and-mark-stable.yml",
+			"event": "workflow_dispatch",
+			"display_title": SMOKE_DISPLAY_TITLE.replace("skip-e2e:false", "skip-e2e:true"),
+			"conclusion": "success",
+			"head_sha": SMOKE_SHA,
+			"actor": {"id": SMOKE_ACTOR_ID},
+		},
+	}
+	result = _verifying_run(
+		_project_state(),
+		compare_commits=commits,
+		extra_store={"action_runs_by_id": unsafe_run},
 	)
 	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"
 	assert result["latest_state"]["final_merge_status"] != "merged"

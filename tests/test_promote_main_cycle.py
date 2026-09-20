@@ -25,6 +25,7 @@ MARKER_KEYRING = json.dumps({
 	"active_key_id": "test-key",
 	"keys": [{"key_id": "test-key", "key_base64": base64.b64encode(MARKER_KEY).decode("ascii")}],
 })
+GATE_DISPLAY_TITLE = "Test & Mark Stable Release [cycle:777;gate-only:true;skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]"
 
 
 def _signed_cycle_comment(baseline_sha: str) -> dict:
@@ -35,8 +36,11 @@ def _signed_cycle_comment(baseline_sha: str) -> dict:
 		"dispatcher_run_id": 42, "smoke_run_id": 500, "smoke_actor_id": 1234,
 		"smoke_workflow_path": ".github/workflows/test-and-mark-stable.yml",
 		"smoke_event": "workflow_dispatch",
-		"smoke_display_title": "Test & Mark Stable Release [cycle:42]",
-		"smoke_inputs": {"gate_only": "true", "gate_cycle_id": "42"},
+		"smoke_display_title": "Test & Mark Stable Release [cycle:42;gate-only:true;skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]",
+		"smoke_inputs": {
+			"gate_only": "true", "gate_cycle_id": "42", "skip_e2e": "false",
+			"dry_run": "false", "test_repo": "", "review_workflow_file": "internal-review.yml",
+		},
 		"smoke_conclusion": "success", "smoke_head_sha": TIP,
 		"cycle_baseline_sha": baseline_sha, "promote_sha": "", "proving_merge_sha": "",
 		"signature": "0" * 64,
@@ -201,13 +205,13 @@ def _compare(files: list[str], status: str = "ahead") -> dict:
 
 GATE_SUCCESS = [
 	[],
-	[{"id": 500, "status": "in_progress", "conclusion": None, "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
-	[{"id": 500, "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
+	[{"id": 500, "status": "in_progress", "conclusion": None, "head_branch": "main", "head_sha": TIP, "display_title": GATE_DISPLAY_TITLE, "created_at": "2026-09-19T00:00:01Z"}],
+	[{"id": 500, "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": TIP, "display_title": GATE_DISPLAY_TITLE, "created_at": "2026-09-19T00:00:01Z"}],
 ]
 ADVANCED_TIP = "5" * 40
 GATE_SUCCESS_ON_ADVANCED_MAIN = [
 	[],
-	[{"id": 500, "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": ADVANCED_TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
+	[{"id": 500, "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": ADVANCED_TIP, "display_title": GATE_DISPLAY_TITLE, "created_at": "2026-09-19T00:00:01Z"}],
 ]
 
 
@@ -359,7 +363,12 @@ def test_full_cycle_runs_smoke_gate_then_dispatches_proving_run() -> None:
 		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh", "README.md"])}, "gate_runs_sequence": GATE_SUCCESS})
 		env_lines = env_out.read_text(encoding="utf-8").splitlines()
 	assert proc.returncode == 0, proc.stderr + proc.stdout
-	assert final["dispatches"] == [["test-and-mark-stable.yml", "--repo", "owner/repo", "--ref", "main", "-f", "gate_only=true", "-f", "gate_cycle_id=777"]]
+	assert final["dispatches"] == [[
+		"test-and-mark-stable.yml", "--repo", "owner/repo", "--ref", "main",
+		"-f", "gate_only=true", "-f", "skip_e2e=false", "-f", "dry_run=false",
+		"-f", "test_repo=", "-f", "review_workflow_file=internal-review.yml",
+		"-f", "gate_cycle_id=777",
+	]]
 	assert "Smoke gate passed on " + TIP + " (run 500)" in proc.stdout
 	assert f"PROMOTE_CYCLE_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md baseline={TIP} smoke={TIP}" in proc.stdout
 	assert "APPLY_ANALYSIS_ROLE=proving" in env_lines
@@ -370,7 +379,7 @@ def test_full_cycle_runs_smoke_gate_then_dispatches_proving_run() -> None:
 
 
 def test_smoke_gate_failure_fails_the_cycle_without_dispatching_a_proving_run() -> None:
-	seq = [[], [{"id": 501, "status": "completed", "conclusion": "failure", "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}]]
+	seq = [[], [{"id": 501, "status": "completed", "conclusion": "failure", "head_branch": "main", "display_title": GATE_DISPLAY_TITLE, "created_at": "2026-09-19T00:00:01Z"}]]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": seq})
 		assert not env_out.exists()
@@ -380,7 +389,7 @@ def test_smoke_gate_failure_fails_the_cycle_without_dispatching_a_proving_run() 
 
 
 def test_smoke_gate_timeout_fails_the_cycle() -> None:
-	seq = [[], [{"id": 502, "status": "in_progress", "conclusion": None, "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}]]
+	seq = [[], [{"id": 502, "status": "in_progress", "conclusion": None, "head_branch": "main", "display_title": GATE_DISPLAY_TITLE, "created_at": "2026-09-19T00:00:01Z"}]]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": seq}, env={"PROMOTE_CYCLE_GATE_WAIT_SECS": "3"})
 	assert proc.returncode == 1
@@ -392,9 +401,10 @@ def test_smoke_gate_ignores_unrelated_concurrent_dispatch() -> None:
 		[],
 		[
 			{"id": 503, "status": "completed", "conclusion": "failure", "head_branch": "main", "display_title": "Test & Mark Stable Release", "created_at": "2026-09-19T00:00:01Z"},
-			{"id": 504, "status": "in_progress", "conclusion": None, "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:02Z"},
+			{"id": 505, "status": "completed", "conclusion": "success", "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777;gate-only:true;skip-e2e:true;dry-run:false;test-repo:;review-workflow:internal-review.yml]", "created_at": "2026-09-19T00:00:01Z"},
+			{"id": 504, "status": "in_progress", "conclusion": None, "head_branch": "main", "display_title": GATE_DISPLAY_TITLE, "created_at": "2026-09-19T00:00:02Z"},
 		],
-		[{"id": 504, "status": "completed", "conclusion": "success", "head_branch": "main", "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:02Z"}],
+		[{"id": 504, "status": "completed", "conclusion": "success", "head_branch": "main", "display_title": GATE_DISPLAY_TITLE, "created_at": "2026-09-19T00:00:02Z"}],
 	]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": seq})

@@ -44,8 +44,15 @@ def _signed_marker_comment(source_doc: str) -> dict:
 		"smoke_actor_id": 1234,
 		"smoke_workflow_path": ".github/workflows/test-and-mark-stable.yml",
 		"smoke_event": "workflow_dispatch",
-		"smoke_display_title": "Test & Mark Stable Release [cycle:42]",
-		"smoke_inputs": {"gate_only": "true", "gate_cycle_id": "42"},
+		"smoke_display_title": "Test & Mark Stable Release [cycle:42;gate-only:true;skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]",
+		"smoke_inputs": {
+			"gate_only": "true",
+			"gate_cycle_id": "42",
+			"skip_e2e": "false",
+			"dry_run": "false",
+			"test_repo": "",
+			"review_workflow_file": "internal-review.yml",
+		},
 		"smoke_conclusion": "success",
 		"smoke_head_sha": "b" * 40,
 		"cycle_baseline_sha": "c" * 40,
@@ -393,7 +400,7 @@ def test_release_gate_only_mode_contract() -> None:
 	gate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8"))
 	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_only"]["default"] is False
 	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_cycle_id"]["default"] == ""
-	assert "[cycle:{0}]" in gate["run-name"]
+	assert "[cycle:{0};gate-only:{1};skip-e2e:{2};dry-run:{3};test-repo:{4};review-workflow:{5}]" in gate["run-name"]
 	assert gate["jobs"]["release"]["if"] == "${{ success() && !inputs.gate_only }}"
 	assert "!inputs.gate_only" in gate["jobs"]["sync-to-main"]["if"]
 	source_run = gate["jobs"]["source"]["steps"][0]["run"]

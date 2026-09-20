@@ -364,6 +364,10 @@ gh_retry gh workflow run "${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}" \
 	--repo "${GITHUB_REPOSITORY}" \
 	--ref "${PROMOTE_CYCLE_DEFAULT_BRANCH}" \
 	-f gate_only=true \
+	-f skip_e2e=false \
+	-f dry_run=false \
+	-f test_repo= \
+	-f review_workflow_file=internal-review.yml \
 	-f "gate_cycle_id=${GITHUB_RUN_ID}"
 smoke_sha="${main_tip}"
 
@@ -376,7 +380,7 @@ while [ "$(date +%s)" -lt "${deadline}" ]; do
 	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
 	runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue
 	if [ -z "${gate_run_id}" ]; then
-		gate_run_id="$(printf '%s' "${runs_json}" | jq -r --argjson before "${before_gate_ids}" --arg branch "${PROMOTE_CYCLE_DEFAULT_BRANCH}" --arg title "Test & Mark Stable Release [cycle:${GITHUB_RUN_ID}]" '[.workflow_runs[]? | select((.id as $id | ($before | index($id) | not)) and (.head_branch // "") == $branch and (.display_title // "") == $title)] | sort_by(.created_at) | first | .id // empty')"
+		gate_run_id="$(printf '%s' "${runs_json}" | jq -r --argjson before "${before_gate_ids}" --arg branch "${PROMOTE_CYCLE_DEFAULT_BRANCH}" --arg title "Test & Mark Stable Release [cycle:${GITHUB_RUN_ID};gate-only:true;skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]" '[.workflow_runs[]? | select((.id as $id | ($before | index($id) | not)) and (.head_branch // "") == $branch and (.display_title // "") == $title)] | sort_by(.created_at) | first | .id // empty')"
 		[ -n "${gate_run_id}" ] || continue
 		echo "Smoke gate run: ${gate_run_id}"
 	fi
