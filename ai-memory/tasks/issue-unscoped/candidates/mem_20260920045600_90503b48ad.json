@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add a contract assertion for the new `e2e-smoke-test` job budget so a later edit cannot silently restore 120 minutes and reintroduce the cancellation without failing CI.\n  expected_change_site: `tests/` contract test loading `.github/workflows/test-and-mark-stable.yml` and asserting `jobs[\"e2e-smoke-test\"][\"timeout-minutes\"]` equals or is at least 180, modeled on `tests/test_ci_poll_test_sharding.py:186` and `tests/test_ci_poll_test_sharding.py:302-307`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  EVIDENCE: No `tests/` diff hunk adds the assertion; grep found no `timeout-minutes.*180`, `e2e-smoke.*180`, or equivalent assertion; existing `e2e-smoke-test` references do not load the workflow to verify its timeout; the PR verification only confirms pre-existing tests pass; a regression from 180 to 120 would pass CI silently\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: PR description states \"Contract tests that read the workflow file pass locally\" and repository convention plus Copilot review comment id 4056049728 require that workflow YAML changes ship with a contract test pinning the new value.\n  Expected change site: A new test method in an existing or new file under `tests/` that loads `.github/workflows/test-and-mark-stable.yml` via `yaml.safe_load`, locates `jobs[\"e2e-smoke-test\"][\"timeout-minutes\"]`, and asserts `>= 180`, modeled on `tests/test_ci_poll_test_sharding.py:302-307`.\n  Evidence of absence: `grep -n 'timeout-minutes.*180\\|e2e-smoke.*180\\|e2e-smoke-test.*timeout' tests/` returns no matches; the PR diff's `tests/` set is empty; existing `tests/` references to `e2e-smoke-test` do not load the workflow file to assert its timeout; the listed verification tests do not assert the new 180m budget.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- Requirement: Copilot review comment entry[0] (id 4056049728, on `.github/workflows/test-and-mark-stable.yml:387`): \"Please add a contract assertion for this new job budget. The existing release workflow tests explicitly pin job timeout-minutes values (for example, tests/test_ci_poll_test_sharding.py:302-307), but no current test checks the e2e-smoke-test budget, so a later edit could silently restore 120 and reintroduce the cancellation without failing CI.\" This is reinforced by the repository's standing convention that workflow YAML changes ship with contract tests locking the exact values they depend on.\n  Expected change site: tests/ \u2014 a new or existing contract test, e.g. alongside the `test_test_and_mark_stable_*` family or in `tests/test_ci_poll_test_sharding.py`, that loads `.github/workflows/test-and-mark-stable.yml` and asserts the `e2e-smoke-test` job's `timeout-minutes` equals 180 (or >= 180), modeled on `tests/test_ci_poll_test_sharding.py:186` and `:302-307`.\n  Evidence of absence: I grepped `tests/` for `timeout-minutes` / `timeout_minutes` and for `e2e-smoke-test` / `e2e_smoke`; the only timeout assertions cover other jobs, every `e2e-smoke-test` match is an unrelated label/canary/fixture reference, and no diff hunk in this PR touches any `tests/` file.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Please add a contract assertion for this new job budget. The existing release workflow tests explicitly pin job timeout-minutes values (for example, tests/test_ci_poll_test_sharding.py:302-307), but no current test checks the e2e-smoke-test budget, so a later edit could silently restore 120 and reintroduce the cancellation without failing CI.\" (Copilot review comment id 4056049728; echoed by the PR description's \"Contract tests that read the workflow file pass locally\" verification claim, which confirms existing tests pass but does not assert the new 180m value.)\n  Expected change site: tests/ \u2014 a new or existing contract test that loads .github/workflows/test-and-mark-stable.yml, finds the e2e-smoke-test job, and asserts timeout-minutes equals 180, modeled after test_validate_scripts_job_has_headroom_over_the_sharded_runtime in tests/test_ci_poll_test_sharding.py:302-307.\n  Evidence of absence: No diff hunk in any tests/ file introduces an assertion on the e2e-smoke-test job's timeout-minutes. Grep for \"timeout-minutes.*180\" and \"e2e-smoke.*180\" across tests/*.py returns zero matches. The existing test_ci_poll_test_sharding.py:302-307 pins the sibling validate-scripts job at 45m but nothing pins the e2e-smoke-test job. The PR diff adds four YAML hunks and the changelog fragment but ships no test hunk. A regression to 120 would pass CI silently.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "7d8048ec910b784a58b303391b68efb65973f8c4b40a04fb36e2bb4586ea4c84",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4171,
+    "run_id": "35487956507",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35487956507",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260920045600_90503b48ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4171,
+    "run_id": "35487956507"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-20T04:56:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
