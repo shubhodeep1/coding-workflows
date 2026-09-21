@@ -242,6 +242,24 @@ poller_run_isolated_python() {
   "${isolated_python_environment[@]}" python3 -I -B "$@"
 }
 
+poller_render_prompt_isolated() {
+  local prompt_path="$1"
+  local semble_prefetch="${2:-}"
+
+  env -i \
+    HOME="${HOME:-}" \
+    PATH="${PATH:-/usr/bin:/bin}" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LANG="C.UTF-8" \
+    LC_ALL="C.UTF-8" \
+    PYTHONDONTWRITEBYTECODE="1" \
+    PYTHON_ISOLATED_MODE="true" \
+    PROMPT_PRELUDE_REFACTOR_ENABLED="${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" \
+    ALLOW_WORKFLOW_EDITS="${ALLOW_WORKFLOW_EDITS:-false}" \
+    SEMBLE_PREFETCH="${semble_prefetch}" \
+    bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${prompt_path}"
+}
+
 poller_run_readonly_model() {
   local prompt_file="$1"
   local output_file="$2"
@@ -3027,7 +3045,7 @@ set_issue_phase_label() {
   local phase_changes
   local _resolve_err_file
   _resolve_err_file="$(mktemp)"
-  if ! phase_changes="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
+  if ! phase_changes="$(poller_run_isolated_python -- "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
     local _resolve_err
     _resolve_err="$(tr '\n' ' ' < "${_resolve_err_file}" 2>/dev/null || true)"
     rm -f "${_resolve_err_file}"
@@ -3916,7 +3934,7 @@ backfill_validation_fix_issue_merged_label() {
 
   edit_args+=(--add-label "ai:merged")
   if [ -f "${contract_file}" ]; then
-    phase_changes="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
+    phase_changes="$(poller_run_isolated_python -- "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
     while IFS= read -r remove_label; do
       [ -n "${remove_label}" ] || continue
       if has_label "${fix_labels}" "${remove_label}"; then
@@ -4188,7 +4206,7 @@ reconcile_managed_issue_labels() {
   local labels_csv
   labels_csv="$(echo "${labels_json}" | jq -r 'join(",")' 2>/dev/null || echo "")"
   local repair_json
-  repair_json="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
+  repair_json="$(poller_run_isolated_python -- "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
 
   local plan_json
   plan_json="$(poller_run_isolated_python -- - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
@@ -6402,7 +6420,10 @@ security_pass_exhaustion_judge() {
     echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=rounds_exhausted rounds=${judge_rounds} cap=${MAX_SECURITY_PASS_JUDGE_ROUNDS}"
     return 1
   fi
-  if [ ! -f prompts/mode-judge-security-pass-exhaustion.txt ] || [ ! -f scripts/write_codex_config.sh ]; then
+  if [ ! -f "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-security-pass-exhaustion.txt" ] \
+    || [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" ] \
+    || [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/write_codex_config.sh" ] \
+    || [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh" ]; then
     echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=prompt_unavailable"
     return 1
   fi
@@ -6476,7 +6497,7 @@ security_pass_exhaustion_judge() {
     echo
     echo "=== SECURITY PASS EXHAUSTION JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-security-pass-exhaustion.txt
+    poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-security-pass-exhaustion.txt" "${semble_prefetch}"
     echo
     echo "=== SECURITY PASS EXHAUSTION DIAGNOSTICS JSON ==="
     echo
@@ -6484,7 +6505,7 @@ security_pass_exhaustion_judge() {
   } > "${prompt_file}"
 
   effective_judge_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
-  if ! bash scripts/write_codex_config.sh --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}" >/dev/null 2>"${error_file}"; then
+  if ! bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/write_codex_config.sh" --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}" >/dev/null 2>"${error_file}"; then
     echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=codex_config_failed"
     return 1
   fi
@@ -6496,7 +6517,7 @@ security_pass_exhaustion_judge() {
       printf '%s\n' "${MOCK_SECURITY_PASS_JUDGE_JSON}" > "${output_file}"
     else
       sanitize_codex_prompt_file "${prompt_file}"
-      bash scripts/codex_heartbeat.sh \
+      bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh" \
         --phase "orchestrate-security-pass-judge" \
         --stdout-file "${output_file}" \
         --stderr-file "${error_file}" \
@@ -15075,7 +15096,7 @@ invoke_stall_judge() {
     echo
     echo "=== STALL JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-stall-recovery.txt"
+    poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-stall-recovery.txt" "${stall_judge_semble_prefetch}"
     echo
     echo "=== STALL DIAGNOSTICS JSON ==="
     echo
@@ -20754,7 +20775,7 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+        poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" "${RB_JUDGE_SEMBLE_PREFETCH}"
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -22520,7 +22541,7 @@ ${PR_DIFF}
     echo
     echo "=== JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge.txt"
+    poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge.txt" "${JUDGE_SEMBLE_PREFETCH}"
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo

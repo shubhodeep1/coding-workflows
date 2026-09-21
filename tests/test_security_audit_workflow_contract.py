@@ -476,6 +476,8 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 	assert codex_helpers_content.count("_codex_helpers_run_isolated_python") == 5
 	assert 'RENDER_PROMPT_PYTHON_ARGS=(-I -B)' in render_prompt_content
 	assert 'ASSEMBLE_PROMPT_PYTHON_ARGS=(-I -B)' in assemble_prompt_content
+	assert '1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])' in render_prompt_content
+	assert '1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])' in assemble_prompt_content
 
 
 def test_security_audit_uses_workflow_editor_model_with_stable_fallback() -> None:

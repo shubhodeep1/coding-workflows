@@ -220,7 +220,7 @@ fi
 
 declare -a RENDER_PROMPT_PYTHON_ARGS=()
 case "${PYTHON_ISOLATED_MODE:-false}" in
-	1|true|TRUE|yes|YES|on|ON)
+	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
 		RENDER_PROMPT_PYTHON_ARGS=(-I -B)
 		;;
 esac

@@ -445,6 +445,63 @@ def test_poller_inline_python_is_centralized_and_ignores_checkout_startup_hooks(
 	assert not startup_marker.exists()
 
 
+def test_poller_prompt_rendering_uses_isolated_immutable_support() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper_start = script.index("poller_run_isolated_python() {")
+	helper_end = script.index("\npoller_run_readonly_model()", helper_start)
+
+	assert script.count('poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/') == 4
+	assert "bash scripts/render_prompt.sh" not in script
+	assert "bash scripts/write_codex_config.sh" not in script
+	assert "bash scripts/codex_heartbeat.sh" not in script
+	assert 'python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py"' not in script
+	assert script.count('poller_run_isolated_python -- "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py"') == 3
+
+	with tempfile.TemporaryDirectory(prefix="poller-render-sitecustomize-") as td:
+		checkout = Path(td)
+		prompt_path = checkout / "prompt.txt"
+		startup_marker = checkout / "render-startup-hook-ran"
+		prompt_path.write_text("isolated render\n", encoding="utf-8")
+		(checkout / "sitecustomize.py").write_text(
+			"import os\n"
+			"from pathlib import Path\n"
+			f"Path({str(startup_marker)!r}).write_text(os.environ.get('GH_PAT', 'missing'), encoding='utf-8')\n",
+			encoding="utf-8",
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"GH_PAT": "poller-render-secret-sentinel",
+				"ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+				"PYTHONPATH": str(checkout),
+			}
+		)
+		proc = subprocess.run(
+			[
+				"bash",
+				"--noprofile",
+				"--norc",
+				"-c",
+				(
+					script[helper_start:helper_end]
+					+ '\ncd "$1"\n'
+					+ 'poller_render_prompt_isolated "$2" "unused-prefetch"\n'
+				),
+				"poller-render-isolation-test",
+				str(checkout),
+				str(prompt_path),
+			],
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip() == "isolated render"
+	assert not startup_marker.exists()
+
+
 def test_judge_lessons_learned_isolated_python_forwards_memory_configuration() -> None:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper_start = script.index("poller_run_isolated_python() {")

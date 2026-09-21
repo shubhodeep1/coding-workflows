@@ -349,11 +349,9 @@ SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_FP_EXCLUSIONS:-scripts/security_a
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "${REPO_ROOT}"
 
-# Consumer-called runs (workflow-templates/ai-security-audit.yml wrapper) stage
-# this repo's scripts/prompts outside the audited checkout and point
-# SECURITY_AUDIT_SUPPORT_DIR at that staged tree. Source-repo runs leave it
-# unset so support files resolve from the audited checkout itself,
-# byte-identical to the pre-consumer behaviour.
+# Workflow runs stage this repo's scripts/prompts outside the audited checkout
+# and point SECURITY_AUDIT_SUPPORT_DIR at that immutable tree. Direct callers
+# that do not provide a staged path retain the repository-root fallback.
 SECURITY_AUDIT_SUPPORT_DIR="${SECURITY_AUDIT_SUPPORT_DIR:-${REPO_ROOT}}"
 SECURITY_AUDIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! SECURITY_AUDIT_CANONICAL_SUPPORT_DIR="$(cd "${SECURITY_AUDIT_SUPPORT_DIR}" 2>/dev/null && pwd -P)"; then
