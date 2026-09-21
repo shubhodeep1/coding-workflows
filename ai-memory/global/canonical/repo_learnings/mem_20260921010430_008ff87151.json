@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Orchestration behavior is stateful and polling-based, with explicit handling for ownership, retries, promotion bases, and terminal markers.",
   "timestamps": {
     "created_at": "2026-09-21T01:04:30Z",
