@@ -126,6 +126,8 @@ analysis/workflow-optimization-2026-09-16.md
 analysis/workflow-optimization-2026-09-18.md
 analysis/workflow-optimization-2026-09-20-2.md
 analysis/workflow-optimization-2026-09-20.md
+analysis/workflow-optimization-2026-09-21-2.md
+analysis/workflow-optimization-2026-09-21-3.md
 analysis/workflow-optimization-2026-09-21.md
 changelog.d/.gitkeep
 changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
@@ -482,6 +484,7 @@ scripts/validation_template_bootstrap.py
 scripts/verify_integration_fingerprints.py
 scripts/watchdog_helpers.sh
 scripts/workflow_failure_heal.py
+scripts/workflow_failure_heal_autofix_report.sh
 scripts/workflow_failure_heal_intake.sh
 scripts/workflow_failure_heal_report.sh
 scripts/workflow_retro.py
