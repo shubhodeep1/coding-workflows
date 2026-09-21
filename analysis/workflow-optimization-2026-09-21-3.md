@@ -373,3 +373,136 @@ No `TODO`, `FIXME`, `HACK`, or `XXX` markers were found in scoped files.
 | Code modularization | 9 | Medium |
 | Expression size reduction | 2 | Medium |
 | Medium/Low fixes | 7 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-21)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is directly implementable; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented because retry, pagination, race, or poller semantics are involved.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Batch consumer workflow-content reads
+
+- **Safety tag:** `RISKY_SKIP`
+- **File path / lines:** `scripts/audit_consumer_drift.py:408-426,428-480,482-509`
+- **Current / proposed calls:** `1 + N` REST reads per consumer, currently up to 17 for 16 templates → 1 GraphQL batch per consumer.
+- **Endpoint(s):** `GET /repos/{repo}/contents/.github/workflows`; `GET /repos/{repo}/contents/.github/workflows/{file}` → GraphQL `repository.object(expression: ...)`.
+- **Evidence:**
+  ```python
+  available_files = self.fetch_workflow_directory_listing(repository)
+  for file_name, expected_text in sorted(self.expected_templates.items()):
+      actual_text = self.fetch_workflow_content(...)
+  ```
+  The current 13-repository registry therefore permits up to 221 reads per audit.
+- **Proposed fix:** Add `ConsumerDriftAuditor.fetch_workflow_contents_graphql()`, batch up to 25 file aliases, return `{file_name: text_or_none}`, and update `audit_repository()` to consume that map. Follow `_fetch_candidate_issue_details_graphql`’s batching contract.
+- **Safety rationale:** The calls execute through `_run_gh_api`’s retry/backoff loop, so batching changes retry blast radius and per-file failure isolation.
+- **Downstream signal:** Do not auto-implement; manually validate GraphQL blob behavior for missing/non-text files, partial alias errors, PAT access, and exact parity with current REST normalization and retry outcomes.
+
+#### MERGE-002 — Batch auto-close lint label lookups
+
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path / lines:** `scripts/lint_pr_body_auto_close.py:128-163,233-267`
+- **Current / proposed calls:** `U` calls for unique `(repository, issue)` references → `sum(ceil(U_repo / 25))` GraphQL calls, with legacy fallback only for unresolved aliases.
+- **Endpoint(s):** Current `gh issue view --json labels`; proposed GraphQL `repository.issue(number) { labels { nodes { name } } }`.
+- **Evidence:**
+  ```python
+  for source, line_no, line, keyword, referenced_repo, issue in candidate_matches:
+      ...
+      labels = label_lookup(lookup_repo, issue)
+  ```
+- **Proposed fix:** Add `_fetch_issue_labels_batch_gh()`, group candidates by repository, seed `issue_label_cache`, and retain `_fetch_issue_labels_gh()` for missing/error aliases. Use batches of 25 following `_fetch_candidate_issue_details_graphql`.
+- **Safety rationale:** Static reading cannot prove that batched partial failures preserve the current per-reference retry and cross-repository behavior.
+- **Downstream signal:** Verify mixed-repository aliases, null/error aliases, label truncation, and `tests/test_lint_pr_body_auto_close.py:285-300`’s “failed lookup is not cached” contract before implementation.
+
+#### MERGE-003 — Batch plan-archival issue reads
+
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path / lines:** `scripts/lint_plan_archival_completeness.py:85-107,172-193`
+- **Current / proposed calls:** `N` issue reads → `ceil(N / 25)` GraphQL calls.
+- **Endpoint(s):** Current `gh issue view --json labels,body`; proposed GraphQL aliases for `repository.issue(number) { body labels { nodes { name } } }`.
+- **Evidence:**
+  ```python
+  referenced_issues = _extract_referenced_issues(pr_body)
+  for issue_num in referenced_issues:
+      issue = issue_fetcher(repo, issue_num)
+  ```
+- **Proposed fix:** Extend `_fetch_issue_via_gh` with a batch counterpart returning an issue-number map, then update `lint()` to consume the prefetched map with per-item fallback.
+- **Safety rationale:** Per-item lookup failures currently produce independent errors, which a single batch could accidentally collapse into a different exit outcome.
+- **Downstream signal:** Test multiple references with mixed success/failure and confirm identical `--fail-open-on-lookup-error`, violation, and exit-code behavior before merging.
+
+#### MERGE-004 — Reuse one live PR payload for labels and merge metadata
+
+- **Safety tag:** `RISKY_SKIP`
+- **File path / lines:** `scripts/review_enable_auto_merge.sh:39-56,91-115,150-191`
+- **Current / proposed calls:** 2 reads on auto-merge-enabled paths → 1.
+- **Endpoint(s):** `GET /issues/{pr}/labels?per_page=100`; `GET /pulls/{pr}` → one `GET /pulls/{pr}`.
+- **Evidence:**
+  ```bash
+  gh_retry gh api --paginate ".../issues/${PR_NUMBER}/labels?per_page=100"
+  ...
+  _ORCH_PR_META_JSON="$(gh_retry gh api ".../pulls/${PR_NUMBER}")"
+  ```
+  `.github/workflows/review_autofix.yml:355-381` already extracts labels and PR metadata from one `/pulls/{n}` response.
+- **Proposed fix:** Fetch one `_AUTO_MERGE_PR_META_JSON` payload after the enabled check; derive labels, head SHA/ref, and body locally, and let `reviewed_head_is_current_for_labels` accept that payload.
+- **Safety rationale:** The existing label read deliberately paginates, so replacing it risks changing page-boundary and fail-closed E2E protection semantics.
+- **Downstream signal:** Do not auto-implement; manually prove `/pulls/{n}.labels` is complete at high label counts or retain a page-aware fallback, and preserve every head-freshness failure path.
+
+#### MERGE-005 — Reuse the second stability response for PR state
+
+- **Safety tag:** `RISKY_SKIP`
+- **File path / lines:** `.github/workflows/test-and-mark-stable.yml:1151-1187`
+- **Current / proposed calls:** Successful attempt uses `2A + 1` reads, where `A` is stability attempts → `2A`; retain the final read when stability never converges.
+- **Endpoint(s):** `GET /repos/{repo}/pulls/{pr}`.
+- **Evidence:**
+  ```bash
+  HEAD_B=$(gh api ".../pulls/${PR_NUMBER}" --jq '.head.sha // ""')
+  ...
+  PR_META=$(gh api ".../pulls/${PR_NUMBER}")
+  ```
+- **Proposed fix:** Capture the second read as `HEAD_B_META`, extract `HEAD_B` locally, and assign `PR_META="${HEAD_B_META}"` only after a stable pair is confirmed.
+- **Safety rationale:** The call is inside an upstream-indexing retry loop and participates in a race defense.
+- **Downstream signal:** Do not auto-implement; manually simulate moving heads, closure between reads, API failures, and five-attempt exhaustion before accepting reuse.
+
+#### MERGE-006 — Return marker comment body with its ID
+
+- **Safety tag:** `RISKY_SKIP`
+- **File path / lines:** `scripts/review_merge_train.sh:255-290,331-388,464-488`
+- **Current / proposed calls:** Existing-marker no-op: 2 reads → 1; existing-marker update: 2 reads plus PATCH → 1 read plus PATCH.
+- **Endpoint(s):** `GET /issues/{pr}/comments?per_page=100`; `GET /issues/comments/{id}`.
+- **Evidence:**
+  ```bash
+  _mt_find_marker_comment_id ... | .id
+  ...
+  existing_body="$(gh_retry gh api ".../issues/comments/${existing_id}" --jq '.body')"
+  ```
+- **Proposed fix:** Add `_mt_find_marker_comment_json` returning compact `{id, body}`, keep `_mt_find_marker_comment_id` as a compatibility wrapper, and pass the JSON to `_mt_upsert_comment`.
+- **Safety rationale:** The source read is paginated and feeds race-sensitive merge-train claim, bypass, and release behavior.
+- **Downstream signal:** Do not auto-implement; manually test markers beyond page one, concurrent marker edits, dispatch failure/label restoration, and preservation of all `MERGE_TRAIN_*` log keys.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — The consolidation includes paginated REST inputs and must preserve GraphQL-to-REST fallback and artifact contracts.
+- API-002: RISKY_SKIP — The full comments source is paginated; deriving the bounded first-50 artifact requires manual pagination and failure-semantics review.
+- API-003: RISKY_SKIP — Every cited call is inside `orchestrate_poll_process.sh`, an explicitly race-defensive path.
+- BATCH-001: RISKY_SKIP — Batching is directionally correct, but the loop is inside `orchestrate_poll_process.sh` and must retain its unknown-state fail-open behavior.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | MERGE-002, MERGE-003 |
+| RISKY_SKIP | 8 | MERGE-001, MERGE-004, MERGE-005, MERGE-006, API-001, API-002, API-003, BATCH-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
