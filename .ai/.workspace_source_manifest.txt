@@ -248,6 +248,7 @@ changelog.d/investigate-issue-attached-upstream-autochain.md
 changelog.d/merge-train-files-cache-retry-after.md
 changelog.d/merged-pr-commit-guard.md
 changelog.d/merged-pr-guard-offline-fallback.md
+changelog.d/orchestrator-security-isolation-hardening.md
 changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md
 changelog.d/orchestrator-security-pass-phase-2-audit-engine.md
 changelog.d/orchestrator-security-pass-phase-3-dark-launch.md
