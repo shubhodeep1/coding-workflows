@@ -703,17 +703,42 @@ jobs:
             exit 1
           fi
 
+          # Bounded retry around each tag push. GitHub occasionally rejects a
+          # push server-side with a transient error such as "Unable to
+          # determine if workflow can be created or updated due to timeout;
+          # `workflows` scope may be required." — run 35570966035 (v1.29.7)
+          # lost a fully green gate to exactly that on the first push below,
+          # and a failed gate on the tip then blocks auto-release until a
+          # human re-runs it. Re-pushing a tag that already landed is a
+          # no-op ("Everything up-to-date"), so retrying is idempotent; a
+          # genuine rejection still fails after the last attempt.
+          retry_push() {
+            local push_attempt push_delay=2
+            for push_attempt in 1 2 3 4 5; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "${push_attempt}" -eq 5 ]; then
+                echo "::error::Tag push failed after ${push_attempt} attempts: $*"
+                return 1
+              fi
+              echo "::warning::Tag push failed (attempt ${push_attempt}/5): $* — retrying in ${push_delay}s."
+              sleep "${push_delay}"
+              push_delay=$((push_delay * 2))
+            done
+          }
+
           # Immutable version tag (refs/tags/ prefix for consistency with the moving-tag pushes below)
           git tag -a "$VERSION" -m "Release $VERSION"
-          git push origin "refs/tags/$VERSION"
+          retry_push git push origin "refs/tags/$VERSION"
 
           # Moving stable pointer (use refs/tags/ to disambiguate from refs/heads/stable)
           git tag -f stable "$VERSION"
-          git push -f origin refs/tags/stable
+          retry_push git push -f origin refs/tags/stable
 
           # Moving major-version pointer (e.g. v1)
           git tag -f "$MAJOR" "$VERSION"
-          git push -f origin "refs/tags/$MAJOR"
+          retry_push git push -f origin "refs/tags/$MAJOR"
 
           echo "Tagged $VERSION and updated stable + $MAJOR pointers."
 

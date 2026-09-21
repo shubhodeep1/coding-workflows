@@ -60,6 +60,36 @@ def test_workflows_push_immutable_version_via_refs_tags() -> None:
 		)
 
 
+def test_workflows_retry_every_tag_push_with_a_bounded_backoff() -> None:
+	"""A transient server-side rejection must not fail a fully green gate.
+
+	Run 35570966035 (v1.29.7) lost its release to a single "Unable to
+	determine if workflow can be created or updated due to timeout" rejection
+	on the version-tag push; the tip then counted as last_gate_failed and
+	auto-release stopped re-dispatching it. Each of the three tag pushes must
+	go through the step-local retry_push helper, and the helper must be
+	bounded so a genuine rejection still fails the step.
+	"""
+	for wf in WORKFLOWS:
+		text = _read(wf)
+		assert "retry_push() {" in text, f"{wf.name}: retry_push helper missing"
+		assert "for push_attempt in 1 2 3 4 5; do" in text, (
+			f"{wf.name}: retry_push must be bounded to five attempts"
+		)
+		for push in (
+			'git push origin "refs/tags/$VERSION"',
+			"git push -f origin refs/tags/stable",
+			'git push -f origin "refs/tags/$MAJOR"',
+		):
+			assert f"retry_push {push}" in text, (
+				f"{wf.name}: tag push must be wrapped by retry_push: {push}"
+			)
+			assert not re.search(rf"^\s*{re.escape(push)}\s*$", text, re.MULTILINE), (
+				f"{wf.name}: bare tag push without retry_push would re-introduce "
+				f"the single-attempt release failure: {push}"
+			)
+
+
 def test_workflows_dispatch_peeled_release_commit_sha() -> None:
 	for workflow_path in WORKFLOWS:
 		workflow_text = _read(workflow_path)
