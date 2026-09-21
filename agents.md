@@ -361,6 +361,27 @@ a new value, add it to the appropriate overrides file with a
   as they are; the conftest fixture is the floor, not a replacement.
   `tests/test_pytest_git_env_isolation.py` pins the contract with a nested
   pytest run against a sentinel repository.
+- The same fixture strips the self-repo staged-support ledger paths that
+  implement.yml's "Stage workflow support files" step exports into
+  `$GITHUB_ENV` (`STAGED_SUPPORT_LEDGER`, `STAGED_SUPPORT_BASE_DIR`,
+  `STAGED_SUPPORT_EDITOR_HEAD_LEDGER`, `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`;
+  `STAGED_SUPPORT_RUNTIME_ENV_VARS` in `tests/conftest.py`).
+  `scripts/implement_staged_support_workspace.sh` and
+  `scripts/implement_commit_changes.sh` read `STAGED_SUPPORT_EDITOR_HEAD_LEDGER`
+  from the environment before their ledger-relative default, so a test that
+  copies `os.environ` and only overrides `STAGED_SUPPORT_LEDGER` /
+  `STAGED_SUPPORT_BASE_DIR` writes its fixture paths into the live run's
+  editor-head ledger. Incident: implement runs 35614385686, 35628923735,
+  35642366131 and 35656715219 (issues #4227 / #4242, project #4139) each
+  finished the editor with a complete change set, then the editor's own
+  pytest run of `tests/test_implement_post_codex_recovery.py` appended
+  `scripts/helper.sh` to `/tmp/codex-implement-<run>/staged_support_editor_head.txt`,
+  and the post-editor `reinstall` failed closed with
+  `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh`. The stall
+  poller retried twice, the stall judge re-issued #4227 as #4242, and the
+  replacement failed the same way. The second nested run in
+  `tests/test_pytest_git_env_isolation.py` pins this contract against a
+  sentinel ledger.
 
 ## Models in use (defaults; overridable via repo-vars)
 
