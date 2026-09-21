@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "Workflow behavior is commonly validated through focused tests under tests/, such as workflow contract, payload fallback, budget, sharding, and security tests. When changing .github/workflows files, update or add the corresponding contract test rather than relying only on end-to-end execution.",
+  "fingerprint": "43bd2cadda8a92ad71e3f91d081f871e5d5456f842cdeafde1c42eabff8f5080",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35572567158",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35572567158",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4143",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4166",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4167",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4189",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4190",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4144",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4168",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4169",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4191",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4192"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260921072315_3a413a45af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "GitHub Actions workflow changes are guarded by dedicated contract tests.",
+  "timestamps": {
+    "created_at": "2026-09-21T07:23:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
