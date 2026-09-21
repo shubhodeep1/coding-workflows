@@ -481,18 +481,23 @@ jobs:
                 required_prompts: [
                   "prompts/mode-judge.txt",
                   "prompts/mode-judge-review-blocked.txt",
+                  "prompts/mode-judge-security-pass-exhaustion.txt",
                   "prompts/mode-judge-stall-recovery.txt",
                   "prompts/mode-security-audit.txt",
                   "prompts/_identity_recall.txt",
                   "prompts/_prelude_common.txt",
                   "prompts/_prelude_semble.txt",
                   "prompts/_prelude_output_contract.txt",
+                  "prompts/_prelude_role_persona.txt",
                   "prompts/_templates/mode-judge.txt",
                   "prompts/_templates/mode-judge-review-blocked.txt",
+                  "prompts/_templates/mode-judge-security-pass-exhaustion.txt",
                   "prompts/_templates/mode-judge-stall-recovery.txt",
                   "prompts/_templates/mode-orchestrate-poll-judge.txt",
                   "prompts/_templates/mode-security-audit.txt",
+                  "prompts/references/output-contract.txt",
                   "prompts/references/security-money-lens.txt",
+                  "prompts/references/severity-classification.txt",
                   "prompts/_nag_reminders.txt"
                 ],
                 required_files: [

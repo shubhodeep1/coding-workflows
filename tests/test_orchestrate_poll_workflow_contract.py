@@ -135,7 +135,18 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 	assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}" in wf
 	assert "SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}" in wf
 	assert "for security_prompt in mode-security-audit.txt mode-judge-security-pass-exhaustion.txt; do" in wf
-	assert "_templates/mode-judge-security-pass-exhaustion.txt" in wf
+	manifest_assignment_start = wf.index('poll_immutable_support_manifest="${RUNNER_TEMP}/poll-immutable-support-manifest.json"')
+	required_prompts_start = wf.index("required_prompts: [", manifest_assignment_start)
+	required_prompts_end = wf.index("],", required_prompts_start)
+	immutable_required_prompts = wf[required_prompts_start:required_prompts_end]
+	for required_prompt in (
+		"prompts/mode-judge-security-pass-exhaustion.txt",
+		"prompts/_templates/mode-judge-security-pass-exhaustion.txt",
+		"prompts/references/output-contract.txt",
+		"prompts/references/severity-classification.txt",
+		"prompts/_prelude_role_persona.txt",
+	):
+		assert f'"{required_prompt}"' in immutable_required_prompts
 	assert "WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}" in wf
 	for asset in (
 		"codex_heartbeat.sh",
