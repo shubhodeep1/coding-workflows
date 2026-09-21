@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: The task requires one exact fixture update. Modifying any additional file would violate the explicit constraint; the complete implementation is the smallest safe change.\n\n## Planning ref\n\n- Branch: `main`\n- HEAD: `f60eb2de26b71344230992e6dce591ab91a6b034`\n- No integration branch metadata was supplied; no mismatch is established.\n\n## Automation integration\n\n- Change type: modify one existing file.\n- Scheduler/PR-push wiring: none required.\n- New script or supervisor: no.\n- Database operation or gate: no.\n- Future-removal registry entry: not applicable.\n- Estimated implementation time: under 5 minutes.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 replace its complete contents with:\n  ```\n  status: ok\n  run_id: alt-35548345586\n  updated-by: ai-pipeline\n  ```\n\nNo other file may be changed.\n\n## Functions or modules to implement\n\nNone. This is a plain-text fixture update.\n\n## Data structures affected\n\nThe existing three-line smoke-canary record only. Preserve the exact key order, values, punctuation, and line count.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the fixture atomically\n\n- **Chosen:** Rewrite the whole file with the specified three lines.\n- **Alternatives considered:** Edit individual values or append the requested lines.\n- **Why:** Whole-file replacement guarantees exact content and prevents stale or duplicate lines.\n\n## Security considerations\n\n- No endpoints, authorization surfaces, secrets, payments, or external services are affected.\n- Do not interpolate untrusted issue text into shell commands; write the fixed literal content.\n- Primary abuse/error case: accidental modification of additional files or hidden extra content. Verify both the exact bytes and changed-path set.\n\n## Risks and edge cases\n\n- Preserve exactly three lines with no blank prefix, suffix, or additional fields.\n- Ensure the final line uses the repository\u2019s normal trailing newline.\n- Do not add documentation, tests, or changelog fragments because the issue permits only the canary file.\n\n## Testing considerations\n\n1. Compare the file against the exact expected three-line string.\n2. Confirm the file contains exactly three lines.\n3. Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n4. Review the final diff for no unrelated whitespace or metadata changes.\n\n## Pre-execution self-check\n\n- Requirements are complete and unambiguous.\n- The plan respects the single-file scope.\n- No dependency, API, scheduler, schema, or security contract changes are required.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ae8018debf630792deeec79c2e774e05a3ee20b0904739860baa664f5ee60bc2",
+  "lineage": {
+    "issue_number": 4178,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35548545028",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35548545028",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4178"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260921004658_206e297115",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4178,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35548545028"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4178",
+  "timestamps": {
+    "created_at": "2026-09-21T00:46:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
