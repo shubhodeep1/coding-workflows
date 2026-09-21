@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow behavior is protected by repository-level contract tests.",
   "timestamps": {
     "created_at": "2026-09-21T13:02:38Z",
