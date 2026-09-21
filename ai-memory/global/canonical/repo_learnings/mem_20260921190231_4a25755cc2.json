@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Release automation must explicitly handle Git refspecs, retries, and token recovery.",
   "timestamps": {
     "created_at": "2026-09-21T19:02:31Z",
