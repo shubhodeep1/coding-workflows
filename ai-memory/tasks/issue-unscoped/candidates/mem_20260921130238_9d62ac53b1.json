@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "Merged changes to GitHub Actions workflows and orchestration scripts consistently add or update focused tests under tests/. Future workflow changes should include explicit assertions for job inputs, permissions, fallback behavior, markers, and shell command contracts rather than relying only on runtime integration tests.",
+  "fingerprint": "83234cb450af1967d9199566e2fc65070868c6b67a508ec6d137be1aa6e81dd3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35602889757",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35602889757",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4166",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4175",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4189",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4190",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4207",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4169",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4176",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4191",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4192",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4209"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260921130238_9d62ac53b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is protected by repository-level contract tests.",
+  "timestamps": {
+    "created_at": "2026-09-21T13:02:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
