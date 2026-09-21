@@ -2519,7 +2519,12 @@ if [ -n "$(git status --porcelain)" ]; then
     fi
   fi
   resolver_generated_advisory_staged_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/resolver-generated-advisory-staged.XXXXXX")"
-  printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${resolver_generated_advisory_staged_file}"
+  resolver_merge_head="$(git rev-parse --verify MERGE_HEAD 2>/dev/null || true)"
+  if [ -n "${resolver_merge_head}" ]; then
+    git diff --cached --name-only "${resolver_merge_head}" | sed '/^$/d' > "${resolver_generated_advisory_staged_file}"
+  else
+    printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${resolver_generated_advisory_staged_file}"
+  fi
   if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
     LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
   fi

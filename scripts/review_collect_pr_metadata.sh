@@ -285,6 +285,7 @@ printf 'LINKED_ISSUE_FALLBACK_NUMBERS_JSON=%s\n' "${LINKED_ISSUE_FALLBACK_NUMBER
 _linked_fetch_ok="false"
 _linked_raw='[]'
 _linked_metadata_collection_status="resolved"
+_linked_primary_truncated="false"
 if [ -n "${PR_NUMBER:-}" ]; then
 	_linked_metadata_collection_status="unresolved"
 	_linked_tmp="$(mktemp)"
@@ -292,11 +293,17 @@ if [ -n "${PR_NUMBER:-}" ]; then
 		-f owner="${REPOSITORY_OWNER}" \
 		-f name="${REPOSITORY_NAME}" \
 		-F number="${PR_NUMBER}" \
-		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body authorAssociation author{login}}}}}}' \
-		--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
-		_linked_fetch_ok="true"
-		_linked_metadata_collection_status="resolved"
-		_linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
+		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body authorAssociation author{login}} pageInfo{hasNextPage}}}}}' \
+		--jq '.data.repository.pullRequest.closingIssuesReferences // {nodes:[],pageInfo:{hasNextPage:false}}'; then
+		_linked_connection="$(cat "${_linked_tmp}" 2>/dev/null || echo '{}')"
+		if printf '%s' "${_linked_connection}" | jq -e '.pageInfo.hasNextPage == true' >/dev/null 2>&1; then
+			_linked_primary_truncated="true"
+			echo "::warning::Linked-issue metadata exceeds the 50-issue GraphQL page; exact-file scope enforcement will fail closed."
+		elif printf '%s' "${_linked_connection}" | jq -e '.nodes | type == "array"' >/dev/null 2>&1; then
+			_linked_fetch_ok="true"
+			_linked_metadata_collection_status="resolved"
+			_linked_raw="$(printf '%s' "${_linked_connection}" | jq -c '.nodes')"
+		fi
 	else
 		echo "::warning::Failed to fetch linked issues via GraphQL; proceeding without linked-issue context."
 	fi
@@ -323,9 +330,11 @@ if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSO
 	_fallback_numbers="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" | jq -r '.[]' 2>/dev/null || true)"
 	if [ -n "${_fallback_numbers}" ]; then
 		_FALLBACK_MAX_ISSUES=20
+		_fallback_truncated="false"
 		_fallback_total="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" | jq -r 'length' 2>/dev/null || echo '0')"
 		if [[ "${_fallback_total:-0}" =~ ^[0-9]+$ ]] && [ "${_fallback_total:-0}" -gt "${_FALLBACK_MAX_ISSUES}" ]; then
 			echo "::warning::Linked-issue body-text fallback: PR title/body referenced ${_fallback_total} distinct in-repo issues; capping fetches at ${_FALLBACK_MAX_ISSUES}."
+			_fallback_truncated="true"
 			_fallback_numbers="$(printf '%s\n' "${_fallback_numbers}" | head -n "${_FALLBACK_MAX_ISSUES}")"
 		fi
 		_fallback_numbers_json="$(printf '%s\n' "${_fallback_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)' 2>/dev/null || echo '[]')"
@@ -336,6 +345,14 @@ if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSO
 			echo "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration failed; skipping"
 		elif [ "${_fallback_json}" != "[]" ]; then
 			_linked_context_raw="${_fallback_json}"
+			_fallback_hydrated="$(printf '%s' "${_fallback_json}" | jq -r 'length' 2>/dev/null || echo 0)"
+			_fallback_requested="$(printf '%s' "${_fallback_numbers_json}" | jq -r 'length' 2>/dev/null || echo 0)"
+			if [ "${_linked_primary_truncated}" != "true" ] && [ "${_fallback_truncated}" != "true" ] \
+				&& [ "${_fallback_hydrated}" = "${_fallback_requested}" ]; then
+				_linked_metadata_collection_status="resolved"
+			else
+				_linked_metadata_collection_status="unresolved"
+			fi
 			echo "Linked-issue body-text fallback resolved $(printf '%s' "${_fallback_json}" | jq 'length') issue(s) for context (GraphQL closingIssuesReferences returned empty — likely non-default base branch)."
 		fi
 	fi

@@ -5477,7 +5477,7 @@ def test_security_pass_advisory_followup_reconciles_remote_marker_before_create(
 					f"- Cited file: `{finding['file']}`\n"
 					"files_touched:\n"
 					f"  - {finding['file']}\n"
-				),
+				).replace("\n", "\r\n"),
 				"state": "open",
 			}
 		],
@@ -5496,6 +5496,32 @@ def test_security_pass_advisory_followup_reconciles_remote_marker_before_create(
 	]
 	assert latest_state["security_pass_waived_findings"][0]["issue"] == 955
 	assert result["api_calls"].count("search/issues") == 1
+
+
+def test_security_pass_keyed_advisory_does_not_adopt_legacy_id_collision() -> None:
+	finding = _security_pass_test_finding()
+	state = _security_pass_exhausted_state()
+	state["security_pass_followup_issues"] = [{"finding_id": finding["finding_id"], "issue": 955}]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([finding]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"))
+			),
+		},
+	)
+
+	assert len(result.get("created_issues", [])) == 1
+	assert result["latest_state"]["security_pass_followup_issues"] == [
+		{"finding_id": "SEC-TEST-1", "issue": 955},
+		{"finding_id": "SEC-TEST-1", "waiver_match_key": finding["waiver_match_key"], "issue": 900},
+	]
 
 
 def test_security_pass_advisory_followup_ignores_injected_remote_marker() -> None:

@@ -653,6 +653,82 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 		commit_text = commit_script.read_text(encoding="utf-8")
 		assert "--linked-issue-metadata-file" in commit_text, commit_script
 		assert "files_touched_scope_guard.py" in commit_text, commit_script
+	assert 'git diff --cached --name-only "${prepare_merge_head}"' in REVIEW_CONFLICT_PREPARE_SCRIPT.read_text(encoding="utf-8")
+	assert 'git diff --cached --name-only "${resolver_merge_head}"' in REVIEW_CONFLICT_RESOLVE_SCRIPT.read_text(encoding="utf-8")
+	rb_judge_text = REVIEW_RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
+	assert 'git diff HEAD --name-only -z > "${RB_FIX_PREEXISTING_DIRTY_FILE}"' in rb_judge_text
+	assert '":(exclude,literal)${rb_fix_preexisting_path}"' in rb_judge_text
+
+
+def test_conflict_scope_diff_excludes_clean_base_side_merge_changes() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		repo = Path(td)
+		git_env = {
+			key: value
+			for key, value in os.environ.items()
+			if key not in {"GIT_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_WORK_TREE", "GIT_COMMON_DIR"}
+		}
+		subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, env=git_env)
+		(repo / "src").mkdir()
+		(repo / "src/security.py").write_text("VALUE = 1\n", encoding="utf-8")
+		(repo / "base.txt").write_text("base one\n", encoding="utf-8")
+		subprocess.run(["git", "add", "."], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "checkout", "-qb", "feature"], cwd=repo, check=True, env=git_env)
+		(repo / "src/security.py").write_text("VALUE = 2\n", encoding="utf-8")
+		subprocess.run(["git", "commit", "-qam", "advisory fix"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True, env=git_env)
+		(repo / "base.txt").write_text("base two\n", encoding="utf-8")
+		subprocess.run(["git", "commit", "-qam", "advance base"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "checkout", "-q", "feature"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "merge", "--no-commit", "main"], cwd=repo, check=True, env=git_env)
+		merge_head = subprocess.run(
+			["git", "rev-parse", "--verify", "MERGE_HEAD"], cwd=repo, check=True, env=git_env,
+			capture_output=True, text=True,
+		).stdout.strip()
+		first_parent_paths = subprocess.run(
+			["git", "diff", "--cached", "--name-only"], cwd=repo, check=True, env=git_env,
+			capture_output=True, text=True,
+		).stdout.splitlines()
+		base_parent_paths = subprocess.run(
+			["git", "diff", "--cached", "--name-only", merge_head], cwd=repo, check=True, env=git_env,
+			capture_output=True, text=True,
+		).stdout.splitlines()
+		assert first_parent_paths == ["base.txt"]
+		assert base_parent_paths == ["src/security.py"]
+
+
+def test_judge_staging_excludes_paths_dirty_before_writer_runs() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		repo = Path(td)
+		git_env = {
+			key: value
+			for key, value in os.environ.items()
+			if key not in {"GIT_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_WORK_TREE", "GIT_COMMON_DIR"}
+		}
+		subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, env=git_env)
+		(repo / "src").mkdir()
+		(repo / "src/security.py").write_text("VALUE = 1\n", encoding="utf-8")
+		(repo / "manifest.txt").write_text("baseline\n", encoding="utf-8")
+		subprocess.run(["git", "add", "."], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=git_env)
+		(repo / "manifest.txt").write_text("runtime drift\n", encoding="utf-8")
+		preexisting = subprocess.run(
+			["git", "diff", "HEAD", "--name-only"], cwd=repo, check=True, env=git_env,
+			capture_output=True, text=True,
+		).stdout.splitlines()
+		(repo / "src/security.py").write_text("VALUE = 2\n", encoding="utf-8")
+		pathspecs = [f":(exclude,literal){path}" for path in preexisting]
+		subprocess.run(["git", "add", "-u", "--", *pathspecs], cwd=repo, check=True, env=git_env)
+		staged = subprocess.run(
+			["git", "diff", "--cached", "--name-only"], cwd=repo, check=True, env=git_env,
+			capture_output=True, text=True,
+		).stdout.splitlines()
+		assert staged == ["src/security.py"]
 
 
 def test_alert_step_handles_scope() -> None:

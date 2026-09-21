@@ -140,6 +140,10 @@ if args[:1] == ["api"]:
 		sys.stdout.write("HTTP/1.1 200 OK\nx-ratelimit-reset: 0\n")
 		sys.exit(0)
 	api_responses = state.get("api_responses", {}) or {}
+	if path == "graphql" and state.get("fail_closing_issues_graphql") and any("closingIssuesReferences" in arg for arg in args):
+		save()
+		sys.stderr.write("mock gh: synthetic closingIssuesReferences failure\n")
+		sys.exit(1)
 	matched = None
 	for pattern, response in sorted(api_responses.items(), key=lambda item: len(item[0]), reverse=True):
 		if pattern and pattern in path:
@@ -153,10 +157,12 @@ if args[:1] == ["api"]:
 	save()
 	if jq_filter == ".default_branch":
 		print((matched or {}).get("default_branch", ""))
-	elif jq_filter == ".data.repository.pullRequest.closingIssuesReferences.nodes // []":
-		nodes = (((matched or {}).get("data") or {}).get("repository") or {}).get("pullRequest") or {}
-		nodes = ((nodes.get("closingIssuesReferences") or {}).get("nodes") or [])
-		print(json.dumps(nodes))
+	elif jq_filter == ".data.repository.pullRequest.closingIssuesReferences // {nodes:[],pageInfo:{hasNextPage:false}}":
+		connection = (((matched or {}).get("data") or {}).get("repository") or {}).get("pullRequest") or {}
+		connection = dict(connection.get("closingIssuesReferences") or {})
+		connection.setdefault("nodes", [])
+		connection.setdefault("pageInfo", {"hasNextPage": False})
+		print(json.dumps(connection))
 	elif jq_filter == '{number: (.number // 0), title: (.title // ""), body: (.body // "")}':
 		print(json.dumps({
 			"number": (matched or {}).get("number", 0) or 0,
@@ -3540,6 +3546,73 @@ def test_review_collect_pr_metadata_helper_marks_failed_link_lookup_unresolved()
 	assert "Failed to fetch linked issues via GraphQL" in result["stdout"]
 
 
+def test_review_collect_pr_metadata_helper_accepts_complete_fallback_after_primary_failure() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"fail_closing_issues_graphql": True,
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7",
+					"base": {"ref": "main"},
+					"head": {"ref": "feature/ref", "sha": "abc123", "repo": {"full_name": "owner/repo"}},
+				},
+				"graphql": {
+					"data": {"repository": {"i0": {
+						"__typename": "Issue", "number": 7, "title": "Recovered issue",
+						"body": "Recovered body", "authorAssociation": "MEMBER",
+						"author": {"login": "trusted-maintainer"},
+					}}},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == [{
+		"number": 7,
+		"title": "Recovered issue",
+		"body": "Recovered body",
+		"author_association": "MEMBER",
+		"author_login": "trusted-maintainer",
+	}]
+	assert "Linked-issue body-text fallback resolved 1 issue(s)" in result["stdout"]
+
+
+def test_review_collect_pr_metadata_helper_fails_closed_on_truncated_primary_page() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title", "body": "", "base": {"ref": "main"},
+					"head": {"ref": "feature/ref", "sha": "abc123", "repo": {"full_name": "owner/repo"}},
+				},
+				"graphql": {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {
+					"nodes": [], "pageInfo": {"hasNextPage": True},
+				}}}}},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
+	assert "metadata exceeds the 50-issue GraphQL page" in result["stdout"]
+
+
 def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default() -> None:
 	result = _run_review_collect_pr_metadata_harness(
 		pr_number="42",
@@ -6689,6 +6762,8 @@ def main() -> int:
 	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
 	test_review_collect_pr_metadata_helper_defaults_linked_issue_metadata_file_from_runtime_dir()
 	test_review_collect_pr_metadata_helper_marks_failed_link_lookup_unresolved()
+	test_review_collect_pr_metadata_helper_accepts_complete_fallback_after_primary_failure()
+	test_review_collect_pr_metadata_helper_fails_closed_on_truncated_primary_page()
 	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
 	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()
 	test_review_collect_pr_metadata_helper_fails_open_on_non_array_batch_input()

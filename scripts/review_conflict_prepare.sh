@@ -278,7 +278,12 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
               git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
             fi
             prepare_generated_advisory_staged_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/prepare-generated-advisory-staged.XXXXXX")"
-            git diff --cached --name-only | sed '/^$/d' > "${prepare_generated_advisory_staged_file}"
+            prepare_merge_head="$(git rev-parse --verify MERGE_HEAD 2>/dev/null || true)"
+            if [ -n "${prepare_merge_head}" ]; then
+              git diff --cached --name-only "${prepare_merge_head}" | sed '/^$/d' > "${prepare_generated_advisory_staged_file}"
+            else
+              git diff --cached --name-only | sed '/^$/d' > "${prepare_generated_advisory_staged_file}"
+            fi
             if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
               LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
             fi

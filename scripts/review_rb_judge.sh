@@ -1845,6 +1845,8 @@ case "${RB_ACTION}" in
       echo "Judge is applying fixes to PR #${PR_NUMBER}..."
 
       # Re-run the judge in editing mode on the PR branch
+      RB_FIX_PREEXISTING_DIRTY_FILE="${RUNTIME_DIR}/rb_fix_preexisting_dirty.txt"
+      git diff HEAD --name-only -z > "${RB_FIX_PREEXISTING_DIRTY_FILE}"
       RB_FIX_PROMPT="${RUNTIME_DIR}/rb_fix_prompt.txt"
       RB_FIX_OUTPUT="${RUNTIME_DIR}/rb_fix_output.txt"
       {
@@ -2018,10 +2020,14 @@ __EDIT_DISCIPLINE__
         esac
         unset _rb_origin_url
 
+        rb_fix_preexisting_excludes=()
+        while IFS= read -r -d '' rb_fix_preexisting_path; do
+          rb_fix_preexisting_excludes+=(":(exclude,literal)${rb_fix_preexisting_path}")
+        done < "${RB_FIX_PREEXISTING_DIRTY_FILE}"
         if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' "${rb_fix_preexisting_excludes[@]}"
         else
-          git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' "${rb_fix_preexisting_excludes[@]}"
         fi
         echo "Staged files before commit:"
         STAGED_FILES="$(git diff --cached --name-only || true)"

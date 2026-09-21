@@ -5765,9 +5765,9 @@ create_security_pass_advisory_followup() {
     SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
     return 0
   fi
-  existing_issue="$(jq -r --arg id "${finding_id}" --arg key "${waiver_match_key}" '
+  existing_issue="$(jq -r --arg key "${waiver_match_key}" '
     [(.security_pass_followup_issues // [])[]
-      | select(.waiver_match_key == $key or (((.waiver_match_key // "") == "") and .finding_id == $id))
+      | select(.waiver_match_key == $key)
       | .issue] | last // empty
   ' "${STATE_FILE}" 2>/dev/null || true)"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
@@ -5788,7 +5788,7 @@ create_security_pass_advisory_followup() {
   fi
   existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg id "${finding_id}" --arg key "${waiver_match_key}" --arg marker "${advisory_marker}" --arg file "${finding_file}" --arg head "${head_sha}" '
     [if type == "array" then .[].items[]? else .items[]? end
-      | select((.body // "") as $body
+      | select(((.body // "") | gsub("\r\n"; "\n")) as $body
           | ($body | startswith("<!-- ai:security-finding:\($id) -->\n<!-- ai:security-waiver-key:\($key) -->\n\($marker)\n"))
             and ($body | endswith("---\n**Generated security advisory metadata**\n- Schema: `generated-security-advisory.v1`\n- Waiver match key: `\($key)`\n- Audited commit: `\($head)`\n- Cited file: `\($file)`\nfiles_touched:\n  - \($file)\n")))
       | .number]
@@ -5796,7 +5796,7 @@ create_security_pass_advisory_followup() {
   ' 2>/dev/null || true)"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
     if ! jq --arg id "${finding_id}" --arg key "${waiver_match_key}" --argjson issue "${existing_issue}" '
-      def same_advisory: .waiver_match_key == $key or (((.waiver_match_key // "") == "") and .finding_id == $id);
+      def same_advisory: .waiver_match_key == $key;
       .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(same_advisory | not)] + [{finding_id: $id, waiver_match_key: $key, issue: $issue}])
       | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if same_advisory then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end]
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
@@ -5920,7 +5920,7 @@ PY
   fi
   _SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]="${issue_number}"
   if ! jq --arg id "${finding_id}" --arg key "${waiver_match_key}" --argjson issue "${issue_number}" '
-    def same_advisory: .waiver_match_key == $key or (((.waiver_match_key // "") == "") and .finding_id == $id);
+    def same_advisory: .waiver_match_key == $key;
     .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(same_advisory | not)] + [{finding_id: $id, waiver_match_key: $key, issue: $issue}])
     | .security_pass_waived_findings = [
         (.security_pass_waived_findings // [])[]
