@@ -35,6 +35,7 @@
 .github/ai/orchestrate_schema.v1.json
 .github/ai/write_guards.v1.json
 .github/workflows/audit_consumer_drift.yml
+.github/workflows/auto-release-stable.yml
 .github/workflows/cancel_on_pr_close.yml
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
@@ -119,6 +120,9 @@ analysis/workflow-optimization-2026-09-07.md
 analysis/workflow-optimization-2026-09-08.md
 analysis/workflow-optimization-2026-09-09.md
 analysis/workflow-optimization-2026-09-16.md
+analysis/workflow-optimization-2026-09-18.md
+analysis/workflow-optimization-2026-09-20-2.md
+analysis/workflow-optimization-2026-09-20.md
 changelog.d/.gitkeep
 changelog.d/255-artifact-cleanup-preserves-tracked.md
 changelog.d/3738-merge-precheck-promisor-recovery.md
@@ -165,6 +169,7 @@ changelog.d/3902-secure-workflow-shell-inputs.md
 changelog.d/3903-changelog-only-notification.md
 changelog.d/3906-stall-recovery-human-gated-latch.md
 changelog.d/3909-deterministic-manifest-conflict-resolution.md
+changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
 changelog.d/3928-security-pass-delta-reaudit.md
 changelog.d/3928-security-pass-exhaustion-findings.md
 changelog.d/3928-security-pass-fix-reissue.md
@@ -180,6 +185,8 @@ changelog.d/3963-reissue-preserve-baseline-default-true.md
 changelog.d/3965-review-ledger-cache-stable-path.md
 changelog.d/3965-security-pass-cycle-budget-reset.md
 changelog.d/3965-security-pass-fix-successor-adoption.md
+changelog.d/3965-security-pass-loop-convergence.md
+changelog.d/3965-security-pass-no-human-input-paths.md
 changelog.d/3967-plan-blocker-prompt-routing.md
 changelog.d/3972-blocked-already-satisfied-noop.md
 changelog.d/3973-immutable-consumer-workflow-pins.md
@@ -202,10 +209,16 @@ changelog.d/4077-editor-noop-zero-reviewers-recoverable-telemetry.md
 changelog.d/4079-review-autofix-approval-pending-alert.md
 changelog.d/4084-security-audit-mitigation-policy.md
 changelog.d/4087-terminal-same-head-gate-skip.md
+changelog.d/4093-pytest-git-env-isolation.md
 changelog.d/4109-bind-auto-merge-head.md
+changelog.d/4109-bind-auto-merge-to-evaluated-head.md
+changelog.d/4127-security-fix-pr-base.md
+changelog.d/4134-auto-apply-analysis-and-stable-release.md
+changelog.d/4163-e2e-review-blocked-budget.md
 changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/433-readme-wrapper-predicate-examples.md
+changelog.d/4379-followup-metadata-and-merged-label-race.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/codex-blocked-verdict-bail.md
@@ -223,6 +236,7 @@ changelog.d/orchestrator-security-pass-phase-3-dark-launch.md
 changelog.d/orchestrator-security-pass-phase-4-default-on.md
 changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
+changelog.d/security-audit-concurrency-deadlock.md
 changelog.d/seed-repo-command.md
 changelog.d/slash-commands-session-model.md
 changelog.d/stall-recovery-dead-end-fixes.md
@@ -412,10 +426,12 @@ scripts/ai_memory.py
 scripts/ai_memory_lib.py
 scripts/analyze_soft_errors.py
 scripts/analyze_workflow_logs.py
+scripts/apply_analysis_on_main.sh
 scripts/apply_audit_gate_assets.py
 scripts/assemble_changelog.py
 scripts/assemble_prompt.sh
 scripts/audit_consumer_drift.py
+scripts/auto_release_stable.sh
 scripts/blocker_check.py
 scripts/build_semble_wrapper.sh
 scripts/build_state_snapshot.py
@@ -470,6 +486,7 @@ scripts/git_ref_health_check.sh
 scripts/implement_commit_changes.sh
 scripts/implement_diagnose_post_codex_failure.sh
 scripts/implement_handle_guard_block.sh
+scripts/implement_staged_support_workspace.sh
 scripts/install_semble.sh
 scripts/issue_attachment_bundle.py
 scripts/label_helpers.sh
@@ -493,6 +510,7 @@ scripts/orchestrate_poll_process.sh
 scripts/orchestrate_state_v2.py
 scripts/post_review_comment.sh
 scripts/pr_checks_lib.sh
+scripts/promote_main_cycle.sh
 scripts/render_prompt.py
 scripts/render_prompt.sh
 scripts/render_scenario_trace.py
@@ -564,6 +582,7 @@ scripts/write_codex_config.sh
 scripts/write_guard.sh
 scripts/write_opencode_config.sh
 test_file.txt
+tests/conftest.py
 tests/e2e_smoke_canary.txt
 tests/e2e_smoke_canary_b.txt
 tests/e2e_smoke_canary_spec.txt
@@ -671,11 +690,13 @@ tests/test_ai_memory_push_retry_backoff.py
 tests/test_ai_memory_sync_reference_files.py
 tests/test_ai_memory_workflow_log_analysis_cache.py
 tests/test_analyze_workflow_logs.py
+tests/test_apply_analysis_on_main.py
 tests/test_assemble_changelog.py
 tests/test_assemble_prompt.py
 tests/test_audit_consumer_drift.py
 tests/test_audit_gate_identity.py
 tests/test_audit_gate_template_atomicity.py
+tests/test_auto_release_stable.py
 tests/test_blocker_check.py
 tests/test_branch_rebuild.py
 tests/test_changelog_fragment_contract.py
@@ -717,6 +738,7 @@ tests/test_gh_helpers_list_runs_method.py
 tests/test_gh_helpers_parse_reset_header.py
 tests/test_header_render.sh
 tests/test_identity_recall_render.sh
+tests/test_implement_blocked_verdict_terminalizes.py
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
@@ -745,6 +767,7 @@ tests/test_orchestrate_integration_ahead_by_gate.py
 tests/test_orchestrate_lib.py
 tests/test_orchestrate_poll_noop_suspicious_recovery.py
 tests/test_orchestrate_poll_process.py
+tests/test_orchestrate_poll_promote_cycle.py
 tests/test_orchestrate_poll_stages_readiness_script.py
 tests/test_orchestrate_poll_workflow_contract.py
 tests/test_orchestrator_concurrency_caps.py
@@ -764,7 +787,9 @@ tests/test_plan_template_owned_path_guard.py
 tests/test_pr_checks_lib_required_filter.py
 tests/test_pr_merge_status_guard.py
 tests/test_pr_watch_guard.py
+tests/test_promote_main_cycle.py
 tests/test_prompt_compaction.py
+tests/test_pytest_git_env_isolation.py
 tests/test_record_id_format_contract.py
 tests/test_render_prompt_core_modes.py
 tests/test_render_prompt_foundation.py
@@ -839,6 +864,7 @@ tests/test_task_state_unblock.py
 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py
 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
 tests/test_test_and_mark_stable_plan_polling_guard.py
+tests/test_test_and_mark_stable_review_blocked_budget.py
 tests/test_transcript_archive.sh
 tests/test_truncate_to_utf8_byte_cap.py
 tests/test_update_repo_tree.py

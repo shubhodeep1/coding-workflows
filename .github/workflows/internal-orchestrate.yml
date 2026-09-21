@@ -9,6 +9,16 @@ on:
           issues with a dependency DAG and dispatch them through the AI pipeline.
         required: true
         type: string
+      tracking_labels:
+        description: Optional comma-separated extra labels for the tracking issue.
+        required: false
+        type: string
+        default: ""
+      tracking_comment:
+        description: Optional comment posted on the tracking issue after creation.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -20,4 +30,6 @@ jobs:
     uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@main
     with:
       project_description: ${{ inputs.project_description }}
+      tracking_labels: ${{ inputs.tracking_labels }}
+      tracking_comment: ${{ inputs.tracking_comment }}
     secrets: inherit

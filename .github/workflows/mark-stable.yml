@@ -408,6 +408,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_auto_release_stable.py tests/test_orchestrate_poll_promote_cycle.py tests/test_implement_blocked_verdict_terminalizes.py
 
       - name: Prompt files integrity
         run: |
@@ -549,12 +551,33 @@ jobs:
     needs: [source, resolve-version, validate, validate-scripts]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Serialise the mutating tag pushes across every stable-tag writer
+    # (test-and-mark-stable.yml, this legacy path, and everything that
+    # dispatches them). The stale-tip guard in the tagging step covers the
+    # ordering half: a gate whose checkout is no longer the branch tip
+    # refuses to tag.
+    concurrency:
+      group: stable-release-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Checkout source branch
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.source.outputs.branch }}
+          # The dispatched commit, not the branch name: the branch may move
+          # while the test jobs run, and only the dispatched commit was tested.
+          ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Record the tested commit
+        env:
+          DISPATCHED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "${DISPATCHED_SHA}" ]; then
+            echo "::error::Release checkout is $(git rev-parse HEAD), not the dispatched commit ${DISPATCHED_SHA}."
+            exit 1
+          fi
+          echo "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" >> "$GITHUB_ENV"
 
       - name: Assemble changelog fragments
         id: changelog_assemble
@@ -607,14 +630,21 @@ jobs:
             echo "::warning::Push of assembled changelog failed (attempt ${attempt}); retrying in ${delay}s."
             sleep "${delay}"
             delay=$((delay * 2))
+            # Never rebase onto a moved branch: only the tested commit may be
+            # released. A remote tip other than RELEASE_TESTED_SHA means the
+            # branch moved under this run, so fail closed instead of
+            # re-baselining onto untested history.
             git fetch origin "${SOURCE_BRANCH}" || true
-            git rebase "origin/${SOURCE_BRANCH}" || { git rebase --abort || true; break; }
+            _remote_tip="$(git rev-parse "origin/${SOURCE_BRANCH}" 2>/dev/null || true)"
+            if [ -n "${_remote_tip}" ] && [ "${_remote_tip}" != "${RELEASE_TESTED_SHA}" ]; then
+              echo "::error::RELEASE_STALE_TIP branch=${SOURCE_BRANCH} tested=${RELEASE_TESTED_SHA} tip=${_remote_tip}: the branch moved after this gate started; not releasing a stale checkout."
+              exit 1
+            fi
           done
 
           if [ "${pushed}" != "true" ]; then
             echo "::warning::Could not push the assembled changelog to ${SOURCE_BRANCH}; releasing without it. Fragments remain in changelog.d/ for the next release."
-            git fetch origin "${SOURCE_BRANCH}"
-            git reset --hard "origin/${SOURCE_BRANCH}"
+            git reset --hard "${RELEASE_TESTED_SHA}"
           fi
 
       - name: Extract changelog for this version
@@ -635,6 +665,8 @@ jobs:
 
       - name: Tag version and update stable pointer
         if: ${{ !inputs.dry_run }}
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -642,6 +674,31 @@ jobs:
 
           VERSION="${{ needs.resolve-version.outputs.version }}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
+
+          # Stale-tip guard. RELEASE_TESTED_SHA is the commit this run was
+          # dispatched on and the gate tested. HEAD may be that commit or
+          # that commit plus the changelog-assembly commit, nothing else, and
+          # the branch tip must still be HEAD: a gate dispatched on an older
+          # tip that finishes after the branch moved (a promotion
+          # fast-forwarded `stable`, or a patch landed) would otherwise move
+          # the `stable` tag onto history the newer gate has superseded.
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "${HEAD_SHA}" != "${RELEASE_TESTED_SHA}" ]; then
+            if [ "$(git rev-parse HEAD^)" != "${RELEASE_TESTED_SHA}" ] \
+              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/)' || true)" ]; then
+              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog assembly; refusing to tag."
+              exit 1
+            fi
+          fi
+          BRANCH_TIP="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" | awk '{print $1}')"
+          if [ -z "${BRANCH_TIP}" ]; then
+            echo "::error::Could not read the tip of ${SOURCE_BRANCH} from origin; refusing to tag without confirming the checkout is current."
+            exit 1
+          fi
+          if [ "${BRANCH_TIP}" != "${HEAD_SHA}" ]; then
+            echo "::error::RELEASE_STALE_TIP branch=${SOURCE_BRANCH} tested=${RELEASE_TESTED_SHA} tip=${BRANCH_TIP}: the branch moved after this gate started; not tagging a stale checkout. The gate on the new tip owns the release."
+            exit 1
+          fi
 
           # Immutable version tag (refs/tags/ prefix for consistency with the moving-tag pushes below)
           git tag -a "$VERSION" -m "Release $VERSION"

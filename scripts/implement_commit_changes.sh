@@ -160,6 +160,7 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
   staged_support_rebased=0
   staged_support_edited_from_head=0
   staged_support_conflicts=""
+  staged_support_auto_release_safe="true"
   while IFS= read -r staged_support_path; do
     [ -n "${staged_support_path}" ] || continue
     case "${staged_support_path}" in
@@ -176,6 +177,7 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
     if [ ! -f "${staged_support_base}" ]; then
       echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${staged_support_path}; refusing to leave an unverifiable support-ref copy eligible for commit."
       staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      staged_support_auto_release_safe="false"
       continue
     fi
     staged_support_mode="$(stat -c '%a' -- "${staged_support_path}" 2>/dev/null || true)"
@@ -183,6 +185,7 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
     if [ -e "${staged_support_path}" ] && { [ -z "${staged_support_mode}" ] || [ -z "${staged_support_base_mode}" ]; }; then
       echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED path=${staged_support_path} reason=mode_read: could not compare the editor and installed-content modes safely."
       staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      staged_support_auto_release_safe="false"
       continue
     fi
     if ! git cat-file -e "HEAD:${staged_support_path}" >/dev/null 2>&1; then
@@ -233,6 +236,7 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
     if ! git show "HEAD:${staged_support_path}" > "${staged_support_head}"; then
       echo "::error::IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED path=${staged_support_path}; refusing to commit without the branch-side merge input."
       staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      staged_support_auto_release_safe="false"
       rm -f -- "${staged_support_head}" "${staged_support_merged}"
       continue
     fi
@@ -256,6 +260,7 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
     else
       echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED path=${staged_support_path} merge_file_rc=${staged_support_merge_rc}: git merge-file could not process the staged, support-ref, and branch-side inputs."
       staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      staged_support_auto_release_safe="false"
     fi
     rm -f -- "${staged_support_head}" "${staged_support_merged}"
   done < "${staged_support_ledger}"
@@ -264,6 +269,9 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
     {
       echo "staged_support_rebase_conflict=true"
       echo "staged_support_rebase_conflict_files=${staged_support_conflicts}"
+      if [ "${staged_support_auto_release_safe}" = "true" ]; then
+        echo "staged_support_auto_release_safe=true"
+      fi
     } >> "$GITHUB_OUTPUT"
     exit 1
   fi

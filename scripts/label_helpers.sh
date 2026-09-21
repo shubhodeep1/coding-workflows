@@ -71,6 +71,8 @@ declare -A _AI_LABEL_COLORS=(
 	["e2e-smoke-test"]="5319e7"
 	["ai:check-triage"]="d876e3"
 	["ai:check-triage-escalated"]="b60205"
+	["ai:workflow-heal"]="d876e3"
+	["ai:workflow-heal-escalated"]="b60205"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -124,6 +126,8 @@ declare -A _AI_LABEL_DESCS=(
 	["e2e-smoke-test"]="E2E smoke test PR — review_autofix skips auto-merge"
 	["ai:check-triage"]="Issue auto-filed from a failing PR check by check-failure triage"
 	["ai:check-triage-escalated"]="Check-failure auto-fix chain hit the lineage cap; needs human attention"
+	["ai:workflow-heal"]="Issue auto-filed from an escalated workflow failure by workflow failure heal"
+	["ai:workflow-heal-escalated"]="Workflow failure heal chain hit the lineage cap; needs human attention"
 )
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
