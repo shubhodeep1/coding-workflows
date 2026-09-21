@@ -4124,17 +4124,17 @@ jobs:
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     # Sum of remaining in-step DEADLINEs (validation-refresh 2400s +
-    # update_workflows 600s + memory-maintenance 1320s = 4320s ≈ 72m).
+    # update_workflows 600s + memory-maintenance 2400s = 5400s = 90m).
     # Add headroom for prerequisite validation, checkout, and the
     # per-phase run-soft-error-analyzer composite actions (each waits
     # up to wait_for_completion_secs=120s and then runs an OpenRouter
     # call; log1 of run #25200117236 observed ~40s per phase, so 3
     # phases under OpenRouter latency variance can plausibly reach
-    # 6–9m), runner queueing, and step setup. Cap at 90m so a runaway
+    # 6–9m), runner queueing, and step setup. Cap at 110m so a runaway
     # validation-refresh / update_workflows / memory_maintenance can
     # still be killed within a sensible budget. Down from 360m before
     # the workflow-log-analysis split-out.
-    timeout-minutes: 90
+    timeout-minutes: 110
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -4266,7 +4266,7 @@ jobs:
 
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
-        timeout-minutes: 25
+        timeout-minutes: 45
         run: |
           set -euo pipefail
           sleep 4
@@ -4286,7 +4286,7 @@ jobs:
             --display-name "internal-memory-maintenance" \
             --registration-timeout-secs 900 \
             --registration-poll-interval-secs 5 \
-            --completion-timeout-secs 1320 \
+            --completion-timeout-secs 2400 \
             --completion-poll-interval-secs 15 \
             --dispatch-max-attempts 5 \
             --dispatch-backoff-base-secs 2

@@ -64,6 +64,11 @@ def test_memory_maintenance_timeout_hierarchy() -> None:
 	]
 	assert len(dispatch_steps) == 1
 	dispatch_step = dispatch_steps[0]
+	registration_timeout_match = re.search(
+		r"--registration-timeout-secs\s+(\d+)", dispatch_step["run"]
+	)
+	assert registration_timeout_match is not None
+	registration_timeout_seconds = int(registration_timeout_match.group(1))
 	watcher_timeout_match = re.search(
 		r"--completion-timeout-secs\s+(\d+)", dispatch_step["run"]
 	)
@@ -73,7 +78,7 @@ def test_memory_maintenance_timeout_hierarchy() -> None:
 	orphan_timeout_minutes = orphan_job["timeout-minutes"]
 
 	assert child_timeout_minutes >= 20
-	assert child_timeout_minutes * 60 < watcher_timeout_seconds
+	assert registration_timeout_seconds + child_timeout_minutes * 60 < watcher_timeout_seconds
 	assert watcher_timeout_seconds < dispatch_timeout_minutes * 60
 	assert dispatch_timeout_minutes < orphan_timeout_minutes
 
