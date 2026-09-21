@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:lines ~218-220 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: `extract_plan_files()` captures only the first backtick-wrapped path in a bullet, allowing a multi-path plan bullet to pass the exact-file scope check.\n  WHY: The plan-level guard accepts drifted plans that name additional paths; severity was reported as MAJOR by minimax_minimax-m3 and NIT by moonshotai_kimi-k3, with the highest severity used.\n- scripts/stage_workflow_support.sh:line 45 (REQUIRED_BOOTSTRAP_SCRIPTS) and line 68 (MAIN_PRIMARY_BOOTSTRAP_SCRIPTS) | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: `files_touched_scope_guard.py` is staged branch-first while `review_conflict_prepare.sh` and `review_conflict_resolve.sh` are staged main-first, allowing version skew where the resolver passes `--linked-issue-metadata-sha256` to an older helper that rejects it.\n  WHY: During rollout, argparse exits non-zero and the resolver treats the result as a hard refusal, blocking conflict-resolution commits on in-flight PRs until rebasing.\n- .github/workflows/review_autofix.yml:lines 2250-2255 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The \u201cCollect PR metadata\u201d step hard-fails when the staged `review_collect_pr_metadata.sh` does not create `LINKED_ISSUE_METADATA_FILE`.\n  WHY: Self-repo review runs can combine the new workflow with an older branch-staged collector, so `sha256sum` cannot produce a digest and the run exits before reviewers, the editor, or conflict resolution.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/files_touched_scope_guard.py:lines ~218-220 | severity=MAJOR | confidence=4\n  PROBLEM: `extract_plan_files()` keeps only the first backtick span per bullet, so a bullet containing multiple paths passes the plan-level exact-file check.\n  WHY: The plan guard is bypassed for multi-path bullets, although the later commit-time scope check rejects the second path.\n- scripts/stage_workflow_support.sh:line ~45 versus `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` | severity=MAJOR | confidence=4\n  PROBLEM: `files_touched_scope_guard.py` is branch-first while its main-first resolver consumers can require a newer CLI flag.\n  WHY: Rollout version skew causes argparse failure and hard refusal of generated-advisory conflict-resolution commits.\n- TASK_GAP: No requirement is missing; all five linked-issue findings are addressed in the PR diff.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/review_autofix.yml: lines 2244-2256 (\"Collect PR metadata\" step, `id: collect_pr_metadata`) | severity=MAJOR | confidence=4\n  PROBLEM: The step hard-fails when the linked-issue metadata artifact is absent.\n  WHY: A new workflow combined with an older branch-staged collector deterministically kills in-flight self-repo review runs before reviewers, the editor, or conflict resolution.\n- scripts/files_touched_scope_guard.py: extract_plan_files, line 263 | severity=NIT | confidence=4\n  PROBLEM: Only the first backtick span per bullet is captured.\n  WHY: A multi-path generated-advisory plan can pass the exact-file check, although later commit guards reject out-of-scope code.\n- scripts/stage_workflow_support.sh: line 45 (REQUIRED_BOOTSTRAP_SCRIPTS) and line 68 (MAIN_PRIMARY_BOOTSTRAP_SCRIPTS) | severity=MAJOR | confidence=3\n  PROBLEM: Resolver scripts and the scope-guard helper can be staged from mismatched versions.\n  WHY: The old helper rejects `--linked-issue-metadata-sha256`, while the old collector independently causes missing-artifact refusal.\n- TASK_GAP: NONE \u2014 all five linked-issue findings have corresponding delivery in the PR diff.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/stage_workflow_support.sh: line 45 (REQUIRED_BOOTSTRAP_SCRIPTS) and line 68 (MAIN_PRIMARY_BOOTSTRAP_SCRIPTS) | severity=MAJOR | confidence=4\n  PROBLEM: `files_touched_scope_guard.py` is staged branch-first while the conflict scripts are staged main-first and pass it `--linked-issue-metadata-sha256`.\n  WHY: An old helper rejects the new option and blocks conflict-resolution attempts on in-flight PRs until rebasing.\n- .github/workflows/review_autofix.yml: lines 2250-2255 | severity=MAJOR | confidence=4\n  PROBLEM: The \u201cCollect PR metadata\u201d step fails when `sha256sum` cannot produce a digest because the metadata file does not exist.\n  WHY: The old branch-staged helper does not write the artifact, so every affected self-repo autofix iteration exits before reviewers, the editor, or conflict resolution.\n- TASK_GAP: NONE.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- .github/workflows/review_autofix.yml: lines 2250-2255 | severity=MAJOR | confidence=4\n  PROBLEM: The new digest publisher hard-fails when `LINKED_ISSUE_METADATA_FILE` was never written.\n  WHY: In-flight self-repo reviews using an older branch-staged collector exit before reviewers, the editor, or conflict resolution, including no-op reviews.\n- scripts/review_conflict_prepare.sh and scripts/review_conflict_resolve.sh: prepare path lines 294-296 and resolver path lines 2535-2537 | severity=MAJOR | confidence=4\n  PROBLEM: The main-staged resolvers require a CLI flag that the branch-staged `files_touched_scope_guard.py` may not support.\n  WHY: argparse exits non-zero and both resolver commit paths treat any status other than 0 or 10 as a hard refusal until the branch is rebased.\n- TASK_GAP: NONE.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "4418199bb6b695769a5967c95e5fcd5395ed38efc2f2ce63b6471ba88b4e625c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4174,
+    "run_id": "35571926267",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35571926267",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921082100_fc9d5d9ca4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4174,
+    "run_id": "35571926267"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-21T08:21:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
