@@ -865,6 +865,7 @@ def test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_p
 def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 	expectations = {
 		"scripts/codex_stall_guard.sh": [
+			'exec python3 -I -B -c "$(cat <<\'PY\'',
 			"codex_stall_observed",
 			"codex_stall_killed",
 			"codex_stall_guard failed to write status file",
