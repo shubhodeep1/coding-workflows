@@ -397,3 +397,116 @@ No real `TODO`, `FIXME`, or `HACK` markers were found. ShellCheck found no repos
 | Code modularization | ~12 | Large |
 | Expression size reduction | 3 | Medium |
 | Medium/Low fixes | 5 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-21)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is directly actionable; `NEEDS_VERIFICATION` requires specified checks; `RISKY_SKIP` must not be automated because pagination, retries, polling, or race defenses are involved.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Reuse the branch-runs snapshot across adjacent autofix probes
+
+- **Safety tag:** `SAFE_TO_MERGE`
+- **Files:** `scripts/gh_helpers.sh:1238-1244`, `scripts/gh_helpers.sh:1358-1364`; caller `.github/workflows/review_autofix.yml:6851-6870`
+- **Current call count:** 2 on the successful no-peer path.
+- **Proposed call count:** 1.
+- **Endpoint:** `GET /repos/{owner}/{repo}/actions/runs?branch={head_branch}&per_page=30`
+- **Evidence:** Both helpers issue identical requests and run consecutively without an intervening GitHub mutation.
+
+```bash
+"/repos/${GITHUB_REPOSITORY}/actions/runs"
+-f "branch=${head_branch}"
+-f "per_page=30"
+```
+
+```bash
+autofix_retrigger_has_inflight_peer ...
+REVIEWED_HEAD_SHA="$(git rev-parse HEAD ...)"
+autofix_changes_lost_head_retry_consumed ...
+```
+
+- **Proposed fix:** After `autofix_retrigger_has_inflight_peer` successfully validates and parses its response, retain it in a process-local cache keyed by repository and branch. Extend `autofix_changes_lost_head_retry_consumed` to consume that snapshot. Do not cache API or parse failures, so its existing live fallback and fail-closed behavior remain unchanged.
+- **Safety rationale:** The endpoint, query filters, auth, retry helper, and workflow step are identical; successful-only shell-local reuse preserves independent failure semantics and does not cross workflow-step boundaries.
+- **Downstream signal:** Implement a successful-response-only branch-runs cache in `gh_helpers.sh` and add a test asserting one `gh api` invocation for the adjacent no-peer/budget path.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Final-PR state and merge status use two identical reads
+
+- **Safety tag:** `RISKY_SKIP`
+- **File:** `scripts/orchestrate_poll_process.sh:10230-10242`, function `finalize_integration_merge_if_needed`
+- **Current call count:** 2 on snapshot miss.
+- **Proposed call count:** 1.
+- **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{final_pr}`
+- **Evidence:**
+
+```bash
+existing_pr_state="$(gh_retry _safe_gh_jq ... --jq '.state' ...)"
+existing_pr_merged="$(gh_retry _safe_gh_jq ... --jq '.merged_at != null' ...)"
+```
+
+- **Proposed fix:** Fetch one full PR object and derive both `.state` and `.merged_at != null` locally.
+- **Safety rationale:** Although adjacent and identical, the calls are inside `orchestrate_poll_process.sh`, which explicitly defends against upstream races and therefore triggers mandatory `RISKY_SKIP`.
+- **Downstream signal:** Do not auto-implement; manually verify final-merge race tests and preserve cache-miss/failure behavior before consolidating.
+
+#### REUSE-002 — Reissue paths fetch issue title and body separately
+
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/orchestrate_poll_process.sh:13726-13733` (`execute_stall_recovery_action`), `scripts/orchestrate_poll_process.sh:16413-16421` (`run_standalone_stall_recovery`), `scripts/orchestrate_poll_process.sh:21397-21399` (implementation-failed sweep)
+- **Current call count:** 2 per reissue path; up to 6 across the three sites.
+- **Proposed call count:** 1 per path; up to 3.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence:**
+
+```bash
+orig_title="$(gh_retry _safe_gh_jq ... --jq '.title // ""' ...)"
+orig_body="$(gh_retry _safe_gh_jq ... --jq '.body // ""' ...)"
+```
+
+- **Proposed fix:** Add a single issue-object fetch at each site and extract both fields locally, preferably through one shared `_fetch_issue_title_body_json` helper.
+- **Safety rationale:** These calls are in orchestrator stall/recovery paths, and combining them also changes the current independent partial-failure behavior.
+- **Downstream signal:** Do not auto-implement; manually test API failure between field reads and every managed, standalone, and implementation-failed reissue path.
+
+#### REUSE-003 — Merge-train marker lookup discards a body that is immediately re-fetched
+
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/review_merge_train.sh:257-261`, `scripts/review_merge_train.sh:275-287`, caller `scripts/review_merge_train.sh:354-387`
+- **Current call count:** 2 logical calls when a marker exists.
+- **Proposed call count:** 1 logical call.
+- **Endpoints:** Paginated `GET /repos/{owner}/{repo}/issues/{pr}/comments?per_page=100`; `GET /repos/{owner}/{repo}/issues/comments/{comment_id}`
+- **Evidence:**
+
+```bash
+--jq ".[] | select(.body | startswith(\"${marker}\")) | .id"
+...
+existing_body="$(gh_retry gh api "repos/${MT_REPO}/issues/comments/${existing_id}" --jq '.body' ...)"
+```
+
+- **Proposed fix:** Extend the marker lookup to return the latest matching comment’s ID and body together, then pass both into `_mt_upsert_comment`.
+- **Safety rationale:** The source lookup uses `--paginate`, which mandates `RISKY_SKIP` because page ordering and boundary semantics must remain exact.
+- **Downstream signal:** Do not auto-implement; manually verify latest-marker selection across multiple pages and bodies containing tabs, newlines, and Unicode.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- BATCH-001: `RISKY_SKIP` — Its per-PR files reads are paginated, requiring manual GraphQL connection and REST-fallback review.
+- BATCH-002: `NEEDS_VERIFICATION` — Verify aliased mutation partial-error handling and label creation/ID races before batching.
+- BATCH-003: `RISKY_SKIP` — Cross-repository auth scopes and paginated comment reads prevent automatic consolidation.
+- API-001: `RISKY_SKIP` — The calls are inside retry loops, and changing classifiers affects retry and logging semantics.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | MERGE-001 |
+| NEEDS_VERIFICATION | 1 | BATCH-002 |
+| RISKY_SKIP | 6 | REUSE-001, REUSE-002, REUSE-003, BATCH-001, BATCH-003, API-001 |
+
+### Implement-Stage Handoff
+
+- MERGE-001
