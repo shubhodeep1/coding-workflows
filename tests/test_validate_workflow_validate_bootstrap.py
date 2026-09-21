@@ -148,7 +148,11 @@ def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_mai
 def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
-	assert 'python3 -I -B -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2' in wf
+	dependency_step = wf.split("- name: Install Python dependencies for validation renderer", 1)[1].split("- name: Determine Semble bootstrap state", 1)[0]
+	assert "RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}" in dependency_step
+	assert 'python3 -I -B -m pip install --target "${RUNTIME_DIR}/validation-renderer-python" --disable-pip-version-check --quiet pyyaml jsonschema jinja2' in wf
+	assert '"${RUNTIME_DIR}/validation-renderer-python${PYTHONPATH:+:${PYTHONPATH}}" >> "$GITHUB_ENV"' in wf
+	assert "pip install --disable-pip-version-check --quiet --user" not in wf
 
 
 def test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:

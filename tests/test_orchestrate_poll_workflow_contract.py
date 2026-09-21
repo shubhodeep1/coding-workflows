@@ -156,6 +156,11 @@ def test_sibling_workflow_python_stdin_launches_are_isolated() -> None:
 			call_index = step_block.find("_gh_helpers_run_isolated_python")
 			step_name = step_block.splitlines()[0].strip()
 			assert 0 <= source_index < call_index, f"isolated Python helper is not sourced first in {workflow_path} step {step_name}"
+	for redis_workflow_path in (CLARIFY_WF, ORCHESTRATE_CLARIFY_RESPOND_WF):
+		redis_workflow_text = _workflow(redis_workflow_path)
+		assert 'python3 -I -B -m pip install --target "${RUNTIME_DIR}/semantic-cache-python" --disable-pip-version-check "redis>=5,<6"' in redis_workflow_text
+		assert '"${RUNTIME_DIR}/semantic-cache-python${PYTHONPATH:+:${PYTHONPATH}}" >> "$GITHUB_ENV"' in redis_workflow_text
+		assert "pip install --user" not in redis_workflow_text
 
 
 def test_nag_reminder_assets_and_judge_wiring_are_present() -> None:

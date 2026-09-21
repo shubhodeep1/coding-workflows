@@ -537,7 +537,8 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          python3 -I -B -m pip install --user --disable-pip-version-check "redis>=5,<6"
+          python3 -I -B -m pip install --target "${RUNTIME_DIR}/semantic-cache-python" --disable-pip-version-check "redis>=5,<6"
+          printf 'PYTHONPATH=%s\n' "${RUNTIME_DIR}/semantic-cache-python${PYTHONPATH:+:${PYTHONPATH}}" >> "$GITHUB_ENV"
 
       - name: Restore semantic cache SQLite
         if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'

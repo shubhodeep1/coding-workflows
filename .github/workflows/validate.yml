@@ -751,11 +751,14 @@ jobs:
             --metadata-json "${metadata_json}"
 
       - name: Install Python dependencies for validation renderer
+        env:
+          RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
         run: |
           set -euo pipefail
 
           if [ -f "${SUPPORT_SCRIPTS_DIR}/render_validation_templates.py" ]; then
-            python3 -I -B -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
+            python3 -I -B -m pip install --target "${RUNTIME_DIR}/validation-renderer-python" --disable-pip-version-check --quiet pyyaml jsonschema jinja2
+            printf 'PYTHONPATH=%s\n' "${RUNTIME_DIR}/validation-renderer-python${PYTHONPATH:+:${PYTHONPATH}}" >> "$GITHUB_ENV"
           else
             echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
           fi
