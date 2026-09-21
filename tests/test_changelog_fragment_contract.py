@@ -207,6 +207,16 @@ def test_release_assembly_fails_open() -> None:
 		assert 'if [ "${DRY_RUN}" = "true" ]' in step
 		assert 'git reset --hard "origin/${SOURCE_BRANCH}"' in step
 		assert "::warning::Could not push the assembled changelog" in step
+		# `stable` is both a branch and a tag, so every ref in this step must
+		# be fully qualified: a bare `HEAD:stable` push is "dst refspec stable
+		# matches more than one", and a bare `git fetch origin stable` fetches
+		# the tag and never refreshes origin/stable.
+		assert 'git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"' in step
+		assert '"HEAD:${SOURCE_BRANCH}"' not in step
+		assert step.count(
+			'git fetch origin "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"'
+		) == 2
+		assert 'git fetch origin "${SOURCE_BRANCH}"' not in step
 
 
 def test_consumer_sync_has_the_fifth_category_and_assembly() -> None:

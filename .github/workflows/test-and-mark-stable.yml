@@ -5079,20 +5079,24 @@ jobs:
           pushed="false"
           delay=2
           for attempt in 1 2 3 4; do
-            if git push origin "HEAD:${SOURCE_BRANCH}"; then
+            # refs/heads/ everywhere below: `stable` is also a tag, so a bare
+            # `HEAD:stable` is rejected with "dst refspec stable matches more
+            # than one", and a bare `git fetch origin stable` resolves to the
+            # tag and leaves origin/stable stale.
+            if git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"; then
               pushed="true"
               break
             fi
             echo "::warning::Push of assembled changelog failed (attempt ${attempt}); retrying in ${delay}s."
             sleep "${delay}"
             delay=$((delay * 2))
-            git fetch origin "${SOURCE_BRANCH}" || true
+            git fetch origin "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}" || true
             git rebase "origin/${SOURCE_BRANCH}" || { git rebase --abort || true; break; }
           done
 
           if [ "${pushed}" != "true" ]; then
             echo "::warning::Could not push the assembled changelog to ${SOURCE_BRANCH}; releasing without it. Fragments remain in changelog.d/ for the next release."
-            git fetch origin "${SOURCE_BRANCH}"
+            git fetch origin "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
             git reset --hard "origin/${SOURCE_BRANCH}"
           fi
 
