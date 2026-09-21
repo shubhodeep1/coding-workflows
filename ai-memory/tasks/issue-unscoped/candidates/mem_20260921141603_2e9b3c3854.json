@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | severity=blocker | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The canary file contains incorrect bait values and extra lines instead of exactly the three required lines.\n  WHY: The smoke gate validates the canary against the issue specification, so the wrong values and extra lines fail the gate deterministically.\n- .ai/.workspace_source_manifest.txt:lines 126-598 | severity=blocker | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The PR includes unrelated modifications to the workspace manifest, changelog entries, and a script.\n  WHY: The explicit single-file constraint permits modifying only tests/e2e_smoke_canary.txt, so the files-touched scope guard will reject the PR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update tests/e2e_smoke_canary.txt to exactly three specified lines (status: ok, run_id: 35601057512, updated-by: ai-pipeline) with a trailing newline.\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The file contains six lines of bait content; none of the required lines appear in their correct form, and no diff hunk introduces the specified values.\n- requirement: Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\n  expected_change_site: tests/e2e_smoke_canary.txt (sole allowed file)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20]\n  EVIDENCE: .ai/.workspace_source_manifest.txt is modified in three hunks (analysis addition, changelog fragments, script addition), and a new script file plus 7 changelog entries are included outside the allowed file.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt | severity=critical\n  PROBLEM: The canary content is incorrect and includes extra lines instead of the required three lines.\n  WHY: Issue #4219 requires status: ok, run_id: 35601057512, updated-by: ai-pipeline with a trailing newline.\n- .ai/.workspace_source_manifest.txt and scripts/workflow_failure_heal_autofix_report.sh | severity=critical\n  PROBLEM: The PR modifies files outside the explicitly allowed canary file.\n  WHY: The editor must revert all changes to `.ai/.workspace_source_manifest.txt` and remove `scripts/workflow_failure_heal_autofix_report.sh`.\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | severity=BLOCKER | confidence=5\n  PROBLEM: Canary file contains bait values and extra lines rather than the specific three lines required.\n  WHY: The smoke test gate validates the canary content against the issue specification; incorrect values or extra lines will cause the smoke test to fail.\n- .ai/.workspace_source_manifest.txt:lines 126-598 | severity=BLOCKER | confidence=5\n  PROBLEM: PR includes unrelated modifications to the workspace manifest, changelog, and scripts.\n  WHY: Violates the explicit task constraint to modify ONLY tests/e2e_smoke_canary.txt. The E2E smoke gate's files-touched scope guard will likely reject this PR due to the out-of-scope changes.\n- TASK_GAP\n  Requirement: Update tests/e2e_smoke_canary.txt to exactly three specified lines (status: ok, run_id: 35601057512, updated-by: ai-pipeline) with a trailing newline.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The file contains six lines of bait content; none of the required lines appear in their correct form.\n- TASK_GAP\n  Requirement: Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\n  Expected change site: tests/e2e_smoke_canary.txt (sole allowed file)\n  Evidence of absence: .ai/.workspace_source_manifest.txt is modified in three hunks (analysis addition, changelog fragments, script addition).\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file content) | severity=BLOCKER | confidence=5\n  PROBLEM: The file contains six lines of corrupted bait content instead of the required three lines.\n  WHY: Every required key is replaced with a wrong value and three extra lines violate the explicit \"no more, no less\" constraint; the smoke gate will fail deterministically.\n- .ai/.workspace_source_manifest.txt:lines 126-598 and scripts/workflow_failure_heal_autofix_report.sh | severity=BLOCKER | confidence=5\n  PROBLEM: The PR modifies files outside scope.\n  WHY: `.ai/.workspace_source_manifest.txt` is modified in three hunks and `scripts/workflow_failure_heal_autofix_report.sh` is added despite the single-file requirement.\n- TASK_GAP\n  Requirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention): status: ok / run_id: 35601057512 / updated-by: ai-pipeline\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR diff replaces the prior 3-line content with 6 lines of bait content. None of the three required lines (status: ok, run_id: 35601057512, updated-by: ai-pipeline) appear in their correct form anywhere in the file. No diff hunk introduces the specified values.\n- TASK_GAP\n  Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  Expected change site: tests/e2e_smoke_canary.txt (sole allowed file)\n  Evidence of absence: `.ai/.workspace_source_manifest.txt` is modified in three hunks (lines 126-132 add analysis/workflow-optimization-2026-09-21-2.md; lines 224-236 add seven changelog.d/* fragments; lines 592-598 add scripts/workflow_failure_heal_autofix_report.sh). The Copilot inline review comment (id 4062364568, path .ai/.workspace_source_manifest.txt, line 129) independently flags this same manifest addition as an unrelated out-of-scope edit.\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .ai/.workspace_source_manifest.txt + new script + 7 changelog entries | severity=MAJOR\n  PROBLEM: `.ai/.workspace_source_manifest.txt`, a new script, and 7 changelog entries violate \"ONLY modify tests/e2e_smoke_canary.txt\".\n  WHY: The canary is now correct but the scope breach remains.\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)",
+  "fingerprint": "4814eb01e839288bdecee0ffe3585e02795ab9b091077d78cf14a60113032f84",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4225,
+    "run_id": "35603036628",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35603036628",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921141603_2e9b3c3854",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4225,
+    "run_id": "35603036628"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-21T14:16:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
