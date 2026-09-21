@@ -8464,7 +8464,7 @@ jobs:
         # reported through the ai:resolver-escalated label path. Fail-open by
         # construction: the script always exits 0 and the step never blocks
         # cleanup.
-        if: failure() && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+        if: (failure() || env.EDITOR_CHANGES_LOST == 'true' || env.EDITOR_NOOP_SUSPICIOUS == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}

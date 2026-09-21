@@ -82,14 +82,22 @@ DEFAULT_AUTOFIX_FAILURE_STREAK = 2
 FAILURE_EVIDENCE_LIMIT = 4000  # same bound as ISSUE_EXCERPT_LIMIT (defined below)
 
 # PR comment markers the review/autofix workflow posts. The streak counter reads
-# them newest first: every failure marker counts, a success marker ends the run.
+# them newest first. An editor summary ends the streak unless the next newer
+# failure marker shows that the same run failed after posting its summary.
 AUTOFIX_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
 	"AI review/autofix produced no output",
 	"AI review/autofix failed",
 	"AI review/autofix encountered a post-editor failure",
+	"Editor changes lost",
+	"Editor no-op suspicious",
 )
 AUTOFIX_SUCCESS_COMMENT_MARKERS: tuple[str, ...] = (
 	"AI autofix editor summary",
+)
+AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
+	"AI review/autofix encountered a post-editor failure",
+	"Editor changes lost",
+	"Editor no-op suspicious",
 )
 
 ISSUE_EXCERPT_LIMIT = 4000
@@ -363,19 +371,24 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
 
 	``comments`` is the PR's issue-comment list, oldest first (the order the
 	GitHub API returns). Scanning from the newest comment, every failure marker
-	adds one; the first success marker (an editor summary) stops the count. The
-	current run's own failure comment is normally not in the list yet, so the
-	reporter adds one for it.
+	adds one. An editor summary stops the count unless it belongs to the
+	post-editor failure immediately newer than it. The current run's own failure
+	comment is normally not in the list yet, so the reporter adds one for it.
 	"""
 	streak = 0
+	skip_paired_summary = False
 	for comment in reversed(list(comments)):
 		if not isinstance(comment, dict):
 			continue
 		body = sanitize_text(comment.get("body"))
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
 			streak += 1
+			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
 			continue
 		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+			if skip_paired_summary:
+				skip_paired_summary = False
+				continue
 			break
 	return streak
 

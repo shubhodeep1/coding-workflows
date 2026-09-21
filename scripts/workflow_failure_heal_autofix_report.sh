@@ -12,10 +12,10 @@
 #      structured run summary's `finalize_reason`, falling back to
 #      `workflow_failure`.
 #   2. Counts how many review runs in a row failed on this pull request from
-#      the PR comments the run fetched at its start (every failure marker the
-#      workflow posts counts, the last editor summary ends the streak), plus one
-#      for this run. Zero API calls (CLAUDE.md §15). A single failure stays with
-#      the stall poller's retry; only a streak of at least
+#      the PR comments the run fetched at its start. Editor summaries paired
+#      with a later failure comment from the same run do not end the streak.
+#      The reporter adds one for this run and makes zero API reads (CLAUDE.md
+#      §15). A single failure stays with the stall poller's retry; only a streak of at least
 #      WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK (default 2) is reported.
 #   3. Builds the `autofix_failure` payload (scripts/workflow_failure_heal.py
 #      build-autofix-payload) with the run summary line and the tail of the

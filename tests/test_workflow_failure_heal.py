@@ -960,6 +960,7 @@ def test_intake_without_linked_runs_still_files_from_label_context() -> None:
 
 AUTOFIX_NOOP_COMMENT = "**AI review/autofix produced no output — will retry**\n\nThe editor stage completed without a structured summary."
 AUTOFIX_FAILED_COMMENT = "**AI review/autofix failed — needs human intervention**"
+AUTOFIX_POST_EDITOR_FAILED_COMMENT = "**AI review/autofix encountered a post-editor failure — needs human intervention**"
 AUTOFIX_SUMMARY_COMMENT = "AI autofix editor summary\n\nChanges made:\n- none"
 RUN_SUMMARY_LINE = (
 	'REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"budget_elapsed_secs":129,"completed_phases":["editor","finalize"],'
@@ -985,14 +986,23 @@ def test_count_autofix_failure_streak_reads_trailing_failure_comments() -> None:
 		{"body": AUTOFIX_FAILED_COMMENT},
 		{"body": AUTOFIX_SUMMARY_COMMENT},
 		{"body": "unrelated reviewer note"},
-		{"body": AUTOFIX_NOOP_COMMENT},
-		{"body": "⚠️ **Editor no-op suspicious** (run 1)"},
-		{"body": AUTOFIX_NOOP_COMMENT},
+		{"body": AUTOFIX_SUMMARY_COMMENT},
+		{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+		{"body": AUTOFIX_SUMMARY_COMMENT},
+		{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
 	]
 	assert heal.count_autofix_failure_streak(comments) == 2
 	assert heal.count_autofix_failure_streak([]) == 0
 	assert heal.count_autofix_failure_streak([{"body": AUTOFIX_SUMMARY_COMMENT}]) == 0
-	assert heal.count_autofix_failure_streak([{"body": AUTOFIX_NOOP_COMMENT}, {"body": "**AI review/autofix encountered a post-editor failure — needs human intervention**"}]) == 2
+	assert heal.count_autofix_failure_streak([{"body": AUTOFIX_SUMMARY_COMMENT}, {"body": AUTOFIX_NOOP_COMMENT}]) == 1
+	assert heal.count_autofix_failure_streak(
+		[
+			{"body": AUTOFIX_SUMMARY_COMMENT},
+			{"body": "⚠️ **Editor changes lost** — no commit was produced."},
+			{"body": AUTOFIX_SUMMARY_COMMENT},
+			{"body": "⚠️ **Editor no-op suspicious** — disposition could not be verified."},
+		]
+	) == 2
 
 
 def _autofix_payload(**overrides) -> dict:
@@ -1123,6 +1133,25 @@ def test_autofix_report_dispatches_past_streak_threshold() -> None:
 		assert all(call[:1] != ["api"] or "/dispatches" in " ".join(call) for call in state["calls"])
 
 
+def test_autofix_report_counts_interleaved_post_editor_failures() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-interleaved-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(
+			tmp,
+			comments=[
+				{"body": AUTOFIX_SUMMARY_COMMENT},
+				{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+				{"body": AUTOFIX_SUMMARY_COMMENT},
+				{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+			],
+			flags={"EDITOR_CHANGES_LOST": "true", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "3"},
+		)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "dispatched pr=4174 failure=editor_changes_lost streak=3" in result.stdout
+		assert len(_state(state_file)["dispatches"]) == 1
+
+
 def test_autofix_report_skip_paths() -> None:
 	cases = [
 		("below_streak", [], {"AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, "skip reason=below_streak pr=4174 reason=editor_empty_noop streak=1 threshold=2"),
@@ -1178,7 +1207,10 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	assert names.index("Append review pipeline iteration summary") < report_index < names.index("Cleanup temporary artifacts")
 	step = steps[report_index]
 	assert step["continue-on-error"] is True
-	assert "failure()" in step["if"] and "WORKFLOW_HEAL_ENABLED" in step["if"] and "RESOLVER_ESCALATED" in step["if"]
+	assert step["if"].startswith(
+		"(failure() || env.EDITOR_CHANGES_LOST == 'true' || env.EDITOR_NOOP_SUSPICIOUS == 'true') &&"
+	)
+	assert "WORKFLOW_HEAL_ENABLED" in step["if"] and "RESOLVER_ESCALATED" in step["if"]
 	assert "${{" not in step["run"]
 	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}"
 	assert step["env"]["REPORT_WORKFLOW_NAME"] == "${{ github.workflow }}"

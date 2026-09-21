@@ -1191,7 +1191,9 @@ through `clarify → plan → implement → review`.
   consecutive failed review runs, counted from the failure comments the
   workflow posts on the PR (`AI review/autofix produced no output`,
   `AI review/autofix failed`, `AI review/autofix encountered a post-editor
-  failure`; an `AI autofix editor summary` ends the streak). A single
+  failure`, `Editor changes lost`, or `Editor no-op suspicious`). An `AI
+  autofix editor summary` ends the streak only when a newer failure comment
+  does not show that the same run failed after posting its summary. A single
   retryable failure stays with the stall poller's retry. The report carries
   the run's `finalize_reason` (or the editor flag that fired:
   `editor_empty_noop`, `editor_changes_lost`, `editor_refusal`), the
