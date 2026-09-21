@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends the existing `tests/e2e_smoke_canary.txt` orchestrator-smoke fixture\nScope-mode justification: The complete fix is a single exact replacement, so no expansion is needed. This follows \u00a76 priorities by favoring correctness and safety over shortcuts while strictly respecting the declared file scope.\n\n## Planning ref\n\n- Commit: `137a2dd79c0343eaff936008e5818df0d41e65b4`\n- Branch: `orchestrator/project-4220`\n- Integration metadata matches the checked-out branch.\n\n## Automation integration\n\n- Modifies an existing fixture only; no new script or dependency.\n- Existing entry point: orchestrator smoke flow in `.github/workflows/test-and-mark-stable.yml`.\n- No scheduler, supervisor, database operation, or removal-registry entry required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace its current three-line content with:\n    1. `status: ok`\n    2. `decompose-run: 35601057512`\n\nNo other files should change.\n\n## Functions or modules\n\nNone. This is a plain-text fixture update.\n\n## Data structures affected\n\nThe canary file changes from three records to exactly two ordered lines.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the complete file\n\n- **Chosen:** Rewrite the fixture to the exact requested two-line payload.\n- **Alternatives considered:** Edit only the existing identifier line while retaining `updated-by`; append the new line without removing old content.\n- **Why:** Both alternatives violate the exact-content and no-additional-lines requirements.\n\n### D2 \u2014 Preserve a normal text-file terminator\n\n- **Chosen:** End the second line with one terminal newline, without a third blank line.\n- **Alternatives considered:** Omit the terminal newline; leave trailing spaces.\n- **Why:** A terminal newline terminates the second line without adding another line, while trailing spaces would violate exact matching.\n\n## Security considerations\n\n- No trust boundary, authorization surface, secret, external input, network call, or money-handling path changes.\n- Abuse prevention is provided by the strict one-file scope and byte-level content verification.\n\n## Risks and edge cases\n\n- Existing content conflicts with the issue: it currently contains `run_id: 26151428977` and `updated-by: ai-pipeline`.\n- Retaining either old line, adding blank lines, or adding trailing spaces would fail the acceptance criteria.\n- Unrelated workflow or test updates would violate `files_touched`.\n\n## Testing considerations\n\n- Verify exact bytes equal `status: ok\\ndecompose-run: 35601057512\\n`.\n- Verify `splitlines()` returns exactly the two requested strings in order.\n- Run `git diff --check`.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n\n## Assumptions and missing context\n\n- Assumption: one terminal newline is a line terminator, not an additional blank line.\n- No required context is missing.\n\n## Pre-execution self-check\n\n- Scope is explicit and limited to one existing file.\n- Required target values are fully specified.\n- Planning ref matches the integration branch.\n- No interface, dependency, scheduler, or security changes are needed.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fd477e7484a645ba2378b0849a78c0affbf4df54843b8997d25007e7a8b9156f",
+  "lineage": {
+    "issue_number": 4221,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35601605939",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35601605939",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4221"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260921125246_254419f74f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4221,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35601605939"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4221",
+  "timestamps": {
+    "created_at": "2026-09-21T12:52:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
