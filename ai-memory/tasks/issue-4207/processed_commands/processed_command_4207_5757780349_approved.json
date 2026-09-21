@@ -5,13 +5,26 @@
   "entry_id": "processed_command_4207_5757780349_approved",
   "issue_number": 4207,
   "metadata": {
+    "branch": "ai/issue-4207",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/mark-stable.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/4207-release-tag-push-retry.md",
+      "tests/test_mark_stable_release_tag_refspec_contract.py"
+    ],
+    "issue_number": 4207,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4207",
+    "pr_number": 4209,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4209",
+    "run_attempt": "1",
+    "run_id": "35579627801",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/35579627801"
   },
   "run_attempt": 1,
   "run_id": "35579627801",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-21T08:48:11Z",
+  "status": "completed",
+  "timestamp": "2026-09-21T09:00:40Z",
   "workflow": "implement"
 }
