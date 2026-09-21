@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What concrete improvement should this issue deliver?\nChoices:\nA. Fix a bug \u2014 provide the affected workflow, observed behavior, expected behavior, and reproduction steps. (RECOMMENDED)\nB. Add or change a capability \u2014 name the pipeline phase and required user-visible outcome.\nC. Improve documentation or usability \u2014 name the target page/tool, audience, and missing outcome.",
+  "fingerprint": "31723db37c5b32cf84345939ee13e9ef46b669363b84fe35f1d72be895167457",
+  "lineage": {
+    "issue_number": 4177,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35548397539",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35548397539",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260921004501_9f874f77fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4177,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35548397539"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4177 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-21T00:45:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
