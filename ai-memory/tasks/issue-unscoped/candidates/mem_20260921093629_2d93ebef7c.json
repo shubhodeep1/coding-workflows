@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:404 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: `head_branch` is assigned from the PR's target/base branch ref instead of the source/head branch ref.\n  WHY: The heal issue and diagnosis context identify the base/integration branch as the failed or head branch while `head_sha` correctly identifies the source commit, misleading diagnosis and triage.\n\n- scripts/workflow_failure_heal_autofix_report.sh:157 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fallback PR-fetch failure path suppresses `gh` stderr and emits only `skip reason=pr_fetch_failed`.\n  WHY: Operators cannot distinguish API, authentication, not-found, rate-limit, or transport failures, making the missing heal issue difficult to diagnose.\n\n- scripts/workflow_failure_heal.py:105 and validate_payload lines 459-466 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The restrictive failure-reason validation can reject otherwise well-formed `autofix_failure` reports when a future `finalize_reason` falls outside the allowed charset.\n  WHY: `validate_payload` raises before intake deduplication or fingerprinting, dropping the report without a heal issue and leaving only a generic validation warning.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py\n  Line or code reference: 404\n  Problem: `head_branch` is assigned from `pr.get(\"base\", {}).get(\"ref\")` (the PR's target branch) instead of `pr.get(\"head\", {}).get(\"ref\")` (the PR's source branch).\n  Why it fails at runtime: The payload field is named `head_branch`, but the field carries the base branch; the heal issue body shows the base as the failed branch while the head SHA identifies the source branch, misleading triage.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py\n  Line or code reference: 404: head_branch = str(pr.get(\"base\", {}).get(\"ref\") or \"\")\n  Problem: head_branch is assigned the pull request target (base) branch ref instead of the source (head) branch ref.\n  Why it fails at runtime: The heal issue payload will incorrectly identify the target branch as the branch that failed, potentially misleading developers or the diagnosis model during failure investigation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py\n  Line or code reference: line 404 (`head_branch = str(pr.get(\"base\", {}).get(\"ref\") or \"\") if isinstance(pr.get(\"base\"), dict) else \"\"`)\n  Problem: The variable is named `head_branch` but is read from `pr.get(\"base\", {}).get(\"ref\")` instead of `pr.get(\"head\", {}).get(\"ref\")`.\n  Why it fails at runtime: The payload's `head_branch` is the PR's target branch, while `head_sha` is the feature-branch commit; `_context_lines` and the intake diagnosis prompt therefore present mismatched branch context.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n\n- scripts/workflow_failure_heal_autofix_report.sh\n  Line or code reference: line 157 (`if ! gh_retry gh api --method GET \"repos/${REPO}/pulls/${PR}\" > \"${PR_JSON_FILE}\" 2>/dev/null; then`)\n  Problem: The fallback PR-fetch failure path sends `gh` stderr to `/dev/null` and emits only the `skip reason=pr_fetch_failed` log line before `exit 0`.\n  Why it fails at runtime: A real API error is invisible beyond the skip line, so operators cannot distinguish a deleted PR from missing permissions, rate limiting, or a transient transport failure.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n\n- scripts/workflow_failure_heal.py\n  Line or code reference: line 105 (`_FAILURE_REASON_RE = re.compile(r\"^[a-z][a-z0-9_:-]{0,79}$\")`) and validate_payload lines 459-466\n  Problem: The restrictive failure-reason regex can cause an unrecognized `finalize_reason` to be coerced to `None`, rejecting an otherwise well-formed `autofix_failure` payload.\n  Why it fails at runtime: `validate_payload` raises before intake deduplication or fingerprinting, dropping the report without a heal issue when a future reason falls outside the accepted charset.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py\n  Line or code reference: `build_autofix_failure_payload`, line 404: `head_branch = str(pr.get(\"base\", {}).get(\"ref\") or \"\") if isinstance(pr.get(\"base\"), dict) else \"\"`\n  Problem: `head_branch` reads from `pr[\"base\"][\"ref\"]` instead of `pr[\"head\"][\"ref\"]`.\n  Why it fails at runtime: Every `autofix_failure` report names the wrong branch in the heal issue and model context, while `head_sha` correctly points to the PR's head commit.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/workflow_failure_heal.py\n  Line or code reference: build_autofix_failure_payload:404 (head_branch = str(pr.get(\"base\", {}).get(\"ref\") or \"\"))\n  Problem: head_branch reads pr.base.ref while head_sha on line 403 reads pr.head.sha.\n  Why it fails at runtime: Heal issue and model context name the base/integration branch as the head branch, misleading diagnosis of where the failing editor run occurred.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal.py\n  Line or code reference: build_autofix_failure_payload, line 404: `head_branch = str(pr.get(\"base\", {}).get(\"ref\") or \"\") if isinstance(pr.get(\"base\"), dict) else \"\"`\n  Problem: `head_branch` is read from `pr.get(\"base\", {}).get(\"ref\")` instead of `pr.get(\"head\", {}).get(\"ref\")`.\n  Why it fails at runtime: The heal issue body and diagnosis prompt display the PR's base/target branch as the head branch, contradicting `head_sha` and misleading the diagnosis model and human operators.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0e7aa7a3cacaed4eb35264b3034f40e0ee5d1fe8649c9dbb4124d3bd50f2d4e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4208,
+    "run_id": "35579290710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35579290710",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921093629_2d93ebef7c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4208,
+    "run_id": "35579290710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-21T09:36:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
