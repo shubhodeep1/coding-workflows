@@ -1762,6 +1762,42 @@ def test_staged_support_workspace_restore_then_reinstall_round_trip() -> None:
 		assert committed == ["README.md"], committed
 
 
+def test_staged_support_workspace_reinstall_skips_editor_head_entries_outside_staged_ledger() -> None:
+	"""Regression for implement runs 35614385686..35656715219 (#4227 / #4242).
+
+	The editor's own pytest run inherited STAGED_SUPPORT_EDITOR_HEAD_LEDGER and
+	appended a fixture path to the live editor-head ledger. Such an entry is not
+	in STAGED_SUPPORT_LEDGER, so it cannot be a SCRIPT_REF copy: reinstall logs
+	it and moves on instead of failing closed on the missing base copy, and the
+	commit helper still commits the editor's real change.
+	"""
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_unknown_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		helper = repo_dir / "scripts" / "helper.sh"
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		stray = repo_dir / "scripts" / "stray_fixture.sh"
+		stray.write_text("#!/usr/bin/env bash\necho stray\n", encoding="utf-8")
+		with _editor_head_ledger(env).open("a", encoding="utf-8") as ledger_handle:
+			ledger_handle.write("scripts/stray_fixture.sh\n")
+			ledger_handle.write("scripts/never_existed.sh\n")
+
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALLED path=scripts/helper.sh" in proc.stdout
+		assert "::warning::IMPLEMENT_STAGED_SUPPORT_EDITOR_HEAD_LEDGER_UNKNOWN_PATH path=scripts/stray_fixture.sh reason=not_in_staged_ledger" in proc.stdout
+		assert "::warning::IMPLEMENT_STAGED_SUPPORT_EDITOR_HEAD_LEDGER_UNKNOWN_PATH path=scripts/never_existed.sh reason=not_in_staged_ledger" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING" not in proc.stdout + proc.stderr
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=1 edited_from_head=0 unknown=2" in proc.stdout
+		assert helper.read_text(encoding="utf-8") == _STAGED_HELPER_MAIN
+		assert stray.read_text(encoding="utf-8") == "#!/usr/bin/env bash\necho stray\n"
+		# An unsafe entry still fails closed ahead of the membership check.
+		with _editor_head_ledger(env).open("a", encoding="utf-8") as ledger_handle:
+			ledger_handle.write("../outside.sh\n")
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 1
+		assert "IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=../outside.sh reason=unsafe_path" in proc.stdout
+
+
 def test_staged_support_workspace_editor_edit_of_branch_file_commits_without_rebase() -> None:
 	"""Regression for #4113 (run 35072286584): the editor edits the branch's
 	own helper, so an edit on a line the branch changed is a plain edit and

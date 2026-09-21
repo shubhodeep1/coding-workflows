@@ -46,6 +46,18 @@
 #   - Fails closed (exit 1) on an unsafe ledger path or a missing base copy,
 #     matching implement_commit_changes.sh, so an inconsistent inventory never
 #     silently leaves SCRIPT_REF copies in the editor's view.
+#   - `reinstall` only acts on editor-head ledger entries that are also in
+#     STAGED_SUPPORT_LEDGER. `restore` is the only writer of the editor-head
+#     ledger and it only records staged paths, so any other entry was written
+#     by something else that inherited STAGED_SUPPORT_EDITOR_HEAD_LEDGER from
+#     the job environment (the editor's own pytest run of
+#     tests/test_implement_post_codex_recovery.py appended its fixture path
+#     `scripts/helper.sh` during implement runs 35614385686, 35628923735,
+#     35642366131 and 35656715219 and the reinstall failed closed on it).
+#     Such an entry cannot be a SCRIPT_REF copy, so it is logged as
+#     IMPLEMENT_STAGED_SUPPORT_EDITOR_HEAD_LEDGER_UNKNOWN_PATH and skipped;
+#     the commit helper never consults the editor-head ledger for a path
+#     outside the staged inventory either.
 #   - Every decision is logged under the IMPLEMENT_STAGED_SUPPORT_EDITOR_*
 #     keys; the summary line is IMPLEMENT_STAGED_SUPPORT_EDITOR_<MODE>.
 #   - No GitHub API calls; git operations are local to the workspace.
@@ -139,11 +151,17 @@ if [ ! -f "${editor_head_ledger}" ]; then
 fi
 reinstalled=0
 edited=0
+unknown=0
 while IFS= read -r staged_path; do
   [ -n "${staged_path}" ] || continue
   if _unsafe_path "${staged_path}"; then
     echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=${staged_path} reason=unsafe_path"
     exit 1
+  fi
+  if ! grep -Fqx -- "${staged_path}" "${staged_support_ledger}"; then
+    echo "::warning::IMPLEMENT_STAGED_SUPPORT_EDITOR_HEAD_LEDGER_UNKNOWN_PATH path=${staged_path} reason=not_in_staged_ledger; not a staged support copy, leaving the workspace path alone."
+    unknown=$((unknown + 1))
+    continue
   fi
   staged_base="${staged_support_base_dir}/${staged_path}"
   if [ ! -f "${staged_base}" ]; then
@@ -181,5 +199,5 @@ while IFS= read -r staged_path; do
     edited=$((edited + 1))
   fi
 done < "${editor_head_ledger}"
-echo "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=${reinstalled} edited_from_head=${edited}"
+echo "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=${reinstalled} edited_from_head=${edited} unknown=${unknown}"
 exit 0
