@@ -1203,6 +1203,31 @@ through `clarify → plan → implement → review`.
   escalations are left to the `ai:resolver-escalated` label path. The
   reporter never fails the review job; stable log lines are prefixed
   `WORKFLOW_HEAL_AUTOFIX_REPORT`.
+- **Trigger (implementation failures):** the implement workflow itself
+  (`implement.yml`, so consumers need no new wrapper) reports a failed run on
+  an issue from its failure path via
+  `scripts/workflow_failure_heal_implement_report.sh`, but only once the same
+  issue has accumulated `WORKFLOW_HEAL_IMPLEMENT_FAILURE_STREAK` (default 2)
+  consecutive failed implementation runs, counted from the failure comments
+  the workflow posts on the issue (`AI implementation workflow failed for
+  …`, `AI implementation workflow was cancelled/timed out for …`). Plan,
+  `/approved` and stall-recovery comments between two failures are neutral;
+  a `BLOCKED` verdict, a pathspec halt or a no-op comment ends the streak
+  because those paths route the issue elsewhere (`ai:blocked`, the
+  `ai:needs-human` label path, `ai:implementation-failed`). A single failure
+  stays with the stall poller's retry. The step runs under the same gates as
+  the failure comment: destructive / scope / staged-support latches use their
+  own labels and a diagnose-handled failure already opened fix-up issues. The
+  report carries the run's `failure_reason` (`workflow_failure` or
+  `cancelled_or_timed_out`), the run's log tails as evidence, and this run
+  plus the runs linked from the issue's failure comments as run references,
+  so the intake fetches the job logs of the whole streak; the failing step's
+  `::error::` annotation signs the fingerprint. The reporter never fails the
+  implement job; stable log lines are prefixed
+  `WORKFLOW_HEAL_IMPLEMENT_REPORT`. Incident: implement runs 35614385686,
+  35628923735, 35642366131 and 35656715219 (#4227 / #4242) failed four times
+  on one defect while the stall poller retried and re-issued, and no
+  escalation label was ever applied, so nothing reached the heal path.
 - **Trigger (releases):** `workflow_run: completed` with conclusion `failure`
   or `timed_out` on `Test & Mark Stable Release`, `Mark Stable Release`,
   `Promote main to stable`, `Auto release stable`, and
@@ -1498,6 +1523,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead. |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
+| `WORKFLOW_HEAL_IMPLEMENT_FAILURE_STREAK` | `2` | Consecutive failed implementation runs on one issue before `implement.yml` reports the failure to the workflow failure heal intake (`WORKFLOW_HEAL_IMPLEMENT_REPORT`). Counted from the workflow's own failure comments on the issue; retries between failures are neutral. `1` reports the first failure; `0` or a non-number falls back to `2`. |
 | `WORKFLOW_HEAL_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-5.6-sol`) | coding-workflows only. Diagnosis model for the workflow failure heal intake. |
 | `THINKING_LEVEL_WORKFLOW_HEAL` | `xhigh` | coding-workflows only. Reasoning effort for the heal diagnosis call. |
 | `VERBOSITY_WORKFLOW_HEAL` | `low` | coding-workflows only. Codex verbosity for the heal diagnosis call. |

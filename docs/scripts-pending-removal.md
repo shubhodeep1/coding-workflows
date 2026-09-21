@@ -53,9 +53,9 @@ Copy this block when adding a new entry:
 
 ## Entries
 
-### `scripts/workflow_failure_heal_report.sh` + `scripts/workflow_failure_heal_autofix_report.sh` + `scripts/workflow_failure_heal_intake.sh` + `scripts/workflow_failure_heal.py` + `.github/workflows/workflow_failure_heal.yml` + `.github/workflows/workflow-failure-heal-intake.yml`
+### `scripts/workflow_failure_heal_report.sh` + `scripts/workflow_failure_heal_autofix_report.sh` + `scripts/workflow_failure_heal_implement_report.sh` + `scripts/workflow_failure_heal_intake.sh` + `scripts/workflow_failure_heal.py` + `.github/workflows/workflow_failure_heal.yml` + `.github/workflows/workflow-failure-heal-intake.yml`
 
-- **Introduced in:** #4165 (2026-09-20)
+- **Introduced in:** #4165 (2026-09-20); `scripts/workflow_failure_heal_implement_report.sh` in #4243 (2026-09-21)
 - **Type:** long-running
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**
@@ -63,6 +63,7 @@ Copy this block when adding a new entry:
   - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:workflow-heal"` returns `[]` (no heal issue is waiting on the pipeline), or a replacement heal path owns those issues.
   - `rg -n 'ai-workflow-failure-heal.yml' workflow-templates/profiles/full.txt agents.md` shows the consumer wrapper is no longer delivered, i.e. consumers have been moved off the report path first.
   - `rg -n 'workflow_failure_heal_autofix_report.sh' .github/workflows/review_autofix.yml scripts/stage_workflow_support.sh` shows the review/autofix failure reporter step and its staging entry have been removed first.
+  - `rg -n 'workflow_failure_heal_implement_report.sh' .github/workflows/implement.yml` shows the implement failure reporter step ("Report implementation failure to workflow failure heal") and its optional staging loop have been removed first.
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 

@@ -94,10 +94,23 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `autofix_failure`): it reports a failed review/autofix run on a pull
     request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2) runs in a
     row failed on that PR, counted from the workflow's own failure comments,
-    so the stall poller's single retry is not pre-empted. On by
+    so the stall poller's single retry is not pre-empted. A fourth reporter
+    lives in the failure path of `implement.yml`
+    (`scripts/workflow_failure_heal_implement_report.sh`, payload kind
+    `implement_failure`): it reports a failed implementation run on an issue
+    once `WORKFLOW_HEAL_IMPLEMENT_FAILURE_STREAK` (default 2) runs in a row
+    failed on that issue, counted from the `AI implementation workflow
+    failed for …` comments (retries between failures are neutral; a BLOCKED
+    verdict, pathspec halt or no-op comment ends the streak), under the same
+    gates as the failure comment, with this run and the runs the failure
+    comments link as run references. Incident: implement runs 35614385686,
+    35628923735, 35642366131 and 35656715219 (#4227 / #4242) failed four
+    times on one defect with no escalation label, so the label path never
+    fired. On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
-    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL`.
+    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_IMPLEMENT_REPORT`,
+    `WORKFLOW_HEAL`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -273,7 +286,13 @@ a new value, add it to the appropriate overrides file with a
   `ai:needs-human`. Log keys: `IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORED`,
   `IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALLED`, `IMPLEMENT_STAGED_SUPPORT_EDITOR_SKIPPED`,
   `IMPLEMENT_STAGED_SUPPORT_EDITOR_SKIPPED_PATH`, `IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE`,
-  `IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL`, `IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD`.
+  `IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL`, `IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD`,
+  `IMPLEMENT_STAGED_SUPPORT_EDITOR_HEAD_LEDGER_UNKNOWN_PATH`. `reinstall` acts only
+  on editor-head ledger entries that are also in `STAGED_SUPPORT_LEDGER`; any other
+  entry (only something that inherited `STAGED_SUPPORT_EDITOR_HEAD_LEDGER` from the
+  job environment can write one) is logged under that last key with
+  `reason=not_in_staged_ledger` and skipped, and the summary line carries
+  `unknown=<n>`. Unsafe paths still fail closed ahead of that check.
 - Staged-support failures are consumed by the runtime-preserved rejection handler,
   which attempts and verifies the `ai:needs-human` latch, comments with the affected paths and
   latch status, sends the configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.
@@ -374,10 +393,11 @@ a new value, add it to the appropriate overrides file with a
   editor-head ledger. Incident: implement runs 35614385686, 35628923735,
   35642366131 and 35656715219 (issues #4227 / #4242, project #4139) each
   finished the editor with a complete change set, then the editor's own
-  pytest run of `tests/test_implement_post_codex_recovery.py` appended
-  `scripts/helper.sh` to `/tmp/codex-implement-<run>/staged_support_editor_head.txt`,
-  and the post-editor `reinstall` failed closed with
-  `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh`. The stall
+  pytest run of `tests/test_implement_post_codex_recovery.py` appended its
+  fixture path (`helper.sh` under `scripts/`, which is not a tracked file) to
+  `/tmp/codex-implement-<run>/staged_support_editor_head.txt`, and the
+  post-editor `reinstall` failed closed with
+  `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=<that fixture path>`. The stall
   poller retried twice, the stall judge re-issued #4227 as #4242, and the
   replacement failed the same way. The second nested run in
   `tests/test_pytest_git_env_isolation.py` pins this contract against a
@@ -1042,6 +1062,7 @@ and shipped:
 - `CHECK_TRIAGE`
 - `WORKFLOW_HEAL_REPORT`
 - `WORKFLOW_HEAL_AUTOFIX_REPORT`
+- `WORKFLOW_HEAL_IMPLEMENT_REPORT`
 - `WORKFLOW_HEAL`
 - `WORKTREE_REGISTER`
 - `WORKTREE_DEREGISTER`
@@ -1214,6 +1235,7 @@ LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
 LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
+LOG_PREFIX.name=WORKFLOW_HEAL_IMPLEMENT_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKTREE_REGISTER
 LOG_PREFIX.name=WORKTREE_DEREGISTER

@@ -32,6 +32,8 @@ INTERNAL_WRAPPER = REPO_ROOT / ".github" / "workflows" / "internal-workflow-fail
 CONSUMER_TEMPLATE = REPO_ROOT / "workflow-templates" / "ai-workflow-failure-heal.yml"
 AUTOFIX_REPORT_SCRIPT = SCRIPTS_DIR / "workflow_failure_heal_autofix_report.sh"
 REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+IMPLEMENT_REPORT_SCRIPT = SCRIPTS_DIR / "workflow_failure_heal_implement_report.sh"
+IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 STAGE_SUPPORT_SCRIPT = SCRIPTS_DIR / "stage_workflow_support.sh"
 PROMPT_FILE = REPO_ROOT / "prompts" / "mode-workflow-failure-heal.txt"
 LABEL_CONTRACT = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
@@ -186,7 +188,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 def test_stable_log_prefixes_are_registered() -> None:
 	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
-	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL"):
+	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_IMPLEMENT_REPORT", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
 
@@ -1220,3 +1222,365 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	staging = STAGE_SUPPORT_SCRIPT.read_text(encoding="utf-8")
 	optional = re.search(r'^OPTIONAL_BOOTSTRAP_SCRIPTS="([^"]*)"', staging, re.MULTILINE)
 	assert optional and {"workflow_failure_heal.py", "workflow_failure_heal_autofix_report.sh"} <= set(optional.group(1).split())
+
+
+# ---------------------------------------------------------------------------
+# Implement-failure reports (implement.yml failure path)
+# ---------------------------------------------------------------------------
+
+IMPLEMENT_FAILED_COMMENT = (
+	f"AI implementation workflow failed for https://github.com/{CONSUMER_REPO}/issues/4227. "
+	f"Run: https://github.com/{CONSUMER_REPO}/actions/runs/35642366131"
+)
+IMPLEMENT_CANCELLED_COMMENT = (
+	f"AI implementation workflow was cancelled/timed out for https://github.com/{CONSUMER_REPO}/issues/4227. "
+	f"Run: https://github.com/{CONSUMER_REPO}/actions/runs/35628923735"
+)
+IMPLEMENT_APPROVED_COMMENT = "/approved\n\n_Standalone stall recovery: implementation stalled. Re-triggering implementation._"
+IMPLEMENT_PLAN_COMMENT = "Implementation Plan\n\nScope-mode: Hold Scope\n\nSTATUS: CLEAR"
+IMPLEMENT_BLOCKED_COMMENT = "Implementation blocked: human input required.\n\nReason: the plan needs credentials"
+IMPLEMENT_NOOP_COMMENT = "⚠️ AI implementation produced no repository changes despite an approved plan."
+IMPLEMENT_JOB_LOG = (
+	"2026-09-21T19:21:23.9484299Z ##[error]IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh; cannot reinstall the support-ref copy.\n"
+	"2026-09-21T19:21:23.9488280Z ##[error]Process completed with exit code 1.\n"
+)
+
+
+def test_count_implement_failure_streak_reads_trailing_failure_comments() -> None:
+	comments = [
+		{"body": IMPLEMENT_FAILED_COMMENT},
+		{"body": IMPLEMENT_APPROVED_COMMENT},
+		{"body": IMPLEMENT_CANCELLED_COMMENT},
+		{"body": IMPLEMENT_PLAN_COMMENT},
+		{"body": IMPLEMENT_APPROVED_COMMENT},
+		{"body": IMPLEMENT_FAILED_COMMENT},
+		{"body": "<!-- tg_cleanup:4993,5010,5032 -->"},
+	]
+	# Retries between failures are neutral: the whole run of failures counts.
+	assert heal.count_implement_failure_streak(comments) == 3
+	assert heal.count_implement_failure_streak([]) == 0
+	assert heal.count_implement_failure_streak([{"body": IMPLEMENT_APPROVED_COMMENT}]) == 0
+	# A path that already routes the issue elsewhere ends the streak.
+	assert heal.count_implement_failure_streak([{"body": IMPLEMENT_FAILED_COMMENT}, {"body": IMPLEMENT_BLOCKED_COMMENT}]) == 0
+	assert heal.count_implement_failure_streak(
+		[{"body": IMPLEMENT_FAILED_COMMENT}, {"body": IMPLEMENT_NOOP_COMMENT}, {"body": IMPLEMENT_FAILED_COMMENT}]
+	) == 1
+	assert heal.count_implement_failure_streak([{"body": None}, "junk", {"body": IMPLEMENT_FAILED_COMMENT}]) == 1
+
+
+def _implement_issue(number: int = 4227, *, title: str = "Complete generated-advisory identity and review-producer integrity binding") -> dict:
+	return {
+		"number": number,
+		"title": title,
+		"body": "Refs #4139\n\n## Context\n\nPR #4174 implemented the main design.",
+		"state": "open",
+		"html_url": f"https://github.com/{CONSUMER_REPO}/issues/{number}",
+		"labels": [{"name": "ai:implementing"}, {"name": "ai:orchestrator-managed"}],
+	}
+
+
+def _implement_payload(**overrides) -> dict:
+	payload = heal.build_implement_failure_payload(
+		repo=CONSUMER_REPO,
+		issue=_implement_issue(),
+		comments=[{"body": IMPLEMENT_FAILED_COMMENT}, {"body": IMPLEMENT_APPROVED_COMMENT}],
+		workflow_name="AI Implement",
+		failure_reason="workflow_failure",
+		failure_evidence="failure_reason=workflow_failure\njob_status=failure\nconsecutive_failed_runs=2\n--- codex_log_attempt_1.txt (tail) ---\n::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh; cannot reinstall the support-ref copy.",
+		failure_streak=2,
+		run_id="500",
+		run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		wrapper_sha=SHA_A,
+		reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		head_branch="ai/issue-4227",
+	)
+	payload.update(overrides)
+	return payload
+
+
+def test_implement_payload_validates_and_links_the_streak_runs() -> None:
+	payload = heal.validate_payload(_implement_payload())
+	assert payload["source_kind"] == "implement_failure"
+	assert payload["issue_number"] == 4227 and payload["label"] is None
+	assert payload["failure_reason"] == "workflow_failure" and payload["failure_streak"] == 2
+	assert payload["head_branch"] == "ai/issue-4227" and payload["head_sha"] is None
+	assert payload["issue_url"] == f"https://github.com/{CONSUMER_REPO}/issues/4227"
+	assert "ai:orchestrator-managed" in payload["labels"]
+	# This run first, then the runs the issue's failure comments link.
+	assert [ref["run_id"] for ref in payload["run_refs"]] == ["500", "35642366131"]
+	assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING" in payload["failure_evidence"]
+
+	# Linked runs are newest first, deduplicated, and bounded by MAX_RUN_REFS.
+	many = heal.build_implement_failure_payload(
+		repo=CONSUMER_REPO,
+		issue=_implement_issue(),
+		comments=[
+			{"body": f"AI implementation workflow failed for x. Run: https://github.com/{CONSUMER_REPO}/actions/runs/1"},
+			{"body": f"AI implementation workflow failed for x. Run: https://github.com/{CONSUMER_REPO}/actions/runs/2"},
+			{"body": f"AI implementation workflow failed for x. Run: https://github.com/{CONSUMER_REPO}/actions/runs/500"},
+			{"body": f"AI implementation workflow failed for x. Run: https://github.com/{CONSUMER_REPO}/actions/runs/3"},
+			{"body": "AI implementation workflow failed for x. Run: https://github.com/other/repo/actions/runs/4"},
+		],
+		workflow_name="AI Implement",
+		failure_reason="workflow_failure",
+		failure_evidence="",
+		failure_streak=5,
+		run_id="500",
+		run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		wrapper_sha=None,
+		reporter_run_url=None,
+	)
+	assert [ref["run_id"] for ref in heal.validate_payload(many)["run_refs"]] == ["500", "3", "2"]
+
+	# Non-streak kinds never carry the streak fields.
+	as_issue = json.loads(json.dumps(_implement_payload()))
+	as_issue["source_kind"] = "issue"
+	as_issue["label"] = "ai:needs-human"
+	validated = heal.validate_payload(as_issue)
+	assert validated["failure_reason"] is None and validated["failure_streak"] is None and validated["failure_evidence"] == ""
+	# A malformed reason is rejected for this kind.
+	try:
+		heal.validate_payload(_implement_payload(failure_reason="Bad Reason!"))
+	except ValueError as exc:
+		assert "implement_failure" in str(exc)
+	else:
+		raise AssertionError("malformed failure_reason must be rejected")
+
+
+def test_compose_implement_issue_title_and_body() -> None:
+	payload = heal.validate_payload(_implement_payload())
+	assert heal.compose_issue_title(payload, workflow_name=None) == (
+		f"Workflow heal: AI Implement failed 2x for {CONSUMER_REPO}#4227 (workflow_failure)"
+	)
+	body = heal.compose_issue_body(
+		payload=payload,
+		diagnosis=DIAG_WORKFLOW_DEFECT,
+		fp=FP_HEX,
+		gen=1,
+		root=FP_HEX,
+		classification="workflow-defect",
+		target_branch="stable",
+		max_depth=3,
+		intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/777",
+		run_summaries=[],
+	)
+	assert "The implement workflow failed repeatedly on one issue" in body
+	assert f"- **Source issue:** https://github.com/{CONSUMER_REPO}/issues/4227 ({CONSUMER_REPO}#4227)" in body
+	assert "- **Failure reason:** `workflow_failure`" in body
+	assert "- **Consecutive failed implementation runs on this issue:** 2" in body
+	assert "- **Failed on branch:** `ai/issue-4227`" in body
+	assert "Failure evidence from the reporting run (UNTRUSTED, verbatim)" in body
+	assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING" in body
+	assert not AUTO_CLOSE_RE.search(body)
+
+
+def test_intake_implement_failure_signs_the_defect_from_the_job_log() -> None:
+	state = _intake_state(
+		jobs={
+			"500": [
+				{
+					"id": 9001,
+					"name": "implement / implement",
+					"workflow_name": "AI Implement",
+					"conclusion": "failure",
+					"steps": [{"name": "Checkout", "conclusion": "success"}, {"name": "Run Codex implementation", "conclusion": "failure"}],
+				}
+			]
+		},
+		job_logs={"9001": IMPLEMENT_JOB_LOG},
+	)
+	result, state_after, prompt = _run_intake(_implement_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "received source=" + CONSUMER_REPO + " kind=implement_failure issue=4227" in result.stdout
+	assert "workflow=AI Implement step=Run Codex implementation" in result.stdout
+	created = state_after["issues_created"][0]
+	assert created["repo"] == SELF_REPO
+	assert created["title"] == f"Workflow heal: AI Implement failed 2x for {CONSUMER_REPO}#4227 (workflow_failure)"
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert "Failed implementation run on issue #4227" in prompt
+	assert "Failure reason: workflow_failure" in prompt and "Consecutive failed implementation runs on this issue: 2" in prompt
+	assert "Branch: ai/issue-4227" in prompt
+	assert "Failure evidence from the reporting run (UNTRUSTED)" in prompt
+	assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh" in prompt
+	# The escalated issue gets the outcome comment.
+	assert any(c["path"] == f"repos/{CONSUMER_REPO}/issues/4227/comments" for c in state_after["comments_posted"])
+
+	# The same defect reported from a log that only says "exit code 1" gets a
+	# different fingerprint than a log naming the failing helper: the fetched
+	# job log signs the failure.
+	assert heal.fingerprint("AI Implement", "Run Codex implementation", heal.error_signature(IMPLEMENT_JOB_LOG)) != heal.fingerprint(
+		"AI Implement", "Run Codex implementation", heal.error_signature("##[error]Process completed with exit code 1.\n")
+	)
+
+
+def _stage_implement_report(tmp: Path, *, comments: list[dict], flags: dict[str, str], blocked: bool = False, issue: dict | None = None) -> tuple[Path, Path, dict[str, str]]:
+	work, state_file, env = _stage(tmp, with_codex=False)
+	shutil.copy(IMPLEMENT_REPORT_SCRIPT, work / "scripts" / IMPLEMENT_REPORT_SCRIPT.name)
+	runtime = tmp / "runtime"
+	runtime.mkdir(exist_ok=True)
+	(runtime / "issue_meta.json").write_text(json.dumps(issue or _implement_issue()), encoding="utf-8")
+	(runtime / "issue_comments.json").write_text(json.dumps(comments), encoding="utf-8")
+	(runtime / "codex_log_attempt_1.txt").write_text(
+		"Codex implement succeeded with file changes on attempt 1.\n::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh; cannot reinstall the support-ref copy.\n",
+		encoding="utf-8",
+	)
+	if blocked:
+		(runtime / "codex_blocked.flag").write_text("BLOCKED: the plan needs credentials\n", encoding="utf-8")
+	state_file.write_text(json.dumps({}), encoding="utf-8")
+	env.update(
+		{
+			"GITHUB_REPOSITORY": CONSUMER_REPO,
+			"ISSUE_NUMBER": "4227",
+			"GITHUB_RUN_ID": "500",
+			"RUNTIME_DIR": str(runtime),
+			"ISSUE_META_FILE": str(runtime / "issue_meta.json"),
+			"ISSUE_COMMENTS_FILE": str(runtime / "issue_comments.json"),
+			"REPORT_WORKFLOW_NAME": "AI Implement",
+			"REPORT_RUN_URL": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+			"REPORT_WRAPPER_SHA": SHA_A.upper(),
+			"REPORT_JOB_STATUS": "failure",
+			"REPORT_HEAD_BRANCH": "ai/issue-4227",
+			"WORKFLOW_HEAL_PY": str(work / "scripts" / "workflow_failure_heal.py"),
+		}
+	)
+	env.update(flags)
+	return work, state_file, env
+
+
+def test_implement_report_dispatches_past_streak_threshold() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-implement-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_implement_report(tmp, comments=[{"body": IMPLEMENT_FAILED_COMMENT}, {"body": IMPLEMENT_APPROVED_COMMENT}], flags={})
+		result = _run(work / "scripts" / IMPLEMENT_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL_IMPLEMENT_REPORT dispatched issue=4227 failure=workflow_failure streak=2 workflow=AI Implement" in result.stdout
+		state = _state(state_file)
+		assert len(state["dispatches"]) == 1
+		dispatch = state["dispatches"][0]
+		assert dispatch["path"] == f"repos/{SELF_REPO}/dispatches"
+		assert dispatch["body"]["event_type"] == "workflow-failure-heal"
+		payload = heal.validate_payload(dispatch["body"]["client_payload"])
+		assert payload["source_kind"] == "implement_failure" and payload["failure_reason"] == "workflow_failure"
+		assert payload["failure_streak"] == 2 and payload["issue_number"] == 4227
+		assert payload["wrapper_sha"] == SHA_A and payload["workflow_name"] == "AI Implement"
+		assert payload["head_branch"] == "ai/issue-4227"
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500", "35642366131"]
+		assert "consecutive_failed_runs=2" in payload["failure_evidence"]
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh" in payload["failure_evidence"]
+		# No GitHub read was needed: the issue payload and comments came from the run.
+		assert all(call[:1] != ["api"] or "/dispatches" in " ".join(call) for call in state["calls"])
+
+
+def test_implement_report_names_a_cancelled_job() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-implement-cancelled-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_implement_report(tmp, comments=[{"body": IMPLEMENT_CANCELLED_COMMENT}], flags={"REPORT_JOB_STATUS": "cancelled"})
+		result = _run(work / "scripts" / IMPLEMENT_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "dispatched issue=4227 failure=cancelled_or_timed_out streak=2" in result.stdout
+		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"])
+		assert payload["failure_reason"] == "cancelled_or_timed_out"
+
+
+def test_implement_report_skip_paths() -> None:
+	cases = [
+		("below_streak", [], {}, False, "skip reason=below_streak issue=4227 reason=workflow_failure streak=1 threshold=2"),
+		("reset_marker", [{"body": IMPLEMENT_FAILED_COMMENT}, {"body": IMPLEMENT_BLOCKED_COMMENT}], {}, False, "skip reason=below_streak issue=4227 reason=workflow_failure streak=1 threshold=2"),
+		("disabled", [{"body": IMPLEMENT_FAILED_COMMENT}], {"WORKFLOW_HEAL_ENABLED": "false"}, False, "skip reason=disabled"),
+		("blocked_verdict", [{"body": IMPLEMENT_FAILED_COMMENT}], {}, True, "skip reason=blocked_verdict issue=4227"),
+		("missing_context", [{"body": IMPLEMENT_FAILED_COMMENT}], {"ISSUE_NUMBER": "abc"}, False, "skip reason=missing_context"),
+		("dispatch_denied", [{"body": IMPLEMENT_FAILED_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, False, "skip reason=dispatch_denied issue=4227 failure=workflow_failure streak=2"),
+	]
+	for name, comments, flags, blocked, expected in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-implement-{name}-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_implement_report(tmp, comments=comments, flags=flags, blocked=blocked)
+			if flags.get("MOCK_DISPATCH_FAIL"):
+				state_file.write_text(json.dumps({"dispatch_fail": True}), encoding="utf-8")
+			result = _run(work / "scripts" / IMPLEMENT_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, f"{name}: {result.stderr}{result.stdout}"
+			assert f"WORKFLOW_HEAL_IMPLEMENT_REPORT {expected}" in result.stdout, f"{name}: {result.stdout}"
+			# The mock records the attempted dispatch before refusing it.
+			if name != "dispatch_denied":
+				assert not _state(state_file).get("dispatches"), name
+
+	# A smoke-test fixture is never reported, whatever the streak.
+	with tempfile.TemporaryDirectory(prefix="heal-implement-smoke-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_implement_report(
+			tmp,
+			comments=[{"body": IMPLEMENT_FAILED_COMMENT}],
+			flags={},
+			issue=_implement_issue(title="[E2E Smoke Test alt-model] update canary"),
+		)
+		result = _run(work / "scripts" / IMPLEMENT_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL_IMPLEMENT_REPORT skip reason=smoke_test_fixture issue=4227" in result.stdout
+
+	# Threshold 1 reports the first failure; an invalid threshold falls back to 2.
+	with tempfile.TemporaryDirectory(prefix="heal-implement-threshold1-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_implement_report(tmp, comments=[], flags={"WORKFLOW_HEAL_IMPLEMENT_FAILURE_STREAK": "1"})
+		result = _run(work / "scripts" / IMPLEMENT_REPORT_SCRIPT.name, work, env)
+		assert "dispatched issue=4227 failure=workflow_failure streak=1" in result.stdout, result.stdout
+	with tempfile.TemporaryDirectory(prefix="heal-implement-threshold0-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_implement_report(tmp, comments=[], flags={"WORKFLOW_HEAL_IMPLEMENT_FAILURE_STREAK": "0"})
+		result = _run(work / "scripts" / IMPLEMENT_REPORT_SCRIPT.name, work, env)
+		assert "skip reason=below_streak issue=4227 reason=workflow_failure streak=1 threshold=2" in result.stdout, result.stdout
+
+
+def test_implement_report_falls_back_to_the_api_for_the_issue_payload() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-implement-issue-fetch-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_implement_report(tmp, comments=[{"body": IMPLEMENT_FAILED_COMMENT}], flags={"ISSUE_META_FILE": str(tmp / "missing.json")})
+		state_file.write_text(json.dumps({"issues": {"4227": _implement_issue()}}), encoding="utf-8")
+		result = _run(work / "scripts" / IMPLEMENT_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "dispatched issue=4227 failure=workflow_failure streak=2" in result.stdout, result.stdout
+		state = _state(state_file)
+		assert any("repos/%s/issues/4227" % CONSUMER_REPO in call for call in state["calls"] if call[:1] == ["api"])
+		# An unreadable issue is a bounded skip, never a job failure.
+		state_file.write_text(json.dumps({}), encoding="utf-8")
+		result = _run(work / "scripts" / IMPLEMENT_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0
+		assert "WORKFLOW_HEAL_IMPLEMENT_REPORT skip reason=issue_fetch_failed issue=4227 detail=HTTP 404" in result.stdout
+
+
+def test_implement_workflow_wires_the_heal_reporter() -> None:
+	workflow = _yaml(IMPLEMENT_WORKFLOW)
+	steps = workflow["jobs"]["implement"]["steps"]
+	names = [step.get("name") for step in steps]
+	report_index = names.index("Report implementation failure to workflow failure heal")
+	assert names.index("Record implementation run failure event") < report_index < names.index("Stage codex logs for upload (failure only)")
+	step = steps[report_index]
+	assert step["continue-on-error"] is True
+	assert step["if"].startswith("(failure() || cancelled()) &&")
+	# Same gates as the failure comment the streak is counted from, plus the kill switch.
+	comment_step = steps[names.index("Comment on issue failure")]
+	assert step["if"].startswith(comment_step["if"])
+	assert step["if"].endswith("&& !contains(fromJson('[\"false\"]'), vars.WORKFLOW_HEAL_ENABLED)")
+	for gate in (
+		"steps.preflight_destructive_guard.outputs.destructive_commit_blocked == ''",
+		"steps.commit_changes.outputs.scope_violation_blocked == ''",
+		"steps.commit_changes.outputs.staged_support_rebase_conflict == ''",
+		"steps.diagnose_post_codex_failure.outputs.handled != 'true'",
+	):
+		assert gate in step["if"], gate
+	assert "${{" not in step["run"]
+	assert step["env"]["WORKFLOW_HEAL_ENABLED"] == "${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}"
+	assert step["env"]["WORKFLOW_HEAL_IMPLEMENT_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_IMPLEMENT_FAILURE_STREAK || '2' }}"
+	assert step["env"]["REPORT_WORKFLOW_NAME"] == "${{ github.workflow }}"
+	assert step["env"]["REPORT_JOB_STATUS"] == "${{ job.status }}"
+	assert step["env"]["REPORT_HEAD_BRANCH"] == "${{ env.TARGET_BRANCH }}"
+	assert step["env"]["REPORT_WRAPPER_SHA"] == "${{ env.SCRIPT_REF }}"
+	assert 'reporter="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workflow_failure_heal_implement_report.sh"' in step["run"]
+	assert 'WORKFLOW_HEAL_PY="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workflow_failure_heal.py" bash "${reporter}" || true' in step["run"]
+	assert "WORKFLOW_HEAL_IMPLEMENT_REPORT skip reason=reporter_missing" in step["run"]
+	# The reporter and the heal module are staged fail-open with the other optional helpers.
+	staging_step = steps[names.index("Stage workflow support files")]
+	assert "for f in workflow_failure_heal.py workflow_failure_heal_implement_report.sh; do" in staging_step["run"]
+	staging_loop = staging_step["run"].split("for f in workflow_failure_heal.py workflow_failure_heal_implement_report.sh; do", 1)[1].split("done", 1)[0]
+	assert "::notice::" in staging_loop and "::error::" not in staging_loop
+	assert '_fetched_scripts+=("${f}")' in staging_loop and '_staged_support_installed_paths+=("scripts/${f}")' in staging_loop

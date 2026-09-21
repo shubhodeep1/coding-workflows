@@ -11,7 +11,8 @@
 #
 #   1. Validates the payload (every field is re-checked; the body, comments, and
 #      logs stay untrusted data for the model; an `autofix_failure` report from
-#      the review/autofix workflow carries its own evidence text) and applies the skip gates:
+#      the review/autofix workflow and an `implement_failure` report from the
+#      implement workflow carry their own evidence text) and applies the skip gates:
 #      kill switch, unregistered source repo, smoke-test fixture, self run,
 #      downstream release-gate failure already reported by the gate itself.
 #   2. Fetches the failed jobs + a filtered tail of their logs for the linked
@@ -259,6 +260,24 @@ if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	else
 		SIGNATURE="autofix:${FAILURE_REASON:-unknown}"
 	fi
+elif [ "${SOURCE_KIND}" = "implement_failure" ]; then
+	# The implement job's own log carries the distinctive error annotation
+	# (for example `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh`
+	# in runs 35614385686..35656715219), so the fetched logs sign the failure
+	# when they are available; the reporter's evidence is the fallback.
+	[ -n "${PAYLOAD_WORKFLOW_NAME}" ] && FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
+	[ -n "${FIRST_FAILING_STEP}" ] || FIRST_FAILING_STEP="implement:${FAILURE_REASON:-unknown}"
+	if [ "${#LOG_FILES[@]}" -gt 0 ]; then
+		SIG_ARGS=()
+		for f in "${LOG_FILES[@]}"; do
+			SIG_ARGS+=(--log-file "${f}")
+		done
+		SIGNATURE="$(python3 "${HEAL_PY}" error-signature "${SIG_ARGS[@]}" 2>/dev/null || echo "no-error-lines")"
+	elif [ -s "${FAILURE_EVIDENCE_FILE}" ]; then
+		SIGNATURE="$(python3 "${HEAL_PY}" error-signature --log-file "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || echo "no-error-lines")"
+	else
+		SIGNATURE="implement:${FAILURE_REASON:-unknown}"
+	fi
 elif [ "${#LOG_FILES[@]}" -gt 0 ]; then
 	SIG_ARGS=()
 	for f in "${LOG_FILES[@]}"; do
@@ -427,6 +446,14 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "Failure reason: ${FAILURE_REASON}"
 		echo "Consecutive failed review runs on this PR: ${FAILURE_STREAK:-1}"
 		echo "PR labels: $(_pf '.labels | join(", ")')"
+	elif [ "${SOURCE_KIND}" = "implement_failure" ]; then
+		echo "Failed implementation run on issue #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
+		echo "URL: ${ISSUE_URL}"
+		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
+		echo "Failure reason: ${FAILURE_REASON}"
+		echo "Consecutive failed implementation runs on this issue: ${FAILURE_STREAK:-1}"
+		echo "Branch: ${HEAD_BRANCH:-unknown}"
+		echo "Issue labels: $(_pf '.labels | join(", ")')"
 	elif [ -n "${ISSUE_NUMBER}" ]; then
 		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
 		echo "URL: ${ISSUE_URL}"
@@ -446,7 +473,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		_pf '.comments_excerpt'
 		echo
 	fi
-	if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+	if [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "implement_failure" ]; then
 		echo "--- Failure evidence from the reporting run (UNTRUSTED) ---"
 		cat "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || true
 		echo

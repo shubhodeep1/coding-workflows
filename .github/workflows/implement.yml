@@ -1029,6 +1029,24 @@ jobs:
             _staged_support_installed_paths+=("scripts/${f}")
           done
 
+          # Optional: workflow failure heal reporter for repeated implement
+          # failures (README "Workflow Failure Heal"). Fail-open — absent on
+          # ${SCRIPT_REF} means the failure-path step logs reporter_missing
+          # and the run's failure stays with the stall poller's retry.
+          for f in workflow_failure_heal.py workflow_failure_heal_implement_report.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional workflow failure heal helper ${f} is unavailable on ${SCRIPT_REF}; repeated implement failures will not be reported to the heal intake this run."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+            _staged_support_installed_paths+=("scripts/${f}")
+          done
+
           for f in transcript_archive.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -5362,6 +5380,42 @@ jobs:
               --actor "${{ github.actor }}" \
               --metadata-json "$(jq -cn --arg job_status "${{ job.status }}" --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '{job_status: $job_status, run_url: $run_url}')"
           fi
+
+      - name: Report implementation failure to workflow failure heal
+        # Workflow failure heal (README "Workflow Failure Heal"): after the
+        # failure comment and alerts, hand a repeated implementation failure
+        # on this issue to coding-workflows' heal intake so it is diagnosed
+        # and fixed through the normal pipeline. The reporter counts
+        # consecutive failed runs from the issue comments fetched at run start
+        # and reports only past WORKFLOW_HEAL_IMPLEMENT_FAILURE_STREAK
+        # (default 2); a single retryable failure stays with the stall poller.
+        # Gated exactly like "Comment on issue failure": the human-latch paths
+        # (destructive / scope / staged-support) escalate through their own
+        # labels, a diagnose-handled failure opened fix-up issues, and a
+        # BLOCKED verdict is skipped inside the reporter. Fail-open by
+        # construction: the script always exits 0 and the step never blocks
+        # cleanup. Incident: implement runs 35614385686, 35628923735,
+        # 35642366131 and 35656715219 (#4227 / #4242) failed four times on
+        # one defect and nothing reached the heal path.
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == '' && !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          WORKFLOW_HEAL_IMPLEMENT_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_IMPLEMENT_FAILURE_STREAK || '2' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPORT_WRAPPER_SHA: ${{ env.SCRIPT_REF }}
+          REPORT_JOB_STATUS: ${{ job.status }}
+          REPORT_HEAD_BRANCH: ${{ env.TARGET_BRANCH }}
+        run: |
+          set -uo pipefail
+          reporter="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workflow_failure_heal_implement_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_IMPLEMENT_REPORT skip reason=reporter_missing path=${reporter}"
+            exit 0
+          fi
+          WORKFLOW_HEAL_PY="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workflow_failure_heal.py" bash "${reporter}" || true
 
       - name: Stage codex logs for upload (failure only)
         if: (failure() || cancelled()) && env.RUNTIME_DIR != ''
