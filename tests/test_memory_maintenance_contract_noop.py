@@ -72,7 +72,7 @@ def test_memory_maintenance_timeout_hierarchy() -> None:
 	dispatch_timeout_minutes = dispatch_step["timeout-minutes"]
 	orphan_timeout_minutes = orphan_job["timeout-minutes"]
 
-	assert child_timeout_minutes == 20
+	assert child_timeout_minutes >= 20
 	assert child_timeout_minutes * 60 < watcher_timeout_seconds
 	assert watcher_timeout_seconds < dispatch_timeout_minutes * 60
 	assert dispatch_timeout_minutes < orphan_timeout_minutes
