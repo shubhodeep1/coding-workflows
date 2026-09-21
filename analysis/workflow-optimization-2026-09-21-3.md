@@ -242,3 +242,134 @@ Add `ORCHESTRATOR_CYCLE_SUMMARY` with active projects, transitions, skip reasons
 - Serena-disabled runs emit no explicit skipped probe.
 - Cancellation actor/superseding run is unavailable.
 - Telemetry markers are not source-anchored, allowing recursive counting.
+
+## Deep Audit — Workflows & Scripts (2026-09-21)
+
+### Section 1: Bug & Correctness Sweep
+
+Audit coverage: 50 workflows and 142 scripts. All workflow YAML parsed without duplicate keys; all shell scripts passed `bash -n`; all 57 Python scripts parsed successfully. No direct issue/PR title or body interpolation was found inside `run:` bodies.
+
+#### SHELL-001 — Truncation pipelines can fail under `pipefail`
+
+- **File path / lines:** `.github/workflows/plan.yml:1839-1844,1959-1964`; `scripts/review_conflict_prepare.sh:616-634`; `scripts/workflow_failure_heal_intake.sh:604-623`; `scripts/review_apply_fixes.sh:2251-2266`
+- **Severity:** Medium
+- **Category tag:** `shellcheck`
+- **Description:** These strict-mode paths truncate data with producer-to-`head` pipelines such as `cat ... | head -c 10000` and `printf ... | head`. For sufficiently large input, the producer receives SIGPIPE and the pipeline returns non-zero under `set -euo pipefail`, aborting the step instead of merely truncating its diagnostic or memory payload.
+- **Recommended fix:** Read files directly with `head -c N "$file"`. For variables, use `scripts/truncate_to_utf8_byte_cap.py` or write to a temporary file and invoke `head` directly. Use `sed -n '1,10p'` or arrays for line-limited diagnostics.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001 — Review metadata collection bypasses the consolidated GraphQL helper
+
+- **File path / lines:** `scripts/review_collect_pr_metadata.sh:209-226,251-269`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** The normal PR path performs four logical reads: PR metadata, issue comments, review comments, and linked issues. Enabling `REVIEW_BREAK_GLASS_ENABLED` adds a fifth reviews read. Pagination can increase the underlying request count.
+- **Current / proposed calls:** 4 normally or 5 with break-glass → 1 primary GraphQL call.
+- **Recommended fix:** Extend `gh_pr_with_all_comments` in `scripts/gh_helpers.sh:783-930` to return top-level reviews, `closingIssuesReferences`, and head-repository metadata in addition to its current metadata/comments fields. Preserve its REST fail-open fallback and populate all existing artifact files from the consolidated response.
+
+#### API-002 — Clarify fetches the same issue comments twice
+
+- **File path / lines:** `.github/workflows/clarify.yml:457-487`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** With semantic caching enabled, the step first fetches 50 comments into `ISSUE_COMMENTS_FILE`, then immediately fetches the same endpoint paginated at 100 per page for `THREAD_HISTORY_FILE`.
+- **Current / proposed calls:** 2 logical reads → 1.
+- **Recommended fix:** Fetch the paginated comments once with `gh_retry_to_file`; derive the first 50 comments for the bounded prompt artifact and render full thread history from the same cached JSON.
+
+#### API-003 — Adjacent poller reads query identical resources twice
+
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:10230-10242,13731-13733,16413-16421,21397-21399`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** Four paths read the same PR or issue twice consecutively to obtain separate fields: state plus merged status, or title plus body.
+- **Current / proposed calls:** 2 calls per reached site → 1 call per site.
+- **Recommended fix:** Fetch an object once with `_safe_gh_jq`, such as `{state, merged: (.merged_at != null)}` or `{title, body}`, then extract both fields locally. Reuse `_fetch_pr_json` where the PR cache is already available.
+
+#### BATCH-001 — Blocker-state checks perform one REST request per issue
+
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:21222-21243`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** Each implementation-failed item loops over `IF_BLOCKERS_JSON` and reads every blocker issue independently. This is the per-iteration API pattern prohibited by CLAUDE.md §15.
+- **Current / proposed calls:** N blocker reads → `ceil(N / 25)` GraphQL calls, normally 1.
+- **Recommended fix:** Pass `IF_BLOCKERS_JSON` to `_fetch_candidate_issue_details_graphql` at `scripts/orchestrate_poll_process.sh:14483-14613`, which already returns issue state in batches of 25. Missing cache entries can retain the existing `unknown` fail-open behavior.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Identical Semble query-section helper appears three times
+
+- **File path / lines:** `scripts/review_apply_fixes.sh:909-918`; `scripts/review_conflict_prepare.sh:605-614`; `scripts/review_run_reviewers.sh:1760-1769`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** All three files define the same `append_semble_query_section` implementation.
+- **Recommended fix:** Move it to `scripts/semble_helpers.sh` as `semble_append_query_section <label> <path> [max_bytes]`, then update the editor, conflict resolver, and reviewer callers.
+
+#### DUP-002 — Workflow-analysis utilities are copied across Python scripts
+
+- **File path / lines:** `scripts/analyze_workflow_logs.py:40-85`; `scripts/workflow_retro.py:50-99`; `scripts/collect_workflow_logs.py:96-108`; `scripts/cost_audit.py:283-295`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** `_parse_iso8601` is duplicated across four scripts; integer coercion, percentile calculation, and JSON loading are also duplicated across analysis and retro code.
+- **Recommended fix:** Add `scripts/workflow_analysis_utils.py` with `parse_iso8601(value)`, `coerce_int(value, default=0)`, `percentile(values, pct)`, and `load_json(path)`. Import it from the four callers using the repository’s existing direct/package import fallback pattern.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging block exceeds the medium-risk threshold
+
+- **File path / lines:** `.github/workflows/implement.yml:930-1288`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Description:** The parsed YAML `run:` scalar is approximately **16,985 characters**, leaving about **4,015 characters** before GitHub’s 21,000-character limit. It contains three `${{ }}` interpolations and therefore falls within the template-expression limit.
+- **Recommended fix:** Move this step into an `implement` mode in `scripts/stage_workflow_support.sh`, preserving the staged-support ledger and `$GITHUB_ENV` outputs. Keep the workflow step limited to validated environment setup and one script invocation.
+
+No interpolated `run:` block exceeds 18,000 characters. The next-largest is approximately 14,392 characters. No large `if:` expression approaches the limit; the largest measured about 739 characters. No workflow exceeds 800 KB; the largest is `.github/workflows/review_autofix.yml` at 500,755 bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001 — Ledger variables are assigned but never consumed
+
+- **File path / lines:** `scripts/review_issue_ledger.sh:67-104,866-919`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `line_end` is parsed and repeatedly assigned but signature generation only uses `line_start`. `CURRENT_FLOOR` is declared and populated but never read.
+- **Recommended fix:** Remove `line_end` and `CURRENT_FLOOR` assignments to reflect current behavior and prevent future readers from assuming range-end or floor data affects ledger identity.
+
+#### DEAD-002 — Branch-rebuild diagnostic state is discarded
+
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:9183-9259,9707-9711`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `BRANCH_REBUILD_SKIP_REASON` and `BRANCH_REBUILD_LAST_REBUILD_AT` are assigned but never read. Only `BRANCH_REBUILD_ESCALATED_ERROR` reaches the caller’s diagnostics.
+- **Recommended fix:** Emit `BRANCH_REBUILD_SKIPPED reason=<...> last_rebuild_at=<...>` when preflight declines a rebuild, then clear the variables after logging.
+
+#### CONSIST-001 — E2E API helper diverges from shared retry policy
+
+- **File path / lines:** `scripts/comprehensive_test_and_release_gh_api.sh:3-47`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** `gh_api_safe` retries only when stderr contains “rate limit.” HTTP 5xx responses, connection resets, and timeouts fail immediately, unlike the reset-aware transient handling in `scripts/gh_helpers.sh`. This helper is widely used by release and dispatch-watcher polling.
+- **Recommended fix:** Implement `gh_api_safe` as a compatibility wrapper over `gh_retry_to_file` or `gh_api_json_to_file`, retaining `GH_API_SAFE_OUTPUT` and quiet-mode behavior while using the shared retry classifier and backoff.
+
+No `TODO`, `FIXME`, `HACK`, or `XXX` markers were found in scoped files.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 5 | SHELL-001, API-001, BATCH-001, EXPR-001, CONSIST-001 |
+| Low | 6 | API-002, API-003, DUP-001, DUP-002, DEAD-001, DEAD-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 4 | Medium |
+| Code modularization | 9 | Medium |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 7 | Medium |
