@@ -328,13 +328,18 @@ publish_tag_with_remote_verification refs/tags/test "${PUBLICATION_HELPER_MODE}"
 ''',
 		)
 	)
-	publication_environment = {
-		**os.environ,
+	publication_environment = os.environ.copy()
+	publication_environment.pop("BASH_ENV", None)
+	publication_environment.pop("ENV", None)
+	for publication_environment_key in tuple(publication_environment):
+		if publication_environment_key.startswith("BASH_FUNC_"):
+			publication_environment.pop(publication_environment_key)
+	publication_environment.update({
 		"PUBLICATION_HELPER_CALL_LOG": str(publication_call_log),
 		"PUBLICATION_HELPER_EXPECTED_OBJECT_ID": "a" * 40,
 		"PUBLICATION_HELPER_MODE": publication_mode,
 		"PUBLICATION_HELPER_SCENARIO": publication_scenario,
-	}
+	})
 	publication_result = subprocess.run(
 		["bash", "-c", workflow_publication_script],
 		capture_output=True,
@@ -379,11 +384,13 @@ def test_workflow_tag_publication_helper_executes_failure_matrix() -> None:
 			working_directory, "remote-unreadable", "immutable"
 		)
 		assert unreadable_remote.returncode != 0
-		assert unreadable_remote_calls.count("push:origin refs/tags/test") == 3
-		assert unreadable_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 3
+		assert unreadable_remote_calls.count("push:origin refs/tags/test") == 5
+		assert unreadable_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 5
 		assert [call for call in unreadable_remote_calls if call.startswith("sleep:")] == [
 			"sleep:2",
 			"sleep:4",
+			"sleep:8",
+			"sleep:16",
 		]
 		assert "mock ls-remote transport failure" in unreadable_remote.stderr
 
@@ -391,8 +398,8 @@ def test_workflow_tag_publication_helper_executes_failure_matrix() -> None:
 			working_directory, "remote-absent", "immutable"
 		)
 		assert absent_remote.returncode != 0
-		assert absent_remote_calls.count("push:origin refs/tags/test") == 3
-		assert absent_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 3
+		assert absent_remote_calls.count("push:origin refs/tags/test") == 5
+		assert absent_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 5
 		assert "Failed to publish and verify" in absent_remote.stdout
 
 
@@ -512,8 +519,8 @@ def test_workflow_tag_publication_helper_is_bounded_verified_and_fail_closed() -
 		workflow_text = _read(workflow_path)
 		helper_text = _workflow_publication_helper(workflow_text)
 
-		assert "local max_attempts=3" in helper_text, (
-			f"{workflow_path.name}: tag publication retries must be bounded to three attempts"
+		assert "local max_attempts=5" in helper_text, (
+			f"{workflow_path.name}: tag publication retries must be bounded to five attempts"
 		)
 		assert 'sleep "${backoff_seconds}"' in helper_text, (
 			f"{workflow_path.name}: failed publication must back off before retrying"
@@ -523,6 +530,15 @@ def test_workflow_tag_publication_helper_is_bounded_verified_and_fail_closed() -
 		)
 		assert 'git ls-remote --exit-code origin "${tag_ref}"' in helper_text, (
 			f"{workflow_path.name}: a failed push must query the exact remote tag ref"
+		)
+		assert 'mktemp "${RUNNER_TEMP:-/tmp}/release_tag_lsremote_err.XXXXXX"' in helper_text, (
+			f"{workflow_path.name}: remote lookup diagnostics must use an isolated temporary file"
+		)
+		assert '2>"${remote_lookup_error_file}"' in helper_text, (
+			f"{workflow_path.name}: remote lookup stderr must use the isolated temporary file"
+		)
+		assert 'rm -f "${remote_lookup_error_file}"' in helper_text, (
+			f"{workflow_path.name}: remote lookup diagnostic files must be removed after capture"
 		)
 		assert 'if ! expected_object_id="$(git rev-parse "${tag_ref}"' in helper_text, (
 			f"{workflow_path.name}: an unresolved local tag must fail with the helper diagnostic"

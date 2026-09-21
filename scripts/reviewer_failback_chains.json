@@ -2,6 +2,9 @@
   "deepseek/deepseek-v4-pro": [
     "deepseek/deepseek-v3.2"
   ],
+  "google/gemini-3.1-flash-lite": [
+    "google/gemini-3-flash-preview"
+  ],
   "minimax/minimax-m3": [
     "minimax/minimax-m2.5"
   ],
@@ -15,9 +18,12 @@
     "qwen/qwen3.6-plus"
   ],
   "x-ai/grok-4.20": [
-    "x-ai/grok-4.1-fast"
+    "x-ai/grok-4.3"
   ],
   "x-ai/grok-4.6": [
     "x-ai/grok-4.20"
+  ],
+  "z-ai/glm-5.2": [
+    "z-ai/glm-5.3-flashx"
   ]
 }

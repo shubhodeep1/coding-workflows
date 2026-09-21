@@ -69,6 +69,35 @@ Phases of the unattended pipeline (each is a separate workflow file under
     in-flight triage per repo+PR+check and caps the
     auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
     (escalates with `ai:check-triage-escalated` + Telegram at the cap).
+14. **workflow failure heal** (`workflow_failure_heal.yml`,
+    `internal-workflow-failure-heal.yml`, `workflow-failure-heal-intake.yml`,
+    `scripts/workflow_failure_heal_report.sh`,
+    `scripts/workflow_failure_heal_intake.sh`, `scripts/workflow_failure_heal.py`,
+    `prompts/mode-workflow-failure-heal.txt`) — triggers on `issues: labeled` /
+    `pull_request: labeled` with a human-needed escalation label
+    (`ai:needs-human`, `ai:check-triage-escalated`, `ai:destructive-blocked`,
+    `ai:scope-blocked`, `ai:harness-broken`, `ai:resolver-escalated`,
+    `ai:security-pass-failed`) in a consumer or in this repo, and on
+    `workflow_run: completed` failures of the five release / promotion
+    workflows. The reporter links the failed runs and the wrapper release pin
+    and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
+    the intake fetches the failed job logs, diagnoses against the source at
+    that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
+    `Target branch: stable`; `consumer-app-defect` → issue in the consumer;
+    `consumer-config` / `transient` → Telegram + comment only), de-dupes by
+    fingerprint (label `ai:workflow-heal`), caps the lineage at
+    `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
+    `ai:workflow-heal-escalated` + Telegram), and bounds the volume with
+    `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`. A
+    third reporter lives in the failure path of `review_autofix.yml`
+    (`scripts/workflow_failure_heal_autofix_report.sh`, payload kind
+    `autofix_failure`): it reports a failed review/autofix run on a pull
+    request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2) runs in a
+    row failed on that PR, counted from the workflow's own failure comments,
+    so the stall poller's single retry is not pre-empted. On by
+    default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
+    code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
+    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -248,6 +277,31 @@ a new value, add it to the appropriate overrides file with a
 - Staged-support failures are consumed by the runtime-preserved rejection handler,
   which attempts and verifies the `ai:needs-human` latch, comments with the affected paths and
   latch status, sends the configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.
+  Genuine three-way rebase conflicts add
+  `<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->`; missing ledgers,
+  baselines, unsafe paths, and merge-tool failures remain human-gated without that marker.
+  The source-repository poller's `release_staged_support_needs_human_latches` sweep (gated by
+  `STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED`, default `true`) runs in sweep-only mode when no
+  tracking project is active and matches that marker or the exact pre-marker #4113 incident
+  from run `35072286584`, only on comments from an `OWNER`, `MEMBER`, `COLLABORATOR`, or installed
+  `[bot]`, and once the running engine carries
+  `scripts/implement_staged_support_workspace.sh` it restores `ai:awaiting-approval` and posts
+  `/approved` with a `<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict
+  engine=<sha> -->` marker, at most once per issue per engine commit (log keys
+  `STAGED_SUPPORT_LATCH_RELEASED`, `STAGED_SUPPORT_LATCH_SKIP`,
+  `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`). The latest `ai:needs-human` label event must strictly
+  precede the staged-support comment and have the same actor; same-second timestamps fail closed,
+  so clearing that latch and later setting another human gate cannot reuse the stale marker.
+  Immediately before changing labels, the sweep re-reads the paginated live labels and latest
+  latch event; a changed or unreadable latch, or a residual `ai:implementing` label, skips release
+  for that tick. A failed `/approved` response triggers a paginated history check; a trusted
+  release marker confirms an accepted write, while a confirmed failure restores
+  `ai:needs-human`. If that compensation also fails, the unresolved latch marker blocks
+  managed and standalone auto-approval and raises a CRITICAL alert. Those recovery guards use
+  the batched comment cache only when it explicitly reports an available array with fewer than
+  100 entries; a missing/partial field or a full window triggers a paginated history read, and
+  unavailable or malformed history fails closed for that tick.
+  Consumer repositories and other latch reasons stay human-cleared.
 - The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,
   `check_failure_triage.yml`) either never commit from that checkout or run on
@@ -260,6 +314,31 @@ a new value, add it to the appropriate overrides file with a
   pins the ledger, immutable-execution, deleted-path, handler, and restore outcomes.
 
 ---
+
+## Review self-repo support staging runs under main's workflow YAML
+
+- `internal-review.yml` calls the reusable
+  `shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@main`
+  (a `uses:` ref cannot vary per PR), while `review_autofix.yml`'s "Resolve
+  workflow support ref" step sets `SCRIPT_REF=${{ github.sha }}` in this
+  repository. A self-repo PR review therefore executes the PR-head copies of
+  `scripts/*`, `prompts/*`, and `ai-memory/schemas/*` under `main`'s workflow
+  YAML: the step list, the `env:` blocks, and the "Initialize runtime
+  workspace" exports all come from `main`, not from the PR.
+- Consequence for contributors and the unattended editor: a helper on the PR
+  branch may not depend on a new workflow export until that export is on
+  `main`. New variables a staged helper reads must default inside the helper
+  (`unattended_system_instructions.md` §8), typically to a
+  `${RUNTIME_DIR}/<artifact>` path, and the helper should publish the resolved
+  value to `GITHUB_ENV` when later steps consume it.
+- Incident: PR #4174 (`ai/issue-4173`, head `662aacb`) added
+  `LINKED_ISSUE_METADATA_FILE` as a required env of
+  `scripts/review_collect_pr_metadata.sh` together with the matching
+  `review_autofix.yml` export. The export never ran, and review runs
+  35546298657, 35549937758, 35551938072, and 35552937934 all failed in
+  "Collect PR metadata" with `required env LINKED_ISSUE_METADATA_FILE is
+  unset` while the stall poller kept re-dispatching. `main` now exports the
+  variable as well, so the same path is defined on both sides.
 
 ## Test-suite git environment isolation
 
@@ -294,7 +373,7 @@ a new value, add it to the appropriate overrides file with a
 | implement-repair, implement-repair-syntax | `openai/gpt-5.6-sol` | `xhigh` | `low` |
 | implement-diagnose | `openai/gpt-5.6-sol` | `xhigh` | `low` |
 | review autofix editor | `openai/gpt-5.6-sol` | `xhigh` (smoke: `medium`) | `low` |
-| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `moonshotai/kimi-k3`, `deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`, `qwen/qwen3.7-plus`, `x-ai/grok-4.6`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
+| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`, `qwen/qwen3.7-plus`, `x-ai/grok-4.20`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` |
 | review consolidator | `openai/gpt-5.6-sol` | `xhigh` | `low` |
 | conflict resolver | `openai/gpt-5.6-sol` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` |
@@ -331,9 +410,9 @@ callsite (≈20 sites across `scripts/*.sh` and `.github/workflows/*.yml`),
 the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
 writes into `config.toml`, and the `"default_verbosity": "low"` for
 `openai/gpt-5.6-sol` in `scripts/codex_model_catalog.json`. Third-party
-reviewer models (`minimax/minimax-m3`, `moonshotai/kimi-k3`,
-`deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`,
-`qwen/qwen3.7-plus`, `x-ai/grok-4.6`)
+reviewer models (`minimax/minimax-m3`, `z-ai/glm-5.2`,
+`deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`,
+`qwen/qwen3.7-plus`, `x-ai/grok-4.20`)
 carry `support_verbosity = false` in the catalog — codex CLI logs
 `model_verbosity is set but ignored as the model does not support verbosity`
 and continues; the value is operationally moot for those rows. The
@@ -358,9 +437,9 @@ the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` is now
 `function`).
 
 The reviewer-only multi-model run (claude-branch-review) uses third-party
-models (`minimax/minimax-m3`, `moonshotai/kimi-k3`,
-`deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`,
-`qwen/qwen3.7-plus`, `x-ai/grok-4.6`) plus
+models (`minimax/minimax-m3`, `z-ai/glm-5.2`,
+`deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`,
+`qwen/qwen3.7-plus`, `x-ai/grok-4.20`) plus
 `unattended_system_instructions.md` as system context.
 
 ---
@@ -411,7 +490,7 @@ Cycle-local caches that must not be re-fetched per iteration:
 PROFILE.default=full
 PROFILE.name=core manifest=workflow-templates/profiles/core.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml
 PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate.yml,ai-orchestrate-poll.yml,ai-orchestrate-clarify-respond.yml,ai-validate.yml,ai-sync-labels.yml,review_rb_judge_dispatch.yml
-PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-check-failure-triage.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-security-audit.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,review_rb_judge_dispatch.yml
+PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-check-failure-triage.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-security-audit.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,ai-workflow-failure-heal.yml,review_rb_judge_dispatch.yml
 
 ## Immutable consumer wrapper pins
 
@@ -566,6 +645,22 @@ and cycles 2 and 3 were never told to audit as new code.
 Persistent findings after `MAX_SECURITY_PASS_CYCLES` (default `5`)
 terminalize as `ai:security-pass-failed`; `/re-security-pass` resets the
 bounded loop and the next audit covers the full range again.
+The terminal state is engine-aware: every terminal path
+(`security_pass_terminal_failure`, `security_pass_closed_fix_failure`,
+`security_pass_fix_reissue_exhausted`) records the engine commit that ran the
+tick in `security_pass_failed_engine_sha` (`ORCHESTRATOR_ENGINE_SHA`, resolved
+once at startup by `resolve_orchestrator_engine_sha` from `ORCHESTRATE_ENGINE_SHA`
+or the `.codex-workflow-src` HEAD; empty when unresolvable). With
+`SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE` (default `true`), a tick whose
+engine differs from that record, with no `/re-security-pass` comment claiming
+the tick, performs the same reset once per engine commit
+(`security_pass_auto_reset_engine_shas`, last 20 kept, both fields normalized by
+`ensure_security_pass_state_fields`), logs `SECURITY_PASS_AUTO_RESET` or
+`SECURITY_PASS_AUTO_RESET_SKIPPED ... reason=engine_unresolved|same_engine|already_reset_on_engine`,
+and posts a `<!-- security-pass-auto-reset:<sha> -->` tracking comment. A
+legacy state without the record counts as a different engine, so projects
+parked by older engines (binance-blessings#249) re-run on their first tick
+after a sync; the same engine failing a project again never re-fires.
 The budget bounds *persistent* findings, so a recorded clean pass breaks the
 chain: when the integration head advances past a `passed` SHA (a
 `chore: sync <default> into <integration>` merge, a resolver/judge conflict
@@ -605,7 +700,22 @@ looks for the live successor by the durable `- Tracking issue: #<N>` and
 ``- Local ID: `security-pass-fix-cycle-<K>` `` body markers that survive
 re-issue, adopts it into `security_pass_active_fix_issues`, and logs
 `SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`. Both markers must match, so
-another project or another cycle is never adopted. An inconclusive lookup
+another project or another cycle is never adopted. The review-blocked judge's
+`close_and_reissue` replacement carries those markers as well:
+`scripts/review_rb_judge.sh` copies the parent's `**Orchestrator metadata**`
+lines (tracking issue, integration branch, local ID, priority, managed-by) only
+when its tracking and branch lines agree with the GitHub-reported
+`orchestrator/project-<n>` PR base. Missing, malformed, or inconsistent metadata
+falls back to base-derived tracking and branch lines without an unverified local
+ID. The validated block is placed ahead of the review-blocked footer
+(`REISSUE_ORCHESTRATOR_METADATA_CARRIED` / `_ABSENT`), and its spot-fix
+`files_touched` allowlist unions the judge's cited files with the closed PR's
+changed files that still exist at its head (`REISSUE_FILES_TOUCHED_UNION`,
+fail-open on a failed `pulls/<n>/files` listing).
+Before that block is appended, canonical tracking-issue, integration-branch,
+and local-ID lines are removed from the judge-generated issue prose, so only
+the PR-base-validated block can supply successor-adoption lineage. Incident:
+binance-blessings#249 / #294, 2026-09-19. An inconclusive lookup
 (API or parse failure) retains `security-pass-fixing` for retry rather than
 reading a transient read failure as evidence of a failed fix.
 Setting `ENABLE_SECURITY_PASS=false` remains the immediate operator kill switch.
@@ -638,6 +748,37 @@ contain the broker module the findings cite, so the planner emitted
 `/security-pass-waive` path defers the same way. A create that fails keeps the
 row pending for the next merged-state tick; `create_security_pass_advisory_followup`
 clears `followup_pending` and drops the payload when it records the issue.
+Right before the deferred filer, the same merged-state sites call
+`security_pass_unblock_filed_advisory_followups`: each
+`security_pass_followup_issues` row whose issue is not in
+`security_pass_followups_merge_checked` costs one issue GET; an open follow-up
+labelled `ai:blocked` costs one paginated comments GET and gets one
+`/answer [auto-answered-by-poller]` comment unless a trusted
+OWNER/MEMBER/COLLABORATOR User comment carries both that prefix and its durable
+unblock marker (plan.yml moves ai:blocked to ai:planning on `/answer`). Every read
+issue is appended to `security_pass_followups_merge_checked` (deduped,
+last 100; `security_pass_mark_followup_merge_checked`) so it is never re-read
+after a successful state write; failed state writes may repeat the reads, but
+the durable comment marker prevents a second `/answer` POST
+(`SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED ... outcome=answered|not_blocked|closed`,
+`🔓 Security-pass advisory follow-ups re-planned` comment when any were
+answered). The filer records the issues it creates after the merge as checked
+at creation, and the completed-project finalizer re-enters both steps while
+pending waiver rows or unchecked follow-ups remain. The row shape of
+`security_pass_followup_issues` is unchanged. This is what un-parks advisories
+filed before the merge (#4090 / #4091) without a human.
+`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS` (default `2`, `0` = unbounded) bounds
+how many judge rounds may end in `keep_fixing`: `judge_round` beyond the cap
+puts `keep_fixing_available: false` and `max_keep_fixing_rounds` in the
+diagnostics, and after verdict normalization the poller rewrites every
+`keep_fixing` decision to `accept_with_followup` with the justification
+prefixed `[keep_fixing capped after <c> judge round(s); converted to advisory
+follow-up]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
+round=<r> cap=<c> converted=<n>`), so the accept-all path runs and the project
+completes with deferred advisories. `fail` verdicts are untouched; unlike
+`MAX_SECURITY_PASS_JUDGE_ROUNDS` this cap never terminalizes. Project #3965
+ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
+`keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
 (exact id, or same file and category within `SECURITY_AUDIT_WAIVER_LINE_WINDOW`,
@@ -767,12 +908,39 @@ and shipped:
 - `REISSUE_BASELINE_PRESERVED`
 - `REISSUE_BASELINE_DISCARDED`
 - `REISSUE_MODE`
+- `REISSUE_FILES_TOUCHED_UNION`
+- `REISSUE_ORCHESTRATOR_METADATA_CARRIED`
+- `REISSUE_ORCHESTRATOR_METADATA_ABSENT`
 - `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1`
 - `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1`
 - `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1`
 - `FINGERPRINT_STATE_SELFHEAL_V1`
 - `FINAL_MERGE_INELIGIBILITY_ALERT_SENT`
 - `EAGER_DRAFT_PR_CREATED`
+- `APPLY_ANALYSIS_SKIPPED`
+- `APPLY_ANALYSIS_DISPATCHED`
+- `APPLY_ANALYSIS_CANDIDATES`
+- `PROMOTE_CYCLE_SKIPPED`
+- `PROMOTE_CYCLE_FAILED`
+- `PROMOTE_CYCLE_DISPATCHED`
+- `COMPREHENSIVE_VERIFICATION_DISPATCHED`
+- `COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED`
+- `COMPREHENSIVE_PROMOTION_DISPATCHED`
+- `COMPREHENSIVE_PROMOTION_DEFERRED`
+- `COMPREHENSIVE_PROMOTION_HOLD`
+- `COMPREHENSIVE_PROMOTION_DONE`
+- `COMPREHENSIVE_PROMOTION_FAILED`
+- `COMPREHENSIVE_PROMOTION_SKIPPED`
+- `COMPREHENSIVE_VERIFYING_COMPLETE`
+- `COMPREHENSIVE_MARKER_UNTRUSTED`
+- `TRACKING_ISSUE_LABEL_APPLIED`
+- `TRACKING_ISSUE_BINDING_FAILED`
+- `RELEASE_STALE_TIP`
+- `RELEASE_UNTESTED_HEAD`
+- `TRACKING_ISSUE_COMMENT_POSTED`
+- `AUTO_RELEASE_SKIPPED`
+- `AUTO_RELEASE_DISPATCHED`
+- `IMPLEMENT_BLOCKED_TERMINALIZED`
 - `EAGER_DRAFT_PR_PROMOTED`
 - `INTEGRATION_STALE_ALERT_SENT`
 - `STALL_INFLIGHT_DIRECT_CHECK`
@@ -828,6 +996,14 @@ and shipped:
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED`
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED`
 - `SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED`
+- `SECURITY_PASS_AUTO_RESET`
+- `SECURITY_PASS_AUTO_RESET_SKIPPED`
+- `STAGED_SUPPORT_LATCH_RELEASED`
+- `STAGED_SUPPORT_LATCH_SKIP`
+- `STAGED_SUPPORT_LATCH_RELEASE_SKIPPED`
+- `ORCHESTRATOR_ENGINE_SHA`
+- `SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED`
+- `SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED`
 
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
@@ -843,6 +1019,9 @@ and shipped:
 - `IDENTITY_REINJECT_PARSE_FAIL`
 - `drift-audit:`
 - `CHECK_TRIAGE`
+- `WORKFLOW_HEAL_REPORT`
+- `WORKFLOW_HEAL_AUTOFIX_REPORT`
+- `WORKFLOW_HEAL`
 - `WORKTREE_REGISTER`
 - `WORKTREE_DEREGISTER`
 - `WORKTREE_GC`
@@ -902,12 +1081,39 @@ LOG_PREFIX.name=BEHAVIOURAL_SMOKE_PRESENT_PASSED
 LOG_PREFIX.name=REISSUE_BASELINE_PRESERVED
 LOG_PREFIX.name=REISSUE_BASELINE_DISCARDED
 LOG_PREFIX.name=REISSUE_MODE
+LOG_PREFIX.name=REISSUE_FILES_TOUCHED_UNION
+LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_CARRIED
+LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_ABSENT
 LOG_PREFIX.name=FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1
 LOG_PREFIX.name=FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1
 LOG_PREFIX.name=FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1
 LOG_PREFIX.name=FINGERPRINT_STATE_SELFHEAL_V1
 LOG_PREFIX.name=FINAL_MERGE_INELIGIBILITY_ALERT_SENT
 LOG_PREFIX.name=EAGER_DRAFT_PR_CREATED
+LOG_PREFIX.name=APPLY_ANALYSIS_SKIPPED
+LOG_PREFIX.name=APPLY_ANALYSIS_DISPATCHED
+LOG_PREFIX.name=APPLY_ANALYSIS_CANDIDATES
+LOG_PREFIX.name=PROMOTE_CYCLE_SKIPPED
+LOG_PREFIX.name=PROMOTE_CYCLE_FAILED
+LOG_PREFIX.name=PROMOTE_CYCLE_DISPATCHED
+LOG_PREFIX.name=COMPREHENSIVE_VERIFICATION_DISPATCHED
+LOG_PREFIX.name=COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED
+LOG_PREFIX.name=COMPREHENSIVE_PROMOTION_DISPATCHED
+LOG_PREFIX.name=COMPREHENSIVE_PROMOTION_DEFERRED
+LOG_PREFIX.name=COMPREHENSIVE_PROMOTION_HOLD
+LOG_PREFIX.name=COMPREHENSIVE_PROMOTION_DONE
+LOG_PREFIX.name=COMPREHENSIVE_PROMOTION_FAILED
+LOG_PREFIX.name=COMPREHENSIVE_PROMOTION_SKIPPED
+LOG_PREFIX.name=COMPREHENSIVE_VERIFYING_COMPLETE
+LOG_PREFIX.name=COMPREHENSIVE_MARKER_UNTRUSTED
+LOG_PREFIX.name=TRACKING_ISSUE_LABEL_APPLIED
+LOG_PREFIX.name=TRACKING_ISSUE_BINDING_FAILED
+LOG_PREFIX.name=RELEASE_STALE_TIP
+LOG_PREFIX.name=RELEASE_UNTESTED_HEAD
+LOG_PREFIX.name=TRACKING_ISSUE_COMMENT_POSTED
+LOG_PREFIX.name=AUTO_RELEASE_SKIPPED
+LOG_PREFIX.name=AUTO_RELEASE_DISPATCHED
+LOG_PREFIX.name=IMPLEMENT_BLOCKED_TERMINALIZED
 LOG_PREFIX.name=EAGER_DRAFT_PR_PROMOTED
 LOG_PREFIX.name=INTEGRATION_STALE_ALERT_SENT
 LOG_PREFIX.name=STALL_INFLIGHT_DIRECT_CHECK
@@ -963,6 +1169,14 @@ LOG_PREFIX.name=SECURITY_PASS_WAIVED_SUPPRESSED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED
+LOG_PREFIX.name=SECURITY_PASS_AUTO_RESET
+LOG_PREFIX.name=SECURITY_PASS_AUTO_RESET_SKIPPED
+LOG_PREFIX.name=STAGED_SUPPORT_LATCH_RELEASED
+LOG_PREFIX.name=STAGED_SUPPORT_LATCH_SKIP
+LOG_PREFIX.name=STAGED_SUPPORT_LATCH_RELEASE_SKIPPED
+LOG_PREFIX.name=ORCHESTRATOR_ENGINE_SHA
+LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED
+LOG_PREFIX.name=SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED
 LOG_PREFIX.name=SEMBLE_QUERY
 LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY
@@ -977,6 +1191,9 @@ LOG_PREFIX.name=TRANSCRIPT_ARCHIVE_FAIL
 LOG_PREFIX.name=IDENTITY_REINJECT_PARSE_FAIL
 LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
+LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
+LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
+LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKTREE_REGISTER
 LOG_PREFIX.name=WORKTREE_DEREGISTER
 LOG_PREFIX.name=WORKTREE_GC
@@ -1074,7 +1291,7 @@ depend on it.
 - `scripts/review_agents_md_materiality.sh` is deterministic-path-glob v1: it writes a JSON result payload plus a non-blocking PR comment headed `## AI Materiality Advisory` when materiality is `high` or `medium` and root `agents.md` is unchanged. `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` is reserved only; enabling it still does not trigger a model call in the current shipped script.
 - When `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED=true`, `scripts/review_consolidate.sh` feeds that helper JSON into the consolidator prompt as advisory untrusted context. This is the Lens 7 companion to the separate advisory comment path controlled by `AGENTS_MD_MATERIALITY_ENABLED`. Lens 7 (`NAMING / BACKWARD COMPATIBILITY`) may then emit a default-`high` `AGENTS.md materiality` finding when operator-visible structural changes leave root `agents.md` unchanged, but downgrades or omits it when equivalent touched docs already cover the behavior.
 - `REVIEW_LEDGER_REREVIEW_ENABLED` gates consolidator-side suppression of repeated `accepted-residual` / `won't-fix` findings from the existing review ledger and the review-blocked judge's ledger-fed prior-round decision input. `scripts/review_rb_judge.sh` renders that `=== BEGIN PRIOR ROUND DECISIONS ===` block via `render_review_rb_prior_round_decisions_file`, and `prompts/mode-judge-review-blocked.txt` treats it as advisory history rather than fresh reviewer evidence.
-- `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. The live-roster mapping file covers `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2`, `minimax/minimax-m3 -> minimax/minimax-m2.5`, `moonshotai/kimi-k3 -> moonshotai/kimi-k2.7-code`, `qwen/qwen3.7-plus -> qwen/qwen3.6-plus`, and `x-ai/grok-4.6 -> x-ai/grok-4.20`; it also retains non-roster override mappings `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus` and `x-ai/grok-4.20 -> x-ai/grok-4.1-fast`. `mistralai/mistral-small-2603` remains intentionally unmapped until the catalog ships a same-family alternate.
+- `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. The live-roster mapping file covers `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2`, `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview`, `minimax/minimax-m3 -> minimax/minimax-m2.5`, `qwen/qwen3.7-plus -> qwen/qwen3.6-plus`, `x-ai/grok-4.20 -> x-ai/grok-4.3`, and `z-ai/glm-5.2 -> z-ai/glm-5.3-flashx`; the three new failback targets for Gemini, Grok, and GLM keep 1M+ token windows because reviewer prompts regularly exceed 250K tokens. It also retains retired-roster / operator-override mappings `moonshotai/kimi-k3 -> moonshotai/kimi-k2.7-code`, `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus`, and `x-ai/grok-4.6 -> x-ai/grok-4.20` (the former `x-ai/grok-4.20 -> x-ai/grok-4.1-fast` entry was dropped because OpenRouter no longer serves that slug). Every live reviewer is mapped; `REVIEWER_FAILBACK_UNMAPPED` still governs any operator-supplied slug without a chain entry.
 - `scripts/cost_audit.py` now parses additive review telemetry fields `cache_hit_rate`, `wall_clock_p50_ms`, `wall_clock_p99_ms`, `break_glass_count`, and `context_budget_warn_count`. `CONTEXT_BUDGET_WARN` is emitted pre-flight from review / consolidator / judge paths when a prompt exceeds the configured per-model context threshold.
 - `scripts/codex_heartbeat.sh` wraps long-running `codex exec` calls in reviewer, consolidator, review-blocked judge, conflict-resolver, and validate/self-heal paths, emitting `CODEX_HEARTBEAT: phase=<phase> elapsed_secs=<n>` during silent periods.
 - `REVIEW_APPROVAL_RUBRIC_ENABLED` lets the review-blocked judge emit logical `review_state` values (`APPROVE`, `APPROVE_WITH_COMMENTS`, `COMMENT`, `REQUEST_CHANGES`) that `scripts/post_review_comment.sh --review-state` maps to outbound PR reviews. With `REVIEW_BREAK_GLASS_ENABLED`, a human comment anchored as `@codex break-glass` downgrades only the outbound `REQUEST_CHANGES` event to comment-only and logs `BREAK_GLASS`, while preserving the judge's written review body.
@@ -1120,7 +1337,7 @@ depend on it.
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for `lite` review-tier resolution. `lite` also requires the existing doc-only path set. |
 | `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.7-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
 | `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for `standard` review-tier resolution. `standard` also requires changes confined to one allowed top-level directory. |
-| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
 | `REVIEWER_RISK_TIER_TRIVIAL_LOC` | `10` | Trivial-tier LOC threshold. |
 | `REVIEWER_RISK_TIER_TRIVIAL_FILES` | `20` | Trivial-tier changed-file threshold. |
@@ -1198,6 +1415,7 @@ Active workflow files (regenerate with `make generate`):
 <!-- TREE:START id=workflows -->
 ```
 .github/workflows/audit_consumer_drift.yml
+.github/workflows/auto-release-stable.yml
 .github/workflows/cancel_on_pr_close.yml
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
@@ -1219,6 +1437,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/internal-plan.yml
 .github/workflows/internal-review.yml
 .github/workflows/internal-validate.yml
+.github/workflows/internal-workflow-failure-heal.yml
 .github/workflows/issue_pr_status.yml
 .github/workflows/lint-plan-archival.yml
 .github/workflows/lint-pr-body-auto-close.yml
@@ -1241,7 +1460,9 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/validate.yml
 .github/workflows/validation-improvements-intake.yml
 .github/workflows/validation-refresh.yml
+.github/workflows/workflow-failure-heal-intake.yml
 .github/workflows/workflow-log-analysis.yml
+.github/workflows/workflow_failure_heal.yml
 .github/workflows/workspace-cache-maintenance.yml
 ```
 <!-- TREE:END id=workflows -->
@@ -1265,6 +1486,7 @@ workflow-templates/ai-security-audit.yml
 workflow-templates/ai-sync-labels.yml
 workflow-templates/ai-update-workflows.yml
 workflow-templates/ai-validate.yml
+workflow-templates/ai-workflow-failure-heal.yml
 workflow-templates/review_rb_judge_dispatch.yml
 ```
 <!-- TREE:END id=workflow_templates -->
