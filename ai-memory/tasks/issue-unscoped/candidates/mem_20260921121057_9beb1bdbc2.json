@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/4207-release-tag-push-retry.md:2-12 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The changelog fragment is missing the required lead paragraph and audience-closing paragraph per the repository's documented entry structure.\n  WHY: The fragment will fail the `tests/test_assemble_changelog.py` validation and cannot be merged.\n- tests/test_mark_stable_release_tag_refspec_contract.py:76-192 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `_run_publication_helper_scenario` function uses hardcoded `WORKFLOWS[0]` which makes it brittle and non-portable.\n  WHY: The test will fail with an IndexError if the workflow list changes or is empty.\n- tests/test_mark_stable_release_tag_refspec_contract.py:196-197 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Loop variable `workflow_path` is defined but never used in the function scope.\n  WHY: The code is dead/unused and wastes CI resources.\n- tests/test_mark_stable_release_tag_refspec_contract.py:356-357 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Function `test_script_handles_already_published_version_tag()` is defined but never called.\n  WHY: The test suite reports a collected-but-not-run test, reducing coverage visibility.\n- tests/test_mark_stable_release_tag_refspec_contract.py:186-194 | severity=high | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Assertions check for exact retry counts which makes the test brittle to implementation changes.\n  WHY: The test could become flaky if retry logic evolves, causing false failures.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- changelog.d/4207-release-tag-push-retry.md:2-12 | severity=BLOCKER | confidence=5\n  PROBLEM: The changelog fragment is missing the required lead paragraph and audience-closing paragraph per the repository's documented entry structure.\n  WHY: The fragment will fail the `tests/test_assemble_changelog.py` validation and cannot be merged.\n- tests/test_mark_stable_release_tag_refspec_contract.py:76-192 | severity=MAJOR | confidence=4\n  PROBLEM: The `_run_publication_helper_scenario` function uses hardcoded `WORKFLOWS[0]` which makes it brittle and non-portable.\n  WHY: The test will fail with an IndexError if the workflow list changes or is empty.\n- tests/test_mark_stable_release_tag_refspec_contract.py:196-197 | severity=MAJOR | confidence=5\n  PROBLEM: Loop variable `workflow_path` is defined but never used in the function scope.\n  WHY: The code is dead/unused and wastes CI resources.\n- tests/test_mark_stable_release_tag_refspec_contract.py:356-357 | severity=MAJOR | confidence=5\n  PROBLEM: Function `test_script_handles_already_published_version_tag()` is defined but never called.\n  WHY: The test suite reports a collected-but-not-run test, reducing coverage visibility.\n- tests/test_mark_stable_release_tag_refspec_contract.py:186-194 | severity=MAJOR | confidence=3\n  PROBLEM: Assertions check for exact retry counts which makes the test brittle to implementation changes.\n  WHY: The test could become flaky if retry logic evolves, causing false failures.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8917102b03d6f88327d56cacec5bf63bf6c9541e8956af9b213bf68ade30e73d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4209,
+    "run_id": "35591979658",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35591979658",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921121057_9beb1bdbc2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4209,
+    "run_id": "35591979658"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T12:10:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
