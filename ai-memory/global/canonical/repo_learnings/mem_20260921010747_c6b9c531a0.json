@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review automation must bind actions such as auto-merge and fixes to the current pull-request head.",
   "timestamps": {
     "created_at": "2026-09-21T01:07:47Z",
