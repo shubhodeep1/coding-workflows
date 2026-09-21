@@ -199,7 +199,11 @@ while IFS=$'\t' read -r run_id run_url; do
 		fi
 		RAW_LOG="${LOG_DIR}/run-${run_id}-job-${job_id}.raw"
 		FILTERED_LOG="${LOG_DIR}/run-${run_id}-job-${job_id}.txt"
-		if gh_retry gh api "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" > "${RAW_LOG}" 2>/dev/null && [ -s "${RAW_LOG}" ]; then
+		# Job logs carry ANSI colour codes; without --allow-escape-sequences gh
+		# refuses the body ("the response contains terminal escape sequences")
+		# even when stdout is a file, and every job read as "(job log
+		# unavailable)": no error signature, no downstream-gate dedup.
+		if gh_retry gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" > "${RAW_LOG}" 2>/dev/null && [ -s "${RAW_LOG}" ]; then
 			python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}" || : > "${FILTERED_LOG}"
 			rm -f "${RAW_LOG}"
 		else
