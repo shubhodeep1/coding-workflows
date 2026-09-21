@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:line 1260 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The documentation incorrectly claims every failback target keeps a 1M+ token window.\n  WHY: Failback targets like deepseek/deepseek-v3.2 (128k) and minimax/minimax-m2.5 (200k) have windows smaller than the 250K threshold the PR mentions, meaning they will overflow on the same prompts that caused the Mistral slot to fail, silently increasing retry and stall rates.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CLAUDE.md \u00a720.B requires changelog fragments to be named `changelog.d/<issue-or-pr>-<slug>.md`, with a leading numeric issue or PR prefix.\n  expected_change_site: filename of `changelog.d/reviewer-roster-cost-refresh-2026-09.md`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  EVIDENCE: `changelog.d/reviewer-roster-cost-refresh-2026-09.md` lacks an issue or PR number prefix; the filename should be renamed to use the owning issue or PR number, such as `changelog.d/<PR-number>-reviewer-roster-cost-refresh.md`.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:line 1260 | severity=MAJOR | confidence=4\n  PROBLEM: The documentation incorrectly claims every failback target keeps a 1M+ token window.\n  WHY: While this is a documentation error and not a runtime failure, it contradicts the PR's stated rationale for replacing the 262K Mistral slot. Failback targets like deepseek/deepseek-v3.2 (128k) and minimax/minimax-m2.5 (200k) have windows smaller than the 250K threshold the PR mentions, meaning they will overflow on the same prompts that caused the Mistral slot to fail, silently increasing retry and stall rates.\n- TASK_GAP changelog.d/reviewer-roster-cost-refresh-2026-09.md:1\n  Requirement: Filenames in changelog.d must follow the <issue-or-pr>-<slug>.md convention (CLAUDE.md S20.B).\n  Expected change site: changelog.d/reviewer-roster-cost-refresh-2026-09.md\n  Evidence of absence: The file `changelog.d/reviewer-roster-cost-refresh-2026-09.md` lacks an issue or PR number prefix, violating the unique-path-attribution convention required to guarantee fragment path uniqueness across concurrent PRs.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP changelog.d/reviewer-roster-cost-refresh-2026-09.md:1\n  Requirement: PR DESCRIPTION claims \"changelog.d/reviewer-roster-cost-refresh-2026-09.md: changelog fragment (\u00a720).\" CLAUDE.md \u00a720.B states: \"Create `changelog.d/<issue-or-pr>-<slug>.md`, e.g. `changelog.d/3712-soft-deadline-finalization.md`. The number is the issue or PR the work belongs to, the slug is a few keebab-case words. One fragment per PR. Never reuse another PR's filename \u2014 the unique path is the whole point.\"\n  Expected change site: filename of `changelog.d/reviewer-roster-cost-refresh-2026-09.md` should be renamed to `changelog.d/<PR-number>-reviewer-roster-cost-refresh.md` (or similar, using the owning PR number as prefix).\n  Evidence of absence: the file is named `changelog.d/reviewer-roster-cost-refresh-2026-09.md` \u2014 no `<issue-or-pr>-` numeric prefix is present. The LAST RUN DIFF (commit e956798f) edited line 9 of that fragment (Kimi pricing correction) but did not rename it. Copilot review_comment id 4059116881 flagged this exact violation, and four pass-1 reviewers (minimax_minimax-m3, deepseek_deepseek-v4-pro, z-ai_glm-5_2, and the cross-pollination consensus) re-flagged it; the autofix editor addressed the pricing and 1M-claim findings but left the filename untouched. No test in `tests/test_changelog_fragment_contract.py` validates actual fragment filenames against the convention, so this violation is unchecked by CI.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP changelog.d/reviewer-roster-cost-refresh-2026-09.md:1\n  Requirement: missing `<issue-or-pr>-` prefix per CLAUDE.md \u00a720.B; rename required\n  Expected change site: changelog.d/reviewer-roster-cost-refresh-2026-09.md\n  Evidence of absence: filename still violates convention.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP changelog.d/reviewer-roster-cost-refresh-2026-09.md\n  Requirement: CLAUDE.md \u00a720.B requires changelog fragments to be named `changelog.d/<issue-or-pr>-<slug>.md` (e.g. `changelog.d/3712-soft-deadline-finalization.md`), with the leading `<issue-or-pr>-` numeric prefix required so concurrent PRs never collide on the same path \u2014 \"the unique path is the whole point.\"\n  Expected change site: filename of `changelog.d/reviewer-roster-cost-refresh-2026-09.md` (rename to prefix with the owning PR number, e.g. `changelog.d/<PR-N>-reviewer-roster-cost-refresh.md`).\n  Evidence of absence: The file is named `changelog.d/reviewer-roster-cost-refresh-2026-09.md` with no `<issue-or-pr>-` numeric prefix. The LAST RUN DIFF (commit e956798f) edited only line 9 of the fragment body (Kimi pricing correction) and did not rename it. Copilot review_comment id 4059116881 flagged this exact violation; the autofix editor summary explicitly listed the file under \"Files changed\" but did not address the filename. The cross-pollination consensus flagged this at confidence 5 across three reviewers. This is a direct violation of a MANDATORY rule whose collision-prevention property is the stated rationale for the fragment-per-PR convention.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e6031a56fa640e37211dff6507b25003875e2cfde57e4a3211f81609e9899863",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4196,
+    "run_id": "35562647997",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35562647997",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921054744_1e402c1182",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4196,
+    "run_id": "35562647997"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-21T05:47:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
