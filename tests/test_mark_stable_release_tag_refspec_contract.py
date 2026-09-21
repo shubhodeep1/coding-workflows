@@ -10,7 +10,10 @@ release jobs trigger by checking out the `stable` branch and then creating a
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -68,6 +71,125 @@ def _workflow_publication_helper(workflow_text: str) -> str:
 	)
 	assert match is not None, "release workflow must define the tag publication helper"
 	return match.group(0)
+
+
+def _run_publication_helper_scenario(
+	working_directory: Path,
+	publication_scenario: str,
+	publication_mode: str,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	publication_call_log = working_directory / f"{publication_scenario}-{publication_mode}.log"
+	workflow_publication_script = "\n".join(
+		(
+			"set -euo pipefail",
+			_workflow_publication_helper(_read(WORKFLOWS[0])),
+			r'''
+git() {
+	local publication_mock_command="$1"
+	shift
+	case "${publication_mock_command}" in
+		rev-parse)
+			printf '%s\n' "${PUBLICATION_HELPER_EXPECTED_OBJECT_ID}"
+			;;
+		push)
+			printf 'push:%s\n' "$*" >> "${PUBLICATION_HELPER_CALL_LOG}"
+			[ "${PUBLICATION_HELPER_SCENARIO}" = "push-success" ]
+			;;
+		ls-remote)
+			printf 'lookup:%s\n' "$*" >> "${PUBLICATION_HELPER_CALL_LOG}"
+			case "${PUBLICATION_HELPER_SCENARIO}" in
+				remote-match)
+					printf '%s\t%s\n' "${PUBLICATION_HELPER_EXPECTED_OBJECT_ID}" "${@: -1}"
+					;;
+				remote-conflict)
+					printf '%040d\t%s\n' 0 "${@: -1}"
+					;;
+				remote-unreadable)
+					printf 'mock ls-remote transport failure\n' >&2
+					return 128
+					;;
+				remote-absent)
+					return 2
+					;;
+			esac
+			;;
+	esac
+}
+
+sleep() {
+	printf 'sleep:%s\n' "$1" >> "${PUBLICATION_HELPER_CALL_LOG}"
+}
+
+publish_tag_with_remote_verification refs/tags/test "${PUBLICATION_HELPER_MODE}"
+''',
+		)
+	)
+	publication_environment = {
+		**os.environ,
+		"PUBLICATION_HELPER_CALL_LOG": str(publication_call_log),
+		"PUBLICATION_HELPER_EXPECTED_OBJECT_ID": "a" * 40,
+		"PUBLICATION_HELPER_MODE": publication_mode,
+		"PUBLICATION_HELPER_SCENARIO": publication_scenario,
+	}
+	publication_result = subprocess.run(
+		["bash", "-c", workflow_publication_script],
+		capture_output=True,
+		check=False,
+		env=publication_environment,
+		text=True,
+	)
+	publication_calls = publication_call_log.read_text(encoding="utf-8").splitlines()
+	return publication_result, publication_calls
+
+
+def test_workflow_tag_publication_helper_executes_failure_matrix() -> None:
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		working_directory = Path(temporary_directory)
+
+		direct_success, direct_success_calls = _run_publication_helper_scenario(
+			working_directory, "push-success", "immutable"
+		)
+		assert direct_success.returncode == 0
+		assert direct_success_calls == ["push:origin refs/tags/test"]
+
+		ambiguous_success, ambiguous_success_calls = _run_publication_helper_scenario(
+			working_directory, "remote-match", "moving"
+		)
+		assert ambiguous_success.returncode == 0
+		assert ambiguous_success_calls == [
+			"push:-f origin refs/tags/test",
+			"lookup:--exit-code origin refs/tags/test",
+		]
+
+		immutable_collision, immutable_collision_calls = _run_publication_helper_scenario(
+			working_directory, "remote-conflict", "immutable"
+		)
+		assert immutable_collision.returncode != 0
+		assert immutable_collision_calls == [
+			"push:origin refs/tags/test",
+			"lookup:--exit-code origin refs/tags/test",
+		]
+		assert "refusing to overwrite it" in immutable_collision.stdout
+
+		unreadable_remote, unreadable_remote_calls = _run_publication_helper_scenario(
+			working_directory, "remote-unreadable", "immutable"
+		)
+		assert unreadable_remote.returncode != 0
+		assert unreadable_remote_calls.count("push:origin refs/tags/test") == 3
+		assert unreadable_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 3
+		assert [call for call in unreadable_remote_calls if call.startswith("sleep:")] == [
+			"sleep:2",
+			"sleep:4",
+		]
+		assert "mock ls-remote transport failure" in unreadable_remote.stderr
+
+		absent_remote, absent_remote_calls = _run_publication_helper_scenario(
+			working_directory, "remote-absent", "immutable"
+		)
+		assert absent_remote.returncode != 0
+		assert absent_remote_calls.count("push:origin refs/tags/test") == 3
+		assert absent_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 3
+		assert "Failed to publish and verify" in absent_remote.stdout
 
 
 def test_workflow_tag_publication_helper_is_bounded_verified_and_fail_closed() -> None:

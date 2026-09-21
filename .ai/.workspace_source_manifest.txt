@@ -207,6 +207,7 @@ changelog.d/4093-pytest-git-env-isolation.md
 changelog.d/4109-bind-auto-merge-head.md
 changelog.d/4109-bind-auto-merge-to-evaluated-head.md
 changelog.d/4171-e2e-smoke-job-timeout.md
+changelog.d/4207-release-tag-push-retry.md
 changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/433-readme-wrapper-predicate-examples.md
