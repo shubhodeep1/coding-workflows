@@ -91,6 +91,16 @@ def _pid_is_running(pid: int) -> bool:
 		return False
 	except PermissionError:
 		return True
+	try:
+		process_state_fields = Path(f"/proc/{pid}/stat").read_text(
+			encoding="ascii", errors="replace"
+		).rpartition(")")[2].split()
+	except FileNotFoundError:
+		return False
+	except OSError:
+		return True
+	if process_state_fields and process_state_fields[0] == "Z":
+		return False
 	return True
 
 
