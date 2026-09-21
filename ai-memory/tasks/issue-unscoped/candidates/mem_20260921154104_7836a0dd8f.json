@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\"\n  expected_change_site: PR merged state\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff resolves conflicts in .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml, and .ai/.workspace_source_manifest.txt. The implemented solution correctly introduces the robust tag-publication helper and updates tests to lock the new contract. The task intent appears fully satisfied by the provided patches.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\"\n  Expected change site: PR merged state\n  Evidence of absence: The PR diff resolves conflicts in .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml, and .ai/.workspace_source_manifest.txt. The implemented solution correctly introduces the robust tag-publication helper and updates tests to lock the new contract. The task intent appears fully satisfied by the provided patches.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "087342cdfaa7df69047390b9c34b8ae5466d705c67191247b32cd98b86d43190",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4215,
+    "run_id": "35615285359",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35615285359",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921154104_7836a0dd8f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4215,
+    "run_id": "35615285359"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T15:41:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
