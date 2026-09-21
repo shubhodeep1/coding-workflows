@@ -45,6 +45,8 @@ if args[:1] == ["api"]:
     if "/compare/" in path:
         base = path.split("/compare/")[1].split("...")[0]
         entry = state.get("compares", {}).get(base)
+        if entry == "api_error":
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
         if entry is None:
             respond({"status": "ahead", "total_commits": 1, "files": [{"filename": "scripts/x.sh"}]})
         respond(entry)
@@ -370,6 +372,31 @@ def test_diverged_newest_failed_run_still_skips_base_not_ancestor() -> None:
 		proc, final, _ = _run(Path(tmp), state)
 	assert f"PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base={failed_head} head={TIP} status=diverged" in proc.stdout
 	assert not final.get("dispatches")
+
+
+def test_newest_failed_run_compare_error_still_skips_guard_unavailable() -> None:
+	failed_head = "4" * 40
+	runs = [{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": failed_head, "created_at": "2026-09-18T00:00:00Z"}]
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), failed_head: "api_error"}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert f"PROMOTE_CYCLE_SKIPPED reason=guard_unavailable compare={failed_head}...{TIP}" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_older_failed_run_compare_error_stops_walk_without_skipping() -> None:
+	older_head = "4" * 40
+	runs = [
+		{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": older_head, "created_at": "2026-09-17T00:00:00Z"},
+		{"id": 3, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": TIP, "created_at": "2026-09-18T00:00:00Z"},
+	]
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), older_head: "api_error"}, "gate_runs_sequence": GATE_SUCCESS}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "reason=guard_unavailable" not in proc.stdout
+	assert f"Retrying the cycle on {TIP}: 1 failed attempt(s) since the last code change, budget 3." in proc.stdout
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout
 
 
 def test_invalid_max_attempts_fails_fast() -> None:

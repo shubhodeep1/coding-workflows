@@ -371,7 +371,10 @@ while IFS= read -r failed_cycle_head; do
 		break
 	fi
 	if [ "${failed_compare_rc}" -ne 0 ]; then
-		skip_cycle guard_unavailable "compare=${failed_cycle_head}...${main_tip}"
+		if [ "${failed_cycle_head}" = "${last_failed_head}" ]; then
+			skip_cycle guard_unavailable "compare=${failed_cycle_head}...${main_tip}"
+		fi
+		break
 	fi
 	[ -z "${CODE_CHANGES_OUT}" ] || break
 	failed_attempts_on_tip=$((failed_attempts_on_tip + 1))
