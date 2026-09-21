@@ -251,6 +251,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'reviewer_nag_counter_for_attempt=$((reviewer_silent_rounds + 1))' in reviewers
 	assert 'reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_nag_counter_for_attempt}")"' in reviewers
 	assert 'if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then' in reviewers
+	assert 'echo "LINKED_ISSUE_METADATA_FILE=${RUNTIME_DIR}/linked_issue_metadata.json"' in init_block
 	assert 'echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"' in init_block
 	assert 'echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"' in init_block
 	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"' in init_block
