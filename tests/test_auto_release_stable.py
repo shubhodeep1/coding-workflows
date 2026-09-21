@@ -195,15 +195,69 @@ def test_in_flight_legacy_mark_stable_run_skips() -> None:
 
 
 def test_failed_gate_on_same_tip_skips_until_branch_moves() -> None:
+	# Budget of one: a single failure holds the tip, as before the retry budget.
 	runs = [
 		{"status": "completed", "conclusion": "success", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-18T00:00:00Z"},
 		{"status": "completed", "conclusion": "failure", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T00:00:00Z"},
 	]
 	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_SKIPPED reason=last_gate_failed sha={TIP} conclusion=failure attempts=1 max=1" in proc.stdout
+	assert not state.get("dispatches")
+
+
+def test_failed_gate_on_same_tip_is_retried_within_the_default_budget() -> None:
+	# One failed and one timed-out gate on the tip: two of the default three
+	# attempts are spent, so the next tick dispatches again.
+	runs = [
+		{"status": "completed", "conclusion": "failure", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T00:00:00Z"},
+		{"status": "completed", "conclusion": "timed_out", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T06:00:00Z"},
+	]
+	with tempfile.TemporaryDirectory() as tmp:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs))
 	assert proc.returncode == 0, proc.stderr
-	assert f"AUTO_RELEASE_SKIPPED reason=last_gate_failed sha={TIP} conclusion=failure" in proc.stdout
+	assert "last_gate_failed" not in proc.stdout
+	assert f"Retrying test-and-mark-stable.yml on stable@{TIP}: 2 failed attempt(s) so far, budget 3." in proc.stdout
+	assert f"AUTO_RELEASE_DISPATCHED sha={TIP}" in proc.stdout
+	assert len(state["dispatches"]) == 1
+
+
+def test_failed_gate_on_same_tip_holds_once_the_budget_is_spent() -> None:
+	runs = [
+		{"status": "completed", "conclusion": "failure", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T00:00:00Z"},
+		{"status": "completed", "conclusion": "cancelled", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T03:00:00Z"},
+		{"status": "completed", "conclusion": "startup_failure", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T06:00:00Z"},
+		{"status": "completed", "conclusion": "failure", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T12:00:00Z"},
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs))
+	assert proc.returncode == 0, proc.stderr
+	# The cancelled run is not an attempt; the three real failures spend the budget.
+	assert f"AUTO_RELEASE_SKIPPED reason=last_gate_failed sha={TIP} conclusion=failure attempts=3 max=3" in proc.stdout
 	assert not state.get("dispatches")
+
+
+def test_failed_gates_on_other_tips_or_branches_do_not_spend_the_budget() -> None:
+	runs = [
+		{"status": "completed", "conclusion": "failure", "head_sha": "9" * 40, "head_branch": "stable", "created_at": "2026-09-18T00:00:00Z"},
+		{"status": "completed", "conclusion": "failure", "head_sha": TIP, "head_branch": "main", "created_at": "2026-09-19T00:00:00Z"},
+		{"status": "completed", "conclusion": "failure", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T06:00:00Z"},
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": "2"})
+	assert proc.returncode == 0, proc.stderr
+	assert "1 failed attempt(s) so far, budget 2." in proc.stdout
+	assert len(state["dispatches"]) == 1
+
+
+def test_invalid_max_attempts_fails_fast() -> None:
+	for bad in ("0", "many", "-1"):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, state = _run(Path(tmp), _state(tag_commit="3" * 40), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": bad})
+		assert proc.returncode == 1, bad
+		assert "AUTO_RELEASE_STABLE_MAX_ATTEMPTS must be a positive integer" in proc.stdout + proc.stderr, bad
+		assert not state.get("dispatches"), bad
 
 
 def test_failed_gate_only_run_on_main_with_same_tip_does_not_block() -> None:
@@ -235,6 +289,7 @@ def test_workflow_contract() -> None:
 	run_step = next(s for s in wf["jobs"]["release-check"]["steps"] if "run" in s)
 	assert "bash scripts/auto_release_stable.sh" in run_step["run"]
 	assert run_step["env"]["AUTO_RELEASE_STABLE_ENABLED"] == "${{ vars.AUTO_RELEASE_STABLE_ENABLED || 'true' }}"
+	assert run_step["env"]["AUTO_RELEASE_STABLE_MAX_ATTEMPTS"] == "${{ vars.AUTO_RELEASE_STABLE_MAX_ATTEMPTS || '3' }}"
 
 
 def test_branch_behind_or_diverged_from_tag_fails_closed() -> None:

@@ -19,10 +19,21 @@
 #                                                 or a legacy mark-stable run
 #                                                 is queued/running
 #   AUTO_RELEASE_SKIPPED reason=last_gate_failed  the gate already failed or
-#                                                 timed out on this exact tip;
-#                                                 a human must look (a
-#                                                 cancelled gate is retried)
+#                                                 timed out on this exact tip
+#                                                 AUTO_RELEASE_STABLE_MAX_ATTEMPTS
+#                                                 times; a human must look (a
+#                                                 cancelled gate is retried and
+#                                                 never counts as an attempt)
 #   AUTO_RELEASE_DISPATCHED sha=<tip>
+#
+# Retry budget: a gate that failed on the current tip is re-dispatched on the
+# next tick until AUTO_RELEASE_STABLE_MAX_ATTEMPTS completed runs on that tip
+# have ended in failure / timed_out / startup_failure. A transient failure (a
+# GitHub-side push rejection, a runner loss after the tests ran) therefore
+# releases on a later tick by itself; a deterministic failure stops costing
+# gate runs after the budget and waits for the branch to move (a workflow-heal
+# hotfix on `stable` is such a move) or for a human re-run. Attempts are
+# counted from the 30 most recent gate runs the workflow-runs read returns.
 #
 # API calls per run (§15): 2 ref reads (+1 to dereference an annotated tag),
 # 1 compare, 3 workflow-runs lists (the release gate, promote-main-to-stable,
@@ -35,6 +46,8 @@
 #   AUTO_RELEASE_STABLE_BRANCH          default stable
 #   AUTO_RELEASE_STABLE_TAG             default stable
 #   AUTO_RELEASE_STABLE_WORKFLOW_FILE   default test-and-mark-stable.yml
+#   AUTO_RELEASE_STABLE_MAX_ATTEMPTS    default 3 (failed gate runs per tip
+#                                       before the tip is held)
 #   GITHUB_OUTPUT                       receives dispatched=/sha=
 
 set -euo pipefail
@@ -47,6 +60,7 @@ AUTO_RELEASE_STABLE_ENABLED="${AUTO_RELEASE_STABLE_ENABLED:-true}"
 AUTO_RELEASE_STABLE_BRANCH="${AUTO_RELEASE_STABLE_BRANCH:-stable}"
 AUTO_RELEASE_STABLE_TAG="${AUTO_RELEASE_STABLE_TAG:-stable}"
 AUTO_RELEASE_STABLE_WORKFLOW_FILE="${AUTO_RELEASE_STABLE_WORKFLOW_FILE:-test-and-mark-stable.yml}"
+AUTO_RELEASE_STABLE_MAX_ATTEMPTS="${AUTO_RELEASE_STABLE_MAX_ATTEMPTS:-3}"
 
 for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 	if [ -z "${!required_env:-}" ]; then
@@ -54,6 +68,10 @@ for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 		exit 1
 	fi
 done
+if ! [[ "${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}" -lt 1 ]; then
+	echo "::error::AUTO_RELEASE_STABLE_MAX_ATTEMPTS must be a positive integer (got '${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}')."
+	exit 1
+fi
 
 emit_output()
 {
@@ -164,16 +182,19 @@ fi
 # Restrict to runs on the stable branch: the promote cycle runs the same
 # workflow in gate_only mode on the default branch, and when the two branches
 # share a tip a failed smoke gate there must not read as a failed release.
-last_conclusion_on_tip="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha and .head_branch == $branch)] | sort_by(.created_at) | last | .conclusion // empty')"
-# `cancelled` is deliberately not in this list: a cancelled gate proved
-# nothing (concurrency, a runner loss, an operator), so the next tick simply
-# tries again instead of waiting for a human.
-case "${last_conclusion_on_tip}" in
-	failure|timed_out|startup_failure)
-		echo "::warning::${AUTO_RELEASE_STABLE_WORKFLOW_FILE} already ended with '${last_conclusion_on_tip}' on ${AUTO_RELEASE_STABLE_BRANCH}@${branch_tip}; not re-dispatching until the branch moves or a human re-runs the gate."
-		skip_release last_gate_failed "sha=${branch_tip} conclusion=${last_conclusion_on_tip}"
-		;;
-esac
+# `cancelled` is deliberately not counted: a cancelled gate proved nothing
+# (concurrency, a runner loss, an operator), so the next tick simply tries
+# again instead of spending an attempt.
+failed_attempts_on_tip="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha and .head_branch == $branch and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure"))] | length')"
+[[ "${failed_attempts_on_tip}" =~ ^[0-9]+$ ]] || failed_attempts_on_tip=0
+if [ "${failed_attempts_on_tip}" -ge "${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}" ]; then
+	last_conclusion_on_tip="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha and .head_branch == $branch and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure"))] | sort_by(.created_at) | last | .conclusion // empty')"
+	echo "::warning::${AUTO_RELEASE_STABLE_WORKFLOW_FILE} already failed ${failed_attempts_on_tip} time(s) on ${AUTO_RELEASE_STABLE_BRANCH}@${branch_tip} (last '${last_conclusion_on_tip}', budget ${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}); not re-dispatching until the branch moves or a human re-runs the gate."
+	skip_release last_gate_failed "sha=${branch_tip} conclusion=${last_conclusion_on_tip} attempts=${failed_attempts_on_tip} max=${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}"
+fi
+if [ "${failed_attempts_on_tip}" -gt 0 ]; then
+	echo "Retrying ${AUTO_RELEASE_STABLE_WORKFLOW_FILE} on ${AUTO_RELEASE_STABLE_BRANCH}@${branch_tip}: ${failed_attempts_on_tip} failed attempt(s) so far, budget ${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}."
+fi
 
 echo "Dispatching ${AUTO_RELEASE_STABLE_WORKFLOW_FILE} on ${AUTO_RELEASE_STABLE_BRANCH} (tip ${branch_tip}, tag at ${tag_commit:-none})."
 gh_retry gh workflow run "${AUTO_RELEASE_STABLE_WORKFLOW_FILE}" \

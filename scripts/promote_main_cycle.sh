@@ -5,9 +5,13 @@
 # A promotion of `main` to `stable` happens only after main has been proven
 # end to end, in this order:
 #
-#   1. code change on main since the last promotion (the `stable` tag), and
-#      since the last cycle's baseline and the last failed cycle run — so a
-#      known-bad tip is never retried until main moves with real code;
+#   1. code change on main since the last promotion (the `stable` tag) and
+#      since the last cycle's baseline; a tip whose cycle failed (smoke gate
+#      failed or timed out, dispatch failed) is retried on later ticks until
+#      PROMOTE_CYCLE_MAX_ATTEMPTS failed cycle runs have covered it without a
+#      code change in between, so a transient gate failure recovers by itself
+#      and a deterministic one stops costing gate runs after the budget and
+#      waits for main to move with real code;
 #   2. smoke gate: test-and-mark-stable.yml in gate_only mode on main;
 #   3. PROVING apply-analysis run dispatched (one analysis doc, labelled
 #      ai:comprehensive-test-pending, marker comment carries the cycle SHAs).
@@ -21,7 +25,9 @@
 #   PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight            a labelled tracking issue is open
 #   PROMOTE_CYCLE_SKIPPED reason=no_code_changes            nothing but non-code paths changed
 #   PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_last_cycle
-#   PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run
+#   PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run   PROMOTE_CYCLE_MAX_ATTEMPTS
+#                                                           failed cycle runs already
+#                                                           covered this tip
 #   PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor          main diverged from the stable
 #                                                           tag / last baseline; cannot
 #                                                           fast-forward, so no cycle
@@ -58,6 +64,9 @@
 #   PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS   default 1800
 #   PROMOTE_CYCLE_GATE_POLL_SECS        default 60
 #   PROMOTE_CYCLE_MIN_DOCS              default 2 (proving + verifying)
+#   PROMOTE_CYCLE_MAX_ATTEMPTS          default 3 (failed cycle runs per tip before
+#                                       the tip is held; costs at most that many
+#                                       extra compare calls per tick)
 #   PROMOTE_CYCLE_TRACKING_LABEL        default ai:comprehensive-test-pending
 #   APPLY_ANALYSIS_DISPATCHER           default scripts/apply_analysis_on_main.sh
 
@@ -79,6 +88,7 @@ PROMOTE_CYCLE_GATE_WAIT_SECS="${PROMOTE_CYCLE_GATE_WAIT_SECS:-18000}"
 PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS="${PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS:-1800}"
 PROMOTE_CYCLE_GATE_POLL_SECS="${PROMOTE_CYCLE_GATE_POLL_SECS:-60}"
 PROMOTE_CYCLE_MIN_DOCS="${PROMOTE_CYCLE_MIN_DOCS:-2}"
+PROMOTE_CYCLE_MAX_ATTEMPTS="${PROMOTE_CYCLE_MAX_ATTEMPTS:-3}"
 PROMOTE_CYCLE_TRACKING_LABEL="${PROMOTE_CYCLE_TRACKING_LABEL:-ai:comprehensive-test-pending}"
 APPLY_ANALYSIS_DISPATCHER="${APPLY_ANALYSIS_DISPATCHER:-${SCRIPT_DIR}/apply_analysis_on_main.sh}"
 GITHUB_RUN_ID="${GITHUB_RUN_ID:-0}"
@@ -93,7 +103,7 @@ for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 		exit 1
 	fi
 done
-for numeric_env in PROMOTE_CYCLE_GATE_WAIT_SECS PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS PROMOTE_CYCLE_GATE_POLL_SECS PROMOTE_CYCLE_MIN_DOCS; do
+for numeric_env in PROMOTE_CYCLE_GATE_WAIT_SECS PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS PROMOTE_CYCLE_GATE_POLL_SECS PROMOTE_CYCLE_MIN_DOCS PROMOTE_CYCLE_MAX_ATTEMPTS; do
 	if ! [[ "${!numeric_env}" =~ ^[0-9]+$ ]] || [ "${!numeric_env}" -lt 1 ]; then
 		echo "::error::${numeric_env} must be a positive integer (got '${!numeric_env}')."
 		exit 1
@@ -332,10 +342,48 @@ if [[ "${last_baseline}" =~ ^[0-9a-f]{40}$ ]] && [ "${last_baseline}" != "${tag_
 	require_code_changes "${last_baseline}" "${main_tip}" no_code_changes_since_last_cycle
 fi
 
-# 5. Not a tip whose smoke gate or dispatch already failed.
-last_failed_head="$(printf '%s' "${self_runs_json}" | jq -r '[.workflow_runs[]? | select(.event == "schedule" and .status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out"))] | sort_by(.created_at) | last | .head_sha // empty')"
-if [[ "${last_failed_head}" =~ ^[0-9a-f]{40}$ ]]; then
-	require_code_changes "${last_failed_head}" "${main_tip}" no_code_changes_since_failed_run
+# 5. Not a tip whose smoke gate, dispatch, or scheduled cycle job already
+#    failed, timed out, or was cancelled PROMOTE_CYCLE_MAX_ATTEMPTS times.
+#    Failed scheduled cycle runs are walked
+#    newest first; each one whose head has no code change up to the current
+#    tip is one spent attempt, and the walk stops at the first run that a code
+#    change separates from the tip (older runs predate that change). The
+#    newest failed run keeps the pre-budget handling of a diverged head
+#    (skip base_not_ancestor) and of a compare failure (skip guard_unavailable).
+failed_cycle_heads="$(printf '%s' "${self_runs_json}" | jq -r --argjson max "${PROMOTE_CYCLE_MAX_ATTEMPTS}" '[.workflow_runs[]? | select(.event == "schedule" and .status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out"))] | sort_by(.created_at) | reverse | .[:$max] | .[].head_sha // empty')"
+failed_attempts_on_tip=0
+last_failed_head=""
+while IFS= read -r failed_cycle_head; do
+	[[ "${failed_cycle_head}" =~ ^[0-9a-f]{40}$ ]] || continue
+	[ -n "${last_failed_head}" ] || last_failed_head="${failed_cycle_head}"
+	if [ "${failed_cycle_head}" = "${main_tip}" ]; then
+		failed_attempts_on_tip=$((failed_attempts_on_tip + 1))
+		continue
+	fi
+	set +e
+	code_changes_between "${failed_cycle_head}" "${main_tip}"
+	failed_compare_rc=$?
+	set -e
+	if [ "${failed_compare_rc}" -eq 3 ]; then
+		if [ "${failed_cycle_head}" = "${last_failed_head}" ]; then
+			skip_cycle base_not_ancestor "base=${failed_cycle_head} head=${main_tip} status=${CODE_CHANGES_STATUS:-unknown}"
+		fi
+		break
+	fi
+	if [ "${failed_compare_rc}" -ne 0 ]; then
+		if [ "${failed_cycle_head}" = "${last_failed_head}" ]; then
+			skip_cycle guard_unavailable "compare=${failed_cycle_head}...${main_tip}"
+		fi
+		break
+	fi
+	[ -z "${CODE_CHANGES_OUT}" ] || break
+	failed_attempts_on_tip=$((failed_attempts_on_tip + 1))
+done <<< "${failed_cycle_heads}"
+if [ "${failed_attempts_on_tip}" -ge "${PROMOTE_CYCLE_MAX_ATTEMPTS}" ]; then
+	skip_cycle no_code_changes_since_failed_run "base=${last_failed_head} head=${main_tip} attempts=${failed_attempts_on_tip} max=${PROMOTE_CYCLE_MAX_ATTEMPTS}"
+fi
+if [ "${failed_attempts_on_tip}" -gt 0 ]; then
+	echo "Retrying the cycle on ${main_tip}: ${failed_attempts_on_tip} failed attempt(s) since the last code change, budget ${PROMOTE_CYCLE_MAX_ATTEMPTS}."
 fi
 
 # 6. Enough analysis docs for a proving AND a verifying run.
