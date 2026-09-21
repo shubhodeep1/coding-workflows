@@ -220,7 +220,7 @@ def extract_plan_files(text: str) -> list[str]:
 			continue
 		if in_files_section and (
 			re.match(r"^\s{0,3}#{1,6}\s+\S", raw_line)
-			or re.match(r"^\s{0,3}\d+[.)]\s+[^`]+[.:]\s*$", raw_line)
+			or re.match(r"^\s{0,3}\d+[.)]\s+[^`]+[.:]?\s*$", raw_line)
 		):
 			break
 		if not in_files_section or not re.match(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", raw_line):

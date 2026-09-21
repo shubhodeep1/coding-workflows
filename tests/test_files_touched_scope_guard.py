@@ -6,12 +6,11 @@ Three layers, mirroring how the destructive-commit guard is validated:
   1. Unit tests of scripts/files_touched_scope_guard.py (the parser + matcher),
      including the real incident from orchestrator project #244 / issue #254
      ("frontend-send-status") that motivated the guard.
-  2. Behavioral extract-and-run of the real preflight scope-guard `run:`
-     fragment from .github/workflows/implement.yml and the real commit-time
-     scope-guard fragment from scripts/implement_commit_changes.sh against a
-     synthetic staged index, so the block / override / skip behaviour is
-     validated against production code rather than a reimplementation.
-  3. Static assertions that the guard is wired in at both guard sites and into
+  2. Behavioral extract-and-run of the real plan/implement/review guard
+     fragments against a synthetic staged index, so block / override / skip
+     behaviour is validated against production code rather than a
+     reimplementation.
+  3. Static assertions that the guard is wired in at all guard sites and into
      the alert / failure-gate / env / label / redispatch-refusal plumbing.
 
 Runnable either under pytest or directly as `python3 tests/<this file>.py`.
@@ -37,6 +36,8 @@ import files_touched_scope_guard as guard  # noqa: E402
 
 IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+REVIEW_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "review_commit_changes.sh"
+REVIEW_STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 LABEL_CONTRACT = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
@@ -290,9 +291,9 @@ def test_generated_advisory_scope_matches_only_the_exact_cited_path() -> None:
 
 def test_generated_advisory_plan_parser_accepts_numbered_contract() -> None:
 	plan = (
-		"1. Files likely to change.\n"
+		"1. Files likely to change\n"
 		"- `src/security.py`\n\n"
-		"2. Functions/modules to implement.\n"
+		"2. Functions/modules to implement\n"
 		"- `README.md` is mentioned only outside the files section.\n"
 	)
 	assert guard.extract_plan_files(plan) == ["src/security.py"]
@@ -304,7 +305,12 @@ def test_generated_advisory_plan_parser_accepts_numbered_contract() -> None:
 
 
 def _scope_fragment(label: str) -> str:
-	source = IMPLEMENT_COMMIT_SCRIPT if label == "commit" else IMPLEMENT
+	if label == "review":
+		source = REVIEW_COMMIT_SCRIPT
+	elif label == "commit":
+		source = IMPLEMENT_COMMIT_SCRIPT
+	else:
+		source = IMPLEMENT
 	text = source.read_text(encoding="utf-8")
 	start = f"# >>> files_touched scope-enforcement guard ({label}) >>>"
 	end = f"# <<< files_touched scope-enforcement guard ({label}) <<<"
@@ -326,6 +332,7 @@ def _run_fragment(
 	issue_author_association: str = "OWNER",
 	issue_author_login: str = "octocat",
 	helper_source: str | None = None,
+	linked_issue_metadata_available: bool = True,
 ) -> tuple[int, str, str]:
 	fragment = _scope_fragment(label)
 	with tempfile.TemporaryDirectory() as td:
@@ -351,6 +358,21 @@ def _run_fragment(
 			subprocess.run(["git", "add", "--", rel], cwd=tdp, check=True, env=git_env)
 		body_file = tdp / "issue_body.txt"
 		body_file.write_text(body, encoding="utf-8")
+		linked_issue_metadata_file = tdp / "linked_issue_metadata.json"
+		if linked_issue_metadata_available:
+			linked_issue_metadata_file.write_text(
+				json.dumps(
+					[
+						{
+							"number": 1,
+							"body": body,
+							"author_association": issue_author_association,
+							"author_login": issue_author_login,
+						}
+					]
+				),
+				encoding="utf-8",
+			)
 		gh_output = tdp / "gh_output.txt"
 		gh_output.write_text("", encoding="utf-8")
 		env = dict(git_env)
@@ -362,6 +384,10 @@ def _run_fragment(
 				"ENFORCE_FILES_TOUCHED": enforce,
 				"ALLOW_OUT_OF_SCOPE_FILES": allow_out_of_scope,
 				"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(tdp / "scripts"),
+				"SUPPORT_SCRIPTS_DIR": str(tdp / "scripts"),
+				"RUNTIME_DIR": str(tdp),
+				"LINKED_ISSUE_METADATA_FILE": str(linked_issue_metadata_file),
+				"STAGED_FILES": "\n".join(staged),
 				"ISSUE_AUTHOR_ASSOCIATION": issue_author_association,
 				"ISSUE_AUTHOR_LOGIN": issue_author_login,
 			}
@@ -438,7 +464,37 @@ def test_generated_advisory_accepts_exact_github_actions_bot_identity() -> None:
 	assert "scope_violation_blocked" not in gh_output
 
 
-@pytest.mark.parametrize("label", ("preflight", "commit"))
+def test_generated_advisory_review_scope_rejects_editor_path_drift() -> None:
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["README.md"],
+		label="review",
+	)
+	assert rc == 1, log
+	assert "README.md" in log
+	assert "exact cited-file scope" in log
+
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label="review",
+	)
+	assert rc == 0, log
+	assert "all staged paths match the exact cited file" in log
+
+
+def test_review_scope_fails_closed_without_linked_issue_metadata() -> None:
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label="review",
+		linked_issue_metadata_available=False,
+	)
+	assert rc == 1, log
+	assert "linked-issue metadata is unavailable" in log
+
+
+@pytest.mark.parametrize("label", ("preflight", "commit", "review"))
 def test_generated_advisory_helper_failure_fails_closed(label: str) -> None:
 	rc, gh_output, log = _run_fragment(
 		_generated_advisory_body(),
@@ -447,7 +503,10 @@ def test_generated_advisory_helper_failure_fails_closed(label: str) -> None:
 		helper_source="raise RuntimeError('validator crashed')\n",
 	)
 	assert rc == 1, log
-	assert "scope_violation_blocked=generated-security-advisory" in gh_output
+	if label == "review":
+		assert "metadata validation failed" in log
+	else:
+		assert "scope_violation_blocked=generated-security-advisory" in gh_output
 
 
 def _strip_comments(fragment: str) -> str:
@@ -472,6 +531,10 @@ def _implement_text() -> str:
 
 def _implement_commit_text() -> str:
 	return IMPLEMENT_COMMIT_SCRIPT.read_text(encoding="utf-8")
+
+
+def _review_commit_text() -> str:
+	return REVIEW_COMMIT_SCRIPT.read_text(encoding="utf-8")
 
 
 def _implement_guard_handler_text() -> str:
@@ -502,6 +565,15 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	assert combined_text.count('--issue-author-login "${ISSUE_AUTHOR_LOGIN:-}"') == 2
 	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
 	assert "scope_violation_blocked=scope-lock-label" in commit_text
+
+
+def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
+	review_text = _review_commit_text()
+	stage_text = REVIEW_STAGE_SCRIPT.read_text(encoding="utf-8")
+	assert "files_touched scope-enforcement guard (review)" in review_text
+	assert '"${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py"' in review_text
+	assert '"${LINKED_ISSUE_METADATA_FILE}"' in review_text
+	assert "files_touched_scope_guard.py" in stage_text
 
 
 def test_alert_step_handles_scope() -> None:

@@ -205,6 +205,7 @@ def _run_review_collect_pr_metadata_harness(
 			"pr_reviews": runtime_dir / "pr_reviews.json",
 			"pr_review_comments": runtime_dir / "pr_review_comments.json",
 			"linked_issue_context": runtime_dir / "linked_issue_context.txt",
+			"linked_issue_metadata": runtime_dir / "linked_issue_metadata.json",
 			"comments_context": runtime_dir / "pr_all_comments_context.txt",
 			"pr_diff": runtime_dir / "pr_diff.patch",
 			"github_env": runtime_dir / "github_env.txt",
@@ -229,6 +230,7 @@ def _run_review_collect_pr_metadata_harness(
 			"PR_REVIEWS_FILE": str(files["pr_reviews"]),
 			"PR_REVIEW_COMMENTS_FILE": str(files["pr_review_comments"]),
 			"LINKED_ISSUE_CONTEXT_FILE": str(files["linked_issue_context"]),
+			"LINKED_ISSUE_METADATA_FILE": str(files["linked_issue_metadata"]),
 			"PR_ALL_COMMENTS_CONTEXT_FILE": str(files["comments_context"]),
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"GITHUB_ENV": str(files["github_env"]),
@@ -263,6 +265,7 @@ def _run_review_collect_pr_metadata_harness(
 			"pr_reviews": json.loads(files["pr_reviews"].read_text(encoding="utf-8")),
 			"pr_review_comments": json.loads(files["pr_review_comments"].read_text(encoding="utf-8")),
 			"linked_issue_context": files["linked_issue_context"].read_text(encoding="utf-8"),
+			"linked_issue_metadata": json.loads(files["linked_issue_metadata"].read_text(encoding="utf-8")),
 			"comments_context": files["comments_context"].read_text(encoding="utf-8"),
 			"pr_diff": files["pr_diff"].read_text(encoding="utf-8"),
 		}
@@ -3458,6 +3461,7 @@ def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> No
 	assert result["pr_reviews"] == []
 	assert result["pr_review_comments"] == []
 	assert result["linked_issue_context"] == "No linked issues found."
+	assert result["linked_issue_metadata"] == []
 	assert "issue_comments_count: 0" in result["comments_context"]
 	assert "reviews_count: 0" in result["comments_context"]
 	assert "review_comments_count: 0" in result["comments_context"]
@@ -3536,6 +3540,8 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 								"number": 7,
 								"title": "Linked fallback issue",
 								"body": "Linked fallback body",
+								"authorAssociation": "MEMBER",
+								"author": {"login": "trusted-maintainer"},
 							},
 						},
 					},
@@ -3559,6 +3565,15 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 		"Issue #7: Linked fallback issue",
 		"Linked fallback body",
 	]
+	assert result["linked_issue_metadata"] == [
+		{
+			"number": 7,
+			"title": "Linked fallback issue",
+			"body": "Linked fallback body",
+			"author_association": "MEMBER",
+			"author_login": "trusted-maintainer",
+		}
+	]
 	assert "issue_comments_count: 1" in result["comments_context"]
 	assert "reviews_count: 0" in result["comments_context"]
 	assert "review_comments_count: 1" in result["comments_context"]
@@ -3577,6 +3592,8 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 	assert len(graphql_call_texts) == 2
 	fallback_call = next(call for call in graphql_call_texts if "issueOrPullRequest(number:" in call)
 	assert "i0: issueOrPullRequest(number: 7)" in fallback_call
+	assert "authorAssociation" in fallback_call
+	assert "author { login }" in fallback_call
 	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
 	assert not any("repos/owner/repo/pulls/42/reviews" in call for call in call_texts)
 

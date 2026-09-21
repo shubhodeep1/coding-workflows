@@ -15,7 +15,8 @@
 #   HEAD_REF_OVERRIDE_INPUT / HEAD_SHA_OVERRIDE_INPUT / BASE_REF_OVERRIDE_INPUT
 #   PR_PAYLOAD_FILE / PR_META_FILE / PR_ISSUE_COMMENTS_FILE
 #   PR_REVIEWS_FILE / PR_REVIEW_COMMENTS_FILE
-#   LINKED_ISSUE_CONTEXT_FILE / PR_ALL_COMMENTS_CONTEXT_FILE / PR_DIFF_FILE
+#   LINKED_ISSUE_CONTEXT_FILE / LINKED_ISSUE_METADATA_FILE
+#   PR_ALL_COMMENTS_CONTEXT_FILE / PR_DIFF_FILE
 #   GITHUB_ENV
 #
 # Outputs:
@@ -50,6 +51,7 @@ for required_var in \
 	PR_REVIEWS_FILE \
 	PR_REVIEW_COMMENTS_FILE \
 	LINKED_ISSUE_CONTEXT_FILE \
+	LINKED_ISSUE_METADATA_FILE \
 	PR_ALL_COMMENTS_CONTEXT_FILE \
 	PR_DIFF_FILE \
 	GITHUB_ENV
@@ -72,7 +74,8 @@ gh_retry()
 #
 # Input: JSON array of issue numbers, e.g. "[7,12]".
 # Output: JSON array of objects shaped like
-#   [{"number":7,"title":"...","body":"..."}, ...]
+#   [{"number":7,"title":"...","body":"...",
+#     "author_association":"MEMBER","author_login":"octocat"}, ...]
 # API calls: exactly one `gh api graphql` call for the provided input
 # (the caller preserves the existing 20-issue cap before invoking it).
 # Fail-open: echoes [] and returns non-zero when the fetch or JSON
@@ -102,11 +105,15 @@ _fetch_linked_issue_bodies_graphql()
             number
             title
             body
+            authorAssociation
+            author { login }
           }
           ... on PullRequest {
             number
             title
             body
+            authorAssociation
+            author { login }
           }
         }"
 	done
@@ -153,7 +160,9 @@ _fetch_linked_issue_bodies_graphql()
 			| {
 				number: (.number // 0),
 				title: (.title // ""),
-				body: (.body // "")
+				body: (.body // ""),
+				author_association: (.authorAssociation // ""),
+				author_login: (.author.login // "")
 			}
 		)
 	' "${response_file}" 2>/dev/null)" || {
@@ -259,7 +268,7 @@ if [ -n "${PR_NUMBER:-}" ]; then
 		-f owner="${REPOSITORY_OWNER}" \
 		-f name="${REPOSITORY_NAME}" \
 		-F number="${PR_NUMBER}" \
-		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body authorAssociation author{login}}}}}}' \
 		--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
 		_linked_fetch_ok="true"
 		_linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
@@ -305,6 +314,21 @@ if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSO
 		fi
 	fi
 fi
+
+# Persist the same batched linked-issue data used by reviewer prompts in a
+# machine-readable artifact. The review commit guard consumes authorship and
+# body metadata from this cache, so it adds no per-issue GitHub API calls.
+if ! printf '%s' "${_linked_context_raw}" | jq -c '[.[] | {
+	number: (.number // 0),
+	title: (.title // ""),
+	body: (.body // ""),
+	author_association: (.author_association // .authorAssociation // ""),
+	author_login: (.author_login // .author.login // "")
+}]' > "${LINKED_ISSUE_METADATA_FILE}"; then
+	echo "::error::Could not serialize linked-issue metadata for review scope enforcement." >&2
+	exit 1
+fi
+_linked_context_raw="$(cat "${LINKED_ISSUE_METADATA_FILE}")"
 
 # Build linked issue context file for reviewer/editor prompts.
 _linked_json_file="$(mktemp)"

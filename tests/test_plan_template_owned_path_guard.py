@@ -130,7 +130,7 @@ def _run_guard(
 
 
 def _plan_listing(path: str) -> str:
-	return f"1. Files likely to change.\n- `{path}`\n\n2. Current behavior.\nUnchanged.\n"
+	return f"1. Files likely to change\n- `{path}`\n\n2. Current behavior\nUnchanged.\n"
 
 
 def _generated_advisory_body(path: str = "src/security.py") -> str:
@@ -149,6 +149,21 @@ def _generated_advisory_body(path: str = "src/security.py") -> str:
 def test_generated_security_advisory_plan_is_exactly_scoped() -> None:
 	returncode, output = _run_guard(
 		_plan_listing("src/security.py"),
+		FETCHED_HELPERS,
+		issue_body=_generated_advisory_body(),
+	)
+	assert returncode == 0, output
+
+
+def test_periodless_numbered_successor_ends_files_section() -> None:
+	plan_text = (
+		"1. Files likely to change\n"
+		"- `src/security.py`\n\n"
+		"2. Functions or modules to implement\n"
+		"- Update `README.md` only as explanatory context.\n"
+	)
+	returncode, output = _run_guard(
+		plan_text,
 		FETCHED_HELPERS,
 		issue_body=_generated_advisory_body(),
 	)

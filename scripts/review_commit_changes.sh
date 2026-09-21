@@ -22,6 +22,8 @@
 #   RUNTIME_DIR                       Ephemeral per-run directory.
 #   PRE_EDITOR_STATE_FILE             Optional snapshot of pre-editor tree state.
 #   PRE_EDITOR_DIFF_BASELINE_FILE     Optional pre-editor baseline diff file.
+#   LINKED_ISSUE_METADATA_FILE        Batched linked-issue body/authorship JSON
+#                                     produced by review_collect_pr_metadata.sh.
 #   PRE_EDITOR_UNTRACKED_FILE         Optional sorted NUL-delimited list of paths
 #                                     that were untracked before the editor ran
 #                                     (both repo kinds). Consumer repos use it to keep
@@ -474,6 +476,60 @@ if [ "${PROTECTED_LEAKED}" = "true" ]; then
   echo "Staged files after protected-path reset:"
   printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
 fi
+
+# >>> files_touched scope-enforcement guard (review) >>>
+# Generated security advisories are exact-file tasks. Re-check the staged
+# review-editor delta against the authenticated linked-issue metadata so a
+# later [ai-autofix] commit cannot widen an implementation that passed the
+# plan and implement guards. This path is deliberately fail-closed.
+review_advisory_rows_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review-advisory-rows.XXXXXX")"
+if [ ! -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
+  echo "::error::Refusing to commit: linked-issue metadata is unavailable."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
+if ! jq -c '[.[] | select(((.body // "") | contains("**Generated security advisory metadata**")))]' \
+    "${LINKED_ISSUE_METADATA_FILE}" > "${review_advisory_rows_file}"; then
+  echo "::error::Refusing to commit: linked-issue metadata is malformed."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
+review_advisory_count="$(jq -r 'length' "${review_advisory_rows_file}")"
+if [ "${review_advisory_count}" -gt 1 ]; then
+  echo "::error::Refusing to commit: multiple generated security advisories are linked to one PR."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
+if [ "${review_advisory_count}" -eq 1 ]; then
+  review_advisory_body_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review-advisory-body.XXXXXX")"
+  review_advisory_staged_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review-advisory-staged.XXXXXX")"
+  jq -rj '.[0].body // ""' "${review_advisory_rows_file}" > "${review_advisory_body_file}"
+  printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${review_advisory_staged_file}"
+  review_advisory_author_association="$(jq -r '.[0].author_association // ""' "${review_advisory_rows_file}")"
+  review_advisory_author_login="$(jq -r '.[0].author_login // ""' "${review_advisory_rows_file}")"
+  review_advisory_scope_rc=30
+  if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+    set +e
+    review_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py" \
+      --issue-body-file "${review_advisory_body_file}" \
+      --staged-file "${review_advisory_staged_file}" \
+      --issue-author-association "${review_advisory_author_association}" \
+      --issue-author-login "${review_advisory_author_login}" \
+      --generated-advisory-mode required)"
+    review_advisory_scope_rc=$?
+    set -e
+  fi
+  rm -f "${review_advisory_body_file}" "${review_advisory_staged_file}"
+  if [ "${review_advisory_scope_rc}" -ne 0 ]; then
+    echo "::error::Refusing to commit: generated security advisory review edits exceed the exact cited-file scope or metadata validation failed."
+    printf '%s\n' "${review_advisory_violations:-}" | sed '/^$/d;s/^/  - /'
+    rm -f "${review_advisory_rows_file}"
+    exit 1
+  fi
+  echo "Generated security advisory review scope guard: all staged paths match the exact cited file."
+fi
+rm -f "${review_advisory_rows_file}"
+# <<< files_touched scope-enforcement guard (review) <<<
 
 REVIEW_WRITE_GUARD_STAGED_FILE="$(mktemp "${TMPDIR:-/tmp}/review-write-guard-staged.XXXXXX")"
 printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${REVIEW_WRITE_GUARD_STAGED_FILE}"

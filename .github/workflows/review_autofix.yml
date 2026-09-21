@@ -1997,6 +1997,7 @@ jobs:
             echo "PR_EDITOR_COMMENT_FILE=${RUNTIME_DIR}/pr_editor_comment.txt"
             echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
             echo "LINKED_ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/linked_issue_context.txt"
+            echo "LINKED_ISSUE_METADATA_FILE=${RUNTIME_DIR}/linked_issue_metadata.json"
             echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
             echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"
             echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"
