@@ -296,13 +296,88 @@ def test_tag_lookup_failure_fails_closed() -> None:
 
 
 def test_no_code_change_since_failed_run_skips() -> None:
+	# Budget of one: a single failed cycle holds the tip, as before the retry budget.
 	failed_head = "4" * 40
 	runs = [{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": failed_head, "created_at": "2026-09-18T00:00:00Z"}]
 	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), failed_head: _compare(["README.md"])}}
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, final, _ = _run(Path(tmp), state)
-	assert f"PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run base={failed_head} head={TIP}" in proc.stdout
+		proc, final, _ = _run(Path(tmp), state, env={"PROMOTE_CYCLE_MAX_ATTEMPTS": "1"})
+	assert f"PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run base={failed_head} head={TIP} attempts=1 max=1" in proc.stdout
 	assert not final.get("dispatches")
+
+
+def test_failed_run_on_same_tip_is_retried_within_the_default_budget() -> None:
+	# Two failed ticks (one on the tip itself, one a docs-only commit behind
+	# it) spend two of the default three attempts; the tick runs the gate.
+	docs_only_head = "4" * 40
+	runs = [
+		{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": docs_only_head, "created_at": "2026-09-17T00:00:00Z"},
+		{"id": 3, "status": "completed", "event": "schedule", "conclusion": "timed_out", "head_sha": TIP, "created_at": "2026-09-18T00:00:00Z"},
+	]
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), docs_only_head: _compare(["README.md"])}, "gate_runs_sequence": GATE_SUCCESS}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "no_code_changes_since_failed_run" not in proc.stdout
+	assert f"Retrying the cycle on {TIP}: 2 failed attempt(s) since the last code change, budget 3." in proc.stdout
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout
+
+
+def test_failed_runs_on_same_tip_hold_once_the_budget_is_spent() -> None:
+	older_head = "4" * 40
+	runs = [
+		{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": TIP, "created_at": "2026-09-16T00:00:00Z"},
+		{"id": 3, "status": "completed", "event": "schedule", "conclusion": "cancelled", "head_sha": older_head, "created_at": "2026-09-17T00:00:00Z"},
+		{"id": 4, "status": "completed", "event": "schedule", "conclusion": "success", "head_sha": TIP, "created_at": "2026-09-17T12:00:00Z"},
+		{"id": 5, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": TIP, "created_at": "2026-09-18T00:00:00Z"},
+	]
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), older_head: _compare(["docs/notes.md"])}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	# Skipped ticks (conclusion success) are not attempts; the three failed
+	# or cancelled ones are, so the newest failed head is reported as base.
+	assert f"PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run base={TIP} head={TIP} attempts=3 max=3" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_failed_runs_before_a_code_change_do_not_spend_the_budget() -> None:
+	# Newest failed run has no code change to the tip (one attempt); the one
+	# before it is separated from the tip by a code change, so the walk stops
+	# there and the older failure is never compared or counted.
+	recent_head = "4" * 40
+	old_head = "6" * 40
+	oldest_head = "7" * 40
+	runs = [
+		{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": oldest_head, "created_at": "2026-09-15T00:00:00Z"},
+		{"id": 3, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": old_head, "created_at": "2026-09-16T00:00:00Z"},
+		{"id": 4, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": recent_head, "created_at": "2026-09-18T00:00:00Z"},
+	]
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), recent_head: _compare(["README.md"]), old_head: _compare(["scripts/y.sh"]), oldest_head: _compare(["README.md"])}, "gate_runs_sequence": GATE_SUCCESS}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env={"PROMOTE_CYCLE_MAX_ATTEMPTS": "2"})
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert f"Retrying the cycle on {TIP}: 1 failed attempt(s) since the last code change, budget 2." in proc.stdout
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout
+	compared = [c[1].split("/compare/")[1].split("...")[0] for c in final["calls"] if c[:1] == ["api"] and "/compare/" in c[1]]
+	assert oldest_head not in compared
+
+
+def test_diverged_newest_failed_run_still_skips_base_not_ancestor() -> None:
+	failed_head = "4" * 40
+	runs = [{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": failed_head, "created_at": "2026-09-18T00:00:00Z"}]
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), failed_head: _compare([], status="diverged")}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert f"PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base={failed_head} head={TIP} status=diverged" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_invalid_max_attempts_fails_fast() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {}, env={"PROMOTE_CYCLE_MAX_ATTEMPTS": "0"})
+	assert proc.returncode == 1
+	assert "PROMOTE_CYCLE_MAX_ATTEMPTS must be a positive integer" in proc.stdout + proc.stderr
+	assert not final.get("calls")
 
 
 def test_insufficient_docs_skips_before_the_smoke_gate() -> None:

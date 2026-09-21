@@ -316,6 +316,7 @@ def test_promote_workflow_cycle_job_runs_the_cycle_script_daily() -> None:
 	assert run_step["env"]["PROMOTE_CYCLE_GATE_WAIT_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}"
 	assert run_step["env"]["PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}"
 	assert run_step["env"]["PROMOTE_CYCLE_GATE_POLL_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_MAX_ATTEMPTS"] == "${{ vars.PROMOTE_CYCLE_MAX_ATTEMPTS || '3' }}"
 	assert 18000 + 1800 < cycle["timeout-minutes"] * 60
 	assert run_step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT || github.token }}"
 	promote = wf["jobs"]["promote"]

@@ -7,9 +7,11 @@ name: Auto release stable
 # `stable` branch is invisible to them until test-and-mark-stable.yml runs.
 # This schedule dispatches that gate whenever the branch tip differs from the
 # tag commit, skipping while a gate run is queued or running on any branch
-# (the gate's e2e job cancels concurrent siblings) and after the gate already
-# failed on the current tip (a human has to look at that; a cancelled gate is
-# retried). See scripts/auto_release_stable.sh for the decision order.
+# (the gate's e2e job cancels concurrent siblings) and once the gate has
+# failed AUTO_RELEASE_STABLE_MAX_ATTEMPTS times on the current tip (a human
+# has to look at that; earlier failures are retried on the next tick, and a
+# cancelled gate never counts). See scripts/auto_release_stable.sh for the
+# decision order.
 #
 # Promotion of `main` to `stable` stays with promote-main-to-stable.yml:
 # its daily cycle job proves `main` first, and an operator can still run it
@@ -50,6 +52,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           AUTO_RELEASE_STABLE_ENABLED: ${{ vars.AUTO_RELEASE_STABLE_ENABLED || 'true' }}
+          AUTO_RELEASE_STABLE_MAX_ATTEMPTS: ${{ vars.AUTO_RELEASE_STABLE_MAX_ATTEMPTS || '3' }}
         run: |
           set -euo pipefail
           bash scripts/auto_release_stable.sh

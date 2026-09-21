@@ -27,7 +27,8 @@ name: Promote main to stable
 #
 #   1. detect a code change on `main` since the `stable` tag (non-code paths
 #      such as analysis/, docs/ and most *.md do not count), hold while a
-#      cycle is in flight or already ran for this tip;
+#      cycle is in flight, already ran for this tip, or already failed on it
+#      PROMOTE_CYCLE_MAX_ATTEMPTS times;
 #   2. run test-and-mark-stable.yml in gate_only mode on `main` (the smoke
 #      gate) and wait for it;
 #   3. dispatch the PROVING apply-analysis run (one analysis doc) with the
@@ -136,6 +137,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PROMOTE_CYCLE_ENABLED: ${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}
           PROMOTE_CYCLE_MIN_DOCS: ${{ vars.PROMOTE_CYCLE_MIN_DOCS || '2' }}
+          PROMOTE_CYCLE_MAX_ATTEMPTS: ${{ vars.PROMOTE_CYCLE_MAX_ATTEMPTS || '3' }}
           PROMOTE_CYCLE_GATE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}
           PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}
           PROMOTE_CYCLE_GATE_POLL_SECS: ${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}
