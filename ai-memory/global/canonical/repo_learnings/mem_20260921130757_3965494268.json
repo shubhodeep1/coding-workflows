@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Release and promotion automation treats refs, budgets, and review gates as explicit contracts.",
   "timestamps": {
     "created_at": "2026-09-21T13:07:57Z",
