@@ -202,7 +202,7 @@ def test_targeted_file_context_receives_semble_inputs() -> None:
 def test_repair_prompt_appends_bounded_semble_context() -> None:
 	repair_block = _step_run_text("Attempt post-Codex syntax repair")
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"' in repair_block
-	assert 'python3 - "${CAPTURE_FILE}" "${ALLOW_LIST_FILE}" "${CAPTURED_FILES_FILE}" "${output_file}"' in repair_block
+	assert '_gh_helpers_run_isolated_python -- - "${CAPTURE_FILE}" "${ALLOW_LIST_FILE}" "${CAPTURED_FILES_FILE}" "${output_file}"' in repair_block
 	assert '::warning::Failed to build repair Semble query' in repair_block
 	assert 'REPAIR_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/post_codex_repair_semble_query.txt"' in repair_block
 	assert 'build_repair_semble_query "${REPAIR_SEMBLE_QUERY_FILE}"' in repair_block

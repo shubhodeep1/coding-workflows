@@ -569,7 +569,21 @@ jobs:
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          env -i \
+            HOME="${HOME:-}" \
+            PATH="${PATH:-/usr/bin:/bin}" \
+            TMPDIR="${TMPDIR:-/tmp}" \
+            LANG="C.UTF-8" \
+            LC_ALL="C.UTF-8" \
+            PYTHONDONTWRITEBYTECODE="1" \
+            GH_TOKEN="${GH_TOKEN}" \
+            GITHUB_OUTPUT="${GITHUB_OUTPUT}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+            ISSUE_BODY="${ISSUE_BODY}" \
+            ISSUE_BODY_FILE="${ISSUE_BODY_FILE:-}" \
+            ISSUE_AUTHOR_ASSOCIATION="${ISSUE_AUTHOR_ASSOCIATION}" \
+            REISSUE_PRESERVE_BASELINE_ENABLED="${REISSUE_PRESERVE_BASELINE_ENABLED}" \
+            python3 -I -B - <<'PY'
           import json
           import os
           import re
@@ -3555,7 +3569,7 @@ jobs:
           REPAIR_CODEX_CONFIG="${CODEX_HOME:-${HOME:-/root}/.codex}/config.toml"
           upsert_repair_reasoning_into_config() {
             local cfg="$1"
-            PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${REPAIR_REASONING}" <<'PY' || return 1
+            _gh_helpers_run_isolated_python -- - "${cfg}" "${REPAIR_REASONING}" <<'PY' || return 1
           from pathlib import Path
           import re
           import sys
@@ -3669,7 +3683,7 @@ jobs:
             build_repair_semble_query() {
               local output_file="$1"
               : > "${output_file}"
-              python3 - "${CAPTURE_FILE}" "${ALLOW_LIST_FILE}" "${CAPTURED_FILES_FILE}" "${output_file}" <<'PY' || { echo "::warning::Failed to build repair Semble query" >&2; :; }
+              _gh_helpers_run_isolated_python -- - "${CAPTURE_FILE}" "${ALLOW_LIST_FILE}" "${CAPTURED_FILES_FILE}" "${output_file}" <<'PY' || { echo "::warning::Failed to build repair Semble query" >&2; :; }
           import os
           import re
           import sys
@@ -4568,6 +4582,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"
           mkdir -p "${RUNTIME_DIR}/pr-body-lint"
           PR_TITLE_FILE="${RUNTIME_DIR}/pr-body-lint/title.txt"
           PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"
@@ -4580,7 +4595,7 @@ jobs:
           # the lint is checking a different artifact than the one
           # submitted.
           TRACKING_ISSUE_NUMBER="$(
-            python3 - "${ISSUE_META_FILE}" <<'PY'
+            _gh_helpers_run_isolated_python -- - "${ISSUE_META_FILE}" <<'PY'
           import json
           import re
           import sys

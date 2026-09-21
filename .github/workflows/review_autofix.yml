@@ -615,7 +615,18 @@ jobs:
                   echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error"
                 else
                   terminal_decision=""
-                  if ! terminal_decision="$(PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" GATE_MARKER_AUTHOR_LOGIN="${terminal_marker_author_login}" python3 - <<'PY'
+                  if ! terminal_decision="$(env -i \
+                    HOME="${HOME:-}" \
+                    PATH="${PATH:-/usr/bin:/bin}" \
+                    TMPDIR="${TMPDIR:-/tmp}" \
+                    LANG="C.UTF-8" \
+                    LC_ALL="C.UTF-8" \
+                    PYTHONDONTWRITEBYTECODE="1" \
+                    PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" \
+                    GATE_HEAD_SHA="${pr_head_sha_gate}" \
+                    GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" \
+                    GATE_MARKER_AUTHOR_LOGIN="${terminal_marker_author_login}" \
+                    python3 -I -B - <<'PY'
           import json
           import os
           import re
@@ -848,7 +859,15 @@ jobs:
                       # alone. Repo-verified signals such as new top-level
                       # directories remain helper-only and intentionally fail
                       # open on the gate path.
-                      if gate_materiality_json="$(PR_FILES_JSON="${pr_files_json}" python3 - <<'PY'
+                      if gate_materiality_json="$(env -i \
+                        HOME="${HOME:-}" \
+                        PATH="${PATH:-/usr/bin:/bin}" \
+                        TMPDIR="${TMPDIR:-/tmp}" \
+                        LANG="C.UTF-8" \
+                        LC_ALL="C.UTF-8" \
+                        PYTHONDONTWRITEBYTECODE="1" \
+                        PR_FILES_JSON="${pr_files_json}" \
+                        python3 -I -B - <<'PY'
           import json
           import os
           import sys
@@ -2390,6 +2409,7 @@ jobs:
         if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 
           current_head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
           if [ -z "${current_head_sha}" ]; then
@@ -2403,11 +2423,13 @@ jobs:
           fi
 
           resume_env_file="$(mktemp)"
-          CURRENT_HEAD_SHA="${current_head_sha}" \
-          RESUME_ROUND_LIMIT="${resume_round_limit}" \
-          CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}" \
-          CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}" \
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_env_file}"
+          _gh_helpers_run_isolated_python \
+            "CURRENT_HEAD_SHA=${current_head_sha}" \
+            "RESUME_ROUND_LIMIT=${resume_round_limit}" \
+            "PR_NUMBER=${PR_NUMBER:-}" \
+            "CURRENT_PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR:-}" \
+            "CURRENT_RUNTIME_DIR=${RUNTIME_DIR:-}" \
+            -- - <<'PY' > "${resume_env_file}"
           from __future__ import annotations
 
           import json
@@ -4281,6 +4303,7 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 
           validation_tail_can_complete="true"
           edits_withheld_for_safety="false"
@@ -4291,7 +4314,7 @@ jobs:
             if [ ! -f "${workflow_timeout_source_path}" ]; then
               workflow_timeout_source_path=".github/workflows/review_autofix.yml"
             fi
-            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
+            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(_gh_helpers_run_isolated_python -- -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
               job_timeout_minutes="240"
               resolver_timeout_minutes="170"
             fi
@@ -5643,6 +5666,7 @@ jobs:
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           echo "REVIEW_BREAK_GLASS=false" >> "$GITHUB_ENV"
           echo "REVIEW_BREAK_GLASS_COMMENTER=" >> "$GITHUB_ENV"
 
@@ -5656,7 +5680,10 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> "$GITHUB_ENV"
+          _gh_helpers_run_isolated_python \
+            "PR_ISSUE_COMMENTS_FILE=${PR_ISSUE_COMMENTS_FILE:-}" \
+            "PR_REVIEWS_FILE=${PR_REVIEWS_FILE:-}" \
+            -- - <<'PY' >> "$GITHUB_ENV"
           import json
           import os
           import re
@@ -6390,24 +6417,25 @@ jobs:
           fi
 
           resume_eval_file="$(mktemp)"
-          CURRENT_HEAD_SHA="${current_head_sha}" \
-          PREVIOUS_PROGRESS_FINGERPRINT="${previous_progress_fingerprint}" \
-          PREVIOUS_REVIEWS_DIR_PATH="${PREVIOUS_REVIEWS_DIR:-}" \
-          RUNTIME_DIR_PATH="${RUNTIME_DIR:-}" \
-          EDITOR_SUMMARY_FILE_PATH="${EDITOR_SUMMARY_FILE:-}" \
-          COMMITTED_FILES_FILE_PATH="${COMMITTED_FILES_FILE:-}" \
-          COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
-          INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
-          RESUME_ROUND_VALUE="${resume_round}" \
-          RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
-          PARTIAL_PHASE="${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}" \
-          PARTIAL_REASON="${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}" \
-          VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
-          EDITS_PUSHED="${edits_pushed}" \
-          VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}" \
-          EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}" \
-          WITHHELD_REASON="${withheld_reason}" \
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_eval_file}"
+          _gh_helpers_run_isolated_python \
+            "CURRENT_HEAD_SHA=${current_head_sha}" \
+            "PREVIOUS_PROGRESS_FINGERPRINT=${previous_progress_fingerprint}" \
+            "PREVIOUS_REVIEWS_DIR_PATH=${PREVIOUS_REVIEWS_DIR:-}" \
+            "RUNTIME_DIR_PATH=${RUNTIME_DIR:-}" \
+            "EDITOR_SUMMARY_FILE_PATH=${EDITOR_SUMMARY_FILE:-}" \
+            "COMMITTED_FILES_FILE_PATH=${COMMITTED_FILES_FILE:-}" \
+            "COMPLETED_SCOPE_CSV=${completed_scope_csv}" \
+            "INCOMPLETE_SCOPE_CSV=${incomplete_scope_csv}" \
+            "RESUME_ROUND_VALUE=${resume_round}" \
+            "RESUME_ROUND_LIMIT_VALUE=${resume_round_limit}" \
+            "PARTIAL_PHASE=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}" \
+            "PARTIAL_REASON=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}" \
+            "VALIDATED_EDITS_COMMITTED=${validated_edits_committed}" \
+            "EDITS_PUSHED=${edits_pushed}" \
+            "VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}" \
+            "EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}" \
+            "WITHHELD_REASON=${withheld_reason}" \
+            -- - <<'PY' > "${resume_eval_file}"
           from __future__ import annotations
 
           import glob
@@ -6598,24 +6626,27 @@ jobs:
           partial_marker_dir=".ai/review_runtime/pr-${PR_NUMBER}/round-${resume_round}"
           mkdir -p "${partial_marker_dir}"
           partial_marker_file="${partial_marker_dir}/partial_finalize.json"
-          PARTIAL_MARKER_FILE="${partial_marker_file}" \
-          PARTIAL_COMMENT_POSTED="${partial_comment_posted}" \
-          CURRENT_HEAD_SHA="${current_head_sha}" \
-          COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
-          INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
-          VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
-          EDITS_PUSHED="${edits_pushed}" \
-          VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}" \
-          EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}" \
-          WITHHELD_REASON="${withheld_reason}" \
-          RESUME_ROUND_VALUE="${resume_round}" \
-          RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
-          RESUME_STATE_VALUE="${RESUME_STATE}" \
-          RESUME_SHOULD_CONTINUE_VALUE="${RESUME_SHOULD_CONTINUE}" \
-          PROGRESS_FINGERPRINT_VALUE="${PROGRESS_FINGERPRINT}" \
-          PREVIOUS_REVIEWS_DIR_PATH="${PREVIOUS_REVIEWS_DIR:-}" \
-          RUNTIME_DIR_PATH="${RUNTIME_DIR:-}" \
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          _gh_helpers_run_isolated_python \
+            "PARTIAL_MARKER_FILE=${partial_marker_file}" \
+            "PARTIAL_COMMENT_POSTED=${partial_comment_posted}" \
+            "CURRENT_HEAD_SHA=${current_head_sha}" \
+            "COMPLETED_SCOPE_CSV=${completed_scope_csv}" \
+            "INCOMPLETE_SCOPE_CSV=${incomplete_scope_csv}" \
+            "VALIDATED_EDITS_COMMITTED=${validated_edits_committed}" \
+            "EDITS_PUSHED=${edits_pushed}" \
+            "VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}" \
+            "EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}" \
+            "WITHHELD_REASON=${withheld_reason}" \
+            "RESUME_ROUND_VALUE=${resume_round}" \
+            "RESUME_ROUND_LIMIT_VALUE=${resume_round_limit}" \
+            "RESUME_STATE_VALUE=${RESUME_STATE}" \
+            "RESUME_SHOULD_CONTINUE_VALUE=${RESUME_SHOULD_CONTINUE}" \
+            "PROGRESS_FINGERPRINT_VALUE=${PROGRESS_FINGERPRINT}" \
+            "PREVIOUS_REVIEWS_DIR_PATH=${PREVIOUS_REVIEWS_DIR:-}" \
+            "RUNTIME_DIR_PATH=${RUNTIME_DIR:-}" \
+            "AUTOFIX_PARTIAL_FINALIZE_REASON=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}" \
+            "AUTOFIX_PARTIAL_FINALIZE_PHASE=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}" \
+            -- - <<'PY'
           from __future__ import annotations
 
           import json
@@ -7582,6 +7613,7 @@ jobs:
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 
           count_nonempty_lines()
           {
@@ -7736,19 +7768,41 @@ jobs:
           partial_finalize_edits_withheld_for_safety="${AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY:-false}"
           partial_finalize_withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-none}"
 
+          review_summary_environment=()
+          for review_summary_environment_name in \
+            RUNTIME_DIR PREVIOUS_REVIEWS_DIR EDITOR_SUMMARY_FILE REVIEW_CONSOLIDATOR_ENABLED \
+            AUTOFIX_EDITOR_EMPTY_NOOP EDITOR_CHANGES_LOST EDITOR_NOOP_SUSPICIOUS \
+            EDITOR_NOOP_REFUSAL EDITOR_NOOP_RECOVERABLE_FAILURE PR_CLOSED \
+            MAX_ITERATIONS_REACHED DID_COMMIT LEDGER_ONLY_COMMIT LEDGER_ONLY_COMMIT_STRICT \
+            AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE \
+            AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON \
+            AUTOFIX_STALE_BASE_SKIP AUTOFIX_EDITS_PUSHED CAN_PUSH CONFLICT_RESOLVED \
+            SKIP_JUDGE JUDGE_HANDLED JUDGE_ACTION JUDGE_SKIP_REASON RB_JUDGE_STATUS \
+            AUTOFIX_PARTIAL_FINALIZE_REQUESTED AUTOFIX_PARTIAL_FINALIZE_REASON \
+            AUTOFIX_PARTIAL_FINALIZE_PHASE AUTOFIX_PARTIAL_COMMENT_POSTED \
+            AUTOFIX_RESUME_RESTORED AUTOFIX_RESUME_HEAD_SHA AUTOFIX_RESUME_ROUND_LIMIT \
+            AUTOFIX_RESUME_STATE AUTOFIX_RESUME_SHOULD_CONTINUE AUTOFIX_RESUME_REASON \
+            AUTOFIX_RESUME_PHASE AUTOFIX_RESUME_COMMENT_POSTED AUTOFIX_RESUME_COMPLETED_SCOPE \
+            AUTOFIX_RESUME_INCOMPLETE_SCOPE CHANGES_LOST_REDISPATCHED; do
+            if [ "${!review_summary_environment_name+x}" = "x" ]; then
+              review_summary_environment+=("${review_summary_environment_name}=${!review_summary_environment_name}")
+            fi
+          done
+
           structured_summary_line="$(
-            BUDGET_ELAPSED_SECS="${budget_elapsed_secs}" \
-            BUDGET_TOTAL_SECS="${budget_total_secs}" \
-            BUDGET_REMAINING_SECS="${budget_remaining_secs}" \
-            RESUME_ROUND_SUMMARY="${resume_round}" \
-            REVIEWER_BUNDLE_FILE="${reviewer_bundle_file}" \
-            FLOOR_TAGS_FILE="${floor_tags_file}" \
-            CONSOLIDATOR_RAW_FILE="${consolidator_raw_file}" \
-            PARSER_STATS_FILE="${parser_stats_file}" \
-            LEDGER_STATUS_FILE="${ledger_status_file}" \
-            COMMITTED_FILES_FILE="${committed_files_file}" \
-            PYTHONDONTWRITEBYTECODE=1 \
-            python3 - <<'PY' || true
+            _gh_helpers_run_isolated_python \
+              "${review_summary_environment[@]}" \
+              "BUDGET_ELAPSED_SECS=${budget_elapsed_secs}" \
+              "BUDGET_TOTAL_SECS=${budget_total_secs}" \
+              "BUDGET_REMAINING_SECS=${budget_remaining_secs}" \
+              "RESUME_ROUND_SUMMARY=${resume_round}" \
+              "REVIEWER_BUNDLE_FILE=${reviewer_bundle_file}" \
+              "FLOOR_TAGS_FILE=${floor_tags_file}" \
+              "CONSOLIDATOR_RAW_FILE=${consolidator_raw_file}" \
+              "PARSER_STATS_FILE=${parser_stats_file}" \
+              "LEDGER_STATUS_FILE=${ledger_status_file}" \
+              "COMMITTED_FILES_FILE=${committed_files_file}" \
+              -- - <<'PY' || true
           from __future__ import annotations
 
           import glob

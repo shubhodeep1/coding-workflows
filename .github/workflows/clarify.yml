@@ -537,7 +537,7 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
+          python3 -I -B -m pip install --user --disable-pip-version-check "redis>=5,<6"
 
       - name: Restore semantic cache SQLite
         if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
@@ -656,6 +656,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           declare -F memory_bootstrap >/dev/null 2>&1 || memory_bootstrap(){ return 0; }
           memory_bootstrap --require memory_retrieve
@@ -678,7 +679,7 @@ jobs:
             --scope-level "global" \
             --max "10"
 
-          python3 - <<'PY' "${RUNTIME_DIR}/repo_learnings_context.txt" "${RUNTIME_DIR}/repo_learnings.txt"
+          _gh_helpers_run_isolated_python -- - "${RUNTIME_DIR}/repo_learnings_context.txt" "${RUNTIME_DIR}/repo_learnings.txt" <<'PY'
           from pathlib import Path
           import sys
 

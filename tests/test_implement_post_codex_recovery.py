@@ -3261,7 +3261,7 @@ def test_repair_reasoning_heredoc_is_column_zero_after_yaml_strip() -> None:
 	run_indent = len(block[run_idx]) - len(block[run_idx].lstrip(" "))
 	opener_idx = next(
 		i for i, line in enumerate(block)
-		if 'PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${REPAIR_REASONING}" <<\'PY\'' in line
+		if '_gh_helpers_run_isolated_python -- - "${cfg}" "${REPAIR_REASONING}" <<\'PY\'' in line
 	)
 	body_line = block[opener_idx + 1]
 	terminator_idx = next(i for i in range(opener_idx + 1, len(block)) if block[i].strip() == "PY")

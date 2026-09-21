@@ -10,6 +10,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATE_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 ORCHESTRATE_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
+IMPLEMENT_WF = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+REVIEW_AUTOFIX_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+CLARIFY_WF = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 ORCHESTRATE_POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 SYNC_LIST_UNION_REQUIREMENTS = REPO_ROOT / "scripts" / "sync_contract_list_union.requirements.txt"
 
@@ -97,7 +101,7 @@ def test_orchestrate_python_launches_are_isolated() -> None:
 		(line_number, line)
 		for line_number, line in enumerate(wf.splitlines(), 1)
 		if not line.lstrip().startswith("#")
-		and re.search(r"\bpython(?:3)?\s+(?:-I\b|-B\b|-c\b|-(?:\s|$)|\"?\$\{)", line)
+		and re.search(r"\bpython(?:3)?\s+\S", line)
 	]
 	assert active_python_launches == [
 		(next(
@@ -112,7 +116,7 @@ def test_orchestrate_python_launches_are_isolated() -> None:
 	assert 'PYTHONDONTWRITEBYTECODE="1" \\' in bootstrap_prefix
 	assert wf.count("_gh_helpers_run_isolated_python") >= 12
 	isolated_python_step_blocks = [
-		block for block in wf.split("\n      - name: ")[1:]
+		block for block in re.split(r"\n(?=[ \t]+- name: )", wf)[1:]
 		if "_gh_helpers_run_isolated_python" in block
 	]
 	assert isolated_python_step_blocks
@@ -122,6 +126,27 @@ def test_orchestrate_python_launches_are_isolated() -> None:
 	assert '"PROJECT_DESCRIPTION=${PROJECT_DESCRIPTION}" -- -' in wf
 	assert wf.count('"ORCHESTRATOR_STATE_AUTH_KEYRING=${ORCHESTRATOR_STATE_AUTH_KEYRING}" --') == 2
 	assert "PYTHONDONTWRITEBYTECODE=1 python3" not in wf
+
+
+def test_sibling_workflow_python_stdin_launches_are_isolated() -> None:
+	unsafe_launch_pattern = re.compile(
+		r"\bpython(?:3)?\s+(?!-I(?:\s|$)).*?(?:-(?:c|m)(?:\s|$)|-(?:\s|$))"
+	)
+	for workflow_path in (IMPLEMENT_WF, REVIEW_AUTOFIX_WF, PLAN_WF, CLARIFY_WF):
+		workflow_text = _workflow(workflow_path)
+		unsafe_launches = [
+			(line_number, line)
+			for line_number, line in enumerate(workflow_text.splitlines(), 1)
+			if not line.lstrip().startswith("#") and unsafe_launch_pattern.search(line)
+		]
+		assert unsafe_launches == [], f"unsafe Python launch in {workflow_path}: {unsafe_launches}"
+		for step_block in re.split(r"\n(?=[ \t]+- name: )", workflow_text)[1:]:
+			if "_gh_helpers_run_isolated_python" not in step_block:
+				continue
+			source_index = step_block.find("gh_helpers.sh\"")
+			call_index = step_block.find("_gh_helpers_run_isolated_python")
+			step_name = step_block.splitlines()[0].strip()
+			assert 0 <= source_index < call_index, f"isolated Python helper is not sourced first in {workflow_path} step {step_name}"
 
 
 def test_nag_reminder_assets_and_judge_wiring_are_present() -> None:
@@ -295,6 +320,7 @@ def main() -> int:
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_python_launches_are_isolated()
+	test_sibling_workflow_python_stdin_launches_are_isolated()
 	test_nag_reminder_assets_and_judge_wiring_are_present()
 	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
 	test_security_pass_dark_launch_env_and_assets_are_wired()

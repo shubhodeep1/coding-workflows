@@ -64,7 +64,7 @@ def _terminal_parser_script() -> str:
 	gate_lines = _gate_block().splitlines()
 	start_idx = -1
 	for idx, line in enumerate(gate_lines):
-		if "terminal_decision=" in line and "python3 - <<'PY'" in line:
+		if "python3 -I -B - <<'PY'" in line:
 			start_idx = idx + 1
 			break
 	if start_idx < 0:
