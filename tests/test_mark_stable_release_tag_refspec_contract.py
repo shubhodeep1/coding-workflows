@@ -180,11 +180,13 @@ def test_workflow_tag_publication_helper_executes_failure_matrix() -> None:
 			working_directory, "remote-unreadable", "immutable"
 		)
 		assert unreadable_remote.returncode != 0
-		assert unreadable_remote_calls.count("push:origin refs/tags/test") == 3
-		assert unreadable_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 3
+		assert unreadable_remote_calls.count("push:origin refs/tags/test") == 5
+		assert unreadable_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 5
 		assert [call for call in unreadable_remote_calls if call.startswith("sleep:")] == [
 			"sleep:2",
 			"sleep:4",
+			"sleep:8",
+			"sleep:16",
 		]
 		assert "mock ls-remote transport failure" in unreadable_remote.stderr
 
@@ -192,8 +194,8 @@ def test_workflow_tag_publication_helper_executes_failure_matrix() -> None:
 			working_directory, "remote-absent", "immutable"
 		)
 		assert absent_remote.returncode != 0
-		assert absent_remote_calls.count("push:origin refs/tags/test") == 3
-		assert absent_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 3
+		assert absent_remote_calls.count("push:origin refs/tags/test") == 5
+		assert absent_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 5
 		assert "Failed to publish and verify" in absent_remote.stdout
 
 
@@ -202,8 +204,8 @@ def test_workflow_tag_publication_helper_is_bounded_verified_and_fail_closed() -
 		workflow_text = _read(workflow_path)
 		helper_text = _workflow_publication_helper(workflow_text)
 
-		assert "local max_attempts=3" in helper_text, (
-			f"{workflow_path.name}: tag publication retries must be bounded to three attempts"
+		assert "local max_attempts=5" in helper_text, (
+			f"{workflow_path.name}: tag publication retries must be bounded to five attempts"
 		)
 		assert 'sleep "${backoff_seconds}"' in helper_text, (
 			f"{workflow_path.name}: failed publication must back off before retrying"

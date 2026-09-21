@@ -687,7 +687,7 @@ jobs:
             local remote_lookup_output=""
             local remote_object_id=""
             local attempt=1
-            local max_attempts=3
+            local max_attempts=5
             local backoff_seconds=2
             local lookup_rc=0
 
