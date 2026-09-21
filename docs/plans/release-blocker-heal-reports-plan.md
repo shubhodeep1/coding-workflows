@@ -154,7 +154,7 @@ End-to-end (manual, after phase 1 merges, no code): dispatch `workflow-failure-h
 - Fingerprint drift: if evidence lines contain wording that changes between ticks the dedup would open a second issue. Mitigation: the first evidence line is the fixed `reason=` token line; tests assert stability across SHAs, ages and run IDs.
 - `GH_PAT` missing in a producer job makes every dispatch fail. Mitigation: `dispatch_denied` is logged and alerted once per tick; the tick's own work is unaffected.
 - `TG_BOT_SECRET` / `TG_ADMIN_CHAT_ID` missing in a producer job silences its dispatch-failure alert. Mitigation: phase 2 binds them (step 13) and its tests assert the producer's `tg_send_msg` call is made; the intake-side alerts do not depend on the producer bindings.
-- Phase 1 must land the intake's job-log fix from PR #4191 (`gh api --allow-escape-sequences` on the logs call) or inherit it: without it `run_refs` evidence is empty and the `last_gate_failed` dedup onto the gate's issue cannot work. ACCEPTED — pending #4191 merging first; phase 1 re-checks this before relying on it.
+- Phase 1 must land the intake's job-log fix from PR #4194 (`gh api --allow-escape-sequences` on the logs call) or inherit it: without it `run_refs` evidence is empty and the `last_gate_failed` dedup onto the gate's issue cannot work. ACCEPTED — pending #4194 merging first; phase 1 re-checks this before relying on it.
 - The exact age of the stable release comes from `releases?per_page=1`, which reflects the newest release, not necessarily the tag commit's release. ACCEPTED — pending observation of the first week of reports; the evidence carries both the tag commit and the release tag so a mismatch is visible in the issue.
 
 ## Rollout
