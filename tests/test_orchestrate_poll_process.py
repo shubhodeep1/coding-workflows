@@ -20492,7 +20492,10 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# reach wedged branches (see the dedicated contract test in
 	# tests/test_review_autofix_review_pipeline_contract.py); keep this list in
 	# sync with review_autofix.yml and stage_workflow_support.sh.
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in stage_helper_body
+	assert (
+		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
+		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"'
+	) in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." in stage_helper_body
 	# The bootstrap still enumerates the script name in review_autofix.yml

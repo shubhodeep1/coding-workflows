@@ -6,6 +6,10 @@ Two shell drivers use this module through its CLI:
   * ``scripts/workflow_failure_heal_report.sh`` runs in the repository where an
     escalation label (``ai:needs-human`` and friends) was applied. It builds the
     thin ``repository_dispatch`` payload that is sent to coding-workflows.
+  * ``scripts/workflow_failure_heal_autofix_report.sh`` runs inside the
+    failure path of ``review_autofix.yml`` (in consumers and in this repo). It
+    counts how many review runs in a row failed on the pull request and, past
+    the streak threshold, reports the failure with the run's own evidence.
   * ``scripts/workflow_failure_heal_intake.sh`` runs in coding-workflows. It
     validates the payload, fingerprints the failure, applies the dedup / lineage
     / budget gates, and composes the heal issue body.
@@ -57,7 +61,7 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 	"Forward-merge stable to main",
 )
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
 CLASSIFICATIONS: tuple[str, ...] = (
@@ -74,6 +78,19 @@ DEFAULT_MAX_LINEAGE_DEPTH = 3
 DEFAULT_MAX_OPEN_ISSUES = 10
 DEFAULT_MAX_ISSUES_PER_DAY = 20
 DEFAULT_TARGET_BRANCH = "stable"
+DEFAULT_AUTOFIX_FAILURE_STREAK = 2
+FAILURE_EVIDENCE_LIMIT = 4000  # same bound as ISSUE_EXCERPT_LIMIT (defined below)
+
+# PR comment markers the review/autofix workflow posts. The streak counter reads
+# them newest first: every failure marker counts, a success marker ends the run.
+AUTOFIX_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
+	"AI review/autofix produced no output",
+	"AI review/autofix failed",
+	"AI review/autofix encountered a post-editor failure",
+)
+AUTOFIX_SUCCESS_COMMENT_MARKERS: tuple[str, ...] = (
+	"AI autofix editor summary",
+)
 
 ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
@@ -85,6 +102,7 @@ SIGNATURE_CHAR_LIMIT = 500
 _REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+_FAILURE_REASON_RE = re.compile(r"^[a-z][a-z0-9_:-]{0,79}$")
 _RUN_URL_RE = re.compile(
 	r"https://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/(?P<run_id>[0-9]+)"
 )
@@ -340,6 +358,77 @@ def build_workflow_run_payload(*, repo: str, workflow_run: dict[str, Any], now: 
 	}
 
 
+def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
+	"""Count the trailing review/autofix failure comments on a pull request.
+
+	``comments`` is the PR's issue-comment list, oldest first (the order the
+	GitHub API returns). Scanning from the newest comment, every failure marker
+	adds one; the first success marker (an editor summary) stops the count. The
+	current run's own failure comment is normally not in the list yet, so the
+	reporter adds one for it.
+	"""
+	streak = 0
+	for comment in reversed(list(comments)):
+		if not isinstance(comment, dict):
+			continue
+		body = sanitize_text(comment.get("body"))
+		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
+			streak += 1
+			continue
+		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+			break
+	return streak
+
+
+def build_autofix_failure_payload(
+	*,
+	repo: str,
+	pr: dict[str, Any],
+	comments: list[dict[str, Any]],
+	workflow_name: str,
+	failure_reason: str,
+	failure_evidence: str,
+	failure_streak: int,
+	run_id: str,
+	run_url: str | None,
+	wrapper_sha: str | None,
+	reporter_run_url: str | None,
+	now: datetime | None = None,
+) -> dict[str, Any]:
+	"""Build the dispatch payload for a failed review/autofix run on a PR."""
+	now = now or _utc_now()
+	body = sanitize_text(pr.get("body"))
+	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
+	run_number = _positive_int(run_id)
+	head_sha = str(pr.get("head", {}).get("sha") or "").lower() if isinstance(pr.get("head"), dict) else ""
+	head_branch = str(pr.get("base", {}).get("ref") or "") if isinstance(pr.get("base"), dict) else ""
+	return {
+		"schema_version": SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": "autofix_failure",
+		"issue_number": _positive_int(pr.get("number")),
+		"issue_title": single_line(pr.get("title"), 300),
+		"issue_url": sanitize_text(pr.get("html_url"), 300),
+		"label": None,
+		"labels": _labels_of(pr)[:50],
+		"run_refs": [{"repo": repo, "run_id": str(run_number), "url": sanitize_text(run_url, 300)}] if run_number else [],
+		"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
+		"source_gen": None,
+		"source_root": None,
+		"issue_excerpt": sanitize_text(body, ISSUE_EXCERPT_LIMIT),
+		"comments_excerpt": sanitize_text("\n\n---\n\n".join(comment_texts[-8:]), COMMENTS_EXCERPT_LIMIT),
+		"workflow_name": single_line(workflow_name, 200),
+		"head_branch": head_branch if is_valid_branch(head_branch) else None,
+		"head_sha": head_sha if is_valid_sha(head_sha) else None,
+		"conclusion": "failure",
+		"failure_reason": single_line(failure_reason, 80),
+		"failure_evidence": sanitize_text(failure_evidence, FAILURE_EVIDENCE_LIMIT),
+		"failure_streak": max(1, _positive_int(failure_streak) or 1),
+		"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
+		"reported_at": _iso(now),
+	}
+
+
 def validate_payload(payload: Any) -> dict[str, Any]:
 	"""Validate + normalise an incoming payload. Raises ValueError when unusable.
 
@@ -367,6 +456,18 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			raise ValueError("label is not a human-needed escalation label")
 	else:
 		label = None
+	failure_reason = payload.get("failure_reason")
+	failure_reason = failure_reason if isinstance(failure_reason, str) and _FAILURE_REASON_RE.match(failure_reason) else None
+	failure_streak = _positive_int(payload.get("failure_streak")) if payload.get("failure_streak") is not None else None
+	if kind == "autofix_failure":
+		if issue_number is None:
+			raise ValueError("issue_number (the pull request number) is required for autofix_failure reports")
+		if failure_reason is None:
+			raise ValueError("failure_reason is missing or malformed for autofix_failure reports")
+		failure_streak = failure_streak or 1
+	else:
+		failure_reason = None
+		failure_streak = None
 
 	run_refs: list[dict[str, str]] = []
 	for ref in payload.get("run_refs") or []:
@@ -416,6 +517,9 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"head_branch": head_branch,
 		"head_sha": head_sha,
 		"conclusion": single_line(payload.get("conclusion"), 40) or None,
+		"failure_reason": failure_reason,
+		"failure_evidence": sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT) if kind == "autofix_failure" else "",
+		"failure_streak": failure_streak,
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
@@ -628,11 +732,16 @@ def parse_classification(markdown: str) -> str:
 
 def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any]]) -> list[str]:
 	lines = [f"- **Source repository:** `{payload['source_repo']}`"]
+	kind = payload.get("source_kind")
 	if payload.get("issue_number"):
-		noun = "Pull request" if payload.get("source_kind") == "pull_request" else "Issue"
+		noun = "Pull request" if kind in ("pull_request", "autofix_failure") else "Issue"
 		url = payload.get("issue_url") or f"https://github.com/{payload['source_repo']}/issues/{payload['issue_number']}"
 		lines.append(f"- **Source {noun.lower()}:** {url} ({payload['source_repo']}#{payload['issue_number']})")
-		lines.append(f"- **Escalation label:** `{payload.get('label')}`")
+		if kind == "autofix_failure":
+			lines.append(f"- **Failure reason:** `{payload.get('failure_reason')}`")
+			lines.append(f"- **Consecutive failed review runs on this PR:** {payload.get('failure_streak') or 1}")
+		else:
+			lines.append(f"- **Escalation label:** `{payload.get('label')}`")
 	if payload.get("workflow_name"):
 		lines.append(f"- **Failed workflow:** `{payload['workflow_name']}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
 	if payload.get("head_branch"):
@@ -651,6 +760,10 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 	name = single_line(workflow_name or payload.get("workflow_name") or "", 120)
 	if payload.get("source_kind") == "workflow_run":
 		return f"Workflow heal: {name or 'release workflow'} failed on {payload.get('head_branch') or 'unknown branch'}"
+	if payload.get("source_kind") == "autofix_failure":
+		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
+		streak = payload.get("failure_streak") or 1
+		return f"Workflow heal: {name or 'review/autofix'} failed {streak}x for {target} ({payload.get('failure_reason')})"
 	label = payload.get("label") or "escalation"
 	target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 	if name:
@@ -686,14 +799,25 @@ def compose_issue_body(
 	parts.append(f"## Automated workflow failure heal (generation {gen} of max {max_depth})")
 	parts.append("")
 	if classification in UPSTREAM_ISSUE_CLASSIFICATIONS:
-		parts.append(
-			"A pipeline failure in a consumer of these workflows was escalated for human attention. "
-			"The diagnosis below attributes it to the shared workflow source, so this issue was filed "
-			"automatically for the clarify -> plan -> implement -> review pipeline to fix it here."
-			if payload.get("source_kind") != "workflow_run"
-			else "A release / promotion workflow run failed. This issue was filed automatically for the "
-			"clarify -> plan -> implement -> review pipeline to fix the cause."
-		)
+		if payload.get("source_kind") == "workflow_run":
+			intro = (
+				"A release / promotion workflow run failed. This issue was filed automatically for the "
+				"clarify -> plan -> implement -> review pipeline to fix the cause."
+			)
+		elif payload.get("source_kind") == "autofix_failure":
+			intro = (
+				"The review/autofix workflow failed repeatedly on one pull request, past the retry the "
+				"stall poller already gives it. The diagnosis below attributes it to the shared workflow "
+				"source, so this issue was filed automatically for the clarify -> plan -> implement -> "
+				"review pipeline to fix it here."
+			)
+		else:
+			intro = (
+				"A pipeline failure in a consumer of these workflows was escalated for human attention. "
+				"The diagnosis below attributes it to the shared workflow source, so this issue was filed "
+				"automatically for the clarify -> plan -> implement -> review pipeline to fix it here."
+			)
+		parts.append(intro)
 		if classification == "inconclusive":
 			parts.append("")
 			parts.append(
@@ -712,6 +836,15 @@ def compose_issue_body(
 	parts.append(f"- **Classification:** `{classification}`")
 	parts.append(f"- **Heal intake run:** {intake_run_url}")
 	parts.append("")
+	if payload.get("source_kind") == "autofix_failure" and payload.get("failure_evidence"):
+		parts.append("<details><summary>Failure evidence from the reporting run (UNTRUSTED, verbatim)</summary>")
+		parts.append("")
+		parts.append("```")
+		parts.append(sanitize_text(payload["failure_evidence"], FAILURE_EVIDENCE_LIMIT).replace("```", "` ` `"))
+		parts.append("```")
+		parts.append("")
+		parts.append("</details>")
+		parts.append("")
 	parts.append("---")
 	parts.append("")
 	parts.append(sanitize_text(diagnosis).strip() or "_(no diagnosis produced)_")
@@ -773,6 +906,41 @@ def _cmd_build_issue_payload(args: argparse.Namespace) -> int:
 		payload["comments_excerpt"] = sanitize_text(payload["comments_excerpt"], 1500)
 		payload["issue_excerpt"] = sanitize_text(payload["issue_excerpt"], 1500)
 	_write_json(payload)
+	return 0
+
+
+def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
+	pr = _load_json_file(args.pr_json)
+	comments = _load_json_file(args.comments_json) if args.comments_json else []
+	evidence = Path(args.failure_evidence_file).read_text(encoding="utf-8", errors="replace") if args.failure_evidence_file else ""
+	payload = build_autofix_failure_payload(
+		repo=args.repo,
+		pr=pr if isinstance(pr, dict) else {},
+		comments=comments if isinstance(comments, list) else [],
+		workflow_name=args.workflow_name,
+		failure_reason=args.failure_reason,
+		failure_evidence=evidence,
+		failure_streak=args.failure_streak,
+		run_id=args.run_id,
+		run_url=args.run_url or None,
+		wrapper_sha=args.wrapper_sha or None,
+		reporter_run_url=args.reporter_run_url or None,
+	)
+	validate_payload(payload)
+	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
+		payload["comments_excerpt"] = sanitize_text(payload["comments_excerpt"], 1500)
+		payload["issue_excerpt"] = sanitize_text(payload["issue_excerpt"], 1500)
+		payload["failure_evidence"] = sanitize_text(payload["failure_evidence"], 2000)
+	_write_json(payload)
+	return 0
+
+
+def _cmd_autofix_failure_streak(args: argparse.Namespace) -> int:
+	try:
+		comments = _load_json_file(args.comments_json)
+	except (OSError, json.JSONDecodeError):
+		comments = []
+	sys.stdout.write(str(count_autofix_failure_streak(comments if isinstance(comments, list) else [])) + "\n")
 	return 0
 
 
@@ -895,6 +1063,24 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--wrapper-sha", default="")
 	p.add_argument("--reporter-run-url", default="")
 	p.set_defaults(func=_cmd_build_issue_payload)
+
+	p = sub.add_parser("build-autofix-payload", help="Build the payload for a failed review/autofix run on a PR")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--pr-json", required=True)
+	p.add_argument("--comments-json")
+	p.add_argument("--workflow-name", required=True)
+	p.add_argument("--failure-reason", required=True)
+	p.add_argument("--failure-evidence-file")
+	p.add_argument("--failure-streak", type=int, default=1)
+	p.add_argument("--run-id", required=True)
+	p.add_argument("--run-url", default="")
+	p.add_argument("--wrapper-sha", default="")
+	p.add_argument("--reporter-run-url", default="")
+	p.set_defaults(func=_cmd_build_autofix_payload)
+
+	p = sub.add_parser("autofix-failure-streak", help="Count trailing review/autofix failure comments on a PR")
+	p.add_argument("--comments-json", required=True)
+	p.set_defaults(func=_cmd_autofix_failure_streak)
 
 	p = sub.add_parser("build-run-payload", help="Build the payload for a failed workflow_run event")
 	p.add_argument("--repo", required=True)

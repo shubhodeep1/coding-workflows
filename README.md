@@ -1183,6 +1183,22 @@ through `clarify → plan → implement → review`.
   `ai-workflow-failure-heal.yml` (profile `full`); coding-workflows uses
   `internal-workflow-failure-heal.yml`. Both call the reusable
   `workflow_failure_heal.yml`, which runs `scripts/workflow_failure_heal_report.sh`.
+- **Trigger (review/autofix failures):** the review/autofix workflow itself
+  (`review_autofix.yml`, so consumers need no new wrapper) reports a failed
+  run on a pull request from its failure path via
+  `scripts/workflow_failure_heal_autofix_report.sh`, but only once the same PR
+  has accumulated `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2)
+  consecutive failed review runs, counted from the failure comments the
+  workflow posts on the PR (`AI review/autofix produced no output`,
+  `AI review/autofix failed`, `AI review/autofix encountered a post-editor
+  failure`; an `AI autofix editor summary` ends the streak). A single
+  retryable failure stays with the stall poller's retry. The report carries
+  the run's `finalize_reason` (or the editor flag that fired:
+  `editor_empty_noop`, `editor_changes_lost`, `editor_refusal`), the
+  `REVIEW_AUTOFIX_RUN_SUMMARY_V1` line, and log tails as evidence; resolver
+  escalations are left to the `ai:resolver-escalated` label path. The
+  reporter never fails the review job; stable log lines are prefixed
+  `WORKFLOW_HEAL_AUTOFIX_REPORT`.
 - **Trigger (releases):** `workflow_run: completed` with conclusion `failure`
   or `timed_out` on `Test & Mark Stable Release`, `Mark Stable Release`,
   `Promote main to stable`, `Auto release stable`, and
@@ -1477,6 +1493,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead. |
+| `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
 | `WORKFLOW_HEAL_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-5.6-sol`) | coding-workflows only. Diagnosis model for the workflow failure heal intake. |
 | `THINKING_LEVEL_WORKFLOW_HEAL` | `xhigh` | coding-workflows only. Reasoning effort for the heal diagnosis call. |
 | `VERBOSITY_WORKFLOW_HEAL` | `low` | coding-workflows only. Codex verbosity for the heal diagnosis call. |
