@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing `tests/e2e_smoke_canary_b.txt` fixture contract  \nScope-mode justification: The complete implementation is the requested one-file, one-line-value replacement. Expanding scope would violate the explicit acceptance criteria; reducing it would leave the stale run ID. No new dependency or interface is needed.\n\n## Planning ref\n\n- Branch: `orchestrator/project-4234`\n- HEAD: `f30e5ae12e63e94cf9add136098ecd82edd43169`\n- Integration branch matches the checked-out branch.\n- Current file has two lines; only the second line is stale.\n\n## Automation and lifecycle\n\n- **Change type:** Modify existing fixture only; no new script or subsystem.\n- **Existing entry point:** `.github/workflows/test-and-mark-stable.yml` `workflow_dispatch`, whose orchestrator smoke setup independently targets this fixture.\n- **Supervisor:** None required.\n- **Database gate:** Not applicable.\n- **Removal registry:** Not applicable.\n\n## Files likely to change\n\n1. `tests/e2e_smoke_canary_b.txt`\n   - Preserve line 1 as `status: ok`.\n   - Replace line 2 with `decompose-run: 35639756385`.\n   - Retain the normal trailing newline.\n   - Do not modify any other file, including the other canary fixture.\n\n## Functions or modules to implement\n\nNone. This is a literal fixture-content update.\n\n## Data structures affected\n\n- Existing two-line plain-text canary format:\n  1. Status field\n  2. Decomposition workflow run identifier\n\n## API/interface changes\n\nNone. No workflow, command, environment variable, or public interface changes.\n\n## Decisions\n\n### D1 \u2014 Replace only the stale run identifier\n\n- **Chosen:** Edit only the second line of `tests/e2e_smoke_canary_b.txt`.\n- **Alternatives considered:** Rewrite related canary files or modify smoke-workflow generation.\n- **Why:** The first line already satisfies the issue, and broader changes would violate the one-file acceptance constraint.\n\n### D2 \u2014 Preserve a trailing newline\n\n- **Chosen:** Store exactly two logical lines followed by the existing POSIX newline.\n- **Alternatives considered:** Omit the final newline or add a blank third line.\n- **Why:** This preserves repository formatting while avoiding an additional logical line.\n\n## Security considerations\n\n- **Trust boundary:** The issue-provided numeric run identifier becomes repository fixture content.\n- **Authorization:** No endpoint or privileged runtime surface is introduced.\n- **Validation:** Use the exact decimal literal supplied; do not interpolate shell input or derive it from another canary.\n- **Abuse cases:** Prevent path expansion, injected extra lines, or unrelated changes by editing the declared file only and verifying the final diff.\n\n## Risks and edge cases\n\n- Accidentally retaining the old run ID.\n- Adding whitespace, a blank third line, or changing line endings.\n- Reading or modifying the independent canary fixture.\n- Staging incidental worktree changes.\n- No issue/codebase conflict was found; the stale second line is the expected implementation delta.\n\n## Testing considerations\n\n- Verify exact bytes equal `status: ok\\ndecompose-run: 35639756385\\n`.\n- Verify there are exactly two logical lines.\n- Run `git diff --check`.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary_b.txt`.\n- Full test-suite execution is unnecessary for this data-only fixture update.\n\n## Assumptions and missing context\n\n- The existing trailing newline is intentional and does not constitute an additional line.\n- No clarification questions existed; the orchestrator auto-answer confirmed continuation.\n- No required context is missing.\n\n## Pre-execution self-check\n\n- One declared file only: yes.\n- Exact target content specified: yes.\n- Independent from the other canary: yes.\n- No external inputs or unresolved decisions: yes.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "21f9b32738d8915ecd55988e3382c232af13bdb83ad9dedd614844f7317406bc",
+  "lineage": {
+    "issue_number": 4236,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35640393832",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35640393832",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4236"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260921185006_6e15106aa4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4236,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35640393832"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4236",
+  "timestamps": {
+    "created_at": "2026-09-21T18:50:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
