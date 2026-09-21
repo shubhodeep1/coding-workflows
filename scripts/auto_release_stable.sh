@@ -14,10 +14,14 @@
 #   AUTO_RELEASE_SKIPPED reason=up_to_date        branch tip == tag commit
 #   AUTO_RELEASE_SKIPPED reason=branch_not_ahead   branch is behind or diverged
 #                                                 from the tag; fail closed
-#   AUTO_RELEASE_SKIPPED reason=release_in_flight the gate is queued/running
+#   AUTO_RELEASE_SKIPPED reason=release_in_flight the gate (any branch), a
+#                                                 promote-main-to-stable run
+#                                                 or a legacy mark-stable run
+#                                                 is queued/running
 #   AUTO_RELEASE_SKIPPED reason=last_gate_failed  the gate already failed or
-#                                                 was cancelled on this exact
-#                                                 tip; a human must look
+#                                                 timed out on this exact tip;
+#                                                 a human must look (a
+#                                                 cancelled gate is retried)
 #   AUTO_RELEASE_DISPATCHED sha=<tip>
 #
 # API calls per run (§15): 2 ref reads (+1 to dereference an annotated tag),
@@ -138,12 +142,17 @@ if [[ "${tag_commit}" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${AUTO_RELEASE_STABLE_WORKFLOW_FILE}/runs?per_page=30")"
-active_count="$(printf '%s' "${runs_json}" | jq -r --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select((.head_branch // "") == $branch) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+# Any branch: the gate's e2e-smoke-test job runs under a per-repository
+# cancel-in-progress group, so dispatching a stable gate while the promote
+# cycle's gate_only run on main is active would cancel that run.
+active_count="$(printf '%s' "${runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
 # The gate-runs endpoint above cannot report a promotion that has moved
 # `stable` but has not dispatched its gate yet, so this requires a separate
 # workflow-scoped read.
 promote_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/promote-main-to-stable.yml/runs?per_page=30")"
-promote_active_count="$(printf '%s' "${promote_runs_json}" | jq -r '[.workflow_runs[]? | select(.event == "workflow_dispatch") | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+# Any event: a scheduled cycle tick is about to dispatch (or is waiting on)
+# its own gate run, which the group above would otherwise cancel.
+promote_active_count="$(printf '%s' "${promote_runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
 active_count=$((active_count + promote_active_count))
 # The legacy manual release path (mark-stable.yml) also writes refs/tags/stable.
 legacy_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/mark-stable.yml/runs?per_page=30")"
@@ -156,8 +165,11 @@ fi
 # workflow in gate_only mode on the default branch, and when the two branches
 # share a tip a failed smoke gate there must not read as a failed release.
 last_conclusion_on_tip="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha and .head_branch == $branch)] | sort_by(.created_at) | last | .conclusion // empty')"
+# `cancelled` is deliberately not in this list: a cancelled gate proved
+# nothing (concurrency, a runner loss, an operator), so the next tick simply
+# tries again instead of waiting for a human.
 case "${last_conclusion_on_tip}" in
-	failure|cancelled|timed_out|startup_failure)
+	failure|timed_out|startup_failure)
 		echo "::warning::${AUTO_RELEASE_STABLE_WORKFLOW_FILE} already ended with '${last_conclusion_on_tip}' on ${AUTO_RELEASE_STABLE_BRANCH}@${branch_tip}; not re-dispatching until the branch moves or a human re-runs the gate."
 		skip_release last_gate_failed "sha=${branch_tip} conclusion=${last_conclusion_on_tip}"
 		;;

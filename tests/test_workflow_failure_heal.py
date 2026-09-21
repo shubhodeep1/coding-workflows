@@ -528,6 +528,10 @@ if args[:1] == ["api"]:
 			fail("HTTP 404")
 		out(json.dumps({"jobs": jobs}))
 	if "/actions/jobs/" in path and path.endswith("/logs"):
+		# Real gh refuses a log body with ANSI escape sequences unless the
+		# caller opts in; job logs always contain them.
+		if "--allow-escape-sequences" not in rest:
+			fail("the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway")
 		job_id = path.split("/")[-2]
 		text = state.get("job_logs", {}).get(job_id)
 		if text is None:
