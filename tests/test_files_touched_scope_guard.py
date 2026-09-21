@@ -38,6 +38,9 @@ IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 REVIEW_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "review_commit_changes.sh"
 REVIEW_STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
+REVIEW_RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+REVIEW_CONFLICT_PREPARE_SCRIPT = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
+REVIEW_CONFLICT_RESOLVE_SCRIPT = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
 IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 LABEL_CONTRACT = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
@@ -289,6 +292,41 @@ def test_generated_advisory_scope_matches_only_the_exact_cited_path() -> None:
 	assert out.split() == ["src/security.py"]
 
 
+def test_linked_issue_metadata_scope_is_exact_and_unresolved_collection_fails_closed() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		metadata_file = tdp / "linked.json"
+		staged_file = tdp / "staged.txt"
+		metadata_file.write_text(
+			json.dumps(
+				[
+					{
+						"body": _generated_advisory_body(),
+						"author_association": "OWNER",
+						"author_login": "octocat",
+					}
+				]
+			),
+			encoding="utf-8",
+		)
+		staged_file.write_text("src/security.py\n", encoding="utf-8")
+		base_command = [
+			sys.executable,
+			str(GUARD_SCRIPT),
+			"--linked-issue-metadata-file",
+			str(metadata_file),
+			"--staged-file",
+			str(staged_file),
+			"--generated-advisory-mode",
+			"auto",
+		]
+		assert subprocess.run(base_command, capture_output=True, text=True).returncode == guard.EXIT_IN_SCOPE
+		staged_file.write_text("README.md\n", encoding="utf-8")
+		assert subprocess.run(base_command, capture_output=True, text=True).returncode == guard.EXIT_OUT_OF_SCOPE
+		metadata_file.write_text('[{"_collection_status":"unresolved"}]\n', encoding="utf-8")
+		assert subprocess.run(base_command, capture_output=True, text=True).returncode == guard.EXIT_INVALID_GENERATED_ADVISORY
+
+
 def test_generated_advisory_plan_parser_accepts_numbered_contract() -> None:
 	plan = (
 		"1. Files likely to change\n"
@@ -334,6 +372,7 @@ def _run_fragment(
 	helper_source: str | None = None,
 	linked_issue_metadata_available: bool = True,
 	linked_issue_metadata_env: bool = True,
+	linked_issue_metadata_unresolved: bool = False,
 ) -> tuple[int, str, str]:
 	fragment = _scope_fragment(label)
 	with tempfile.TemporaryDirectory() as td:
@@ -361,19 +400,22 @@ def _run_fragment(
 		body_file.write_text(body, encoding="utf-8")
 		linked_issue_metadata_file = tdp / "linked_issue_metadata.json"
 		if linked_issue_metadata_available:
-			linked_issue_metadata_file.write_text(
-				json.dumps(
-					[
-						{
-							"number": 1,
-							"body": body,
-							"author_association": issue_author_association,
-							"author_login": issue_author_login,
-						}
-					]
-				),
-				encoding="utf-8",
-			)
+			if linked_issue_metadata_unresolved:
+				linked_issue_metadata_file.write_text('[{"_collection_status":"unresolved"}]\n', encoding="utf-8")
+			else:
+				linked_issue_metadata_file.write_text(
+					json.dumps(
+						[
+							{
+								"number": 1,
+								"body": body,
+								"author_association": issue_author_association,
+								"author_login": issue_author_login,
+							}
+						]
+					),
+					encoding="utf-8",
+				)
 		gh_output = tdp / "gh_output.txt"
 		gh_output.write_text("", encoding="utf-8")
 		env = dict(git_env)
@@ -512,6 +554,17 @@ def test_review_scope_fails_closed_without_linked_issue_metadata() -> None:
 	assert "linked-issue metadata is unavailable" in log
 
 
+def test_review_scope_fails_closed_when_linked_issue_collection_is_unresolved() -> None:
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label="review",
+		linked_issue_metadata_unresolved=True,
+	)
+	assert rc == 1, log
+	assert "linked-issue metadata collection is unresolved" in log
+
+
 @pytest.mark.parametrize("label", ("preflight", "commit", "review"))
 def test_generated_advisory_helper_failure_fails_closed(label: str) -> None:
 	rc, gh_output, log = _run_fragment(
@@ -592,6 +645,14 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 	assert '"${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py"' in review_text
 	assert '"${LINKED_ISSUE_METADATA_FILE}"' in review_text
 	assert "files_touched_scope_guard.py" in stage_text
+	for commit_script in (
+		REVIEW_RB_JUDGE_SCRIPT,
+		REVIEW_CONFLICT_PREPARE_SCRIPT,
+		REVIEW_CONFLICT_RESOLVE_SCRIPT,
+	):
+		commit_text = commit_script.read_text(encoding="utf-8")
+		assert "--linked-issue-metadata-file" in commit_text, commit_script
+		assert "files_touched_scope_guard.py" in commit_text, commit_script
 
 
 def test_alert_step_handles_scope() -> None:
@@ -667,7 +728,11 @@ def _run_all() -> int:
 	failures = 0
 	for fn in funcs:
 		try:
-			fn()
+			if fn is test_generated_advisory_helper_failure_fails_closed:
+				for direct_guard_label in ("preflight", "commit", "review"):
+					fn(direct_guard_label)
+			else:
+				fn()
 			print(f"ok   {fn.__name__}")
 		except Exception as exc:  # noqa: BLE001 — test harness surfaces any failure
 			failures += 1

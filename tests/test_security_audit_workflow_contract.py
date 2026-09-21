@@ -2311,7 +2311,11 @@ def test_security_audit_invalid_engine_output_preserves_existing_findings_file()
 def main() -> int:
 	for name in sorted(globals()):
 		if name.startswith("test_") and callable(globals()[name]):
-			globals()[name]()
+			if name == "test_security_audit_cross_file_deleted_guard_keeps_sink_blocking":
+				for direct_deleted_guard_line in ("@tenant_gate", "if has_access(user):", "if user.can_view:"):
+					globals()[name](direct_deleted_guard_line)
+			else:
+				globals()[name]()
 	return 0
 
 

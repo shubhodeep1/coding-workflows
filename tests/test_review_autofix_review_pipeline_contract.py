@@ -220,6 +220,7 @@ def _run_review_collect_pr_metadata_harness(
 			"GITHUB_REPOSITORY": "owner/repo",
 			"GITHUB_REPOSITORY_OWNER": "owner",
 			"GH_TOKEN": "test-token",
+			"GH_RETRY_MAX_ATTEMPTS": "1",
 			"PR_NUMBER": pr_number,
 			"CLAUDE_BRANCH_REVIEW_MODE": claude_branch_review_mode,
 			"HEAD_REF_OVERRIDE_INPUT": head_ref_override,
@@ -3509,6 +3510,36 @@ def test_review_collect_pr_metadata_helper_defaults_linked_issue_metadata_file_f
 	assert "required env LINKED_ISSUE_METADATA_FILE is unset" not in result["stderr"]
 
 
+def test_review_collect_pr_metadata_helper_marks_failed_link_lookup_unresolved() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+			},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
+	assert result["linked_issue_context"] == "No linked issues found."
+	assert "Failed to fetch linked issues via GraphQL" in result["stdout"]
+
+
 def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default() -> None:
 	result = _run_review_collect_pr_metadata_harness(
 		pr_number="42",
@@ -6656,6 +6687,8 @@ def main() -> int:
 	test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 	test_collect_pr_check_runs_helper_top_level_exception_is_fail_open()
 	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
+	test_review_collect_pr_metadata_helper_defaults_linked_issue_metadata_file_from_runtime_dir()
+	test_review_collect_pr_metadata_helper_marks_failed_link_lookup_unresolved()
 	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
 	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()
 	test_review_collect_pr_metadata_helper_fails_open_on_non_array_batch_input()

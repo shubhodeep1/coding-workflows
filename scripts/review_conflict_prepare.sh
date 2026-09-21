@@ -277,6 +277,31 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
               git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
               git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
             fi
+            prepare_generated_advisory_staged_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/prepare-generated-advisory-staged.XXXXXX")"
+            git diff --cached --name-only | sed '/^$/d' > "${prepare_generated_advisory_staged_file}"
+            if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+              LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
+            fi
+            prepare_generated_advisory_scope_rc=30
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
+              && [ -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
+              set +e
+              prepare_generated_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
+                --linked-issue-metadata-file "${LINKED_ISSUE_METADATA_FILE}" \
+                --staged-file "${prepare_generated_advisory_staged_file}" \
+                --generated-advisory-mode auto)"
+              prepare_generated_advisory_scope_rc=$?
+              set -e
+            fi
+            rm -f "${prepare_generated_advisory_staged_file}"
+            case "${prepare_generated_advisory_scope_rc}" in
+              0|10) ;;
+              *)
+                echo "::error::Refusing deterministic [ai-merge-resolve] commit: generated security advisory scope is unresolved, invalid, or exceeded."
+                printf '%s\n' "${prepare_generated_advisory_violations:-}" | sed '/^$/d;s/^/  - /'
+                exit 1
+                ;;
+            esac
             git commit -m "[ai-merge-resolve] resolve merge conflicts"
             for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
               if [ -d "${RESOLVE_STASH}/${d}" ]; then

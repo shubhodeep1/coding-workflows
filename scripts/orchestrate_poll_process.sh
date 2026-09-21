@@ -5723,7 +5723,8 @@ security_pass_record_waivers() {
 # when nothing was filed).  Dedupes on security_pass_followup_issues in
 # state (one cheap jq read, no API call); the body carries the weekly
 # audit's `<!-- ai:security-finding:<id> -->` marker plus the provenance-keyed
-# advisory marker. Reconciliation also recognises the legacy finding-id marker.
+# advisory marker. Remote reconciliation requires the canonical generated
+# footer; legacy finding-id rows are reconciled only through authoritative state.
 # API cost: one paginated reconciliation search per tracking issue per poller
 # process, one `gh issue create` per new accepted finding, and the first cached
 # `gh label create` attempt for `ai:security`. Fail-open: lookup/create failures
@@ -5739,9 +5740,10 @@ create_security_pass_advisory_followup() {
   # the body tells the pipeline the cited code is already on the default
   # branch; empty on the legacy judge-time filing path.
   local merged_pr="${6:-}"
-  local finding_id waiver_match_key existing_issue body_file title issue_url issue_number advisory_marker legacy_advisory_marker remote_followups_json advisory_cache_key
+  local finding_id finding_file waiver_match_key existing_issue body_file title issue_url issue_number advisory_marker legacy_advisory_marker remote_followups_json advisory_cache_key
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
+  finding_file="$(printf '%s' "${finding_json}" | jq -r '.file // ""' 2>/dev/null || true)"
   waiver_match_key="$(printf '%s' "${finding_json}" | jq -r '.waiver_match_key // ""' 2>/dev/null || true)"
   [ -n "${finding_id}" ] || return 0
   if ! [[ "${waiver_match_key}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -5784,11 +5786,11 @@ create_security_pass_advisory_followup() {
       -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security (\"security-pass-advisory-key:${TRACKING_NUM}\" OR \"security-pass-advisory:${TRACKING_NUM}\") in:body" 2>/dev/null || echo '[]')"
     _SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]="${remote_followups_json}"
   fi
-  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg id "${finding_id}" --arg key "${waiver_match_key}" --arg marker "${advisory_marker}" --arg legacy_marker "${legacy_advisory_marker}" '
+  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg id "${finding_id}" --arg key "${waiver_match_key}" --arg marker "${advisory_marker}" --arg file "${finding_file}" --arg head "${head_sha}" '
     [if type == "array" then .[].items[]? else .items[]? end
-      | select((.body // "")
-          | startswith("<!-- ai:security-finding:\($id) -->\n<!-- ai:security-waiver-key:\($key) -->\n\($marker)\n")
-            or startswith("<!-- ai:security-finding:\($id) -->\n\($legacy_marker)\n"))
+      | select((.body // "") as $body
+          | ($body | startswith("<!-- ai:security-finding:\($id) -->\n<!-- ai:security-waiver-key:\($key) -->\n\($marker)\n"))
+            and ($body | endswith("---\n**Generated security advisory metadata**\n- Schema: `generated-security-advisory.v1`\n- Waiver match key: `\($key)`\n- Audited commit: `\($head)`\n- Cited file: `\($file)`\nfiles_touched:\n  - \($file)\n")))
       | .number]
     | first // empty
   ' 2>/dev/null || true)"

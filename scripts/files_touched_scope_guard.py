@@ -55,6 +55,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 from functools import lru_cache
+import json
 from pathlib import PurePosixPath
 import re
 import sys
@@ -206,6 +207,34 @@ def parse_generated_advisory(text: str) -> dict[str, str] | None:
 	}
 
 
+def parse_linked_issue_metadata(text: str) -> tuple[str, str, str] | None:
+	"""Return one generated-advisory body and author, or None when verified absent."""
+	try:
+		linked_issue_rows = json.loads(text)
+	except (json.JSONDecodeError, TypeError) as exc:
+		raise ValueError("linked-issue metadata is malformed") from exc
+	if not isinstance(linked_issue_rows, list) or any(not isinstance(row, dict) for row in linked_issue_rows):
+		raise ValueError("linked-issue metadata must be an array of objects")
+	for linked_issue_row in linked_issue_rows:
+		if "_collection_status" in linked_issue_row:
+			raise ValueError("linked-issue metadata collection is unresolved")
+	linked_advisory_rows = [
+		row
+		for row in linked_issue_rows
+		if isinstance(row.get("body"), str) and GENERATED_ADVISORY_HEADER in row["body"]
+	]
+	if len(linked_advisory_rows) > 1:
+		raise ValueError("multiple generated security advisories are linked to one PR")
+	if not linked_advisory_rows:
+		return None
+	linked_advisory_row = linked_advisory_rows[0]
+	return (
+		linked_advisory_row["body"],
+		str(linked_advisory_row.get("author_association") or ""),
+		str(linked_advisory_row.get("author_login") or ""),
+	)
+
+
 def extract_plan_files(text: str) -> list[str]:
 	"""Extract concrete paths from a plan's Files-to-change section."""
 	paths: list[str] = []
@@ -352,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--staged-file", default="")
 	parser.add_argument("--allowlist-out", default="")
 	parser.add_argument("--plan-file", default="")
+	parser.add_argument("--linked-issue-metadata-file", default="")
 	parser.add_argument("--issue-author-association", default="")
 	parser.add_argument("--issue-author-login", default="")
 	parser.add_argument(
@@ -362,6 +392,17 @@ def main(argv: list[str] | None = None) -> int:
 	args = parser.parse_args(argv)
 
 	issue_body = _read_text_file(args.issue_body_file) if args.issue_body_file else ""
+	issue_author_association = args.issue_author_association
+	issue_author_login = args.issue_author_login
+	if args.linked_issue_metadata_file:
+		try:
+			linked_advisory = parse_linked_issue_metadata(_read_text_file(args.linked_issue_metadata_file))
+		except ValueError as exc:
+			print(f"generated security advisory rejected: {exc}", file=sys.stderr)
+			return EXIT_INVALID_GENERATED_ADVISORY
+		if linked_advisory is None:
+			return EXIT_SKIP_NO_ALLOWLIST
+		issue_body, issue_author_association, issue_author_login = linked_advisory
 	staged_paths = _read_staged(args.staged_file or None)
 	allowlist_entries = _read_allowlist(args.allowlist_file) if args.allowlist_file else None
 
@@ -376,8 +417,8 @@ def main(argv: list[str] | None = None) -> int:
 			print("generated security advisory metadata is required", file=sys.stderr)
 			return EXIT_INVALID_GENERATED_ADVISORY
 	if generated_advisory is not None:
-		issue_author_association = args.issue_author_association.strip().upper()
-		issue_author_login = args.issue_author_login.strip().lower()
+		issue_author_association = issue_author_association.strip().upper()
+		issue_author_login = issue_author_login.strip().lower()
 		if issue_author_association not in TRUSTED_AUTHOR_ASSOCIATIONS and not (
 			issue_author_association == "NONE"
 			and issue_author_login in TRUSTED_GENERATED_ADVISORY_BOT_LOGINS

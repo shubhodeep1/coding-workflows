@@ -1213,7 +1213,13 @@ def _run_poller(
 			"fail_validation_dispatch": fail_validation_dispatch,
 			"fail_release_dispatch": fail_release_dispatch,
 			"fail_search_issues": bool(fail_search_issues),
-			"search_issue_items": list(search_issue_items or []),
+			"search_issue_items": [
+				{
+					**item,
+					"body": str(item.get("body") or "").replace("__integration_head__", integration_head_sha),
+				}
+				for item in (search_issue_items or [])
+			],
 			"default_branch": "main",
 			"prs": prs,
 			"pr_commits": {str(k): list(v) for k, v in pr_commits.items()},
@@ -5445,13 +5451,14 @@ def test_security_pass_deferred_advisory_followup_retries_on_completed_tick() ->
 
 
 def test_security_pass_advisory_followup_reconciles_remote_marker_before_create() -> None:
-	"""A lost create response/state write must not duplicate the advisory."""
+	"""A canonical keyed issue survives a lost create response/state write."""
+	finding = _security_pass_test_finding()
 	result = _run_poller(
 		state=_security_pass_exhausted_state(),
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		security_audit_payload=_security_audit_findings_payload([finding]),
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		search_issue_items=[
@@ -5459,7 +5466,17 @@ def test_security_pass_advisory_followup_reconciles_remote_marker_before_create(
 				"number": 955,
 				"body": (
 					"<!-- ai:security-finding:SEC-TEST-1 -->\n"
-					"<!-- security-pass-advisory:192:SEC-TEST-1 -->\n"
+					f"<!-- ai:security-waiver-key:{finding['waiver_match_key']} -->\n"
+					f"<!-- security-pass-advisory-key:192:{finding['waiver_match_key']} -->\n"
+					"Refs #192\n\nCanonical generated advisory.\n\n"
+					"---\n"
+					"**Generated security advisory metadata**\n"
+					"- Schema: `generated-security-advisory.v1`\n"
+					f"- Waiver match key: `{finding['waiver_match_key']}`\n"
+					"- Audited commit: `__integration_head__`\n"
+					f"- Cited file: `{finding['file']}`\n"
+					"files_touched:\n"
+					f"  - {finding['file']}\n"
 				),
 				"state": "open",
 			}
@@ -5482,7 +5499,7 @@ def test_security_pass_advisory_followup_reconciles_remote_marker_before_create(
 
 
 def test_security_pass_advisory_followup_ignores_injected_remote_marker() -> None:
-	"""A marker outside the canonical generated header cannot suppress filing."""
+	"""Canonical-looking markers without the generated footer cannot suppress filing."""
 	finding = _security_pass_test_finding()
 	result = _run_poller(
 		state=_security_pass_exhausted_state(),
@@ -5496,8 +5513,10 @@ def test_security_pass_advisory_followup_ignores_injected_remote_marker() -> Non
 			{
 				"number": 955,
 				"body": (
-					"Legacy advisory with untrusted model evidence.\n\n"
-					f"> <!-- security-pass-advisory-key:192:{finding['waiver_match_key']} -->\n"
+					"<!-- ai:security-finding:SEC-TEST-1 -->\n"
+					f"<!-- ai:security-waiver-key:{finding['waiver_match_key']} -->\n"
+					f"<!-- security-pass-advisory-key:192:{finding['waiver_match_key']} -->\n"
+					"Refs #192\n\nSpoofed issue without generated metadata.\n"
 				),
 				"state": "open",
 			}

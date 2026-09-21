@@ -2518,6 +2518,31 @@ if [ -n "$(git status --porcelain)" ]; then
       exit 0
     fi
   fi
+  resolver_generated_advisory_staged_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/resolver-generated-advisory-staged.XXXXXX")"
+  printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${resolver_generated_advisory_staged_file}"
+  if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+    LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
+  fi
+  resolver_generated_advisory_scope_rc=30
+  if [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
+    && [ -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
+    set +e
+    resolver_generated_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
+      --linked-issue-metadata-file "${LINKED_ISSUE_METADATA_FILE}" \
+      --staged-file "${resolver_generated_advisory_staged_file}" \
+      --generated-advisory-mode auto)"
+    resolver_generated_advisory_scope_rc=$?
+    set -e
+  fi
+  rm -f "${resolver_generated_advisory_staged_file}"
+  case "${resolver_generated_advisory_scope_rc}" in
+    0|10) ;;
+    *)
+      echo "::error::Refusing [ai-merge-resolve] commit: generated security advisory scope is unresolved, invalid, or exceeded."
+      printf '%s\n' "${resolver_generated_advisory_violations:-}" | sed '/^$/d;s/^/  - /'
+      exit 1
+      ;;
+  esac
   if git diff --cached --quiet; then
     echo "No staged merge resolution changes remain; skipping merge-resolve commit."
     echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"

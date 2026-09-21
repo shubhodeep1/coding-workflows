@@ -284,7 +284,9 @@ printf 'LINKED_ISSUE_FALLBACK_NUMBERS_JSON=%s\n' "${LINKED_ISSUE_FALLBACK_NUMBER
 # skip its own fetch.
 _linked_fetch_ok="false"
 _linked_raw='[]'
+_linked_metadata_collection_status="resolved"
 if [ -n "${PR_NUMBER:-}" ]; then
+	_linked_metadata_collection_status="unresolved"
 	_linked_tmp="$(mktemp)"
 	if gh_retry "${_linked_tmp}" api graphql \
 		-f owner="${REPOSITORY_OWNER}" \
@@ -293,6 +295,7 @@ if [ -n "${PR_NUMBER:-}" ]; then
 		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body authorAssociation author{login}}}}}}' \
 		--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
 		_linked_fetch_ok="true"
+		_linked_metadata_collection_status="resolved"
 		_linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
 	else
 		echo "::warning::Failed to fetch linked issues via GraphQL; proceeding without linked-issue context."
@@ -329,6 +332,7 @@ if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSO
 		_fallback_fetch_status=0
 		_fallback_json="$(_fetch_linked_issue_bodies_graphql "${_fallback_numbers_json}")" || _fallback_fetch_status=$?
 		if [ "${_fallback_fetch_status}" -ne 0 ]; then
+			_linked_metadata_collection_status="unresolved"
 			echo "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration failed; skipping"
 		elif [ "${_fallback_json}" != "[]" ]; then
 			_linked_context_raw="${_fallback_json}"
@@ -338,9 +342,13 @@ if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSO
 fi
 
 # Persist the same batched linked-issue data used by reviewer prompts in a
-# machine-readable artifact. The review commit guard consumes authorship and
+# machine-readable artifact. The review commit guards consume authorship and
 # body metadata from this cache, so it adds no per-issue GitHub API calls.
-if ! printf '%s' "${_linked_context_raw}" | jq -c '[.[] | {
+# An unresolved lookup is explicit and fail-closed; it must never serialize as
+# the verified-empty [] value because that would disable advisory scope checks.
+if [ "${_linked_metadata_collection_status}" != "resolved" ]; then
+	printf '[{"_collection_status":"unresolved"}]\n' > "${LINKED_ISSUE_METADATA_FILE}"
+elif ! printf '%s' "${_linked_context_raw}" | jq -c '[.[] | {
 	number: (.number // 0),
 	title: (.title // ""),
 	body: (.body // ""),
@@ -350,7 +358,6 @@ if ! printf '%s' "${_linked_context_raw}" | jq -c '[.[] | {
 	echo "::error::Could not serialize linked-issue metadata for review scope enforcement." >&2
 	exit 1
 fi
-_linked_context_raw="$(cat "${LINKED_ISSUE_METADATA_FILE}")"
 # Publish the resolved path so later steps (the review commit guard) read the
 # same artifact even when the workflow did not export the variable itself.
 printf 'LINKED_ISSUE_METADATA_FILE=%s\n' "${LINKED_ISSUE_METADATA_FILE}" >> "${GITHUB_ENV}"

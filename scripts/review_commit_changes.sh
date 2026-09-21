@@ -495,6 +495,16 @@ if [ ! -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
   rm -f "${review_advisory_rows_file}"
   exit 1
 fi
+if ! jq -e 'type == "array" and all(.[]; type == "object")' "${LINKED_ISSUE_METADATA_FILE}" >/dev/null 2>&1; then
+  echo "::error::Refusing to commit: linked-issue metadata is malformed."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
+if jq -e 'any(.[]; has("_collection_status"))' "${LINKED_ISSUE_METADATA_FILE}" >/dev/null 2>&1; then
+  echo "::error::Refusing to commit: linked-issue metadata collection is unresolved."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
 if ! jq -c '[.[] | select(((.body // "") | contains("**Generated security advisory metadata**")))]' \
     "${LINKED_ISSUE_METADATA_FILE}" > "${review_advisory_rows_file}"; then
   echo "::error::Refusing to commit: linked-issue metadata is malformed."
