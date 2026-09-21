@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_mark_stable_release_tag_refspec_contract.py:lines 491-507 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The adjacent release workflow tests use exact whitespace matching and assume a following named step exists when locating the end of the \"Checkout source branch\" step.\n  WHY: A future workflow step reorder or indentation-only change can raise an opaque ValueError instead of producing a descriptive assertion failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_mark_stable_release_tag_refspec_contract.py: lines 499-507 (new test) | severity=low | confidence=3\n  PROBLEM: test_workflow_release_checkout_prefers_repository_pat_for_git_transport uses workflow_text.index(\"\\n      - name:\", step_start + 1) to locate the end of the \"Checkout source branch\" step. If the checkout step is the last named step in a job, index raises ValueError and the test crashes rather than producing a clean assertion failure. The existing test_workflow_release_creation_prefers_repository_pat at line 491 has the same bug \u2014 it assumes a following named step always exists.\n  WHY: A future workflow edit that rearranges steps so the checkout is last in its job would crash the test suite with an unhandled ValueError instead of a descriptive assertion failure. This is the identical structural pattern in both the new and the existing adjacent test.\n- tests/test_mark_stable_release_tag_refspec_contract.py: line 500 (workflow_text.index(\"      - name: Checkout source branch\")) | severity=low | confidence=3\n  PROBLEM: The test relies on an exact whitespace prefix match to find the checkout step. If either workflow re-indents its job steps (e.g., moving from 6-space to 4-space inside a nested job), the index call raises ValueError.\n  WHY: A formatting-only workflow change that adjusts YAML indentation would break the test suite with an opaque ValueError instead of a meaningful assertion. The existing tests in this file share the same fragility and remain in the predecessor test at line 491.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ca29445566201ca2e95a7db2a4a20d0361cb61a8e7a747d690b4fb54c39db11e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4241,
+    "run_id": "35663977268",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35663977268",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921232456_b17c73c96c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4241,
+    "run_id": "35663977268"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T23:24:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
