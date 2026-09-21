@@ -191,6 +191,40 @@ def test_render_prompt_sh_renders_implement_contract_defaults_and_env_values() -
 	)
 
 
+def test_render_prompt_sh_blocks_checkout_python_startup_hooks() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_isolation_") as td:
+		repo_root = Path(td)
+		prompt_file = repo_root / "mode-sample.txt"
+		startup_marker = repo_root / "startup-marker.txt"
+		prompt_file.write_text("Header\n{{SERENA_TOOL_HINTS}}\n", encoding="utf-8")
+		(repo_root / "sitecustomize.py").write_text(
+			"import os\n"
+			"from pathlib import Path\n"
+			f"Path({str(startup_marker)!r}).write_text(os.environ.get('RENDER_SENTINEL_SECRET', ''), encoding='utf-8')\n",
+			encoding="utf-8",
+		)
+		env = _base_env()
+		env.update(
+			{
+				"PYTHONPATH": str(repo_root),
+				"RENDER_SENTINEL_SECRET": "must-not-reach-python",
+				"SERENA_TOOL_HINTS": "safe hint",
+			}
+		)
+		proc = subprocess.run(
+			["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+			cwd=str(repo_root),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout == "Header\nsafe hint\n"
+	assert not startup_marker.exists()
+
+
 def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
 	header_compaction_rules = (
 		"<compaction-rules>\n"
@@ -1319,6 +1353,7 @@ def test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt() -> Non
 def main() -> int:
 	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
+	test_render_prompt_sh_blocks_checkout_python_startup_hooks()
 	test_render_prompt_sh_renders_header_with_empty_repo_learnings()
 	test_render_prompt_sh_renders_header_with_populated_repo_learnings()
 	test_render_prompt_py_renders_inline_placeholders_and_yaml_scalar_defaults()

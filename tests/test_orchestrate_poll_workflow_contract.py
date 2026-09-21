@@ -91,6 +91,31 @@ def test_orchestrate_run_start_support_is_immutable_and_fail_closed() -> None:
 	assert "if: steps.run_start_support_checkout.outcome == 'success' && steps.run_start_support_stage.outcome == 'success'" in record
 
 
+def test_orchestrate_python_launches_are_isolated() -> None:
+	wf = _workflow(ORCHESTRATE_WF)
+	active_python_launches = [
+		(line_number, line)
+		for line_number, line in enumerate(wf.splitlines(), 1)
+		if not line.lstrip().startswith("#")
+		and re.search(r"\bpython(?:3)?\s+(?:-I\b|-B\b|-c\b|-(?:\s|$)|\"?\$\{)", line)
+	]
+	assert active_python_launches == [
+		(next(
+			line_number
+			for line_number, line in enumerate(wf.splitlines(), 1)
+			if 'python3 -I -B "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py"' in line
+		), '            python3 -I -B "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py" \\')
+	]
+	bootstrap_line = active_python_launches[0][0]
+	bootstrap_prefix = "\n".join(wf.splitlines()[bootstrap_line - 9:bootstrap_line - 1])
+	assert "env -i \\" in bootstrap_prefix
+	assert 'PYTHONDONTWRITEBYTECODE="1" \\' in bootstrap_prefix
+	assert wf.count("_gh_helpers_run_isolated_python") >= 12
+	assert '"PROJECT_DESCRIPTION=${PROJECT_DESCRIPTION}" -- -' in wf
+	assert wf.count('"ORCHESTRATOR_STATE_AUTH_KEYRING=${ORCHESTRATOR_STATE_AUTH_KEYRING}" --') == 2
+	assert "PYTHONDONTWRITEBYTECODE=1 python3" not in wf
+
+
 def test_nag_reminder_assets_and_judge_wiring_are_present() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
@@ -261,6 +286,7 @@ def main() -> int:
 	test_stall_recovery_prompt_is_bootstrapped_from_immutable_workflow_source()
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
+	test_orchestrate_python_launches_are_isolated()
 	test_nag_reminder_assets_and_judge_wiring_are_present()
 	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
 	test_security_pass_dark_launch_env_and_assets_are_wired()

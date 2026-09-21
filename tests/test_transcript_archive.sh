@@ -49,15 +49,24 @@ test_flag_on_writes_archive_and_sanitizes_filename()
 	local source_file="${tmpdir}/output.txt"
 	local archive_path=""
 	local archive_base=""
+	local startup_marker="${tmpdir}/startup-marker.txt"
 	mkdir -p "${workspace}"
 	printf 'hello archive\n' > "${source_file}"
+	cat > "${tmpdir}/sitecustomize.py" <<PY
+import os
+from pathlib import Path
+Path(${startup_marker@Q}).write_text(os.environ.get("TRANSCRIPT_SENTINEL_SECRET", ""), encoding="utf-8")
+PY
 
 	(
 		export UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true
 		export GITHUB_WORKSPACE="${workspace}"
+		export PYTHONPATH="${tmpdir}"
+		export TRANSCRIPT_SENTINEL_SECRET="must-not-reach-python"
 		source "${REPO_ROOT}/scripts/transcript_archive.sh"
 		archive_transcript "run/123" "review:editor" "${source_file}"
 	)
+	assert_no_path "${startup_marker}"
 
 	archive_path="$(find "${workspace}/.transcripts" -type f -name '*.json' | head -n 1)"
 	if [ -z "${archive_path}" ]; then
