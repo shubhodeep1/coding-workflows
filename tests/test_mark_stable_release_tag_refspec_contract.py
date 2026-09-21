@@ -124,13 +124,18 @@ publish_tag_with_remote_verification refs/tags/test "${PUBLICATION_HELPER_MODE}"
 ''',
 		)
 	)
-	publication_environment = {
-		**os.environ,
+	publication_environment = os.environ.copy()
+	publication_environment.pop("BASH_ENV", None)
+	publication_environment.pop("ENV", None)
+	for publication_environment_key in tuple(publication_environment):
+		if publication_environment_key.startswith("BASH_FUNC_"):
+			publication_environment.pop(publication_environment_key)
+	publication_environment.update({
 		"PUBLICATION_HELPER_CALL_LOG": str(publication_call_log),
 		"PUBLICATION_HELPER_EXPECTED_OBJECT_ID": "a" * 40,
 		"PUBLICATION_HELPER_MODE": publication_mode,
 		"PUBLICATION_HELPER_SCENARIO": publication_scenario,
-	}
+	})
 	publication_result = subprocess.run(
 		["bash", "-c", workflow_publication_script],
 		capture_output=True,
@@ -208,6 +213,15 @@ def test_workflow_tag_publication_helper_is_bounded_verified_and_fail_closed() -
 		)
 		assert 'git ls-remote --exit-code origin "${tag_ref}"' in helper_text, (
 			f"{workflow_path.name}: a failed push must query the exact remote tag ref"
+		)
+		assert 'mktemp "${RUNNER_TEMP:-/tmp}/release_tag_lsremote_err.XXXXXX"' in helper_text, (
+			f"{workflow_path.name}: remote lookup diagnostics must use an isolated temporary file"
+		)
+		assert '2>"${remote_lookup_error_file}"' in helper_text, (
+			f"{workflow_path.name}: remote lookup stderr must use the isolated temporary file"
+		)
+		assert 'rm -f "${remote_lookup_error_file}"' in helper_text, (
+			f"{workflow_path.name}: remote lookup diagnostic files must be removed after capture"
 		)
 		assert 'if ! expected_object_id="$(git rev-parse "${tag_ref}"' in helper_text, (
 			f"{workflow_path.name}: an unresolved local tag must fail with the helper diagnostic"

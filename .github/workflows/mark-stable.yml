@@ -682,6 +682,8 @@ jobs:
             local tag_ref="$1"
             local publication_mode="$2"
             local expected_object_id=""
+            local remote_lookup_error=""
+            local remote_lookup_error_file=""
             local remote_lookup_output=""
             local remote_object_id=""
             local attempt=1
@@ -716,10 +718,13 @@ jobs:
                 return 0
               fi
 
+              remote_lookup_error_file="$(mktemp "${RUNNER_TEMP:-/tmp}/release_tag_lsremote_err.XXXXXX")"
               set +e
-              remote_lookup_output="$(git ls-remote --exit-code origin "${tag_ref}" 2>/tmp/release_tag_lsremote_err)"
+              remote_lookup_output="$(git ls-remote --exit-code origin "${tag_ref}" 2>"${remote_lookup_error_file}")"
               lookup_rc=$?
               set -e
+              remote_lookup_error="$(<"${remote_lookup_error_file}")"
+              rm -f "${remote_lookup_error_file}"
               remote_object_id=""
               if [ "${lookup_rc}" -eq 0 ]; then
                 remote_object_id="$(printf '%s\n' "${remote_lookup_output}" | awk -v expected_ref="${tag_ref}" '$2 == expected_ref { print $1 }')"
@@ -735,8 +740,8 @@ jobs:
 
               if [ "${attempt}" -eq "${max_attempts}" ]; then
                 echo "::error::Failed to publish and verify ${tag_ref} after ${max_attempts} attempts."
-                if [ "${lookup_rc}" -ne 0 ] && [ -s /tmp/release_tag_lsremote_err ]; then
-                  cat /tmp/release_tag_lsremote_err >&2
+                if [ "${lookup_rc}" -ne 0 ] && [ -n "${remote_lookup_error}" ]; then
+                  printf '%s\n' "${remote_lookup_error}" >&2
                 fi
                 return 1
               fi
