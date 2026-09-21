@@ -10,7 +10,10 @@ release jobs trigger by checking out the `stable` branch and then creating a
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -29,8 +32,8 @@ def _read(p: Path) -> str:
 def test_workflows_push_stable_tag_via_refs_tags() -> None:
 	for wf in WORKFLOWS:
 		text = _read(wf)
-		assert "git push -f origin refs/tags/stable" in text, (
-			f"{wf.name}: stable tag push must use fully qualified refs/tags/stable"
+		assert "publish_tag_with_remote_verification refs/tags/stable moving" in text, (
+			f"{wf.name}: stable tag publication must use fully qualified refs/tags/stable"
 		)
 		assert not re.search(r"^\s*git push -f origin stable\s*$", text, re.MULTILINE), (
 			f"{wf.name}: bare 'git push -f origin stable' would re-introduce the "
@@ -41,8 +44,8 @@ def test_workflows_push_stable_tag_via_refs_tags() -> None:
 def test_workflows_push_major_tag_via_refs_tags() -> None:
 	for wf in WORKFLOWS:
 		text = _read(wf)
-		assert 'git push -f origin "refs/tags/$MAJOR"' in text, (
-			f"{wf.name}: major-version tag push must use fully qualified refs/tags/$MAJOR"
+		assert 'publish_tag_with_remote_verification "refs/tags/$MAJOR" moving' in text, (
+			f"{wf.name}: major-version tag publication must use fully qualified refs/tags/$MAJOR"
 		)
 		assert not re.search(r'^\s*git push -f origin "\$MAJOR"\s*$', text, re.MULTILINE), (
 			f"{wf.name}: bare 'git push -f origin \"$MAJOR\"' would re-introduce the regression"
@@ -52,12 +55,202 @@ def test_workflows_push_major_tag_via_refs_tags() -> None:
 def test_workflows_push_immutable_version_via_refs_tags() -> None:
 	for wf in WORKFLOWS:
 		text = _read(wf)
-		assert 'git push origin "refs/tags/$VERSION"' in text, (
-			f"{wf.name}: immutable version tag push must use fully qualified refs/tags/$VERSION"
+		assert 'publish_tag_with_remote_verification "refs/tags/$VERSION" immutable' in text, (
+			f"{wf.name}: immutable version tag publication must use fully qualified refs/tags/$VERSION"
 		)
 		assert not re.search(r'^\s*git push origin "\$VERSION"\s*$', text, re.MULTILINE), (
 			f"{wf.name}: bare 'git push origin \"$VERSION\"' would re-introduce the regression"
 		)
+
+
+def _workflow_publication_helper(workflow_text: str) -> str:
+	match = re.search(
+		r"^          publish_tag_with_remote_verification\(\) \{.*?^          \}$",
+		workflow_text,
+		re.MULTILINE | re.DOTALL,
+	)
+	assert match is not None, "release workflow must define the tag publication helper"
+	return match.group(0)
+
+
+def _run_publication_helper_scenario(
+	working_directory: Path,
+	publication_scenario: str,
+	publication_mode: str,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	publication_call_log = working_directory / f"{publication_scenario}-{publication_mode}.log"
+	workflow_publication_script = "\n".join(
+		(
+			"set -euo pipefail",
+			_workflow_publication_helper(_read(WORKFLOWS[0])),
+			r'''
+git() {
+	local publication_mock_command="$1"
+	shift
+	case "${publication_mock_command}" in
+		rev-parse)
+			printf '%s\n' "${PUBLICATION_HELPER_EXPECTED_OBJECT_ID}"
+			;;
+		push)
+			printf 'push:%s\n' "$*" >> "${PUBLICATION_HELPER_CALL_LOG}"
+			[ "${PUBLICATION_HELPER_SCENARIO}" = "push-success" ]
+			;;
+		ls-remote)
+			printf 'lookup:%s\n' "$*" >> "${PUBLICATION_HELPER_CALL_LOG}"
+			case "${PUBLICATION_HELPER_SCENARIO}" in
+				remote-match)
+					printf '%s\t%s\n' "${PUBLICATION_HELPER_EXPECTED_OBJECT_ID}" "${@: -1}"
+					;;
+				remote-conflict)
+					printf '%040d\t%s\n' 0 "${@: -1}"
+					;;
+				remote-unreadable)
+					printf 'mock ls-remote transport failure\n' >&2
+					return 128
+					;;
+				remote-absent)
+					return 2
+					;;
+			esac
+			;;
+	esac
+}
+
+sleep() {
+	printf 'sleep:%s\n' "$1" >> "${PUBLICATION_HELPER_CALL_LOG}"
+}
+
+publish_tag_with_remote_verification refs/tags/test "${PUBLICATION_HELPER_MODE}"
+''',
+		)
+	)
+	publication_environment = {
+		**os.environ,
+		"PUBLICATION_HELPER_CALL_LOG": str(publication_call_log),
+		"PUBLICATION_HELPER_EXPECTED_OBJECT_ID": "a" * 40,
+		"PUBLICATION_HELPER_MODE": publication_mode,
+		"PUBLICATION_HELPER_SCENARIO": publication_scenario,
+	}
+	publication_result = subprocess.run(
+		["bash", "-c", workflow_publication_script],
+		capture_output=True,
+		check=False,
+		env=publication_environment,
+		text=True,
+	)
+	publication_calls = publication_call_log.read_text(encoding="utf-8").splitlines()
+	return publication_result, publication_calls
+
+
+def test_workflow_tag_publication_helper_executes_failure_matrix() -> None:
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		working_directory = Path(temporary_directory)
+
+		direct_success, direct_success_calls = _run_publication_helper_scenario(
+			working_directory, "push-success", "immutable"
+		)
+		assert direct_success.returncode == 0
+		assert direct_success_calls == ["push:origin refs/tags/test"]
+
+		ambiguous_success, ambiguous_success_calls = _run_publication_helper_scenario(
+			working_directory, "remote-match", "moving"
+		)
+		assert ambiguous_success.returncode == 0
+		assert ambiguous_success_calls == [
+			"push:-f origin refs/tags/test",
+			"lookup:--exit-code origin refs/tags/test",
+		]
+
+		immutable_collision, immutable_collision_calls = _run_publication_helper_scenario(
+			working_directory, "remote-conflict", "immutable"
+		)
+		assert immutable_collision.returncode != 0
+		assert immutable_collision_calls == [
+			"push:origin refs/tags/test",
+			"lookup:--exit-code origin refs/tags/test",
+		]
+		assert "refusing to overwrite it" in immutable_collision.stdout
+
+		unreadable_remote, unreadable_remote_calls = _run_publication_helper_scenario(
+			working_directory, "remote-unreadable", "immutable"
+		)
+		assert unreadable_remote.returncode != 0
+		assert unreadable_remote_calls.count("push:origin refs/tags/test") == 3
+		assert unreadable_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 3
+		assert [call for call in unreadable_remote_calls if call.startswith("sleep:")] == [
+			"sleep:2",
+			"sleep:4",
+		]
+		assert "mock ls-remote transport failure" in unreadable_remote.stderr
+
+		absent_remote, absent_remote_calls = _run_publication_helper_scenario(
+			working_directory, "remote-absent", "immutable"
+		)
+		assert absent_remote.returncode != 0
+		assert absent_remote_calls.count("push:origin refs/tags/test") == 3
+		assert absent_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 3
+		assert "Failed to publish and verify" in absent_remote.stdout
+
+
+def test_workflow_tag_publication_helper_is_bounded_verified_and_fail_closed() -> None:
+	for workflow_path in WORKFLOWS:
+		workflow_text = _read(workflow_path)
+		helper_text = _workflow_publication_helper(workflow_text)
+
+		assert "local max_attempts=3" in helper_text, (
+			f"{workflow_path.name}: tag publication retries must be bounded to three attempts"
+		)
+		assert 'sleep "${backoff_seconds}"' in helper_text, (
+			f"{workflow_path.name}: failed publication must back off before retrying"
+		)
+		assert "backoff_seconds=$((backoff_seconds * 2))" in helper_text, (
+			f"{workflow_path.name}: publication retry delay must increase exponentially"
+		)
+		assert 'git ls-remote --exit-code origin "${tag_ref}"' in helper_text, (
+			f"{workflow_path.name}: a failed push must query the exact remote tag ref"
+		)
+		assert 'if ! expected_object_id="$(git rev-parse "${tag_ref}"' in helper_text, (
+			f"{workflow_path.name}: an unresolved local tag must fail with the helper diagnostic"
+		)
+		assert 'remote_object_id}" = "${expected_object_id}' in helper_text, (
+			f"{workflow_path.name}: identical remote and local tag objects must recover an ambiguous push"
+		)
+		assert 'publication_mode}" = "immutable"' in helper_text, (
+			f"{workflow_path.name}: immutable publication must have a distinct fail-closed path"
+		)
+		assert "exists remotely at a different object ID; refusing to overwrite it" in helper_text, (
+			f"{workflow_path.name}: an immutable tag collision must fail without overwrite"
+		)
+		assert 'git push origin "${tag_ref}"' in helper_text, (
+			f"{workflow_path.name}: immutable tag publication must remain non-forced"
+		)
+		assert 'git push -f origin "${tag_ref}"' in helper_text, (
+			f"{workflow_path.name}: moving tag publication must retain force-update semantics"
+		)
+		assert helper_text.index('git push origin "${tag_ref}"') < helper_text.index(
+			'git push -f origin "${tag_ref}"'
+		), f"{workflow_path.name}: immutable mode must be selected before the moving force push"
+		assert 'lookup_rc}" -ne 0' in helper_text, (
+			f"{workflow_path.name}: unreadable remote state must not be accepted as success"
+		)
+		assert "Failed to publish and verify" in helper_text, (
+			f"{workflow_path.name}: absent, malformed, or non-converged refs must fail after retries"
+		)
+
+
+def test_workflows_share_identical_publication_logic_and_call_order() -> None:
+	workflow_texts = [_read(workflow_path) for workflow_path in WORKFLOWS]
+	assert _workflow_publication_helper(workflow_texts[0]) == _workflow_publication_helper(
+		workflow_texts[1]
+	), "both release workflows must keep byte-identical tag publication helpers"
+
+	for workflow_path, workflow_text in zip(WORKFLOWS, workflow_texts, strict=True):
+		version_call = 'publish_tag_with_remote_verification "refs/tags/$VERSION" immutable'
+		stable_call = "publish_tag_with_remote_verification refs/tags/stable moving"
+		major_call = 'publish_tag_with_remote_verification "refs/tags/$MAJOR" moving'
+		assert workflow_text.index(version_call) < workflow_text.index(stable_call) < workflow_text.index(
+			major_call
+		), f"{workflow_path.name}: tag publication order must remain version, stable, major"
 
 
 def test_workflows_dispatch_peeled_release_commit_sha() -> None:

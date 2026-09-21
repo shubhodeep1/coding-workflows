@@ -180,6 +180,7 @@ changelog.d/3963-reissue-preserve-baseline-default-true.md
 changelog.d/3965-review-ledger-cache-stable-path.md
 changelog.d/3965-security-pass-cycle-budget-reset.md
 changelog.d/3965-security-pass-fix-successor-adoption.md
+changelog.d/3965-security-pass-no-human-input-paths.md
 changelog.d/3967-plan-blocker-prompt-routing.md
 changelog.d/3972-blocked-already-satisfied-noop.md
 changelog.d/3973-immutable-consumer-workflow-pins.md
@@ -202,10 +203,15 @@ changelog.d/4077-editor-noop-zero-reviewers-recoverable-telemetry.md
 changelog.d/4079-review-autofix-approval-pending-alert.md
 changelog.d/4084-security-audit-mitigation-policy.md
 changelog.d/4087-terminal-same-head-gate-skip.md
+changelog.d/4093-pytest-git-env-isolation.md
 changelog.d/4109-bind-auto-merge-head.md
+changelog.d/4109-bind-auto-merge-to-evaluated-head.md
+changelog.d/4171-e2e-smoke-job-timeout.md
+changelog.d/4207-release-tag-push-retry.md
 changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/433-readme-wrapper-predicate-examples.md
+changelog.d/4379-followup-metadata-and-merged-label-race.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/codex-blocked-verdict-bail.md
@@ -223,6 +229,7 @@ changelog.d/orchestrator-security-pass-phase-3-dark-launch.md
 changelog.d/orchestrator-security-pass-phase-4-default-on.md
 changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
+changelog.d/security-audit-concurrency-deadlock.md
 changelog.d/seed-repo-command.md
 changelog.d/slash-commands-session-model.md
 changelog.d/stall-recovery-dead-end-fixes.md
@@ -470,6 +477,7 @@ scripts/git_ref_health_check.sh
 scripts/implement_commit_changes.sh
 scripts/implement_diagnose_post_codex_failure.sh
 scripts/implement_handle_guard_block.sh
+scripts/implement_staged_support_workspace.sh
 scripts/install_semble.sh
 scripts/issue_attachment_bundle.py
 scripts/label_helpers.sh
@@ -564,6 +572,7 @@ scripts/write_codex_config.sh
 scripts/write_guard.sh
 scripts/write_opencode_config.sh
 test_file.txt
+tests/conftest.py
 tests/e2e_smoke_canary.txt
 tests/e2e_smoke_canary_b.txt
 tests/e2e_smoke_canary_spec.txt
@@ -765,6 +774,7 @@ tests/test_pr_checks_lib_required_filter.py
 tests/test_pr_merge_status_guard.py
 tests/test_pr_watch_guard.py
 tests/test_prompt_compaction.py
+tests/test_pytest_git_env_isolation.py
 tests/test_record_id_format_contract.py
 tests/test_render_prompt_core_modes.py
 tests/test_render_prompt_foundation.py
