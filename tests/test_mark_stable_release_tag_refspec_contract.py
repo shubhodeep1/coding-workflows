@@ -165,6 +165,10 @@ def _run_tag_step_recovery_scenario(
 		config) ;;
 		ls-remote)
 			printf 'lookup:%s\n' "$*" >> "${TAG_STEP_CALL_LOG}"
+			if [ "$*" = "origin refs/heads/stable" ]; then
+				printf '%040d\n' 1
+				return 0
+			fi
 			if [ "${TAG_STEP_SCENARIO}" = "tag-match" ] || [ "${TAG_STEP_SCENARIO}" = "tag-conflict" ]; then
 				return 0
 			fi
@@ -196,6 +200,8 @@ def _run_tag_step_recovery_scenario(
 	)
 	tag_step_environment = {
 		**os.environ,
+		"RELEASE_TESTED_SHA": "0" * 39 + "1",
+		"SOURCE_BRANCH": "stable",
 		"TAG_STEP_CALL_LOG": str(tag_step_call_log),
 		"TAG_STEP_SCENARIO": tag_step_scenario,
 	}
@@ -233,16 +239,26 @@ def _run_release_creation_scenario(
 			printf '%s\n' "${release_mock_count}" > "${RELEASE_API_COUNT}"
 			case "${RELEASE_SCENARIO}" in
 				release-existing) printf 'v1.2.3\n' ;;
+				release-draft|release-prerelease)
+					echo 'release-is-draft-or-prerelease' >&2
+					return 1
+					;;
 				release-absent)
 					echo 'gh: Not Found (HTTP 404)' >&2
 					return 1
 					;;
-				release-race)
+				release-race|release-race-draft|release-race-prerelease)
 					if [ "${release_mock_count}" -eq 1 ]; then
 						echo 'gh: Not Found (HTTP 404)' >&2
 						return 1
 					fi
-					printf 'v1.2.3\n'
+					if [ "${RELEASE_SCENARIO}" = "release-race" ]; then
+						printf 'v1.2.3\n'
+					else
+						echo 'release-is-draft-or-prerelease' >&2
+						return 1
+					fi
+					return 0
 					;;
 				release-lookup-failure)
 					echo 'gh: Resource not accessible by integration (HTTP 403)' >&2
@@ -251,7 +267,9 @@ def _run_release_creation_scenario(
 			esac
 			;;
 		release)
-			[ "${RELEASE_SCENARIO}" != "release-race" ]
+			case "${RELEASE_SCENARIO}" in
+				release-race|release-race-draft|release-race-prerelease) return 1 ;;
+			esac
 			;;
 	esac
 }
@@ -464,6 +482,13 @@ def test_workflow_release_creation_executes_recovery_matrix() -> None:
 	with tempfile.TemporaryDirectory() as temporary_directory:
 		working_directory = Path(temporary_directory)
 		for workflow_path in WORKFLOWS:
+			release_step_script = _workflow_step_script(_read(workflow_path), "Create GitHub Release")
+			published_release_filter = (
+				"--jq 'if (.draft == false and .prerelease == false) then .tag_name "
+				'else error("release-is-draft-or-prerelease") end\''
+			)
+			assert release_step_script.count(published_release_filter) == 2
+
 			existing_release, existing_calls = _run_release_creation_scenario(
 				working_directory, workflow_path, "release-existing"
 			)
@@ -483,6 +508,32 @@ def test_workflow_release_creation_executes_recovery_matrix() -> None:
 			assert concurrent_release.returncode == 0
 			assert len([call for call in concurrent_calls if call.startswith("api:")]) == 2
 			assert "appeared concurrently" in concurrent_release.stdout
+
+			for unpublished_scenario in ("release-draft", "release-prerelease"):
+				unpublished_release, unpublished_calls = _run_release_creation_scenario(
+					working_directory, workflow_path, unpublished_scenario
+				)
+				assert unpublished_release.returncode != 0
+				assert all(not call.startswith("release:") for call in unpublished_calls)
+				assert "release-is-draft-or-prerelease" in unpublished_release.stderr
+
+			for concurrent_unpublished_scenario in (
+				"release-race-draft",
+				"release-race-prerelease",
+			):
+				concurrent_unpublished, concurrent_unpublished_calls = _run_release_creation_scenario(
+					working_directory, workflow_path, concurrent_unpublished_scenario
+				)
+				assert concurrent_unpublished.returncode != 0
+				assert len(
+					[call for call in concurrent_unpublished_calls if call.startswith("api:")]
+				) == 2
+				assert any(
+					call.startswith("release:create v1.2.3")
+					for call in concurrent_unpublished_calls
+				)
+				assert "appeared concurrently" not in concurrent_unpublished.stdout
+				assert "release-is-draft-or-prerelease" in concurrent_unpublished.stderr
 
 			lookup_failure, lookup_failure_calls = _run_release_creation_scenario(
 				working_directory, workflow_path, "release-lookup-failure"
