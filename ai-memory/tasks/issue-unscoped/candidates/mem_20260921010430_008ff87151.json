@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Changes frequently touch the orchestration poller, state model, promotion cycle, and related tests together. Any plan affecting orchestration should preserve durable state semantics and validate retries, ownership or line assignment, base/head selection, and terminal success or waiver markers.",
+  "fingerprint": "44f312a5ea64e87e0c3e02e1d89382d31a495241d44417ee90556952ac9517e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35549414411",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35549414411",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4113",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4140",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4143",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4166",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4167",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4136",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4141",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4144",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4168",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4169"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260921010430_008ff87151",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestration behavior is stateful and polling-based, with explicit handling for ownership, retries, promotion bases, and terminal markers.",
+  "timestamps": {
+    "created_at": "2026-09-21T01:04:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
