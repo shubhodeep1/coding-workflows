@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4190,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4190\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4192\",\"pr_number\":4192,\"branch\":\"ai/issue-4190\",\"run_id\":\"35554593581\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35554593581\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/memory_maintenance.yml\",\".github/workflows/test-and-mark-stable.yml\",\"tests/test_ci_poll_test_sharding.py\",\"tests/test_memory_maintenance_contract_noop.py\"]}",
+  "fingerprint": "d1e66aa2345bd63aa4c7266e422feac878741bbb2c914f1c50d39417164275fb",
+  "lineage": {
+    "issue_number": 4190,
+    "parent_ids": [],
+    "pr_number": 4192,
+    "run_id": "35554593581",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35554593581",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4192"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260921024151_4bb4051cf6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4190,
+    "level": "run",
+    "pr_number": 4192,
+    "run_id": "35554593581"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4190: https://github.com/shubhodeep1/coding-workflows/pull/4192",
+  "timestamps": {
+    "created_at": "2026-09-21T02:41:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
