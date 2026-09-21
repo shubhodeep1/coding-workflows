@@ -137,10 +137,17 @@ changelog.d/4163-e2e-review-blocked-budget.md
 changelog.d/4165-workflow-failure-heal.md
 changelog.d/4171-e2e-smoke-job-timeout.md
 changelog.d/4172-gh-token-web-proxy-substitution.md
+changelog.d/4174-linked-issue-metadata-default.md
+changelog.d/4185-release-dispatcher-guards.md
 changelog.d/4189-release-budget-contracts.md
+changelog.d/4196-reviewer-roster-cost-refresh.md
+changelog.d/4207-changelog-push-stable-refspec.md
 changelog.d/4207-release-tag-push-retry.md
+changelog.d/4208-autofix-failure-heal.md
+changelog.d/4211-release-tag-push-retry.md
 changelog.d/4228-release-creation-token-recovery.md
 changelog.d/binance-blessings-249-parked-projects-resume-without-humans.md
+changelog.d/release-gate-retry-budget.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
