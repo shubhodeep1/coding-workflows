@@ -269,3 +269,147 @@ Track:
 | Rate-limit events | No structured count available | None observed |
 
 **Material data gaps:** only 7% success-log sampling, no GH API call counters, aggregate cache rate absent, no Serena probe telemetry, and sparse validate/release samples.
+
+## Deep Audit — Workflows & Scripts (2026-09-21)
+
+### Section 1: Bug & Correctness Sweep
+
+Coverage: 50 workflows, 85 shell scripts, and 57 Python scripts. YAML parsing/yamllint, `bash -n`, and Python AST parsing completed without syntax failures. No secret-printing, `set -x`, or direct issue/PR-body interpolation into workflow shell source was found.
+
+#### BUG-001 — Script-reference guard retains a stale exemption
+- **File:** `scripts/check_workflow_script_refs.py:30-40,116-123,147-153`; `scripts/stage_workflow_support.sh:45-68`; `.github/workflows/implement.yml:963-970`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** `render_prompt.py` is excluded from missing-reference checks because comments claim it does not exist on `main`. It now exists, is main-primary in support staging, and is required by the implement bootstrap. Deleting it would therefore pass both repository-wide and post-resolver reference checks.
+- **Recommended fix:** Remove `render_prompt.py` from `OPTIONAL_REFS`, correct the stale comment, and add a test proving a missing `render_prompt.py` fails the guard.
+
+#### BUG-002 — Consumer drift audit omits a load-bearing wrapper
+- **File:** `scripts/audit_consumer_drift.py:202-220,482-493`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** Expected wrappers are discovered only with `ai-*.yml`. This excludes `workflow-templates/review_rb_judge_dispatch.yml`, whose filename is required for autonomous `ai:review-blocked` recovery. The audit can report a consumer as matching while that wrapper is absent or stale.
+- **Recommended fix:** Derive the managed wrapper set from `workflow-templates/profiles/full.txt`, or explicitly include `review_rb_judge_dispatch.yml`. Add a test asserting all 17 top-level managed templates are audited.
+
+#### SHELL-001 — Consumer registry iteration permits word splitting and glob expansion
+- **File:** `.github/workflows/mark-stable.yml:834-847`; `.github/workflows/test-and-mark-stable.yml:5523-5536`
+- **Severity:** Low
+- **Category:** `shellcheck`
+- **Description:** `for REPO in $REPOS` intentionally leaves the expansion unquoted. Inference: a malformed registry entry containing whitespace or glob characters could split into multiple dispatch targets.
+- **Recommended fix:** Iterate with `while IFS= read -r REPO`, validate `owner/repo` syntax, and reject malformed entries before dispatch.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001 — Drift audit performs one contents request per template
+- **File:** `scripts/audit_consumer_drift.py:405-480,482-493,538-539`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** Each repository costs one directory request plus up to 16 file-content requests: **17 calls/repository**, or **up to 221 calls** for the current 13-repository registry. A GraphQL blob-alias query could reduce this to **13–26 calls total**. [NEEDS VERIFICATION]
+- **Recommended fix:** Add `fetch_workflow_contents_batch(repository, file_names)` using the aliased-query pattern from `_fetch_candidate_issue_details_graphql`. Document payload limits and fall back to current per-file REST reads when an alias or blob is unavailable.
+
+#### BATCH-002 — Staged-support latch release reads each candidate four times
+- **File:** `scripts/orchestrate_poll_process.sh:15321-15419`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** For `N` latched issues and `M` candidates reaching live revalidation, reads total **1 + 2N + 2M**: inventory, comments, events, then labels and events again. Worst case is **1 + 4N**.
+- **Recommended fix:** Batch initial comments, labels, and label-event timelines in groups of 25, then combine each candidate’s fresh labels and latest event into one revalidation query. Projected count: **1 + ceil(N/25) + M**. Extend the `_fetch_candidate_issue_details_graphql` alias/cache pattern while preserving mutation-time revalidation.
+
+#### BATCH-003 — Security advisory follow-ups are fetched inside a loop
+- **File:** `scripts/orchestrate_poll_process.sh:5964-6028`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** The loop issues one issue GET per unchecked follow-up plus one comments request for each blocked issue: **N + B calls**. Data is independent and batchable.
+- **Recommended fix:** Prefetch state, labels, and recent comments with aliased GraphQL in batches of 25, reducing the normal path to **ceil(N/25) calls**. Fall back to paginated REST only when the comments connection reports older pages.
+
+#### BATCH-004 — Standalone recovery performs seven label inventories
+- **File:** `scripts/orchestrate_poll_process.sh:14398-14438,15504-15528`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** Every standalone-recovery cycle performs seven `gh issue list` calls—one per phase label—plus `_fetch_standalone_marker_issues_graphql`: **8 logical calls** before candidate hydration.
+- **Recommended fix:** Extend `_fetch_standalone_marker_issues_graphql` with seven aliased label connections and retain REST pagination fallbacks when `hasNextPage=true`. Normal-path projection: **8 → 1 call**. [NEEDS VERIFICATION]
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Prompt path resolution is duplicated exactly
+- **File:** `scripts/assemble_prompt.sh:12-41,51-93`; `scripts/render_prompt.sh:12-41,95-159`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `resolve_prompt_file`, `resolve_render_prompt_py`, and `resolve_assembly_source_path` have identical implementations in both scripts.
+- **Recommended fix:** Move them to `scripts/prompt_path_helpers.sh` with signatures `resolve_prompt_file <path>`, `resolve_render_prompt_py`, and `resolve_assembly_source_path <path>`. Source it from both callers.
+
+#### DUP-002 — Consumer registry and command-executor implementations are duplicated
+- **File:** `scripts/audit_consumer_drift.py:51-164`; `scripts/validation_refresh_runner.py:96-163,701-723`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `CommandExecutor`, its error representation, and `load_target_repositories()` are structurally identical.
+- **Recommended fix:** Create `scripts/consumer_repo_utils.py` owning `CommandExecutor.run(...)` and `load_target_repositories(path: Path) -> list[str]`; update both scripts to import it.
+
+#### DUP-003 — Stable-release implementation is duplicated between release workflows
+- **File:** `.github/workflows/mark-stable.yml:673-795`; `.github/workflows/test-and-mark-stable.yml:5368-5490`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** The two workflows carry approximately 5,000-character near-identical release blocks. Adjacent dispatch blocks have already drifted in retry behavior.
+- **Recommended fix:** Extract `publish_stable_release <version> <source_branch> <tested_sha> <consumer_file> <dry_run>` into `scripts/stable_release_helpers.sh`; keep only workflow-specific wiring in YAML.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging block exceeds the medium-risk threshold
+- **File:** `.github/workflows/implement.yml:932-1289`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The interpolated `run:` scalar is approximately **16,985 characters**, containing three `${{ }}` expressions. It has **4,015 characters of headroom** before GitHub’s 21,000-character limit. No other interpolated block exceeds 15,000 characters.
+- **Recommended fix:** Extract the block to `scripts/implement_stage_workflow_support.sh`. Pass repository and feature flags through step `env:` so the `run:` body contains no template interpolation.
+
+No workflow exceeds the 800 KB warning threshold. The largest is `.github/workflows/review_autofix.yml` at approximately 500,755 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001 — Equivalent release dispatch paths use different retry policies
+- **File:** `.github/workflows/mark-stable.yml:840-846`; `.github/workflows/test-and-mark-stable.yml:5529-5535`
+- **Severity:** Medium
+- **Category:** `consistency`
+- **Description:** `mark-stable.yml` uses `gh_retry gh api` for consumer dispatches, while `test-and-mark-stable.yml` uses raw `gh api`. The latter can silently skip a consumer on transient API failures.
+- **Recommended fix:** Route both through `gh_retry`, preferably inside the shared release helper proposed in DUP-003.
+
+#### DEAD-001 — Reviewer raw-file aliases are assignment-only
+- **File:** `scripts/review_run_reviewers.sh:753-777`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE` and `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE` are assigned but never referenced.
+- **Recommended fix:** Remove the aliases, or wire them into the filter rollback path if preserving those originals was intended.
+
+#### DEAD-002 — Review ledger stores an unused floor map
+- **File:** `scripts/review_issue_ledger.sh:862-918`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `CURRENT_FLOOR` is declared and populated but never read. `floor_cat` is already consumed directly while generating the issue ID.
+- **Recommended fix:** Remove `CURRENT_FLOOR` and its assignment.
+
+#### DEAD-003 — Merge-with-follow-up captures an unused current head SHA
+- **File:** `scripts/review_rb_judge.sh:2128-2154`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `PR_HEAD_SHA` is fetched with comments claiming it binds the merge, but all checks and `--match-head-commit` correctly use `RB_JUDGED_HEAD_SHA`.
+- **Recommended fix:** Remove `PR_HEAD_SHA` and update the comment to identify `RB_JUDGED_HEAD_SHA` as the authoritative evaluated head.
+
+No `TODO`, `FIXME`, `HACK`, or `XXX` markers were found in scoped workflows or scripts.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 9 | BUG-001, BUG-002, BATCH-001, BATCH-002, BATCH-003, BATCH-004, DUP-003, EXPR-001, CONSIST-001 |
+| Low | 6 | SHELL-001, DUP-001, DUP-002, DEAD-001, DEAD-002, DEAD-003 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 2–4 | Large |
+| Code modularization | 7–9 | Large |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 7–10 | Medium |
