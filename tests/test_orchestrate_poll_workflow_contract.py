@@ -139,6 +139,7 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 	required_prompts_start = wf.index("required_prompts: [", manifest_assignment_start)
 	required_prompts_end = wf.index("],", required_prompts_start)
 	immutable_required_prompts = wf[required_prompts_start:required_prompts_end]
+	prompt_assembly_assets = wf.split("for prompt_assembly_asset in ", 1)[1].split("; do", 1)[0]
 	for required_prompt in (
 		"prompts/mode-judge-security-pass-exhaustion.txt",
 		"prompts/_templates/mode-judge-security-pass-exhaustion.txt",
@@ -147,6 +148,12 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 		"prompts/_prelude_role_persona.txt",
 	):
 		assert f'"{required_prompt}"' in immutable_required_prompts
+	for staged_asset in (
+		"_prelude_role_persona.txt",
+		"references/output-contract.txt",
+		"references/severity-classification.txt",
+	):
+		assert staged_asset in prompt_assembly_assets
 	assert "WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}" in wf
 	for asset in (
 		"codex_heartbeat.sh",
