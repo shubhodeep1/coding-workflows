@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Security-related changes span security_audit.sh, audit prompts, orchestration polling, and workflow contracts, with dedicated changelog entries. Changes that create, consume, or waive security results should preserve authenticated marker ownership and test the exact workflow handoff.",
+  "fingerprint": "85fdeb63b6f86e1a0774c710216a53cb43b1569dad6a209867593a7e73227bb6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35572567158",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35572567158",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4143",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4166",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4167",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4189",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4190",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4144",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4168",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4169",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4191",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4192"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260921072453_f2acd0b35b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "The repository treats security-audit pass markers and line ownership as explicit workflow contracts.",
+  "timestamps": {
+    "created_at": "2026-09-21T07:24:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
