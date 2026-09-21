@@ -14,6 +14,8 @@ IMPLEMENT_WF = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 REVIEW_AUTOFIX_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 CLARIFY_WF = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
+ORCHESTRATE_CLARIFY_RESPOND_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_clarify_respond.yml"
+VALIDATE_WF = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 ORCHESTRATE_POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 SYNC_LIST_UNION_REQUIREMENTS = REPO_ROOT / "scripts" / "sync_contract_list_union.requirements.txt"
 
@@ -132,7 +134,14 @@ def test_sibling_workflow_python_stdin_launches_are_isolated() -> None:
 	unsafe_launch_pattern = re.compile(
 		r"\bpython(?:3)?\s+(?!-I(?:\s|$)).*?(?:-(?:c|m)(?:\s|$)|-(?:\s|$))"
 	)
-	for workflow_path in (IMPLEMENT_WF, REVIEW_AUTOFIX_WF, PLAN_WF, CLARIFY_WF):
+	for workflow_path in (
+		IMPLEMENT_WF,
+		REVIEW_AUTOFIX_WF,
+		PLAN_WF,
+		CLARIFY_WF,
+		ORCHESTRATE_CLARIFY_RESPOND_WF,
+		VALIDATE_WF,
+	):
 		workflow_text = _workflow(workflow_path)
 		unsafe_launches = [
 			(line_number, line)

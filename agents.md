@@ -532,13 +532,15 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   capacity fallback model on the same broker decision
   (PR #4077 runs 34663517732 / 34654303940 lost ~18 minutes per round to
   HTTP 429 replays). The fallback summary stays `recoverable_failure`.
-- Inline Python parsers in `clarify.yml`, `plan.yml`, `implement.yml`,
-  `review_autofix.yml`, and `orchestrate.yml` run with an allowlisted `env -i`
-  environment plus `python3 -I -B`. Parser-specific files and status values are
-  passed explicitly, so checkout-controlled `sitecustomize.py` files cannot read
-  workflow credentials, rewrite parser output, or persist changes through runner
-  command-file environment variables. The workflow contract test rejects direct
-  stdin, `-c`, and `-m` launches that omit isolated mode.
+- Checkout-sensitive inline and module Python launches in `clarify.yml`,
+  `plan.yml`, `implement.yml`, `review_autofix.yml`, `orchestrate.yml`,
+  `orchestrate_clarify_respond.yml`, and `validate.yml` run in isolated mode;
+  helper-backed parsers use an allowlisted `env -i` environment plus
+  `python3 -I -B`. Parser-specific files and status values are passed explicitly,
+  so checkout-controlled `sitecustomize.py` files cannot read workflow credentials,
+  rewrite parser output, or persist changes through runner command-file environment
+  variables. The workflow contract test rejects direct stdin, `-c`, and `-m`
+  launches that omit isolated mode.
 - Same-UID model launches run inside a private PID namespace with a fresh
   `/proc`, so danger-full-access agents retain their existing workspace file
   permissions but cannot inspect the secret-bearing workflow or broker process

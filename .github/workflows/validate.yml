@@ -755,7 +755,7 @@ jobs:
           set -euo pipefail
 
           if [ -f "${SUPPORT_SCRIPTS_DIR}/render_validation_templates.py" ]; then
-            python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
+            python3 -I -B -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
           else
             echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
           fi

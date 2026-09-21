@@ -148,7 +148,7 @@ def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_mai
 def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
-	assert 'python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2' in wf
+	assert 'python3 -I -B -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2' in wf
 
 
 def test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
