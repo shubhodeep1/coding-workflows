@@ -11,6 +11,31 @@ security_audit_require_cmd() {
 	}
 }
 
+# Inline Python must not inherit checkout-controlled startup hooks, module
+# paths, or workflow credentials. All required data is passed by argv/files.
+security_audit_run_isolated_python() {
+	env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE="1" \
+		python3 -I -B "$@"
+}
+
+security_audit_run_isolated_support_command() {
+	env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE="1" \
+		PYTHON_ISOLATED_MODE="true" \
+		"$@"
+}
+
 security_audit_flag_enabled() {
 	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on)
@@ -324,13 +349,32 @@ SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_FP_EXCLUSIONS:-scripts/security_a
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "${REPO_ROOT}"
 
-# Consumer-called runs (workflow-templates/ai-security-audit.yml wrapper) stage
-# this repo's scripts/prompts outside the audited checkout and point
-# SECURITY_AUDIT_SUPPORT_DIR at that staged tree. Source-repo runs leave it
-# unset so support files resolve from the audited checkout itself,
-# byte-identical to the pre-consumer behaviour.
+# Workflow runs stage this repo's scripts/prompts outside the audited checkout
+# and point SECURITY_AUDIT_SUPPORT_DIR at that immutable tree. Direct callers
+# that do not provide a staged path retain the repository-root fallback.
 SECURITY_AUDIT_SUPPORT_DIR="${SECURITY_AUDIT_SUPPORT_DIR:-${REPO_ROOT}}"
 SECURITY_AUDIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! SECURITY_AUDIT_CANONICAL_SUPPORT_DIR="$(cd "${SECURITY_AUDIT_SUPPORT_DIR}" 2>/dev/null && pwd -P)"; then
+	security_audit_emit_failure "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}" "support directory is unavailable"
+	exit 1
+fi
+SECURITY_AUDIT_SUPPORT_DIR="${SECURITY_AUDIT_CANONICAL_SUPPORT_DIR}"
+security_audit_require_directory "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}"
+security_audit_require_file "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/orchestrate_lib.py"
+security_audit_require_cmd realpath
+if ! SECURITY_AUDIT_ORCHESTRATE_LIB_PATH="$(realpath -e -- "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/orchestrate_lib.py" 2>/dev/null)"; then
+	security_audit_emit_failure "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/orchestrate_lib.py" "support module cannot be canonicalized"
+	exit 1
+fi
+case "${SECURITY_AUDIT_ORCHESTRATE_LIB_PATH}" in
+	"${SECURITY_AUDIT_SUPPORT_DIR}"/*)
+		;;
+	*)
+		security_audit_emit_failure "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/orchestrate_lib.py" "support module resolves outside the canonical support directory"
+		exit 1
+		;;
+esac
+SECURITY_AUDIT_ORCHESTRATE_LIB_DIR="$(dirname -- "${SECURITY_AUDIT_ORCHESTRATE_LIB_PATH}")"
 
 # Resolve the exclusion catalog: a copy in the audited repository wins (so a
 # consumer can pin its own catalog at the default relative path); otherwise a
@@ -426,6 +470,9 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 		security_audit_emit_failure "findings-output-preflight" "(unset)" "SECURITY_AUDIT_FINDINGS_OUT is required in findings-json mode"
 		exit 1
 	fi
+	if [[ "${SECURITY_AUDIT_FINDINGS_OUT}" != /* ]]; then
+		SECURITY_AUDIT_FINDINGS_OUT="${REPO_ROOT}/${SECURITY_AUDIT_FINDINGS_OUT}"
+	fi
 	security_audit_require_writable_destination "findings-output-preflight" "${SECURITY_AUDIT_FINDINGS_OUT}"
 	if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
 		security_audit_require_file "project-spec-preflight" "${SECURITY_AUDIT_PROJECT_SPEC_PATH}"
@@ -468,7 +515,7 @@ gh_retry gh issue list \
 	--limit 50 \
 		--json number,title,body,state,url > "${TRACKER_CANDIDATES_JSON}"
 
-python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" > "${TRACKER_SELECTION_ENV}" <<'PY'
+security_audit_run_isolated_python - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" > "${TRACKER_SELECTION_ENV}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -653,7 +700,7 @@ PRIOR_FINDINGS_COUNT=0
 : > "${PRIOR_FINDINGS_SCOPE_FILE}"
 : > "${PRIOR_FINDINGS_PROMPT_FILE}"
 if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
-	if ! PRIOR_FINDINGS_COUNT="$(python3 - \
+	if ! PRIOR_FINDINGS_COUNT="$(security_audit_run_isolated_python - \
 		"${REPO_ROOT}" \
 		"${SECURITY_AUDIT_PRIOR_FINDINGS}" \
 		"${PRIOR_FINDINGS_SCOPE_FILE}" \
@@ -767,7 +814,7 @@ FIX_CYCLE_DIFFS_SUMMARY=""
 : > "${FIX_CYCLE_DIFFS_SCOPE_FILE}"
 : > "${FIX_CYCLE_DIFFS_PROMPT_FILE}"
 if [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
-	if FIX_CYCLE_DIFFS_SUMMARY="$(python3 - \
+	if FIX_CYCLE_DIFFS_SUMMARY="$(security_audit_run_isolated_python - \
 		"${REPO_ROOT}" \
 		"${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" \
 		"${FIX_CYCLE_DIFFS_SCOPE_FILE}" \
@@ -995,7 +1042,7 @@ WAIVED_FINDINGS_COUNT=0
 : > "${WAIVED_FINDINGS_PROMPT_FILE}"
 printf '[]\n' > "${WAIVED_FINDINGS_NORMALIZED_FILE}"
 if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
-	if ! WAIVED_FINDINGS_COUNT="$(python3 - \
+	if ! WAIVED_FINDINGS_COUNT="$(security_audit_run_isolated_python - \
 		"${SECURITY_AUDIT_WAIVED_FINDINGS}" \
 		"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
 		"${WAIVED_FINDINGS_PROMPT_FILE}" 2> "${WAIVED_FINDINGS_ERROR_FILE}" <<'PY'
@@ -1104,7 +1151,7 @@ security_audit_require_directory "prompt-preflight" "${SECURITY_AUDIT_RUNTIME_DI
 security_audit_require_writable_destination "prompt-preflight" "${RENDERED_PROMPT_FILE}"
 security_audit_require_writable_destination "prompt-preflight" "${RENDER_PROMPT_ERROR_FILE}"
 
-if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_PROMPT_PATH}" \
+if security_audit_run_isolated_support_command bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_PROMPT_PATH}" \
 		> "${RENDERED_PROMPT_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
 	:
 else
@@ -1116,7 +1163,7 @@ fi
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	printf '%s\n' '{{REFERENCE_SECURITY_MONEY_LENS}}' > "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}"
-	if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" \
+	if security_audit_run_isolated_support_command bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" \
 			> "${SECURITY_AUDIT_MONEY_LENS_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
 		:
 	else
@@ -1179,7 +1226,7 @@ else
 	exit "${CODEX_EXECUTION_STATUS}"
 fi
 
-python3 - \
+security_audit_run_isolated_python - \
 	"${REPO_ROOT}" \
 	"${CODEX_OUTPUT_FILE}" \
 	"${SECURITY_AUDIT_FP_EXCLUSIONS}" \
@@ -1190,7 +1237,7 @@ python3 - \
 	"${CHANGED_FILES_FILE}" \
 	"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
 	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" \
-	"${SECURITY_AUDIT_SUPPORT_DIR}/scripts" <<'PY'
+	"${SECURITY_AUDIT_ORCHESTRATE_LIB_DIR}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -1516,10 +1563,10 @@ summary_path.write_text(
 PY
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
-	if python3 - \
+	if (cd "${SECURITY_AUDIT_RUNTIME_DIR}" && security_audit_run_isolated_python - \
 		"${FILTERED_FINDINGS_FILE}" \
 		"${FILTER_SUMMARY_FILE}" \
-		"${SECURITY_AUDIT_FINDINGS_OUT}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
+		"${SECURITY_AUDIT_FINDINGS_OUT}") 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -1613,7 +1660,7 @@ gh_retry gh issue list \
 	--limit 200 \
 		--json number,title,body,createdAt,url > "${EXISTING_FOLLOWUPS_JSON}"
 
-python3 - \
+security_audit_run_isolated_python - \
 	"${FILTERED_FINDINGS_FILE}" \
 	"${FILTER_SUMMARY_FILE}" \
 	"${EXISTING_FOLLOWUPS_JSON}" \

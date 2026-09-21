@@ -40,6 +40,18 @@ _codex_helpers_resolve_catalog_path()
 	printf '%s\n' "${scripts_dir}/codex_model_catalog.json"
 }
 
+_codex_helpers_run_isolated_python()
+{
+	env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE="1" \
+		python3 -I -B "$@"
+}
+
 codex_config_assemble()
 {
 	local model="${1:-}"
@@ -204,7 +216,7 @@ model_provider_broker_start()
 	export MODEL_PROVIDER_BROKER_PID_FILE MODEL_PROVIDER_BROKER_READY_FILE MODEL_PROVIDER_BROKER_AGENT_HOME MODEL_PROVIDER_BROKER_REJECTIONS_FILE
 	env -i PATH="${PATH}" HOME="${HOME:-/root}" PYTHONDONTWRITEBYTECODE=1 \
 		OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
-		python3 "${broker_path}" --ready-file "${ready_file}" \
+		python3 -I -B "${broker_path}" --ready-file "${ready_file}" \
 		--rejections-file "${rejections_file}" \
 		--max-requests "${MODEL_PROVIDER_BROKER_MAX_REQUESTS:-100}" \
 		--max-output-tokens "${MODEL_PROVIDER_BROKER_MAX_OUTPUT_TOKENS:-16384}" \
@@ -227,8 +239,8 @@ model_provider_broker_start()
 		fi
 		if [ -s "${ready_file}" ]; then
 			ready_json="$(cat "${ready_file}")"
-			MODEL_PROVIDER_BROKER_BASE_URL="$(printf '%s' "${ready_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["base_url"])')" || return 1
-			MODEL_PROVIDER_BROKER_TOKEN="$(printf '%s' "${ready_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')" || return 1
+			MODEL_PROVIDER_BROKER_BASE_URL="$(printf '%s' "${ready_json}" | _codex_helpers_run_isolated_python -c 'import json,sys; print(json.load(sys.stdin)["base_url"])')" || return 1
+			MODEL_PROVIDER_BROKER_TOKEN="$(printf '%s' "${ready_json}" | _codex_helpers_run_isolated_python -c 'import json,sys; print(json.load(sys.stdin)["token"])')" || return 1
 			export MODEL_PROVIDER_BROKER_BASE_URL MODEL_PROVIDER_BROKER_TOKEN
 			return 0
 		fi
@@ -323,7 +335,7 @@ model_provider_broker_last_policy_rejection()
 	fi
 	last_line="$(grep -E '"status":[[:space:]]*4[0-9]{2}([^0-9]|$)' -- "${rejections_file}" 2>/dev/null | tail -n 1 || true)"
 	[ -n "${last_line}" ] || return 0
-	printf '%s' "${last_line}" | python3 -c 'import json, sys
+	printf '%s' "${last_line}" | _codex_helpers_run_isolated_python -c 'import json, sys
 try:
 	record = json.loads(sys.stdin.read())
 except ValueError:
@@ -391,7 +403,7 @@ model_provider_broker_prepare_codex_writer()
 		if [ "${source_config}" != "${CODEX_HOME}/config.toml" ]; then
 			install -m 0600 "${source_config}" "${CODEX_HOME}/config.toml"
 		fi
-		PYTHONDONTWRITEBYTECODE=1 python3 - \
+		_codex_helpers_run_isolated_python - \
 			"${CODEX_HOME}/config.toml" \
 			"${MODEL_PROVIDER_BROKER_BASE_URL:?broker base URL required}" \
 			"${reasoning}" <<'PY'

@@ -381,6 +381,229 @@ def _run_poller_subprocess(
 			shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def test_poller_inline_python_is_centralized_and_ignores_checkout_startup_hooks() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	inline_python_launches = [
+		(line_number, line)
+		for line_number, line in enumerate(script.splitlines(), 1)
+		if not line.lstrip().startswith("#")
+		and re.search(r"\bpython3\s+(?:-I\b|-c\b|-(?:\s|$))", line)
+	]
+	assert inline_python_launches == [
+		(next(
+			line_number
+			for line_number, line in enumerate(script.splitlines(), 1)
+			if 'python3 -I -B "$@"' in line
+		), '  "${isolated_python_environment[@]}" python3 -I -B "$@"')
+	]
+
+	helper_match = re.search(
+		r"(?ms)^poller_run_isolated_python\(\) \{\n.*?^\}",
+		script,
+	)
+	assert helper_match is not None
+	with tempfile.TemporaryDirectory(prefix="poller-sitecustomize-") as td:
+		checkout = Path(td)
+		startup_marker = checkout / "startup-hook-ran"
+		(checkout / "sitecustomize.py").write_text(
+			"import os\n"
+			"from pathlib import Path\n"
+			f"Path({str(startup_marker)!r}).write_text(os.environ.get('GH_PAT', 'missing'), encoding='utf-8')\n",
+			encoding="utf-8",
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"GH_PAT": "poller-secret-sentinel",
+				"ORCHESTRATOR_STATE_AUTH_KEYRING": "state-secret-sentinel",
+				"PYTHONPATH": str(checkout),
+			}
+		)
+		proc = subprocess.run(
+			[
+				"bash",
+				"--noprofile",
+				"--norc",
+				"-c",
+				(
+					helper_match.group(0)
+					+ '\ncd "$1"\n'
+					+ "poller_run_isolated_python -- -c "
+					+ "'import os; print(os.environ.get(\"GH_PAT\", \"missing\"))'\n"
+				),
+				"poller-isolation-test",
+				str(checkout),
+			],
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip() == "missing"
+	assert not startup_marker.exists()
+
+
+def test_poller_prompt_rendering_uses_isolated_immutable_support() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper_start = script.index("poller_run_isolated_python() {")
+	helper_end = script.index("\npoller_run_readonly_model()", helper_start)
+
+	assert script.count('poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/') == 4
+	assert "bash scripts/render_prompt.sh" not in script
+	assert "bash scripts/write_codex_config.sh" not in script
+	assert "bash scripts/codex_heartbeat.sh" not in script
+	assert 'python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py"' not in script
+	assert script.count('poller_run_isolated_python -- "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py"') == 3
+
+	with tempfile.TemporaryDirectory(prefix="poller-render-sitecustomize-") as td:
+		checkout = Path(td)
+		prompt_path = checkout / "prompts" / "mode-judge.txt"
+		startup_marker = checkout / "render-startup-hook-ran"
+		prompt_path.parent.mkdir(parents=True, exist_ok=True)
+		prompt_path.write_text(
+			"Role: test judge. Goal: retain isolated renderer features.\n\nBase prompt.\n",
+			encoding="utf-8",
+		)
+		(checkout / "prompts" / "_identity_recall.txt").write_text(
+			"<identity-recall>\nPhase: {{PHASE_NAME}}.\nRole: {{PHASE_ROLE}}.\n"
+			"Mission: {{PHASE_MISSION}}.\n</identity-recall>\n",
+			encoding="utf-8",
+		)
+		(checkout / ".github" / "ai" / "fragments").mkdir(parents=True, exist_ok=True)
+		(checkout / ".github" / "ai" / "fragments" / "judge.txt").write_text(
+			"Overlay appendix.\n",
+			encoding="utf-8",
+		)
+		(checkout / "sitecustomize.py").write_text(
+			"import os\n"
+			"from pathlib import Path\n"
+			f"Path({str(startup_marker)!r}).write_text(os.environ.get('GH_PAT', 'missing'), encoding='utf-8')\n",
+			encoding="utf-8",
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"GH_PAT": "poller-render-secret-sentinel",
+				"ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+				"PYTHONPATH": str(checkout),
+				"UNATTENDED_IDENTITY_REINJECT_ENABLED": "true",
+				"WORKFLOW_OVERLAY_ENABLED": "true",
+				"WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON": json.dumps(
+					[
+						{
+							"mode": "mode-judge",
+							"append_path": ".github/ai/fragments/judge.txt",
+						}
+					]
+				),
+				"WORKFLOW_OVERLAY_REPO_ROOT": str(checkout),
+			}
+		)
+		proc = subprocess.run(
+			[
+				"bash",
+				"--noprofile",
+				"--norc",
+				"-c",
+				(
+					script[helper_start:helper_end]
+					+ '\ncd "$1"\n'
+					+ 'poller_render_prompt_isolated "$2" "unused-prefetch"\n'
+				),
+				"poller-render-isolation-test",
+				str(checkout),
+				str(prompt_path),
+			],
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "<identity-recall>\nPhase: mode-judge." in proc.stdout
+	assert "Role: test judge." in proc.stdout
+	assert "Mission: retain isolated renderer features." in proc.stdout
+	assert proc.stdout.endswith("Base prompt.\nOverlay appendix.\n")
+	assert not startup_marker.exists()
+
+
+def test_judge_lessons_learned_isolated_python_forwards_memory_configuration() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper_start = script.index("poller_run_isolated_python() {")
+	helper_end = script.index("\npoller_run_readonly_model()", helper_start)
+	is_truthy_start = script.index("is_truthy() {")
+	emit_start = script.index("emit_judge_lessons_learned_records() {")
+	emit_end = script.index("\n_state_snapshot_json_object_or_empty()", emit_start)
+
+	with tempfile.TemporaryDirectory(prefix="poller-lessons-memory-env-") as td:
+		tmp_path = Path(td)
+		captured_environment_path = tmp_path / "captured-memory-environment.json"
+		(tmp_path / "ai_memory_lib.py").write_text(
+			"import json\n"
+			"import os\n"
+			"from pathlib import Path\n"
+			"\n"
+			"def resolve_memory_root_dir(clone_dir, relative):\n"
+			"\treturn clone_dir / relative\n"
+			"\n"
+			"def record_lessons_learned(*args, **kwargs):\n"
+			"\treturn [{'record_id': 'test-record'}]\n"
+			"\n"
+			"def persist_memory_operation(repo_root, *, memory_branch, memory_root_relative, push_retries, **kwargs):\n"
+			f"\tPath({str(captured_environment_path)!r}).write_text(json.dumps({{\n"
+			"\t\t'gh_pat': os.environ.get('GH_PAT'),\n"
+			"\t\t'gh_token_present': 'GH_TOKEN' in os.environ,\n"
+			"\t\t'memory_branch': memory_branch,\n"
+			"\t\t'memory_root_relative': memory_root_relative,\n"
+			"\t\t'push_retries': push_retries,\n"
+			"\t}), encoding='utf-8')\n"
+			"\treturn {'operation_result': {'records': [{'record_id': 'test-record'}]}, 'did_push': True}\n",
+			encoding="utf-8",
+		)
+		shell_source = (
+			script[helper_start:helper_end]
+			+ "\n"
+			+ script[is_truthy_start:emit_start]
+			+ script[emit_start:emit_end]
+			+ "\nemit_judge_lessons_learned_records test-judge 42 43 "
+			+ "'{\"lessons_learned\":[{\"lesson\":\"keep auth\"}]}'\n"
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"AI_MEMORY_BRANCH": "custom-memory-branch",
+				"AI_MEMORY_ROOT": "custom-memory-root",
+				"AI_MEMORY_PUSH_RETRIES": "7",
+				"GH_PAT": "preferred-token",
+				"GH_TOKEN": "secondary-token",
+				"ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR": str(tmp_path),
+			}
+		)
+		proc = subprocess.run(
+			["bash", "--noprofile", "--norc", "-c", shell_source],
+			cwd=tmp_path,
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+		captured_environment = json.loads(captured_environment_path.read_text(encoding="utf-8"))
+
+	assert proc.returncode == 0, proc.stderr
+	assert '"count": 1' in proc.stderr, proc.stderr
+	assert '"did_push": true' in proc.stderr, proc.stderr
+	assert captured_environment == {
+		"gh_pat": "preferred-token",
+		"gh_token_present": False,
+		"memory_branch": "custom-memory-branch",
+		"memory_root_relative": "custom-memory-root",
+		"push_retries": 7,
+	}
+
+
 def test_judge_reasoning_effort_uses_configured_value_without_downgrade():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))' in script
@@ -3051,6 +3274,8 @@ import sys
 from pathlib import Path
 
 args = sys.argv[1:]
+if args[:2] == ["-I", "-B"]:
+	os.execv(sys.executable, [sys.executable, *args])
 real_python = os.environ.get("REAL_PYTHON_BIN", "python3")
 store_path = Path(os.environ.get("GH_MOCK_STORE", ""))
 

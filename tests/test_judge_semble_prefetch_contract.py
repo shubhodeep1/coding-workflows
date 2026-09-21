@@ -259,7 +259,9 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     # The poller consumes Semble helpers from immutable support, so all three
     # assets are part of the required helper closure rather than an optional
     # checkout-local fallback.
-    required_loop = stage_block.split("_fetched_scripts=()", 1)[1].split("; do", 1)[0]
+    required_loop = next(
+        line for line in stage_block.splitlines() if line.strip().startswith("for f in ")
+    )
     for helper in ("install_semble.sh", "build_semble_wrapper.sh", "semble_helpers.sh"):
         assert helper in required_loop
     assert '_fetched_scripts+=("${f}")' in stage_block
@@ -322,9 +324,9 @@ def test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges() -> No
     assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"' in text
     assert 'JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${JUDGE_SEMBLE_QUERY_FILE}" "Judge Context")"' in text
     assert "printf '%s\\n' \"${judge_semble_prefetch}\"" in text
-    assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-stall-recovery.txt"' in text
-    assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"' in text
-    assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge.txt"' in text
+    assert 'poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-stall-recovery.txt" "${stall_judge_semble_prefetch}"' in text
+    assert 'poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" "${RB_JUDGE_SEMBLE_PREFETCH}"' in text
+    assert 'poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge.txt" "${JUDGE_SEMBLE_PREFETCH}"' in text
     assert 'bash scripts/render_prompt.sh prompts/mode-orchestrate-poll-judge.txt' not in text
 
 

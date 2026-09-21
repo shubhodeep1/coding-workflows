@@ -113,10 +113,11 @@ def test_orchestrator_runtime_helpers_reject_checkout_relative_execution() -> No
 	assert 'ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-' in poller_text
 	assert 'source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' in poller_text
 	assert 'PYTHONPATH="${PWD}/scripts' not in poller_text
-	assert 'python3 -I -B - "${PWD}"' in poller_text
+	assert 'poller_run_isolated_python() {' in poller_text
+	assert '"${isolated_python_environment[@]}" python3 -I -B "$@"' in poller_text
 	assert 'sys.path.insert(0, str(support_scripts_dir))' in poller_text
 	assert "sys.path.insert(0, 'scripts')" not in poller_text
-	assert poller_text.count("python3 -I -B") >= 7
+	assert poller_text.count("python3 -I -B") == 1
 	assert 'os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"]' in poller_text
 	assert 'cat "${ORCHESTRATE_POLL_SUPPORT_ROOT_DIR}/unattended_system_instructions.md"' in poller_text
 	assert "cat unattended_system_instructions.md" not in poller_text

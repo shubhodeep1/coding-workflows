@@ -91,6 +91,16 @@ def _pid_is_running(pid: int) -> bool:
 		return False
 	except PermissionError:
 		return True
+	try:
+		process_state_fields = Path(f"/proc/{pid}/stat").read_text(
+			encoding="ascii", errors="replace"
+		).rpartition(")")[2].split()
+	except FileNotFoundError:
+		return False
+	except OSError:
+		return True
+	if process_state_fields and process_state_fields[0] == "Z":
+		return False
 	return True
 
 
@@ -865,6 +875,7 @@ def test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_p
 def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 	expectations = {
 		"scripts/codex_stall_guard.sh": [
+			'exec python3 -I -B -c "$(cat <<\'PY\'',
 			"codex_stall_observed",
 			"codex_stall_killed",
 			"codex_stall_guard failed to write status file",

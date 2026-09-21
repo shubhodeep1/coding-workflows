@@ -212,6 +212,58 @@ poller_run_sanitized_command() {
   "${sanitized_command_environment[@]}" "$@"
 }
 
+# Run inline Python without repository-controlled startup hooks or ambient
+# workflow credentials. Callers may pass explicit NAME=value entries before
+# `--`; everything else is supplied as Python argv after the separator.
+poller_run_isolated_python() {
+  local -a isolated_python_environment=(env -i \
+    HOME="${HOME:-}" \
+    PATH="${PATH:-/usr/bin:/bin}" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LANG="C.UTF-8" \
+    LC_ALL="C.UTF-8" \
+    PYTHONDONTWRITEBYTECODE="1")
+  local explicit_environment_entry=""
+
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    explicit_environment_entry="$1"
+    if ! [[ "${explicit_environment_entry}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      echo "poller_run_isolated_python: invalid environment entry" >&2
+      return 2
+    fi
+    isolated_python_environment+=("${explicit_environment_entry}")
+    shift
+  done
+  if [ "$#" -eq 0 ]; then
+    echo "poller_run_isolated_python: missing -- separator" >&2
+    return 2
+  fi
+  shift
+  "${isolated_python_environment[@]}" python3 -I -B "$@"
+}
+
+poller_render_prompt_isolated() {
+  local prompt_path="$1"
+  local semble_prefetch="${2:-}"
+
+  env -i \
+    HOME="${HOME:-}" \
+    PATH="${PATH:-/usr/bin:/bin}" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LANG="C.UTF-8" \
+    LC_ALL="C.UTF-8" \
+    PYTHONDONTWRITEBYTECODE="1" \
+    PYTHON_ISOLATED_MODE="true" \
+    PROMPT_PRELUDE_REFACTOR_ENABLED="${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" \
+    ALLOW_WORKFLOW_EDITS="${ALLOW_WORKFLOW_EDITS:-false}" \
+    UNATTENDED_IDENTITY_REINJECT_ENABLED="${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" \
+    WORKFLOW_OVERLAY_ENABLED="${WORKFLOW_OVERLAY_ENABLED:-false}" \
+    WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON="${WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON:-}" \
+    WORKFLOW_OVERLAY_REPO_ROOT="${WORKFLOW_OVERLAY_REPO_ROOT:-}" \
+    SEMBLE_PREFETCH="${semble_prefetch}" \
+    bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${prompt_path}"
+}
+
 poller_run_readonly_model() {
   local prompt_file="$1"
   local output_file="$2"
@@ -274,7 +326,7 @@ _judge_truncate_pr_diff_file()
 	[ -f "${diff_path}" ] || return 1
 	[[ "${max_bytes}" =~ ^[1-9][0-9]*$ ]] || return 1
 	truncated_tmp="$(mktemp)" || return 1
-	if PYTHONDONTWRITEBYTECODE=1 python3 - "${diff_path}" "${max_bytes}" > "${truncated_tmp}" 2>/dev/null <<'PY'
+	if poller_run_isolated_python -- - "${diff_path}" "${max_bytes}" > "${truncated_tmp}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
@@ -302,7 +354,7 @@ extract_judge_json_with_status() {
   local parsed_json=""
 
   [ -s "${output_file}" ] || return 0
-  parsed_json="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${output_file}" <<'PY' 2>/dev/null || true
+  parsed_json="$(poller_run_isolated_python -- - "${output_file}" <<'PY' 2>/dev/null || true
 import json
 import re
 import sys
@@ -410,6 +462,7 @@ emit_judge_lessons_learned_records() {
   local pr_number="${3:-}"
   local judge_json="${4:-}"
   local telemetry_json=""
+  local memory_git_auth_entry="GH_TOKEN="
 
   if ! is_truthy "${AI_MEMORY_ENABLED:-true}" || ! is_truthy "${LESSONS_LEARNED_ENABLED:-true}"; then
     return 0
@@ -418,9 +471,21 @@ emit_judge_lessons_learned_records() {
   if ! command -v python3 >/dev/null 2>&1; then
     return 0
   fi
+  if [ -n "${GH_PAT:-}" ]; then
+    memory_git_auth_entry="GH_PAT=${GH_PAT}"
+  elif [ -n "${GH_TOKEN:-}" ]; then
+    memory_git_auth_entry="GH_TOKEN=${GH_TOKEN}"
+  fi
 
-  telemetry_json="$(printf '%s\n' "${judge_json}" | {
-    python3 -I -B - "${PWD}" "${source_name}" "${issue_number}" "${pr_number}" <<'PY'
+  telemetry_json="$({
+    poller_run_isolated_python \
+      "ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR=${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" \
+      "${memory_git_auth_entry}" \
+      "AI_MEMORY_BRANCH=${AI_MEMORY_BRANCH:-ai-memory}" \
+      "AI_MEMORY_ROOT=${AI_MEMORY_ROOT:-ai-memory}" \
+      "AI_MEMORY_PUSH_RETRIES=${AI_MEMORY_PUSH_RETRIES:-16}" \
+      "JUDGE_LESSONS_JSON=${judge_json}" \
+      -- - "${PWD}" "${source_name}" "${issue_number}" "${pr_number}" <<'PY'
 import json
 import os
 import sys
@@ -450,7 +515,7 @@ memory_branch = str(os.environ.get("AI_MEMORY_BRANCH", "ai-memory") or "ai-memor
 memory_root_relative = str(os.environ.get("AI_MEMORY_ROOT", "ai-memory") or "ai-memory").strip() or "ai-memory"
 push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 16
 
-payload = json.loads(sys.stdin.read())
+payload = json.loads(os.environ.get("JUDGE_LESSONS_JSON", ""))
 lessons_raw = payload.get("lessons_learned") if isinstance(payload, dict) else None
 if lessons_raw is None:
     lessons = []
@@ -2166,7 +2231,7 @@ review_blocked_refusal_is_valid() {
       return 0
     fi
     rm -f "${refusal_envelope_file}"
-  done < <(printf '%s' "${comments_json}" | PRODUCER_ID="${producer_id}" PYTHONDONTWRITEBYTECODE=1 python3 -c '
+  done < <(printf '%s' "${comments_json}" | poller_run_isolated_python "PRODUCER_ID=${producer_id}" -- -c '
 import base64, json, os, re, sys
 try:
     comments = json.load(sys.stdin); producer_id = int(os.environ["PRODUCER_ID"])
@@ -2984,7 +3049,7 @@ set_issue_phase_label() {
   local phase_changes
   local _resolve_err_file
   _resolve_err_file="$(mktemp)"
-  if ! phase_changes="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
+  if ! phase_changes="$(poller_run_isolated_python -- "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
     local _resolve_err
     _resolve_err="$(tr '\n' ' ' < "${_resolve_err_file}" 2>/dev/null || true)"
     rm -f "${_resolve_err_file}"
@@ -3084,7 +3149,7 @@ reconcile_tracking_issue_body_from_state() {
 
 	current_hash="$(jq -r '.tracking_body_sync_hash // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
 	if [ -z "${current_hash}" ] && jq -e '(.project_body_snapshot // "") != ""' "${STATE_FILE}" >/dev/null 2>&1; then
-		current_hash="$(python3 - "${STATE_FILE}" <<'PY'
+		current_hash="$(poller_run_isolated_python -- - "${STATE_FILE}" <<'PY'
 import hashlib
 import json
 import sys
@@ -3133,7 +3198,7 @@ PY
 			rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
 			return 1
 		fi
-		if ! python3 - "${issue_json_file}" > "${template_body_file}" <<'PY'
+		if ! poller_run_isolated_python -- - "${issue_json_file}" > "${template_body_file}" <<'PY'
 import json
 import sys
 
@@ -3873,7 +3938,7 @@ backfill_validation_fix_issue_merged_label() {
 
   edit_args+=(--add-label "ai:merged")
   if [ -f "${contract_file}" ]; then
-    phase_changes="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
+    phase_changes="$(poller_run_isolated_python -- "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
     while IFS= read -r remove_label; do
       [ -n "${remove_label}" ] || continue
       if has_label "${fix_labels}" "${remove_label}"; then
@@ -4145,10 +4210,10 @@ reconcile_managed_issue_labels() {
   local labels_csv
   labels_csv="$(echo "${labels_json}" | jq -r 'join(",")' 2>/dev/null || echo "")"
   local repair_json
-  repair_json="$(python3 "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
+  repair_json="$(poller_run_isolated_python -- "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/ai_labels.py" repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
 
   local plan_json
-  plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
+  plan_json="$(poller_run_isolated_python -- - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
 import json
 import sys
 
@@ -5120,7 +5185,7 @@ Completion remains gated. The scheduled poller will retry automatically."
 # non-zero exit means the findings file was unreadable or malformed.
 render_security_pass_findings_table() {
   local findings_file="$1"
-  python3 - "${findings_file}" <<'PY'
+  poller_run_isolated_python -- - "${findings_file}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -5654,7 +5719,7 @@ create_security_pass_fix_issue() {
   if ! render_security_pass_findings_table "${findings_file}" > "${findings_table_file}"; then
     return 1
   fi
-  if ! python3 - "${findings_table_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
+  if ! poller_run_isolated_python -- - "${findings_table_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
 from __future__ import annotations
 
 import sys
@@ -5850,7 +5915,7 @@ security_pass_apply_waivers_to_findings() {
   waived_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
   [[ "${waived_count}" =~ ^[0-9]+$ ]] || waived_count=0
   [ "${waived_count}" -gt 0 ] || return 0
-  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" <<'PY'
+  if ! suppressed_summary="$(poller_run_isolated_python -- - "${findings_file}" "${STATE_FILE}" "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -6022,7 +6087,7 @@ create_security_pass_advisory_followup() {
   fi
   body_file="${RUNTIME_DIR}/security_pass_advisory_${TRACKING_NUM}_$(printf '%s' "${finding_id}" | tr -c 'A-Za-z0-9._-' '_').md"
   printf '%s\n' "${finding_json}" > "${body_file}.finding.json"
-  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
+  if ! title="$(poller_run_isolated_python -- - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -6359,7 +6424,10 @@ security_pass_exhaustion_judge() {
     echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=rounds_exhausted rounds=${judge_rounds} cap=${MAX_SECURITY_PASS_JUDGE_ROUNDS}"
     return 1
   fi
-  if [ ! -f prompts/mode-judge-security-pass-exhaustion.txt ] || [ ! -f scripts/write_codex_config.sh ]; then
+  if [ ! -f "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-security-pass-exhaustion.txt" ] \
+    || [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" ] \
+    || [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/write_codex_config.sh" ] \
+    || [ ! -f "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh" ]; then
     echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=prompt_unavailable"
     return 1
   fi
@@ -6433,7 +6501,7 @@ security_pass_exhaustion_judge() {
     echo
     echo "=== SECURITY PASS EXHAUSTION JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-security-pass-exhaustion.txt
+    poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-security-pass-exhaustion.txt" "${semble_prefetch}"
     echo
     echo "=== SECURITY PASS EXHAUSTION DIAGNOSTICS JSON ==="
     echo
@@ -6441,7 +6509,7 @@ security_pass_exhaustion_judge() {
   } > "${prompt_file}"
 
   effective_judge_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
-  if ! bash scripts/write_codex_config.sh --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}" >/dev/null 2>"${error_file}"; then
+  if ! bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/write_codex_config.sh" --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}" >/dev/null 2>"${error_file}"; then
     echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=codex_config_failed"
     return 1
   fi
@@ -6453,7 +6521,12 @@ security_pass_exhaustion_judge() {
       printf '%s\n' "${MOCK_SECURITY_PASS_JUDGE_JSON}" > "${output_file}"
     else
       sanitize_codex_prompt_file "${prompt_file}"
-      bash scripts/codex_heartbeat.sh \
+      poller_run_sanitized_command env \
+        CODEX_HEARTBEAT_ENABLED="${CODEX_HEARTBEAT_ENABLED:-1}" \
+        CODEX_HEARTBEAT_INTERVAL_SECS="${CODEX_HEARTBEAT_INTERVAL_SECS:-30}" \
+        CODEX_RUN_BUDGET_START_EPOCH="${CODEX_RUN_BUDGET_START_EPOCH:-}" \
+        CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH="${CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH:-}" \
+        bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh" \
         --phase "orchestrate-security-pass-judge" \
         --stdout-file "${output_file}" \
         --stderr-file "${error_file}" \
@@ -6658,7 +6731,7 @@ ${decisions_table}}"
 # Strip notification triggers from judge- or audit-generated prose before it
 # lands in a tracking comment (same rule as render_security_pass_findings_table).
 security_pass_prose() {
-  printf '%s' "${1:-}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+  printf '%s' "${1:-}" | poller_run_isolated_python -- -c '
 import re, sys
 text = " ".join(sys.stdin.read().split())
 sys.stdout.write(re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b")))
@@ -6667,7 +6740,7 @@ sys.stdout.write(re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b")))
 
 render_security_pass_judge_decisions_table() {
   local verdict_file="$1"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${verdict_file}" <<'PY'
+  poller_run_isolated_python -- - "${verdict_file}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -7447,7 +7520,7 @@ extract_autofix_resolver_retry_state_from_pr_body() {
   local retry_state_body=""
   retry_state_body="$(cat)"
 
-  RETRY_STATE_BODY="${retry_state_body}" python3 - <<'PY'
+  poller_run_isolated_python "RETRY_STATE_BODY=${retry_state_body}" -- - <<'PY'
 from __future__ import annotations
 
 import json
@@ -7599,7 +7672,7 @@ normalize_judge_justification_for_fingerprint() {
   # poller invocation that touched judge fingerprints into a non-zero
   # exit. Reading the text from RAW_TEXT and the script from stdin
   # (`python3 -`) sidesteps the FD-3 dance entirely.
-  RAW_TEXT="${raw_text}" python3 - <<'PY'
+  poller_run_isolated_python "RAW_TEXT=${raw_text}" -- - <<'PY'
 import os
 import re
 
@@ -7632,7 +7705,7 @@ judge_justification_fingerprint() {
     printf '%s' "${normalized_text}" | shasum -a 256 | awk '{print $1}'
     return 0
   fi
-  printf '%s' "${normalized_text}" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+  printf '%s' "${normalized_text}" | poller_run_isolated_python -- -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 }
 
 # Capture merged-sub-issue intent fingerprints for a sub-issue whose
@@ -7752,11 +7825,12 @@ capture_intent_fingerprints_for_merged_subissue() {
   fi
 
   local fp_json
-  fp_json="$(FINGERPRINT_PER_FILE_CAP="${FINGERPRINT_PER_FILE_CAP}" \
-    FINGERPRINT_MIN_PATTERN_CHARS="${FINGERPRINT_MIN_PATTERN_CHARS}" \
-    GIT_COMMAND_TIMEOUT_SECS="${integration_fetch_timeout_secs}" \
-    FINGERPRINT_POST_MERGE_REF="${integration_ref_for_capture}" \
-    python3 - "${diff_file}" <<'PY' 2>/dev/null || true
+  fp_json="$(poller_run_isolated_python \
+    "FINGERPRINT_PER_FILE_CAP=${FINGERPRINT_PER_FILE_CAP}" \
+    "FINGERPRINT_MIN_PATTERN_CHARS=${FINGERPRINT_MIN_PATTERN_CHARS}" \
+    "GIT_COMMAND_TIMEOUT_SECS=${integration_fetch_timeout_secs}" \
+    "FINGERPRINT_POST_MERGE_REF=${integration_ref_for_capture}" \
+    -- - "${diff_file}" <<'PY' 2>/dev/null || true
 import json, os, re, subprocess, sys
 from collections import Counter
 
@@ -8231,7 +8305,7 @@ update_eager_pr_validation_status_section() {
 
   pr_body="$(printf '%s' "${pr_json}" | jq -r '.body // ""' 2>/dev/null || echo '')"
   validation_block="$(build_eager_pr_validation_status_block "${next_action_override}")"
-  updated_body="$(printf '%s' "${pr_body}" | VALIDATION_STATUS_BLOCK="${validation_block}" python3 -c '
+  updated_body="$(printf '%s' "${pr_body}" | poller_run_isolated_python "VALIDATION_STATUS_BLOCK=${validation_block}" -- -c '
 from __future__ import annotations
 
 import os
@@ -13940,7 +14014,9 @@ recovery_action_for_phase() {
   fi
 
   local action
-  action="$(python3 -I -B - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+  action="$(poller_run_isolated_python \
+    "ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR=${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" \
+    -- - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
 import os, sys
 sys.path.insert(0, os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"])
 from orchestrate_lib import resolve_stall_recovery_action
@@ -13972,7 +14048,9 @@ normalize_stall_recovery_action() {
   local candidate_action="${3:-}"
 
   local action
-  action="$(python3 -I -B - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+  action="$(poller_run_isolated_python \
+    "ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR=${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" \
+    -- - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
 import os, sys
 sys.path.insert(0, os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"])
 from orchestrate_lib import resolve_effective_stall_recovery_action
@@ -14018,7 +14096,7 @@ stall_recovery_action_is_terminal() {
 _robust_parse_json_file() {
   local file_path="$1"
   local parse_log="${RUNTIME_DIR:-/tmp}/stall_judge.log"
-  python3 -c "
+  poller_run_isolated_python -- -c "
 import json, re, sys
 
 try:
@@ -15027,7 +15105,7 @@ invoke_stall_judge() {
     echo
     echo "=== STALL JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-stall-recovery.txt"
+    poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-stall-recovery.txt" "${stall_judge_semble_prefetch}"
     echo
     echo "=== STALL DIAGNOSTICS JSON ==="
     echo
@@ -16209,7 +16287,9 @@ run_standalone_stall_recovery() {
     phase=""
     _standalone_latch_label=""
     _standalone_phase_resolve_rc=0
-    IFS=$'\t' read -r phase _standalone_latch_label < <(python3 -I -B - "$labels_json" <<'PY'
+    IFS=$'\t' read -r phase _standalone_latch_label < <(poller_run_isolated_python \
+      "ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR=${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" \
+      -- - "$labels_json" <<'PY'
 import json, os, sys
 sys.path.insert(0, os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"])
 from orchestrate_lib import determine_phase, stall_recovery_latch_label
@@ -16248,7 +16328,7 @@ PY
     state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
     state_json="$(_extract_standalone_state_json_from_comments "${comments_json}")"
 
-    updated_state="$(python3 - "$state_json" "$phase" <<'PY'
+    updated_state="$(poller_run_isolated_python -- - "$state_json" "$phase" <<'PY'
 import json, sys, time
 state = json.loads(sys.argv[1])
 phase = sys.argv[2]
@@ -16276,7 +16356,9 @@ PY
     if [ "${phase}" = "ai:done" ]; then
       effective_max_recoveries="${MAX_STALL_RECOVERIES_DONE}"
     fi
-    threshold_minutes="$(python3 -I -B - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
+    threshold_minutes="$(poller_run_isolated_python \
+      "ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR=${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" \
+      -- - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
 import json, os, sys
 sys.path.insert(0, os.environ["ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR"])
 from orchestrate_lib import DEFAULT_PHASE_STALL_THRESHOLDS
@@ -17133,7 +17215,11 @@ REISSUE_EOF
 # Read the impl_noop_count for a local_id from the state file.
 get_impl_noop_count() {
   local lid="$1"
-  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -I -B -c "
+  poller_run_isolated_python \
+    "STATE_FILE=${STATE_FILE}" \
+    "IMPL_NOOP_LID=${lid}" \
+    "ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR=${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" \
+    -- -c "
 import json, os, sys
 sys.path.insert(0, os.environ['ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR'])
 from orchestrate_lib import get_impl_noop_count
@@ -17152,7 +17238,11 @@ except (TypeError, ValueError):
 # Increment the impl_noop_count for a local_id in the state file.
 bump_impl_noop_count() {
   local lid="$1"
-  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -I -B -c "
+  poller_run_isolated_python \
+    "STATE_FILE=${STATE_FILE}" \
+    "IMPL_NOOP_LID=${lid}" \
+    "ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR=${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" \
+    -- -c "
 import json, os, sys
 sys.path.insert(0, os.environ['ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR'])
 from orchestrate_lib import increment_impl_noop_count
@@ -19123,7 +19213,7 @@ The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-runnin
       if [ -z "${REVALIDATE_COMMENT_URL}" ] && [[ "${REVALIDATE_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
         REVALIDATE_COMMENT_URL="$(_gh_url "issues/${TRACKING_NUM}#issuecomment-${REVALIDATE_COMMENT_ID}")"
       fi
-      REVALIDATE_REASON="$(REVALIDATE_COMMENT_BODY="${REVALIDATE_COMMENT_BODY}" python3 - <<'PY'
+      REVALIDATE_REASON="$(poller_run_isolated_python "REVALIDATE_COMMENT_BODY=${REVALIDATE_COMMENT_BODY}" -- - <<'PY'
 from __future__ import annotations
 
 import os
@@ -20694,7 +20784,7 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+        poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" "${RB_JUDGE_SEMBLE_PREFETCH}"
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -20785,7 +20875,7 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
       fi
 
       # Parse judge output
-      RB_JUDGE_JSON="$(python3 -c "
+      RB_JUDGE_JSON="$(poller_run_isolated_python -- -c "
 import json, re, sys
 
 raw = open('${RB_JUDGE_OUTPUT_FILE}', 'r').read()
@@ -22137,7 +22227,9 @@ fi
           STALL_STATE_CHANGED=true
 
           if [ "${STALL_RECOVERY_SHOULD_INCREMENT}" = "true" ] && [ -n "${STALL_LOCAL_ID}" ] && [ "${STALL_LOCAL_ID}" != "null" ]; then
-            python3 -I -B -c "
+            poller_run_isolated_python \
+              "ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR=${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" \
+              -- -c "
 import json, os, time, sys
 sys.path.insert(0, os.environ['ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR'])
 from orchestrate_lib import increment_stall_recovery
@@ -22458,7 +22550,7 @@ ${PR_DIFF}
     echo
     echo "=== JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge.txt"
+    poller_render_prompt_isolated "${ORCHESTRATE_POLL_SUPPORT_PROMPTS_DIR}/mode-judge.txt" "${JUDGE_SEMBLE_PREFETCH}"
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo

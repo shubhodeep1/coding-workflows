@@ -425,7 +425,7 @@ jobs:
             install -m 0644 "${src}" "prompts/${security_prompt}"
           done
 
-          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-judge-security-pass-exhaustion.txt _templates/mode-orchestrate-poll-judge.txt _templates/mode-security-audit.txt references/security-money-lens.txt; do
+          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _prelude_role_persona.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-judge-security-pass-exhaustion.txt _templates/mode-orchestrate-poll-judge.txt _templates/mode-security-audit.txt references/output-contract.txt references/security-money-lens.txt references/severity-classification.txt; do
             asset_src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
             if [ ! -f "${asset_src}" ]; then
               echo "::error::Missing required support file prompts/${prompt_assembly_asset}"
@@ -481,18 +481,23 @@ jobs:
                 required_prompts: [
                   "prompts/mode-judge.txt",
                   "prompts/mode-judge-review-blocked.txt",
+                  "prompts/mode-judge-security-pass-exhaustion.txt",
                   "prompts/mode-judge-stall-recovery.txt",
                   "prompts/mode-security-audit.txt",
                   "prompts/_identity_recall.txt",
                   "prompts/_prelude_common.txt",
                   "prompts/_prelude_semble.txt",
                   "prompts/_prelude_output_contract.txt",
+                  "prompts/_prelude_role_persona.txt",
                   "prompts/_templates/mode-judge.txt",
                   "prompts/_templates/mode-judge-review-blocked.txt",
+                  "prompts/_templates/mode-judge-security-pass-exhaustion.txt",
                   "prompts/_templates/mode-judge-stall-recovery.txt",
                   "prompts/_templates/mode-orchestrate-poll-judge.txt",
                   "prompts/_templates/mode-security-audit.txt",
+                  "prompts/references/output-contract.txt",
                   "prompts/references/security-money-lens.txt",
+                  "prompts/references/severity-classification.txt",
                   "prompts/_nag_reminders.txt"
                 ],
                 required_files: [
@@ -875,7 +880,14 @@ jobs:
           cp "${SNAPSHOT_FILE}" "${PUBLISH_DIR}/state.json"
           cp "${SNAPSHOT_FILE}" "${PUBLISH_DIR}/snapshots/${TICK_SLUG}.json"
 
-          python3 - "${PUBLISH_DIR}/snapshots" "${HISTORY_DEPTH}" <<'PY'
+          env -i \
+            HOME="${HOME:-}" \
+            PATH="${PATH:-/usr/bin:/bin}" \
+            TMPDIR="${TMPDIR:-/tmp}" \
+            LANG="C.UTF-8" \
+            LC_ALL="C.UTF-8" \
+            PYTHONDONTWRITEBYTECODE="1" \
+            python3 -I -B - "${PUBLISH_DIR}/snapshots" "${HISTORY_DEPTH}" <<'PY'
           from pathlib import Path
           import sys
 

@@ -178,6 +178,36 @@ def test_review_blocked_approval_requires_exact_command_and_maintainer_role() ->
 	assert _approval_status([{**base, "body": command}], request, repository="")["status"] == "pending"
 
 
+def test_review_blocked_python_helpers_ignore_checkout_startup_hooks(tmp_path: Path) -> None:
+	startup_marker = tmp_path / "startup-hook-ran"
+	(tmp_path / "sitecustomize.py").write_text(
+		"import os\n"
+		"from pathlib import Path\n"
+		f"Path({str(startup_marker)!r}).write_text(os.environ.get('GH_PAT', 'missing'), encoding='utf-8')\n",
+		encoding="utf-8",
+	)
+	command = (
+		f"source {str(REPO_ROOT / 'scripts' / 'gh_helpers.sh')!r}; "
+		"test \"$(_gh_helpers_run_isolated_python -- -c 'import os; print(os.environ.get(\"GH_PAT\", \"missing\"))')\" = missing; "
+		"review_blocked_find_pending_request '[]' 12 \"$HEAD_SHA\" 41898282"
+	)
+	result = subprocess.run(
+		["bash", "-c", command],
+		cwd=tmp_path,
+		env={
+			"PATH": "/usr/bin:/bin",
+			"GH_PAT": "review-blocked-secret-sentinel",
+			"HEAD_SHA": "b" * 40,
+			"PYTHONPATH": str(tmp_path),
+		},
+		check=True,
+		text=True,
+		capture_output=True,
+	)
+	assert result.stdout == ""
+	assert not startup_marker.exists()
+
+
 def test_editor_model_step_has_no_repository_credentials_and_rechecks_state() -> None:
 	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	editor_start = workflow_text.index("- name: Apply fixes with editor model")

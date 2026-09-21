@@ -52,6 +52,31 @@ if ! type emit_event >/dev/null 2>&1; then
 	}
 fi
 
+_gh_helpers_run_isolated_python()
+{
+	local -a isolated_python_environment=(env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE="1")
+	local explicit_environment_entry=""
+
+	while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+		explicit_environment_entry="$1"
+		if ! [[ "${explicit_environment_entry}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+			echo "_gh_helpers_run_isolated_python: invalid environment entry" >&2
+			return 2
+		fi
+		isolated_python_environment+=("${explicit_environment_entry}")
+		shift
+	done
+	[ "$#" -gt 0 ] || return 2
+	shift
+	"${isolated_python_environment[@]}" python3 -I -B "$@"
+}
+
 # ---------------------------------------------------------------
 # _is_gh_rate_limit — detect rate-limit text in stderr / body.
 # Returns 0 (true) if the text indicates a rate limit.
@@ -999,7 +1024,7 @@ review_blocked_find_pending_request()
 	local head_sha="${3:?head SHA required}"
 	local producer_id="${4:?authenticated producer ID required}"
 	[[ "${producer_id}" =~ ^[1-9][0-9]*$ ]] || return 1
-	printf '%s' "${comments_json}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+	printf '%s' "${comments_json}" | _gh_helpers_run_isolated_python -- -c '
 import json, re, sys
 comments = json.load(sys.stdin)
 pr = int(sys.argv[1]); head = sys.argv[2]; producer_id = int(sys.argv[3])
@@ -1043,7 +1068,7 @@ review_blocked_build_approval_request()
 	action="$(printf '%s' "${decision_json}" | jq -r '.action // empty')"
 	decision_digest="$(review_blocked_decision_digest "${decision_json}")"
 	helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	request_id="$(python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); from ai_memory_lib import make_record_id; print(make_record_id("review_blocked_approval"))' "${helper_dir}")" || return 1
+	request_id="$(_gh_helpers_run_isolated_python -- -c 'import sys; sys.path.insert(0, sys.argv[1]); from ai_memory_lib import make_record_id; print(make_record_id("review_blocked_approval"))' "${helper_dir}")" || return 1
 	created_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 	jq -cn --arg request_id "${request_id}" --argjson pr_number "${pr_number}" \
 		--argjson issue_number "${issue_number:-0}" --arg action "${action}" \
@@ -1063,7 +1088,7 @@ review_blocked_approval_status()
 		printf '%s\n' "${pending_json}"
 		return 0
 	fi
-	approval_candidate="$(printf '%s' "${comments_json}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+	approval_candidate="$(printf '%s' "${comments_json}" | _gh_helpers_run_isolated_python -- -c '
 import json, re, sys
 try:
     comments = json.load(sys.stdin); request = json.loads(sys.argv[1])
@@ -1165,10 +1190,14 @@ review_blocked_build_successor_intent()
 	local successor_body="${4:?successor body required}"
 	local required_labels_json="${5:?required labels JSON required}"
 	local producer_id="${6:?producer ID required}"
-	REQUEST_JSON="${request_json}" SUCCESSOR_TYPE="${successor_type}" \
-	SUCCESSOR_TITLE="${successor_title}" SUCCESSOR_BODY="${successor_body}" \
-	REQUIRED_LABELS_JSON="${required_labels_json}" PRODUCER_ID="${producer_id}" \
-	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+	_gh_helpers_run_isolated_python \
+		"REQUEST_JSON=${request_json}" \
+		"SUCCESSOR_TYPE=${successor_type}" \
+		"SUCCESSOR_TITLE=${successor_title}" \
+		"SUCCESSOR_BODY=${successor_body}" \
+		"REQUIRED_LABELS_JSON=${required_labels_json}" \
+		"PRODUCER_ID=${producer_id}" \
+		-- - <<'PY'
 import hashlib
 import json
 import os
@@ -1266,8 +1295,11 @@ review_blocked_resolve_successor_issue()
 		printf '%s\n' '{"status":"inconclusive","url":null}'
 		return 0
 	fi
-	INTENT_JSON="${intent_json}" SEARCH_JSON="${search_json}" PRODUCER_ID="${producer_id}" \
-	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+	_gh_helpers_run_isolated_python \
+		"INTENT_JSON=${intent_json}" \
+		"SEARCH_JSON=${search_json}" \
+		"PRODUCER_ID=${producer_id}" \
+		-- - <<'PY'
 import hashlib
 import json
 import os
@@ -2057,7 +2089,7 @@ sanitize_codex_prompt_file()
 		: > "${_tmp}" 2>/dev/null || { rm -f "${_tmp}"; return 0; }
 	fi
 	if command -v python3 >/dev/null 2>&1; then
-		if python3 - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
+		if _gh_helpers_run_isolated_python -- - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
 from pathlib import Path
 import sys
 

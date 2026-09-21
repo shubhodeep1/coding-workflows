@@ -426,7 +426,7 @@ def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
 	assert internal["jobs"]["orchestrate"]["with"]["tracking_comment"] == "${{ inputs.tracking_comment }}"
 	text = (REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8")
 	assert "TRACKING_LABELS_INPUT: ${{ inputs.tracking_labels }}" in text
-	assert "source scripts/label_helpers.sh" in text.split("- name: Create tracking issue", 1)[1]
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"' in text.split("- name: Create tracking issue", 1)[1]
 	assert "TRACKING_ISSUE_COMMENT_POSTED" in text
 	assert "TRACKING_COMMENT_TOKEN: ${{ github.token }}" in text
 	assert "TRACKING_COMMENT_CALLER_ACTOR_ID: ${{ github.actor_id }}" in text

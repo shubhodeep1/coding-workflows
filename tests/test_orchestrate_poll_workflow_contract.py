@@ -135,7 +135,25 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 	assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}" in wf
 	assert "SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}" in wf
 	assert "for security_prompt in mode-security-audit.txt mode-judge-security-pass-exhaustion.txt; do" in wf
-	assert "_templates/mode-judge-security-pass-exhaustion.txt" in wf
+	manifest_assignment_start = wf.index('poll_immutable_support_manifest="${RUNNER_TEMP}/poll-immutable-support-manifest.json"')
+	required_prompts_start = wf.index("required_prompts: [", manifest_assignment_start)
+	required_prompts_end = wf.index("],", required_prompts_start)
+	immutable_required_prompts = wf[required_prompts_start:required_prompts_end]
+	prompt_assembly_assets = wf.split("for prompt_assembly_asset in ", 1)[1].split("; do", 1)[0]
+	for required_prompt in (
+		"prompts/mode-judge-security-pass-exhaustion.txt",
+		"prompts/_templates/mode-judge-security-pass-exhaustion.txt",
+		"prompts/references/output-contract.txt",
+		"prompts/references/severity-classification.txt",
+		"prompts/_prelude_role_persona.txt",
+	):
+		assert f'"{required_prompt}"' in immutable_required_prompts
+	for staged_asset in (
+		"_prelude_role_persona.txt",
+		"references/output-contract.txt",
+		"references/severity-classification.txt",
+	):
+		assert staged_asset in prompt_assembly_assets
 	assert "WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}" in wf
 	for asset in (
 		"codex_heartbeat.sh",
@@ -230,6 +248,12 @@ def test_poller_state_auth_and_readonly_model_security_contract() -> None:
 	readonly_model_block = poller.split("poller_run_readonly_model() {", 1)[1].split("\n}", 1)[0]
 	assert "model_provider_broker_exec_sanitized" in readonly_model_block
 	assert "OPENROUTER_API_KEY" not in readonly_model_block
+	snapshot_publish_block = wf.split("- name: Publish state snapshot branch", 1)[1].split("\n      - name:", 1)[0]
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in snapshot_publish_block
+	assert "env -i \\" in snapshot_publish_block
+	assert 'PYTHONDONTWRITEBYTECODE="1" \\' in snapshot_publish_block
+	assert 'python3 -I -B - "${PUBLISH_DIR}/snapshots" "${HISTORY_DEPTH}"' in snapshot_publish_block
+	assert "GH_TOKEN=" not in snapshot_publish_block.split("run: |", 1)[1].split("python3 -I -B", 1)[0]
 
 
 def main() -> int:
