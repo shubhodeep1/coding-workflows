@@ -228,3 +228,172 @@ Terminal-outcome success rate excluding skipped/other runs: **87.0%**.
 | Highest-priority collection step | Add `GH_API_CALL` and `GH_API_SUMMARY` markers |
 
 **Coverage gap:** the assembled context has telemetry or summaries for 124 runs, while `summary.json` contains full deep-log telemetry for 29 selected runs. Successful-run sampling is 7%, so latency/provider conclusions based on slow-run logs are high-confidence for outliers but not population-wide distributions.
+
+## Deep Audit — Workflows & Scripts (2026-09-21)
+
+### Section 1: Bug & Correctness Sweep
+
+Repository-wide checks found no Bash syntax errors across 84 scripts, no Python AST errors across 57 scripts, and no YAML lint errors across 49 workflows.
+
+#### BUG-001 — Critical guard latches use non-retrying GitHub mutations
+
+- **File path and line range:** `scripts/implement_handle_guard_block.sh:13-58`, `scripts/implement_handle_guard_block.sh:212-289`
+- **Severity:** High
+- **Category tag:** `bug`
+- **Description:** The staged-support and destructive-commit handlers call `gh label`, `gh issue edit`, `gh issue view`, and `gh issue comment` directly. Most writes are followed by `|| true`; a transient GitHub failure can therefore leave `ai:needs-human` or `ai:destructive-blocked` absent while the handler exits. Lines 21-37 and 246-264 explicitly acknowledge that an unverified latch does not block redispatch.
+- **Recommended fix:** Source `${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh` and route every GitHub call through `gh_retry`. Fail closed when the final verification read confirms the latch is absent; preserve Telegram fail-open behavior.
+
+#### BUG-002 — One-time validation dispatch bypasses the available retry helper
+
+- **File path and line range:** `.github/workflows/review_autofix.yml:1204-1243`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** The step defines `gh_retry` at lines 1123-1137 and uses it for label reads, but lines 1229 and 1237 invoke raw `gh workflow run` and `gh issue edit`. A transient dispatch failure merely warns and continues; because this is a post-merge event, there may be no later event to initiate standalone validation. A transient label-removal failure can also permit duplicate dispatch on a rerun. [NEEDS VERIFICATION]
+- **Recommended fix:** Wrap both workflow candidates and the label removal with `gh_retry`. Leave `ai:orchestrator-validate-required` intact when dispatch fails and emit a force-tick/retry marker.
+
+#### SEC-001 — PAT is embedded directly in executable step source and Git remote configuration
+
+- **File path and line range:** `.github/workflows/implement.yml:4328-4340`, `.github/workflows/review_autofix.yml:6005-6010`
+- **Severity:** High
+- **Category tag:** `security`
+- **Description:** Both steps already export `GH_TOKEN`, but interpolate `${{ secrets.GH_PAT }}` directly into the `run:` body and save it in `origin` via `git remote set-url`. This materializes the PAT in the generated step script and persists it in `.git/config`; masking protects ordinary logs but not local file or process inspection.
+- **Recommended fix:** Keep a credential-free origin URL and authenticate individual fetch/push operations with an ephemeral `http.extraheader` or credential helper derived from `GH_TOKEN`. Never place `${{ secrets.* }}` directly in shell source.
+
+#### BUG-003 — “Unreadable file” contract is implemented as existence-only
+
+- **File path and line range:** `scripts/validate_editor_audit.sh:43-78`
+- **Severity:** Low
+- **Category tag:** `bug`
+- **Description:** Exit code 3 is documented for a missing or unreadable summary, but the guard checks only `-f`. An existing unreadable file reaches `awk`; because the script intentionally lacks `set -e`, the failure becomes an empty audit and returns exit code 1 instead of 3.
+- **Recommended fix:** Check `[ -r "${summary_file}" ]` and explicitly test the `awk` return code before classifying the audit contents.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+The six-to-two review-sweep status-call optimization is already covered by the existing report’s **GH API Call Audit** and is not duplicated below.
+
+#### BATCH-001 — Merge-train file discovery performs one REST request per PR
+
+- **File path and line range:** `scripts/review_merge_train.sh:41-60`, `scripts/review_merge_train.sh:110-137`, `scripts/review_merge_train.sh:194-230`, `scripts/review_merge_train.sh:423-457`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** The gate performs one open-PR request plus one paginated `/pulls/{n}/files` request for each older PR, up to `MERGE_TRAIN_MAX_OLDER_PRS=20`. Current logical count is `1 + N`; the release path is `2 + U`, where `U` is the number of distinct PR file lists needed. The cycle-local cache prevents duplicate fetches but does not batch the first fetch.
+- **Recommended fix:** Add an aliased GraphQL file-list prefetch modeled on `_fetch_linked_pr_status_graphql`, in batches of approximately 20 PRs. Projected gate count: `1 + ceil(N/20)`—21 calls become 2 at the configured cap. Retain REST fallback for PRs whose file connection exceeds the GraphQL page.
+
+#### BATCH-002 — Deterministic skip applies linked-issue labels one REST mutation at a time
+
+- **File path and line range:** `.github/workflows/review_autofix.yml:1454-1493`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** One GraphQL query resolves up to 50 closing issues, followed by one REST label mutation per issue and one label-creation attempt. Current count is `N + 2`; with 50 linked issues it reaches 52 calls.
+- **Recommended fix:** Return issue node IDs and the `ai:ready-to-merge` label ID in the initial query, then issue one aliased `addLabelsToLabelable` mutation. Projected count: 2 calls, or 3 only when the label must first be created. Follow the alias construction used by `_fetch_candidate_issue_details_graphql`.
+
+#### BATCH-003 — Weekly consumer retro fan-out repeats repository metadata reads
+
+- **File path and line range:** `scripts/workflow_retro_fanout.sh:96-115`, `scripts/workflow_retro_fanout.sh:202-223`, `scripts/workflow_retro_fanout.sh:275-323`, `scripts/workflow_retro_fanout.sh:328-346`
+- **Severity:** Low
+- **Category tag:** `api-batching`
+- **Description:** For each active consumer, the loop performs a variable GET, a label-creation attempt, a tracker issue list, and a current-window comment list before necessary upsert mutations. With the current 13-consumer roster, that is 52 calls before tracker/comment writes. [NEEDS VERIFICATION]
+- **Recommended fix:** Batch label existence, tracker selection, and recent tracker comments across repositories using GraphQL aliases based on `_fetch_candidate_issue_details_graphql`. Keep the unbatchable Actions-variable GET per repository. Projected pre-write count for 13 consumers: approximately 14 calls, subject to GraphQL pagination limits.
+
+#### API-001 — Inline retry shims retry permanent client errors
+
+- **File path and line range:** `.github/workflows/review_autofix.yml:1123-1137`, `.github/workflows/review_autofix.yml:1326-1337`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** Both inline `gh_retry` functions retry every error four times. Unlike `scripts/gh_helpers.sh:439-465`, they do not stop on authentication, permission, validation, or missing-resource failures. Current count for a permanent failure is 4 calls; the canonical helper would issue 1.
+- **Recommended fix:** Stage/source the canonical helper or extract its permanent-failure classifier into a lightweight shared module suitable for these jobs.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Context-budget telemetry function is copied byte-for-byte
+
+- **File path and line range:** `scripts/review_run_reviewers.sh:69-107`, `scripts/review_apply_fixes.sh:164-202`, `scripts/review_rb_judge.sh:256-294`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** `emit_context_budget_warn_for_prompt` has the same 39-line body in all three scripts. Any telemetry schema, import path, or fail-open behavior change must be synchronized manually.
+- **Recommended fix:** Move it into `scripts/watchdog_helpers.sh` or a new `scripts/prompt_budget_helpers.sh` with signature `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>`. Source that module from all three callers.
+
+#### DUP-002 — Workflow support staging is independently maintained in ten workflows
+
+- **File path and line range:** `.github/workflows/check_failure_triage.yml:263-324`, `.github/workflows/clarify.yml:218-353`, `.github/workflows/implement.yml:932-1288`, `.github/workflows/orchestrate.yml:358-486`, `.github/workflows/orchestrate_clarify_respond.yml:281-414`, `.github/workflows/orchestrate_poll.yml:373-585`, `.github/workflows/plan.yml:281-428`, `.github/workflows/review_autofix.yml:1765-1849`, `.github/workflows/validate.yml:214-433`, `.github/workflows/workflow_failure_heal.yml:131-160`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** These blocks independently maintain script manifests, main fallbacks, prompt/schema copying, optional assets, and environment exports. `review_autofix.yml` and `validate.yml` already delegate most work to `scripts/stage_workflow_support.sh`, while the other workflows repeat comparable logic inline.
+- **Recommended fix:** Generalize the helper to `stage_workflow_support.sh <phase> --manifest <path> --layout in-tree|runtime [--self-repo-ledger]`. Store per-phase manifests as data. Keep implement’s staged-support ledger as a phase callback rather than duplicating the common staging engine.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Support-staging run body has only 674 characters of expression headroom
+
+- **File path and line range:** `.github/workflows/implement.yml:932-1288`
+- **Severity:** High
+- **Category tag:** `expression-limit`
+- **Description:** The interpolated `Stage workflow support files` run body is approximately 20,326 characters, leaving about 674 characters before the 21,000-character runner limit. It exceeds the requested 18,000-character high-risk threshold.
+- **Recommended fix:** Extract the body to `scripts/stage_workflow_support.sh` with an implement manifest and self-repository ledger mode. Keep only environment setup and one script invocation in YAML.
+
+#### EXPR-002 — Destructive preflight is above the medium-risk threshold
+
+- **File path and line range:** `.github/workflows/implement.yml:3143-3449`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Description:** The interpolated `Preflight destructive-commit guard` body is approximately 17,313 characters, leaving about 3,687 characters of headroom. It exceeds the 15,000-character medium-risk threshold.
+- **Recommended fix:** Extract it to `scripts/implement_preflight_guard.sh`, with explicit paths for `GITHUB_OUTPUT`, the staged-support ledger, issue-body file, and scope helper.
+
+No individual `${{ ... }}` expression exceeds 234 characters, and the largest `if:` value is approximately 793 characters. No workflow exceeds the 800 KB warning threshold; the largest is `review_autofix.yml` at approximately 497,787 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001 — Three poller functions have no repository call sites
+
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:11348-11356`, `scripts/orchestrate_poll_process.sh:12958-12977`, `scripts/orchestrate_poll_process.sh:13087-13097`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `get_last_validation_run_conclusion`, `read_standalone_state_json`, and `stall_recovery_action_is_terminal` are definition-only. The dead `read_standalone_state_json` path also retains a latent paginated comments API call.
+- **Recommended fix:** Remove the functions after confirming no externally sourced consumer depends on them, or mark them as a documented compatibility API with direct tests and callers.
+
+#### DEAD-002 — Reviewer cutover left unused compatibility functions
+
+- **File path and line range:** `scripts/review_run_reviewers.sh:664-692`, `scripts/review_run_reviewers.sh:3562-3583`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `is_mcp_incompatible_model` and `strip_all_mcp_server_blocks` are explicit no-ops after the OpenCode cutover. `reviewer_patch_reasoning_config_file` is also definition-only, while `reviewer_prepare_reasoning_configs` states that reasoning now uses `--variant`.
+- **Recommended fix:** Document these as a public compatibility surface if consumers may call them. Otherwise deprecate them and remove them in a versioned cleanup consistent with identifier-immutability rules.
+
+#### SHELL-001 — Reviewer state assignments are never consumed
+
+- **File path and line range:** `scripts/review_run_reviewers.sh:753-761`, `scripts/review_run_reviewers.sh:3533-3548`, `scripts/review_run_reviewers.sh:3772-3775`, `scripts/review_run_reviewers.sh:4047-4048`, `scripts/review_run_reviewers.sh:4120-4128`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** ShellCheck reports unused assignments including `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE` and `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE`. Repository search also finds `REVIEWER_HEALTH_LAST_OPEN_UNTIL_EPOCH` and `REVIEWER_ATTEMPT_WD_REASON` written but never read.
+- **Recommended fix:** Remove obsolete assignments, or wire `open_until_epoch` and watchdog reason into `REVIEWER_SLOT_STATE`/`REVIEW_AUTOFIX_RUN_SUMMARY_V1` if they are intended telemetry.
+
+#### CONSIST-001 — Inline label metadata duplicates the authoritative contract
+
+- **File path and line range:** `.github/workflows/review_autofix.yml:1340-1343`, `.github/workflows/review_autofix.yml:1442-1448`
+- **Severity:** Low
+- **Category tag:** `consistency`
+- **Description:** The deterministic-skip job hardcodes label colors and descriptions while comments require them to remain synchronized with `scripts/label_helpers.sh` and `.github/ai/label_contract.v1.json`. There is no shared data source in this job.
+- **Recommended fix:** Stage a lightweight generated label helper or generate the inline constants from `label_contract.v1.json` during CI, with a contract check preventing drift.
+
+No real `TODO`, `FIXME`, or `HACK` markers were found. ShellCheck found no repository-wide SC2086/SC2046 unquoted-expansion class requiring a separate finding.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, SEC-001, EXPR-001 |
+| Medium | 6 | BUG-002, BATCH-001, BATCH-002, DUP-001, DUP-002, EXPR-002 |
+| Low | 7 | BUG-003, API-001, BATCH-003, DEAD-001, DEAD-002, SHELL-001, CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3 | Medium |
+| API call optimization | 4 | Medium |
+| Code modularization | ~12 | Large |
+| Expression size reduction | 3 | Medium |
+| Medium/Low fixes | 5 | Medium |
