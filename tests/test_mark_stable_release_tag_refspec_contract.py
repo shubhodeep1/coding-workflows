@@ -11,6 +11,8 @@ release jobs trigger by checking out the `stable` branch and then creating a
 from __future__ import annotations
 
 import re
+import subprocess
+import textwrap
 from pathlib import Path
 
 
@@ -24,6 +26,50 @@ SCRIPT = REPO_ROOT / "scripts" / "mark-stable.sh"
 
 def _read(p: Path) -> str:
 	return p.read_text(encoding="utf-8")
+
+
+def _run_workflow_retry_push_helper(
+	workflow_path: Path, *, success_at_attempt: int
+) -> subprocess.CompletedProcess[str]:
+	workflow_text = _read(workflow_path)
+	helper_match = re.search(
+		r"(?ms)^          retry_push\(\) \{\n.*?^          \}\n",
+		workflow_text,
+	)
+	assert helper_match is not None, f"{workflow_path.name}: retry_push helper missing"
+	helper_source = textwrap.dedent(helper_match.group(0))
+	shell_script = textwrap.dedent(
+		f"""\
+		{helper_source}
+		retry_push_contract_calls=0
+		retry_push_contract_success_at={success_at_attempt}
+		retry_push_contract_command() {{
+			retry_push_contract_calls=$((retry_push_contract_calls + 1))
+			if [ "${{retry_push_contract_success_at}}" -gt 0 ] \
+				&& [ "${{retry_push_contract_calls}}" -ge "${{retry_push_contract_success_at}}" ]; then
+				return 0
+			fi
+			return 1
+		}}
+		sleep() {{
+			printf 'sleep=%s\n' "$1"
+		}}
+		set +e
+		retry_push retry_push_contract_command
+		retry_push_contract_status=$?
+		set -e
+		printf 'status=%s\n' "${{retry_push_contract_status}}"
+		printf 'calls=%s\n' "${{retry_push_contract_calls}}"
+		exit "${{retry_push_contract_status}}"
+		"""
+	)
+	return subprocess.run(
+		["bash", "-eu", "-o", "pipefail", "-c", shell_script],
+		capture_output=True,
+		check=False,
+		cwd=REPO_ROOT,
+		text=True,
+	)
 
 
 def test_workflows_push_stable_tag_via_refs_tags() -> None:
@@ -58,6 +104,64 @@ def test_workflows_push_immutable_version_via_refs_tags() -> None:
 		assert not re.search(r'^\s*git push origin "\$VERSION"\s*$', text, re.MULTILINE), (
 			f"{wf.name}: bare 'git push origin \"$VERSION\"' would re-introduce the regression"
 		)
+
+
+def test_workflows_retry_every_tag_push_with_a_bounded_backoff() -> None:
+	"""A transient server-side rejection must not fail a fully green gate.
+
+	Run 35570966035 (v1.29.7) lost its release to a single "Unable to
+	determine if workflow can be created or updated due to timeout" rejection
+	on the version-tag push; the tip then counted as last_gate_failed and
+	auto-release stopped re-dispatching it. Each of the three tag pushes must
+	go through the step-local retry_push helper, and the helper must be
+	bounded so a genuine rejection still fails the step.
+	"""
+	for wf in WORKFLOWS:
+		text = _read(wf)
+		assert "retry_push() {" in text, f"{wf.name}: retry_push helper missing"
+		assert "for push_attempt in 1 2 3 4 5; do" in text, (
+			f"{wf.name}: retry_push must be bounded to five attempts"
+		)
+		for push in (
+			'git push origin "refs/tags/$VERSION"',
+			"git push -f origin refs/tags/stable",
+			'git push -f origin "refs/tags/$MAJOR"',
+		):
+			assert f"retry_push {push}" in text, (
+				f"{wf.name}: tag push must be wrapped by retry_push: {push}"
+			)
+			assert not re.search(rf"^\s*{re.escape(push)}\s*$", text, re.MULTILINE), (
+				f"{wf.name}: bare tag push without retry_push would re-introduce "
+				f"the single-attempt release failure: {push}"
+			)
+
+
+def test_workflow_retry_push_helpers_execute_backoff_and_exhaustion_contract() -> None:
+	for workflow_path in WORKFLOWS:
+		success_result = _run_workflow_retry_push_helper(
+			workflow_path, success_at_attempt=3
+		)
+		assert success_result.returncode == 0, success_result.stdout + success_result.stderr
+		assert success_result.stderr == ""
+		assert success_result.stdout.count("::warning::Tag push failed") == 2
+		assert "::error::Tag push failed" not in success_result.stdout
+		assert re.findall(r"^sleep=(\d+)$", success_result.stdout, re.MULTILINE) == ["2", "4"]
+		assert "status=0\ncalls=3\n" in success_result.stdout
+
+		exhaustion_result = _run_workflow_retry_push_helper(
+			workflow_path, success_at_attempt=0
+		)
+		assert exhaustion_result.returncode == 1
+		assert exhaustion_result.stderr == ""
+		assert exhaustion_result.stdout.count("::warning::Tag push failed") == 4
+		assert exhaustion_result.stdout.count("::error::Tag push failed after 5 attempts") == 1
+		assert re.findall(r"^sleep=(\d+)$", exhaustion_result.stdout, re.MULTILINE) == [
+			"2",
+			"4",
+			"8",
+			"16",
+		]
+		assert "status=1\ncalls=5\n" in exhaustion_result.stdout
 
 
 def test_workflows_dispatch_peeled_release_commit_sha() -> None:
