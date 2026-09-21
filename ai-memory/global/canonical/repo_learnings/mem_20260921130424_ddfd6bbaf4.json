@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Security-sensitive automation requires explicit isolation and ownership boundaries.",
   "timestamps": {
     "created_at": "2026-09-21T13:04:24Z",
