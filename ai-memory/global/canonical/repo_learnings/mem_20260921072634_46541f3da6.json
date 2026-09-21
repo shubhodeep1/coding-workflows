@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Orchestration is implemented as stateful polling with explicit base, promotion, and recovery behavior.",
   "timestamps": {
     "created_at": "2026-09-21T07:26:34Z",
