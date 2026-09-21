@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml and .github/workflows/test-and-mark-stable.yml: Create GitHub Release step \u2014 `grep -Fq \"HTTP 404\" \"${RELEASE_LOOKUP_ERROR_FILE}\"` at mark-stable.yml ~line 800, test-and-mark-stable.yml ~line 5276 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The lookup-error classifier depends on the literal string \"HTTP 404\" in `gh`'s stderr.\n  WHY: A future `gh` wording change could classify a recoverable 404 as an unknown error and fail a retry run; severity was reported as NIT.\n- tests/test_mark_stable_release_tag_refspec_contract.py: `_run_tag_step_recovery_scenario` mock `rev-parse` handler at lines 177-181; exercised by `test_workflow_tag_step_skips_only_matching_immutable_tag` (lines 411-432) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The tag-step recovery test never exercises the immutable-tag conflict branch because its mock returns identical SHAs for `HEAD` and `v1.2.3^{commit}`.\n  WHY: A regression confined to the tag-step conflict guard could pass the existing tests; severity was reported as NIT.\n- tests/test_mark_stable_release_tag_refspec_contract.py: `test_workflows_share_identical_publication_logic_and_call_order` (lines 538-556) \u2014 only checks `Tag version and update stable pointer` and `Create GitHub Release`, not `Validate existing version tag` | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The byte-identity contract does not assert that the `Validate existing version tag` preflight step is identical in both workflows.\n  WHY: Future divergence in that duplicated preflight logic could ship without a test failure; severity was reported as NIT.\n- .ai/.workspace_source_manifest.txt: Lines 123-236 (114 removed entries) | severity=critical | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The PR removes 114 changelog fragment entries from the workspace source manifest even though the corresponding files remain and the change is unrelated to release workflow token permissions and partial-release recovery.\n  WHY: This breaks the manifest's accurate-inventory contract, can remove those files from AI pipeline visibility, and violates the issue's minimal backward-compatible scope; severity was reported as BLOCKER.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/mark-stable.yml and .github/workflows/test-and-mark-stable.yml\n  Line or code reference: Create GitHub Release step \u2014 `grep -Fq \"HTTP 404\" \"${RELEASE_LOOKUP_ERROR_FILE}\"` at mark-stable.yml ~line 800, test-and-mark-stable.yml ~line 5276\n  Problem: The lookup-error classifier greps for the literal string \"HTTP 404\" in `gh`'s stderr.\n  Why it fails at runtime: Any gh-cli / OpenRouter-side wording change can turn a benign partial-release recovery into a hard failure on a retry run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- tests/test_mark_stable_release_tag_refspec_contract.py\n  Line or code reference: `_run_tag_step_recovery_scenario` mock `rev-parse` handler at lines 177-181; exercised by `test_workflow_tag_step_skips_only_matching_immutable_tag` (lines 411-432)\n  Problem: The tag-step mock returns identical SHAs for both `HEAD` and `v1.2.3^{commit}` in every scenario, so the immutable-tag conflict branch is never exercised.\n  Why it fails at runtime: A future edit could break only the tag-step conflict guard while the existing test matrix still passes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- tests/test_mark_stable_release_tag_refspec_contract.py\n  Line or code reference: `test_workflows_share_identical_publication_logic_and_call_order` (lines 538-556) \u2014 only checks `Tag version and update stable pointer` and `Create GitHub Release`, not `Validate existing version tag`\n  Problem: The byte-identity contract does not assert that the `Validate existing version tag` preflight step is identical in both workflows.\n  Why it fails at runtime: Future divergence in the preflight's logic between the two workflows could compile and ship without any test failing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .ai/.workspace_source_manifest.txt\n  Line or code reference: Lines 123-236 (114 removed entries)\n  Problem: The PR removes 114 changelog fragment entries from the workspace source manifest, which is unrelated to the task of fixing release workflow token permissions and partial-release recovery.\n  Why it fails at runtime: Removing entries for existing changelog fragments breaks the manifest's accurate-inventory contract and can cause the workspace tracking system to lose visibility of these files.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1d647cc7082257dd3e2d04df11a88fddeb06fd6e7f3d169808624fe951668f1e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4229,
+    "run_id": "35617891489",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35617891489",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921155839_2bfe7f51b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4229,
+    "run_id": "35617891489"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T15:58:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
