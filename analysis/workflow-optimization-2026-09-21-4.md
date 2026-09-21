@@ -413,3 +413,92 @@ No `TODO`, `FIXME`, `HACK`, or `XXX` markers were found in scoped workflows or s
 | Code modularization | 7–9 | Large |
 | Expression size reduction | 2 | Medium |
 | Medium/Low fixes | 7–10 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-21)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is directly implementable; `NEEDS_VERIFICATION` requires stated checks first; `RISKY_SKIP` must not be auto-implemented because pagination, retry, race, or recovery semantics are involved.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Reuse one comments snapshot for clarify context and semantic history
+- **Safety tag:** `RISKY_SKIP`
+- **File:** `.github/workflows/clarify.yml:457-488`
+- **Current call count:** 2 when semantic caching is enabled; 1 otherwise.
+- **Proposed call count:** 1 normal-path call.
+- **Endpoints:** `GET /repos/{repo}/issues/{issue}/comments?sort=created&direction=asc&per_page=50`; paginated `GET /repos/{repo}/issues/{issue}/comments?sort=created&direction=asc&per_page=100`.
+- **Evidence:**
+  ```bash
+  gh_retry gh api ".../comments?...&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+  gh_retry gh api --paginate --slurp \
+    ".../comments?...&per_page=100" |
+    jq -r 'add // [] | .[] | ...' > "${THREAD_HISTORY_FILE}"
+  ```
+  The paginated response is a strict data superset of the bounded 50-comment snapshot.
+- **Proposed fix:** In `Fetch issue comments`, capture the paginated pages once, write the first 50 ordered comments to `ISSUE_COMMENTS_FILE`, and render all comments into `THREAD_HISTORY_FILE`. Preserve the original 50-comment request as a failure fallback and retain the existing semantic-cache warning/sentinel behavior.
+- **Safety rationale:** The second call uses `--paginate`, and the two calls currently have different failure semantics: the bounded fetch is fatal while full-history failure is fail-open.
+- **Downstream signal:** Do not auto-implement; manually test multi-page ordering, page-two failure, fallback call counts, and preservation of the existing warning and hard-failure behavior.
+
+#### MERGE-002 — Combine queued and in-progress close-run inventories
+- **Safety tag:** `RISKY_SKIP`
+- **File:** `.github/workflows/cancel_on_pr_close.yml:100-152`
+- **Current call count:** 2 logical paginated calls.
+- **Proposed call count:** 1 logical paginated call.
+- **Endpoint:** `GET /repos/{repo}/actions/runs`, filtered by branch, `pull_request` event, and separately by `queued` or `in_progress` status.
+- **Evidence:**
+  ```bash
+  gh_retry gh api ... --paginate \
+    -f status=queued -f event=pull_request -f "branch=${PR_HEAD_REF}"
+
+  gh_retry gh api ... --paginate \
+    -f status=in_progress -f event=pull_request -f "branch=${PR_HEAD_REF}"
+  ```
+- **Proposed fix:** Fetch branch/event runs once without a status parameter, then locally select `queued` and `in_progress` entries before constructing `target_run_ids`.
+- **Safety rationale:** Both existing calls paginate, and removing server-side status filters may alter page-boundary completeness or increase underlying requests on branches with substantial completed-run history.
+- **Downstream signal:** Do not auto-implement; manually prove the unfiltered inventory returns every cancellable run without increasing underlying request count, and replay close-event race tests before changing this path.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Editor-changes-lost guard fetches the identical branch-run snapshot twice
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/gh_helpers.sh:1219-1291` (call at `1238-1244`); `scripts/gh_helpers.sh:1338-1402` (call at `1358-1364`); caller `.github/workflows/review_autofix.yml:6850-6876`
+- **Current call count:** 2 when no in-flight peer is found; 1 when a peer is found.
+- **Proposed call count:** 1 on the successful no-peer path.
+- **Endpoint:** `GET /repos/{repo}/actions/runs?branch={head_branch}&per_page=30`.
+- **Evidence:**
+  ```bash
+  autofix_retrigger_has_inflight_peer \
+    "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}"
+
+  autofix_changes_lost_head_retry_consumed \
+    "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}" "${REVIEWED_HEAD_SHA}"
+  ```
+  Both helpers execute the same `gh_retry gh api -X GET` request with identical headers, branch, page size, and authentication.
+- **Proposed fix:** Add a successful-response-only `_autofix_branch_runs_snapshot` cache in `scripts/gh_helpers.sh`. Have both helpers reuse its structurally validated `.workflow_runs` payload within the same shell step; do not cache failures or malformed responses.
+- **Safety rationale:** This path explicitly defends against dispatch visibility races, while the peer predicate fails open and the retry-budget predicate fails closed.
+- **Downstream signal:** Do not auto-implement; manual review must preserve a fresh second request after any first-fetch/parse failure, both existing log keys, asymmetric failure returns, and post-wait snapshot freshness.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- BATCH-001: `NEEDS_VERIFICATION` — Verify GraphQL blob ref parity, size/encoding behavior, missing-blob handling, and per-repository REST fallback.
+- BATCH-002: `RISKY_SKIP` — Poller placement, pagination, and mutation-time revalidation require preserving fresh reads.
+- BATCH-003: `RISKY_SKIP` — Poller and paginated-comment fallback semantics prohibit automatic batching.
+- BATCH-004: `RISKY_SKIP` — Standalone recovery is race-sensitive; preserve `hasNextPage` fallbacks and cycle-local behavior.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| `SAFE_TO_MERGE` | 0 | — |
+| `NEEDS_VERIFICATION` | 1 | BATCH-001 |
+| `RISKY_SKIP` | 6 | MERGE-001, MERGE-002, REUSE-001, BATCH-002, BATCH-003, BATCH-004 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
