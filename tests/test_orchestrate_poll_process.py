@@ -20167,7 +20167,8 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in wf_body
 	assert (
 		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
-		'review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"'
+		'review_conflict_prepare.sh review_collect_pr_metadata.sh files_touched_scope_guard.py '
+		'render_prompt.py opencode_helpers.sh write_opencode_config.sh"'
 	) in stage_helper_body
 	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in stage_helper_body
 	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in stage_helper_body

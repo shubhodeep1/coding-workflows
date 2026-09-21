@@ -2022,13 +2022,14 @@ generated_footer_key_regex = re.compile(
 	r"\*\*Generated security advisory metadata\*\*\n"
 	r"- Schema: `generated-security-advisory\.v1`\n"
 	r"- Waiver match key: `(sha256:[0-9a-f]{64})`\n"
-	r"- Audited commit: `[0-9a-f]{40,64}`\n"
-	r"- Cited file: `[^`\n]+`\n"
+	r"- Audited commit: `([0-9a-f]{40,64})`\n"
+	r"- Cited file: `([^`\n]+)`\n"
 	r"files_touched:\n"
-	r"  - [^\n]+\n?\Z"
+	r"  - ([^\n]+)\n?\Z"
 )
 existing_finding_ids: set[str] = set()
 existing_waiver_keys: set[str] = set()
+existing_waiver_metadata: set[tuple[str, str, str]] = set()
 weekly_existing_count = 0
 now_utc = datetime.now(timezone.utc)
 week_start = (now_utc - timedelta(days=now_utc.weekday())).date()
@@ -2046,8 +2047,16 @@ for issue in existing_followups:
 		finding_id = match.group(1).strip()
 		if finding_id:
 			existing_finding_ids.add(finding_id)
-	if key_match is not None and footer_key_match is not None and key_match.group(2) == footer_key_match.group(1):
+	if (
+		key_match is not None
+		and footer_key_match is not None
+		and key_match.group(2) == footer_key_match.group(1)
+		and footer_key_match.group(3) == footer_key_match.group(4)
+	):
 		existing_waiver_keys.add(key_match.group(2))
+		existing_waiver_metadata.add(
+			(key_match.group(2), footer_key_match.group(2), footer_key_match.group(3))
+		)
 	created_at = parse_dt(issue.get("createdAt"))
 	if created_at is not None and created_at.date() >= week_start:
 		weekly_existing_count += 1
@@ -2064,6 +2073,7 @@ for finding in findings:
 	waiver_match_key = str(finding.get("waiver_match_key") or "").strip()
 	if (
 		waiver_match_key in existing_waiver_keys
+		and (waiver_match_key, head_sha, str(finding.get("file") or "")) in existing_waiver_metadata
 		or (not waiver_match_key and finding_id in existing_finding_ids)
 	):
 		skipped_existing_count += 1

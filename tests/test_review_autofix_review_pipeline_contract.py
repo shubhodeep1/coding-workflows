@@ -158,12 +158,15 @@ if args[:1] == ["api"]:
 	save()
 	if jq_filter == ".default_branch":
 		print((matched or {}).get("default_branch", ""))
-	elif jq_filter == ".data.repository.pullRequest.closingIssuesReferences // {nodes:[],pageInfo:{hasNextPage:false}}":
-		connection = (((matched or {}).get("data") or {}).get("repository") or {}).get("pullRequest") or {}
-		connection = dict(connection.get("closingIssuesReferences") or {})
-		connection.setdefault("nodes", [])
-		connection.setdefault("pageInfo", {"hasNextPage": False})
-		print(json.dumps(connection))
+	elif "pullRequest.closingIssuesReferences" in jq_filter:
+		pull_request = (((matched or {}).get("data") or {}).get("repository") or {}).get("pullRequest")
+		if (matched or {}).get("errors") or not isinstance(pull_request, dict) or not isinstance(pull_request.get("closingIssuesReferences"), dict):
+			print(json.dumps({"_collection_status": "unresolved"}))
+		else:
+			connection = dict(pull_request["closingIssuesReferences"])
+			connection.setdefault("nodes", [])
+			connection.setdefault("pageInfo", {"hasNextPage": False})
+			print(json.dumps(connection))
 	elif jq_filter == '{number: (.number // 0), title: (.title // ""), body: (.body // "")}':
 		print(json.dumps({
 			"number": (matched or {}).get("number", 0) or 0,
@@ -3104,12 +3107,18 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	required_bootstrap_line = next(
 		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
 	)
+	main_primary_bootstrap_line = next(
+		line for line in _stage_helper_text().splitlines() if "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=" in line
+	)
 	block = _step_block("Collect PR metadata")
 	helper_text = METADATA_HELPER.read_text(encoding="utf-8")
 
 	assert METADATA_HELPER.exists(), f"missing helper: {METADATA_HELPER}"
 	assert "review_collect_pr_metadata.sh" in required_bootstrap_line, required_bootstrap_line
+	assert "review_collect_pr_metadata.sh" in main_primary_bootstrap_line, main_primary_bootstrap_line
+	assert "files_touched_scope_guard.py" in main_primary_bootstrap_line, main_primary_bootstrap_line
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"' in block
+	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py; do" in _workflow_text()
 	assert 'gh_retry "${PR_PAYLOAD_FILE}"' not in block
 	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in helper_text
 	assert 'gh_retry_to_file "${outfile}" gh "$@"' in helper_text
@@ -3118,6 +3127,7 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	assert 'LINKED_ISSUE_METADATA_EXPECTED_SHA256=%s' in helper_text
 	assert 'id: collect_pr_metadata' in block
 	assert 'linked_issue_metadata_sha256=${linked_issue_metadata_sha256}' in block
+	assert "awk '{print $1}' || true" in block
 
 
 def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None:
@@ -3963,10 +3973,11 @@ def test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_e
 		},
 	)
 
-	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert "LINKED_ISSUES_JSON" not in result["github_env"]
 	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7]"
+	assert result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
 	assert result["linked_issue_context"] == "No linked issues found."
-	assert "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration failed; skipping" in result["stdout"]
+	assert "exact-file scope metadata remains unresolved" in result["stdout"]
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
 	assert len([call for call in call_texts if call.startswith("api graphql ")]) == 2
 	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
@@ -4019,7 +4030,8 @@ def test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_e
 	assert partial_result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7,8]"
 	assert "Issue #7: Linked fallback issue" in partial_result["linked_issue_context"]
 	assert "Issue #8:" not in partial_result["linked_issue_context"]
-	assert "Linked-issue body-text fallback resolved 1 issue(s) for context" in partial_result["stdout"]
+	assert partial_result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
+	assert "exact-file scope metadata remains unresolved" in partial_result["stdout"]
 	assert (
 		"::warning::Linked-issue body-text fallback: batched GraphQL issue hydration returned partial data "
 		"(hydrated 1 of 2 references); continuing with available context."

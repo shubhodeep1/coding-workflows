@@ -263,12 +263,14 @@ def extract_plan_files(text: str) -> list[str]:
 		path_match = re.search(r"`([^`]+)`", raw_line)
 		if path_match is None:
 			continue
-		try:
-			candidate = _strict_repository_file(path_match.group(1))
-		except ValueError:
-			continue
-		if candidate not in paths:
-			paths.append(candidate)
+		path_matches = re.findall(r"`([^`]+)`", raw_line)
+		for path_candidate_raw in path_matches:
+			try:
+				candidate = _strict_repository_file(path_candidate_raw)
+			except ValueError:
+				candidate = path_candidate_raw
+			if candidate not in paths:
+				paths.append(candidate)
 	return paths
 
 

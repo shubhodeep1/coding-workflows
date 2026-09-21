@@ -568,6 +568,25 @@ def test_security_audit_incremental_scope_drops_out_of_scope_findings() -> None:
 						),
 						"createdAt": "2020-01-01T00:00:00Z",
 						"url": "https://github.com/owner/repo/issues/8999",
+					},
+					{
+						"number": 8998,
+						"title": "Stale follow-up with a mismatched canonical footer",
+						"body": (
+							"<!-- ai:security-finding:changed-file-finding -->\n"
+							f"<!-- ai:security-waiver-key:{injected_waiver_key} -->\n"
+							"Refs #9000\n\n"
+							"---\n"
+							"**Generated security advisory metadata**\n"
+							"- Schema: `generated-security-advisory.v1`\n"
+							f"- Waiver match key: `{injected_waiver_key}`\n"
+							f"- Audited commit: `{head_sha}`\n"
+							"- Cited file: `file_a.py`\n"
+							"files_touched:\n"
+							"  - file_a.py\n"
+						),
+						"createdAt": "2020-01-01T00:00:00Z",
+						"url": "https://github.com/owner/repo/issues/8998",
 					}
 				],
 			],

@@ -344,6 +344,8 @@ def test_generated_advisory_plan_parser_accepts_numbered_contract() -> None:
 		"- `README.md` is mentioned only outside the files section.\n"
 	)
 	assert guard.extract_plan_files(plan) == ["src/security.py"]
+	plan = "1. Files likely to change\n- Update `src/security.py` and `README.md`.\n"
+	assert guard.extract_plan_files(plan) == ["src/security.py", "README.md"]
 
 
 # --------------------------------------------------------------------------
@@ -666,11 +668,18 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 	review_text = _review_commit_text()
 	stage_text = REVIEW_STAGE_SCRIPT.read_text(encoding="utf-8")
 	workflow_text = REVIEW_WORKFLOW.read_text(encoding="utf-8")
+	main_primary_line = next(
+		line for line in stage_text.splitlines() if "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=" in line
+	)
 	assert "files_touched scope-enforcement guard (review)" in review_text
 	assert '"${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py"' in review_text
 	assert '"${LINKED_ISSUE_METADATA_FILE}"' in review_text
 	assert "files_touched_scope_guard.py" in stage_text
+	assert "review_collect_pr_metadata.sh" in main_primary_line
+	assert "files_touched_scope_guard.py" in main_primary_line
+	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py; do" in workflow_text
 	assert "id: collect_pr_metadata" in workflow_text
+	assert 'awk \'{print $1}\' || true' in workflow_text
 	assert 'echo "linked_issue_metadata_sha256=${linked_issue_metadata_sha256}" >> "$GITHUB_OUTPUT"' in workflow_text
 	assert workflow_text.count(
 		"LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}"

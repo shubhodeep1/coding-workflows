@@ -1782,6 +1782,21 @@ jobs:
           SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
           SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
 
+          # The branch-pinned staging helper can predate these artifacts. Keep
+          # the metadata producer, validator, and main-primary commit producers
+          # on one revision even while reviewing an in-flight stale branch.
+          for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py; do
+            metadata_guard_support_src=".codex-workflow-src-main/scripts/${metadata_guard_support_file}"
+            if [ ! -f "${metadata_guard_support_src}" ]; then
+              metadata_guard_support_src=".codex-workflow-src/scripts/${metadata_guard_support_file}"
+            fi
+            if [ ! -f "${metadata_guard_support_src}" ]; then
+              echo "::error::Required metadata guard support ${metadata_guard_support_file} is unavailable in both support snapshots."
+              exit 1
+            fi
+            install -m 0755 "${metadata_guard_support_src}" "${SUPPORT_SCRIPTS_DIR}/${metadata_guard_support_file}"
+          done
+
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
             backfill_src=".codex-workflow-src/scripts/transcript_archive.sh"
             if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/transcript_archive.sh" ]; then
@@ -2248,7 +2263,7 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"
-          linked_issue_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}')"
+          linked_issue_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}' || true)"
           if ! [[ "${linked_issue_metadata_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
             echo "::error::Could not publish the linked-issue metadata integrity digest."
             exit 1
