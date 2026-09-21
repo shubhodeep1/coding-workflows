@@ -4124,7 +4124,7 @@ jobs:
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     # Sum of remaining in-step DEADLINEs (validation-refresh 2400s +
-    # update_workflows 600s + memory-maintenance 900s = 3900s ≈ 65m).
+    # update_workflows 600s + memory-maintenance 1320s = 4320s ≈ 72m).
     # Add headroom for prerequisite validation, checkout, and the
     # per-phase run-soft-error-analyzer composite actions (each waits
     # up to wait_for_completion_secs=120s and then runs an OpenRouter
@@ -4286,7 +4286,7 @@ jobs:
             --display-name "internal-memory-maintenance" \
             --registration-timeout-secs 900 \
             --registration-poll-interval-secs 5 \
-            --completion-timeout-secs 900 \
+            --completion-timeout-secs 1320 \
             --completion-poll-interval-secs 15 \
             --dispatch-max-attempts 5 \
             --dispatch-backoff-base-secs 2
