@@ -390,6 +390,8 @@ def test_release_job_is_serialised_and_refuses_a_stale_tip() -> None:
 		assert "git rebase" not in changelog["run"], workflow
 		assert "RELEASE_STALE_TIP" in changelog["run"], workflow
 		assert 'git reset --hard "${RELEASE_TESTED_SHA}"' in changelog["run"], workflow
+		assert 'git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"' in changelog["run"], workflow
+		assert 'git ls-remote origin "refs/heads/${SOURCE_BRANCH}"' in changelog["run"], workflow
 		tag_step = next(step for step in release["steps"] if step.get("name") == "Tag version and update stable pointer")
 		assert tag_step["env"]["SOURCE_BRANCH"] == "${{ needs.source.outputs.branch }}", workflow
 		run = tag_step["run"]

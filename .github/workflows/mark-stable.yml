@@ -623,7 +623,11 @@ jobs:
           pushed="false"
           delay=2
           for attempt in 1 2 3 4; do
-            if git push origin "HEAD:${SOURCE_BRANCH}"; then
+            # refs/heads/ on the push and on the tip lookup below: `stable` is
+            # also a tag, so a bare `HEAD:stable` is rejected with "dst refspec
+            # stable matches more than one" and `git fetch origin stable`
+            # resolves to the tag, leaving origin/stable stale.
+            if git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"; then
               pushed="true"
               break
             fi
@@ -634,8 +638,7 @@ jobs:
             # released. A remote tip other than RELEASE_TESTED_SHA means the
             # branch moved under this run, so fail closed instead of
             # re-baselining onto untested history.
-            git fetch origin "${SOURCE_BRANCH}" || true
-            _remote_tip="$(git rev-parse "origin/${SOURCE_BRANCH}" 2>/dev/null || true)"
+            _remote_tip="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" 2>/dev/null | awk '{print $1}' || true)"
             if [ -n "${_remote_tip}" ] && [ "${_remote_tip}" != "${RELEASE_TESTED_SHA}" ]; then
               echo "::error::RELEASE_STALE_TIP branch=${SOURCE_BRANCH} tested=${RELEASE_TESTED_SHA} tip=${_remote_tip}: the branch moved after this gate started; not releasing a stale checkout."
               exit 1
