@@ -145,6 +145,7 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[sub
 			"STUB_ENV_OUT": str(env_out),
 			"PROMOTE_CYCLE_GATE_POLL_SECS": "1",
 			"PROMOTE_CYCLE_GATE_WAIT_SECS": "6",
+			"PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS": "6",
 			"PYTHONDONTWRITEBYTECODE": "1",
 		}
 	)
@@ -342,9 +343,10 @@ def test_cycle_waits_for_an_active_release_gate_before_dispatching() -> None:
 	stable_gate = [{"id": 400, "status": "in_progress", "conclusion": None, "head_branch": "stable", "head_sha": "9" * 40, "display_title": "Test & Mark Stable Release", "created_at": "2026-09-18T23:50:00Z"}]
 	idle = [stable_gate, stable_gate, []]
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS, "gate_idle_sequence": idle})
+		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS, "gate_idle_sequence": idle}, env={"PROMOTE_CYCLE_GATE_WAIT_SECS": "3"})
 	assert proc.returncode == 0, proc.stderr + proc.stdout
 	assert proc.stdout.count("run(s) active (a stable release gate must not be cancelled by ours)") == 2
+	assert "reason=smoke_gate_timeout" not in proc.stdout
 	assert "PROMOTE_CYCLE_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md" in proc.stdout
 	# Only the smoke gate goes through gh; the proving run goes through the stub.
 	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
@@ -353,7 +355,7 @@ def test_cycle_waits_for_an_active_release_gate_before_dispatching() -> None:
 def test_cycle_skips_when_the_gate_stays_busy_for_the_whole_budget() -> None:
 	stable_gate = [{"id": 400, "status": "in_progress", "conclusion": None, "head_branch": "stable", "head_sha": "9" * 40, "display_title": "Test & Mark Stable Release", "created_at": "2026-09-18T23:50:00Z"}]
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_idle_sequence": [stable_gate]}, env={"PROMOTE_CYCLE_GATE_WAIT_SECS": "3"})
+		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_idle_sequence": [stable_gate]}, env={"PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS": "3"})
 		assert not env_out.exists()
 	assert proc.returncode == 0, proc.stderr
 	assert "PROMOTE_CYCLE_SKIPPED reason=gate_busy active_runs=1 waited=3s" in proc.stdout

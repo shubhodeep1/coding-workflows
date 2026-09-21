@@ -55,6 +55,7 @@
 #   PROMOTE_CYCLE_WORKFLOW_FILE         default promote-main-to-stable.yml (self)
 #   PROMOTE_CYCLE_GATE_WORKFLOW_FILE    default test-and-mark-stable.yml
 #   PROMOTE_CYCLE_GATE_WAIT_SECS        default 18000
+#   PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS   default 1800
 #   PROMOTE_CYCLE_GATE_POLL_SECS        default 60
 #   PROMOTE_CYCLE_MIN_DOCS              default 2 (proving + verifying)
 #   PROMOTE_CYCLE_TRACKING_LABEL        default ai:comprehensive-test-pending
@@ -75,6 +76,7 @@ PROMOTE_CYCLE_STABLE_TAG="${PROMOTE_CYCLE_STABLE_TAG:-stable}"
 PROMOTE_CYCLE_WORKFLOW_FILE="${PROMOTE_CYCLE_WORKFLOW_FILE:-promote-main-to-stable.yml}"
 PROMOTE_CYCLE_GATE_WORKFLOW_FILE="${PROMOTE_CYCLE_GATE_WORKFLOW_FILE:-test-and-mark-stable.yml}"
 PROMOTE_CYCLE_GATE_WAIT_SECS="${PROMOTE_CYCLE_GATE_WAIT_SECS:-18000}"
+PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS="${PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS:-1800}"
 PROMOTE_CYCLE_GATE_POLL_SECS="${PROMOTE_CYCLE_GATE_POLL_SECS:-60}"
 PROMOTE_CYCLE_MIN_DOCS="${PROMOTE_CYCLE_MIN_DOCS:-2}"
 PROMOTE_CYCLE_TRACKING_LABEL="${PROMOTE_CYCLE_TRACKING_LABEL:-ai:comprehensive-test-pending}"
@@ -91,7 +93,7 @@ for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 		exit 1
 	fi
 done
-for numeric_env in PROMOTE_CYCLE_GATE_WAIT_SECS PROMOTE_CYCLE_GATE_POLL_SECS PROMOTE_CYCLE_MIN_DOCS; do
+for numeric_env in PROMOTE_CYCLE_GATE_WAIT_SECS PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS PROMOTE_CYCLE_GATE_POLL_SECS PROMOTE_CYCLE_MIN_DOCS; do
 	if ! [[ "${!numeric_env}" =~ ^[0-9]+$ ]] || [ "${!numeric_env}" -lt 1 ]; then
 		echo "::error::${numeric_env} must be a positive integer (got '${!numeric_env}')."
 		exit 1
@@ -348,9 +350,9 @@ fi
 # The gate workflow's e2e-smoke-test job runs under a per-repository
 # concurrency group with cancel-in-progress, so dispatching our gate while a
 # stable release gate is running would cancel that release. Wait for the
-# gate workflow to be idle on every branch first (the wait shares the smoke
-# gate budget), and skip the tick if it never frees.
-deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_WAIT_SECS ))
+# gate workflow to be idle on every branch first, and skip the tick if it
+# never frees within the separate idle-wait budget.
+idle_wait_deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS ))
 while :; do
 	active_gate_runs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" \
 		| jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length' 2>/dev/null || echo "")"
@@ -358,8 +360,8 @@ while :; do
 	if [ "${active_gate_runs}" -eq 0 ]; then
 		break
 	fi
-	if [ "$(date +%s)" -ge "${deadline}" ]; then
-		skip_cycle gate_busy "active_runs=${active_gate_runs} waited=${PROMOTE_CYCLE_GATE_WAIT_SECS}s"
+	if [ "$(date +%s)" -ge "${idle_wait_deadline}" ]; then
+		skip_cycle gate_busy "active_runs=${active_gate_runs} waited=${PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS}s"
 	fi
 	echo "Waiting: ${active_gate_runs} ${PROMOTE_CYCLE_GATE_WORKFLOW_FILE} run(s) active (a stable release gate must not be cancelled by ours)."
 	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
@@ -373,6 +375,7 @@ gh_retry gh workflow run "${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}" \
 	-f "gate_cycle_id=${GITHUB_RUN_ID}"
 smoke_sha="${main_tip}"
 
+deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_WAIT_SECS ))
 gate_run_id=""
 gate_conclusion=""
 gate_head_sha=""
