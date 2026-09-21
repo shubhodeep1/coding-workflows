@@ -343,17 +343,15 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    # Job cap must contain the sum of the phase budgets below, not just a
-    # typical run: Phase 4 may legitimately spend its full REVIEW_STEP_TIMEOUT
-    # (75m, clamped at 90m) on one healthy reviewer step, Phases 1-3 plus the
-    # per-phase analysers take ~25m, and Phase 6 then needs its own 30m
-    # PHASE_TIMEOUT window because its poller dispatch queues behind whatever
-    # scheduled poller run holds the ai-orchestrate-poll concurrency group
-    # (and is displaced by any later force-tick dispatch). Raised 120→180
-    # after run 35479338161 (v1.29.7): Phase 4 ran a healthy 75m, Phase 6
-    # started at +99m, and the 120m cap cancelled it at idle 1222s of its
-    # 1800s window — which also skipped "Deep verify" and failed the gate on
-    # "Internals" even though Phase 6's own timeout is scored non-blocking.
+    # The job cap must cover the evidenced slow-but-healthy release path, not
+    # every phase's inactivity limit: reaching one of those limits fails that
+    # phase, while healthy activity resets its timer. Raised 120→180 after run
+    # 35479338161 (v1.29.7): Phase 4 ran a healthy 75m, Phase 6 started at +99m
+    # and still needed its own 30m PHASE_TIMEOUT window because its poller
+    # dispatch queued behind the ai-orchestrate-poll concurrency group. The
+    # 120m cap cancelled Phase 6 at idle 1222s of its 1800s window, skipped
+    # "Deep verify", and failed the gate on "Internals" even though Phase 6's
+    # own timeout is scored non-blocking.
     timeout-minutes: 180
     concurrency:
       group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
