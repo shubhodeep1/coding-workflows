@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "AI execution helpers enforce isolation and cleanup boundaries around editor or model-provider processes.",
   "timestamps": {
     "created_at": "2026-09-21T01:06:10Z",
