@@ -244,6 +244,14 @@ idempotency, error handling, and rollback safety.
 Always provide defaults for new env vars unless explicitly told otherwise.
 Preserve all existing env var names.
 
+This applies with particular force to the runtime helpers under `scripts/`
+that the workflows stage from a git ref: in the workflow source repository a
+PR's review runs the PR-head copy of each helper under
+`review_autofix.yml@main`, so a new variable the helper reads must carry a
+default in the helper itself. An export added only to the PR's copy of the
+workflow does not reach that run (PR #4174, run 35552937934: the helper
+exited with `required env LINKED_ISSUE_METADATA_FILE is unset`).
+
 ---
 
 ## §9. Minimal Change Set

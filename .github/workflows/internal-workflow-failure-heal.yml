@@ -1,0 +1,24 @@
+name: "Internal: AI Workflow Failure Heal"
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  report:
+    if: >-
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
+      contains(fromJson('["ai:needs-human","ai:check-triage-escalated","ai:destructive-blocked","ai:scope-blocked","ai:harness-broken","ai:resolver-escalated","ai:security-pass-failed"]'), github.event.label.name)
+    uses: shubhodeep1/coding-workflows/.github/workflows/workflow_failure_heal.yml@main
+    with:
+      issue_number: ${{ github.event.issue.number || github.event.pull_request.number }}
+      label: ${{ github.event.label.name }}
+      is_pull_request: ${{ github.event_name == 'pull_request' }}
+    secrets: inherit

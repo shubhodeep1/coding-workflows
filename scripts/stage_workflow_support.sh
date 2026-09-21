@@ -71,7 +71,11 @@ MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_confli
 # that depend on these must themselves tolerate absence.  Keep
 # this list empty unless a genuinely optional helper is added;
 # the default should always be "required".
-OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
+# workflow_failure_heal.py + workflow_failure_heal_autofix_report.sh: the
+# review/autofix failure reporter (README "Workflow Failure Heal"). Optional so
+# a consumer pinned to a release that predates them still bootstraps; the
+# reporting step skips with a stable log line when they are absent.
+OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then

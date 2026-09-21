@@ -1448,7 +1448,7 @@ resolve_review_tier_active_models() {
       selected_raw="${REVIEW_TIER_LITE_REVIEWER_SLUG:-qwen/qwen3.7-plus}"
       ;;
     standard)
-      selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6}"
+      selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20}"
       ;;
     *)
       reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"

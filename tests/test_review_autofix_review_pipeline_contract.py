@@ -1233,7 +1233,7 @@ def _run_review_tier_harness(
 			"REVIEW_TIER_LITE_MAX_LOC": "50",
 			"REVIEW_TIER_LITE_REVIEWER_SLUG": "qwen/qwen3.7-plus",
 			"REVIEW_TIER_STANDARD_MAX_LOC": "200",
-			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20",
 			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
@@ -1670,7 +1670,7 @@ def _run_reviewer_failback_harness() -> dict[str, object]:
 				"\t\t\t\t\tREVIEWER_ATTEMPT_CMD_RC=1\n"
 				"\t\t\t\t\treturn 0\n"
 				"\t\t\t\t\t;;\n"
-				"\t\t\t\tx-ai/grok-4.1-fast)\n"
+				"\t\t\t\tx-ai/grok-4.3)\n"
 				"\t\t\t\t\tprintf 'fallback success for %s\\n' \"${slot_model}\" > \"${output_file}\"\n"
 				"\t\t\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"success\"\n"
 				"\t\t\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
@@ -1964,7 +1964,7 @@ def _run_reviewer_stall_recovery_harness() -> dict[str, object]:
 				"\t\t\tREVIEWER_ATTEMPT_CMD_RC=137\n"
 				"\t\t\treturn 0\n"
 				"\t\t\t;;\n"
-				"\t\tx-ai/grok-4.1-fast:3)\n"
+				"\t\tx-ai/grok-4.3:3)\n"
 				"\t\t\tprintf 'fallback success for %s\\n' \"${slot_model}\" > \"${output_file}\"\n"
 				"\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"success\"\n"
 				"\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
@@ -2335,7 +2335,7 @@ def _run_reviewer_health_dispatch_logging_harness() -> dict[str, str]:
 				"transition=healthy\n"
 				"reason=open_ttl_expired\n"
 				"consecutive_retryable_failures=0\n"
-				"effective_model=x-ai/grok-4.1-fast\n"
+				"effective_model=x-ai/grok-4.3\n"
 				"open_until_epoch=0\n"
 				"EOF\n"
 				"}\n"
@@ -2684,7 +2684,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
 		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -2745,7 +2745,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
 		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -4136,7 +4136,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert standard_result["active_models"] == [
 		"minimax/minimax-m3",
 		"deepseek/deepseek-v4-pro",
-		"x-ai/grok-4.6",
+		"x-ai/grok-4.20",
 	]
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" not in standard_result["github_env"]
 
@@ -4331,18 +4331,21 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 
 	assert sorted(mapped) == [
 		"deepseek/deepseek-v4-pro",
+		"google/gemini-3.1-flash-lite",
 		"minimax/minimax-m3",
-		"moonshotai/kimi-k3",
 		"qwen/qwen3.7-plus",
-		"x-ai/grok-4.6",
+		"x-ai/grok-4.20",
+		"z-ai/glm-5.2",
 	]
-	assert sorted(unmapped) == [
-		"mistralai/mistral-small-2603",
-	]
+	assert sorted(unmapped) == []
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
+	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
-	assert chains["moonshotai/kimi-k3"] == ["moonshotai/kimi-k2.7-code"]
 	assert chains["qwen/qwen3.7-plus"] == ["qwen/qwen3.6-plus"]
+	assert chains["x-ai/grok-4.20"] == ["x-ai/grok-4.3"]
+	assert chains["z-ai/glm-5.2"] == ["z-ai/glm-5.3-flashx"]
+	# Retired-roster mappings stay for operator overrides (CLAUDE.md §6).
+	assert chains["moonshotai/kimi-k3"] == ["moonshotai/kimi-k2.7-code"]
 	assert chains["x-ai/grok-4.6"] == ["x-ai/grok-4.20"]
 
 
@@ -4354,7 +4357,7 @@ def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_m
 
 	mapped_entry = health_state["reviewers"]["x-ai/grok-4.20"]
 	assert mapped_entry["state"] == "open"
-	assert mapped_entry["effective_model"] == "x-ai/grok-4.1-fast"
+	assert mapped_entry["effective_model"] == "x-ai/grok-4.3"
 	assert mapped_entry["last_failure_kind"] == "rate_limit"
 	assert mapped_entry["open_until_epoch"] > 0
 
@@ -4365,14 +4368,14 @@ def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_m
 
 	assert result["MAPPED_STATUS_FILE_CONTENT"].strip() == "success"
 	assert "fallback success for x-ai/grok-4.20" in result["MAPPED_OUTPUT_FILE_CONTENT"]
-	assert "REVIEWER_FAILBACK: x-ai/grok-4.20 -> x-ai/grok-4.1-fast reason=rate_limit" in result["MAPPED_LOG_FILE_CONTENT"]
-	assert "REVIEWER_HEALTH: x-ai/grok-4.20 open reason=rate_limit failures=1 effective_model=x-ai/grok-4.1-fast" in result["MAPPED_LOG_FILE_CONTENT"]
+	assert "REVIEWER_FAILBACK: x-ai/grok-4.20 -> x-ai/grok-4.3 reason=rate_limit" in result["MAPPED_LOG_FILE_CONTENT"]
+	assert "REVIEWER_HEALTH: x-ai/grok-4.20 open reason=rate_limit failures=1 effective_model=x-ai/grok-4.3" in result["MAPPED_LOG_FILE_CONTENT"]
 
 	assert result["CACHED_SUCCESSES"] == "0"
 	assert result["CACHED_STATUS_FILE_CONTENT"].strip() == "skipped_open"
 	assert "cached reviewer health state is open" in result["CACHED_OUTPUT_FILE_CONTENT"]
 	assert "cached reviewer health state is open" in result["CACHED_LOG_FILE_CONTENT"]
-	assert "cached_effective_model=x-ai/grok-4.1-fast" in result["CACHED_LOG_FILE_CONTENT"]
+	assert "cached_effective_model=x-ai/grok-4.3" in result["CACHED_LOG_FILE_CONTENT"]
 
 	assert result["UNMAPPED_STATUS_FILE_CONTENT"].strip() == "skipped_unmapped"
 	assert "no same-family failback mapping is available" in result["UNMAPPED_OUTPUT_FILE_CONTENT"]
@@ -4382,7 +4385,7 @@ def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_m
 	assert attempt_lines == [
 		"x-ai/grok-4.20\tx-ai/grok-4.20\txhigh\tattempt 1",
 		"x-ai/grok-4.20\tx-ai/grok-4.20\thigh\tattempt 2 (cheaper reasoning high)",
-		"x-ai/grok-4.20\tx-ai/grok-4.1-fast\txhigh\tattempt 3 (failback x-ai/grok-4.1-fast)",
+		"x-ai/grok-4.20\tx-ai/grok-4.3\txhigh\tattempt 3 (failback x-ai/grok-4.3)",
 		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\txhigh\tattempt 1",
 		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\thigh\tattempt 2 (cheaper reasoning high)",
 	]
@@ -4395,7 +4398,7 @@ def test_slot_retry_budget_stops_rate_limited_slot_after_bounded_attempts() -> N
 	assert result["ATTEMPT_LOG_FILE_CONTENT"].splitlines() == [
 		"x-ai/grok-4.20\tx-ai/grok-4.20\txhigh\tattempt 1",
 		"x-ai/grok-4.20\tx-ai/grok-4.20\thigh\tattempt 2 (cheaper reasoning high)",
-		"x-ai/grok-4.20\tx-ai/grok-4.1-fast\txhigh\tattempt 3 (failback x-ai/grok-4.1-fast)",
+		"x-ai/grok-4.20\tx-ai/grok-4.3\txhigh\tattempt 3 (failback x-ai/grok-4.3)",
 	]
 	assert result["MAPPED_LOG_FILE_CONTENT"].count("REVIEWER_BACKOFF: ") == 2
 	assert "attempt 4" not in result["MAPPED_LOG_FILE_CONTENT"]
@@ -4404,8 +4407,8 @@ def test_slot_retry_budget_stops_rate_limited_slot_after_bounded_attempts() -> N
 		"next_action=retry_cheaper_reasoning next_attempt=2 next_model=x-ai/grok-4.20"
 	) in result["MAPPED_LOG_FILE_CONTENT"]
 	assert (
-		"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.1-fast reason=rate_limit "
-		"next_action=failback next_attempt=3 next_model=x-ai/grok-4.1-fast"
+		"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.3 reason=rate_limit "
+		"next_action=failback next_attempt=3 next_model=x-ai/grok-4.3"
 	) in result["MAPPED_LOG_FILE_CONTENT"]
 	assert (
 		"REVIEWER_SLOT_STATE: slot=x-ai/grok-4.20 retryable_failure_count=3 "
@@ -4414,7 +4417,7 @@ def test_slot_retry_budget_stops_rate_limited_slot_after_bounded_attempts() -> N
 		"cache_reuse_attempted=true"
 	) in result["MAPPED_LOG_FILE_CONTENT"]
 	assert (
-		"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.1-fast attempt=3 "
+		"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.3 attempt=3 "
 		"status=supported prompt_reused=true"
 	) in result["MAPPED_LOG_FILE_CONTENT"]
 
@@ -4429,14 +4432,14 @@ def test_stall_guard_retryable_failures_log_deterministic_reviewer_advance() -> 
 		"next_action=retry_cheaper_reasoning next_attempt=2 next_model=x-ai/grok-4.20"
 	) in result["MAPPED_LOG_FILE_CONTENT"]
 	assert (
-		"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.1-fast reason=stall_guard "
-		"next_action=failback next_attempt=3 next_model=x-ai/grok-4.1-fast"
+		"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.3 reason=stall_guard "
+		"next_action=failback next_attempt=3 next_model=x-ai/grok-4.3"
 	) in result["MAPPED_LOG_FILE_CONTENT"]
 	assert health_state["reviewers"]["x-ai/grok-4.20"]["last_failure_kind"] == "stall_guard"
 	assert result["ATTEMPT_LOG_FILE_CONTENT"].splitlines() == [
 		"x-ai/grok-4.20\tx-ai/grok-4.20\txhigh\tattempt 1",
 		"x-ai/grok-4.20\tx-ai/grok-4.20\thigh\tattempt 2 (cheaper reasoning high)",
-		"x-ai/grok-4.20\tx-ai/grok-4.1-fast\txhigh\tattempt 3 (failback x-ai/grok-4.1-fast)",
+		"x-ai/grok-4.20\tx-ai/grok-4.3\txhigh\tattempt 3 (failback x-ai/grok-4.3)",
 	]
 
 
@@ -4464,7 +4467,7 @@ def test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_gre
 def test_reviewer_health_dispatch_logs_to_stderr_only() -> None:
 	result = _run_reviewer_health_dispatch_logging_harness()
 	assert result["stdout"] == ""
-	assert "REVIEWER_HEALTH: x-ai/grok-4.20 healthy reason=open_ttl_expired failures=0 effective_model=x-ai/grok-4.1-fast" in result["stderr"]
+	assert "REVIEWER_HEALTH: x-ai/grok-4.20 healthy reason=open_ttl_expired failures=0 effective_model=x-ai/grok-4.3" in result["stderr"]
 
 
 def test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped() -> None:
