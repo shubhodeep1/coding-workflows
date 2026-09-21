@@ -308,6 +308,31 @@ a new value, add it to the appropriate overrides file with a
 
 ---
 
+## Review self-repo support staging runs under main's workflow YAML
+
+- `internal-review.yml` calls the reusable
+  `shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@main`
+  (a `uses:` ref cannot vary per PR), while `review_autofix.yml`'s "Resolve
+  workflow support ref" step sets `SCRIPT_REF=${{ github.sha }}` in this
+  repository. A self-repo PR review therefore executes the PR-head copies of
+  `scripts/*`, `prompts/*`, and `ai-memory/schemas/*` under `main`'s workflow
+  YAML: the step list, the `env:` blocks, and the "Initialize runtime
+  workspace" exports all come from `main`, not from the PR.
+- Consequence for contributors and the unattended editor: a helper on the PR
+  branch may not depend on a new workflow export until that export is on
+  `main`. New variables a staged helper reads must default inside the helper
+  (`unattended_system_instructions.md` §8), typically to a
+  `${RUNTIME_DIR}/<artifact>` path, and the helper should publish the resolved
+  value to `GITHUB_ENV` when later steps consume it.
+- Incident: PR #4174 (`ai/issue-4173`, head `662aacb`) added
+  `LINKED_ISSUE_METADATA_FILE` as a required env of
+  `scripts/review_collect_pr_metadata.sh` together with the matching
+  `review_autofix.yml` export. The export never ran, and review runs
+  35546298657, 35549937758, 35551938072, and 35552937934 all failed in
+  "Collect PR metadata" with `required env LINKED_ISSUE_METADATA_FILE is
+  unset` while the stall poller kept re-dispatching. `main` now exports the
+  variable as well, so the same path is defined on both sides.
+
 ## Test-suite git environment isolation
 
 - `tests/conftest.py` strips the repo-pinning git variables (`GIT_DIR`,
