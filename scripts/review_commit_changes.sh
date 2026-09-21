@@ -495,6 +495,13 @@ if [ ! -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
   rm -f "${review_advisory_rows_file}"
   exit 1
 fi
+review_advisory_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}')"
+if ! [[ "${LINKED_ISSUE_METADATA_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+    || [ "${review_advisory_metadata_sha256}" != "${LINKED_ISSUE_METADATA_EXPECTED_SHA256}" ]; then
+  echo "::error::Refusing to commit: linked-issue metadata changed after collection."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
 if ! jq -e 'type == "array" and all(.[]; type == "object")' "${LINKED_ISSUE_METADATA_FILE}" >/dev/null 2>&1; then
   echo "::error::Refusing to commit: linked-issue metadata is malformed."
   rm -f "${review_advisory_rows_file}"

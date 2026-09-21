@@ -2051,6 +2051,7 @@ __EDIT_DISCIPLINE__
           set +e
           rb_generated_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
             --linked-issue-metadata-file "${LINKED_ISSUE_METADATA_FILE}" \
+            --linked-issue-metadata-sha256 "${LINKED_ISSUE_METADATA_EXPECTED_SHA256:-}" \
             --staged-file "${rb_generated_advisory_staged_file}" \
             --generated-advisory-mode auto)"
           rb_generated_advisory_scope_rc=$?

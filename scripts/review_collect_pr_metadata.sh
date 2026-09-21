@@ -375,9 +375,17 @@ elif ! printf '%s' "${_linked_context_raw}" | jq -c '[.[] | {
 	echo "::error::Could not serialize linked-issue metadata for review scope enforcement." >&2
 	exit 1
 fi
+_linked_issue_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}')"
+if ! [[ "${_linked_issue_metadata_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+	echo "::error::Could not hash linked-issue metadata for review scope enforcement." >&2
+	exit 1
+fi
 # Publish the resolved path so later steps (the review commit guard) read the
-# same artifact even when the workflow did not export the variable itself.
+# same artifact even when the workflow did not export the variable itself. The
+# digest is a rollout fallback; review_autofix.yml binds commit-producing steps
+# to the collector step's server-side output so editor writes cannot replace it.
 printf 'LINKED_ISSUE_METADATA_FILE=%s\n' "${LINKED_ISSUE_METADATA_FILE}" >> "${GITHUB_ENV}"
+printf 'LINKED_ISSUE_METADATA_EXPECTED_SHA256=%s\n' "${_linked_issue_metadata_sha256}" >> "${GITHUB_ENV}"
 
 # Build linked issue context file for reviewer/editor prompts.
 _linked_json_file="$(mktemp)"

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -3114,6 +3115,9 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	assert 'gh_retry_to_file "${outfile}" gh "$@"' in helper_text
 	assert 'review_collect_pr_metadata.XXXXXX' in helper_text
 	assert '::error::Unable to determine PR base branch' in helper_text
+	assert 'LINKED_ISSUE_METADATA_EXPECTED_SHA256=%s' in helper_text
+	assert 'id: collect_pr_metadata' in block
+	assert 'linked_issue_metadata_sha256=${linked_issue_metadata_sha256}' in block
 
 
 def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None:
@@ -3513,6 +3517,7 @@ def test_review_collect_pr_metadata_helper_defaults_linked_issue_metadata_file_f
 
 	assert result["linked_issue_metadata"] == []
 	assert result["github_env"]["LINKED_ISSUE_METADATA_FILE"].endswith("/runtime/linked_issue_metadata.json")
+	assert result["github_env"]["LINKED_ISSUE_METADATA_EXPECTED_SHA256"] == hashlib.sha256(b"[]\n").hexdigest()
 	assert "required env LINKED_ISSUE_METADATA_FILE is unset" not in result["stderr"]
 
 

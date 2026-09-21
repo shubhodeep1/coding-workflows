@@ -25,15 +25,20 @@ Inputs:
                           `git diff --cached --name-only --diff-filter=ACMRD`).
                           Reads stdin when omitted.
   --allowlist-out PATH    Optional: write the normalized allowlist (one entry
-                          per line) so the caller can surface it in the alert.
+                           per line) so the caller can surface it in the alert.
+  --linked-issue-metadata-file PATH
+                          Batched linked-issue body/authorship JSON.
+  --linked-issue-metadata-sha256 HEX
+                          Collector digest required with linked metadata.
 
 Output:
   stdout — the out-of-scope staged paths, one per line (empty when none).
 
-Exit codes (the caller maps these; ANY other code => fail open / skip):
+Exit codes (the caller maps these; generated-advisory callers fail closed):
   0   evaluated, every staged path is in scope.
   10  skipped — the issue declares no (or an empty) files_touched allowlist.
   20  one or more staged paths fall outside the allowlist (stdout lists them).
+  30  generated-advisory metadata, authorship, or collector digest is invalid.
 
 Matching semantics (allowlist entry -> staged path):
   * leading "./" is stripped from both sides; surrounding whitespace trimmed.
@@ -55,6 +60,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 from functools import lru_cache
+import hashlib
 import json
 from pathlib import PurePosixPath
 import re
@@ -362,6 +368,23 @@ def _read_text_file(path: str) -> str:
 		return ""
 
 
+def _read_verified_linked_issue_metadata(path: str, expected_sha256: str) -> str:
+	"""Read linked-issue metadata only when it matches the collector digest."""
+	if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+		raise ValueError("linked-issue metadata collector digest is unavailable")
+	try:
+		with open(path, "rb") as handle:
+			metadata_bytes = handle.read()
+	except OSError as exc:
+		raise ValueError("linked-issue metadata is unavailable") from exc
+	if hashlib.sha256(metadata_bytes).hexdigest() != expected_sha256:
+		raise ValueError("linked-issue metadata integrity check failed")
+	try:
+		return metadata_bytes.decode("utf-8")
+	except UnicodeDecodeError as exc:
+		raise ValueError("linked-issue metadata is malformed") from exc
+
+
 def _read_staged(path: str | None) -> list[str]:
 	if path:
 		text = _read_text_file(path)
@@ -382,6 +405,7 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--allowlist-out", default="")
 	parser.add_argument("--plan-file", default="")
 	parser.add_argument("--linked-issue-metadata-file", default="")
+	parser.add_argument("--linked-issue-metadata-sha256", default="")
 	parser.add_argument("--issue-author-association", default="")
 	parser.add_argument("--issue-author-login", default="")
 	parser.add_argument(
@@ -396,7 +420,11 @@ def main(argv: list[str] | None = None) -> int:
 	issue_author_login = args.issue_author_login
 	if args.linked_issue_metadata_file:
 		try:
-			linked_advisory = parse_linked_issue_metadata(_read_text_file(args.linked_issue_metadata_file))
+			linked_metadata_text = _read_verified_linked_issue_metadata(
+				args.linked_issue_metadata_file,
+				args.linked_issue_metadata_sha256,
+			)
+			linked_advisory = parse_linked_issue_metadata(linked_metadata_text)
 		except ValueError as exc:
 			print(f"generated security advisory rejected: {exc}", file=sys.stderr)
 			return EXIT_INVALID_GENERATED_ADVISORY

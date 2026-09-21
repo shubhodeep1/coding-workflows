@@ -18,6 +18,7 @@ Runnable either under pytest or directly as `python3 tests/<this file>.py`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -35,6 +36,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import files_touched_scope_guard as guard  # noqa: E402
 
 IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 REVIEW_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "review_commit_changes.sh"
 REVIEW_STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
@@ -310,21 +312,28 @@ def test_linked_issue_metadata_scope_is_exact_and_unresolved_collection_fails_cl
 			encoding="utf-8",
 		)
 		staged_file.write_text("src/security.py\n", encoding="utf-8")
-		base_command = [
-			sys.executable,
-			str(GUARD_SCRIPT),
-			"--linked-issue-metadata-file",
-			str(metadata_file),
-			"--staged-file",
-			str(staged_file),
-			"--generated-advisory-mode",
-			"auto",
-		]
+		def command() -> list[str]:
+			return [
+				sys.executable,
+				str(GUARD_SCRIPT),
+				"--linked-issue-metadata-file",
+				str(metadata_file),
+				"--linked-issue-metadata-sha256",
+				hashlib.sha256(metadata_file.read_bytes()).hexdigest(),
+				"--staged-file",
+				str(staged_file),
+				"--generated-advisory-mode",
+				"auto",
+			]
+
+		base_command = command()
 		assert subprocess.run(base_command, capture_output=True, text=True).returncode == guard.EXIT_IN_SCOPE
 		staged_file.write_text("README.md\n", encoding="utf-8")
 		assert subprocess.run(base_command, capture_output=True, text=True).returncode == guard.EXIT_OUT_OF_SCOPE
-		metadata_file.write_text('[{"_collection_status":"unresolved"}]\n', encoding="utf-8")
+		metadata_file.write_text("[]\n", encoding="utf-8")
 		assert subprocess.run(base_command, capture_output=True, text=True).returncode == guard.EXIT_INVALID_GENERATED_ADVISORY
+		metadata_file.write_text('[{"_collection_status":"unresolved"}]\n', encoding="utf-8")
+		assert subprocess.run(command(), capture_output=True, text=True).returncode == guard.EXIT_INVALID_GENERATED_ADVISORY
 
 
 def test_generated_advisory_plan_parser_accepts_numbered_contract() -> None:
@@ -373,6 +382,7 @@ def _run_fragment(
 	linked_issue_metadata_available: bool = True,
 	linked_issue_metadata_env: bool = True,
 	linked_issue_metadata_unresolved: bool = False,
+	linked_issue_metadata_expected_sha256: str | None = None,
 ) -> tuple[int, str, str]:
 	fragment = _scope_fragment(label)
 	with tempfile.TemporaryDirectory() as td:
@@ -439,6 +449,9 @@ def _run_fragment(
 			# Older workflow contract: only RUNTIME_DIR is exported; the
 			# guard must default the artifact path itself.
 			env.pop("LINKED_ISSUE_METADATA_FILE", None)
+		if linked_issue_metadata_expected_sha256 is None and linked_issue_metadata_file.exists():
+			linked_issue_metadata_expected_sha256 = hashlib.sha256(linked_issue_metadata_file.read_bytes()).hexdigest()
+		env["LINKED_ISSUE_METADATA_EXPECTED_SHA256"] = linked_issue_metadata_expected_sha256 or ""
 		proc = subprocess.run(
 			["bash", "-c", "set -euo pipefail\n" + fragment],
 			cwd=tdp,
@@ -565,6 +578,17 @@ def test_review_scope_fails_closed_when_linked_issue_collection_is_unresolved() 
 	assert "linked-issue metadata collection is unresolved" in log
 
 
+def test_review_scope_fails_closed_when_linked_issue_metadata_changes_after_collection() -> None:
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label="review",
+		linked_issue_metadata_expected_sha256="0" * 64,
+	)
+	assert rc == 1, log
+	assert "linked-issue metadata changed after collection" in log
+
+
 @pytest.mark.parametrize("label", ("preflight", "commit", "review"))
 def test_generated_advisory_helper_failure_fails_closed(label: str) -> None:
 	rc, gh_output, log = _run_fragment(
@@ -641,10 +665,18 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 	review_text = _review_commit_text()
 	stage_text = REVIEW_STAGE_SCRIPT.read_text(encoding="utf-8")
+	workflow_text = REVIEW_WORKFLOW.read_text(encoding="utf-8")
 	assert "files_touched scope-enforcement guard (review)" in review_text
 	assert '"${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py"' in review_text
 	assert '"${LINKED_ISSUE_METADATA_FILE}"' in review_text
 	assert "files_touched_scope_guard.py" in stage_text
+	assert "id: collect_pr_metadata" in workflow_text
+	assert 'echo "linked_issue_metadata_sha256=${linked_issue_metadata_sha256}" >> "$GITHUB_OUTPUT"' in workflow_text
+	assert workflow_text.count(
+		"LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}"
+	) == 4
+	assert workflow_text.count('linked-issue metadata changed after collection') == 1
+	assert "linked-issue metadata changed after collection" in review_text
 	for commit_script in (
 		REVIEW_RB_JUDGE_SCRIPT,
 		REVIEW_CONFLICT_PREPARE_SCRIPT,
@@ -652,6 +684,7 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 	):
 		commit_text = commit_script.read_text(encoding="utf-8")
 		assert "--linked-issue-metadata-file" in commit_text, commit_script
+		assert "--linked-issue-metadata-sha256" in commit_text, commit_script
 		assert "files_touched_scope_guard.py" in commit_text, commit_script
 	assert 'git diff --cached --name-only "${prepare_merge_head}"' in REVIEW_CONFLICT_PREPARE_SCRIPT.read_text(encoding="utf-8")
 	assert 'git diff --cached --name-only "${resolver_merge_head}"' in REVIEW_CONFLICT_RESOLVE_SCRIPT.read_text(encoding="utf-8")
