@@ -2449,7 +2449,7 @@ Two automations take the operator out of that loop by default:
      the version under test. The verifying run's own merge is the next cycle's input.
   Every skip and failure is a stable log prefix (`PROMOTE_CYCLE_SKIPPED reason=…`,
   `COMPREHENSIVE_PROMOTION_DEFERRED`, …). A tip whose tick failed (smoke gate failed or timed out,
-  dispatch failed) is retried on the following ticks until `PROMOTE_CYCLE_MAX_ATTEMPTS` (default 3)
+  dispatch failed, or the scheduled cycle job was externally cancelled) is retried on the following ticks until `PROMOTE_CYCLE_MAX_ATTEMPTS` (default 3)
   failed ticks have covered it without a code change in between; after that it is not retried until
   `main` moves with another code change. A pinned promotion whose release run fails leaves the `stable`
   branch ahead of the `stable` tag, which the auto-release below picks up under its own retry budget.

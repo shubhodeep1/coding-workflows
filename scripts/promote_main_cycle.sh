@@ -342,8 +342,9 @@ if [[ "${last_baseline}" =~ ^[0-9a-f]{40}$ ]] && [ "${last_baseline}" != "${tag_
 	require_code_changes "${last_baseline}" "${main_tip}" no_code_changes_since_last_cycle
 fi
 
-# 5. Not a tip whose smoke gate or dispatch already failed
-#    PROMOTE_CYCLE_MAX_ATTEMPTS times. Failed scheduled cycle runs are walked
+# 5. Not a tip whose smoke gate, dispatch, or scheduled cycle job already
+#    failed, timed out, or was cancelled PROMOTE_CYCLE_MAX_ATTEMPTS times.
+#    Failed scheduled cycle runs are walked
 #    newest first; each one whose head has no code change up to the current
 #    tip is one spent attempt, and the walk stops at the first run that a code
 #    change separates from the tip (older runs predate that change). The
