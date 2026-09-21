@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Stable releases now recover safely from ambiguous Git tag push failures.** Both release workflows retry tag publication with exponential backoff and verify the exact remote tag object after a failed push. A matching remote object is accepted when GitHub received the push but timed out responding; an immutable version-tag collision still fails without force, while only the existing `stable` and major pointers retain force-update behavior.
