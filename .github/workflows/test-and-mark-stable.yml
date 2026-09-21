@@ -5168,7 +5168,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Ensure tag does not already exist
+      - name: Validate existing version tag
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-version.outputs.version }}"
@@ -5177,24 +5177,30 @@ jobs:
           # tag push (or be incomplete depending on checkout fetch
           # config). `git ls-remote --exit-code` returns 0 if the ref
           # exists on origin, 2 if it does not, and any other non-zero
-          # value for transport / auth / repo errors. Distinguish those
-          # so a transient failure can't silently look like "tag absent"
-          # and let the workflow advance to a duplicate-tag push.
+          # value for transport / auth / repo errors. A matching existing
+          # tag is a partial-release recovery; a tag targeting any other
+          # commit remains an immutable conflict.
           set +e
-          git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1
+          git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>/tmp/release_version_tag_lsremote_err
           rc=$?
           set -e
           case "$rc" in
             0)
-              echo "::error::Tag ${VERSION} already exists on origin"
-              exit 1
+              git fetch origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+              intended_release_commit="$(git rev-parse HEAD)"
+              existing_release_commit="$(git rev-parse "${VERSION}^{commit}")"
+              if [ "${existing_release_commit}" != "${intended_release_commit}" ]; then
+                echo "::error::Tag ${VERSION} already exists on origin at ${existing_release_commit}, not intended release commit ${intended_release_commit}. Refusing to retarget the immutable tag."
+                exit 1
+              fi
+              echo "Tag ${VERSION} already targets ${intended_release_commit} — accepting partial-release recovery."
               ;;
             2)
-              # Tag absent — this is what we want.
               echo "Tag ${VERSION} does not yet exist on origin — OK"
               ;;
             *)
               echo "::error::git ls-remote failed with exit code ${rc} (transport/auth/repo error). Refusing to proceed without a confirmed tag-absent signal."
+              cat /tmp/release_version_tag_lsremote_err >&2 2>/dev/null || true
               exit 1
               ;;
           esac
@@ -5372,6 +5378,7 @@ jobs:
 
           VERSION="${{ needs.resolve-version.outputs.version }}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          VERSION_TAG_ALREADY_PUBLISHED=false
 
           publish_tag_with_remote_verification() {
             local tag_ref="$1"
@@ -5448,6 +5455,31 @@ jobs:
             done
           }
 
+          # Re-check after changelog assembly because that step may have moved
+          # HEAD. Only a tag peeled to this final release commit is recoverable.
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>/tmp/release_version_tag_lsremote_err
+          version_tag_lookup_rc=$?
+          set -e
+          case "${version_tag_lookup_rc}" in
+            0)
+              git fetch origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+              intended_release_commit="$(git rev-parse HEAD)"
+              existing_release_commit="$(git rev-parse "${VERSION}^{commit}")"
+              if [ "${existing_release_commit}" != "${intended_release_commit}" ]; then
+                echo "::error::Tag ${VERSION} already exists on origin at ${existing_release_commit}, not final release commit ${intended_release_commit}. Refusing to retarget the immutable tag."
+                exit 1
+              fi
+              VERSION_TAG_ALREADY_PUBLISHED=true
+              echo "Tag ${VERSION} already targets ${intended_release_commit} — retaining it for partial-release recovery."
+              ;;
+            2) ;;
+            *)
+              echo "::error::git ls-remote failed with exit code ${version_tag_lookup_rc}; refusing to publish without authoritative immutable-tag state."
+              cat /tmp/release_version_tag_lsremote_err >&2 2>/dev/null || true
+              exit 1
+              ;;
+          esac
           # Stale-tip guard. RELEASE_TESTED_SHA is the commit this run was
           # dispatched on and the gate tested. HEAD may be that commit or
           # that commit plus the changelog-assembly commit, nothing else, and
@@ -5474,8 +5506,10 @@ jobs:
           fi
 
           # Immutable version tag (refs/tags/ prefix for consistency with the moving-tag pushes below)
-          git tag -a "$VERSION" -m "Release $VERSION"
-          publish_tag_with_remote_verification "refs/tags/$VERSION" immutable
+          if [ "${VERSION_TAG_ALREADY_PUBLISHED}" != "true" ]; then
+            git tag -a "$VERSION" -m "Release $VERSION"
+            publish_tag_with_remote_verification "refs/tags/$VERSION" immutable
+          fi
 
           # Moving stable pointer (use refs/tags/ to disambiguate from refs/heads/stable)
           git tag -f stable "$VERSION"
@@ -5490,15 +5524,64 @@ jobs:
       - name: Create GitHub Release
         if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           VERSION="${{ needs.resolve-version.outputs.version }}"
-          gh release create "${VERSION}" \
+          RELEASE_LOOKUP_ERROR_FILE="/tmp/release_lookup_err"
+          RELEASE_CREATE_ERROR_FILE="/tmp/release_create_err"
+
+          # Audited the adjacent consumer-dispatch API calls: they publish an
+          # event but return no release-by-tag state, so this lookup cannot be
+          # merged with or served by existing workflow data.
+          set +e
+          EXISTING_RELEASE_TAG="$(gh_retry gh api "repos/${{ github.repository }}/releases/tags/${VERSION}" --jq 'if (.draft == false and .prerelease == false) then .tag_name else error("release-is-draft-or-prerelease") end' 2>"${RELEASE_LOOKUP_ERROR_FILE}")"
+          RELEASE_LOOKUP_RC=$?
+          set -e
+
+          if [ "${RELEASE_LOOKUP_RC}" -eq 0 ]; then
+            if [ "${EXISTING_RELEASE_TAG}" != "${VERSION}" ]; then
+              echo "::error::Release lookup for ${VERSION} returned unexpected tag '${EXISTING_RELEASE_TAG}'."
+              exit 1
+            fi
+            echo "GitHub Release ${VERSION} already exists — accepting partial-release recovery."
+            exit 0
+          fi
+
+          if ! grep -Fq "HTTP 404" "${RELEASE_LOOKUP_ERROR_FILE}"; then
+            echo "::error::Failed to determine whether GitHub Release ${VERSION} exists."
+            cat "${RELEASE_LOOKUP_ERROR_FILE}" >&2 2>/dev/null || true
+            exit "${RELEASE_LOOKUP_RC}"
+          fi
+
+          set +e
+          gh_retry gh release create "${VERSION}" \
             --title "${VERSION}" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
-            --target "${SOURCE_BRANCH}"
+            --target "${SOURCE_BRANCH}" 2>"${RELEASE_CREATE_ERROR_FILE}"
+          RELEASE_CREATE_RC=$?
+          set -e
+          if [ "${RELEASE_CREATE_RC}" -eq 0 ]; then
+            exit 0
+          fi
+
+          # A concurrent recovery run may have created the release after the
+          # confirmed 404. Accept that race only after an exact-tag recheck.
+          set +e
+          EXISTING_RELEASE_TAG="$(gh_retry gh api "repos/${{ github.repository }}/releases/tags/${VERSION}" --jq 'if (.draft == false and .prerelease == false) then .tag_name else error("release-is-draft-or-prerelease") end' 2>"${RELEASE_LOOKUP_ERROR_FILE}")"
+          RELEASE_RECHECK_RC=$?
+          set -e
+          if [ "${RELEASE_RECHECK_RC}" -eq 0 ] && [ "${EXISTING_RELEASE_TAG}" = "${VERSION}" ]; then
+            echo "GitHub Release ${VERSION} appeared concurrently — accepting it as complete."
+            exit 0
+          fi
+
+          cat "${RELEASE_CREATE_ERROR_FILE}" >&2 2>/dev/null || true
+          cat "${RELEASE_LOOKUP_ERROR_FILE}" >&2 2>/dev/null || true
+          exit "${RELEASE_CREATE_RC}"
 
       - name: Notify consumer repos via repository_dispatch
         if: ${{ !inputs.dry_run }}
