@@ -350,9 +350,11 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "${REPO_ROOT}"
 
 # Workflow runs stage this repo's scripts/prompts outside the audited checkout
-# and point SECURITY_AUDIT_SUPPORT_DIR at that immutable tree. Direct callers
-# that do not provide a staged path retain the repository-root fallback.
-SECURITY_AUDIT_SUPPORT_DIR="${SECURITY_AUDIT_SUPPORT_DIR:-${REPO_ROOT}}"
+# and point SECURITY_AUDIT_SUPPORT_DIR at that immutable tree.
+if [ -z "${SECURITY_AUDIT_SUPPORT_DIR:-}" ]; then
+	security_audit_emit_failure "support-preflight" "SECURITY_AUDIT_SUPPORT_DIR" "immutable support directory is required"
+	exit 1
+fi
 SECURITY_AUDIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! SECURITY_AUDIT_CANONICAL_SUPPORT_DIR="$(cd "${SECURITY_AUDIT_SUPPORT_DIR}" 2>/dev/null && pwd -P)"; then
 	security_audit_emit_failure "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}" "support directory is unavailable"

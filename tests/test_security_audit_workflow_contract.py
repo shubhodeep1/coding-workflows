@@ -249,6 +249,8 @@ def _run_security_audit(
 			env["SECURITY_AUDIT_SUPPORT_DIR"] = str(
 				_install_security_audit_support_tree(tmp_path, failure_mode=support_failure_mode)
 			)
+		else:
+			env["SECURITY_AUDIT_SUPPORT_DIR"] = str(REPO_ROOT)
 		env.update(extra_env or {})
 		proc = subprocess.run(
 			["bash", "--noprofile", "--norc", str(SCRIPT_PATH), *script_args],
@@ -1021,6 +1023,25 @@ def test_security_audit_ignores_audited_checkout_exclusion_catalog() -> None:
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
 	assert [finding["finding_id"] for finding in payload["findings"]] == ["must-survive"]
+
+
+def test_security_audit_requires_explicit_support_directory() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-support-provenance-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, _, _ = _git_fixture_repo(tmp_path)
+		proc, final_state = _run_security_audit(
+			{},
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"SECURITY_AUDIT_SUPPORT_DIR": "",
+			},
+		)
+
+	assert proc.returncode != 0
+	assert "error=immutable\\ support\\ directory\\ is\\ required" in proc.stderr
+	assert final_state.get("codex_calls", []) == []
 
 
 def test_security_audit_rejects_exclusion_catalog_path_escapes() -> None:
