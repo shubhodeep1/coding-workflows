@@ -6521,7 +6521,12 @@ security_pass_exhaustion_judge() {
       printf '%s\n' "${MOCK_SECURITY_PASS_JUDGE_JSON}" > "${output_file}"
     else
       sanitize_codex_prompt_file "${prompt_file}"
-      bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh" \
+      poller_run_sanitized_command env \
+        CODEX_HEARTBEAT_ENABLED="${CODEX_HEARTBEAT_ENABLED:-1}" \
+        CODEX_HEARTBEAT_INTERVAL_SECS="${CODEX_HEARTBEAT_INTERVAL_SECS:-30}" \
+        CODEX_RUN_BUDGET_START_EPOCH="${CODEX_RUN_BUDGET_START_EPOCH:-}" \
+        CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH="${CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH:-}" \
+        bash "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh" \
         --phase "orchestrate-security-pass-judge" \
         --stdout-file "${output_file}" \
         --stderr-file "${error_file}" \

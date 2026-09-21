@@ -53,6 +53,51 @@ def _kill_pid_if_running(pid: int | None) -> None:
 		time.sleep(0.1)
 
 
+def test_codex_heartbeat_supervisor_ignores_checkout_startup_hooks_and_preserves_child_env() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex-heartbeat-sitecustomize-") as td:
+		checkout = Path(td)
+		startup_marker = checkout / "startup-hook-ran"
+		stdout_file = checkout / "child.stdout"
+		(checkout / "sitecustomize.py").write_text(
+			"import os\n"
+			"from pathlib import Path\n"
+			f"Path({str(startup_marker)!r}).write_text(os.environ.get('HEARTBEAT_CHILD_SENTINEL', 'missing'), encoding='utf-8')\n",
+			encoding="utf-8",
+		)
+
+		env = _heartbeat_test_env()
+		env.update(
+			{
+				"CODEX_HEARTBEAT_ENABLED": "0",
+				"HEARTBEAT_CHILD_SENTINEL": "preserved-child-value",
+				"PYTHONPATH": str(checkout),
+			}
+		)
+		result = subprocess.run(
+			[
+				"bash",
+				str(HEARTBEAT_SCRIPT),
+				"--phase",
+				"isolation_test",
+				"--stdout-file",
+				str(stdout_file),
+				"--",
+				"sh",
+				"-c",
+				'printf "%s" "$HEARTBEAT_CHILD_SENTINEL"',
+			],
+			cwd=checkout,
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=10,
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert stdout_file.read_text(encoding="utf-8") == "preserved-child-value"
+		assert not startup_marker.exists()
+
+
 def test_codex_heartbeat_emits_idle_lines_without_polluting_child_streams() -> None:
 	with tempfile.TemporaryDirectory(prefix="codex-heartbeat-") as td:
 		tmp = Path(td)
@@ -326,6 +371,7 @@ def test_codex_heartbeat_timeout_kill_after_does_not_leave_child_running() -> No
 
 
 def main() -> int:
+	test_codex_heartbeat_supervisor_ignores_checkout_startup_hooks_and_preserves_child_env()
 	test_codex_heartbeat_emits_idle_lines_without_polluting_child_streams()
 	test_codex_heartbeat_appends_budget_fields_when_run_budget_env_present()
 	test_codex_heartbeat_disabled_still_tracks_child_activity()
