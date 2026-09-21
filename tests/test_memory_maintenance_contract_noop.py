@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import urllib.error
@@ -19,6 +20,7 @@ from scripts import memory_maintenance_extract_learnings as extractor
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WF_PATH = REPO_ROOT / ".github" / "workflows" / "memory_maintenance.yml"
+RELEASE_WF_PATH = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 
 
 def _workflow_text() -> str:
@@ -48,6 +50,27 @@ def test_extraction_workflow_is_automatic_short_and_fail_open() -> None:
 	assert "exit 0" in extraction_step[disabled_notice_index:helper_index]
 	assert f"{extractor.MODEL_EXTRACTION_FAILURE_EXIT})" in extraction_step
 	assert "Repository learnings model extraction failed; continuing without extraction" in extraction_step
+
+
+def test_memory_maintenance_timeout_budget_contract() -> None:
+	memory_workflow = yaml.safe_load(WF_PATH.read_text(encoding="utf-8"))
+	release_workflow = yaml.safe_load(RELEASE_WF_PATH.read_text(encoding="utf-8"))
+	memory_job_timeout_minutes = memory_workflow["jobs"]["memory_maintenance"]["timeout-minutes"]
+
+	dispatch_step = next(
+		step
+		for step in release_workflow["jobs"]["orphan-workflows-test"]["steps"]
+		if step.get("name") == "Dispatch & watch — internal-memory-maintenance"
+	)
+	watcher_match = re.search(r"--completion-timeout-secs\s+(\d+)", dispatch_step["run"])
+	assert watcher_match is not None
+	watcher_timeout_seconds = int(watcher_match.group(1))
+	dispatch_step_timeout_seconds = dispatch_step["timeout-minutes"] * 60
+
+	assert memory_job_timeout_minutes == 20
+	assert dispatch_step["timeout-minutes"] == 25
+	assert memory_job_timeout_minutes * 60 < watcher_timeout_seconds
+	assert watcher_timeout_seconds < dispatch_step_timeout_seconds
 
 
 def test_empty_source_writes_empty_artifacts_without_render_or_request(
