@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/4171-e2e-smoke-job-timeout.md:line 12 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The claimed 340m cycle cap does not exist.\n  WHY: The changelog presents a non-existent operational constraint as verified fact, which would mislead operators reasoning about future timeout changes.\n- .github/workflows/test-and-mark-stable.yml:lines 346-357 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The timeout sizing comment claims a worst-case sum but mixes a typical figure with selected phase budgets and omits several phases and verification steps.\n  WHY: The inconsistent rationale undermines the comment's purpose as the reference for deriving the next timeout cap.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: changelog.d/4171-e2e-smoke-job-timeout.md\n  Line or code reference: line 12 \u2014 table row `| Parent \\`promote-main-to-stable.yml\\` cycle cap (unchanged) | 340m |`\n  Problem: The claimed 340m cycle cap does not exist. A repo-wide search for `340m` / `340 min` / `340-minute` finds no match outside this fragment, and reading `.github/workflows/promote-main-to-stable.yml` in full (366 lines) shows its only job is `promote` with `timeout-minutes: 10` (line 94), and its final step dispatches `test-and-mark-stable.yml` fire-and-forget via `gh workflow run` (lines 344-351) \u2014 it never waits for the release gate, so no cycle cap applies at all. The \"numbers that matter\" table presents an invented figure as verified fact, which the changelog rules (no invented numbers) forbid and which would mislead an operator sizing future timeout changes.\n  Why it fails at runtime: No runtime failure, but the published release note asserts a non-existent operational constraint; anyone relying on \"the promote cycle caps this at 340m\" to reason about the 180m raise is reasoning from a fabricated bound.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: lines 346-357 (new comment above `timeout-minutes: 180`)\n  Problem: The comment states the job cap \"must contain the sum of the phase budgets below, not just a typical run\", but the arithmetic it then presents is not a worst-case sum: it uses the clamped worst case for Phase 4 (90m) and Phase 6 (30m) yet a typical figure for \"Phases 1-3 plus the per-phase analysers ~25m\", and omits Phase 5 (orchestrator-scripts), Phase 7 (cancel-on-close), and the Deep verify/verify steps entirely. Phase 2's own inactivity window alone defaults to 60m (`PLAN_PHASE_TIMEOUT` at line 367), so a true sum of inactivity budgets would exceed 180m; the cap only holds because idle-based timeouts do not fire on progressing runs. The sizing rationale as written is internally inconsistent (claims worst-case, mixes in typical), which undermines the comment's purpose as the reference for the next bump decision.\n  Why it fails at runtime: No runtime failure \u2014 the 180m value itself is defensible (observed failure: Phase 4 = 75m, Phase 6 start at +99m, needing ~81m more). The defect is a misleading justification that the next maintainer will reuse when re-deriving the cap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "0050d213d40c87fa0ef80bff5501b512b6f9c237e5875d22ddd66b6d73bf60e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35550994532",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35550994532",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921015115_a44bc9c77a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35550994532"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T01:51:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
