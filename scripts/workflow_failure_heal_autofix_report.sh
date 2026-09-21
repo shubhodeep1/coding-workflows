@@ -170,8 +170,9 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 PR_JSON_FILE="${PR_PAYLOAD_FILE:-}"
 if [ -z "${PR_JSON_FILE}" ] || ! jq -e 'type == "object" and (.number != null)' "${PR_JSON_FILE}" >/dev/null 2>&1; then
 	PR_JSON_FILE="${REPORT_DIR}/pr.json"
-	if ! gh_retry gh api --method GET "repos/${REPO}/pulls/${PR}" > "${PR_JSON_FILE}" 2>/dev/null; then
-		log "skip reason=pr_fetch_failed pr=${PR}"
+	PR_FETCH_ERROR_FILE="${REPORT_DIR}/pr_fetch_error.txt"
+	if ! gh_retry gh api --method GET "repos/${REPO}/pulls/${PR}" > "${PR_JSON_FILE}" 2> "${PR_FETCH_ERROR_FILE}"; then
+		log "skip reason=pr_fetch_failed pr=${PR} detail=$(head -c 300 "${PR_FETCH_ERROR_FILE}" | tr '\n' ' ')"
 		exit 0
 	fi
 fi

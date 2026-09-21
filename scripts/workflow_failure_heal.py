@@ -401,7 +401,7 @@ def build_autofix_failure_payload(
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
 	run_number = _positive_int(run_id)
 	head_sha = str(pr.get("head", {}).get("sha") or "").lower() if isinstance(pr.get("head"), dict) else ""
-	head_branch = str(pr.get("base", {}).get("ref") or "") if isinstance(pr.get("base"), dict) else ""
+	head_branch = str(pr.get("head", {}).get("ref") or "") if isinstance(pr.get("head"), dict) else ""
 	return {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,

@@ -512,6 +512,10 @@ if args[:1] == ["api"]:
 		issues_by_repo = state.get("heal_issues_by_repo", {})
 		items = issues_by_repo.get(repo_slug, state.get("heal_issues", []) if repo_slug == "shubhodeep1/coding-workflows" else [])
 		out("".join(json.dumps(item) + "\n" for item in items))
+	if "/pulls/" in path and path.split("/")[-1].isdigit():
+		if state.get("pull_fetch_fail"):
+			fail(state.get("pull_fetch_error", "HTTP 403"))
+		out(json.dumps(state.get("pull_request", {})))
 	if "/issues/" in path and path.split("/")[-1].isdigit():
 		number = path.split("/")[-1]
 		issue = state.get("issues", {}).get(number)
@@ -1015,7 +1019,8 @@ def test_autofix_payload_validates_and_fingerprints_by_reason() -> None:
 	assert payload["issue_number"] == 4174 and payload["label"] is None
 	assert payload["failure_reason"] == "editor_empty_noop" and payload["failure_streak"] == 2
 	assert payload["run_refs"] == [{"repo": CONSUMER_REPO, "run_id": "500", "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500"}]
-	assert payload["head_sha"] == SHA_B and payload["wrapper_sha"] == SHA_A
+	assert payload["head_branch"] == "ai/issue-4173" and payload["head_sha"] == SHA_B
+	assert payload["wrapper_sha"] == SHA_A
 	assert "finalize_reason=editor_empty_noop" in payload["failure_evidence"]
 	# Non-autofix kinds never carry the autofix fields.
 	other = heal.validate_payload(_consumer_payload(failure_reason="x", failure_streak=9))
@@ -1153,6 +1158,18 @@ def test_autofix_report_skip_paths() -> None:
 		assert "dispatches" not in _state(state_file)
 
 
+def test_autofix_report_pr_fetch_failure_logs_bounded_detail() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-pr-fetch-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		Path(env["PR_PAYLOAD_FILE"]).write_text("{}", encoding="utf-8")
+		state_file.write_text(json.dumps({"pull_fetch_fail": True, "pull_fetch_error": "HTTP 403 missing pulls:read"}), encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "skip reason=pr_fetch_failed pr=4174 detail=HTTP 403 missing pulls:read" in result.stdout
+		assert "dispatches" not in _state(state_file)
+
+
 def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	workflow = _yaml(REVIEW_AUTOFIX_WORKFLOW)
 	steps = workflow["jobs"]["codex-agent"]["steps"]
@@ -1171,4 +1188,3 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	staging = STAGE_SUPPORT_SCRIPT.read_text(encoding="utf-8")
 	optional = re.search(r'^OPTIONAL_BOOTSTRAP_SCRIPTS="([^"]*)"', staging, re.MULTILINE)
 	assert optional and {"workflow_failure_heal.py", "workflow_failure_heal_autofix_report.sh"} <= set(optional.group(1).split())
-
