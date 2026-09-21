@@ -308,10 +308,15 @@ def test_promote_workflow_cycle_job_runs_the_cycle_script_daily() -> None:
 	assert "concurrency" not in wf, "workflow-level concurrency would queue promotions behind a waiting cycle"
 	cycle = wf["jobs"]["cycle"]
 	assert cycle["if"] == "github.event_name == 'schedule'"
+	assert cycle["timeout-minutes"] == 340
 	assert "concurrency" not in cycle, "job-level concurrency would queue a later scheduled tick"
 	run_step = next(s for s in cycle["steps"] if "run" in s)
 	assert "bash scripts/promote_main_cycle.sh" in run_step["run"]
 	assert run_step["env"]["PROMOTE_CYCLE_ENABLED"] == "${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_GATE_WAIT_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_GATE_POLL_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}"
+	assert 18000 + 1800 < cycle["timeout-minutes"] * 60
 	assert run_step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT || github.token }}"
 	promote = wf["jobs"]["promote"]
 	assert promote["if"] == "github.event_name == 'workflow_dispatch'"

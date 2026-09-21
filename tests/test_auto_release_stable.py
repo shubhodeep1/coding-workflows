@@ -146,13 +146,15 @@ def test_in_flight_gate_run_skips() -> None:
 	assert not state.get("dispatches")
 
 
-def test_in_flight_gate_only_run_on_main_does_not_block() -> None:
+def test_in_flight_gate_only_run_on_main_blocks() -> None:
+	# The gate's e2e job shares one cancel-in-progress group per repository:
+	# dispatching a stable gate now would cancel the cycle's smoke gate.
 	runs = [{"status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "main", "created_at": "2026-09-19T00:00:00Z"}]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs))
 	assert proc.returncode == 0, proc.stderr
-	assert "release_in_flight" not in proc.stdout
-	assert len(state["dispatches"]) == 1
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("dispatches")
 
 
 def test_in_flight_promotion_run_skips() -> None:
@@ -164,12 +166,22 @@ def test_in_flight_promotion_run_skips() -> None:
 	assert not state.get("dispatches")
 
 
-def test_in_flight_scheduled_promote_cycle_does_not_block() -> None:
+def test_in_flight_scheduled_promote_cycle_blocks() -> None:
+	# A scheduled cycle tick is about to dispatch, or waiting on, its own gate.
 	promote_runs = [{"event": "schedule", "status": "in_progress", "conclusion": None, "head_sha": TIP, "created_at": "2026-09-19T00:00:00Z"}]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, promote_runs=promote_runs))
 	assert proc.returncode == 0, proc.stderr
-	assert "release_in_flight" not in proc.stdout
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("dispatches")
+
+
+def test_cancelled_gate_on_same_tip_is_retried() -> None:
+	runs = [{"status": "completed", "conclusion": "cancelled", "head_sha": TIP, "head_branch": "stable", "created_at": "2026-09-19T00:00:00Z"}]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs))
+	assert proc.returncode == 0, proc.stderr
+	assert "last_gate_failed" not in proc.stdout
 	assert len(state["dispatches"]) == 1
 
 
@@ -215,7 +227,7 @@ def test_failed_gate_on_older_tip_does_not_block() -> None:
 
 def test_workflow_contract() -> None:
 	wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-	assert wf["on"]["schedule"] == [{"cron": "0 */6 * * *"}]
+	assert wf["on"]["schedule"] == [{"cron": "30 */6 * * *"}]
 	assert "workflow_dispatch" in wf["on"]
 	assert wf["concurrency"]["group"] == "promote-main-to-stable", "must share the promote job's group so check-then-dispatch never interleaves with a promotion"
 	assert wf["concurrency"]["cancel-in-progress"] is False
