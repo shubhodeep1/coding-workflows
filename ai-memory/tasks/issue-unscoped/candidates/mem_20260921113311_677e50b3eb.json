@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR's stated intent is \"fully qualify the changelog push and fetch refspecs so stable releases stop dropping the changelog\" \u2014 fix the bug AND lock it in against regression.\n  expected_change_site: Either (a) a step in .github/workflows/ci.yml alongside the existing \"Mark-stable release-tag refspec contract test\" step at ci.yml:832-835 that runs tests/test_changelog_fragment_contract.py; or (b) move the four new refspec assertions into tests/test_mark_stable_release_tag_refspec_contract.py\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: I searched every CI workflow for `tests/test_changelog_fragment_contract.py` (ci.yml, mark-stable.yml, test-and-mark-stable.yml) \u2014 there are zero invocations; the test file is also not in any `pytest tests/...` discovery invocation; CI uses targeted `python3 tests/<name>.py` and `python3 -m pytest -q tests/<name>.py` calls, all of which name specific files; the new refspec assertions therefore never execute in CI, so a future edit that reverts the qualified forms would not be caught by the contract test; PR #4210's analogous test on main likely faces the same gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The PR's stated intent (last-commit summary and changelog fragment) is \"fully qualify the changelog push and fetch refspecs so stable releases stop dropping the changelog\" \u2014 i.e. ship the fix and prevent its regression. The contract assertions added to tests/test_changelog_fragment_contract.py::test_release_assembly_fails_open are the regression guard.\n  Expected change site: Either (a) a step in .github/workflows/ci.yml that runs tests/test_changelog_fragment_contract.py, alongside the existing \"Mark-stable release-tag refspec contract test\" step at ci.yml:832-835 that runs tests/test_mark_stable_release_tag_refspec_contract.py; or (b) the new refspec assertions should live in tests/test_mark_stable_release_tag_refspec_contract.py (which IS in CI) instead of tests/test_changelog_fragment_contract.py (which is not).\n  Evidence of absence: I searched every CI workflow for `tests/test_changelog_fragment_contract.py` (ci.yml, mark-stable.yml, test-and-mark-stable.yml) \u2014 there are zero invocations. The test file is also not in any `pytest tests/...` discovery invocation; CI uses targeted `python3 tests/<name>.py` and `python3 -m pytest -q tests/<name>.py` calls, all of which name specific files. The new refspec assertions therefore never execute in CI; a future edit that reverts the qualified forms back to bare `HEAD:${SOURCE_BRANCH}` / `git fetch origin ${SOURCE_BRANCH}` would not be caught by the contract test because the contract test does not run. This is also a real regression risk because the only other mechanism that would catch the bug is the live release-gate run itself, which only happens during an actual stable release (run 35570966035 last caught it after 113 fragments went unfolded). PR #4210's analogous test on main likely faces the same gap, but this PR is duplicating that gap on the stable branch instead of fixing it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: The PR's stated intent is \"fully qualify the changelog push and fetch refspecs so stable releases stop dropping the changelog\" \u2014 fix the bug AND lock it in against regression. The new assertions added to tests/test_changelog_fragment_contract.py::test_release_assembly_fails_open at tests/test_changelog_fragment_contract.py:210-219 are the regression guard.\n  Expected change site: Either (a) a step in .github/workflows/ci.yml alongside the existing \"Mark-stable release-tag refspec contract test\" step at ci.yml:832-835 that runs PYTHONDONTWRITEBYTECODE=1 python3 tests/test_changelog_fragment_contract.py; or (b) move the four new refspec assertions into tests/test_mark_stable_release_tag_refspec_contract.py (which IS in CI) so they execute on every PR / push.\n  Evidence of absence: I searched every CI workflow (ci.yml, mark-stable.yml, test-and-mark-stable.yml) and every shell script and Python file for \"test_changelog_fragment_contract\" \u2014 there are zero invocations. CI uses targeted `python3 tests/<name>.py` calls (each test file is named explicitly) and there is no `pytest tests/` discovery invocation; the test file is therefore unreachable from CI. Concretely, a future edit that reverts mark-stable.yml:607 / test-and-mark-stable.yml:5086 back to `git push origin \"HEAD:${SOURCE_BRANCH}\"` or that reverts the two `git fetch origin \"+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}\"` calls back to bare `git fetch origin \"${SOURCE_BRANCH}\"` would not be caught by the contract test because the contract test never runs. The bug was previously caught only when the actual release-gate run fired (run 35570966035, which left 113 fragments unfolded); without the test running in CI, the same regression would only be caught at the next release rather than at PR-review time. PR #4210's analogous test on main may face the same gap, but this PR is propagating that gap onto the stable branch instead of closing it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "646287c02f59850b1aff1d3246eed2ee2756424209cc962a1d6e25e88b9b0bcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35592589163",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35592589163",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921113311_677e50b3eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35592589163"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T11:33:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
