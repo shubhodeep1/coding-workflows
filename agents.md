@@ -88,9 +88,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     fingerprint (label `ai:workflow-heal`), caps the lineage at
     `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
     `ai:workflow-heal-escalated` + Telegram), and bounds the volume with
-    `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`. On by
+    `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`. A
+    third reporter lives in the failure path of `review_autofix.yml`
+    (`scripts/workflow_failure_heal_autofix_report.sh`, payload kind
+    `autofix_failure`): it reports a failed review/autofix run on a pull
+    request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2) runs in a
+    row failed on that PR, counted from the workflow's own failure comments,
+    so the stall poller's single retry is not pre-empted. On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
-    code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL`.
+    code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
+    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -1013,6 +1020,7 @@ and shipped:
 - `drift-audit:`
 - `CHECK_TRIAGE`
 - `WORKFLOW_HEAL_REPORT`
+- `WORKFLOW_HEAL_AUTOFIX_REPORT`
 - `WORKFLOW_HEAL`
 - `WORKTREE_REGISTER`
 - `WORKTREE_DEREGISTER`
@@ -1184,6 +1192,7 @@ LOG_PREFIX.name=IDENTITY_REINJECT_PARSE_FAIL
 LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
 LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
+LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKTREE_REGISTER
 LOG_PREFIX.name=WORKTREE_DEREGISTER

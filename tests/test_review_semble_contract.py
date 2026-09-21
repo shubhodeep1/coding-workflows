@@ -198,7 +198,14 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert "assemble_prompt.sh" in required_bootstrap_line
 	assert "render_prompt.py" not in required_bootstrap_line
 	assert "render_prompt.py" not in optional_bootstrap_line
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in stage_helper
+	# The workflow-failure-heal reporter and its Python helper ride the same
+	# optional loop so the review workflow's failure path can report without a
+	# consumer wrapper change; a consumer whose stable ref predates them just
+	# skips the report step.
+	assert (
+		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
+		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"'
+	) in stage_helper
 	assert (
 		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
 		"    codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh\n"

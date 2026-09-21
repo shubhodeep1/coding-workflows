@@ -8448,6 +8448,40 @@ jobs:
 
           printf '\n### Review Autofix Run Summary\n\n' >> "${GITHUB_STEP_SUMMARY}"
           printf '%s\n' "${structured_summary_line}" | tee -a "${GITHUB_STEP_SUMMARY}"
+          # Keep the structured line for the heal reporter below (RUNTIME_DIR
+          # survives until the cleanup step). Best-effort: never fail the
+          # summary over it.
+          printf '%s\n' "${structured_summary_line}" > "${RUNTIME_DIR}/review_autofix_run_summary_line.txt" 2>/dev/null || true
+
+      - name: Report autofix failure to workflow failure heal
+        # Workflow failure heal (README "Workflow Failure Heal"): after the
+        # failure alerts, hand a repeated review/autofix failure on this PR to
+        # coding-workflows' heal intake so it is diagnosed and fixed through
+        # the normal pipeline. The reporter counts consecutive failed runs from
+        # the PR comments fetched at run start and reports only past
+        # WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK (default 2); a single retryable
+        # failure stays with the stall poller. Resolver escalations are already
+        # reported through the ai:resolver-escalated label path. Fail-open by
+        # construction: the script always exits 0 and the step never blocks
+        # cleanup.
+        if: (failure() || env.EDITOR_CHANGES_LOST == 'true' || env.EDITOR_NOOP_SUSPICIOUS == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPORT_WRAPPER_SHA: ${{ env.SCRIPT_REF }}
+          REPORT_SUMMARY_LINE_FILE: ${{ env.RUNTIME_DIR }}/review_autofix_run_summary_line.txt
+        run: |
+          set -uo pipefail
+          reporter="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal_autofix_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_AUTOFIX_REPORT skip reason=reporter_missing path=${reporter}"
+            exit 0
+          fi
+          WORKFLOW_HEAL_PY="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal.py" bash "${reporter}" || true
 
       - name: Cleanup temporary artifacts
         if: always()

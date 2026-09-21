@@ -10,7 +10,8 @@
 # manual `workflow_dispatch` re-run. It:
 #
 #   1. Validates the payload (every field is re-checked; the body, comments, and
-#      logs stay untrusted data for the model) and applies the skip gates:
+#      logs stay untrusted data for the model; an `autofix_failure` report from
+#      the review/autofix workflow carries its own evidence text) and applies the skip gates:
 #      kill switch, unregistered source repo, smoke-test fixture, self run,
 #      downstream release-gate failure already reported by the gate itself.
 #   2. Fetches the failed jobs + a filtered tail of their logs for the linked
@@ -151,6 +152,10 @@ HEAD_BRANCH="$(_pf '.head_branch // ""')"
 PAYLOAD_WORKFLOW_NAME="$(_pf '.workflow_name // ""')"
 SOURCE_GEN="$(_pf '.source_gen // ""')"
 SOURCE_ROOT="$(_pf '.source_root // ""')"
+FAILURE_REASON="$(_pf '.failure_reason // ""')"
+FAILURE_STREAK="$(_pf '.failure_streak // ""')"
+FAILURE_EVIDENCE_FILE="${RUNTIME_DIR}/failure_evidence.txt"
+_pf '.failure_evidence // ""' > "${FAILURE_EVIDENCE_FILE}"
 
 SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --registry-json "${REGISTRY_FILE}" --self-repo "${SELF_REPO}" 2>/dev/null || echo "")"
 if [ -n "${SKIP_REASON}" ]; then
@@ -243,7 +248,18 @@ fi
 
 # --- Fingerprint -------------------------------------------------------------
 
-if [ "${#LOG_FILES[@]}" -gt 0 ]; then
+if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+	# The review job's log ends the same way for every failure class
+	# ("Process completed with exit code 1"), so the reporter's own reason and
+	# evidence identify the failure; the job logs still go to the model below.
+	[ -n "${PAYLOAD_WORKFLOW_NAME}" ] && FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
+	FIRST_FAILING_STEP="autofix:${FAILURE_REASON:-unknown}"
+	if [ -s "${FAILURE_EVIDENCE_FILE}" ]; then
+		SIGNATURE="$(python3 "${HEAL_PY}" error-signature --log-file "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || echo "no-error-lines")"
+	else
+		SIGNATURE="autofix:${FAILURE_REASON:-unknown}"
+	fi
+elif [ "${#LOG_FILES[@]}" -gt 0 ]; then
 	SIG_ARGS=()
 	for f in "${LOG_FILES[@]}"; do
 		SIG_ARGS+=(--log-file "${f}")
@@ -404,7 +420,14 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	echo "HEAL_SOURCE_DIR: ${HEAL_SOURCE_NOTE}"
 	echo "Source repository: ${SOURCE_REPO}"
 	echo "Report kind: ${SOURCE_KIND}"
-	if [ -n "${ISSUE_NUMBER}" ]; then
+	if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+		echo "Failed review/autofix run on pull request #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
+		echo "URL: ${ISSUE_URL}"
+		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
+		echo "Failure reason: ${FAILURE_REASON}"
+		echo "Consecutive failed review runs on this PR: ${FAILURE_STREAK:-1}"
+		echo "PR labels: $(_pf '.labels | join(", ")')"
+	elif [ -n "${ISSUE_NUMBER}" ]; then
 		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
 		echo "URL: ${ISSUE_URL}"
 		echo "Escalation label: ${LABEL}"
@@ -421,6 +444,11 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo
 		echo "--- Latest comments excerpt (UNTRUSTED) ---"
 		_pf '.comments_excerpt'
+		echo
+	fi
+	if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+		echo "--- Failure evidence from the reporting run (UNTRUSTED) ---"
+		cat "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || true
 		echo
 	fi
 	echo "=== FAILED RUN LOGS (UNTRUSTED) ==="

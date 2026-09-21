@@ -30,6 +30,9 @@ REUSABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "workflow_failure_heal
 INTAKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "workflow-failure-heal-intake.yml"
 INTERNAL_WRAPPER = REPO_ROOT / ".github" / "workflows" / "internal-workflow-failure-heal.yml"
 CONSUMER_TEMPLATE = REPO_ROOT / "workflow-templates" / "ai-workflow-failure-heal.yml"
+AUTOFIX_REPORT_SCRIPT = SCRIPTS_DIR / "workflow_failure_heal_autofix_report.sh"
+REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+STAGE_SUPPORT_SCRIPT = SCRIPTS_DIR / "stage_workflow_support.sh"
 PROMPT_FILE = REPO_ROOT / "prompts" / "mode-workflow-failure-heal.txt"
 LABEL_CONTRACT = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
 SELF_REPO = "shubhodeep1/coding-workflows"
@@ -183,7 +186,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 def test_stable_log_prefixes_are_registered() -> None:
 	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
-	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL"):
+	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
 
@@ -509,6 +512,10 @@ if args[:1] == ["api"]:
 		issues_by_repo = state.get("heal_issues_by_repo", {})
 		items = issues_by_repo.get(repo_slug, state.get("heal_issues", []) if repo_slug == "shubhodeep1/coding-workflows" else [])
 		out("".join(json.dumps(item) + "\n" for item in items))
+	if "/pulls/" in path and path.split("/")[-1].isdigit():
+		if state.get("pull_fetch_fail"):
+			fail(state.get("pull_fetch_error", "HTTP 403"))
+		out(json.dumps(state.get("pull_request", {})))
 	if "/issues/" in path and path.split("/")[-1].isdigit():
 		number = path.split("/")[-1]
 		issue = state.get("issues", {}).get(number)
@@ -945,3 +952,271 @@ def test_intake_without_linked_runs_still_files_from_label_context() -> None:
 	assert "no failed run could be linked" in prompt
 	created = state["issues_created"][0]
 	assert created["title"] == f"Workflow heal: ai:needs-human on {CONSUMER_REPO}#42"
+
+
+# ---------------------------------------------------------------------------
+# Autofix-failure reports (review_autofix.yml failure path)
+# ---------------------------------------------------------------------------
+
+AUTOFIX_NOOP_COMMENT = "**AI review/autofix produced no output — will retry**\n\nThe editor stage completed without a structured summary."
+AUTOFIX_FAILED_COMMENT = "**AI review/autofix failed — needs human intervention**"
+AUTOFIX_POST_EDITOR_FAILED_COMMENT = "**AI review/autofix encountered a post-editor failure — needs human intervention**"
+AUTOFIX_SUMMARY_COMMENT = "AI autofix editor summary\n\nChanges made:\n- none"
+RUN_SUMMARY_LINE = (
+	'REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"budget_elapsed_secs":129,"completed_phases":["editor","finalize"],'
+	'"edits_pushed":false,"finalize_reason":"editor_empty_noop","skipped_phases":["reviewers"],'
+	'"slot_results":{"editor":{"attempt_count":1,"failure_class":"empty_noop","status":"failed"}}}'
+)
+
+
+def _pr(number: int = 4174, *, title: str = "AI implementation for issue #4173", labels: list[str] | None = None) -> dict:
+	return {
+		"number": number,
+		"title": title,
+		"body": "Automated implementation. Refs #4139",
+		"html_url": f"https://github.com/{CONSUMER_REPO}/pull/{number}",
+		"labels": [{"name": name} for name in (labels or [])],
+		"head": {"ref": "ai/issue-4173", "sha": SHA_B, "repo": {"full_name": CONSUMER_REPO}},
+		"base": {"ref": "orchestrator/project-4139"},
+	}
+
+
+def test_count_autofix_failure_streak_reads_trailing_failure_comments() -> None:
+	comments = [
+		{"body": AUTOFIX_FAILED_COMMENT},
+		{"body": AUTOFIX_SUMMARY_COMMENT},
+		{"body": "unrelated reviewer note"},
+		{"body": AUTOFIX_SUMMARY_COMMENT},
+		{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+		{"body": AUTOFIX_SUMMARY_COMMENT},
+		{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+	]
+	assert heal.count_autofix_failure_streak(comments) == 2
+	assert heal.count_autofix_failure_streak([]) == 0
+	assert heal.count_autofix_failure_streak([{"body": AUTOFIX_SUMMARY_COMMENT}]) == 0
+	assert heal.count_autofix_failure_streak([{"body": AUTOFIX_SUMMARY_COMMENT}, {"body": AUTOFIX_NOOP_COMMENT}]) == 1
+	assert heal.count_autofix_failure_streak(
+		[
+			{"body": AUTOFIX_SUMMARY_COMMENT},
+			{"body": "⚠️ **Editor changes lost** — no commit was produced."},
+			{"body": AUTOFIX_SUMMARY_COMMENT},
+			{"body": "⚠️ **Editor no-op suspicious** — disposition could not be verified."},
+		]
+	) == 2
+
+
+def _autofix_payload(**overrides) -> dict:
+	payload = heal.build_autofix_failure_payload(
+		repo=CONSUMER_REPO,
+		pr=_pr(),
+		comments=[{"body": AUTOFIX_NOOP_COMMENT}],
+		workflow_name="AI Review",
+		failure_reason="editor_empty_noop",
+		failure_evidence="failure_reason=editor_empty_noop\nfinalize_reason=editor_empty_noop\n" + RUN_SUMMARY_LINE + "\n::error::Process completed with exit code 1.",
+		failure_streak=2,
+		run_id="500",
+		run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		wrapper_sha=SHA_A,
+		reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+	)
+	payload.update(overrides)
+	return payload
+
+
+def test_autofix_payload_validates_and_fingerprints_by_reason() -> None:
+	payload = heal.validate_payload(_autofix_payload())
+	assert payload["source_kind"] == "autofix_failure"
+	assert payload["issue_number"] == 4174 and payload["label"] is None
+	assert payload["failure_reason"] == "editor_empty_noop" and payload["failure_streak"] == 2
+	assert payload["run_refs"] == [{"repo": CONSUMER_REPO, "run_id": "500", "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500"}]
+	assert payload["head_branch"] == "ai/issue-4173" and payload["head_sha"] == SHA_B
+	assert payload["wrapper_sha"] == SHA_A
+	assert "finalize_reason=editor_empty_noop" in payload["failure_evidence"]
+	# Non-autofix kinds never carry the autofix fields.
+	other = heal.validate_payload(_consumer_payload(failure_reason="x", failure_streak=9))
+	assert other["failure_reason"] is None and other["failure_streak"] is None
+	for mutate in (lambda p: p.update(failure_reason="Bad Reason!"), lambda p: p.update(failure_reason=None), lambda p: p.update(issue_number=None)):
+		bad = json.loads(json.dumps(_autofix_payload()))
+		mutate(bad)
+		try:
+			heal.validate_payload(bad)
+		except ValueError:
+			pass
+		else:
+			raise AssertionError(f"payload was accepted: {bad}")
+	# The evidence-based signature is stable across run ids and SHAs.
+	sig_a = heal.error_signature(_autofix_payload()["failure_evidence"])
+	sig_b = heal.error_signature(_autofix_payload(run_refs=[])["failure_evidence"].replace("129", "777"))
+	assert sig_a == sig_b
+	assert heal.fingerprint("AI Review", "autofix:editor_empty_noop", sig_a) != heal.fingerprint("AI Review", "autofix:editor_changes_lost", sig_a)
+
+
+def test_compose_autofix_issue_title_and_body() -> None:
+	payload = heal.validate_payload(_autofix_payload())
+	title = heal.compose_issue_title(payload, workflow_name=None)
+	assert title == f"Workflow heal: AI Review failed 2x for {CONSUMER_REPO}#4174 (editor_empty_noop)"
+	body = heal.compose_issue_body(payload=payload, diagnosis="## Classification\nworkflow-defect\n\n## Summary\nDiff fetch fails.", fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=[])
+	assert "failed repeatedly on one pull request" in body
+	assert "**Source pull request:**" in body and "**Failure reason:** `editor_empty_noop`" in body
+	assert "**Consecutive failed review runs on this PR:** 2" in body
+	assert "Failure evidence from the reporting run (UNTRUSTED, verbatim)" in body and "finalize_reason=editor_empty_noop" in body
+	assert "Escalation label" not in body
+	match = TARGET_BRANCH_RE.search(body)
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert not AUTO_CLOSE_RE.search(body)
+
+
+def test_intake_autofix_failure_opens_upstream_issue_with_reason_fingerprint() -> None:
+	state = _intake_state(jobs={"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}, job_logs={"9001": "2026-09-21T01:49:26.000Z ##[error]Process completed with exit code 1.\n"})
+	result, state_after, prompt = _run_intake(_autofix_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "step=autofix:editor_empty_noop" in result.stdout
+	created = state_after["issues_created"][0]
+	assert created["repo"] == SELF_REPO
+	assert created["title"] == f"Workflow heal: AI Review failed 2x for {CONSUMER_REPO}#4174 (editor_empty_noop)"
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert "Failed review/autofix run on pull request #4174" in prompt
+	assert "Failure reason: editor_empty_noop" in prompt and "Consecutive failed review runs on this PR: 2" in prompt
+	assert "Failure evidence from the reporting run (UNTRUSTED)" in prompt and RUN_SUMMARY_LINE in prompt
+	# The escalated PR gets the outcome comment.
+	assert any(c["path"] == f"repos/{CONSUMER_REPO}/issues/4174/comments" for c in state_after["comments_posted"])
+
+
+def _stage_autofix_report(tmp: Path, *, comments: list[dict], flags: dict[str, str], summary_line: str | None = RUN_SUMMARY_LINE) -> tuple[Path, Path, dict[str, str]]:
+	work, state_file, env = _stage(tmp, with_codex=False)
+	shutil.copy(AUTOFIX_REPORT_SCRIPT, work / "scripts" / AUTOFIX_REPORT_SCRIPT.name)
+	runtime = tmp / "runtime"
+	runtime.mkdir(exist_ok=True)
+	(runtime / "pr_payload.json").write_text(json.dumps(_pr()), encoding="utf-8")
+	(runtime / "pr_issue_comments.json").write_text(json.dumps(comments), encoding="utf-8")
+	(runtime / "codex_editor_log.txt").write_text("editor started\n::error::PR diff unavailable\n", encoding="utf-8")
+	if summary_line is not None:
+		(runtime / "review_autofix_run_summary_line.txt").write_text(summary_line + "\n", encoding="utf-8")
+	state_file.write_text(json.dumps({}), encoding="utf-8")
+	env.update(
+		{
+			"GITHUB_REPOSITORY": CONSUMER_REPO,
+			"PR_NUMBER": "4174",
+			"GITHUB_RUN_ID": "500",
+			"RUNTIME_DIR": str(runtime),
+			"PR_PAYLOAD_FILE": str(runtime / "pr_payload.json"),
+			"PR_ISSUE_COMMENTS_FILE": str(runtime / "pr_issue_comments.json"),
+			"REPORT_WORKFLOW_NAME": "AI Review",
+			"REPORT_RUN_URL": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+			"REPORT_WRAPPER_SHA": SHA_A.upper(),
+			"WORKFLOW_HEAL_PY": str(work / "scripts" / "workflow_failure_heal.py"),
+		}
+	)
+	env.update(flags)
+	return work, state_file, env
+
+
+def test_autofix_report_dispatches_past_streak_threshold() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_SUMMARY_COMMENT}, {"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "EDITOR_NOOP_SUSPICIOUS": "true"})
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL_AUTOFIX_REPORT dispatched pr=4174 failure=editor_empty_noop streak=2 workflow=AI Review" in result.stdout
+		state = _state(state_file)
+		assert len(state["dispatches"]) == 1
+		dispatch = state["dispatches"][0]
+		assert dispatch["path"] == f"repos/{SELF_REPO}/dispatches"
+		payload = heal.validate_payload(dispatch["body"]["client_payload"])
+		assert payload["source_kind"] == "autofix_failure" and payload["failure_reason"] == "editor_empty_noop"
+		assert payload["failure_streak"] == 2 and payload["issue_number"] == 4174
+		assert payload["wrapper_sha"] == SHA_A and payload["workflow_name"] == "AI Review"
+		assert RUN_SUMMARY_LINE in payload["failure_evidence"] and "PR diff unavailable" in payload["failure_evidence"]
+		assert payload["run_refs"][0]["run_id"] == "500"
+		# No GitHub read was needed: the PR payload and comments came from the run.
+		assert all(call[:1] != ["api"] or "/dispatches" in " ".join(call) for call in state["calls"])
+
+
+def test_autofix_report_counts_interleaved_post_editor_failures() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-interleaved-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(
+			tmp,
+			comments=[
+				{"body": AUTOFIX_SUMMARY_COMMENT},
+				{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+				{"body": AUTOFIX_SUMMARY_COMMENT},
+				{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+			],
+			flags={"EDITOR_CHANGES_LOST": "true", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "3"},
+		)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "dispatched pr=4174 failure=editor_changes_lost streak=3" in result.stdout
+		assert len(_state(state_file)["dispatches"]) == 1
+
+
+def test_autofix_report_skip_paths() -> None:
+	cases = [
+		("below_streak", [], {"AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, "skip reason=below_streak pr=4174 reason=editor_empty_noop streak=1 threshold=2"),
+		("disabled", [{"body": AUTOFIX_NOOP_COMMENT}], {"WORKFLOW_HEAL_ENABLED": "false"}, "skip reason=disabled"),
+		("resolver", [{"body": AUTOFIX_NOOP_COMMENT}], {"RESOLVER_ESCALATED": "true"}, "skip reason=resolver_escalated"),
+		("dispatch_denied", [{"body": AUTOFIX_NOOP_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, "skip reason=dispatch_denied"),
+	]
+	for name, comments, flags, expected in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-autofix-{name}-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=comments, flags=flags)
+			if flags.get("MOCK_DISPATCH_FAIL"):
+				state_file.write_text(json.dumps({"dispatch_fail": True}), encoding="utf-8")
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, (name, result.stderr, result.stdout)
+			assert expected in result.stdout, (name, result.stdout)
+			if name != "dispatch_denied":
+				assert "dispatches" not in _state(state_file), name
+	# Threshold 1 reports the first failure; the finalize reason is used when no editor flag fired.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-threshold1-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "1"}, summary_line=RUN_SUMMARY_LINE.replace("editor_empty_noop", "reviewers_unavailable"))
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "dispatched pr=4174 failure=reviewers_unavailable streak=1" in result.stdout
+	# Smoke-test PRs are never reported.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-smoke-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		(tmp / "runtime" / "pr_payload.json").write_text(json.dumps(_pr(labels=["e2e-smoke-test"])), encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0 and "skip reason=smoke_test_fixture" in result.stdout
+		assert "dispatches" not in _state(state_file)
+
+
+def test_autofix_report_pr_fetch_failure_logs_bounded_detail() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-pr-fetch-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		Path(env["PR_PAYLOAD_FILE"]).write_text("{}", encoding="utf-8")
+		state_file.write_text(json.dumps({"pull_fetch_fail": True, "pull_fetch_error": "HTTP 403 missing pulls:read"}), encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "skip reason=pr_fetch_failed pr=4174 detail=HTTP 403 missing pulls:read" in result.stdout
+		assert "dispatches" not in _state(state_file)
+
+
+def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
+	workflow = _yaml(REVIEW_AUTOFIX_WORKFLOW)
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	names = [step.get("name") for step in steps]
+	report_index = names.index("Report autofix failure to workflow failure heal")
+	assert names.index("Append review pipeline iteration summary") < report_index < names.index("Cleanup temporary artifacts")
+	step = steps[report_index]
+	assert step["continue-on-error"] is True
+	assert step["if"].startswith(
+		"(failure() || env.EDITOR_CHANGES_LOST == 'true' || env.EDITOR_NOOP_SUSPICIOUS == 'true') &&"
+	)
+	assert "WORKFLOW_HEAL_ENABLED" in step["if"] and "RESOLVER_ESCALATED" in step["if"]
+	assert "${{" not in step["run"]
+	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}"
+	assert step["env"]["REPORT_WORKFLOW_NAME"] == "${{ github.workflow }}"
+	assert "workflow_failure_heal_autofix_report.sh" in step["run"]
+	summary_step = steps[names.index("Append review pipeline iteration summary")]
+	assert "review_autofix_run_summary_line.txt" in summary_step["run"]
+	staging = STAGE_SUPPORT_SCRIPT.read_text(encoding="utf-8")
+	optional = re.search(r'^OPTIONAL_BOOTSTRAP_SCRIPTS="([^"]*)"', staging, re.MULTILINE)
+	assert optional and {"workflow_failure_heal.py", "workflow_failure_heal_autofix_report.sh"} <= set(optional.group(1).split())
