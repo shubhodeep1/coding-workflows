@@ -24,6 +24,7 @@
 #   PRE_EDITOR_DIFF_BASELINE_FILE     Optional pre-editor baseline diff file.
 #   LINKED_ISSUE_METADATA_FILE        Batched linked-issue body/authorship JSON
 #                                     produced by review_collect_pr_metadata.sh.
+#                                     Defaults to ${RUNTIME_DIR}/linked_issue_metadata.json.
 #   PRE_EDITOR_UNTRACKED_FILE         Optional sorted NUL-delimited list of paths
 #                                     that were untracked before the editor ran
 #                                     (both repo kinds). Consumer repos use it to keep
@@ -483,6 +484,12 @@ fi
 # later [ai-autofix] commit cannot widen an implementation that passed the
 # plan and implement guards. This path is deliberately fail-closed.
 review_advisory_rows_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review-advisory-rows.XXXXXX")"
+# Same default as review_collect_pr_metadata.sh: the workflow exporting the
+# runtime env may predate this artifact (self-repo reviews run PR-head helpers
+# under review_autofix.yml@main), so derive the per-run path when unset.
+if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+  LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
+fi
 if [ ! -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
   echo "::error::Refusing to commit: linked-issue metadata is unavailable."
   rm -f "${review_advisory_rows_file}"

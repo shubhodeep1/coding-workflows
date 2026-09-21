@@ -333,6 +333,7 @@ def _run_fragment(
 	issue_author_login: str = "octocat",
 	helper_source: str | None = None,
 	linked_issue_metadata_available: bool = True,
+	linked_issue_metadata_env: bool = True,
 ) -> tuple[int, str, str]:
 	fragment = _scope_fragment(label)
 	with tempfile.TemporaryDirectory() as td:
@@ -392,6 +393,10 @@ def _run_fragment(
 				"ISSUE_AUTHOR_LOGIN": issue_author_login,
 			}
 		)
+		if not linked_issue_metadata_env:
+			# Older workflow contract: only RUNTIME_DIR is exported; the
+			# guard must default the artifact path itself.
+			env.pop("LINKED_ISSUE_METADATA_FILE", None)
 		proc = subprocess.run(
 			["bash", "-c", "set -euo pipefail\n" + fragment],
 			cwd=tdp,
@@ -478,6 +483,19 @@ def test_generated_advisory_review_scope_rejects_editor_path_drift() -> None:
 		_generated_advisory_body(),
 		["src/security.py"],
 		label="review",
+	)
+	assert rc == 0, log
+	assert "all staged paths match the exact cited file" in log
+
+
+def test_review_scope_defaults_linked_issue_metadata_file_from_runtime_dir() -> None:
+	# review_autofix.yml@main may not export LINKED_ISSUE_METADATA_FILE for a
+	# self-repo PR review; the guard derives ${RUNTIME_DIR}/linked_issue_metadata.json.
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label="review",
+		linked_issue_metadata_env=False,
 	)
 	assert rc == 0, log
 	assert "all staged paths match the exact cited file" in log

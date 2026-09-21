@@ -185,6 +185,7 @@ def _run_review_collect_pr_metadata_harness(
 	head_sha_override: str,
 	base_ref_override: str,
 	review_break_glass_enabled: str = "false",
+	linked_issue_metadata_env: bool = True,
 	mock_state: dict[str, object],
 ) -> dict[str, object]:
 	with tempfile.TemporaryDirectory(prefix="review-collect-pr-metadata-") as td:
@@ -236,6 +237,11 @@ def _run_review_collect_pr_metadata_harness(
 			"GITHUB_ENV": str(files["github_env"]),
 			"REVIEW_BREAK_GLASS_ENABLED": review_break_glass_enabled,
 			})
+		if not linked_issue_metadata_env:
+			# Older workflow contract: the export is absent and only the
+			# per-run directory is known. The helper must default the path.
+			env.pop("LINKED_ISSUE_METADATA_FILE", None)
+			env["RUNTIME_DIR"] = str(runtime_dir)
 
 		result = subprocess.run(
 			["bash", str(METADATA_HELPER)],
@@ -3476,6 +3482,31 @@ def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> No
 	assert not any(call[:2] == ["api", "graphql"] for call in result["mock_state"]["calls"])
 	assert not any(call[:2] == ["pr", "diff"] for call in result["mock_state"]["calls"])
 	assert not any("repos/owner/repo/pulls/" in " ".join(call) for call in result["mock_state"]["calls"])
+
+
+def test_review_collect_pr_metadata_helper_defaults_linked_issue_metadata_file_from_runtime_dir() -> None:
+	# Self-repo reviews run the PR-head helper under review_autofix.yml@main,
+	# which may not export LINKED_ISSUE_METADATA_FILE yet (PR #4174, run
+	# 35552937934 failed with "required env LINKED_ISSUE_METADATA_FILE is
+	# unset"). The helper must derive the path from RUNTIME_DIR, write the
+	# artifact there, and publish the resolved path for later steps.
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="",
+		claude_branch_review_mode="true",
+		head_ref_override="claude/test-no-pr",
+		head_sha_override="deadbeef",
+		base_ref_override="",
+		linked_issue_metadata_env=False,
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo": {"default_branch": "main"},
+			},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == []
+	assert result["github_env"]["LINKED_ISSUE_METADATA_FILE"].endswith("/runtime/linked_issue_metadata.json")
+	assert "required env LINKED_ISSUE_METADATA_FILE is unset" not in result["stderr"]
 
 
 def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default() -> None:

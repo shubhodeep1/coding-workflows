@@ -18,10 +18,20 @@
 #   LINKED_ISSUE_CONTEXT_FILE / LINKED_ISSUE_METADATA_FILE
 #   PR_ALL_COMMENTS_CONTEXT_FILE / PR_DIFF_FILE
 #   GITHUB_ENV
+#   RUNTIME_DIR (optional; default source for LINKED_ISSUE_METADATA_FILE)
+#
+#   LINKED_ISSUE_METADATA_FILE defaults to
+#   "${RUNTIME_DIR}/linked_issue_metadata.json" (or, without RUNTIME_DIR, to
+#   linked_issue_metadata.json next to LINKED_ISSUE_CONTEXT_FILE). Self-repo
+#   review runs stage this helper from the PR head but execute it under
+#   review_autofix.yml@main, so an export that only exists in the PR's copy of
+#   the workflow never reaches this step; the default keeps the helper usable
+#   under the older workflow contract (unattended_system_instructions.md §8).
 #
 # Outputs:
 #   Writes the files above and appends LINKED_ISSUES_JSON, HAS_PR_DIFF,
-#   PR_DIFF_SOURCE, PR_DIFF_ATTEMPTED_PATHS, and BASE_BRANCH to GITHUB_ENV.
+#   PR_DIFF_SOURCE, PR_DIFF_ATTEMPTED_PATHS, BASE_BRANCH, and the resolved
+#   LINKED_ISSUE_METADATA_FILE to GITHUB_ENV.
 
 set -euo pipefail
 
@@ -43,6 +53,18 @@ if [ -z "${REPOSITORY}" ] || ! [[ "${REPOSITORY}" =~ ^[^/]+/[^/]+$ ]]; then
 fi
 REPOSITORY_OWNER="${GITHUB_REPOSITORY_OWNER:-${REPOSITORY%%/*}}"
 REPOSITORY_NAME="${REPOSITORY#*/}"
+
+# Default the linked-issue metadata artifact path before the required-env
+# check: the workflow that exports the runtime env may predate this artifact
+# (self-repo reviews run the PR-head helper under review_autofix.yml@main).
+if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ]; then
+	if [ -n "${RUNTIME_DIR:-}" ]; then
+		LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
+	elif [ -n "${LINKED_ISSUE_CONTEXT_FILE:-}" ]; then
+		LINKED_ISSUE_METADATA_FILE="$(dirname -- "${LINKED_ISSUE_CONTEXT_FILE}")/linked_issue_metadata.json"
+	fi
+fi
+export LINKED_ISSUE_METADATA_FILE
 
 for required_var in \
 	PR_PAYLOAD_FILE \
@@ -329,6 +351,9 @@ if ! printf '%s' "${_linked_context_raw}" | jq -c '[.[] | {
 	exit 1
 fi
 _linked_context_raw="$(cat "${LINKED_ISSUE_METADATA_FILE}")"
+# Publish the resolved path so later steps (the review commit guard) read the
+# same artifact even when the workflow did not export the variable itself.
+printf 'LINKED_ISSUE_METADATA_FILE=%s\n' "${LINKED_ISSUE_METADATA_FILE}" >> "${GITHUB_ENV}"
 
 # Build linked issue context file for reviewer/editor prompts.
 _linked_json_file="$(mktemp)"
