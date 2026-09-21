@@ -496,6 +496,17 @@ def test_workflow_release_creation_prefers_repository_pat() -> None:
 		)
 
 
+def test_workflow_release_checkout_prefers_repository_pat_for_git_transport() -> None:
+	for workflow_path in WORKFLOWS:
+		workflow_text = _read(workflow_path)
+		step_start = workflow_text.index("      - name: Checkout source branch")
+		step_end = workflow_text.index("\n      - name:", step_start + 1)
+		step_text = workflow_text[step_start:step_end]
+		assert "token: ${{ secrets.GH_PAT || github.token }}" in step_text, (
+			f"{workflow_path.name}: release Git transport must prefer GH_PAT"
+		)
+
+
 def test_workflow_tag_publication_helper_is_bounded_verified_and_fail_closed() -> None:
 	for workflow_path in WORKFLOWS:
 		workflow_text = _read(workflow_path)
