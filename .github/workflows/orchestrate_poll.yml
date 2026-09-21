@@ -880,7 +880,14 @@ jobs:
           cp "${SNAPSHOT_FILE}" "${PUBLISH_DIR}/state.json"
           cp "${SNAPSHOT_FILE}" "${PUBLISH_DIR}/snapshots/${TICK_SLUG}.json"
 
-          python3 - "${PUBLISH_DIR}/snapshots" "${HISTORY_DEPTH}" <<'PY'
+          env -i \
+            HOME="${HOME:-}" \
+            PATH="${PATH:-/usr/bin:/bin}" \
+            TMPDIR="${TMPDIR:-/tmp}" \
+            LANG="C.UTF-8" \
+            LC_ALL="C.UTF-8" \
+            PYTHONDONTWRITEBYTECODE="1" \
+            python3 -I -B - "${PUBLISH_DIR}/snapshots" "${HISTORY_DEPTH}" <<'PY'
           from pathlib import Path
           import sys
 

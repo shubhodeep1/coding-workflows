@@ -248,6 +248,12 @@ def test_poller_state_auth_and_readonly_model_security_contract() -> None:
 	readonly_model_block = poller.split("poller_run_readonly_model() {", 1)[1].split("\n}", 1)[0]
 	assert "model_provider_broker_exec_sanitized" in readonly_model_block
 	assert "OPENROUTER_API_KEY" not in readonly_model_block
+	snapshot_publish_block = wf.split("- name: Publish state snapshot branch", 1)[1].split("\n      - name:", 1)[0]
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in snapshot_publish_block
+	assert "env -i \\" in snapshot_publish_block
+	assert 'PYTHONDONTWRITEBYTECODE="1" \\' in snapshot_publish_block
+	assert 'python3 -I -B - "${PUBLISH_DIR}/snapshots" "${HISTORY_DEPTH}"' in snapshot_publish_block
+	assert "GH_TOKEN=" not in snapshot_publish_block.split("run: |", 1)[1].split("python3 -I -B", 1)[0]
 
 
 def main() -> int:
