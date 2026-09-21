@@ -205,17 +205,18 @@ def test_release_assembly_fails_open() -> None:
 			"      - name: ", 1
 		)[0]
 		assert 'if [ "${DRY_RUN}" = "true" ]' in step
-		assert 'git reset --hard "origin/${SOURCE_BRANCH}"' in step
+		# Transient push failures still fail open, but only back onto the
+		# commit the gate tested, never onto a branch tip that moved.
+		assert 'git reset --hard "${RELEASE_TESTED_SHA}"' in step
+		assert "RELEASE_STALE_TIP" in step
 		assert "::warning::Could not push the assembled changelog" in step
-		# `stable` is both a branch and a tag, so every ref in this step must
-		# be fully qualified: a bare `HEAD:stable` push is "dst refspec stable
-		# matches more than one", and a bare `git fetch origin stable` fetches
-		# the tag and never refreshes origin/stable.
+		# `stable` is both a branch and a tag: the push and the stale-tip
+		# lookup must name refs/heads/ explicitly (a bare `HEAD:stable` is
+		# "dst refspec stable matches more than one", and `git fetch origin
+		# stable` resolves to the tag).
 		assert 'git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"' in step
 		assert '"HEAD:${SOURCE_BRANCH}"' not in step
-		assert step.count(
-			'git fetch origin "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"'
-		) == 2
+		assert 'git ls-remote origin "refs/heads/${SOURCE_BRANCH}"' in step
 		assert 'git fetch origin "${SOURCE_BRANCH}"' not in step
 
 

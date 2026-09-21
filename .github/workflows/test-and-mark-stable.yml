@@ -1,5 +1,6 @@
 ---
 name: Test & Mark Stable Release
+run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [cycle:{0}]', inputs.gate_cycle_id) || 'Test & Mark Stable Release' }}
 
 "on":
   workflow_dispatch:
@@ -24,6 +25,21 @@ name: Test & Mark Stable Release
         required: false
         type: boolean
         default: false
+      gate_only:
+        description: >
+          Run every test job but never release: skips the `release` and
+          `sync-to-main` jobs and accepts any dispatch ref (normally `main`).
+          Used by promote-main-to-stable.yml's daily cycle as the smoke gate
+          before the apply-analysis proving run. Static checks and live
+          E2E jobs run exactly as in a real release.
+        required: false
+        type: boolean
+        default: false
+      gate_cycle_id:
+        description: Optional promote-cycle run ID used to correlate the exact gate run.
+        required: false
+        type: string
+        default: ""
       dry_run:
         description: >
           Validate only — do not push tags or create release. Also skips every
@@ -98,7 +114,7 @@ name: Test & Mark Stable Release
           when a long single step should extend the wait past the
           inactivity window). The wait loop clamps overrides above
           90 minutes so a typo cannot mask a genuine hang until the
-          180-minute smoke-test job timeout kills the run.
+          300-minute smoke-test job timeout kills the run.
         required: false
         type: number
         default: 75
@@ -145,9 +161,20 @@ jobs:
     steps:
       - name: Validate dispatch ref
         id: detect
+        env:
+          GATE_ONLY: ${{ inputs.gate_only }}
         run: |
           set -euo pipefail
           REF="${{ github.ref_name }}"
+          if [ "${GATE_ONLY}" = "true" ]; then
+            # Gate-only runs never tag or release, so any ref is safe: the
+            # test jobs check out the dispatched commit (github.sha, the tip
+            # of this ref at dispatch time) and the release/sync-to-main jobs
+            # are skipped by their `!inputs.gate_only` conditions.
+            echo "Dispatched from '${REF}' in gate_only mode — test jobs only, no release"
+            echo "branch=${REF}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$REF" != "stable" ]; then
             echo "::error::test-and-mark-stable.yml must be dispatched from the 'stable' branch (got '${REF}')."
             echo "::error::To promote 'main' to a new stable baseline, run promote-main-to-stable.yml — it fast-forwards stable to main and then dispatches this workflow on stable automatically."
@@ -169,7 +196,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.source.outputs.branch }}
+          # The dispatched commit, not the branch name: the branch may move
+          # while this run is queued, and every job must test the same commit
+          # (the one the promote cycle records as the smoke-tested revision).
+          ref: ${{ github.sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -343,16 +373,10 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    # The job cap must cover the evidenced slow-but-healthy release path, not
-    # every phase's inactivity limit: reaching one of those limits fails that
-    # phase, while healthy activity resets its timer. Raised 120→180 after run
-    # 35479338161 (v1.29.7): Phase 4 ran a healthy 75m, Phase 6 started at +99m
-    # and still needed its own 30m PHASE_TIMEOUT window because its poller
-    # dispatch queued behind the ai-orchestrate-poll concurrency group. The
-    # 120m cap cancelled Phase 6 at idle 1222s of its 1800s window, skipped
-    # "Deep verify", and failed the gate on "Internals" even though Phase 6's
-    # own timeout is scored non-blocking.
-    timeout-minutes: 180
+    # The conservative serial-budget check in Validate prerequisites must stay
+    # aligned with this hard runner limit. Defaults reserve 20 minutes for deep
+    # verification, analysers, aggregation, and unconditional cleanup.
+    timeout-minutes: 300
     concurrency:
       group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
       cancel-in-progress: true
@@ -386,8 +410,13 @@ jobs:
       # step ran a healthy 51m and the 50m cap killed the wait 58s before
       # the step completed. The shell validation below clamps overrides
       # above 90m so a typo cannot suppress stall detection until the
-      # 180m e2e-smoke-test job timeout kills the run.
+      # e2e-smoke-test job timeout kills the run.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
+      E2E_JOB_TIMEOUT_MINUTES: 300
+      REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
+      EDITOR_RETRY_BUDGET_MINUTES: 25
+      PHASE7_WAIT_BUDGET_MINUTES: 10
+      E2E_FINALIZATION_RESERVE_MINUTES: 20
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
       # / poll review_autofix runs. Defaults to the source repo's
@@ -424,12 +453,44 @@ jobs:
             echo "::error::test_repo must match owner/repo."
             exit 1
           fi
-          for timeout_value in "${PHASE_TIMEOUT}" "${PLAN_PHASE_TIMEOUT}" "${REVIEW_TIMEOUT}" "${REVIEW_STEP_TIMEOUT}"; do
+          for timeout_value in \
+            "${PHASE_TIMEOUT}" \
+            "${PLAN_PHASE_TIMEOUT}" \
+            "${REVIEW_TIMEOUT}" \
+            "${REVIEW_STEP_TIMEOUT}" \
+            "${E2E_JOB_TIMEOUT_MINUTES}" \
+            "${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}" \
+            "${EDITOR_RETRY_BUDGET_MINUTES}" \
+            "${PHASE7_WAIT_BUDGET_MINUTES}" \
+            "${E2E_FINALIZATION_RESERVE_MINUTES}"; do
             if ! [[ "${timeout_value}" =~ ^[0-9]+$ ]] || [ "${timeout_value}" -lt 1 ]; then
-              echo "::error::phase, plan, review, and review-step timeouts must be positive integers."
+              echo "::error::E2E timeout budgets must be positive integers."
               exit 1
             fi
           done
+          REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_STEP_TIMEOUT}"
+          if [ "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" -gt 90 ]; then
+            REVIEW_EFFECTIVE_BUDGET_MINUTES=90
+          fi
+          REVIEW_EFFECTIVE_BUDGET_MINUTES=$((REVIEW_EFFECTIVE_BUDGET_MINUTES + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))
+          if [ "${REVIEW_TIMEOUT}" -gt "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" ]; then
+            REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_TIMEOUT}"
+          fi
+          E2E_SERIAL_BUDGET_MINUTES=$((
+            (2 * PHASE_TIMEOUT) +
+            PLAN_PHASE_TIMEOUT +
+            REVIEW_EFFECTIVE_BUDGET_MINUTES +
+            EDITOR_RETRY_BUDGET_MINUTES +
+            PHASE_TIMEOUT +
+            PHASE7_WAIT_BUDGET_MINUTES +
+            E2E_FINALIZATION_RESERVE_MINUTES
+          ))
+          echo "E2E conservative serial budget: ${E2E_SERIAL_BUDGET_MINUTES}/${E2E_JOB_TIMEOUT_MINUTES} minutes"
+          if [ "${E2E_SERIAL_BUDGET_MINUTES}" -gt "${E2E_JOB_TIMEOUT_MINUTES}" ]; then
+            echo "::error::Configured E2E phase budgets require ${E2E_SERIAL_BUDGET_MINUTES}m, exceeding the ${E2E_JOB_TIMEOUT_MINUTES}m job timeout."
+            echo "::error::Budget = 2*phase(${PHASE_TIMEOUT}) + plan(${PLAN_PHASE_TIMEOUT}) + max(review=${REVIEW_TIMEOUT}, min(review-step=${REVIEW_STEP_TIMEOUT}, cap=90) + handoff=${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}) + editor-retry(${EDITOR_RETRY_BUDGET_MINUTES}) + phase-6(${PHASE_TIMEOUT}) + phase-7(${PHASE7_WAIT_BUDGET_MINUTES}) + finalization(${E2E_FINALIZATION_RESERVE_MINUTES})."
+            exit 1
+          fi
           echo "Target repo: ${TEST_REPO}"
           echo "Phase timeout: ${PHASE_TIMEOUT} minutes"
           echo "Review workflow file: ${REVIEW_WORKFLOW_FILE}"
@@ -1363,12 +1424,19 @@ jobs:
           [[ "$REVIEW_STEP_TIMEOUT" =~ ^[0-9]+$ ]] && [ "$REVIEW_STEP_TIMEOUT" -gt 0 ] || REVIEW_STEP_TIMEOUT=75
           REVIEW_STEP_TIMEOUT_MAX=90
           if [ "$REVIEW_STEP_TIMEOUT" -gt "$REVIEW_STEP_TIMEOUT_MAX" ]; then
-            echo "::warning::REVIEW_STEP_TIMEOUT=${REVIEW_STEP_TIMEOUT} exceeds ${REVIEW_STEP_TIMEOUT_MAX}m cap; clamping so wait-review still reports genuine stalls before the 180m job timeout"
+            echo "::warning::REVIEW_STEP_TIMEOUT=${REVIEW_STEP_TIMEOUT} exceeds ${REVIEW_STEP_TIMEOUT_MAX}m cap; clamping so wait-review still reports genuine stalls before the job timeout"
             REVIEW_STEP_TIMEOUT="$REVIEW_STEP_TIMEOUT_MAX"
           fi
           STEP_INACTIVITY_LIMIT=$((REVIEW_STEP_TIMEOUT * 60))
           echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
-          LAST_ACTIVITY=$(date +%s)
+          REVIEW_PHASE_WALL_BUDGET_MINUTES=$((REVIEW_STEP_TIMEOUT + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))
+          if [ "$REVIEW_TIMEOUT" -gt "$REVIEW_PHASE_WALL_BUDGET_MINUTES" ]; then
+            REVIEW_PHASE_WALL_BUDGET_MINUTES="$REVIEW_TIMEOUT"
+          fi
+          REVIEW_PHASE_STARTED_AT=$(date +%s)
+          REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))
+          echo "Review total wall-clock budget: ${REVIEW_PHASE_WALL_BUDGET_MINUTES} minutes"
+          LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
           PREV_STATE=""
           LAST_STEP_GUARD_RUN_ID=""
           LAST_STEP_GUARD_NAME=""
@@ -1399,6 +1467,11 @@ jobs:
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
+            if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then
+              echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
 
             # Find the review workflow run for this PR's head branch
             PR_BRANCH="ai/issue-${ISSUE_NUMBER}"
@@ -2280,13 +2353,14 @@ jobs:
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          # 25 minutes (was 10 min; raised after run 25371432937 timed out
+          # EDITOR_RETRY_BUDGET_MINUTES defaults to 25 (was 10; raised after
+          # run 25371432937 timed out
           # during the retry's reviewer pass — full review_autofix pipeline
           # is 6 reviewers + consolidator + editor + conflict resolver and
           # observed to take ~20 min wall time, so 600s reliably truncated
           # genuine successful retries. 25 min keeps the upper bound below
           # the orchestrator phase budget while covering the observed P95).
-          DEADLINE=$(( $(date +%s) + 1500 ))
+          DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))
           RETRY_RUN_ID=""
           RETRY_STATUS=""
           RETRY_CONCL=""
@@ -2682,13 +2756,115 @@ jobs:
 
           echo "Posted orchestrator state to tracking issue #${TRACKING_NUMBER}"
 
-          # 6d: Trigger the poller workflow
+          # 6d: Trigger the poller workflow and pin the exact run registered by
+          # this dispatch. A later scheduled/manual poller must never replace
+          # the run whose status and logs this phase attributes to Phase 6.
+          RATE_LIMIT_BACKOFF=0
+          . ./scripts/comprehensive_test_and_release_gh_api.sh
+
+          REGISTERED_POLLER_RUN_ID=""
+          POLLER_DISPATCH_REF="ai/issue-${ISSUE_NUMBER}"
+          dispatch_and_register_poller()
+          {
+            local workflow_file="$1"
+            local baseline_id=""
+            local registration_deadline
+            local runs_json=""
+            local candidate_query=""
+            local candidate_count=""
+            local candidate_id=""
+            local dispatch_started_epoch=""
+
+            # GitHub's workflow_dispatch API returns 204/no run id. The old
+            # broad actions/runs lookup could select a peer poller, so this is
+            # intentionally scoped to the unique smoke-test issue branch.
+            candidate_query="repos/${TEST_REPO}/actions/workflows/${workflow_file}/runs?event=workflow_dispatch&branch=${POLLER_DISPATCH_REF}&per_page=10"
+            if ! baseline_id=$(gh_api_safe_quiet_print "${candidate_query}" \
+              --jq '.workflow_runs[0].id // 0'); then
+              echo "  Poller wrapper ${workflow_file} is unavailable for snapshot/dispatch."
+              return 1
+            fi
+            if ! [[ "${baseline_id}" =~ ^[0-9]+$ ]]; then
+              echo "::error::Malformed pre-dispatch run id for ${workflow_file}: '${baseline_id}'"
+              return 2
+            fi
+
+            dispatch_started_epoch=$(date +%s)
+            if ! gh workflow run "${workflow_file}" --repo "${TEST_REPO}" --ref "${POLLER_DISPATCH_REF}" 2>/dev/null; then
+              echo "  Poller wrapper ${workflow_file} could not be dispatched."
+              return 1
+            fi
+
+            registration_deadline=$(( $(date +%s) + 90 ))
+            while [ "$(date +%s)" -lt "${registration_deadline}" ]; do
+              if ! runs_json=$(gh_api_safe_quiet_print "${candidate_query}"); then
+                echo "::warning::Could not list post-dispatch runs for ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
+              fi
+              if ! printf '%s' "${runs_json}" \
+                | jq -se 'length == 1 and (.[0] | type == "object" and (.workflow_runs | type == "array"))' \
+                >/dev/null 2>&1; then
+                echo "::warning::Malformed run-list payload for ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
+              fi
+
+              candidate_count=$(printf '%s' "${runs_json}" \
+                | jq -r \
+                  --arg dispatch_ref "${POLLER_DISPATCH_REF}" \
+                  --argjson baseline_id "${baseline_id}" \
+                  --argjson dispatch_started_epoch "${dispatch_started_epoch}" \
+                  '[.workflow_runs[] | select(.event == "workflow_dispatch" and .id > $baseline_id and .head_branch == $dispatch_ref and ((.created_at | fromdateiso8601? // 0) >= ($dispatch_started_epoch - 5)))] | length' \
+                2>/dev/null || echo "")
+              if ! [[ "${candidate_count}" =~ ^[0-9]+$ ]]; then
+                echo "::warning::Malformed candidate count while registering ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
+              fi
+              if [ "${candidate_count}" -gt 1 ]; then
+                echo "::error::Ambiguous ${workflow_file} registration: ${candidate_count} branch-scoped runs appeared after baseline ${baseline_id}."
+                return 2
+              fi
+              if [ "${candidate_count}" -eq 1 ]; then
+                candidate_id=$(printf '%s' "${runs_json}" \
+                  | jq -r \
+                    --arg dispatch_ref "${POLLER_DISPATCH_REF}" \
+                    --argjson baseline_id "${baseline_id}" \
+                    --argjson dispatch_started_epoch "${dispatch_started_epoch}" \
+                    '.workflow_runs[] | select(.event == "workflow_dispatch" and .id > $baseline_id and .head_branch == $dispatch_ref and ((.created_at | fromdateiso8601? // 0) >= ($dispatch_started_epoch - 5))) | .id' \
+                  2>/dev/null || echo "")
+                if ! [[ "${candidate_id}" =~ ^[0-9]+$ ]] || [ "${candidate_id}" -lt 1 ]; then
+                  echo "::error::Registered ${workflow_file} run id is not a positive integer: '${candidate_id}'"
+                  return 2
+                fi
+                REGISTERED_POLLER_RUN_ID="${candidate_id}"
+                return 0
+              fi
+              sleep 5
+            done
+
+            echo "::error::${workflow_file} dispatch did not register a branch-scoped run within 90 seconds."
+            return 2
+          }
+
           echo "Triggering orchestrator poller..."
           POLLER_WORKFLOW="internal-orchestrate-poll.yml"
-          if ! gh workflow run "${POLLER_WORKFLOW}" --repo "${TEST_REPO}" 2>/dev/null; then
-            # Try the consumer wrapper name
+          if dispatch_and_register_poller "${POLLER_WORKFLOW}"; then
+            :
+          else
+            POLLER_REGISTRATION_RC=$?
+            if [ "${POLLER_REGISTRATION_RC}" -eq 2 ]; then
+              exit 1
+            fi
             POLLER_WORKFLOW="ai-orchestrate-poll.yml"
-            if ! gh workflow run "${POLLER_WORKFLOW}" --repo "${TEST_REPO}" 2>/dev/null; then
+            if dispatch_and_register_poller "${POLLER_WORKFLOW}"; then
+              :
+            else
+              POLLER_REGISTRATION_RC=$?
+              if [ "${POLLER_REGISTRATION_RC}" -eq 2 ]; then
+                exit 1
+              fi
               echo "::warning::Could not trigger poller workflow. Skipping review-blocked verification."
               echo "status=skipped" >> "$GITHUB_OUTPUT"
               # Cleanup tracking issue
@@ -2698,7 +2874,13 @@ jobs:
             fi
           fi
 
-          echo "Poller triggered. Waiting for it to process the review-blocked issue..."
+          POLLER_RUN_ID="${REGISTERED_POLLER_RUN_ID}"
+          if ! [[ "${POLLER_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${POLLER_RUN_ID}" -lt 1 ]; then
+            echo "::error::Phase 6 did not register a positive poller run id."
+            exit 1
+          fi
+          echo "poller_run_id=${POLLER_RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "Poller run #${POLLER_RUN_ID} registered from ${POLLER_WORKFLOW}. Waiting for it to process the review-blocked issue..."
 
           # 6e: Wait for the poller to handle the review-blocked issue
           # The poller should: invoke judge → merge/fix/close_and_reissue
@@ -2707,15 +2889,24 @@ jobs:
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
           PREV_LABELS=""
-          RATE_LIMIT_BACKOFF=0
-          . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
 
-            LABELS=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-              --jq '[.labels[].name] | join(",")' || echo "")
+            if ! LABELS=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")'); then
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Review-blocked issue #${ISSUE_NUMBER} labels remained unreadable for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
+              fi
+              echo "::warning::Could not read review-blocked issue #${ISSUE_NUMBER} labels; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
 
             # If rate-limited, skip this cycle (don't corrupt state)
             if [ "$RATE_LIMIT_BACKOFF" -gt 0 ] && [ -z "$LABELS" ]; then
@@ -2723,31 +2914,8 @@ jobs:
               continue
             fi
 
-            # Also check poller workflow run status for activity detection
-            POLLER_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?per_page=5&event=workflow_dispatch" \
-              --jq "[.workflow_runs[] | select(.name | test(\"Orchestrate.*Poll|Poll\"; \"i\"))] | sort_by(.created_at) | last" || echo "")
-            POLLER_STATUS="unknown"
-            POLLER_CONCLUSION="null"
-            if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
-              POLLER_STATUS=$(echo "${POLLER_RUN}" | jq -r '.status // "unknown"')
-              POLLER_CONCLUSION=$(echo "${POLLER_RUN}" | jq -r '.conclusion // "null"')
-            fi
-
-            CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
-
-            # Capture the latest poller run id (used by the per-phase
-            # soft-error analyser invocation below to ingest the poller's
-            # logs as the `orchestrate_poll` phase artifact).
-            if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
-              POLLER_LATEST_ID=$(echo "${POLLER_RUN}" | jq -r '.id // empty')
-              if [ -n "${POLLER_LATEST_ID}" ]; then
-                echo "poller_run_id=${POLLER_LATEST_ID}" >> "$GITHUB_OUTPUT"
-              fi
-            fi
-
-            # Reset inactivity timer only when LABELS change (not poller
-            # status alone — poller runs starting/completing would otherwise
-            # reset the timer indefinitely while labels remain stuck).
+            # Label progress and terminal success remain authoritative even
+            # when the separate Actions run endpoint is temporarily unreadable.
             if [ "$LABELS" != "$PREV_LABELS" ]; then
               if [ -n "$PREV_LABELS" ]; then
                 echo "  ↻ Label change detected — resetting inactivity timer"
@@ -2756,8 +2924,6 @@ jobs:
               IDLE=0
               PREV_LABELS="$LABELS"
             fi
-            # Still track full state for debug logging
-            PREV_STATE="$CUR_STATE"
 
             # Success: poller has driven the review-blocked issue to a
             # terminal state. Two shapes are accepted:
@@ -2795,6 +2961,43 @@ jobs:
                 -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
               exit 0
             fi
+
+            # Observe only the run pinned immediately after this phase's
+            # dispatch. Never substitute a newer scheduled/manual poller.
+            if ! POLLER_RUN=$(gh_api_safe_quiet_print \
+              "repos/${TEST_REPO}/actions/runs/${POLLER_RUN_ID}"); then
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Pinned poller run #${POLLER_RUN_ID} remained unreadable for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
+              fi
+              echo "::warning::Could not read pinned poller run #${POLLER_RUN_ID}; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
+            if ! printf '%s' "${POLLER_RUN}" \
+              | jq -se 'length == 1 and (.[0] | type == "object" and (.status | type == "string") and ((.conclusion == null) or (.conclusion | type == "string")))' \
+              >/dev/null 2>&1; then
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Pinned poller run #${POLLER_RUN_ID} returned malformed payloads for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
+              fi
+              echo "::warning::Pinned poller run #${POLLER_RUN_ID} returned a malformed payload; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
+            POLLER_STATUS=$(printf '%s' "${POLLER_RUN}" | jq -r '.status')
+            POLLER_CONCLUSION=$(printf '%s' "${POLLER_RUN}" | jq -r '.conclusion // "null"')
+
+            CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
+
+            # Still track full state for debug logging
+            PREV_STATE="$CUR_STATE"
 
             # Check if the poller workflow failed
             if [ "${POLLER_STATUS}" = "completed" ] && [ "${POLLER_CONCLUSION}" = "failure" ]; then
@@ -3109,10 +3312,10 @@ jobs:
             EXISTING_STATUS=$(echo "${EXISTING}" | jq -r '.status // ""')
             EXISTING_CONCLUSION=$(echo "${EXISTING}" | jq -r '.conclusion // ""')
             echo "  found pre-existing cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS}, conclusion=${EXISTING_CONCLUSION}"
-            # Match the open-PR poll budget (600s) so a slow/queued run
+            # Match the open-PR poll budget so a slow/queued run
             # doesn't flake the smoke test if it would have eventually
             # succeeded.
-            WAIT_DEADLINE=$(( $(date +%s) + 600 ))
+            WAIT_DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
             while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
               sleep 5
               # Fetch once, then parse locally. A transient failure still
@@ -3124,7 +3327,7 @@ jobs:
               echo "  cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS:-?}, conclusion=${EXISTING_CONCLUSION:-?}"
             done
             if [ "${EXISTING_STATUS}" != "completed" ]; then
-              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} did not complete within 600s (status=${EXISTING_STATUS:-?})"
+              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${EXISTING_STATUS:-?})"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               echo "cancel_run_id=${EXISTING_RUN_ID}" >> "$GITHUB_OUTPUT"
               exit 1
@@ -3160,7 +3363,7 @@ jobs:
           # observed to lag 2-3 seconds under heavy queue load. Sleep 5s
           # before the first poll so we don't false-fail by reading the
           # `actions/workflows/.../runs` index before the cancel run has
-          # been created. The 600s overall budget below absorbs this.
+          # been created. The named Phase 7 budget below absorbs this.
           sleep 5
 
           # Wait for a new cancel-on-close run to register and complete.
@@ -3169,8 +3372,8 @@ jobs:
           # seconds to index the new run. Poll fast for the first 30s
           # to catch quick runs (the cancel job is short — it only
           # cancels other workflows), then back off to a slower cadence
-          # to ride out longer execution. Total budget unchanged at 600s.
-          DEADLINE=$(( $(date +%s) + 600 ))
+          # to ride out longer execution. Total budget defaults to 10m.
+          DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
           POLL_START=$(date +%s)
           NEW_RUN_ID=""
           NEW_CONCLUSION=""
@@ -3489,7 +3692,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.source.outputs.branch }}
+          # The dispatched commit, not the branch name: the branch may move
+          # while this run is queued, and every job must test the same commit
+          # (the one the promote cycle records as the smoke-tested revision).
+          ref: ${{ github.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -3643,6 +3849,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_review_blocked_budget.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
@@ -3719,6 +3926,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_auto_release_stable.py tests/test_orchestrate_poll_promote_cycle.py tests/test_implement_blocked_verdict_terminalizes.py
 
       - name: Prompt files integrity
         run: |
@@ -3915,17 +4124,17 @@ jobs:
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     # Sum of remaining in-step DEADLINEs (validation-refresh 2400s +
-    # update_workflows 600s + memory-maintenance 900s = 3900s ≈ 65m).
+    # update_workflows 600s + memory-maintenance 2400s = 5400s = 90m).
     # Add headroom for prerequisite validation, checkout, and the
     # per-phase run-soft-error-analyzer composite actions (each waits
     # up to wait_for_completion_secs=120s and then runs an OpenRouter
     # call; log1 of run #25200117236 observed ~40s per phase, so 3
     # phases under OpenRouter latency variance can plausibly reach
-    # 6–9m), runner queueing, and step setup. Cap at 90m so a runaway
+    # 6–9m), runner queueing, and step setup. Cap at 110m so a runaway
     # validation-refresh / update_workflows / memory_maintenance can
     # still be killed within a sensible budget. Down from 360m before
     # the workflow-log-analysis split-out.
-    timeout-minutes: 90
+    timeout-minutes: 110
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -4057,7 +4266,7 @@ jobs:
 
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
-        timeout-minutes: 25
+        timeout-minutes: 45
         run: |
           set -euo pipefail
           sleep 4
@@ -4077,7 +4286,7 @@ jobs:
             --display-name "internal-memory-maintenance" \
             --registration-timeout-secs 900 \
             --registration-poll-interval-secs 5 \
-            --completion-timeout-secs 900 \
+            --completion-timeout-secs 2400 \
             --completion-poll-interval-secs 15 \
             --dispatch-max-attempts 5 \
             --dispatch-backoff-base-secs 2
@@ -4381,6 +4590,10 @@ jobs:
           # tracking-issue label updates. The compose_file fallback uses
           # the canonical default; if the repo has no docker-compose.yml
           # the workflow will emit `status=error` and exit gracefully.
+          # alert_msg_level=SILENT: this gate's `notify` job emits the
+          # single pass/fail Telegram message, so the dispatched validate
+          # run must not send its own per-phase alerts (same contract as
+          # the workflow-log-analysis and orphan-workflows dispatches).
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4392,7 +4605,8 @@ jobs:
             --allowed-conclusions success,failure \
             --field tracking_issue=0 \
             --field compose_file=docker-compose.yml \
-            --field validation_timeout=10
+            --field validation_timeout=10 \
+            --field alert_msg_level=SILENT
 
       - name: "Soft-error analyser (validate-standalone)"
         if: always() && steps.dispatch.outputs.run_id != ''
@@ -4948,7 +5162,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.source.outputs.branch }}
+          # The dispatched commit, not the branch name: the branch may move
+          # while this run is queued, and every job must test the same commit
+          # (the one the promote cycle records as the smoke-tested revision).
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Validate existing version tag
@@ -5042,14 +5259,38 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   release:
     needs: [source, resolve-version, validate]
+    # gate_only runs stop here: every test job above ran, nothing is tagged.
+    if: ${{ success() && !inputs.gate_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Serialise the mutating tag pushes across every dispatcher of this
+    # workflow (auto-release-stable.yml, promote-main-to-stable.yml, manual).
+    # The dispatchers' own locks end at dispatch time, so without this lock
+    # two gates on different `stable` tips could interleave their tag pushes.
+    # The stale-tip guard in the tagging step below covers the ordering half:
+    # a gate whose checkout is no longer the branch tip refuses to tag.
+    concurrency:
+      group: stable-release-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Checkout source branch
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.source.outputs.branch }}
+          # The dispatched commit, not the branch name: the branch may move
+          # while the test jobs run, and only the dispatched commit was tested.
+          ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Record the tested commit
+        env:
+          DISPATCHED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "${DISPATCHED_SHA}" ]; then
+            echo "::error::Release checkout is $(git rev-parse HEAD), not the dispatched commit ${DISPATCHED_SHA}."
+            exit 1
+          fi
+          echo "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" >> "$GITHUB_ENV"
 
       - name: Assemble changelog fragments
         id: changelog_assemble
@@ -5085,10 +5326,10 @@ jobs:
           pushed="false"
           delay=2
           for attempt in 1 2 3 4; do
-            # refs/heads/ everywhere below: `stable` is also a tag, so a bare
-            # `HEAD:stable` is rejected with "dst refspec stable matches more
-            # than one", and a bare `git fetch origin stable` resolves to the
-            # tag and leaves origin/stable stale.
+            # refs/heads/ on the push and on the tip lookup below: `stable` is
+            # also a tag, so a bare `HEAD:stable` is rejected with "dst refspec
+            # stable matches more than one" and `git fetch origin stable`
+            # resolves to the tag, leaving origin/stable stale.
             if git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"; then
               pushed="true"
               break
@@ -5096,14 +5337,20 @@ jobs:
             echo "::warning::Push of assembled changelog failed (attempt ${attempt}); retrying in ${delay}s."
             sleep "${delay}"
             delay=$((delay * 2))
-            git fetch origin "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}" || true
-            git rebase "origin/${SOURCE_BRANCH}" || { git rebase --abort || true; break; }
+            # Never rebase onto a moved branch: only the tested commit may be
+            # released. A remote tip other than RELEASE_TESTED_SHA means the
+            # branch moved under this run, so fail closed instead of
+            # re-baselining onto untested history.
+            _remote_tip="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" 2>/dev/null | awk '{print $1}' || true)"
+            if [ -n "${_remote_tip}" ] && [ "${_remote_tip}" != "${RELEASE_TESTED_SHA}" ]; then
+              echo "::error::RELEASE_STALE_TIP branch=${SOURCE_BRANCH} tested=${RELEASE_TESTED_SHA} tip=${_remote_tip}: the branch moved after this gate started; not releasing a stale checkout."
+              exit 1
+            fi
           done
 
           if [ "${pushed}" != "true" ]; then
             echo "::warning::Could not push the assembled changelog to ${SOURCE_BRANCH}; releasing without it. Fragments remain in changelog.d/ for the next release."
-            git fetch origin "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
-            git reset --hard "origin/${SOURCE_BRANCH}"
+            git reset --hard "${RELEASE_TESTED_SHA}"
           fi
 
       - name: Extract changelog for this version
@@ -5122,6 +5369,8 @@ jobs:
 
       - name: Tag version and update stable pointer
         if: ${{ !inputs.dry_run }}
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -5135,10 +5384,12 @@ jobs:
             local tag_ref="$1"
             local publication_mode="$2"
             local expected_object_id=""
+            local remote_lookup_error=""
+            local remote_lookup_error_file=""
             local remote_lookup_output=""
             local remote_object_id=""
             local attempt=1
-            local max_attempts=3
+            local max_attempts=5
             local backoff_seconds=2
             local lookup_rc=0
 
@@ -5169,10 +5420,13 @@ jobs:
                 return 0
               fi
 
+              remote_lookup_error_file="$(mktemp "${RUNNER_TEMP:-/tmp}/release_tag_lsremote_err.XXXXXX")"
               set +e
-              remote_lookup_output="$(git ls-remote --exit-code origin "${tag_ref}" 2>/tmp/release_tag_lsremote_err)"
+              remote_lookup_output="$(git ls-remote --exit-code origin "${tag_ref}" 2>"${remote_lookup_error_file}")"
               lookup_rc=$?
               set -e
+              remote_lookup_error="$(<"${remote_lookup_error_file}")"
+              rm -f "${remote_lookup_error_file}"
               remote_object_id=""
               if [ "${lookup_rc}" -eq 0 ]; then
                 remote_object_id="$(printf '%s\n' "${remote_lookup_output}" | awk -v expected_ref="${tag_ref}" '$2 == expected_ref { print $1 }')"
@@ -5188,8 +5442,8 @@ jobs:
 
               if [ "${attempt}" -eq "${max_attempts}" ]; then
                 echo "::error::Failed to publish and verify ${tag_ref} after ${max_attempts} attempts."
-                if [ "${lookup_rc}" -ne 0 ] && [ -s /tmp/release_tag_lsremote_err ]; then
-                  cat /tmp/release_tag_lsremote_err >&2
+                if [ "${lookup_rc}" -ne 0 ] && [ -n "${remote_lookup_error}" ]; then
+                  printf '%s\n' "${remote_lookup_error}" >&2
                 fi
                 return 1
               fi
@@ -5226,6 +5480,30 @@ jobs:
               exit 1
               ;;
           esac
+          # Stale-tip guard. RELEASE_TESTED_SHA is the commit this run was
+          # dispatched on and the gate tested. HEAD may be that commit or
+          # that commit plus the changelog-assembly commit, nothing else, and
+          # the branch tip must still be HEAD: a gate dispatched on an older
+          # tip that finishes after the branch moved (a promotion
+          # fast-forwarded `stable`, or a patch landed) would otherwise move
+          # the `stable` tag onto history the newer gate has superseded.
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "${HEAD_SHA}" != "${RELEASE_TESTED_SHA}" ]; then
+            if [ "$(git rev-parse HEAD^)" != "${RELEASE_TESTED_SHA}" ] \
+              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/)' || true)" ]; then
+              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog assembly; refusing to tag."
+              exit 1
+            fi
+          fi
+          BRANCH_TIP="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" | awk '{print $1}')"
+          if [ -z "${BRANCH_TIP}" ]; then
+            echo "::error::Could not read the tip of ${SOURCE_BRANCH} from origin; refusing to tag without confirming the checkout is current."
+            exit 1
+          fi
+          if [ "${BRANCH_TIP}" != "${HEAD_SHA}" ]; then
+            echo "::error::RELEASE_STALE_TIP branch=${SOURCE_BRANCH} tested=${RELEASE_TESTED_SHA} tip=${BRANCH_TIP}: the branch moved after this gate started; not tagging a stale checkout. The gate on the new tip owns the release."
+            exit 1
+          fi
 
           # Immutable version tag (refs/tags/ prefix for consistency with the moving-tag pushes below)
           if [ "${VERSION_TAG_ALREADY_PUBLISHED}" != "true" ]; then
@@ -5375,6 +5653,7 @@ jobs:
     needs: [release]
     if: >-
       !inputs.dry_run &&
+      !inputs.gate_only &&
       needs.release.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -5626,6 +5905,7 @@ jobs:
         # source file is missing.
         if: always()
         env:
+          GATE_ONLY: ${{ inputs.gate_only }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5680,9 +5960,19 @@ jobs:
           esac
 
           # Determine overall status
-          if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ] && [ "$all_supplemental_ok" = "true" ]; then
-            MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
-            MSG+=$'\n'"e2e ✓ scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ✓ log-analysis ${LOG_ANALYSIS_ICON}"
+          release_ok=false
+          if [ "$RELEASE" = "success" ] || { [ "$GATE_ONLY" = "true" ] && [ "$RELEASE" = "skipped" ]; }; then
+            release_ok=true
+          fi
+          if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$release_ok" = "true" ] && [ "$all_supplemental_ok" = "true" ]; then
+            if [ "$GATE_ONLY" = "true" ]; then
+              MSG="Release gate ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
+              RELEASE_ICON="⊘"
+            else
+              MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
+              RELEASE_ICON="✓"
+            fi
+            MSG+=$'\n'"e2e ✓ scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ${RELEASE_ICON} log-analysis ${LOG_ANALYSIS_ICON}"
           else
             MSG="Release ${{ needs.resolve-version.outputs.version }} FAILED"
             STATUS_LINE=""

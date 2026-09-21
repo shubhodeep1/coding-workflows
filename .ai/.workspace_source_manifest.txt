@@ -35,6 +35,7 @@
 .github/ai/orchestrate_schema.v1.json
 .github/ai/write_guards.v1.json
 .github/workflows/audit_consumer_drift.yml
+.github/workflows/auto-release-stable.yml
 .github/workflows/cancel_on_pr_close.yml
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
@@ -56,6 +57,7 @@
 .github/workflows/internal-plan.yml
 .github/workflows/internal-review.yml
 .github/workflows/internal-validate.yml
+.github/workflows/internal-workflow-failure-heal.yml
 .github/workflows/issue_pr_status.yml
 .github/workflows/lint-plan-archival.yml
 .github/workflows/lint-pr-body-auto-close.yml
@@ -78,7 +80,9 @@
 .github/workflows/validate.yml
 .github/workflows/validation-improvements-intake.yml
 .github/workflows/validation-refresh.yml
+.github/workflows/workflow-failure-heal-intake.yml
 .github/workflows/workflow-log-analysis.yml
+.github/workflows/workflow_failure_heal.yml
 .github/workflows/workspace-cache-maintenance.yml
 .gitignore
 .yamllint.yml
@@ -119,8 +123,22 @@ analysis/workflow-optimization-2026-09-07.md
 analysis/workflow-optimization-2026-09-08.md
 analysis/workflow-optimization-2026-09-09.md
 analysis/workflow-optimization-2026-09-16.md
+analysis/workflow-optimization-2026-09-18.md
+analysis/workflow-optimization-2026-09-20-2.md
+analysis/workflow-optimization-2026-09-20.md
+analysis/workflow-optimization-2026-09-21.md
 changelog.d/.gitkeep
+changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
+changelog.d/3965-security-pass-loop-convergence.md
+changelog.d/4127-security-fix-pr-base.md
+changelog.d/4134-auto-apply-analysis-and-stable-release.md
+changelog.d/4161-smoke-test-telegram-silencing.md
+changelog.d/4163-e2e-review-blocked-budget.md
+changelog.d/4165-workflow-failure-heal.md
+changelog.d/4172-gh-token-web-proxy-substitution.md
+changelog.d/4189-release-budget-contracts.md
 changelog.d/4228-release-creation-token-recovery.md
+changelog.d/binance-blessings-249-parked-projects-resume-without-humans.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -159,6 +177,7 @@ docs/plans/opencode-clarify-cutover-plan.md
 docs/plans/orchestrator-prerequisite-gate-automation-plan.md
 docs/plans/orchestrator-sync-contract-list-union-plan.md
 docs/plans/orchestrator-validation-resilience-plan.md
+docs/plans/release-blocker-heal-reports-plan.md
 docs/plans/review-autofix-deterministic-editor-failure-resume-plan.md
 docs/plans/review-blocked-approval-gate-trust-scope-plan.md
 docs/plans/security-pass-convergence-plan.md
@@ -219,6 +238,7 @@ prompts/_templates/mode-validate-self-heal.txt
 prompts/_templates/mode-workflow-analysis.txt
 prompts/_templates/mode-workflow-api-redundancy.txt
 prompts/_templates/mode-workflow-audit.txt
+prompts/_templates/mode-workflow-failure-heal.txt
 prompts/behavioural-smoke-synthesise.txt
 prompts/conflict-resolver.txt
 prompts/contracts/conflict-resolver.yml
@@ -288,6 +308,7 @@ prompts/mode-validate-self-heal.txt
 prompts/mode-workflow-analysis.txt
 prompts/mode-workflow-api-redundancy.txt
 prompts/mode-workflow-audit.txt
+prompts/mode-workflow-failure-heal.txt
 prompts/overlays/claude.txt
 prompts/overlays/gemini.txt
 prompts/overlays/gpt.txt
@@ -306,10 +327,12 @@ scripts/ai_memory.py
 scripts/ai_memory_lib.py
 scripts/analyze_soft_errors.py
 scripts/analyze_workflow_logs.py
+scripts/apply_analysis_on_main.sh
 scripts/apply_audit_gate_assets.py
 scripts/assemble_changelog.py
 scripts/assemble_prompt.sh
 scripts/audit_consumer_drift.py
+scripts/auto_release_stable.sh
 scripts/blocker_check.py
 scripts/build_semble_wrapper.sh
 scripts/build_state_snapshot.py
@@ -388,6 +411,7 @@ scripts/orchestrate_poll_process.sh
 scripts/orchestrate_state_v2.py
 scripts/post_review_comment.sh
 scripts/pr_checks_lib.sh
+scripts/promote_main_cycle.sh
 scripts/render_prompt.py
 scripts/render_prompt.sh
 scripts/render_scenario_trace.py
@@ -448,6 +472,9 @@ scripts/validation_selftest_status.py
 scripts/validation_template_bootstrap.py
 scripts/verify_integration_fingerprints.py
 scripts/watchdog_helpers.sh
+scripts/workflow_failure_heal.py
+scripts/workflow_failure_heal_intake.sh
+scripts/workflow_failure_heal_report.sh
 scripts/workflow_retro.py
 scripts/workflow_retro_fanout.sh
 scripts/workflow_wrapper_refs.py
@@ -567,11 +594,13 @@ tests/test_ai_memory_push_retry_backoff.py
 tests/test_ai_memory_sync_reference_files.py
 tests/test_ai_memory_workflow_log_analysis_cache.py
 tests/test_analyze_workflow_logs.py
+tests/test_apply_analysis_on_main.py
 tests/test_assemble_changelog.py
 tests/test_assemble_prompt.py
 tests/test_audit_consumer_drift.py
 tests/test_audit_gate_identity.py
 tests/test_audit_gate_template_atomicity.py
+tests/test_auto_release_stable.py
 tests/test_blocker_check.py
 tests/test_branch_rebuild.py
 tests/test_changelog_fragment_contract.py
@@ -613,6 +642,7 @@ tests/test_gh_helpers_list_runs_method.py
 tests/test_gh_helpers_parse_reset_header.py
 tests/test_header_render.sh
 tests/test_identity_recall_render.sh
+tests/test_implement_blocked_verdict_terminalizes.py
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
@@ -641,6 +671,7 @@ tests/test_orchestrate_integration_ahead_by_gate.py
 tests/test_orchestrate_lib.py
 tests/test_orchestrate_poll_noop_suspicious_recovery.py
 tests/test_orchestrate_poll_process.py
+tests/test_orchestrate_poll_promote_cycle.py
 tests/test_orchestrate_poll_stages_readiness_script.py
 tests/test_orchestrate_poll_workflow_contract.py
 tests/test_orchestrator_concurrency_caps.py
@@ -660,6 +691,7 @@ tests/test_plan_template_owned_path_guard.py
 tests/test_pr_checks_lib_required_filter.py
 tests/test_pr_merge_status_guard.py
 tests/test_pr_watch_guard.py
+tests/test_promote_main_cycle.py
 tests/test_prompt_compaction.py
 tests/test_pytest_git_env_isolation.py
 tests/test_record_id_format_contract.py
@@ -723,6 +755,7 @@ tests/test_serena_stats_emit.py
 tests/test_session_start_extract_repo_slug.py
 tests/test_setup_serena_toml.py
 tests/test_slop_scan_local.py
+tests/test_smoke_alert_silencing_contract.py
 tests/test_stall_freshness_branch_fallback.py
 tests/test_stall_loop_and_churn_fixes.py
 tests/test_stall_recovery_pr_lookup.py
@@ -736,6 +769,7 @@ tests/test_task_state_unblock.py
 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py
 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
 tests/test_test_and_mark_stable_plan_polling_guard.py
+tests/test_test_and_mark_stable_review_blocked_budget.py
 tests/test_transcript_archive.sh
 tests/test_truncate_to_utf8_byte_cap.py
 tests/test_update_repo_tree.py
@@ -771,6 +805,7 @@ tests/test_verify_integration_fingerprints_post_capture_evolution.py
 tests/test_verify_integration_fingerprints_post_capture_reintroduction.py
 tests/test_verify_integration_fingerprints_tiers.py
 tests/test_workflow_checkout_integration_ref_audit.py
+tests/test_workflow_failure_heal.py
 tests/test_workflow_gh_retry_fallback_contract.py
 tests/test_workflow_log_analysis_failure_contract.py
 tests/test_workflow_overlay_core.py
@@ -823,6 +858,7 @@ workflow-templates/ai-security-audit.yml
 workflow-templates/ai-sync-labels.yml
 workflow-templates/ai-update-workflows.yml
 workflow-templates/ai-validate.yml
+workflow-templates/ai-workflow-failure-heal.yml
 workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js
 workflow-templates/audit-gate/assets/security/dependency-audit-allowlist.json
 workflow-templates/audit-gate/contract.json

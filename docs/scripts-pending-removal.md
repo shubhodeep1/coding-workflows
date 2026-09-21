@@ -53,6 +53,43 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/workflow_failure_heal_report.sh` + `scripts/workflow_failure_heal_autofix_report.sh` + `scripts/workflow_failure_heal_intake.sh` + `scripts/workflow_failure_heal.py` + `.github/workflows/workflow_failure_heal.yml` + `.github/workflows/workflow-failure-heal-intake.yml`
+
+- **Introduced in:** #4165 (2026-09-20)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view workflow-failure-heal-intake.yml -R shubhodeep1/coding-workflows` confirms the `repository_dispatch` (`workflow-failure-heal`) and `workflow_run` entry points still exist and still run `scripts/workflow_failure_heal_intake.sh`.
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:workflow-heal"` returns `[]` (no heal issue is waiting on the pipeline), or a replacement heal path owns those issues.
+  - `rg -n 'ai-workflow-failure-heal.yml' workflow-templates/profiles/full.txt agents.md` shows the consumer wrapper is no longer delivered, i.e. consumers have been moved off the report path first.
+  - `rg -n 'workflow_failure_heal_autofix_report.sh' .github/workflows/review_autofix.yml scripts/stage_workflow_support.sh` shows the review/autofix failure reporter step and its staging entry have been removed first.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
+### `scripts/promote_main_cycle.sh` + `scripts/apply_analysis_on_main.sh` + the `cycle` job of `.github/workflows/promote-main-to-stable.yml`
+
+- **Introduced in:** #4134 (2026-09-19)
+- **Type:** supervisor
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view promote-main-to-stable.yml -R shubhodeep1/coding-workflows` confirms the daily schedule still exists and the `cycle` job still runs `scripts/promote_main_cycle.sh`.
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:orchestrator-tracking,ai:comprehensive-test-pending"` returns `[]` (no proving or verifying run in flight).
+  - `git ls-remote origin refs/heads/main 'refs/tags/stable^{}'` shows no code change on `main` since the tag, or a replacement promotion path is live.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_orchestrate_poll_promote_cycle.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
+### `scripts/auto_release_stable.sh` + `.github/workflows/auto-release-stable.yml`
+
+- **Introduced in:** #4134 (2026-09-19)
+- **Type:** supervisor
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view auto-release-stable.yml -R shubhodeep1/coding-workflows` confirms the 6-hourly schedule still exists and still runs `scripts/auto_release_stable.sh`.
+  - `git ls-remote origin refs/heads/stable 'refs/tags/stable^{}'` prints the same commit for both refs (nothing on the `stable` branch is waiting for a release).
+  - `gh api "repos/shubhodeep1/coding-workflows/actions/workflows/test-and-mark-stable.yml/runs?per_page=1"` shows the latest run was not dispatched by the schedule, i.e. a replacement release path is live.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_auto_release_stable.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
 ### `scripts/workflow_retro.py`
 
 - **Introduced in:** #3532 (2026-06-26)
