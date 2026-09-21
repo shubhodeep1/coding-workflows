@@ -6,7 +6,7 @@ Across five recent successful review runs, Kimi K3 and Grok 4.6 accounted for $1
 | The numbers that matter | Value |
 | --- | --- |
 | Grok slot, input / output per M tokens | $2.00 / $6.00 to $1.25 / $2.50 |
-| Kimi slot, input / output per M tokens | $1.68 / $9.38 to $0.65 / $2.04 |
+| Kimi slot, input / output per M tokens | $1.70 / $8.50 to $0.65 / $2.04 |
 | Mistral slot, context window | 262K to 1M |
 | Estimated Grok + Kimi spend on the five sampled runs | $14.52 to about $7.30 |
 | New catalog entries | 4 (`glm-5.2`, `glm-5.3-flashx`, `grok-4.3`, `gemini-3.1-flash-lite`) |

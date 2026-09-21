@@ -183,7 +183,7 @@
     {
       "slug": "moonshotai/kimi-k3",
       "display_name": "Kimi K3",
-      "description": "Moonshot Kimi K3 - 1M context, multimodal (text/image), 2.8T-param open-weight flagship for complex coding, knowledge work and long-horizon agentic workflows ($2.80/$14.00 per M, $0.29/M cached input read). Replaces kimi-k2.5, which Moonshot discontinued upstream on 2026-05-25.",
+      "description": "Moonshot Kimi K3 - 1M context, multimodal (text/image), 2.8T-param open-weight flagship for complex coding, knowledge work and long-horizon agentic workflows ($1.70/$8.50 per M, $0.17/M cached input read). Replaces kimi-k2.5, which Moonshot discontinued upstream on 2026-05-25.",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
         {"effort": "high", "description": "Thorough reasoning"},
@@ -760,7 +760,7 @@
     {
       "slug": "x-ai/grok-4.6",
       "display_name": "Grok 4.6",
-      "description": "xAI Grok 4.6 - 500K context, multimodal (text/image), frontier performance on coding, knowledge work and STEM ($2.00/$6.00 per M, $0.50/M cached input read). Replaces grok-4.20 as the live reviewer slot.",
+      "description": "xAI Grok 4.6 - 500K context, multimodal (text/image), frontier performance on coding, knowledge work and STEM ($2.00/$6.00 per M, $0.50/M cached input read). Retained for operator overrides after grok-4.20 replaced it in the live reviewer slot during the 2026-09 cost refresh.",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
         {"effort": "high", "description": "Thorough reasoning"},
@@ -820,7 +820,7 @@
     {
       "slug": "z-ai/glm-5.2",
       "display_name": "GLM-5.2",
-      "description": "Zhipu GLM-5.2 - 1M context, text-only, reasoning + tool calling ($0.65/$2.04 per M, $0.12/M cached input read). Reviewer-roster replacement for moonshotai/kimi-k3 (2026-09 cost refresh): Kimi K3's $1.68/$9.38 per M rate and heavy per-turn cache re-reads made it the most expensive reviewer slot; GLM-5.2 keeps a 1M window at roughly half the cost.",
+      "description": "Zhipu GLM-5.2 - 1M context, text-only, reasoning + tool calling ($0.65/$2.04 per M, $0.12/M cached input read). Reviewer-roster replacement for moonshotai/kimi-k3 (2026-09 cost refresh): Kimi K3's $1.70/$8.50 per M rate and heavy per-turn cache re-reads made it the most expensive reviewer slot; GLM-5.2 keeps a 1M window at substantially lower cost.",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
         {"effort": "high", "description": "Thorough reasoning"},
