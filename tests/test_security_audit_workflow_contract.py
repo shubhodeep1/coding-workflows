@@ -628,6 +628,79 @@ def test_security_audit_incremental_scope_drops_out_of_scope_findings() -> None:
 	assert "[security marker removed]" in followup_body
 
 
+def test_security_audit_deduplicates_canonical_crlf_followup() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-crlf-followup-") as fixture_td:
+		repo_dir, _first_sha, head_sha = _git_fixture_repo(Path(fixture_td))
+		finding = _finding_payload("crlf-existing", file_path="file_b.py")
+		fixture_git_env = {
+			key: value
+			for key, value in os.environ.items()
+			if key not in _SANITIZED_GIT_ENV_KEYS
+		}
+		provenance_commit = subprocess.run(
+			["git", "blame", "--porcelain", "-L", "1,1", head_sha, "--", "file_b.py"],
+			cwd=repo_dir,
+			env=fixture_git_env,
+			check=True,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+		).stdout.split()[0].lstrip("^")
+		waiver_key_payload = json.dumps(
+			[
+				"file_b.py",
+				" ".join(str(finding["owasp_or_stride_category"]).lower().split()),
+				1,
+				provenance_commit,
+			],
+			ensure_ascii=True,
+			separators=(",", ":"),
+		)
+		waiver_match_key = "sha256:" + hashlib.sha256(waiver_key_payload.encode("utf-8")).hexdigest()
+		canonical_body = (
+			"<!-- ai:security-finding:crlf-existing -->\n"
+			f"<!-- ai:security-waiver-key:{waiver_match_key} -->\n"
+			"Refs #9000\n\n"
+			"Existing generated advisory.\n\n"
+			"---\n"
+			"**Generated security advisory metadata**\n"
+			"- Schema: `generated-security-advisory.v1`\n"
+			f"- Waiver match key: `{waiver_match_key}`\n"
+			f"- Audited commit: `{head_sha}`\n"
+			"- Cited file: `file_b.py`\n"
+			"files_touched:\n"
+			"  - file_b.py\n"
+		).replace("\n", "\r\n")
+		state = {
+			"issue_list_responses": [
+				[{
+					"number": 9000,
+					"title": "AI Security Audit Tracker",
+					"body": "<!-- ai:security-audit-tracker:v1 -->\n# AI Security Audit Tracker\n",
+					"state": "OPEN",
+					"url": "https://github.com/owner/repo/issues/9000",
+				}],
+				[{
+					"number": 8997,
+					"title": "Existing CRLF advisory",
+					"body": canonical_body,
+					"createdAt": "2020-01-01T00:00:00Z",
+					"url": "https://github.com/owner/repo/issues/8997",
+				}],
+			],
+		}
+		proc, final_state = _run_security_audit(
+			state,
+			codex_output=json.dumps([finding]),
+			extra_env={"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT)},
+			cwd=repo_dir,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "tracker=#9000 findings=1 followups_created=0" in proc.stdout
+	assert final_state.get("issue_create_bodies", []) == []
+
+
 def test_security_audit_missing_render_helper_reports_sanitized_context() -> None:
 	proc, final_state = _run_security_audit(
 		_security_audit_tracker_state(),

@@ -2752,6 +2752,12 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 	stage_step_block = _step_block("Stage workflow support files")
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in stage_step_block
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in stage_step_block
+	assert "id: stage_workflow_support" in stage_step_block
+	assert "publish_review_support_sha256 scope_guard_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_commit_changes_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_conflict_prepare_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_conflict_resolve_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_rb_judge_sha256" in stage_step_block
 	assert "REQUIRED_BOOTSTRAP_SCRIPTS=" not in stage_step_block
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}"' not in stage_step_block
 	required_bootstrap_line = next(

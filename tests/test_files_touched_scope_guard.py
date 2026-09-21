@@ -385,6 +385,8 @@ def _run_fragment(
 	linked_issue_metadata_env: bool = True,
 	linked_issue_metadata_unresolved: bool = False,
 	linked_issue_metadata_expected_sha256: str | None = None,
+	issue_body_expected_sha256: str | None = None,
+	scope_guard_expected_sha256: str | None = None,
 ) -> tuple[int, str, str]:
 	fragment = _scope_fragment(label)
 	with tempfile.TemporaryDirectory() as td:
@@ -454,6 +456,13 @@ def _run_fragment(
 		if linked_issue_metadata_expected_sha256 is None and linked_issue_metadata_file.exists():
 			linked_issue_metadata_expected_sha256 = hashlib.sha256(linked_issue_metadata_file.read_bytes()).hexdigest()
 		env["LINKED_ISSUE_METADATA_EXPECTED_SHA256"] = linked_issue_metadata_expected_sha256 or ""
+		if issue_body_expected_sha256 is None:
+			issue_body_expected_sha256 = hashlib.sha256(body_file.read_bytes()).hexdigest()
+		if scope_guard_expected_sha256 is None:
+			scope_guard_expected_sha256 = hashlib.sha256(helper_path.read_bytes()).hexdigest()
+		env["GENERATED_SECURITY_ADVISORY"] = "true" if guard.GENERATED_ADVISORY_HEADER in body else "false"
+		env["ISSUE_BODY_EXPECTED_SHA256"] = issue_body_expected_sha256
+		env["SCOPE_GUARD_EXPECTED_SHA256"] = scope_guard_expected_sha256
 		proc = subprocess.run(
 			["bash", "-c", "set -euo pipefail\n" + fragment],
 			cwd=tdp,
@@ -606,6 +615,21 @@ def test_generated_advisory_helper_failure_fails_closed(label: str) -> None:
 		assert "scope_violation_blocked=generated-security-advisory" in gh_output
 
 
+def test_generated_advisory_body_and_helper_digest_mismatches_fail_closed() -> None:
+	for direct_guard_label, digest_overrides in (
+		("preflight", {"issue_body_expected_sha256": "0" * 64}),
+		("commit", {"scope_guard_expected_sha256": "0" * 64}),
+	):
+		rc, gh_output, log = _run_fragment(
+			_generated_advisory_body(),
+			["src/security.py"],
+			label=direct_guard_label,
+			**digest_overrides,
+		)
+		assert rc == 1, log
+		assert "scope_violation_blocked=generated-security-advisory" in gh_output
+
+
 def _strip_comments(fragment: str) -> str:
 	keep = [ln for ln in fragment.splitlines() if ln.strip() and not ln.strip().startswith("#")]
 	return "\n".join(keep)
@@ -658,10 +682,13 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	assert 'ISSUE_AUTHOR_LOGIN="$(printf \'%s\' "${ISSUE_PAYLOAD}" | jq -r \'.user.login // ""\')"' in text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
 	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
-	assert combined_text.count('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"') == 3
+	assert combined_text.count('python3 "${scope_guard_path}"') == 2
 	assert combined_text.count('--issue-author-login "${ISSUE_AUTHOR_LOGIN:-}"') == 2
 	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
 	assert "scope_violation_blocked=scope-lock-label" in commit_text
+	assert "ISSUE_BODY_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.issue_body_sha256 }}" in text
+	assert "SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.scope_guard_sha256 }}" in text
+	assert "COMMIT_CHANGES_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.commit_changes_sha256 }}" in text
 
 
 def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
@@ -678,6 +705,16 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 	assert "review_collect_pr_metadata.sh" in main_primary_line
 	assert "files_touched_scope_guard.py" in main_primary_line
 	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py; do" in workflow_text
+	assert "id: stage_workflow_support" in workflow_text
+	for digest_output in (
+		"scope_guard_sha256",
+		"review_commit_changes_sha256",
+		"review_conflict_prepare_sha256",
+		"review_conflict_resolve_sha256",
+		"review_rb_judge_sha256",
+	):
+		assert f"publish_review_support_sha256 {digest_output}" in workflow_text
+	assert workflow_text.count("REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}") == 4
 	assert "id: collect_pr_metadata" in workflow_text
 	assert 'awk \'{print $1}\' || true' in workflow_text
 	assert 'echo "linked_issue_metadata_sha256=${linked_issue_metadata_sha256}" >> "$GITHUB_OUTPUT"' in workflow_text
@@ -697,9 +734,11 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 		assert "files_touched_scope_guard.py" in commit_text, commit_script
 	assert 'git diff --cached --name-only "${prepare_merge_head}"' in REVIEW_CONFLICT_PREPARE_SCRIPT.read_text(encoding="utf-8")
 	assert 'git diff --cached --name-only "${resolver_merge_head}"' in REVIEW_CONFLICT_RESOLVE_SCRIPT.read_text(encoding="utf-8")
+	assert "REVIEW_SCOPE_GUARD_EXPECTED_SHA256" in REVIEW_CONFLICT_RESOLVE_SCRIPT.read_text(encoding="utf-8")
 	rb_judge_text = REVIEW_RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
 	assert 'git diff HEAD --name-only -z > "${RB_FIX_PREEXISTING_DIRTY_FILE}"' in rb_judge_text
 	assert '":(exclude,literal)${rb_fix_preexisting_path}"' in rb_judge_text
+	assert "REVIEW_SCOPE_GUARD_EXPECTED_SHA256" in rb_judge_text
 
 
 def test_conflict_scope_diff_excludes_clean_base_side_merge_changes() -> None:

@@ -2529,7 +2529,11 @@ if [ -n "$(git status --porcelain)" ]; then
     LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
   fi
   resolver_generated_advisory_scope_rc=30
-  if [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
+  resolver_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+  if { [ -z "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" ] \
+      || { [[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
+        && [ "${resolver_scope_guard_actual_sha256}" = "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ]; }; } \
+    && [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
     && [ -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
     set +e
     resolver_generated_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \

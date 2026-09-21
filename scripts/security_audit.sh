@@ -2037,7 +2037,7 @@ week_start = (now_utc - timedelta(days=now_utc.weekday())).date()
 for issue in existing_followups:
 	if not isinstance(issue, dict):
 		continue
-	body = str(issue.get("body") or "")
+	body = str(issue.get("body") or "").replace("\r\n", "\n")
 	match = marker_regex.search(body)
 	key_match = key_marker_regex.search(body)
 	footer_key_match = generated_footer_key_regex.search(body)

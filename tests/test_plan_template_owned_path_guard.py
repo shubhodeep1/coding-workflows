@@ -14,6 +14,7 @@ is committable and must be allowed, while runtime-fetched paths such as
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -64,6 +65,8 @@ def _run_guard(
 	issue_author_association: str = "OWNER",
 	issue_author_login: str = "octocat",
 	workflow_source_repo: bool = False,
+	issue_body_expected_sha256: str | None = None,
+	scope_guard_expected_sha256: str | None = None,
 ):
 	"""Execute the guard against a synthetic plan; return (exit_code, output).
 
@@ -103,6 +106,11 @@ def _run_guard(
 		codex_output.write_text(plan_text)
 		issue_body_file = runtime_dir / "issue_body.txt"
 		issue_body_file.write_text(issue_body)
+		staged_scope_guard = workspace / "scripts" / SCOPE_GUARD.name
+		if issue_body_expected_sha256 is None:
+			issue_body_expected_sha256 = hashlib.sha256(issue_body_file.read_bytes()).hexdigest()
+		if scope_guard_expected_sha256 is None:
+			scope_guard_expected_sha256 = hashlib.sha256(staged_scope_guard.read_bytes()).hexdigest()
 		env.update(
 			{
 				"PYTHONDONTWRITEBYTECODE": "1",
@@ -116,6 +124,9 @@ def _run_guard(
 				"ISSUE_AUTHOR_ASSOCIATION": issue_author_association,
 				"ISSUE_AUTHOR_LOGIN": issue_author_login,
 				"IS_WORKFLOW_SOURCE_REPO": "true" if workflow_source_repo else "false",
+				"GENERATED_SECURITY_ADVISORY": "true" if "**Generated security advisory metadata**" in issue_body else "false",
+				"ISSUE_BODY_EXPECTED_SHA256": issue_body_expected_sha256,
+				"SCOPE_GUARD_EXPECTED_SHA256": scope_guard_expected_sha256,
 			}
 		)
 		proc = subprocess.run(
@@ -198,6 +209,21 @@ def test_generated_security_advisory_accepts_exact_github_actions_bot_identity()
 		issue_author_login="github-actions[bot]",
 	)
 	assert returncode == 0, output
+
+
+def test_generated_security_advisory_rejects_mutated_body_or_scope_helper() -> None:
+	for digest_overrides in (
+		{"issue_body_expected_sha256": "0" * 64},
+		{"scope_guard_expected_sha256": "0" * 64},
+	):
+		returncode, output = _run_guard(
+			_plan_listing("src/security.py"),
+			FETCHED_HELPERS,
+			issue_body=_generated_advisory_body(),
+			**digest_overrides,
+		)
+		assert returncode != 0
+		assert "changed after collection" in output
 
 
 @pytest.mark.parametrize(
@@ -472,3 +498,7 @@ def test_workflow_materializes_issue_body_for_generated_advisory_guard() -> None
 	assert 'jq -r \'.body // ""\' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}"' in workflow_text
 	assert 'echo "ISSUE_AUTHOR_LOGIN=$(jq -r \'.user.login // ""\' "${ISSUE_META_FILE}")"' in workflow_text
 	assert '--issue-author-login "${ISSUE_AUTHOR_LOGIN}"' in workflow_text
+	assert "id: fetch_issue_metadata" in workflow_text
+	assert 'echo "issue_body_sha256=${issue_body_sha256}"' in workflow_text
+	assert 'echo "scope_guard_sha256=${scope_guard_sha256}"' in workflow_text
+	assert "ISSUE_BODY_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.issue_body_sha256 }}" in workflow_text

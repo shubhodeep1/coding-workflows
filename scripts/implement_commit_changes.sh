@@ -468,10 +468,7 @@ fi
 # either scope bypass. On a violation the commit is neither created nor
 # pushed; the "Destructive-commit guard — label + alert on rejection"
 # step labels the issue ai:scope-blocked and alerts.
-generated_security_advisory=false
-if grep -qF '**Generated security advisory metadata**' "${ISSUE_BODY_FILE:-/dev/null}" 2>/dev/null; then
-  generated_security_advisory=true
-fi
+generated_security_advisory="${GENERATED_SECURITY_ADVISORY:-false}"
 if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${generated_security_advisory}" != "true" ]; then
   echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
 else
@@ -482,9 +479,20 @@ else
     printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
     scope_violations=""
     scope_rc=0
-    if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+    scope_guard_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"
+    if [ "${generated_security_advisory}" = "true" ]; then
+      issue_body_actual_sha256="$(sha256sum "${ISSUE_BODY_FILE:-}" 2>/dev/null | awk '{print $1}')"
+      scope_guard_actual_sha256="$(sha256sum "${scope_guard_path}" 2>/dev/null | awk '{print $1}')"
+      if ! [[ "${ISSUE_BODY_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+        || ! [[ "${SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+        || [ "${issue_body_actual_sha256}" != "${ISSUE_BODY_EXPECTED_SHA256}" ] \
+        || [ "${scope_guard_actual_sha256}" != "${SCOPE_GUARD_EXPECTED_SHA256}" ]; then
+        scope_rc=30
+      fi
+    fi
+    if [ "${scope_rc}" -eq 0 ] && [ -f "${scope_guard_path}" ]; then
       set +e
-      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+      scope_violations="$(python3 "${scope_guard_path}" \
         --issue-body-file "${ISSUE_BODY_FILE:-}" \
         --staged-file "${scope_staged_file}" \
         --allowlist-out "${scope_allowlist_file}" \
@@ -493,7 +501,7 @@ else
         --generated-advisory-mode auto)"
       scope_rc=$?
       set -e
-    else
+    elif [ "${scope_rc}" -eq 0 ]; then
       if [ "${generated_security_advisory}" = "true" ]; then scope_rc=30; else scope_rc=127; fi
     fi
     rm -f "${scope_staged_file}"

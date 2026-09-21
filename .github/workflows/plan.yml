@@ -448,6 +448,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
+        id: fetch_issue_metadata
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -464,6 +465,21 @@ jobs:
             echo "ISSUE_AUTHOR_ASSOCIATION=$(jq -r '.author_association // ""' "${ISSUE_META_FILE}")"
             echo "ISSUE_AUTHOR_LOGIN=$(jq -r '.user.login // ""' "${ISSUE_META_FILE}")"
           } >> "$GITHUB_ENV"
+          generated_security_advisory=false
+          if grep -qF '**Generated security advisory metadata**' "${ISSUE_BODY_FILE}"; then
+            generated_security_advisory=true
+          fi
+          issue_body_sha256="$(sha256sum "${ISSUE_BODY_FILE}" 2>/dev/null | awk '{print $1}')"
+          scope_guard_sha256="$(sha256sum scripts/files_touched_scope_guard.py 2>/dev/null | awk '{print $1}')"
+          if ! [[ "${issue_body_sha256}" =~ ^[0-9a-f]{64}$ ]] || ! [[ "${scope_guard_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not anchor generated-advisory plan inputs before the planner runs."
+            exit 1
+          fi
+          {
+            echo "generated_security_advisory=${generated_security_advisory}"
+            echo "issue_body_sha256=${issue_body_sha256}"
+            echo "scope_guard_sha256=${scope_guard_sha256}"
+          } >> "$GITHUB_OUTPUT"
           ISSUE_BODY_DELIM="EOF_$(date +%s%N)_$RANDOM"
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
@@ -1556,6 +1572,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           IS_WORKFLOW_SOURCE_REPO: ${{ endsWith(github.repository, '/coding-workflows') }}
+          GENERATED_SECURITY_ADVISORY: ${{ steps.fetch_issue_metadata.outputs.generated_security_advisory }}
+          ISSUE_BODY_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.issue_body_sha256 }}
+          SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.scope_guard_sha256 }}
         run: |
           set -euo pipefail
           # Template-owned paths are fetched from coding-workflows templates
@@ -1630,7 +1649,16 @@ jobs:
             }
             print;
           ' "${CODEX_OUTPUT_FILE}" > "${FILES_SECTION_FILE}"
-          if grep -qF '**Generated security advisory metadata**' "${ISSUE_BODY_FILE:-/dev/null}"; then
+          if [ "${GENERATED_SECURITY_ADVISORY:-false}" = "true" ]; then
+            issue_body_actual_sha256="$(sha256sum "${ISSUE_BODY_FILE:-}" 2>/dev/null | awk '{print $1}')"
+            scope_guard_actual_sha256="$(sha256sum scripts/files_touched_scope_guard.py 2>/dev/null | awk '{print $1}')"
+            if ! [[ "${ISSUE_BODY_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+              || ! [[ "${SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+              || [ "${issue_body_actual_sha256}" != "${ISSUE_BODY_EXPECTED_SHA256}" ] \
+              || [ "${scope_guard_actual_sha256}" != "${SCOPE_GUARD_EXPECTED_SHA256}" ]; then
+              echo "::error::Generated-advisory issue body or scope validator changed after collection."
+              exit 1
+            fi
             PYTHONDONTWRITEBYTECODE=1 python3 scripts/files_touched_scope_guard.py \
               --issue-body-file "${ISSUE_BODY_FILE}" \
               --plan-file "${CODEX_OUTPUT_FILE}" \
