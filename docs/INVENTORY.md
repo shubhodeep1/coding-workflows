@@ -35,12 +35,14 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-workflow-analysis.txt` — You are a workflow optimization analyst for an AI-powered GitHub Actions pipeline.
 - `prompts/mode-workflow-api-redundancy.txt` — You are a conservative GitHub API call consolidation auditor for an AI-powered GitHub Actions pipeline.
 - `prompts/mode-workflow-audit.txt` — You are a workflow and script auditor for an AI-powered GitHub Actions pipeline.
+- `prompts/mode-workflow-failure-heal.txt` — Role: workflow failure healer. Goal: diagnose an escalated pipeline failure or a failed release run, classify who owns the fix, and write a GitHub issue body the pipeline can act on.
 - `prompts/review-consolidator.txt` — You are the review consolidator for the AI review pipeline.
 - `prompts/review-reviewer-checklist.txt` — Reviewer checklist defining the eight review lenses and issue formats.
 
 ## Workflows
 
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
+- `.github/workflows/auto-release-stable.yml` — GitHub Actions workflow: Auto release stable.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
@@ -62,6 +64,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/internal-plan.yml` — GitHub Actions workflow: Internal: AI Plan.
 - `.github/workflows/internal-review.yml` — GitHub Actions workflow: Internal: AI Review & Autofix.
 - `.github/workflows/internal-validate.yml` — GitHub Actions workflow: Internal: AI Validate.
+- `.github/workflows/internal-workflow-failure-heal.yml` — GitHub Actions workflow: Internal: AI Workflow Failure Heal.
 - `.github/workflows/issue_pr_status.yml` — GitHub Actions workflow: AI Issue PR Status Sync.
 - `.github/workflows/lint-plan-archival.yml` — GitHub Actions workflow: Lint plan-archival completeness.
 - `.github/workflows/lint-pr-body-auto-close.yml` — GitHub Actions workflow: Lint PR body for auto-close keywords against orchestrator-tracking issues.
@@ -84,7 +87,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/validate.yml` — GitHub Actions workflow: AI Validate (Reusable).
 - `.github/workflows/validation-improvements-intake.yml` — GitHub Actions workflow: Validation Improvements Intake.
 - `.github/workflows/validation-refresh.yml` — GitHub Actions workflow: Validation Refresh.
+- `.github/workflows/workflow-failure-heal-intake.yml` — GitHub Actions workflow: Workflow Failure Heal Intake.
 - `.github/workflows/workflow-log-analysis.yml` — GitHub Actions workflow: Workflow Log Analysis.
+- `.github/workflows/workflow_failure_heal.yml` — GitHub Actions workflow: AI Workflow Failure Heal (Reusable).
 - `.github/workflows/workspace-cache-maintenance.yml` — GitHub Actions workflow: Workspace Cache Maintenance.
 
 ## Scripts
@@ -95,10 +100,12 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.
 - `scripts/analyze_soft_errors.py` — Soft-error log analyzer for the release-gate smoke test.
 - `scripts/analyze_workflow_logs.py` — Prepare aggregated workflow telemetry context for the Codex analysis pass.
+- `scripts/apply_analysis_on_main.sh` — Dispatch one pending workflow-analysis document to the orchestrator.
 - `scripts/apply_audit_gate_assets.py` — Apply canonical audit-gate assets atomically to a repository.
 - `scripts/assemble_changelog.py` — Fold per-PR changelog.d fragments into CHANGELOG.md (Keep a Changelog or date-heading layout) and manage the .gitattributes union backstop.
 - `scripts/assemble_prompt.sh` — Shell wrapper over render_prompt.py --assemble-only for shared-prelude prompt assembly.
 - `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
+- `scripts/auto_release_stable.sh` — Dispatch the release gate when the stable branch is ahead of its tag.
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
 - `scripts/build_state_snapshot.py` — Python helper for build state snapshot.
@@ -177,6 +184,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/orchestrate_state_v2.py` — V2 chunked state persistence helper for orchestrator state comments.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
+- `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
 - `scripts/render_prompt.py` — Render prompt templates with optional mode contracts.
 - `scripts/render_prompt.sh` — Shell helper for render prompt.
 - `scripts/render_scenario_trace.py` — Render replayable workflow scenario traces from workflow-log collector excerpts.
@@ -237,6 +245,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/validation_template_bootstrap.py` — Shared onboarding helper for validation template manifests.
 - `scripts/verify_integration_fingerprints.py` — Verify that an orchestrator integration-sync resolver run preserved merged sub-issue intent.
 - `scripts/watchdog_helpers.sh` — Shell helper for shared Codex watchdog utilities.
+- `scripts/workflow_failure_heal.py` — Shared logic for the workflow failure heal pipeline: payload build/validation, fingerprinting, dedup/lineage/budget decisions, and heal issue composition.
+- `scripts/workflow_failure_heal_intake.sh` — Diagnose an escalated workflow failure report in coding-workflows, enforce heal dedup/lineage/budget rules, and open the heal issue.
+- `scripts/workflow_failure_heal_report.sh` — Report a human-needed escalation from a consumer (or this repo) to coding-workflows with linked failed runs and the wrapper release pin.
 - `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
 - `scripts/workflow_retro_fanout.sh` — Post weekly workflow retros to consumer repositories from the centralized fan-out job.
 - `scripts/workflow_wrapper_refs.py` — Render consumer workflow wrappers with immutable reusable-workflow references.

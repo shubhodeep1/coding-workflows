@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Contract: extract_repo_slug() in .claude/hooks/session-start.sh produces the
-right <owner>/<repo> for every URL shape the hook is expected to handle.
+"""Contracts for the GitHub token probes and repository-slug extraction in
+.claude/hooks/session-start.sh.
 
 The slug is the only thing deciding whether the SessionStart hook reports
 actions:read availability accurately. A silent regression in this URL parser
@@ -12,12 +12,18 @@ Both the in-repo hook and the workflow-templates copy are exercised — they
 must stay byte-identical because the consumer-sync step in
 `.github/workflows/update_workflows.yml` mirrors the template into every
 consumer repo.
+
+The verify_token cases pin the bounded REST identity probe and its no-timeout
+fallback, confirmed proxy substitution, absence of an always-on proxy
+credential, and inconclusive outcomes so none can be misreported as direct
+session-token authentication.
 """
 
 from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -111,6 +117,76 @@ def extract(hook_path: Path, url: str) -> str:
     return result.stdout.strip()
 
 
+def run_verify_token_probe(
+    hook_path: Path,
+    *,
+    gh_exit: int = 0,
+    gh_login: str = "proxy-user",
+    anon_status: str | None = "200",
+    curl_exit: int = 0,
+    timeout_available: bool = True,
+    github_token_only: bool = False,
+) -> str:
+    """Run verify_token() with isolated gh/curl/timeout/git shims."""
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        shim_directory = Path(temporary_directory)
+        shim_bodies = {
+            "gh": """#!/bin/bash
+if [ "${SESSION_START_TEST_EXPECT_TIMEOUT_WRAPPER:-1}" = "1" ] && [ "${SESSION_START_TEST_TIMEOUT_WRAPPED:-}" != "1" ]; then
+  exit 97
+fi
+if [ "${1:-}" = "api" ] && [ "${2:-}" = "user" ]; then
+  [ "${SESSION_START_TEST_GH_EXIT:-0}" -eq 0 ] || exit "${SESSION_START_TEST_GH_EXIT}"
+  printf '%s\\n' "${SESSION_START_TEST_GH_LOGIN:-}"
+  exit 0
+fi
+exit 1
+""",
+            "git": """#!/bin/bash
+exit 1
+""",
+        }
+        if timeout_available:
+            shim_bodies["timeout"] = """#!/bin/bash
+[ "${1:-}" = "15" ] || exit 96
+shift
+SESSION_START_TEST_TIMEOUT_WRAPPED=1 exec "$@"
+"""
+        if anon_status is not None:
+            shim_bodies["curl"] = """#!/bin/bash
+printf '%s' "${SESSION_START_TEST_ANON_STATUS:-000}"
+[ "${SESSION_START_TEST_CURL_EXIT:-0}" -eq 0 ] || exit "${SESSION_START_TEST_CURL_EXIT}"
+"""
+
+        for shim_name, shim_body in shim_bodies.items():
+            shim_path = shim_directory / shim_name
+            shim_path.write_text(shim_body)
+            shim_path.chmod(0o755)
+
+        probe_environment = {
+            "PATH": str(shim_directory),
+            "GH_TOKEN": "" if github_token_only else "test-token",
+            "GITHUB_TOKEN": "test-token" if github_token_only else "",
+            "SESSION_START_TEST_GH_EXIT": str(gh_exit),
+            "SESSION_START_TEST_GH_LOGIN": gh_login,
+            "SESSION_START_TEST_ANON_STATUS": anon_status or "",
+            "SESSION_START_TEST_CURL_EXIT": str(curl_exit),
+            "SESSION_START_TEST_EXPECT_TIMEOUT_WRAPPER": "1" if timeout_available else "0",
+        }
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                "-c",
+                f'source "{hook_path}"; verify_token',
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=probe_environment,
+        )
+        return result.stdout
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -141,6 +217,69 @@ def main() -> int:
                     f"returned {got!r}, expected {expected!r}"
                 )
 
+    probe_cases = [
+        (
+            "identity-failure",
+            {"gh_exit": 1},
+            ("REST identity probe 'gh api user' failed", "does not prove the configured token is invalid"),
+            ("via GH_TOKEN",),
+        ),
+        (
+            "proxy-substitution",
+            {"anon_status": "200", "github_token_only": True},
+            (
+                "the agent proxy authenticates api.github.com calls itself",
+                "does NOT forward the configured session credential (GH_TOKEN or GITHUB_TOKEN)",
+            ),
+            ("probe was inconclusive", "via GH_TOKEN"),
+        ),
+        (
+            "anonymous-401",
+            {"anon_status": "401"},
+            (
+                "no always-on proxy credential was detected",
+                "does not prove the configured session credential (GH_TOKEN or GITHUB_TOKEN) was forwarded",
+            ),
+            ("via GH_TOKEN",),
+        ),
+        (
+            "timeout-unavailable",
+            {"timeout_available": False},
+            ("the agent proxy authenticates api.github.com calls itself",),
+            ("REST identity probe 'gh api user' failed",),
+        ),
+        (
+            "probe-timeout",
+            {"anon_status": "000", "curl_exit": 28},
+            (
+                "proxy-substitution probe was inconclusive (result: 000)",
+                "configured session credential (GH_TOKEN or GITHUB_TOKEN)",
+            ),
+            ("via GH_TOKEN",),
+        ),
+        (
+            "curl-unavailable",
+            {"anon_status": None},
+            (
+                "proxy-substitution probe was inconclusive (result: unavailable)",
+                "configured session credential (GH_TOKEN or GITHUB_TOKEN)",
+            ),
+            ("via GH_TOKEN",),
+        ),
+    ]
+    for probe_case_name, probe_arguments, required_fragments, forbidden_fragments in probe_cases:
+        probe_output = run_verify_token_probe(HOOK, **probe_arguments)
+        for required_fragment in required_fragments:
+            if required_fragment not in probe_output:
+                failures.append(
+                    f"verify_token {probe_case_name}: missing expected output {required_fragment!r}"
+                )
+        for forbidden_fragment in forbidden_fragments:
+            if forbidden_fragment in probe_output:
+                failures.append(
+                    f"verify_token {probe_case_name}: unexpected output {forbidden_fragment!r}"
+                )
+
     if failures:
         for line in failures:
             print(f"FAIL: {line}", file=sys.stderr)
@@ -149,6 +288,7 @@ def main() -> int:
     print(
         f"PASS: extract_repo_slug across {len(CASES)} URL shapes in "
         f"{HOOK.relative_to(REPO_ROOT)} and {TEMPLATE_HOOK.relative_to(REPO_ROOT)}; "
+        f"verify_token across {len(probe_cases)} auth outcomes; "
         f"hook and settings.json parity checks passed"
     )
     return 0

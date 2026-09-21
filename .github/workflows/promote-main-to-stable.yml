@@ -21,9 +21,37 @@ name: Promote main to stable
 # this. If `--ff-only` would refuse, this workflow refuses too — fix
 # the divergence first instead of force-pushing stable.
 
+#
+# Daily cycle (schedule): the `cycle` job runs scripts/promote_main_cycle.sh,
+# which promotes `main` only after it has been proven end to end:
+#
+#   1. detect a code change on `main` since the `stable` tag (non-code paths
+#      such as analysis/, docs/ and most *.md do not count), hold while a
+#      cycle is in flight or already ran for this tip;
+#   2. run test-and-mark-stable.yml in gate_only mode on `main` (the smoke
+#      gate) and wait for it;
+#   3. dispatch the PROVING apply-analysis run (one analysis doc) with the
+#      ai:comprehensive-test-pending label.
+#
+# The orchestrator poller carries the cycle from there: when the proving run
+# merges it dispatches the VERIFYING run on the next doc, and when that run
+# is ready to merge it dispatches THIS workflow with `target_sha` (the
+# proving merge) and holds the verifying merge until the release finishes.
+#
 "on":
+  schedule:
+    - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
+      target_sha:
+        description: >
+          Optional commit on `main` to fast-forward `stable` to instead of
+          main's tip. Used by the orchestrator poller to promote exactly the
+          commit the verifying apply-analysis run was tested on. Must be
+          reachable from main and a descendant of stable.
+        required: false
+        type: string
+        default: ""
       version_tag:
         description: >
           Semantic version tag (e.g. v1.5.0). Leave blank to
@@ -84,14 +112,46 @@ permissions:
   contents: write
   actions: write
 
-concurrency:
-  group: promote-main-to-stable
-  cancel-in-progress: false
-
 jobs:
+  cycle:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    # The smoke gate alone can take ~2-3h. The default 30m idle wait plus 5h
+    # smoke wait leaves 10m for setup and cleanup under this job cap.
+    timeout-minutes: 340
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Run the promote cycle
+        id: cycle
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PROMOTE_CYCLE_ENABLED: ${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}
+          PROMOTE_CYCLE_MIN_DOCS: ${{ vars.PROMOTE_CYCLE_MIN_DOCS || '2' }}
+          PROMOTE_CYCLE_GATE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}
+          PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}
+          PROMOTE_CYCLE_GATE_POLL_SECS: ${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}
+          APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
+          COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
+        run: |
+          set -euo pipefail
+          bash scripts/promote_main_cycle.sh
+
   promote:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: promote-main-to-stable
+      cancel-in-progress: false
     steps:
       - name: Checkout stable (full history)
         uses: actions/checkout@v5
@@ -140,6 +200,8 @@ jobs:
 
       - name: Fast-forward stable to main
         id: ff
+        env:
+          TARGET_SHA_INPUT: ${{ inputs.target_sha }}
         run: |
           set -euo pipefail
           # Pre-check: `stable` MUST exist on origin as a branch. A naked
@@ -169,6 +231,29 @@ jobs:
 
           BEFORE=$(git rev-parse HEAD)
           TARGET=$(git rev-parse origin/main)
+          if [ -n "${TARGET_SHA_INPUT}" ]; then
+            # Pinned promotion (poller-driven): promote exactly the commit the
+            # verifying apply-analysis run was tested on, not whatever main
+            # has become since. It must be on main and ahead of stable.
+            if ! [[ "${TARGET_SHA_INPUT}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::target_sha must be a 40-hex commit SHA (got '${TARGET_SHA_INPUT}')."
+              exit 1
+            fi
+            if ! git cat-file -e "${TARGET_SHA_INPUT}^{commit}" 2>/dev/null; then
+              echo "::error::target_sha ${TARGET_SHA_INPUT} is not a commit in this repository."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "${TARGET_SHA_INPUT}" origin/main; then
+              echo "::error::target_sha ${TARGET_SHA_INPUT} is not reachable from main — refusing to promote a commit main does not contain."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor HEAD "${TARGET_SHA_INPUT}"; then
+              echo "::error::stable (${BEFORE}) is not an ancestor of target_sha ${TARGET_SHA_INPUT} — refusing to move stable backwards or sideways."
+              exit 1
+            fi
+            TARGET="${TARGET_SHA_INPUT}"
+            echo "Pinned promotion target: ${TARGET} (main tip is $(git rev-parse origin/main))"
+          fi
           if [ "${BEFORE}" = "${TARGET}" ]; then
             echo "stable already at main's HEAD (${TARGET}) — no-op"
             echo "moved=false" >> "$GITHUB_OUTPUT"
@@ -176,7 +261,7 @@ jobs:
             exit 0
           fi
 
-          git merge --ff-only origin/main
+          git merge --ff-only "${TARGET}"
           # Push HEAD explicitly to refs/heads/stable. Without the
           # explicit refspec, `git push origin stable` from a detached
           # HEAD resolves to the local `stable` tag (if present) and

@@ -357,7 +357,7 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 def test_judge_context_issue_numbers_are_normalized_without_globbing():
 	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	block_start_marker = '  MERGED_PR_SUMMARIES=""\n  OPEN_PR_SUMMARIES=""\n'
-	block_end_marker = '  unset _sorted_issue_nums _issue_status\n'
+	block_end_marker = '  unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left\n'
 	block_start_index = poller_source_text.index(block_start_marker)
 	block_end_index = poller_source_text.index(block_end_marker, block_start_index)
 	production_block = poller_source_text[
@@ -370,12 +370,21 @@ def test_judge_context_issue_numbers_are_normalized_without_globbing():
 		# unquoted shell expansion in the production block.
 		(worktree / "3").touch()
 		(worktree / "17").touch()
+		# The block reads each issue's wave status from STATE_FILE before the
+		# PR lookup (merged PRs are collected first, then open ones); an empty
+		# wave keeps every issue on the open pass, in sorted order.
+		state_file = worktree / "state.json"
+		state_file.write_text(json.dumps({"waves": [{"issues": []}]}), encoding="utf-8")
 		runner = worktree / "run-normalization.sh"
 		runner.write_text(
 			"#!/usr/bin/env bash\n"
 			"set -euo pipefail\n"
 			"LOOKUP_LOG=\"${1}\"\n"
 			"ISSUE_NUMS=\"${2-}\"\n"
+			f"STATE_FILE={str(state_file)!r}\n"
+			"WAVE_IDX=0\n"
+			"JUDGE_PR_DIFF_MAX_BYTES=65536\n"
+			"JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=524288\n"
 			"_issue_cross_ref_pr_number_last()\n"
 			"{\n"
 			"  printf '%s\\n' \"${1}\" >> \"${LOOKUP_LOG}\"\n"
@@ -686,8 +695,10 @@ def _run_poller(
 	issue_comments: dict[int, list[str | dict]] | None = None,
 	issue_bodies: dict[int, str] | None = None,
 	issue_events: dict[int, list[dict]] | None = None,
+	issue_events_after_first_get: dict[int, list[dict]] | None = None,
 	gql_mode: str = "full",
 	gql_labels: dict[int, list[str]] | None = None,
+	gql_comments_unavailable_for: list[int] | None = None,
 	codex_json: dict | None = None,
 	fail_validation_dispatch: bool = False,
 	fail_release_dispatch: bool = False,
@@ -710,8 +721,11 @@ def _run_poller(
 	label_create_responses: dict[str, dict] | None = None,
 	mock_stall_judge_json: dict | None = None,
 	fail_issue_comment_get_after: dict[int, int] | None = None,
+	fail_issue_comment_post_for: list[int] | None = None,
+	fail_issue_comment_post_after_write_for: list[int] | None = None,
 	fail_issue_get_for: list[int] | None = None,
 	fail_issue_edit_for: list[int] | None = None,
+	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
 	fail_issue_close_for: list[int] | None = None,
 	fail_branch_ref_after: dict[str, int] | None = None,
 	fail_branch_ref_not_found_after: dict[str, int] | None = None,
@@ -744,6 +758,7 @@ def _run_poller(
 	enable_clean_wave_judge_skip: str = "true",
 	judge_repeat_fingerprint_max: str = "2",
 	mock_gh_issue_list_label_filter: bool = False,
+	fail_needs_human_issue_list: bool = False,
 	compare_ahead_by: int = 0,
 	compare_ahead_by_sequence: list[int] | None = None,
 	compare_ahead_by_force_error: bool = False,
@@ -768,6 +783,7 @@ def _run_poller(
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
 	env_overrides: dict[str, str] | None = None,
+	mock_store_extra: dict | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -777,7 +793,9 @@ def _run_poller(
 	issue_comments = issue_comments or {}
 	issue_bodies = issue_bodies or {}
 	issue_events = issue_events or {}
+	issue_events_after_first_get = issue_events_after_first_get or {}
 	gql_labels = gql_labels or {}
+	gql_comments_unavailable_for = gql_comments_unavailable_for or []
 	prs = prs or []
 	pr_commits = pr_commits or {}
 	pr_api_sequence = pr_api_sequence or {}
@@ -795,8 +813,11 @@ def _run_poller(
 	label_create_responses = label_create_responses or {}
 	mock_stall_judge_json = mock_stall_judge_json or {}
 	fail_issue_comment_get_after = fail_issue_comment_get_after or {}
+	fail_issue_comment_post_for = fail_issue_comment_post_for or []
+	fail_issue_comment_post_after_write_for = fail_issue_comment_post_after_write_for or []
 	fail_issue_get_for = fail_issue_get_for or []
 	fail_issue_edit_for = fail_issue_edit_for or []
+	fail_issue_edit_on_calls = fail_issue_edit_on_calls or {}
 	fail_issue_close_for = fail_issue_close_for or []
 	fail_branch_ref_after = fail_branch_ref_after or {}
 	fail_branch_ref_not_found_after = fail_branch_ref_not_found_after or {}
@@ -1100,6 +1121,7 @@ def _run_poller(
 		store = {
 			"issues": issues,
 			"issue_events": {str(k): list(v) for k, v in issue_events.items()},
+			"issue_events_after_first_get": {str(k): list(v) for k, v in issue_events_after_first_get.items()},
 			"next_comment_id": next_comment_id,
 			"api_calls": [],
 			"label_create_calls": [],
@@ -1112,6 +1134,7 @@ def _run_poller(
 			"closed_issues": [],
 			"graphql_mode": gql_mode,
 			"graphql_labels": {str(k): list(v) for k, v in gql_labels.items()},
+			"graphql_comments_unavailable_for": [int(x) for x in gql_comments_unavailable_for],
 			"graphql_calls": 0,
 			"candidate_details_graphql_calls": 0,
 			"label_batch_graphql_calls": 0,
@@ -1141,8 +1164,11 @@ def _run_poller(
 			"merge_tree_conflict_paths": list(merge_tree_conflict_paths),
 			"timeline_fail_for_issues": [int(x) for x in timeline_fail_for_issues],
 			"fail_issue_comment_get_after": {str(k): int(v) for k, v in fail_issue_comment_get_after.items()},
+			"fail_issue_comment_post_for": [int(x) for x in fail_issue_comment_post_for],
+			"fail_issue_comment_post_after_write_for": [int(x) for x in fail_issue_comment_post_after_write_for],
 			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
 			"fail_issue_edit_for": [int(x) for x in fail_issue_edit_for],
+			"fail_issue_edit_on_calls": {str(k): [int(call) for call in calls] for k, calls in fail_issue_edit_on_calls.items()},
 			"fail_issue_close_for": [int(x) for x in fail_issue_close_for],
 			"fail_branch_ref_after": {str(k): int(v) for k, v in fail_branch_ref_after.items()},
 			"fail_branch_ref_not_found_after": {str(k): int(v) for k, v in fail_branch_ref_not_found_after.items()},
@@ -1171,6 +1197,7 @@ def _run_poller(
 			"actions_runs_status": int(actions_runs_status),
 			"actions_runs_status_sequence": list(actions_runs_status_sequence),
 			"mock_gh_issue_list_label_filter": bool(mock_gh_issue_list_label_filter),
+			"fail_needs_human_issue_list": bool(fail_needs_human_issue_list),
 			"compare_ahead_by": int(compare_ahead_by),
 			"compare_ahead_by_sequence": list(compare_ahead_by_sequence),
 			"compare_ahead_by_force_error": bool(compare_ahead_by_force_error),
@@ -1193,6 +1220,8 @@ def _run_poller(
 			"fail_security_pass_managed_issue_lookup": bool(fail_security_pass_managed_issue_lookup),
 			"security_pass_managed_issue_pages_raw": security_pass_managed_issue_pages_raw,
 		}
+		if mock_store_extra:
+			store.update(mock_store_extra)
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
 		(runtime_dir / "tracking_issues.json").write_text(
@@ -1445,7 +1474,7 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		store['review_dispatches'].append({'workflow': wf, 'pr_number': pr_number, 'ref': ref})
 		save()
 		sys.exit(0)
-	if wf == 'test-and-mark-stable.yml':
+	if wf in ('test-and-mark-stable.yml', 'promote-main-to-stable.yml'):
 		if store.get('fail_release_dispatch'):
 			print('dispatch failed', file=sys.stderr)
 			sys.exit(1)
@@ -1658,7 +1687,10 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'edit':
 	num = args[2]
-	if int(num) in set(store.get('fail_issue_edit_for', [])):
+	issue_edit_call_counts = store.setdefault('issue_edit_call_counts', {})
+	issue_edit_call_count = int(issue_edit_call_counts.get(num, 0)) + 1
+	issue_edit_call_counts[num] = issue_edit_call_count
+	if int(num) in set(store.get('fail_issue_edit_for', [])) or issue_edit_call_count in set(store.get('fail_issue_edit_on_calls', {}).get(num, [])):
 		save()
 		print('forced issue edit failure', file=sys.stderr)
 		sys.exit(1)
@@ -1804,13 +1836,15 @@ if args[0] == 'api':
 				issue_payload['state'] = issue_state
 			if 'labels(first:' in query:
 				issue_payload['labels'] = {'nodes': [{'name': label} for label in labels]}
-			if 'comments(last:' in query:
+			if 'comments(last:' in query and issue_num not in set(store.get('graphql_comments_unavailable_for', [])):
 				comment_nodes = []
-				for comment in issue.get('comments', []):
+				for comment in issue.get('comments', [])[-100:]:
 					comment_nodes.append({
 						'databaseId': int(comment.get('id', 0) or 0),
 						'body': str(comment.get('body', '')),
-						'createdAt': '2026-01-01T00:00:00Z',
+						'createdAt': str(comment.get('created_at', '2026-01-01T00:00:00Z')),
+						'authorAssociation': str(comment.get('author_association', '')),
+						'author': {'login': str((comment.get('user') or {}).get('login', ''))},
 					})
 				issue_payload['comments'] = {'nodes': comment_nodes}
 			if 'timelineItems(' in query:
@@ -1854,9 +1888,10 @@ if args[0] == 'api':
 								'labels': {
 									'nodes': [{'name': label} for label in pr.get('labels', [])],
 								},
-								'mergedAt': pr.get('merged_at', None),
-								'headRefName': pr.get('headRefName', ''),
-								'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
+					'mergedAt': pr.get('merged_at', None),
+					'headRefName': pr.get('headRefName', ''),
+					'baseRefName': pr.get('baseRefName', ''),
+					'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
 								'mergeable': pr.get('mergeable', None),
 								'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
 								'mergeCommit': {
@@ -1967,6 +2002,28 @@ if args[0] == 'api':
 			print(json.dumps(result))
 		sys.exit(0)
 
+	if '/issues?' in path and method == 'GET' and not fields:
+		if store.get('fail_needs_human_issue_list') is True:
+			print('forced needs-human issue-list failure', file=sys.stderr)
+			sys.exit(1)
+		if store.get('mock_gh_issue_list_label_filter') is not True:
+			print('[]')
+			sys.exit(0)
+		ril_label_match = re.search(r'(?:[?&])labels=([^&]+)', path)
+		ril_label = (ril_label_match.group(1) if ril_label_match else '').replace('%3A', ':').replace('%3a', ':')
+		ril_issues = []
+		for ril_num, ril_data in store.get('issues', {}).items():
+			if ril_data.get('closed') or ril_label not in (ril_data.get('labels', []) or []):
+				continue
+			ril_issues.append({
+				'number': int(ril_num),
+				'labels': [{'name': ril_name} for ril_name in (ril_data.get('labels', []) or [])],
+			})
+		store.setdefault('issue_list_calls', []).append({'state': 'open', 'label': ril_label, 'transport': 'rest'})
+		save()
+		print(json.dumps(ril_issues))
+		sys.exit(0)
+
 	m = re.search(r'/issues/(\d+)/comments(?:\?.*)?$', path)
 	if m and method == 'GET' and not fields:
 		num = m.group(1)
@@ -1985,6 +2042,10 @@ if args[0] == 'api':
 
 	m = re.search(r'/issues/(\d+)/comments$', path)
 	if m and (fields or input_file):
+		if int(m.group(1)) in set(store.get('fail_issue_comment_post_for', [])):
+			save()
+			print('forced issue comment post failure', file=sys.stderr)
+			sys.exit(1)
 		issue = get_issue(m.group(1))
 		body = ''
 		for f in fields:
@@ -2009,6 +2070,10 @@ if args[0] == 'api':
 			'user': {'login': 'github-actions[bot]'},
 			'html_url': f'https://github.com/owner/repo/issues/{m.group(1)}#issuecomment-{cid}',
 		})
+		if int(m.group(1)) in set(store.get('fail_issue_comment_post_after_write_for', [])):
+			save()
+			print('forced lost comment response after write', file=sys.stderr)
+			sys.exit(1)
 		save()
 		print(json.dumps({'id': cid}))
 		sys.exit(0)
@@ -2049,10 +2114,13 @@ if args[0] == 'api':
 		calls = store.setdefault('issue_events_get_calls', {})
 		calls[num] = int(calls.get(num, 0)) + 1
 		save()
-		print(json.dumps(store.get('issue_events', {}).get(num, [])))
+		if calls[num] > 1 and num in store.get('issue_events_after_first_get', {}):
+			print(json.dumps(store['issue_events_after_first_get'][num]))
+		else:
+			print(json.dumps(store.get('issue_events', {}).get(num, [])))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\d+)/labels$', path)
+	m = re.search(r'/issues/(\d+)/labels(?:\?.*)?$', path)
 	if m:
 		num = m.group(1)
 		issue = get_issue(num)
@@ -2166,6 +2234,9 @@ if args[0] == 'api':
 		if pr is None:
 			print('{}')
 			sys.exit(0)
+		if any('application/vnd.github.diff' in arg for arg in args) and 'diff' in pr:
+			print(pr.get('diff', ''), end='')
+			sys.exit(0)
 		if method == 'PATCH':
 			payload = {}
 			if input_file:
@@ -2220,6 +2291,7 @@ if args[0] == 'api':
 				'mergeable_state': pr.get('mergeable_state', ''),
 				'merged': pr.get('merged', False),
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
+				'merge_commit_sha': pr.get('merge_commit_sha'),
 				'labels': [{'name': label} for label in pr.get('labels', [])],
 				'title': pr.get('title', ''),
 				'body': pr.get('body', ''),
@@ -2334,6 +2406,35 @@ if args[0] == 'api':
 		print(json.dumps({'ref': ref, 'object': {'sha': sha or 'mocksha'}}))
 		sys.exit(0)
 
+	m_tag_ref = re.search(r'/git/ref/tags/([^/]+)$', path)
+	if m_tag_ref:
+		if store.get('tag_ref_lookup_error'):
+			print('HTTP 503 simulated tag lookup failure', file=sys.stderr)
+			sys.exit(1)
+		tag_entry = (store.get('tag_refs') or {}).get(m_tag_ref.group(1))
+		if not tag_entry:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		payload = {'ref': 'refs/tags/' + m_tag_ref.group(1), 'object': {'type': tag_entry.get('type', 'commit'), 'sha': tag_entry['sha']}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
+	m_tag_obj = re.search(r'/git/tags/([0-9a-f]{40})$', path)
+	if m_tag_obj:
+		commit = (store.get('tag_objects') or {}).get(m_tag_obj.group(1))
+		if not commit:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		payload = {'object': {'type': 'commit', 'sha': commit}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
 	m = re.search(r'/git/ref/heads/(.+)$', path)
 	if m:
 		encoded_branch = m.group(1)
@@ -2403,6 +2504,18 @@ if args[0] == 'api':
 			print(json.dumps(events))
 		sys.exit(0)
 
+	m_commit = re.search(r'/commits/([0-9a-f]{40})$', path)
+	if m_commit:
+		files = [{'filename': f} for f in (store.get('commit_files') or {}).get(m_commit.group(1), [])]
+		payload = {'sha': m_commit.group(1), 'files': files}
+		if jq:
+			import subprocess as _sp
+			p = _sp.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
+		print(json.dumps(payload))
+		sys.exit(0)
+
 	m = re.search(r'/commits/([^/]+)/check-runs(\?.*)?$', path)
 	if m:
 		sha = m.group(1)
@@ -2444,6 +2557,8 @@ if args[0] == 'api':
 		else:
 			ahead_by = int(store.get('compare_ahead_by', 0))
 		compare_payload = {'ahead_by': ahead_by, 'behind_by': 0}
+		_range = path.split('/compare/', 1)[1]
+		compare_payload['status'] = (store.get('compare_status_by_range') or {}).get(_range) or ('identical' if ahead_by == 0 else 'ahead')
 		# Optional commit topology for the backpressure work-commit count:
 		# 'compare_commit_parent_counts' is a list of per-commit parent
 		# counts (1 = squash/regular commit, 2 = merge commit such as the
@@ -2452,7 +2567,10 @@ if args[0] == 'api':
 		# and falls back to raw ahead_by — the pre-existing semantics that
 		# older tests pin.
 		parent_counts = store.get('compare_commit_parent_counts')
-		if parent_counts is not None:
+		if store.get('compare_commits_detail') is not None:
+			compare_payload['commits'] = list(store['compare_commits_detail'])
+			compare_payload['total_commits'] = int(store.get('compare_total_commits', len(compare_payload['commits'])))
+		elif parent_counts is not None:
 			compare_payload['commits'] = [
 				{'sha': 'c%04d' % idx, 'parents': [{'sha': 'p%d' % j} for j in range(int(n))]}
 				for idx, n in enumerate(parent_counts)
@@ -2544,9 +2662,12 @@ if args[0] == 'api':
 		sys.stdout.write(output)
 		sys.exit(0)
 
-	m = re.search(r'/actions/workflows/[^/]+/runs', path)
+	m = re.search(r'/actions/workflows/([^/]+)/runs', path)
 	if m:
 		runs = store.get('validation_workflow_runs', [])
+		by_file = store.get('workflow_runs_by_file') or {}
+		if m.group(1) in by_file:
+			runs = by_file[m.group(1)]
 		result = {'workflow_runs': runs, 'total_count': len(runs)}
 		if jq:
 			import subprocess as _sp
@@ -2675,13 +2796,31 @@ sys.exit(proc.returncode)
 		_write_exec(
 			bin_dir / "jq",
 r'''#!/usr/bin/env bash
-if [ "${MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL:-false}" = "true" ]; then
-	for jq_argument in "$@"; do
-		if [ "${jq_argument}" = "reissues" ]; then
-			exit 1
-		fi
+for jq_argument in "$@"; do
+	if [ "${MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL:-false}" = "true" ] \
+		&& [ "${jq_argument}" = "reissues" ]; then
+		exit 1
+	fi
+	if [ "${MOCK_SECURITY_PASS_RESET_STATE_PERSIST_FAIL:-false}" = "true" ]; then
+		case "${jq_argument}" in
+			*'.status = "security-pass"'*'.security_pass_cycle = 0'*'.security_pass_status = "pending"'*) exit 1 ;;
+		esac
+	fi
+	if [ "${MOCK_SECURITY_PASS_AUTO_RESET_STATE_READ_FAIL:-false}" = "true" ] \
+		&& [ "${jq_argument}" = '.security_pass_failed_engine_sha // ""' ]; then
+		exit 1
+	fi
+	if [ "${MOCK_STAGED_SUPPORT_LABEL_EXTRACTION_FAIL:-false}" = "true" ]; then
+		case "${jq_argument}" in
+			*'.labels // [] | map('*) exit 1 ;;
+		esac
+	fi
+	if [ "${MOCK_STAGED_SUPPORT_LATCH_PREDICATE_JQ_FAIL:-false}" = "true" ]; then
+		case "${jq_argument}" in
+			*'def staged_support_latch:'*) exit 3 ;;
+		esac
+	fi
 	done
-fi
 exec "${REAL_JQ_BIN}" "$@"
 ''',
 		)
@@ -3265,6 +3404,10 @@ sys.exit(proc.returncode)
 		result["stderr"] = proc.stderr
 		judge_prompt_path = runtime_dir / "judge_prompt.txt"
 		result["judge_prompt"] = judge_prompt_path.read_text(encoding="utf-8") if judge_prompt_path.exists() else ""
+		result["rb_judge_prompts"] = {
+			path.stem.removeprefix("rb_judge_prompt_"): path.read_text(encoding="utf-8")
+			for path in runtime_dir.glob("rb_judge_prompt_*.txt")
+		}
 		result["security_audit_capture"] = (
 			json.loads(security_audit_capture.read_text(encoding="utf-8"))
 			if security_audit_capture.exists()
@@ -3626,12 +3769,55 @@ def test_security_pass_merged_fix_falls_back_to_rest_when_graphql_is_unavailable
 		gql_mode="error",
 		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
 		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "ai/issue-900",
+				"willCloseTarget": False,
+			},
+		],
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
 	assert result["latest_state"]["security_pass_cycle"] == 1
 	assert result["latest_state"]["security_pass_status"] == "passed"
 	assert "falling back to a direct issue lookup" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_merged_fix_into_wrong_base_does_not_advance_cycle() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-900",
+				"body": "Fixes #900",
+				"willCloseTarget": True,
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=900 candidate_pr=901 rejected=base_mismatch" in combined, combined
+	assert result["latest_state"]["security_pass_cycle"] == 1
+	assert result["latest_state"]["status"] == "failed"
+	assert "ai:merged" in result["issues"]["900"]["labels"]
 
 
 def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
@@ -4369,6 +4555,935 @@ def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 	assert result["git_fetch_calls"]["refs/heads/main:refs/remotes/origin/main"] >= 1
 
 
+
+def _security_pass_failed_state_for_auto_reset(failed_engine_sha: str | None) -> dict:
+	"""Terminal ai:security-pass-failed state as an older engine left it."""
+	state = _base_state(status="failed")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "failed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "old-head",
+			"security_pass_last_audited_sha": "old-head",
+			"security_pass_reported_findings": [
+				{"cycle": 3, "finding_id": "SEC-OLD", "file": "scripts/example.py", "line": 1},
+			],
+		}
+	)
+	if failed_engine_sha is not None:
+		state["security_pass_failed_engine_sha"] = failed_engine_sha
+	return state
+
+
+def _run_failed_project_tick(state: dict, env_overrides: dict[str, str], tracking_comments: list | None = None) -> dict:
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:security-pass-failed"],
+		tracking_comments=tracking_comments or [],
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		capture_telegram_calls=True,
+		env_overrides=env_overrides,
+	)
+
+
+def test_security_pass_terminal_failure_records_engine_sha() -> None:
+	"""Exhaustion records the engine commit that parked the project.
+
+	The record is what lets a later engine tell "this engine already failed
+	the project" from "an older engine failed it" (binance-blessings#249 was
+	parked twice by engines with a 3-cycle budget and no exhaustion judge).
+	"""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		env_overrides={
+			"SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED": "false",
+			"ORCHESTRATE_ENGINE_SHA": "A" * 40,
+		},
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_failed_engine_sha"] == "a" * 40
+	assert result["latest_state"]["security_pass_auto_reset_engine_shas"] == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"ORCHESTRATOR_ENGINE_SHA sha={'a' * 40} source=env" in combined_log
+	exhaustion_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ❌ Project security pass exhausted")
+	]
+	assert len(exhaustion_comments) == 1
+	assert "SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE" in exhaustion_comments[0]
+
+
+def test_security_pass_failed_project_auto_resets_once_on_newer_engine() -> None:
+	"""A parked project is reset like /re-security-pass when the engine changes.
+
+	Regression for binance-blessings#249: both exhaustions ran on stable pins
+	without the delta re-audit and the exhaustion judge; the fixed engine
+	reached the consumer hours later and the poller logged "Project already
+	failed, skipping." every tick until a human commented /re-security-pass.
+	"""
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(state, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "in_progress"
+	assert latest_state["security_pass_cycle"] == 0
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_head_sha"] != "old-head"
+	assert latest_state["security_pass_reported_findings"] == []
+	assert latest_state["security_pass_auto_reset_engine_shas"] == ["b" * 40]
+	# The failing engine stays on record so a second failure on the new engine
+	# overwrites it and the same_engine guard holds from then on.
+	assert latest_state["security_pass_failed_engine_sha"] == "a" * 40
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_AUTO_RESET tracking_issue=192 engine_sha={'b' * 40} failed_engine_sha={'a' * 40}" in combined_log
+	# Full restart, exactly like the manual reset: no delta from the failed head.
+	capture = result["security_audit_capture"]
+	assert not capture["diff_since"]
+	assert capture["prior_findings"] is None
+	assert "mode=full reason=no_prior_audit" in combined_log
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	tracking_comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert any(body.startswith(f"<!-- security-pass-auto-reset:{'b' * 40} -->") for body in tracking_comment_bodies)
+	assert not any("re-security-pass-dedup:" in body for body in tracking_comment_bodies)
+	assert any(
+		notification["issue"] == "192"
+		and notification["level"] == "WARNING"
+		and "security pass reset automatically" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
+
+
+def test_security_pass_failed_legacy_state_without_engine_record_auto_resets() -> None:
+	"""State written before the engine record existed counts as a different engine."""
+	state = _security_pass_failed_state_for_auto_reset(None)
+	result = _run_failed_project_tick(state, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "in_progress"
+	assert latest_state["security_pass_auto_reset_engine_shas"] == ["b" * 40]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_AUTO_RESET tracking_issue=192 engine_sha={'b' * 40} failed_engine_sha=unknown" in combined_log
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+
+
+def test_security_pass_failed_project_stays_parked_on_same_engine() -> None:
+	"""The engine that parked the project never re-runs the pass on its own."""
+	state = _security_pass_failed_state_for_auto_reset("b" * 40)
+	result = _run_failed_project_tick(state, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_auto_reset_engine_shas"] == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=192 reason=same_engine engine_sha={'b' * 40}" in combined_log
+	assert "SECURITY_PASS_AUTO_RESET tracking_issue=192" not in combined_log
+	assert "Project already failed, skipping." in combined_log
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert not any("security-pass-auto-reset:" in comment["body"] for comment in result["issues"]["192"]["comments"])
+	assert result["security_audit_capture"] is None
+
+
+def test_security_pass_failed_project_auto_reset_fires_once_per_engine() -> None:
+	"""An engine that already reset the project once does not reset it again."""
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	state["security_pass_auto_reset_engine_shas"] = ["b" * 40]
+	result = _run_failed_project_tick(state, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_auto_reset_engine_shas"] == ["b" * 40]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=192 reason=already_reset_on_engine engine_sha={'b' * 40}" in combined_log
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result["security_audit_capture"] is None
+
+
+def test_security_pass_failed_project_auto_reset_kill_switch_and_unresolved_engine() -> None:
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+
+	disabled = _run_failed_project_tick(
+		state,
+		{"ORCHESTRATE_ENGINE_SHA": "b" * 40, "SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE": "false"},
+	)
+	assert disabled["latest_state"]["status"] == "failed"
+	assert disabled["tracking_labels"] == ["ai:security-pass-failed"]
+	assert "SECURITY_PASS_AUTO_RESET" not in disabled["stdout"] + disabled["stderr"]
+	assert disabled["security_audit_capture"] is None
+
+	# No ORCHESTRATE_ENGINE_SHA and no .codex-workflow-src checkout in the
+	# sandbox: the engine is unknown, so the legacy dead end stays in force
+	# rather than guessing from the consumer's own HEAD.
+	unresolved = _run_failed_project_tick(state, {})
+	assert unresolved["latest_state"]["status"] == "failed"
+	assert unresolved["tracking_labels"] == ["ai:security-pass-failed"]
+	combined_log = unresolved["stdout"] + unresolved["stderr"]
+	assert "ORCHESTRATOR_ENGINE_SHA sha=unknown source=unresolved" in combined_log
+	assert "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=192 reason=engine_unresolved" in combined_log
+	assert unresolved["security_audit_capture"] is None
+
+
+def test_manual_re_security_pass_takes_precedence_over_engine_auto_reset() -> None:
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(
+		state,
+		{"ORCHESTRATE_ENGINE_SHA": "b" * 40},
+		tracking_comments=["/re-security-pass retry after manual remediation"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "in_progress"
+	assert latest_state["security_pass_auto_reset_engine_shas"] == []
+	tracking_comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert any("re-security-pass-dedup:" in body for body in tracking_comment_bodies)
+	assert not any("security-pass-auto-reset:" in body for body in tracking_comment_bodies)
+	assert "SECURITY_PASS_AUTO_RESET tracking_issue=192" not in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_reset_persistence_failure_keeps_project_parked() -> None:
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	reset_failure_env = {
+		"ORCHESTRATE_ENGINE_SHA": "b" * 40,
+		"MOCK_SECURITY_PASS_RESET_STATE_PERSIST_FAIL": "true",
+	}
+
+	auto_reset_failure = _run_failed_project_tick(state, reset_failure_env)
+	assert auto_reset_failure["latest_state"]["status"] == "failed"
+	assert auto_reset_failure["tracking_labels"] == ["ai:security-pass-failed"]
+	assert auto_reset_failure["security_audit_capture"] is None
+	assert "Could not persist the engine-aware security-pass reset" in auto_reset_failure["stdout"] + auto_reset_failure["stderr"]
+	assert not any("security-pass-auto-reset:" in comment["body"] for comment in auto_reset_failure["issues"]["192"]["comments"])
+
+	manual_reset_failure = _run_failed_project_tick(
+		state,
+		reset_failure_env,
+		tracking_comments=["/re-security-pass retry after manual remediation"],
+	)
+	assert manual_reset_failure["latest_state"]["status"] == "failed"
+	assert manual_reset_failure["tracking_labels"] == ["ai:security-pass-failed"]
+	assert manual_reset_failure["security_audit_capture"] is None
+	assert "Could not persist /re-security-pass reset state" in manual_reset_failure["stdout"] + manual_reset_failure["stderr"]
+	assert not any("re-security-pass-dedup:" in comment["body"] for comment in manual_reset_failure["issues"]["192"]["comments"])
+
+
+def test_security_pass_auto_reset_unreadable_state_keeps_project_parked() -> None:
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(
+		state,
+		{
+			"ORCHESTRATE_ENGINE_SHA": "b" * 40,
+			"MOCK_SECURITY_PASS_AUTO_RESET_STATE_READ_FAIL": "true",
+		},
+	)
+
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result["security_audit_capture"] is None
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_AUTO_RESET_SKIPPED tracking_issue=192 reason=state_unreadable" in combined_log
+	assert "SECURITY_PASS_AUTO_RESET tracking_issue=192" not in combined_log
+
+
+def _staged_support_latch_comment(author_association: str = "OWNER", user_login: str = "workflow-owner") -> dict:
+	return {
+		"author_association": author_association,
+		"user": {"login": user_login},
+		"body": (
+			"🚨 **Staged-support restore failed; implementation halted.**\n\n"
+			"- Workflow run: https://github.com/owner/repo/actions/runs/35072286584\n\n"
+			"The commit was **not** created and **not** pushed. This issue is confirmed labeled `ai:needs-human`; "
+			"autonomous recovery is paused until a human removes the label. The listed support-ref copies could not "
+			"be safely reconciled with this branch:\n\n```\nscripts/codex_helpers.sh\n```\n\n"
+			"Apply the editor's intended changes against the branch versions, then remove `ai:needs-human` before redispatching.\n"
+		),
+	}
+
+
+def _staged_support_release_comment(engine_sha: str) -> dict:
+	return {
+		"author_association": "OWNER",
+		"user": {"login": "workflow-owner"},
+		"body": (
+			"/approved\n\n"
+			f"<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict engine={engine_sha} -->\n"
+			"_Orchestrator: released the `ai:needs-human` latch that the staged-support restore failure set._"
+		),
+	}
+
+
+def _run_latch_release_tick(
+	*,
+	issue_labels: list[str],
+	issue_comments: list[str | dict],
+	env_overrides: dict[str, str],
+	issue_events: list[dict] | None = None,
+	issue_events_after_first_get: list[dict] | None = None,
+	gql_comments_unavailable_for: list[int] | None = None,
+	fail_issue_comment_get_after: dict[int, int] | None = None,
+	fail_issue_comment_post_for: list[int] | None = None,
+	fail_issue_comment_post_after_write_for: list[int] | None = None,
+	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
+	fail_needs_human_issue_list: bool = False,
+) -> dict:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	latch_env_overrides = {"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows", **env_overrides}
+	if issue_events is None:
+		issue_events = [
+			{
+				"event": "labeled",
+				"label": {"name": "ai:needs-human"},
+				"actor": {"login": "workflow-owner"},
+				"created_at": "2026-01-01T00:00:01Z",
+			},
+		]
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: list(issue_labels)},
+		issue_comments={700: list(issue_comments)},
+		issue_events={700: list(issue_events)},
+		issue_events_after_first_get={700: list(issue_events_after_first_get)} if issue_events_after_first_get is not None else None,
+		gql_comments_unavailable_for=gql_comments_unavailable_for,
+		mock_gh_issue_list_label_filter=True,
+		fail_issue_comment_get_after=fail_issue_comment_get_after,
+		fail_issue_comment_post_for=fail_issue_comment_post_for,
+		fail_issue_comment_post_after_write_for=fail_issue_comment_post_after_write_for,
+		fail_issue_edit_on_calls=fail_issue_edit_on_calls,
+		fail_needs_human_issue_list=fail_needs_human_issue_list,
+		env_overrides=latch_env_overrides,
+	)
+
+
+def test_staged_support_needs_human_latch_released_once_per_engine() -> None:
+	"""Regression for coding-workflows#4113 (project #3965 fix cycle 7).
+
+	implement.yml's staged-support rejection handler latched ai:needs-human
+	and removed ai:implementing in run 35072286584.  PR #4119 removed the
+	cause, but the latch outlived it: the poller skipped the issue and a human
+	/approved was refused with ``reason=wrong_phase`` (run 35349975875).
+	"""
+	engine_sha = "c" * 40
+	first = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	labels = first["issues"]["700"]["labels"]
+	assert "ai:needs-human" not in labels
+	assert "ai:awaiting-approval" in labels
+	assert "ai:orchestrator-managed" in labels
+	release_comments = [
+		comment["body"]
+		for comment in first["issues"]["700"]["comments"]
+		if comment["body"].startswith("/approved")
+	]
+	assert len(release_comments) == 1
+	assert release_comments[0].startswith("/approved [auto-approved-by-plan]")
+	assert f"<!-- ai:needs-human-auto-release reason=staged_support_rebase_conflict engine={engine_sha} -->" in release_comments[0]
+	combined_log = first["stdout"] + first["stderr"]
+	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" in combined_log
+
+	# The same engine never releases the same issue twice: a release marker
+	# after the latch comment (or for this engine anywhere) parks it for a human.
+	second = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=[_staged_support_latch_comment(), _staged_support_release_comment(engine_sha)],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in second["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" not in second["issues"]["700"]["labels"]
+	assert f"STAGED_SUPPORT_LATCH_SKIP issue=700 reason=already_released engine_sha={engine_sha}" in second["stdout"] + second["stderr"]
+	assert not any(
+		comment["body"].startswith("/approved") and engine_sha in comment["body"] and comment["id"] != second["issues"]["700"]["comments"][1]["id"]
+		for comment in second["issues"]["700"]["comments"]
+	)
+
+	relatched_same_engine = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=[
+			_staged_support_latch_comment(),
+			_staged_support_release_comment(engine_sha),
+			_staged_support_latch_comment(),
+		],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in relatched_same_engine["issues"]["700"]["labels"]
+	assert f"STAGED_SUPPORT_LATCH_SKIP issue=700 reason=already_released engine_sha={engine_sha}" in relatched_same_engine["stdout"] + relatched_same_engine["stderr"]
+
+	# A newer engine gets one release of its own for a latch set after the
+	# previous release.
+	newer_engine_sha = "d" * 40
+	relatched_newer_engine = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=[
+			_staged_support_latch_comment(),
+			_staged_support_release_comment(engine_sha),
+			_staged_support_latch_comment(),
+		],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": newer_engine_sha},
+	)
+	assert "ai:needs-human" not in relatched_newer_engine["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" in relatched_newer_engine["issues"]["700"]["labels"]
+	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={newer_engine_sha}" in relatched_newer_engine["stdout"] + relatched_newer_engine["stderr"]
+
+
+def test_staged_support_latch_sweep_only_mode_releases_without_tracking_work() -> None:
+	engine_sha = "c" * 40
+	result = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={
+			"ORCHESTRATE_ENGINE_SHA": engine_sha,
+			"STAGED_SUPPORT_LATCH_SWEEP_ONLY": "true",
+		},
+	)
+
+	assert "ai:needs-human" not in result["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" in result["issues"]["700"]["labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" in combined_log
+	assert "Standalone issue stall recovery" not in combined_log
+
+
+def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
+	engine_sha = "c" * 40
+
+	# The marker the handler now writes is matched on its own, without the header.
+	marker_only = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[{
+			"body": "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\nhalted",
+			"author_association": "OWNER",
+			"user": {"login": "workflow-owner"},
+		}],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" not in marker_only["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" in marker_only["issues"]["700"]["labels"]
+
+	# Header-only compatibility is limited to the known #4113 incident run.
+	# Other historical staged-support failures did not encode their specific
+	# failure class and therefore remain human-gated.
+	ambiguous_legacy_latch = _staged_support_latch_comment()
+	ambiguous_legacy_latch["body"] = ambiguous_legacy_latch["body"].replace("35072286584", "99999999999")
+	ambiguous_legacy = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[ambiguous_legacy_latch],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in ambiguous_legacy["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=no_staged_support_latch_comment" in (
+		ambiguous_legacy["stdout"] + ambiguous_legacy["stderr"]
+	)
+
+	trusted_marker_spoof = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment("OWNER", "different-maintainer")],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in trusted_marker_spoof["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=current_latch_not_staged_support" in (
+		trusted_marker_spoof["stdout"] + trusted_marker_spoof["stderr"]
+	)
+
+	# Every other ai:needs-human reason stays human-cleared.
+	other_reason = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=["## Post-Codex implementation-failed deferral escalated\n\nEscalating to `ai:needs-human` for manual review."],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in other_reason["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" not in other_reason["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=no_staged_support_latch_comment" in other_reason["stdout"] + other_reason["stderr"]
+	assert not any(comment["body"].startswith("/approved") for comment in other_reason["issues"]["700"]["comments"])
+
+	# A stale staged-support marker cannot authorize release after that label
+	# instance was manually cleared and an unrelated path latched the issue.
+	mixed_history = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:orchestrator-managed"],
+		issue_comments=[
+			_staged_support_latch_comment(),
+			{
+				"body": "## Post-Codex implementation-failed deferral escalated\n\nEscalating to `ai:needs-human` for manual review.",
+				"author_association": "OWNER",
+				"user": {"login": "workflow-owner"},
+			},
+		],
+		issue_events=[
+			{
+				"event": "labeled",
+				"label": {"name": "ai:needs-human"},
+				"actor": {"login": "workflow-owner"},
+				"created_at": "2026-01-01T00:00:01Z",
+			},
+			{
+				"event": "unlabeled",
+				"label": {"name": "ai:needs-human"},
+				"actor": {"login": "workflow-owner"},
+				"created_at": "2026-01-01T00:00:03Z",
+			},
+			{
+				"event": "labeled",
+				"label": {"name": "ai:needs-human"},
+				"actor": {"login": "workflow-owner"},
+				"created_at": "2026-01-01T00:00:04Z",
+			},
+		],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in mixed_history["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" not in mixed_history["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=current_latch_not_staged_support" in (
+		mixed_history["stdout"] + mixed_history["stderr"]
+	)
+	assert not any(comment["body"].startswith("/approved") for comment in mixed_history["issues"]["700"]["comments"])
+
+	# A second human-gated latch on the same issue means a human still owns it.
+	scope_latched = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:scope-blocked"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in scope_latched["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=other_human_gated_latch_present" in scope_latched["stdout"] + scope_latched["stderr"]
+
+	# Public marker text is not authority to remove a human gate. A spoofed
+	# release marker also cannot suppress a release backed by a trusted latch.
+	spoofed_latch = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment("NONE", "attacker")],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in spoofed_latch["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=no_staged_support_latch_comment" in spoofed_latch["stdout"] + spoofed_latch["stderr"]
+
+	spoofed_release = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[
+			_staged_support_latch_comment(),
+			{
+				"body": _staged_support_release_comment(engine_sha)["body"],
+				"author_association": "NONE",
+				"user": {"login": "attacker"},
+			},
+		],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" not in spoofed_release["issues"]["700"]["labels"]
+	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" in spoofed_release["stdout"] + spoofed_release["stderr"]
+
+	# Kill switch and an unresolved engine both leave the latch in place.
+	disabled = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha, "STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED": "false"},
+	)
+	assert "ai:needs-human" in disabled["issues"]["700"]["labels"]
+	assert "Staged-support latch release disabled by STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED=false" in disabled["stdout"] + disabled["stderr"]
+
+	unresolved = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={},
+	)
+	assert "ai:needs-human" in unresolved["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=engine_unresolved" in unresolved["stdout"] + unresolved["stderr"]
+
+
+def test_staged_support_latch_release_is_source_only_and_compensates_comment_failure() -> None:
+	engine_sha = "c" * 40
+	consumer = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={
+			"GITHUB_REPOSITORY": "owner/consumer",
+			"ORCHESTRATE_ENGINE_SHA": engine_sha,
+		},
+	)
+	assert "ai:needs-human" in consumer["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=repository_out_of_scope repository=owner/consumer" in consumer["stdout"] + consumer["stderr"]
+	assert not any(call.get("label") == "ai:needs-human" for call in consumer.get("issue_list_calls", []))
+
+	list_failed = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+		fail_needs_human_issue_list=True,
+	)
+	assert "ai:needs-human" in list_failed["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=issue_list_unavailable" in list_failed["stdout"] + list_failed["stderr"]
+
+	labels_unavailable = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={
+			"ORCHESTRATE_ENGINE_SHA": engine_sha,
+			"MOCK_STAGED_SUPPORT_LABEL_EXTRACTION_FAIL": "true",
+		},
+	)
+	assert "ai:needs-human" in labels_unavailable["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" not in labels_unavailable["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=labels_unavailable" in labels_unavailable["stdout"] + labels_unavailable["stderr"]
+
+	comment_failed = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+		fail_issue_comment_post_for=[700],
+	)
+	labels = comment_failed["issues"]["700"]["labels"]
+	assert "ai:needs-human" in labels
+	assert "ai:awaiting-approval" not in labels
+	combined_log = comment_failed["stdout"] + comment_failed["stderr"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=approval_comment_failed_latch_restored" in combined_log
+	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" not in combined_log
+
+	response_lost = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+		fail_issue_comment_post_after_write_for=[700],
+	)
+	response_lost_labels = response_lost["issues"]["700"]["labels"]
+	assert "ai:needs-human" not in response_lost_labels
+	assert "ai:awaiting-approval" in response_lost_labels
+	response_lost_log = response_lost["stdout"] + response_lost["stderr"]
+	assert "trusted release marker is present; treating the write as successful" in response_lost_log
+	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" in response_lost_log
+
+	double_failure = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+		fail_issue_comment_post_for=[700],
+		fail_issue_edit_on_calls={700: [2]},
+	)
+	double_failure_labels = double_failure["issues"]["700"]["labels"]
+	assert "ai:needs-human" not in double_failure_labels
+	assert "ai:awaiting-approval" in double_failure_labels
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=approval_comment_failed_compensation_failed" in (
+		double_failure["stdout"] + double_failure["stderr"]
+	)
+
+	half_released = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	half_released_log = half_released["stdout"] + half_released["stderr"]
+	assert "STALL_SKIP issue=700 reason=staged_support_latch_release_incomplete phase=ai:awaiting-approval action=none" in half_released_log
+	assert not any(comment["body"].startswith("/approved") for comment in half_released["issues"]["700"]["comments"])
+
+
+def test_staged_support_latch_release_revalidates_current_latch_before_edit() -> None:
+	poller_text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels?per_page=100"' in poller_text
+	assert "--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []'" in poller_text
+
+	engine_sha = "c" * 40
+	initial_event = {
+		"event": "labeled",
+		"label": {"name": "ai:needs-human"},
+		"actor": {"login": "workflow-owner"},
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+	relatched_event = {
+		"event": "labeled",
+		"label": {"name": "ai:needs-human"},
+		"actor": {"login": "different-maintainer"},
+		"created_at": "2026-01-01T00:00:03Z",
+	}
+	result = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		issue_events=[initial_event],
+		issue_events_after_first_get=[initial_event, relatched_event],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+
+	assert "ai:needs-human" in result["issues"]["700"]["labels"]
+	assert "ai:awaiting-approval" not in result["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=latch_changed_during_release" in result["stdout"] + result["stderr"]
+	assert not any(comment["body"].startswith("/approved") for comment in result["issues"]["700"]["comments"])
+
+	# GitHub timestamps have second-level precision. A later label event in
+	# the same second as the latch comment is ambiguous and must fail closed.
+	same_second = _run_latch_release_tick(
+		issue_labels=["ai:needs-human"],
+		issue_comments=[_staged_support_latch_comment()],
+		issue_events=[{
+			"event": "labeled",
+			"label": {"name": "ai:needs-human"},
+			"actor": {"login": "workflow-owner"},
+			"created_at": "2026-01-01T00:00:02Z",
+		}],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in same_second["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=current_latch_not_staged_support" in (
+		same_second["stdout"] + same_second["stderr"]
+	)
+
+	implementing_residue = _run_latch_release_tick(
+		issue_labels=["ai:needs-human", "ai:implementing"],
+		issue_comments=[_staged_support_latch_comment()],
+		env_overrides={"ORCHESTRATE_ENGINE_SHA": engine_sha},
+	)
+	assert "ai:needs-human" in implementing_residue["issues"]["700"]["labels"]
+	assert "ai:implementing" in implementing_residue["issues"]["700"]["labels"]
+	assert "STAGED_SUPPORT_LATCH_SKIP issue=700 reason=latch_changed_during_release" in (
+		implementing_residue["stdout"] + implementing_residue["stderr"]
+	)
+	assert not any(comment["body"].startswith("/approved") for comment in implementing_residue["issues"]["700"]["comments"])
+
+
+def test_managed_auto_approve_skips_unresolved_staged_support_latch() -> None:
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:awaiting-approval"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	latch_comment = _staged_support_latch_comment()
+	latch_comment["body"] = (
+		"<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\n"
+		+ latch_comment["body"]
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [latch_comment]},
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert "STALL_SKIP issue=10 reason=staged_support_latch_release_incomplete phase=ai:awaiting-approval action=none" in combined_log
+	assert not any(comment["body"].startswith("/approved") for comment in result["issues"]["10"]["comments"])
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_staged_support_guards_refetch_when_graphql_comments_are_unavailable() -> None:
+	latch_comment = _staged_support_latch_comment()
+	latch_comment["body"] = (
+		"<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\n"
+		+ latch_comment["body"]
+	)
+
+	managed_state = _base_state(status="in_progress")
+	managed_issue = managed_state["waves"][0]["issues"][0]
+	managed_issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1})
+	managed = _run_poller(
+		state=managed_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [latch_comment]},
+		gql_comments_unavailable_for=[10],
+	)
+	assert "STALL_SKIP issue=10 reason=staged_support_latch_release_incomplete" in managed["stdout"] + managed["stderr"]
+	assert not any(comment["body"].startswith("/approved") for comment in managed["issues"]["10"]["comments"])
+
+	standalone = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval"],
+		issue_comments=[latch_comment],
+		env_overrides={},
+		gql_comments_unavailable_for=[700],
+	)
+	assert "STALL_SKIP issue=700 reason=staged_support_latch_release_incomplete" in standalone["stdout"] + standalone["stderr"]
+	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
+
+
+def test_standalone_staged_support_guard_reuses_conclusive_comment_cache() -> None:
+	result = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval"],
+		issue_comments=["routine comment"],
+		env_overrides={},
+		fail_issue_comment_get_after={700: 0},
+	)
+
+	assert not any("/issues/700/comments?" in path for path in result["api_calls"])
+	assert "reason=staged_support_latch_comments_unavailable" not in result["stdout"] + result["stderr"]
+
+
+def test_staged_support_guards_fetch_full_history_when_cache_is_at_limit() -> None:
+	latch_comment = _staged_support_latch_comment()
+	latch_comment["body"] = (
+		"<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\n"
+		+ latch_comment["body"]
+	)
+	comment_history = [latch_comment, *[f"routine comment {idx}" for idx in range(100)]]
+
+	standalone = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval"],
+		issue_comments=comment_history,
+		env_overrides={},
+	)
+	standalone_log = standalone["stdout"] + standalone["stderr"]
+	assert "STALL_SKIP issue=700 reason=staged_support_latch_release_incomplete" in standalone_log
+	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
+	assert sum("/issues/700/comments?" in path for path in standalone["api_calls"]) == 1
+
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1})
+	managed = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: comment_history},
+	)
+	managed_log = managed["stdout"] + managed["stderr"]
+	assert "STALL_SKIP issue=10 reason=staged_support_latch_release_incomplete" in managed_log
+	assert not any(comment["body"].startswith("/approved") for comment in managed["issues"]["10"]["comments"])
+
+
+def test_staged_support_guards_fail_closed_when_full_history_is_unavailable() -> None:
+	comment_history = [_staged_support_latch_comment(), *[f"routine comment {idx}" for idx in range(100)]]
+	standalone = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval"],
+		issue_comments=comment_history,
+		env_overrides={},
+		fail_issue_comment_get_after={700: 0},
+	)
+	standalone_log = standalone["stdout"] + standalone["stderr"]
+	assert "STALL_SKIP issue=700 reason=staged_support_latch_comments_unavailable" in standalone_log
+	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
+
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1})
+	managed = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: comment_history},
+		fail_issue_comment_get_after={10: 0},
+	)
+	managed_log = managed["stdout"] + managed["stderr"]
+	assert "STALL_SKIP issue=10 reason=staged_support_latch_comments_unavailable" in managed_log
+	assert not any(comment["body"].startswith("/approved") for comment in managed["issues"]["10"]["comments"])
+
+
+def test_standalone_comment_fetch_failure_only_blocks_approval_recovery() -> None:
+	state = _base_state(status="complete")
+	planning = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:planning"]},
+		gql_mode="error",
+		mock_gh_issue_list_label_filter=True,
+		fail_issue_comment_get_after={700: 0},
+	)
+	planning_log = planning["stdout"] + planning["stderr"]
+	assert "continuing without comment context, but approval recovery will fail closed" in planning_log
+	assert "reason=staged_support_latch_comments_unavailable phase=ai:planning" not in planning_log
+	assert any(
+		"AI_STANDALONE_STALL_STATE_V1" in comment["body"]
+		for comment in planning["issues"]["700"]["comments"]
+	)
+
+	awaiting_approval = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:awaiting-approval"]},
+		gql_mode="error",
+		mock_gh_issue_list_label_filter=True,
+		fail_issue_comment_get_after={700: 0},
+	)
+	awaiting_log = awaiting_approval["stdout"] + awaiting_approval["stderr"]
+	assert "STALL_SKIP issue=700 reason=staged_support_latch_comments_unavailable phase=ai:awaiting-approval action=none" in awaiting_log
+	assert not any(comment["body"].startswith("/approved") for comment in awaiting_approval["issues"]["700"]["comments"])
+
+
+def test_staged_support_latch_predicate_error_fails_closed() -> None:
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_staged_support_latch_comment()]},
+		env_overrides={"MOCK_STAGED_SUPPORT_LATCH_PREDICATE_JQ_FAIL": "true"},
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert "STALL_SKIP issue=10 reason=staged_support_latch_comments_unavailable" in combined_log
+	assert not any(comment["body"].startswith("/approved") for comment in result["issues"]["10"]["comments"])
+
+
+def test_staged_support_release_guard_is_comment_order_independent() -> None:
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	latch_comment = _staged_support_latch_comment()
+	latch_comment["body"] = (
+		"<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->\n"
+		+ latch_comment["body"]
+	)
+	latch_comment["created_at"] = "2026-01-01T00:00:02Z"
+	release_comment = _staged_support_release_comment("c" * 40)
+	release_comment["created_at"] = "2026-01-01T00:00:03Z"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		# Deliberately newest-first, matching the former REST fallback shape.
+		issue_comments={501: [release_comment, latch_comment, standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert "reason=staged_support_latch_release_incomplete" not in combined_log
+	approved_comments = [
+		comment["body"] for comment in result["issues"]["501"]["comments"]
+		if comment["body"].startswith("/approved")
+	]
+	assert len(approved_comments) == 2
+
+
 def test_security_pass_cycle_exhaustion_drops_oversized_findings_table_by_bytes() -> None:
 	"""The exhaustion comment budgets the findings table in bytes, not characters.
 
@@ -4830,6 +5945,307 @@ def test_security_pass_exhaustion_judge_keep_fixing_creates_consolidated_fix_iss
 	assert "granted one more consolidated fix cycle for 1 finding(s)" in judge_comments[0]
 	assert "| SEC-TEST-1 | high | scripts/example.py:1 | keep_fixing |" in judge_comments[0]
 	assert "| SEC-TEST-2 | medium | scripts/example.py:1 | accept_with_followup |" in judge_comments[0]
+
+
+def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories() -> None:
+	"""Past MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS (default 2), keep_fixing becomes accept_with_followup.
+
+	Regression for #3965: the judge was consulted twice on a 5-cycle budget
+	and granted "one more" consolidated cycle both times (cycles 6 and 7),
+	and nothing bounded the sequence.  Round 3 now converts every
+	keep_fixing decision to a deferred advisory so the project completes
+	without a human; `fail` verdicts are unaffected.
+	"""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), _security_pass_second_test_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_judge_rounds"] == 3
+	assert latest_state["security_pass_reported_findings"] == []
+	assert latest_state["security_pass_active_fix_issues"] == []
+	waived = {row["finding_id"]: row for row in latest_state["security_pass_waived_findings"]}
+	assert set(waived) == {"SEC-TEST-1", "SEC-TEST-2"}
+	assert waived["SEC-TEST-1"]["justification"].startswith(
+		"[keep_fixing capped after 2 judge round(s); converted to advisory follow-up] SEC-TEST-1: keep_fixing"
+	)
+	assert waived["SEC-TEST-2"]["justification"].startswith("SEC-TEST-2: accept_with_followup")
+	# Both advisories are filed by the final-merge arm of the same tick; no
+	# consolidated fix issue is created.
+	created = result.get("created_issues", [])
+	assert sorted(issue["labels"] for issue in created) == [["ai:security"], ["ai:security"]]
+	assert {issue["title"] for issue in created} == {
+		"[security-pass] Advisory: SEC-TEST-1 (high, scripts/example.py:1)",
+		"[security-pass] Advisory: SEC-TEST-2 (medium, scripts/example.py:1)",
+	}
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert "ai:security-pass-fixing" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
+	assert "accepted=2 keep_fixing=0 failed=0" in combined_log
+	assert "SECURITY_PASS_CLEAN tracking_issue=192" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	# Advisories filed by this tick's final-merge arm are recorded as
+	# merge-checked at creation, so no follow-up is read back.
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in combined_log
+	assert sorted(latest_state["security_pass_followups_merge_checked"]) == sorted(issue["number"] for issue in created)
+	judge_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")
+	]
+	assert len(judge_comments) == 1
+	assert "The judge accepted every remaining finding as a known risk" in judge_comments[0]
+	assert (
+		"1 of them were `keep_fixing` decisions converted to advisories because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent."
+		in judge_comments[0]
+	)
+	assert "| SEC-TEST-1 | high | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
+
+
+def test_security_pass_exhaustion_judge_keep_fixing_allowed_within_cap() -> None:
+	"""Round 2 with the default cap of 2 still grants the consolidated fix cycle."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=1),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"))),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_judge_rounds"] == 2
+	assert len(latest_state["security_pass_active_fix_issues"]) == 1
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in combined_log
+	assert "accepted=0 keep_fixing=1 failed=0" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=192" in combined_log
+
+
+def test_security_pass_exhaustion_judge_keep_fixing_cap_zero_is_unbounded() -> None:
+	"""MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=0 restores the unbounded keep_fixing loop."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=7),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS": "0",
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"))),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_judge_rounds"] == 8
+	assert len(latest_state["security_pass_active_fix_issues"]) == 1
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=192" in combined_log
+
+
+def test_security_pass_final_merge_reanswers_advisory_followups_parked_in_ai_blocked() -> None:
+	"""Advisories filed before the merge and parked in ai:blocked get one /answer at final merge.
+
+	Regression for #4090 / #4091 (project #3965): both were filed at judge
+	time, the planner answered `BLOCKED: PR #3968 is still open`, and
+	standalone stall recovery skips ai:blocked by design, so they waited for
+	a human `/answer`.  The final-merge arm now re-answers each follow-up at
+	most once (`security_pass_followups_merge_checked`), never touches issues
+	that are not blocked or closed, and leaves the follow-up rows' shape alone.
+	"""
+	state = _base_state(status="in_progress")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_followup_issues": [
+				{"finding_id": "SEC-PARKED", "issue": 850},
+				{"finding_id": "SEC-PLANNED", "issue": 851},
+				{"finding_id": "SEC-CLOSED", "issue": 852},
+				{"finding_id": "SEC-CHECKED", "issue": 853},
+			],
+			"security_pass_followups_merge_checked": [853],
+		}
+	)
+	labels = {
+		10: ["ai:merged"],
+		850: ["ai:security", "ai:blocked"],
+		851: ["ai:security", "ai:planning"],
+		852: ["ai:security", "ai:blocked"],
+		853: ["ai:security", "ai:blocked"],
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["final_merge_status"] == "merged"
+	final_pr = latest_state["final_merge_pr"]
+
+	def _answers(issue_number: int) -> list[str]:
+		return [
+			comment["body"]
+			for comment in result["issues"][str(issue_number)]["comments"]
+			if comment["body"].startswith("/answer [auto-answered-by-poller]")
+		]
+
+	parked_answers = _answers(850)
+	assert len(parked_answers) == 1
+	assert f"`orchestrator/project-192` has merged into `main` via PR #{final_pr}" in parked_answers[0]
+	assert "parked this issue in `ai:blocked` no longer holds" in parked_answers[0]
+	assert "<!-- security-pass-advisory-unblock:192:850 -->" in parked_answers[0]
+	assert _answers(851) == []
+	assert _answers(852) == []
+	assert _answers(853) == []
+	# Row shape is untouched; the check is recorded in a separate list.
+	assert latest_state["security_pass_followup_issues"] == [
+		{"finding_id": "SEC-PARKED", "issue": 850},
+		{"finding_id": "SEC-PLANNED", "issue": 851},
+		{"finding_id": "SEC-CLOSED", "issue": 852},
+		{"finding_id": "SEC-CHECKED", "issue": 853},
+	]
+	assert latest_state["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=192 finding=SEC-PARKED issue=850 final_pr={final_pr} outcome=answered" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=192 finding=SEC-PLANNED issue=851 final_pr={final_pr} outcome=not_blocked" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED tracking_issue=192 finding=SEC-CLOSED issue=852 final_pr={final_pr} outcome=closed" in combined_log
+	assert "issue=853" not in combined_log
+	replanned_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## 🔓 Security-pass advisory follow-ups re-planned")
+	]
+	assert len(replanned_comments) == 1
+	assert f"via PR #{final_pr}" in replanned_comments[0]
+	assert "- `SEC-PARKED` → #850" in replanned_comments[0]
+	assert "SEC-PLANNED" not in replanned_comments[0]
+
+	# A later completed tick re-enters the merged arm but every row is
+	# already checked: no second /answer, no second tracking comment.
+	second = _run_poller(
+		state=latest_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert second["latest_state"]["final_merge_status"] == "merged"
+	assert second["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert not any(
+		comment["body"].startswith("/answer [auto-answered-by-poller]")
+		for comment in second["issues"]["850"]["comments"]
+	)
+	assert not any(
+		comment["body"].startswith("## 🔓 Security-pass advisory follow-ups re-planned")
+		for comment in second["issues"]["192"]["comments"]
+	)
+	second_log = second["stdout"] + second["stderr"]
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in second_log
+
+	# A public commenter can copy both the command prefix and predictable
+	# marker, but an untrusted author association must not suppress the real
+	# poller answer or mark the follow-up checked without posting it.
+	retry_state_after_forged_marker = json.loads(json.dumps(latest_state))
+	retry_state_after_forged_marker["security_pass_followups_merge_checked"] = [851, 852, 853]
+	retry_after_forged_marker = _run_poller(
+		state=retry_state_after_forged_marker,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_comments={
+			850: [
+				{
+					"body": parked_answers[0],
+					"author_association": "CONTRIBUTOR",
+					"user": {"login": "drive-by", "type": "User"},
+				}
+			]
+		},
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert len(
+		[
+			comment["body"]
+			for comment in retry_after_forged_marker["issues"]["850"]["comments"]
+			if comment["body"].startswith("/answer [auto-answered-by-poller]")
+		]
+	) == 2
+	assert retry_after_forged_marker["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert "outcome=answered" in retry_after_forged_marker["stdout"] + retry_after_forged_marker["stderr"]
+
+	# Simulate the POST succeeding while the local merge-checked state write
+	# was lost. The durable comment marker suppresses a duplicate /answer even
+	# if the issue still carries ai:blocked when the next tick starts. The
+	# persisted comment is a trusted User comment, matching the GH_PAT path.
+	retry_state_after_lost_mark = json.loads(json.dumps(latest_state))
+	retry_state_after_lost_mark["security_pass_followups_merge_checked"] = [851, 852, 853]
+	retry_after_lost_mark = _run_poller(
+		state=retry_state_after_lost_mark,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels=labels,
+		issue_comments={
+			850: [
+				{
+					"body": parked_answers[0],
+					"author_association": "OWNER",
+					"user": {"login": "octocat", "type": "User"},
+				}
+			]
+		},
+		issue_closed={852: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	retry_answer_comments = [
+		comment["body"]
+		for comment in retry_after_lost_mark["issues"]["850"]["comments"]
+		if comment["body"].startswith("/answer [auto-answered-by-poller]")
+	]
+	assert retry_answer_comments == parked_answers
+	assert retry_after_lost_mark["latest_state"]["security_pass_followups_merge_checked"] == [850, 851, 852, 853]
+	assert not any(
+		comment["body"].startswith("## 🔓 Security-pass advisory follow-ups re-planned")
+		for comment in retry_after_lost_mark["issues"]["192"]["comments"]
+	)
+	assert "outcome=answered" in retry_after_lost_mark["stdout"] + retry_after_lost_mark["stderr"]
 
 
 def test_security_pass_exhaustion_judge_fail_verdict_terminalizes_with_verdict_comment() -> None:
@@ -5677,6 +7093,40 @@ def test_security_pass_closed_fix_with_mention_only_merged_pr_still_fails() -> N
 	assert "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr" in combined, combined
 	assert result["latest_state"]["status"] == "failed"
 	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+
+
+def test_security_pass_closed_fix_timeline_evidence_rejects_wrong_base() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		gql_mode="error",
+		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-900",
+				"body": "Fixes #900",
+				"willCloseTarget": False,
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "falling back to a direct issue lookup" in combined, combined
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=900 candidate_pr=901 rejected=base_mismatch" in combined, combined
+	assert "SECURITY_PASS_FIX_MERGED_EVIDENCE" not in combined, combined
+	assert result["latest_state"]["security_pass_cycle"] == 1
+	assert result["latest_state"]["status"] == "failed"
+	assert "ai:merged" in result["issues"]["900"]["labels"]
 
 
 def test_security_pass_closed_fix_evidence_lookup_failure_retains_fixing_state() -> None:
@@ -7602,12 +9052,46 @@ def test_comprehensive_pending_complete_dispatches_release_with_metadata():
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert dispatch["version_tag"] == "v9.9.9"
 	assert dispatch["test_repo"] == "owner/release-tests"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
+def test_comprehensive_pending_complete_honours_legacy_release_workflow_override():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 353,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"COMPREHENSIVE_RELEASE_WORKFLOW_FILE": "test-and-mark-stable.yml",
+			"COMPREHENSIVE_RELEASE_WORKFLOW_REF": "stable",
+		},
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert len(result["release_dispatches"]) == 1
+	dispatch = result["release_dispatches"][0]
+	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
+	assert dispatch["dry_run"] == "false"
 
 
 def test_comprehensive_pending_complete_dispatches_release_without_optional_metadata():
@@ -7635,8 +9119,8 @@ def test_comprehensive_pending_complete_dispatches_release_without_optional_meta
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert "version_tag" not in dispatch
 	assert "test_repo" not in dispatch
@@ -7668,8 +9152,8 @@ def test_comprehensive_pending_already_complete_dispatches_release():
 	assert result["latest_state"]["status"] == "complete"
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
-	assert dispatch["workflow"] == "test-and-mark-stable.yml"
-	assert dispatch["ref"] == "stable"
+	assert dispatch["workflow"] == "promote-main-to-stable.yml"
+	assert dispatch["ref"] == "main"
 	assert dispatch["dry_run"] == "false"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
 
@@ -7819,6 +9303,71 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 		pr.get("headRefName", "").startswith("fix/10-followup-") and pr.get("baseRefName") == "main"
 		for pr in followup_prs
 	)
+
+
+def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	huge_line = "rb-bundle-" + ("x" * 5000)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 77},
+		prs=[{
+			"number": 77,
+			"state": "open",
+			"merged": False,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "ordinary PR body",
+			"diff": huge_line,
+		}],
+		codex_json={
+			"action": "fix",
+			"justification": "apply fixes",
+			"fix_description": "none",
+			"remaining_issues_summary": "none",
+		},
+		env_overrides={"JUDGE_PR_DIFF_MAX_BYTES": "2000"},
+	)
+	prompt = result["rb_judge_prompts"]["10"]
+	assert "[NOTE: PR diff is " in prompt
+	assert "after the 1000-line cap; truncated to a prefix within 2000 bytes" in prompt
+	assert "x" * 2001 not in prompt
+	assert "Review-blocked judge prompt size: " in result["stdout"]
+	assert "JUDGE_PR_DIFF_MAX_BYTES=2000" in result["stdout"]
+
+
+def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_bodies={10: "oversized-review-blocked-body-" + ("x" * 1_048_576)},
+		issue_linked_prs={10: 77},
+		prs=[{
+			"number": 77,
+			"state": "open",
+			"merged": False,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	stdout = result["stdout"]
+	assert "Review-blocked judge prompt for issue #10 exceeds codex's 1048576-character stdin cap; skipping 2 attempts" in stdout
+	assert "Review-blocked judge attempt " not in stdout
+	assert "::warning::Review-blocked judge failed for issue #10" in stdout
 
 
 def test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable():
@@ -12581,6 +14130,158 @@ def test_judge_prompt_includes_harness_validation_context():
 	assert "Latest validation raw status: harness_error" in prompt
 	assert "Harness-broken label present: true" in prompt
 	assert "Judge note: the latest validation failure is classified as a harness/infrastructure defect" in prompt
+
+
+def test_judge_prompt_caps_embedded_pr_diffs_by_bytes():
+	"""Regression for tele-funtoken-msg-scoring#3928 / run 35425771769: a
+	merged PR whose diff is a handful of huge single lines passes the
+	500-line cap untouched, and two such PRs pushed the judge prompt past
+	codex's 1,048,576-character stdin cap. JUDGE_PR_DIFF_MAX_BYTES must cut
+	each diff, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES must bound the sum across the
+	prompt (merged PRs first, sorted issue order), every cut must be
+	labelled for the judge, and the poller must log the prompt size."""
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 3
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": 10, "status": "merged"},
+		{"id": "issue-2", "github_issue": 11, "status": "merged"},
+		{"id": "issue-3", "github_issue": 12, "status": "merged"},
+	]
+	state["issue_number_map"] = {"issue-1": 10, "issue-2": 11, "issue-3": 12}
+	# One "diff" line far larger than the per-PR cap, like a minified bundle.
+	huge_line = "bundle-" + ("x" * 5000)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"], 11: ["ai:merged"], 12: ["ai:merged"]},
+		issue_linked_prs={10: 77, 11: 78, 12: 79},
+		prs=[
+			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "body": huge_line},
+			{"number": 78, "state": "closed", "merged": True, "headRefName": "ai/issue-11", "body": huge_line},
+			{"number": 79, "state": "closed", "merged": True, "headRefName": "ai/issue-12", "body": huge_line},
+		],
+		codex_json={
+			"status": "in_progress",
+			"justification": "wave verified",
+			"assessment": "ok",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+		env_overrides={
+			"JUDGE_PR_DIFF_MAX_BYTES": "2000",
+			"JUDGE_PR_DIFFS_TOTAL_MAX_BYTES": "2500",
+		},
+	)
+	prompt = result["judge_prompt"]
+	assert "--- PR #77 (Issue #10) ---" in prompt
+	assert "--- PR #78 (Issue #11) ---" in prompt
+	assert "--- PR #79 (Issue #12) ---" in prompt
+	merged_block = prompt.partition("=== MERGED PR DIFFS (truncated; cache-stable) ===")[2].partition("=== WAVE 1 COMPLETION STATUS ===")[0]
+	# Per-PR cap: the first PR gets the full 2000 bytes, the second only the
+	# 500 bytes left in the shared budget, and the third is elided outright.
+	assert "truncated to a prefix within 2000 bytes (JUDGE_PR_DIFF_MAX_BYTES=2000, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)" in merged_block
+	assert "truncated to a prefix within 500 bytes (JUDGE_PR_DIFF_MAX_BYTES=2000, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)" in merged_block
+	assert "[NOTE: PR diff elided — the shared judge PR-diff budget (JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500 bytes) is exhausted" in merged_block
+	# The sum of embedded diff bytes never exceeds the shared budget; the
+	# 5 KB single lines are gone, only headers and notes remain on top.
+	assert len(merged_block.encode("utf-8")) < 2500 + 1500, len(merged_block)
+	assert merged_block.count("bundle-") == 2
+	assert "x" * 2001 not in merged_block
+	# Merged-first ordering by issue number: PR #77 must precede #78 and #79.
+	assert merged_block.index("--- PR #77 ") < merged_block.index("--- PR #78 ") < merged_block.index("--- PR #79 ")
+	stdout = result["stdout"]
+	assert "Judge context: PR #77 (issue #10) diff truncated from" in stdout
+	assert "Judge context: PR #79 (issue #12) diff elided — JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500 budget exhausted" in stdout
+	assert "Judge prompt size: " in stdout
+	assert "characters; codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=2000, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)." in stdout
+	assert "::warning::Judge prompt for #192" not in stdout
+	assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_judge_diff_truncation_failure_is_reported_to_caller():
+	"""The caller must be able to elide a diff when both truncators fail."""
+	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	block_start_index = poller_source_text.index("_judge_truncate_pr_diff_file()\n")
+	block_end_marker = "\n}\n\nextract_judge_json_with_status()"
+	block_end_index = poller_source_text.index(block_end_marker, block_start_index) + 3
+	function_source = poller_source_text[block_start_index:block_end_index]
+	with tempfile.TemporaryDirectory() as td:
+		test_root = Path(td)
+		fake_bin = test_root / "bin"
+		fake_bin.mkdir()
+		_write_exec(fake_bin / "python3", "#!/usr/bin/env bash\nexit 1\n")
+		_write_exec(fake_bin / "head", "#!/usr/bin/env bash\nexit 1\n")
+		diff_path = test_root / "pr.diff"
+		diff_path.write_bytes(b"x" * 100)
+		runner_path = test_root / "run.sh"
+		runner_path.write_text(
+			"#!/usr/bin/env bash\n"
+			f"{function_source}\n"
+			"_judge_truncate_pr_diff_file \"$1\" 10\n"
+			"printf '%s' \"$?\"\n",
+			encoding="utf-8",
+		)
+		proc = subprocess.run(
+			["bash", str(runner_path), str(diff_path)],
+			check=True,
+			capture_output=True,
+			text=True,
+			env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+		)
+		assert proc.stdout == "1"
+		assert diff_path.read_bytes() == b"x" * 100
+	assert 'if _judge_truncate_pr_diff_file "${_pr_diff_capped_tmp}" "${_pr_diff_allowance}"; then' in poller_source_text
+	assert "eliding ${_pr_diff_bytes} bytes instead of embedding an over-budget payload" in poller_source_text
+
+
+def test_judge_prompt_over_character_cap_skips_codex_attempts():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["project_body_snapshot"] = "oversized-project-body-" + ("x" * 1_048_576)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"]},
+	)
+	stdout = result["stdout"]
+	assert "exceeds codex's 1048576-character stdin cap; skipping 2 attempts" in stdout
+	assert "Judge attempt " not in stdout
+	assert "::error::Judge failed for tracking issue #192" in stdout
+
+
+def test_judge_prompt_keeps_small_pr_diffs_intact_under_default_byte_caps():
+	"""Ordinary diffs sit far below the default caps and must be embedded
+	verbatim, with no truncation note and no budget log line."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 77},
+		prs=[
+			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "body": "ordinary small diff"},
+		],
+		codex_json={
+			"status": "in_progress",
+			"justification": "wave verified",
+			"assessment": "ok",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	prompt = result["judge_prompt"]
+	assert "--- PR #77 (Issue #10) ---" in prompt
+	assert "ordinary small diff" in prompt
+	assert "[NOTE: PR diff" not in prompt
+	assert "Judge context: PR #77" not in result["stdout"]
+	assert "JUDGE_PR_DIFF_MAX_BYTES=65536, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=524288" in result["stdout"]
 
 
 def test_judge_repeat_fingerprint_penalty_is_suppressed_after_harness_error():
