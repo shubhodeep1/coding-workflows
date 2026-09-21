@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_memory_maintenance_contract_noop.py:lines 55-78, specifically the assertion at line 75 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new test asserts an exact literal `20` against `memory_maintenance.timeout-minutes`, re-introducing the brittleness the issue's suggested fix was designed to eliminate.\n  WHY: If `memory_maintenance.yml` is later raised from 20m to a larger value, the test fails with a literal-equality mismatch despite the relative timeout hierarchy still being correct.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_memory_maintenance_contract_noop.py: lines 55-78, specifically the assertion at line 75: `assert child_timeout_minutes == 20`\n  PROBLEM: The new test asserts an exact literal `20` against `memory_maintenance.timeout-minutes`. This re-introduces the same brittleness the issue's suggested fix was designed to eliminate.\n  WHY: If `memory_maintenance.yml` is later raised from 20m to a larger value (e.g. 25m to follow a future compaction-time growth), the test fails with a literal-equality mismatch (`25 != 20`) despite the relative hierarchy still being correct, and the test would then need a code change just to keep enforcing the right structure.\n  severity=MAJOR\n  confidence=4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "3596606ef1243973543c7f480467bcc178d46cacb124bab15d7ebb495c5c3ce6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4191,
+    "run_id": "35554999609",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35554999609",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921034919_c4f4cd7cc8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4191,
+    "run_id": "35554999609"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T03:49:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
