@@ -476,13 +476,14 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-version.outputs.version }}"
-          # Query the remote directly — `git rev-parse refs/tags/<V>`
-          # only checks the local namespace and can race a concurrent
-          # tag push. `git ls-remote --exit-code` returns 0 if the ref
-          # exists, 2 if absent, other non-zero on transport/auth
-          # errors. A matching existing tag is a partial-release recovery;
-          # a tag targeting any other commit remains an immutable conflict.
-          # Matches test-and-mark-stable.yml.
+          # Query the remote directly: `git rev-parse refs/tags/<V>` only
+          # checks the local tag namespace, which can race a concurrent
+          # tag push (or be incomplete depending on checkout fetch
+          # config). `git ls-remote --exit-code` returns 0 if the ref
+          # exists on origin, 2 if it does not, and any other non-zero
+          # value for transport / auth / repo errors. A matching existing
+          # tag is a partial-release recovery; a tag targeting any other
+          # commit remains an immutable conflict.
           set +e
           git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>/tmp/release_version_tag_lsremote_err
           rc=$?

@@ -165,7 +165,7 @@ def _run_tag_step_recovery_scenario(
 		config) ;;
 		ls-remote)
 			printf 'lookup:%s\n' "$*" >> "${TAG_STEP_CALL_LOG}"
-			if [ "${TAG_STEP_SCENARIO}" = "tag-match" ]; then
+			if [ "${TAG_STEP_SCENARIO}" = "tag-match" ] || [ "${TAG_STEP_SCENARIO}" = "tag-conflict" ]; then
 				return 0
 			fi
 			return 2
@@ -175,7 +175,8 @@ def _run_tag_step_recovery_scenario(
 			;;
 		rev-parse)
 			case "$1" in
-				HEAD|'v1.2.3^{commit}') printf '%040d\n' 1 ;;
+				HEAD) printf '%040d\n' 1 ;;
+				'v1.2.3^{commit}') [ "${TAG_STEP_SCENARIO}" = "tag-conflict" ] && printf '%040d\n' 2 || printf '%040d\n' 1 ;;
 				*) printf '%040d\n' 3 ;;
 			esac
 			;;
@@ -438,6 +439,12 @@ def test_workflow_tag_step_skips_only_matching_immutable_tag() -> None:
 			assert "push:-f origin refs/tags/stable" in matching_calls
 			assert "push:-f origin refs/tags/v1" in matching_calls
 
+			conflicting_tag, _ = _run_tag_step_recovery_scenario(
+				working_directory, workflow_path, "tag-conflict"
+			)
+			assert conflicting_tag.returncode != 0
+			assert "Refusing to retarget the immutable tag" in conflicting_tag.stdout
+
 			absent_tag, absent_calls = _run_tag_step_recovery_scenario(
 				working_directory, workflow_path, "tag-absent"
 			)
@@ -540,7 +547,11 @@ def test_workflows_share_identical_publication_logic_and_call_order() -> None:
 	assert _workflow_publication_helper(workflow_texts[0]) == _workflow_publication_helper(
 		workflow_texts[1]
 	), "both release workflows must keep byte-identical tag publication helpers"
-	for step_name in ("Tag version and update stable pointer", "Create GitHub Release"):
+	for step_name in (
+		"Validate existing version tag",
+		"Tag version and update stable pointer",
+		"Create GitHub Release",
+	):
 		assert _workflow_step_script(workflow_texts[0], step_name) == _workflow_step_script(
 			workflow_texts[1], step_name
 		), f"both release workflows must keep byte-identical {step_name!r} shell logic"
