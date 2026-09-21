@@ -493,8 +493,12 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          python3 -I -B -m pip install --target "${RUNTIME_DIR}/semantic-cache-python" --disable-pip-version-check "redis>=5,<6"
-          printf 'PYTHONPATH=%s\n' "${RUNTIME_DIR}/semantic-cache-python${PYTHONPATH:+:${PYTHONPATH}}" >> "$GITHUB_ENV"
+          if ! python3 -I -B -m venv "${RUNNER_TEMP}/orchestrate-clarify-respond-semantic-cache-venv" \
+            || ! "${RUNNER_TEMP}/orchestrate-clarify-respond-semantic-cache-venv/bin/python" -I -B -m pip install --disable-pip-version-check "redis>=5,<6"; then
+            echo "::warning::Redis semantic-cache dependency installation failed; cache operations will fail open for this run."
+            exit 1
+          fi
+          printf '%s\n' "${RUNNER_TEMP}/orchestrate-clarify-respond-semantic-cache-venv/bin" >> "$GITHUB_PATH"
 
       - name: Restore semantic cache SQLite
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
@@ -520,8 +524,19 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           LOOKUP_JSON="${RUNTIME_DIR}/semantic_cache_lookup.json"
-          if python3 "${SUPPORT_SCRIPTS_DIR}/semantic_cache.py" lookup \
+          if _gh_helpers_run_isolated_python \
+            "OPENROUTER_API_KEY=${OPENROUTER_API_KEY}" \
+            "SEMANTIC_CACHE_BACKEND=${SEMANTIC_CACHE_BACKEND}" \
+            "SEMANTIC_CACHE_TTL_DAYS=${SEMANTIC_CACHE_TTL_DAYS}" \
+            "SEMANTIC_CACHE_SIMILARITY_THRESHOLD=${SEMANTIC_CACHE_SIMILARITY_THRESHOLD}" \
+            "SEMANTIC_CACHE_REDIS_URL=${SEMANTIC_CACHE_REDIS_URL}" \
+            "SEMANTIC_CACHE_SQLITE_PATH=${SEMANTIC_CACHE_SQLITE_PATH}" \
+            "SEMANTIC_CACHE_EMBEDDING_MODEL=${SEMANTIC_CACHE_EMBEDDING_MODEL}" \
+            "SEMANTIC_CACHE_MAX_CANONICAL_CHARS=${SEMANTIC_CACHE_MAX_CANONICAL_CHARS}" \
+            "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}" -- \
+            "${SUPPORT_SCRIPTS_DIR}/semantic_cache.py" lookup \
             --phase "orchestrate_clarify_respond" \
             --issue-number "${ISSUE_NUMBER}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
@@ -852,8 +867,19 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           STORE_JSON="${RUNTIME_DIR}/semantic_cache_store.json"
-          if python3 "${SUPPORT_SCRIPTS_DIR}/semantic_cache.py" store \
+          if _gh_helpers_run_isolated_python \
+            "OPENROUTER_API_KEY=${OPENROUTER_API_KEY}" \
+            "SEMANTIC_CACHE_BACKEND=${SEMANTIC_CACHE_BACKEND}" \
+            "SEMANTIC_CACHE_TTL_DAYS=${SEMANTIC_CACHE_TTL_DAYS}" \
+            "SEMANTIC_CACHE_SIMILARITY_THRESHOLD=${SEMANTIC_CACHE_SIMILARITY_THRESHOLD}" \
+            "SEMANTIC_CACHE_REDIS_URL=${SEMANTIC_CACHE_REDIS_URL}" \
+            "SEMANTIC_CACHE_SQLITE_PATH=${SEMANTIC_CACHE_SQLITE_PATH}" \
+            "SEMANTIC_CACHE_EMBEDDING_MODEL=${SEMANTIC_CACHE_EMBEDDING_MODEL}" \
+            "SEMANTIC_CACHE_MAX_CANONICAL_CHARS=${SEMANTIC_CACHE_MAX_CANONICAL_CHARS}" \
+            "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}" -- \
+            "${SUPPORT_SCRIPTS_DIR}/semantic_cache.py" store \
             --phase "orchestrate_clarify_respond" \
             --issue-number "${ISSUE_NUMBER}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \

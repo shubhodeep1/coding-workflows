@@ -156,10 +156,18 @@ def test_sibling_workflow_python_stdin_launches_are_isolated() -> None:
 			call_index = step_block.find("_gh_helpers_run_isolated_python")
 			step_name = step_block.splitlines()[0].strip()
 			assert 0 <= source_index < call_index, f"isolated Python helper is not sourced first in {workflow_path} step {step_name}"
-	for redis_workflow_path in (CLARIFY_WF, ORCHESTRATE_CLARIFY_RESPOND_WF):
+	for redis_workflow_path, redis_venv_name in (
+		(CLARIFY_WF, "clarify-semantic-cache-venv"),
+		(ORCHESTRATE_CLARIFY_RESPOND_WF, "orchestrate-clarify-respond-semantic-cache-venv"),
+	):
 		redis_workflow_text = _workflow(redis_workflow_path)
-		assert 'python3 -I -B -m pip install --target "${RUNTIME_DIR}/semantic-cache-python" --disable-pip-version-check "redis>=5,<6"' in redis_workflow_text
-		assert '"${RUNTIME_DIR}/semantic-cache-python${PYTHONPATH:+:${PYTHONPATH}}" >> "$GITHUB_ENV"' in redis_workflow_text
+		assert f'python3 -I -B -m venv "${{RUNNER_TEMP}}/{redis_venv_name}"' in redis_workflow_text
+		assert f'"${{RUNNER_TEMP}}/{redis_venv_name}/bin/python" -I -B -m pip install --disable-pip-version-check "redis>=5,<6"' in redis_workflow_text
+		assert f'"${{RUNNER_TEMP}}/{redis_venv_name}/bin" >> "$GITHUB_PATH"' in redis_workflow_text
+		assert redis_workflow_text.count('"${SUPPORT_SCRIPTS_DIR}/semantic_cache.py"') == 2
+		assert 'python3 "${SUPPORT_SCRIPTS_DIR}/semantic_cache.py"' not in redis_workflow_text
+		assert redis_workflow_text.count('"GITHUB_REPOSITORY=${GITHUB_REPOSITORY}" --') == 2
+		assert "semantic-cache-python" not in redis_workflow_text
 		assert "pip install --user" not in redis_workflow_text
 
 

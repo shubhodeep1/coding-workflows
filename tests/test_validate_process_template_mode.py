@@ -63,7 +63,11 @@ def test_template_mode_selection_contract_present() -> None:
 	assert 'if attempt_render_recovery_after_preflight_failure; then' in text
 	assert 'attempt_self_heal_and_reexec "render"' in text
 	assert "python3_bin=\"$(command -v python3 2>/dev/null || printf '%s' 'python3')\"" in text
-	assert "if ! \"${python3_bin}\" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then" in text
+	assert "if ! \"${python3_bin}\" -I -B -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then" in text
+	assert 'renderer_summary="$(env -i \\' in text
+	assert 'PATH="/usr/bin:/bin" \\' in text
+	assert '"${python3_bin}" -I -B "${renderer_script}" \\' in text
+	assert '"${python3_bin}" "${renderer_script}" \\' not in text
 	assert 'Template renderer requires python3 >= 3.9' in text
 	assert 'Template rendering is now the only supported harness generation path.' in text
 

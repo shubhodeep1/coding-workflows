@@ -149,9 +149,11 @@ def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
 	dependency_step = wf.split("- name: Install Python dependencies for validation renderer", 1)[1].split("- name: Determine Semble bootstrap state", 1)[0]
-	assert "RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}" in dependency_step
-	assert 'python3 -I -B -m pip install --target "${RUNTIME_DIR}/validation-renderer-python" --disable-pip-version-check --quiet pyyaml jsonschema jinja2' in wf
-	assert '"${RUNTIME_DIR}/validation-renderer-python${PYTHONPATH:+:${PYTHONPATH}}" >> "$GITHUB_ENV"' in wf
+	assert 'python3 -I -B -m venv "${RUNNER_TEMP}/validation-renderer-venv"' in dependency_step
+	assert '"${RUNNER_TEMP}/validation-renderer-venv/bin/python" -I -B -m pip install --disable-pip-version-check --quiet pyyaml jsonschema jinja2' in dependency_step
+	assert '"${RUNNER_TEMP}/validation-renderer-venv/bin" >> "$GITHUB_PATH"' in dependency_step
+	assert "validation-renderer-python" not in dependency_step
+	assert "PYTHONPATH=" not in dependency_step
 	assert "pip install --disable-pip-version-check --quiet --user" not in wf
 
 
