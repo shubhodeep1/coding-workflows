@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:line 1260 (the `REVIEWER_CIRCUIT_BREAKER_ENABLED` paragraph) | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The documentation claims every failback target keeps a 1M+ token window, but `deepseek/deepseek-v3.2` has a 128000-token context window and `minimax/minimax-m2.5` has a 200000-token context window.\n  WHY: This is a documentation defect rather than a runtime regression, but it contradicts the stated rationale for replacing the 262K Mistral slot and may mislead operators about prompt-size overflow protection.\n\n- scripts/codex_model_catalog.json:line 823 (new `z-ai/glm-5.2` description) vs line 186 (existing `moonshotai/kimi-k3` description) | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `z-ai/glm-5.2` description cites Kimi K3 pricing of \"$1.68/$9.38 per M\", while the existing `moonshotai/kimi-k3` catalog entry lists \"$2.80/$14.00 per M, $0.29/M cached input read\".\n  WHY: This catalog and changelog pricing discrepancy does not affect runtime behavior but can confuse maintainers about the cost rationale.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: agents.md\n  Line or code reference: line 1260 (the `REVIEWER_CIRCUIT_BREAKER_ENABLED` paragraph)\n  Problem: The new documentation claims \"every failback target keeps a 1M+ token window because reviewer prompts regularly exceed 250K tokens.\" This claim is FALSE for two of the six live-roster failback targets introduced or retained by this PR's documentation update. The catalog shows: `deepseek/deepseek-v3.2` (line 267) has `context_window: 128000`, and `minimax/minimax-m2.5` (line 27) has `context_window: 200000`. Both failback targets are smaller than the 250K prompt threshold the claim references, contradicting the PR's own rationale (the Mistral 262K window was retired because it overflowed on most reviewer prompts).\n  Why it fails at runtime: This is a documentation defect, not a runtime regression. The pre-existing failback chains point to smaller-context models regardless of this claim. However, the inaccuracy directly contradicts the PR's stated rationale \u2014 if a 262K Mistral window overflowed, the 128K/200K failback targets for deepseek and minimax will overflow on the same prompts and burn retries, silently, just as the Mistral slot did. A future operator reading the docs will be misled into believing all six reviewer slots are uniformly protected against the prompt-size overflow.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n\n- File: scripts/codex_model_catalog.json\n  Line or code reference: line 823 (new `z-ai/glm-5.2` description) vs line 186 (existing `moonshotai/kimi-k3` description)\n  Problem: The new `z-ai/glm-5.2` catalog description states \"Kimi K3's $1.68/$9.38 per M rate ... made it the most expensive reviewer slot\", but the existing `moonshotai/kimi-k3` catalog entry (line 186) declares its own pricing as \"$2.80/$14.00 per M, $0.29/M cached input read\". The two descriptions of the same model's pricing disagree inside the same catalog file. The changelog fragment also repeats the $1.68/$9.38 number.\n  Why it fails at runtime: This is a documentation/catalog description discrepancy, not a runtime defect. The catalog entries are read for `apply_patch_tool_type` and `truncation_policy`, not for cost values. But the inconsistency will confuse future maintainers who consult the catalog to understand pricing and may misattribute the PR's cost rationale. A safe fix is to either use the listed catalog rate ($2.80/$14.00) in the glm-5.2 description or to clarify which rate (listed vs observed/billed) is being referenced.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "0cddd777ede7b323ea8e03b206bf765a4d9c95a5ba24b230c94cdc6aec973f0c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35558255454",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35558255454",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921041536_a0c27ff682",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35558255454"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T04:15:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
