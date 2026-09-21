@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Recent work added safeguards for release-tag refspecs, review-blocked budgets, release budgets, auto-merge head binding, and promotion workflows. Changes to release or stable-branch automation should define the exact commit or ref being acted on and test behavior when review, budget, or tag conditions prevent promotion.",
+  "fingerprint": "26be3cd929896950ed35df23060b933d5b98ceebcdae7167c08c2c8a5f79a1a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35602889757",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35602889757",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4166",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4175",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4189",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4190",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4207",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4169",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4176",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4191",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4192",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4209"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260921130757_3965494268",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Release and promotion automation treats refs, budgets, and review gates as explicit contracts.",
+  "timestamps": {
+    "created_at": "2026-09-21T13:07:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
