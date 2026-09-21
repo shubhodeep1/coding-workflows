@@ -459,9 +459,23 @@ def test_poller_prompt_rendering_uses_isolated_immutable_support() -> None:
 
 	with tempfile.TemporaryDirectory(prefix="poller-render-sitecustomize-") as td:
 		checkout = Path(td)
-		prompt_path = checkout / "prompt.txt"
+		prompt_path = checkout / "prompts" / "mode-judge.txt"
 		startup_marker = checkout / "render-startup-hook-ran"
-		prompt_path.write_text("isolated render\n", encoding="utf-8")
+		prompt_path.parent.mkdir(parents=True, exist_ok=True)
+		prompt_path.write_text(
+			"Role: test judge. Goal: retain isolated renderer features.\n\nBase prompt.\n",
+			encoding="utf-8",
+		)
+		(checkout / "prompts" / "_identity_recall.txt").write_text(
+			"<identity-recall>\nPhase: {{PHASE_NAME}}.\nRole: {{PHASE_ROLE}}.\n"
+			"Mission: {{PHASE_MISSION}}.\n</identity-recall>\n",
+			encoding="utf-8",
+		)
+		(checkout / ".github" / "ai" / "fragments").mkdir(parents=True, exist_ok=True)
+		(checkout / ".github" / "ai" / "fragments" / "judge.txt").write_text(
+			"Overlay appendix.\n",
+			encoding="utf-8",
+		)
 		(checkout / "sitecustomize.py").write_text(
 			"import os\n"
 			"from pathlib import Path\n"
@@ -474,6 +488,17 @@ def test_poller_prompt_rendering_uses_isolated_immutable_support() -> None:
 				"GH_PAT": "poller-render-secret-sentinel",
 				"ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 				"PYTHONPATH": str(checkout),
+				"UNATTENDED_IDENTITY_REINJECT_ENABLED": "true",
+				"WORKFLOW_OVERLAY_ENABLED": "true",
+				"WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON": json.dumps(
+					[
+						{
+							"mode": "mode-judge",
+							"append_path": ".github/ai/fragments/judge.txt",
+						}
+					]
+				),
+				"WORKFLOW_OVERLAY_REPO_ROOT": str(checkout),
 			}
 		)
 		proc = subprocess.run(
@@ -498,7 +523,10 @@ def test_poller_prompt_rendering_uses_isolated_immutable_support() -> None:
 		)
 
 	assert proc.returncode == 0, proc.stderr
-	assert proc.stdout.strip() == "isolated render"
+	assert "<identity-recall>\nPhase: mode-judge." in proc.stdout
+	assert "Role: test judge." in proc.stdout
+	assert "Mission: retain isolated renderer features." in proc.stdout
+	assert proc.stdout.endswith("Base prompt.\nOverlay appendix.\n")
 	assert not startup_marker.exists()
 
 
