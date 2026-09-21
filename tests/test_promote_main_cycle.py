@@ -59,6 +59,12 @@ if args[:1] == ["api"]:
         respond([{"number": n, "labels": []} for n in state.get("in_flight", [])])
     if "/actions/workflows/promote-main-to-stable.yml/runs" in path:
         respond({"workflow_runs": state.get("self_runs", [])})
+    if "/actions/workflows/test-and-mark-stable.yml/runs" in path and "event=workflow_dispatch" not in path:
+        # The idle check before dispatch (any branch, any event).
+        itick = state.get("gate_idle_tick", 0)
+        state["gate_idle_tick"] = itick + 1
+        iseq = state.get("gate_idle_sequence") or []
+        respond({"workflow_runs": iseq[min(itick, len(iseq) - 1)] if iseq else []})
     if "/actions/workflows/test-and-mark-stable.yml/runs" in path:
         tick = state.get("gate_tick", 0)
         state["gate_tick"] = tick + 1
@@ -328,6 +334,46 @@ def test_smoke_gate_failure_fails_the_cycle_without_dispatching_a_proving_run() 
 	assert proc.returncode == 1
 	assert "PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=501 conclusion=failure" in proc.stdout
 	assert len(final["dispatches"]) == 1
+
+
+def test_cycle_waits_for_an_active_release_gate_before_dispatching() -> None:
+	# A stable release gate is running: dispatching ours now would cancel its
+	# e2e job. Wait until the gate workflow is idle, then dispatch as usual.
+	stable_gate = [{"id": 400, "status": "in_progress", "conclusion": None, "head_branch": "stable", "head_sha": "9" * 40, "display_title": "Test & Mark Stable Release", "created_at": "2026-09-18T23:50:00Z"}]
+	idle = [stable_gate, stable_gate, []]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS, "gate_idle_sequence": idle})
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert proc.stdout.count("run(s) active (a stable release gate must not be cancelled by ours)") == 2
+	assert "PROMOTE_CYCLE_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md" in proc.stdout
+	# Only the smoke gate goes through gh; the proving run goes through the stub.
+	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
+
+
+def test_cycle_skips_when_the_gate_stays_busy_for_the_whole_budget() -> None:
+	stable_gate = [{"id": 400, "status": "in_progress", "conclusion": None, "head_branch": "stable", "head_sha": "9" * 40, "display_title": "Test & Mark Stable Release", "created_at": "2026-09-18T23:50:00Z"}]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_idle_sequence": [stable_gate]}, env={"PROMOTE_CYCLE_GATE_WAIT_SECS": "3"})
+		assert not env_out.exists()
+	assert proc.returncode == 0, proc.stderr
+	assert "PROMOTE_CYCLE_SKIPPED reason=gate_busy active_runs=1 waited=3s" in proc.stdout
+	assert not final.get("dispatches")
+	assert "outcome=skipped:gate_busy" in final["github_output"]
+
+
+def test_cancelled_smoke_gate_is_a_skip_not_a_failure() -> None:
+	seq = [
+		[],
+		[{"id": 500, "status": "in_progress", "conclusion": None, "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
+		[{"id": 500, "status": "completed", "conclusion": "cancelled", "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": seq})
+		assert not env_out.exists()
+	assert proc.returncode == 0, proc.stderr
+	assert "PROMOTE_CYCLE_SKIPPED reason=smoke_gate_cancelled run=500" in proc.stdout
+	assert "PROMOTE_CYCLE_FAILED" not in proc.stdout
+	assert "outcome=skipped:smoke_gate_cancelled" in final["github_output"]
 
 
 def test_smoke_gate_timeout_fails_the_cycle() -> None:

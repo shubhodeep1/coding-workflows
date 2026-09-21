@@ -190,7 +190,7 @@ class JobBudgetTest(unittest.TestCase):
 			yaml.safe_load(
 				RELEASE_WORKFLOWS["test-and-mark-stable"].read_text(encoding="utf-8")
 			)["jobs"]["e2e-smoke-test"]["timeout-minutes"],
-			180,
+			300,
 		)
 
 

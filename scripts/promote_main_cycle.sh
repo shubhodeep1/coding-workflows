@@ -27,6 +27,12 @@
 #                                                           fast-forward, so no cycle
 #   PROMOTE_CYCLE_SKIPPED reason=insufficient_docs          fewer than PROMOTE_CYCLE_MIN_DOCS docs
 #   PROMOTE_CYCLE_SKIPPED reason=guard_unavailable          an API guard failed; fail closed
+#   PROMOTE_CYCLE_SKIPPED reason=gate_busy                  another test-and-mark-stable run (a
+#                                                           stable release, any branch) stayed
+#                                                           active for the whole wait budget
+#   PROMOTE_CYCLE_SKIPPED reason=smoke_gate_cancelled run=<id>  the gate was cancelled, not
+#                                                           failed: nothing was proven either
+#                                                           way, so the tip is retried next tick
 #   PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=<id>
 #   PROMOTE_CYCLE_FAILED reason=smoke_gate_timeout
 #   PROMOTE_CYCLE_FAILED reason=smoke_head_checkout_failed  main advanced during the gate and
@@ -338,6 +344,26 @@ if [ "${candidate_count}" -lt "${PROMOTE_CYCLE_MIN_DOCS}" ]; then
 fi
 
 # 7. Smoke gate on main.
+#
+# The gate workflow's e2e-smoke-test job runs under a per-repository
+# concurrency group with cancel-in-progress, so dispatching our gate while a
+# stable release gate is running would cancel that release. Wait for the
+# gate workflow to be idle on every branch first (the wait shares the smoke
+# gate budget), and skip the tick if it never frees.
+deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_WAIT_SECS ))
+while :; do
+	active_gate_runs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" \
+		| jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length' 2>/dev/null || echo "")"
+	[[ "${active_gate_runs}" =~ ^[0-9]+$ ]] || skip_cycle guard_unavailable "lookup=workflow-runs:${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}"
+	if [ "${active_gate_runs}" -eq 0 ]; then
+		break
+	fi
+	if [ "$(date +%s)" -ge "${deadline}" ]; then
+		skip_cycle gate_busy "active_runs=${active_gate_runs} waited=${PROMOTE_CYCLE_GATE_WAIT_SECS}s"
+	fi
+	echo "Waiting: ${active_gate_runs} ${PROMOTE_CYCLE_GATE_WORKFLOW_FILE} run(s) active (a stable release gate must not be cancelled by ours)."
+	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
+done
 before_gate_ids="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50" | jq -c '[.workflow_runs[]?.id]')"
 echo "Dispatching ${PROMOTE_CYCLE_GATE_WORKFLOW_FILE} on ${PROMOTE_CYCLE_DEFAULT_BRANCH} with gate_only=true (smoke gate for ${main_tip})."
 gh_retry gh workflow run "${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}" \
@@ -347,7 +373,6 @@ gh_retry gh workflow run "${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}" \
 	-f "gate_cycle_id=${GITHUB_RUN_ID}"
 smoke_sha="${main_tip}"
 
-deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_WAIT_SECS ))
 gate_run_id=""
 gate_conclusion=""
 gate_head_sha=""
@@ -374,6 +399,12 @@ fi
 emit_output smoke_run_id "${gate_run_id}"
 if [ -z "${gate_conclusion}" ]; then
 	fail_cycle smoke_gate_timeout "run=${gate_run_id} still running after ${PROMOTE_CYCLE_GATE_WAIT_SECS}s"
+fi
+if [ "${gate_conclusion}" = "cancelled" ]; then
+	# A cancelled gate proved nothing either way (concurrency, a runner loss,
+	# an operator). Skip rather than fail so the tip is retried next tick
+	# instead of waiting for main to move.
+	skip_cycle smoke_gate_cancelled "run=${gate_run_id}"
 fi
 if [ "${gate_conclusion}" != "success" ]; then
 	fail_cycle smoke_gate_failed "run=${gate_run_id} conclusion=${gate_conclusion}"

@@ -164,7 +164,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `COMPREHENSIVE_CYCLE_BOT_LOGINS` | No | `github-actions[bot]` | orchestrate_poll | Comma-separated logins whose commits touching only non-code paths may land on `main` during a cycle without deferring the promotion. Any other commit between the smoke-tested commit and the promotion candidate defers it (`COMPREHENSIVE_PROMOTION_DEFERRED`). |
 | `COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS` | No | `OWNER,MEMBER,COLLABORATOR` | orchestrate_poll | Comma-separated `author_association` values whose tracking-issue comments may carry the promote-cycle marker (`apply-analysis-*` lines). Comments by `github-actions[bot]` are always trusted. The same setting governs `scripts/apply_analysis_on_main.sh` (was this doc dispatched before?) and `scripts/promote_main_cycle.sh` (last cycle baseline), so a stray comment from an outside account can neither retire an analysis doc nor fake a completed cycle. A marker found only in an untrusted comment is ignored: the callback logs `COMPREHENSIVE_MARKER_UNTRUSTED`, sends one CRITICAL alert, keeps the label so no new cycle starts, and neither dispatches the verifying run nor promotes until a human resolves it. |
 | `COMPREHENSIVE_VERIFICATION_RETRY_MAX` | No | `24` | orchestrate_poll | How many poll ticks the proving-run callback retries a transient verifying dispatch failure (`default_branch_unavailable`, `project_in_flight`, `orchestrate_run_in_flight`, `guard_unavailable`, `dispatcher_error`) before giving up with `COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED ... retries_exhausted=N`. Non-transient outcomes (`disabled`, `no_docs`, `all_docs_processed`) are terminal on the first tick. |
-| `AUTO_RELEASE_STABLE_ENABLED` | No | `true` | auto-release-stable | Kill switch for `.github/workflows/auto-release-stable.yml`, which every 6 hours dispatches `test-and-mark-stable.yml` on `stable` when the branch tip is strictly ahead of the `stable` tag commit (compare status `ahead`). A tip that is behind or diverged logs `AUTO_RELEASE_SKIPPED reason=branch_not_ahead`. The workflow shares the `promote-main-to-stable` concurrency group with the promote job so the two never race on `stable`. `false` logs `AUTO_RELEASE_SKIPPED reason=disabled`. |
+| `AUTO_RELEASE_STABLE_ENABLED` | No | `true` | auto-release-stable | Kill switch for `.github/workflows/auto-release-stable.yml`, which every 6 hours (at 30 past the hour) dispatches `test-and-mark-stable.yml` on `stable` when the branch tip is strictly ahead of the `stable` tag commit (compare status `ahead`). A tip that is behind or diverged logs `AUTO_RELEASE_SKIPPED reason=branch_not_ahead`. The workflow shares the `promote-main-to-stable` concurrency group with the promote job so the two never race on `stable`. `false` logs `AUTO_RELEASE_SKIPPED reason=disabled`. |
 | `MAX_JUDGE_CYCLES` | No | `25` | orchestrate_poll | Maximum judge evaluation cycles per project before forcing failure. Prevents infinite fix-up loops when the judge repeatedly returns `in_progress`. **Orchestrator final-PR bypass:** when `ORCH_PR_AUTOFIX_FLOW_ENABLED=true` (default) and the integration→default-branch final PR is open with `final_merge_status=pending`, this cap is bypassed for the final-PR loop only — the loop runs unlimited 5-autofix→judge cycles until the PR is mergeable. The cap remains in force for sub-issue stalls, recovery loops, and the intermediate-PR phase (per-sub-issue judge runs are governed by `MAX_REVIEW_BLOCKED_RETRIES` inside `review_autofix.yml`, not by this orchestrator-level counter). The bypass emits a `[final-merge] judge cap bypassed` log line each time it fires. See [Orchestrator PR autofix flow](#orchestrator-pr-autofix-flow). |
 | `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | No | `true` | orchestrate_poll | When true, a completed clean wave (no failures, not stuck-wave) advances mechanically without invoking the judge. Also skips the judge on clean project completions (all waves merged, no failures, no review-blocked issues) — the verdict is deterministic (`complete`). Set to `false` to force judge execution on every wave completion and project finalization. |
 | `ORCHESTRATOR_MAX_CLARIFY_CYCLES` | No | `3` | orchestrate_clarify_respond | Maximum orchestrator clarification auto-answer cycles per issue. When the limit is exceeded, or when a clarify hash repeats, `orchestrate_clarify_respond` stops posting auto-answers and escalates the issue to `ai:blocked` for explicit human intervention. A backup comment-count guard counts existing `/answer [auto-answered-by-orchestrator]` comments on the issue thread (0 extra API calls) and blocks when the count reaches this limit, even when the memory-based guard fails open. |
@@ -2433,7 +2433,7 @@ Two automations take the operator out of that loop by default:
      `CLAUDE.md` and anything under `.claude/` still count because consumers receive them), and
      none of: a cycle already in flight, a previous cycle job still running, the same tip already
      covered by an earlier cycle or failed tick, fewer than `PROMOTE_CYCLE_MIN_DOCS` analysis docs;
-  2. the smoke gate: `test-and-mark-stable.yml` in `gate_only` mode on `main`, carrying the cycle run ID so the tick waits for that exact dispatch rather than another concurrent gate;
+  2. the smoke gate: `test-and-mark-stable.yml` in `gate_only` mode on `main`, carrying the cycle run ID so the tick waits for that exact dispatch rather than another concurrent gate. The tick first waits (within its gate budget) for the gate workflow to be idle on every branch, because the gate's E2E job cancels concurrent siblings and must never cancel a stable release; a gate that stays busy skips the tick (`reason=gate_busy`), and a cancelled gate is a skip (`reason=smoke_gate_cancelled`) that retries next tick, not a failed tip;
   3. the proving run: one analysis doc handed to the orchestrator via `internal-orchestrate.yml`,
      bound at dispatch through the new `tracking_labels` / `tracking_comment` inputs;
   4. the verifying run: dispatched by the poller when the proving run merges (12f), on the next doc,
@@ -2446,7 +2446,8 @@ Two automations take the operator out of that loop by default:
   `COMPREHENSIVE_PROMOTION_DEFERRED`, …) and a failed tip is not retried until `main` moves with
   another code change. Manual `workflow_dispatch` promotion stays available as the override and
   accepts the same optional `target_sha`. Kill switch: `PROMOTE_CYCLE_ENABLED=false`.
-- [`auto-release-stable.yml`](.github/workflows/auto-release-stable.yml) runs every 6 hours and
+- [`auto-release-stable.yml`](.github/workflows/auto-release-stable.yml) runs every 6 hours (at
+  30 past, so it never starts in the same minute as the daily cycle) and
   dispatches `test-and-mark-stable.yml` on `stable` when the branch tip is strictly ahead of the
   `stable` tag commit, so a patch merged straight into `stable` reaches consumers without a manual
   dispatch. A tip behind or diverged from the tag is skipped (`reason=branch_not_ahead`), and the
@@ -2456,8 +2457,10 @@ Two automations take the operator out of that loop by default:
   than the branch name, and refuses to tag when the branch tip moved (`RELEASE_STALE_TIP`) or HEAD is
   anything but the tested commit plus its changelog assembly (`RELEASE_UNTESTED_HEAD`), so a gate that
   finishes late can never move the `stable` tag onto untested history. The 6-hour dispatcher also
-  counts queued or running `mark-stable.yml` releases as in flight. It skips while a gate run is queued or running and after the gate failed on the
-  current tip (`AUTO_RELEASE_SKIPPED reason=…`). Kill switch: `AUTO_RELEASE_STABLE_ENABLED=false`.
+  counts queued or running `mark-stable.yml` releases as in flight. It skips while a gate run is queued or running on any branch, or a
+  promote-main-to-stable run is active (the gate's E2E job cancels concurrent siblings), and after
+  the gate failed or timed out on the current tip (`AUTO_RELEASE_SKIPPED reason=…`); a cancelled
+  gate is retried on the next tick. Kill switch: `AUTO_RELEASE_STABLE_ENABLED=false`.
 
 ## Task-state mirror flag
 
