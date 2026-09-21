@@ -73,6 +73,209 @@ def _workflow_publication_helper(workflow_text: str) -> str:
 	return match.group(0)
 
 
+def _workflow_step_script(workflow_text: str, step_name: str) -> str:
+	lines = workflow_text.splitlines()
+	step_marker = f"      - name: {step_name}"
+	step_index = lines.index(step_marker)
+	run_index = next(
+		index
+		for index in range(step_index + 1, len(lines))
+		if lines[index] == "        run: |"
+	)
+	script_lines: list[str] = []
+	for line in lines[run_index + 1 :]:
+		if line and not line.startswith("          "):
+			break
+		script_lines.append(line[10:] if line else "")
+	return "\n".join(script_lines) + "\n"
+
+
+def _render_workflow_shell(script: str) -> str:
+	return (
+		script.replace("${{ needs.resolve-version.outputs.version }}", "v1.2.3")
+		.replace("${{ github.repository }}", "owner/repo")
+		.replace("${{ steps.changelog.outputs.notes_file }}", "/tmp/release_notes.md")
+	)
+
+
+def _run_version_tag_preflight_scenario(
+	working_directory: Path,
+	workflow_path: Path,
+	preflight_scenario: str,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	preflight_call_log = working_directory / f"{workflow_path.stem}-{preflight_scenario}.log"
+	preflight_script = "\n".join(
+		(
+			r'''git() {
+	local preflight_mock_command="$1"
+	shift
+	printf '%s:%s\n' "${preflight_mock_command}" "$*" >> "${PREFLIGHT_CALL_LOG}"
+	case "${preflight_mock_command}" in
+		ls-remote)
+			case "${PREFLIGHT_SCENARIO}" in
+				tag-absent) return 2 ;;
+				tag-unreadable)
+					echo 'mock transport failure' >&2
+					return 128
+					;;
+			esac
+			;;
+		fetch) ;;
+		rev-parse)
+			if [ "$1" = "HEAD" ] || [ "${PREFLIGHT_SCENARIO}" = "tag-match" ]; then
+				printf '%040d\n' 1
+			else
+				printf '%040d\n' 2
+			fi
+			;;
+	esac
+}
+''',
+			_render_workflow_shell(_workflow_step_script(_read(workflow_path), "Validate existing version tag")),
+		)
+	)
+	preflight_environment = {
+		**os.environ,
+		"PREFLIGHT_CALL_LOG": str(preflight_call_log),
+		"PREFLIGHT_SCENARIO": preflight_scenario,
+	}
+	preflight_result = subprocess.run(
+		["bash", "-c", preflight_script],
+		capture_output=True,
+		check=False,
+		cwd=working_directory,
+		env=preflight_environment,
+		text=True,
+	)
+	return preflight_result, preflight_call_log.read_text(encoding="utf-8").splitlines()
+
+
+def _run_tag_step_recovery_scenario(
+	working_directory: Path,
+	workflow_path: Path,
+	tag_step_scenario: str,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	tag_step_call_log = working_directory / f"{workflow_path.stem}-{tag_step_scenario}.log"
+	tag_step_script = "\n".join(
+		(
+			r'''git() {
+	local tag_step_mock_command="$1"
+	shift
+	case "${tag_step_mock_command}" in
+		config) ;;
+		ls-remote)
+			printf 'lookup:%s\n' "$*" >> "${TAG_STEP_CALL_LOG}"
+			if [ "${TAG_STEP_SCENARIO}" = "tag-match" ]; then
+				return 0
+			fi
+			return 2
+			;;
+		fetch)
+			printf 'fetch:%s\n' "$*" >> "${TAG_STEP_CALL_LOG}"
+			;;
+		rev-parse)
+			case "$1" in
+				HEAD|'v1.2.3^{commit}') printf '%040d\n' 1 ;;
+				*) printf '%040d\n' 3 ;;
+			esac
+			;;
+		tag)
+			printf 'tag:%s\n' "$*" >> "${TAG_STEP_CALL_LOG}"
+			;;
+		push)
+			printf 'push:%s\n' "$*" >> "${TAG_STEP_CALL_LOG}"
+			;;
+	esac
+}
+''',
+			_render_workflow_shell(
+				_workflow_step_script(_read(workflow_path), "Tag version and update stable pointer")
+			),
+		)
+	)
+	tag_step_environment = {
+		**os.environ,
+		"TAG_STEP_CALL_LOG": str(tag_step_call_log),
+		"TAG_STEP_SCENARIO": tag_step_scenario,
+	}
+	tag_step_result = subprocess.run(
+		["bash", "-c", tag_step_script],
+		capture_output=True,
+		check=False,
+		cwd=working_directory,
+		env=tag_step_environment,
+		text=True,
+	)
+	return tag_step_result, tag_step_call_log.read_text(encoding="utf-8").splitlines()
+
+
+def _run_release_creation_scenario(
+	working_directory: Path,
+	workflow_path: Path,
+	release_scenario: str,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	release_call_log = working_directory / f"{workflow_path.stem}-{release_scenario}.log"
+	release_api_count = working_directory / f"{workflow_path.stem}-{release_scenario}.count"
+	release_api_count.write_text("0\n", encoding="utf-8")
+	release_script = "\n".join(
+		(
+			"unset -f gh_retry 2>/dev/null || true",
+			r'''gh() {
+	local release_mock_command="$1"
+	shift
+	printf '%s:%s\n' "${release_mock_command}" "$*" >> "${RELEASE_CALL_LOG}"
+	case "${release_mock_command}" in
+		api)
+			local release_mock_count
+			release_mock_count="$(cat "${RELEASE_API_COUNT}")"
+			release_mock_count=$((release_mock_count + 1))
+			printf '%s\n' "${release_mock_count}" > "${RELEASE_API_COUNT}"
+			case "${RELEASE_SCENARIO}" in
+				release-existing) printf 'v1.2.3\n' ;;
+				release-absent)
+					echo 'gh: Not Found (HTTP 404)' >&2
+					return 1
+					;;
+				release-race)
+					if [ "${release_mock_count}" -eq 1 ]; then
+						echo 'gh: Not Found (HTTP 404)' >&2
+						return 1
+					fi
+					printf 'v1.2.3\n'
+					;;
+				release-lookup-failure)
+					echo 'gh: Resource not accessible by integration (HTTP 403)' >&2
+					return 1
+					;;
+			esac
+			;;
+		release)
+			[ "${RELEASE_SCENARIO}" != "release-race" ]
+			;;
+	esac
+}
+''',
+			_render_workflow_shell(_workflow_step_script(_read(workflow_path), "Create GitHub Release")),
+		)
+	)
+	release_environment = {
+		**{key: value for key, value in os.environ.items() if key not in {"BASH_ENV", "ENV"}},
+		"RELEASE_API_COUNT": str(release_api_count),
+		"RELEASE_CALL_LOG": str(release_call_log),
+		"RELEASE_SCENARIO": release_scenario,
+		"SOURCE_BRANCH": "stable",
+	}
+	release_result = subprocess.run(
+		["bash", "-c", release_script],
+		capture_output=True,
+		check=False,
+		cwd=working_directory,
+		env=release_environment,
+		text=True,
+	)
+	return release_result, release_call_log.read_text(encoding="utf-8").splitlines()
+
+
 def _run_publication_helper_scenario(
 	working_directory: Path,
 	publication_scenario: str,
@@ -192,6 +395,100 @@ def test_workflow_tag_publication_helper_executes_failure_matrix() -> None:
 		assert "Failed to publish and verify" in absent_remote.stdout
 
 
+def test_workflow_version_tag_preflight_executes_recovery_matrix() -> None:
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		working_directory = Path(temporary_directory)
+		for workflow_path in WORKFLOWS:
+			absent_tag, absent_calls = _run_version_tag_preflight_scenario(
+				working_directory, workflow_path, "tag-absent"
+			)
+			assert absent_tag.returncode == 0
+			assert all(not call.startswith("fetch:") for call in absent_calls)
+
+			matching_tag, matching_calls = _run_version_tag_preflight_scenario(
+				working_directory, workflow_path, "tag-match"
+			)
+			assert matching_tag.returncode == 0
+			assert any(call.startswith("fetch:") for call in matching_calls)
+			assert "accepting partial-release recovery" in matching_tag.stdout
+
+			conflicting_tag, _ = _run_version_tag_preflight_scenario(
+				working_directory, workflow_path, "tag-conflict"
+			)
+			assert conflicting_tag.returncode != 0
+			assert "Refusing to retarget the immutable tag" in conflicting_tag.stdout
+
+			unreadable_tag, _ = _run_version_tag_preflight_scenario(
+				working_directory, workflow_path, "tag-unreadable"
+			)
+			assert unreadable_tag.returncode != 0
+			assert "mock transport failure" in unreadable_tag.stderr
+
+
+def test_workflow_tag_step_skips_only_matching_immutable_tag() -> None:
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		working_directory = Path(temporary_directory)
+		for workflow_path in WORKFLOWS:
+			matching_tag, matching_calls = _run_tag_step_recovery_scenario(
+				working_directory, workflow_path, "tag-match"
+			)
+			assert matching_tag.returncode == 0
+			assert not any(call.startswith("tag:-a v1.2.3") for call in matching_calls)
+			assert "push:origin refs/tags/v1.2.3" not in matching_calls
+			assert "push:-f origin refs/tags/stable" in matching_calls
+			assert "push:-f origin refs/tags/v1" in matching_calls
+
+			absent_tag, absent_calls = _run_tag_step_recovery_scenario(
+				working_directory, workflow_path, "tag-absent"
+			)
+			assert absent_tag.returncode == 0
+			assert "tag:-a v1.2.3 -m Release v1.2.3" in absent_calls
+			assert "push:origin refs/tags/v1.2.3" in absent_calls
+
+
+def test_workflow_release_creation_executes_recovery_matrix() -> None:
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		working_directory = Path(temporary_directory)
+		for workflow_path in WORKFLOWS:
+			existing_release, existing_calls = _run_release_creation_scenario(
+				working_directory, workflow_path, "release-existing"
+			)
+			assert existing_release.returncode == 0
+			assert len(existing_calls) == 1
+			assert existing_calls[0].startswith("api:repos/owner/repo/releases/tags/v1.2.3")
+
+			absent_release, absent_calls = _run_release_creation_scenario(
+				working_directory, workflow_path, "release-absent"
+			)
+			assert absent_release.returncode == 0
+			assert any(call.startswith("release:create v1.2.3") for call in absent_calls)
+
+			concurrent_release, concurrent_calls = _run_release_creation_scenario(
+				working_directory, workflow_path, "release-race"
+			)
+			assert concurrent_release.returncode == 0
+			assert len([call for call in concurrent_calls if call.startswith("api:")]) == 2
+			assert "appeared concurrently" in concurrent_release.stdout
+
+			lookup_failure, lookup_failure_calls = _run_release_creation_scenario(
+				working_directory, workflow_path, "release-lookup-failure"
+			)
+			assert lookup_failure.returncode != 0
+			assert all(not call.startswith("release:") for call in lookup_failure_calls)
+			assert "HTTP 403" in lookup_failure.stderr
+
+
+def test_workflow_release_creation_prefers_repository_pat() -> None:
+	for workflow_path in WORKFLOWS:
+		workflow_text = _read(workflow_path)
+		step_start = workflow_text.index("      - name: Create GitHub Release")
+		step_end = workflow_text.index("\n      - name:", step_start + 1)
+		step_text = workflow_text[step_start:step_end]
+		assert "GH_TOKEN: ${{ secrets.GH_PAT || github.token }}" in step_text, (
+			f"{workflow_path.name}: release lookup and creation must prefer GH_PAT"
+		)
+
+
 def test_workflow_tag_publication_helper_is_bounded_verified_and_fail_closed() -> None:
 	for workflow_path in WORKFLOWS:
 		workflow_text = _read(workflow_path)
@@ -243,6 +540,10 @@ def test_workflows_share_identical_publication_logic_and_call_order() -> None:
 	assert _workflow_publication_helper(workflow_texts[0]) == _workflow_publication_helper(
 		workflow_texts[1]
 	), "both release workflows must keep byte-identical tag publication helpers"
+	for step_name in ("Tag version and update stable pointer", "Create GitHub Release"):
+		assert _workflow_step_script(workflow_texts[0], step_name) == _workflow_step_script(
+			workflow_texts[1], step_name
+		), f"both release workflows must keep byte-identical {step_name!r} shell logic"
 
 	for workflow_path, workflow_text in zip(WORKFLOWS, workflow_texts, strict=True):
 		version_call = 'publish_tag_with_remote_verification "refs/tags/$VERSION" immutable'
