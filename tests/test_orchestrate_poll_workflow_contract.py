@@ -111,6 +111,14 @@ def test_orchestrate_python_launches_are_isolated() -> None:
 	assert "env -i \\" in bootstrap_prefix
 	assert 'PYTHONDONTWRITEBYTECODE="1" \\' in bootstrap_prefix
 	assert wf.count("_gh_helpers_run_isolated_python") >= 12
+	isolated_python_step_blocks = [
+		block for block in wf.split("\n      - name: ")[1:]
+		if "_gh_helpers_run_isolated_python" in block
+	]
+	assert isolated_python_step_blocks
+	for isolated_python_step_block in isolated_python_step_blocks:
+		assert 'source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' in isolated_python_step_block
+		assert isolated_python_step_block.index('source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"') < isolated_python_step_block.index("_gh_helpers_run_isolated_python")
 	assert '"PROJECT_DESCRIPTION=${PROJECT_DESCRIPTION}" -- -' in wf
 	assert wf.count('"ORCHESTRATOR_STATE_AUTH_KEYRING=${ORCHESTRATOR_STATE_AUTH_KEYRING}" --') == 2
 	assert "PYTHONDONTWRITEBYTECODE=1 python3" not in wf
