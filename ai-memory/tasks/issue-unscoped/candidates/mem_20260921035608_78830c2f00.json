@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:254-262 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The new `LINKED_ISSUE_METADATA_FILE` export at `.github/workflows/review_autofix.yml:2000` is not asserted by the contract test that pins neighboring `init_block` exports.\n  WHY: If a future refactor drops, renames, or moves the export, the env-skew failure recurs silently while the contract suite remains green.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states the fix prevents the env-skew failure from recurring, and Copilot's review comment explicitly requests an assertion that this block writes `${RUNTIME_DIR}/linked_issue_metadata.json`.\n  expected_change_site: `tests/test_review_semble_contract.py::test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena`, alongside the existing sibling assertions at lines 254-262\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `grep -r LINKED_ISSUE_METADATA_FILE tests/` returns zero matches; `grep -r linked_issue_metadata .` returns only the workflow export and changelog fragment; no test assertion covers the export.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_semble_contract.py\nLine or code reference: function test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena (line 160), init_block assertions (lines 254-262); changed code at .github/workflows/review_autofix.yml line 2000\n  severity=high\n  confidence=5\n  PROBLEM: The \"Initialize runtime workspace\" step now exports LINKED_ISSUE_METADATA_FILE=${RUNTIME_DIR}/linked_issue_metadata.json but no contract test asserts that this export is present in the init_block.\n  WHY: If a future refactor drops, renames, or moves this export out of the \"Initialize runtime workspace\" step, the exact same env-skew failure recurs silently while the contract suite stays green.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The PR's primary purpose is fixing the env-skew failure (\"required env LINKED_ISSUE_METADATA_FILE is unset\") by adding the `LINKED_ISSUE_METADATA_FILE` export to `main`. The PR description frames this as the contract-fixing commit and `agents.md` and the commit message call out that the export must stay defined on both sides going forward. The copilot review comment at `.github/workflows/review_autofix.yml:2000` (entry id 4058977317) explicitly requests an assertion in `test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena` so the env-skew failure cannot recur without the contract suite catching it. The repo memory entry `mem_20260823095357_44615961ff` (\"Review/autofix workflow changes in this repo almost always need contract tests alongside script or YAML edits\") and ten other entries on the contract-heavy culture set the same expectation, and the commit message itself (\"the same path is defined on both sides\") implies the export is load-bearing.\n  severity=high\n  confidence=5\n  PROBLEM: The new export is unprotected by the contract suite.\n  WHY: A future refactor that drops, renames, or moves the line out of the `>> \"$GITHUB_ENV\"` block will not be detected, and the exact env-skew failure this PR fixes can recur silently.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_review_semble_contract.py:254-262\n  severity=high\n  confidence=4\n  PROBLEM: The PR's entire purpose is adding the LINKED_ISSUE_METADATA_FILE export to prevent recurrence of a proven incident, yet no assertion pins the new export.\n  WHY: If a future refactor drops, renames, or moves the export out of the `>> \"$GITHUB_ENV\"` block, the exact env-skew failure this PR fixes recurs silently while the contract suite stays green.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: The PR description states the fix prevents the env-skew failure from recurring, and Copilot's review comment (entry[0].id 4058977317) explicitly requests: \"Please add an assertion (for example in `test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena`) that this block writes `${RUNTIME_DIR}/linked_issue_metadata.json`; otherwise the exact env-skew failure can recur without the contract suite detecting it.\"\n  Expected change site: `tests/test_review_semble_contract.py::test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena`, alongside the existing sibling assertions at lines 254-262 that pin other runtime-default exports (e.g. `REVIEWER_SEMBLE_QUERY_FILE`, `EDITOR_SEMBLE_QUERY_FILE`, `SERENA_AVAILABLE`) against `init_block`.\n  Evidence of absence: The new export `echo \"LINKED_ISSUE_METADATA_FILE=${RUNTIME_DIR}/linked_issue_metadata.json\"` exists at `.github/workflows/review_autofix.yml:2000`, but no test assertion covers it. A repo-wide grep for `linked_issue_metadata` in Python files returns zero matches. `tests/test_review_autofix_review_pipeline_contract.py` references `LINKED_ISSUE_CONTEXT_FILE` but not `LINKED_ISSUE_METADATA_FILE`. The contract suite that caught the original incident pattern stays green even if the export is dropped, renamed, or moved out of the `>> \"$GITHUB_ENV\"` block.\n  severity=high\n  confidence=5\n  PROBLEM: The new export is not covered by a contract-test assertion.\n  WHY: The contract suite remains green if the export is dropped, renamed, or moved, allowing the env-skew failure to recur.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "0f906771555c1d97d6809c9ff5c41e2c632993c52e4ffdc419c1c2995509feee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4193,
+    "run_id": "35555535349",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35555535349",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921035608_78830c2f00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4193,
+    "run_id": "35555535349"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-21T03:56:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
