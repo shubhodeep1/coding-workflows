@@ -137,6 +137,7 @@ changelog.d/4134-auto-apply-analysis-and-stable-release.md
 changelog.d/4161-smoke-test-telegram-silencing.md
 changelog.d/4163-e2e-review-blocked-budget.md
 changelog.d/4165-workflow-failure-heal.md
+changelog.d/4171-e2e-smoke-job-timeout.md
 changelog.d/4172-gh-token-web-proxy-substitution.md
 changelog.d/4174-linked-issue-metadata-default.md
 changelog.d/4185-release-dispatcher-guards.md

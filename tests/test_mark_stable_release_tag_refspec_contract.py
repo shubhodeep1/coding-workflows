@@ -557,6 +557,9 @@ def test_workflow_release_creation_prefers_repository_pat() -> None:
 def test_workflow_release_checkout_prefers_repository_pat_for_git_transport() -> None:
 	for workflow_path in WORKFLOWS:
 		workflow_text = _read(workflow_path)
+		assert "      - name: Checkout source branch" in workflow_text, (
+			f"{workflow_path.name}: release checkout step is missing"
+		)
 		step_start = workflow_text.index("      - name: Checkout source branch")
 		step_end = workflow_text.index("\n      - name:", step_start + 1)
 		step_text = workflow_text[step_start:step_end]
