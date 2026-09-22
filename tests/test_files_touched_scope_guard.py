@@ -6,12 +6,11 @@ Three layers, mirroring how the destructive-commit guard is validated:
   1. Unit tests of scripts/files_touched_scope_guard.py (the parser + matcher),
      including the real incident from orchestrator project #244 / issue #254
      ("frontend-send-status") that motivated the guard.
-  2. Behavioral extract-and-run of the real preflight scope-guard `run:`
-     fragment from .github/workflows/implement.yml and the real commit-time
-     scope-guard fragment from scripts/implement_commit_changes.sh against a
-     synthetic staged index, so the block / override / skip behaviour is
-     validated against production code rather than a reimplementation.
-  3. Static assertions that the guard is wired in at both guard sites and into
+  2. Behavioral extract-and-run of the real plan/implement/review guard
+     fragments against a synthetic staged index, so block / override / skip
+     behaviour is validated against production code rather than a
+     reimplementation.
+  3. Static assertions that the guard is wired in at all guard sites and into
      the alert / failure-gate / env / label / redispatch-refusal plumbing.
 
 Runnable either under pytest or directly as `python3 tests/<this file>.py`.
@@ -19,6 +18,7 @@ Runnable either under pytest or directly as `python3 tests/<this file>.py`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -27,6 +27,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -34,7 +36,13 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import files_touched_scope_guard as guard  # noqa: E402
 
 IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+REVIEW_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "review_commit_changes.sh"
+REVIEW_STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
+REVIEW_RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+REVIEW_CONFLICT_PREPARE_SCRIPT = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
+REVIEW_CONFLICT_RESOLVE_SCRIPT = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
 IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 LABEL_CONTRACT = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
@@ -45,6 +53,19 @@ def _body(*entries: str) -> str:
 	lines = ["Implement the task. Stay inside the files_touched list.", "", "files_touched:"]
 	lines.extend(f"  - {entry}" for entry in entries)
 	return "\n".join(lines) + "\n"
+
+
+def _generated_advisory_body(path: str = "src/security.py", audited_commit: str = "b" * 40) -> str:
+	return (
+		"Generated advisory.\n\n---\n"
+		"**Generated security advisory metadata**\n"
+		"- Schema: `generated-security-advisory.v1`\n"
+		f"- Waiver match key: `sha256:{'a' * 64}`\n"
+		f"- Audited commit: `{audited_commit}`\n"
+		f"- Cited file: `{path}`\n"
+		"files_touched:\n"
+		f"  - {path}\n"
+	)
 
 
 # --------------------------------------------------------------------------
@@ -164,12 +185,37 @@ def test_explicit_allowlist_entries_support_scope_lock_glob() -> None:
 	assert oos == ["README.md"]
 
 
+def test_generated_advisory_requires_trusted_author_and_exact_path() -> None:
+	metadata = guard.parse_generated_advisory(_generated_advisory_body())
+	assert metadata is not None
+	assert metadata["cited_file"] == "src/security.py"
+	status, allowlist, oos = guard.evaluate_allowlist(
+		[metadata["cited_file"]], ["src/security.py", "package-lock.json"], auto_allow_lockfiles=False
+	)
+	assert status == guard.STATUS_OUT_OF_SCOPE
+	assert allowlist == ["src/security.py"]
+	assert oos == ["package-lock.json"]
+	sha256_metadata = guard.parse_generated_advisory(_generated_advisory_body(audited_commit="c" * 64))
+	assert sha256_metadata is not None
+	assert sha256_metadata["audited_commit"] == "c" * 64
+
+
+def test_generated_advisory_rejects_malformed_or_mismatched_footer() -> None:
+	with pytest.raises(ValueError):
+		guard.parse_generated_advisory(_generated_advisory_body().replace("  - src/security.py", "  - README.md"))
+
+
 # --------------------------------------------------------------------------
 # Layer 1b — CLI exit-code contract
 # --------------------------------------------------------------------------
 
 
-def _run_cli(body: str, staged: list[str], allowlist_out: Path | None = None) -> tuple[int, str]:
+def _run_cli(
+	body: str,
+	staged: list[str],
+	allowlist_out: Path | None = None,
+	extra_args: tuple[str, ...] = (),
+) -> tuple[int, str]:
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		body_file = tdp / "body.txt"
@@ -186,6 +232,7 @@ def _run_cli(body: str, staged: list[str], allowlist_out: Path | None = None) ->
 		]
 		if allowlist_out is not None:
 			cmd += ["--allowlist-out", str(allowlist_out)]
+		cmd.extend(extra_args)
 		proc = subprocess.run(cmd, capture_output=True, text=True)
 		return proc.returncode, proc.stdout
 
@@ -232,13 +279,87 @@ def test_cli_explicit_allowlist_file_supports_scope_lock_glob() -> None:
 		assert allowlist_out.read_text(encoding="utf-8").strip() == "scripts/**/*.sh"
 
 
+def test_generated_advisory_scope_matches_only_the_exact_cited_path() -> None:
+	rc, out = _run_cli(
+		_generated_advisory_body("src"),
+		["src/security.py"],
+		extra_args=(
+			"--issue-author-association",
+			"OWNER",
+			"--generated-advisory-mode",
+			"auto",
+		),
+	)
+	assert rc == guard.EXIT_OUT_OF_SCOPE
+	assert out.split() == ["src/security.py"]
+
+
+def test_linked_issue_metadata_scope_is_exact_and_unresolved_collection_fails_closed() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		metadata_file = tdp / "linked.json"
+		staged_file = tdp / "staged.txt"
+		metadata_file.write_text(
+			json.dumps(
+				[
+					{
+						"body": _generated_advisory_body(),
+						"author_association": "OWNER",
+						"author_login": "octocat",
+					}
+				]
+			),
+			encoding="utf-8",
+		)
+		staged_file.write_text("src/security.py\n", encoding="utf-8")
+		def command() -> list[str]:
+			return [
+				sys.executable,
+				str(GUARD_SCRIPT),
+				"--linked-issue-metadata-file",
+				str(metadata_file),
+				"--linked-issue-metadata-sha256",
+				hashlib.sha256(metadata_file.read_bytes()).hexdigest(),
+				"--staged-file",
+				str(staged_file),
+				"--generated-advisory-mode",
+				"auto",
+			]
+
+		base_command = command()
+		assert subprocess.run(base_command, capture_output=True, text=True).returncode == guard.EXIT_IN_SCOPE
+		staged_file.write_text("README.md\n", encoding="utf-8")
+		assert subprocess.run(base_command, capture_output=True, text=True).returncode == guard.EXIT_OUT_OF_SCOPE
+		metadata_file.write_text("[]\n", encoding="utf-8")
+		assert subprocess.run(base_command, capture_output=True, text=True).returncode == guard.EXIT_INVALID_GENERATED_ADVISORY
+		metadata_file.write_text('[{"_collection_status":"unresolved"}]\n', encoding="utf-8")
+		assert subprocess.run(command(), capture_output=True, text=True).returncode == guard.EXIT_INVALID_GENERATED_ADVISORY
+
+
+def test_generated_advisory_plan_parser_accepts_numbered_contract() -> None:
+	plan = (
+		"1. Files likely to change\n"
+		"- `src/security.py`\n\n"
+		"2. Functions/modules to implement\n"
+		"- `README.md` is mentioned only outside the files section.\n"
+	)
+	assert guard.extract_plan_files(plan) == ["src/security.py"]
+	plan = "1. Files likely to change\n- Update `src/security.py` and `README.md`.\n"
+	assert guard.extract_plan_files(plan) == ["src/security.py", "README.md"]
+
+
 # --------------------------------------------------------------------------
 # Layer 2 — extract-and-run the real guard fragments
 # --------------------------------------------------------------------------
 
 
 def _scope_fragment(label: str) -> str:
-	source = IMPLEMENT_COMMIT_SCRIPT if label == "commit" else IMPLEMENT
+	if label == "review":
+		source = REVIEW_COMMIT_SCRIPT
+	elif label == "commit":
+		source = IMPLEMENT_COMMIT_SCRIPT
+	else:
+		source = IMPLEMENT
 	text = source.read_text(encoding="utf-8")
 	start = f"# >>> files_touched scope-enforcement guard ({label}) >>>"
 	end = f"# <<< files_touched scope-enforcement guard ({label}) <<<"
@@ -257,12 +378,25 @@ def _run_fragment(
 	enforce: str = "true",
 	allow_out_of_scope: str = "false",
 	label: str = "commit",
+	issue_author_association: str = "OWNER",
+	issue_author_login: str = "octocat",
+	helper_source: str | None = None,
+	linked_issue_metadata_available: bool = True,
+	linked_issue_metadata_env: bool = True,
+	linked_issue_metadata_unresolved: bool = False,
+	linked_issue_metadata_expected_sha256: str | None = None,
+	issue_body_expected_sha256: str | None = None,
+	scope_guard_expected_sha256: str | None = None,
 ) -> tuple[int, str, str]:
 	fragment = _scope_fragment(label)
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		(tdp / "scripts").mkdir()
-		shutil.copy(GUARD_SCRIPT, tdp / "scripts" / "files_touched_scope_guard.py")
+		helper_path = tdp / "scripts" / "files_touched_scope_guard.py"
+		if helper_source is None:
+			shutil.copy(GUARD_SCRIPT, helper_path)
+		else:
+			helper_path.write_text(helper_source, encoding="utf-8")
 		git_env = {
 			key: value
 			for key, value in os.environ.items()
@@ -278,6 +412,24 @@ def _run_fragment(
 			subprocess.run(["git", "add", "--", rel], cwd=tdp, check=True, env=git_env)
 		body_file = tdp / "issue_body.txt"
 		body_file.write_text(body, encoding="utf-8")
+		linked_issue_metadata_file = tdp / "linked_issue_metadata.json"
+		if linked_issue_metadata_available:
+			if linked_issue_metadata_unresolved:
+				linked_issue_metadata_file.write_text('[{"_collection_status":"unresolved"}]\n', encoding="utf-8")
+			else:
+				linked_issue_metadata_file.write_text(
+					json.dumps(
+						[
+							{
+								"number": 1,
+								"body": body,
+								"author_association": issue_author_association,
+								"author_login": issue_author_login,
+							}
+						]
+					),
+					encoding="utf-8",
+				)
 		gh_output = tdp / "gh_output.txt"
 		gh_output.write_text("", encoding="utf-8")
 		env = dict(git_env)
@@ -288,8 +440,29 @@ def _run_fragment(
 				"TMPDIR": str(tdp),
 				"ENFORCE_FILES_TOUCHED": enforce,
 				"ALLOW_OUT_OF_SCOPE_FILES": allow_out_of_scope,
+				"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(tdp / "scripts"),
+				"SUPPORT_SCRIPTS_DIR": str(tdp / "scripts"),
+				"RUNTIME_DIR": str(tdp),
+				"LINKED_ISSUE_METADATA_FILE": str(linked_issue_metadata_file),
+				"STAGED_FILES": "\n".join(staged),
+				"ISSUE_AUTHOR_ASSOCIATION": issue_author_association,
+				"ISSUE_AUTHOR_LOGIN": issue_author_login,
 			}
 		)
+		if not linked_issue_metadata_env:
+			# Older workflow contract: only RUNTIME_DIR is exported; the
+			# guard must default the artifact path itself.
+			env.pop("LINKED_ISSUE_METADATA_FILE", None)
+		if linked_issue_metadata_expected_sha256 is None and linked_issue_metadata_file.exists():
+			linked_issue_metadata_expected_sha256 = hashlib.sha256(linked_issue_metadata_file.read_bytes()).hexdigest()
+		env["LINKED_ISSUE_METADATA_EXPECTED_SHA256"] = linked_issue_metadata_expected_sha256 or ""
+		if issue_body_expected_sha256 is None:
+			issue_body_expected_sha256 = hashlib.sha256(body_file.read_bytes()).hexdigest()
+		if scope_guard_expected_sha256 is None:
+			scope_guard_expected_sha256 = hashlib.sha256(helper_path.read_bytes()).hexdigest()
+		env["GENERATED_SECURITY_ADVISORY"] = "true" if guard.GENERATED_ADVISORY_HEADER in body else "false"
+		env["ISSUE_BODY_EXPECTED_SHA256"] = issue_body_expected_sha256
+		env["SCOPE_GUARD_EXPECTED_SHA256"] = scope_guard_expected_sha256
 		proc = subprocess.run(
 			["bash", "-c", "set -euo pipefail\n" + fragment],
 			cwd=tdp,
@@ -340,6 +513,123 @@ def test_fragment_master_toggle_off_skips() -> None:
 	assert "disabled" in log.lower()
 
 
+def test_generated_advisory_cannot_use_scope_bypasses_or_lockfile_allowance() -> None:
+	rc, gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["package-lock.json"],
+		enforce="false",
+		allow_out_of_scope="true",
+	)
+	assert rc == 1, log
+	assert "scope_violation_blocked=out-of-scope" in gh_output
+
+
+def test_generated_advisory_accepts_exact_github_actions_bot_identity() -> None:
+	rc, gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		issue_author_association="NONE",
+		issue_author_login="github-actions[bot]",
+	)
+	assert rc == 0, log
+	assert "scope_violation_blocked" not in gh_output
+
+
+def test_generated_advisory_review_scope_rejects_editor_path_drift() -> None:
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["README.md"],
+		label="review",
+	)
+	assert rc == 1, log
+	assert "README.md" in log
+	assert "exact cited-file scope" in log
+
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label="review",
+	)
+	assert rc == 0, log
+	assert "all staged paths match the exact cited file" in log
+
+
+def test_review_scope_defaults_linked_issue_metadata_file_from_runtime_dir() -> None:
+	# review_autofix.yml@main may not export LINKED_ISSUE_METADATA_FILE for a
+	# self-repo PR review; the guard derives ${RUNTIME_DIR}/linked_issue_metadata.json.
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label="review",
+		linked_issue_metadata_env=False,
+	)
+	assert rc == 0, log
+	assert "all staged paths match the exact cited file" in log
+
+
+def test_review_scope_fails_closed_without_linked_issue_metadata() -> None:
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label="review",
+		linked_issue_metadata_available=False,
+	)
+	assert rc == 1, log
+	assert "linked-issue metadata is unavailable" in log
+
+
+def test_review_scope_fails_closed_when_linked_issue_collection_is_unresolved() -> None:
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label="review",
+		linked_issue_metadata_unresolved=True,
+	)
+	assert rc == 1, log
+	assert "linked-issue metadata collection is unresolved" in log
+
+
+def test_review_scope_fails_closed_when_linked_issue_metadata_changes_after_collection() -> None:
+	rc, _gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label="review",
+		linked_issue_metadata_expected_sha256="0" * 64,
+	)
+	assert rc == 1, log
+	assert "linked-issue metadata changed after collection" in log
+
+
+@pytest.mark.parametrize("label", ("preflight", "commit", "review"))
+def test_generated_advisory_helper_failure_fails_closed(label: str) -> None:
+	rc, gh_output, log = _run_fragment(
+		_generated_advisory_body(),
+		["src/security.py"],
+		label=label,
+		helper_source="raise RuntimeError('validator crashed')\n",
+	)
+	assert rc == 1, log
+	if label == "review":
+		assert "metadata validation failed" in log
+	else:
+		assert "scope_violation_blocked=generated-security-advisory" in gh_output
+
+
+def test_generated_advisory_body_and_helper_digest_mismatches_fail_closed() -> None:
+	for direct_guard_label, digest_overrides in (
+		("preflight", {"issue_body_expected_sha256": "0" * 64}),
+		("commit", {"scope_guard_expected_sha256": "0" * 64}),
+	):
+		rc, gh_output, log = _run_fragment(
+			_generated_advisory_body(),
+			["src/security.py"],
+			label=direct_guard_label,
+			**digest_overrides,
+		)
+		assert rc == 1, log
+		assert "scope_violation_blocked=generated-security-advisory" in gh_output
+
+
 def _strip_comments(fragment: str) -> str:
 	keep = [ln for ln in fragment.splitlines() if ln.strip() and not ln.strip().startswith("#")]
 	return "\n".join(keep)
@@ -364,6 +654,10 @@ def _implement_commit_text() -> str:
 	return IMPLEMENT_COMMIT_SCRIPT.read_text(encoding="utf-8")
 
 
+def _review_commit_text() -> str:
+	return REVIEW_COMMIT_SCRIPT.read_text(encoding="utf-8")
+
+
 def _implement_guard_handler_text() -> str:
 	return IMPLEMENT_GUARD_HANDLER.read_text(encoding="utf-8")
 
@@ -385,11 +679,170 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	text = _implement_text()
 	commit_text = _implement_commit_text()
 	combined_text = text + "\n" + commit_text
+	assert 'echo "ISSUE_AUTHOR_ASSOCIATION=${ISSUE_AUTHOR_ASSOCIATION}" >> "$GITHUB_ENV"' not in text
+	assert 'echo "ISSUE_AUTHOR_LOGIN=${ISSUE_AUTHOR_LOGIN}" >> "$GITHUB_ENV"' not in text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
 	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
-	assert combined_text.count('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"') == 3
+	assert combined_text.count('python3 "${scope_guard_path}"') == 2
+	assert combined_text.count('--issue-author-login "${ISSUE_AUTHOR_LOGIN:-}"') == 2
 	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
 	assert "scope_violation_blocked=scope-lock-label" in commit_text
+	assert "ISSUE_BODY_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.issue_body_sha256 }}" in text
+	assert "SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.scope_guard_sha256 }}" in text
+	assert "COMMIT_CHANGES_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.commit_changes_sha256 }}" in text
+
+
+def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
+	review_text = _review_commit_text()
+	stage_text = REVIEW_STAGE_SCRIPT.read_text(encoding="utf-8")
+	workflow_text = REVIEW_WORKFLOW.read_text(encoding="utf-8")
+	main_primary_line = next(
+		line for line in stage_text.splitlines() if "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=" in line
+	)
+	assert "files_touched scope-enforcement guard (review)" in review_text
+	assert '"${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py"' in review_text
+	assert '"${LINKED_ISSUE_METADATA_FILE}"' in review_text
+	assert "files_touched_scope_guard.py" in stage_text
+	assert "review_collect_pr_metadata.sh" in main_primary_line
+	assert "files_touched_scope_guard.py" in main_primary_line
+	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py; do" in workflow_text
+	assert "id: stage_workflow_support" in workflow_text
+	for digest_output in (
+		"scope_guard_sha256",
+		"review_commit_changes_sha256",
+		"review_conflict_prepare_sha256",
+		"review_conflict_resolve_sha256",
+		"review_rb_judge_sha256",
+	):
+		assert f"publish_review_support_sha256 {digest_output}" in workflow_text
+	assert workflow_text.count("REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}") == 4
+	assert "id: collect_pr_metadata" in workflow_text
+	assert 'awk \'{print $1}\' || true' in workflow_text
+	assert 'echo "linked_issue_metadata_sha256=${linked_issue_metadata_sha256}" >> "$GITHUB_OUTPUT"' in workflow_text
+	assert workflow_text.count(
+		"LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}"
+	) == 4
+	assert workflow_text.count('linked-issue metadata changed after collection') == 1
+	assert "linked-issue metadata changed after collection" in review_text
+	for commit_script in (
+		REVIEW_RB_JUDGE_SCRIPT,
+		REVIEW_CONFLICT_PREPARE_SCRIPT,
+		REVIEW_CONFLICT_RESOLVE_SCRIPT,
+	):
+		commit_text = commit_script.read_text(encoding="utf-8")
+		assert "--linked-issue-metadata-file" in commit_text, commit_script
+		assert "--linked-issue-metadata-sha256" in commit_text, commit_script
+		assert "files_touched_scope_guard.py" in commit_text, commit_script
+	assert 'git diff --cached --name-only "${prepare_merge_head}"' in REVIEW_CONFLICT_PREPARE_SCRIPT.read_text(encoding="utf-8")
+	assert 'git diff --cached --name-only "${resolver_merge_head}"' in REVIEW_CONFLICT_RESOLVE_SCRIPT.read_text(encoding="utf-8")
+	resolver_text = REVIEW_CONFLICT_RESOLVE_SCRIPT.read_text(encoding="utf-8")
+	assert '[[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]' in resolver_text
+	assert '[[ "${resolver_scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]]' in resolver_text
+	assert '[ -z "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" ]' not in resolver_text
+	rb_judge_text = REVIEW_RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
+	assert 'git diff HEAD --name-only -z > "${RB_FIX_PREEXISTING_DIRTY_FILE}"' in rb_judge_text
+	assert '":(exclude,literal)${rb_fix_preexisting_path}"' in rb_judge_text
+	assert 'cmp -s "${RB_FIX_PREEXISTING_DIFF_FILE}" "${rb_fix_current_preexisting_diff_file}"' in rb_judge_text
+	assert 'cmp -s "${RB_FIX_PREEXISTING_INDEX_DIFF_FILE}" "${rb_fix_current_preexisting_index_diff_file}"' in rb_judge_text
+	assert "refusing to discard or combine overlapping changes" in rb_judge_text
+	assert "REVIEW_SCOPE_GUARD_EXPECTED_SHA256" in rb_judge_text
+
+
+def test_conflict_scope_diff_excludes_clean_base_side_merge_changes() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		repo = Path(td)
+		git_env = {
+			key: value
+			for key, value in os.environ.items()
+			if key not in {"GIT_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_WORK_TREE", "GIT_COMMON_DIR"}
+		}
+		subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, env=git_env)
+		(repo / "src").mkdir()
+		(repo / "src/security.py").write_text("VALUE = 1\n", encoding="utf-8")
+		(repo / "base.txt").write_text("base one\n", encoding="utf-8")
+		subprocess.run(["git", "add", "."], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "checkout", "-qb", "feature"], cwd=repo, check=True, env=git_env)
+		(repo / "src/security.py").write_text("VALUE = 2\n", encoding="utf-8")
+		subprocess.run(["git", "commit", "-qam", "advisory fix"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True, env=git_env)
+		(repo / "base.txt").write_text("base two\n", encoding="utf-8")
+		subprocess.run(["git", "commit", "-qam", "advance base"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "checkout", "-q", "feature"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "merge", "--no-commit", "main"], cwd=repo, check=True, env=git_env)
+		merge_head = subprocess.run(
+			["git", "rev-parse", "--verify", "MERGE_HEAD"], cwd=repo, check=True, env=git_env,
+			capture_output=True, text=True,
+		).stdout.strip()
+		first_parent_paths = subprocess.run(
+			["git", "diff", "--cached", "--name-only"], cwd=repo, check=True, env=git_env,
+			capture_output=True, text=True,
+		).stdout.splitlines()
+		base_parent_paths = subprocess.run(
+			["git", "diff", "--cached", "--name-only", merge_head], cwd=repo, check=True, env=git_env,
+			capture_output=True, text=True,
+		).stdout.splitlines()
+		assert first_parent_paths == ["base.txt"]
+		assert base_parent_paths == ["src/security.py"]
+
+
+def test_judge_staging_excludes_paths_dirty_before_writer_runs() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		repo = Path(td)
+		git_env = {
+			key: value
+			for key, value in os.environ.items()
+			if key not in {"GIT_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_WORK_TREE", "GIT_COMMON_DIR"}
+		}
+		subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, env=git_env)
+		(repo / "src").mkdir()
+		(repo / "src/security.py").write_text("VALUE = 1\n", encoding="utf-8")
+		(repo / "manifest.txt").write_text("baseline\n", encoding="utf-8")
+		subprocess.run(["git", "add", "."], cwd=repo, check=True, env=git_env)
+		subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=git_env)
+		(repo / "manifest.txt").write_text("runtime drift\n", encoding="utf-8")
+		preexisting = subprocess.run(
+			["git", "diff", "HEAD", "--name-only"], cwd=repo, check=True, env=git_env,
+			capture_output=True, text=True,
+		).stdout.splitlines()
+		preexisting_literals = [f":(literal){path}" for path in preexisting]
+		baseline_diff = subprocess.run(
+			["git", "diff", "--binary", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
+			capture_output=True,
+		).stdout
+		baseline_index_diff = subprocess.run(
+			["git", "diff", "--binary", "--cached", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
+			capture_output=True,
+		).stdout
+		(repo / "src/security.py").write_text("VALUE = 2\n", encoding="utf-8")
+		pathspecs = [f":(exclude,literal){path}" for path in preexisting]
+		subprocess.run(["git", "add", "-u", "--", *pathspecs], cwd=repo, check=True, env=git_env)
+		staged = subprocess.run(
+			["git", "diff", "--cached", "--name-only"], cwd=repo, check=True, env=git_env,
+			capture_output=True, text=True,
+		).stdout.splitlines()
+		assert staged == ["src/security.py"]
+		current_diff = subprocess.run(
+			["git", "diff", "--binary", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
+			capture_output=True,
+		).stdout
+		assert current_diff == baseline_diff
+		subprocess.run(["git", "add", "--", "manifest.txt"], cwd=repo, check=True, env=git_env)
+		staged_overlap_diff = subprocess.run(
+			["git", "diff", "--binary", "--cached", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
+			capture_output=True,
+		).stdout
+		assert staged_overlap_diff != baseline_index_diff
+		(repo / "manifest.txt").write_text("writer overlap\n", encoding="utf-8")
+		overlapping_diff = subprocess.run(
+			["git", "diff", "--binary", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
+			capture_output=True,
+		).stdout
+		assert overlapping_diff != baseline_diff
 
 
 def test_alert_step_handles_scope() -> None:
@@ -443,7 +896,7 @@ def test_redispatch_refusal_checks_scope_label() -> None:
 
 def test_bootstrap_fetches_guard_helper() -> None:
 	text = _implement_text()
-	assert "for f in files_touched_scope_guard.py; do" in text
+	assert "implement_staged_support_workspace.sh files_touched_scope_guard.py; do" in text
 
 
 def test_label_contract_and_helper_have_scope_blocked() -> None:
@@ -465,7 +918,11 @@ def _run_all() -> int:
 	failures = 0
 	for fn in funcs:
 		try:
-			fn()
+			if fn is test_generated_advisory_helper_failure_fails_closed:
+				for direct_guard_label in ("preflight", "commit", "review"):
+					fn(direct_guard_label)
+			else:
+				fn()
 			print(f"ok   {fn.__name__}")
 		except Exception as exc:  # noqa: BLE001 — test harness surfaces any failure
 			failures += 1

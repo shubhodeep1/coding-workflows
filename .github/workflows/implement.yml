@@ -960,7 +960,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -980,26 +980,6 @@ jobs:
           # whose fetched-manifest cleanup can remove repository support files.
           # Preserve a runtime copy outside that cleanup set for the late step.
           install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"
-
-          # Optional: files_touched scope-enforcement guard helper. Fail-open —
-          # if it is unavailable on ${SCRIPT_REF} (e.g. ref skew during a
-          # rollout) the scope guard steps degrade to a logged skip rather than
-          # blocking implementation. Added to _fetched_scripts so the generated
-          # scripts/.gitignore keeps it out of consumer-repo commits (and out of
-          # the staged set the scope guard inspects).
-          for f in files_touched_scope_guard.py; do
-            src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::notice::Optional files_touched scope guard ${f} is unavailable on ${SCRIPT_REF}; scope enforcement will fail open this run."
-              continue
-            fi
-            install -m 0755 "${src}" "scripts/${f}"
-            _fetched_scripts+=("${f}")
-            _staged_support_installed_paths+=("scripts/${f}")
-          done
 
           for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
             src=".codex-workflow-src/scripts/${f}"
@@ -1488,6 +1468,7 @@ jobs:
 
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'
+        id: fetch_issue_metadata
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           IMPLEMENT_METADATA_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
@@ -1537,6 +1518,35 @@ jobs:
           fi
 
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
+
+          generated_security_advisory=false
+          if grep -qF '**Generated security advisory metadata**' "${ISSUE_BODY_FILE}"; then
+            generated_security_advisory=true
+          fi
+          issue_body_sha256=""
+          scope_guard_sha256=""
+          commit_changes_sha256=""
+          if [ "${generated_security_advisory}" = "true" ]; then
+            scope_guard_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"
+            commit_changes_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
+            issue_body_sha256="$(sha256sum "${ISSUE_BODY_FILE}" 2>/dev/null | awk '{print $1}')"
+            scope_guard_sha256="$(sha256sum "${scope_guard_path}" 2>/dev/null | awk '{print $1}')"
+            commit_changes_sha256="$(sha256sum "${commit_changes_path}" 2>/dev/null | awk '{print $1}')"
+            if ! [[ "${issue_body_sha256}" =~ ^[0-9a-f]{64}$ ]] \
+              || ! [[ "${scope_guard_sha256}" =~ ^[0-9a-f]{64}$ ]] \
+              || ! [[ "${commit_changes_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::Could not anchor generated-advisory implementation inputs before the editor runs."
+              exit 1
+            fi
+          fi
+          {
+            echo "generated_security_advisory=${generated_security_advisory}"
+            echo "issue_author_association=$(jq -r '.author_association // ""' "${ISSUE_META_FILE}")"
+            echo "issue_author_login=$(jq -r '.user.login // ""' "${ISSUE_META_FILE}")"
+            echo "issue_body_sha256=${issue_body_sha256}"
+            echo "scope_guard_sha256=${scope_guard_sha256}"
+            echo "commit_changes_sha256=${commit_changes_sha256}"
+          } >> "$GITHUB_OUTPUT"
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
           # issue. It is passed via heredoc (not shell expansion) to prevent injection
@@ -3140,6 +3150,12 @@ jobs:
         # cleanup/exclusion rules, without mutating the real index/worktree.
         if: env.SKIP_IMPLEMENT != 'true'
         id: preflight_destructive_guard
+        env:
+          GENERATED_SECURITY_ADVISORY: ${{ steps.fetch_issue_metadata.outputs.generated_security_advisory }}
+          ISSUE_AUTHOR_ASSOCIATION: ${{ steps.fetch_issue_metadata.outputs.issue_author_association }}
+          ISSUE_AUTHOR_LOGIN: ${{ steps.fetch_issue_metadata.outputs.issue_author_login }}
+          ISSUE_BODY_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.issue_body_sha256 }}
+          SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.scope_guard_sha256 }}
         run: |
           set -euo pipefail
 
@@ -3383,10 +3399,12 @@ jobs:
           # reject when the staged change set includes paths the issue's
           # files_touched allowlist does not cover. Shares the same projected
           # staged index the destructive guard just inspected (GIT_INDEX_FILE
-          # is still the temp index here). Fails OPEN — no allowlist, master
-          # toggle off, or a missing helper all log-and-allow, matching the
-          # missing-allowlist posture used elsewhere in this workflow.
-          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+          # is still the temp index here). Ordinary issues fail open when no
+          # allowlist exists or the master toggle is off. Generated security
+          # advisories fail closed on missing/malformed helper metadata and
+          # cannot use either scope bypass.
+          generated_security_advisory="${GENERATED_SECURITY_ADVISORY:-false}"
+          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${generated_security_advisory}" != "true" ]; then
             echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
           else
             scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
@@ -3396,18 +3414,38 @@ jobs:
               printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
               scope_violations=""
               scope_rc=0
-              if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+              scope_guard_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"
+              if [ "${generated_security_advisory}" = "true" ]; then
+                issue_body_actual_sha256="$(sha256sum "${ISSUE_BODY_FILE:-}" 2>/dev/null | awk '{print $1}')"
+                scope_guard_actual_sha256="$(sha256sum "${scope_guard_path}" 2>/dev/null | awk '{print $1}')"
+                if ! [[ "${ISSUE_BODY_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+                  || ! [[ "${SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+                  || [ "${issue_body_actual_sha256}" != "${ISSUE_BODY_EXPECTED_SHA256}" ] \
+                  || [ "${scope_guard_actual_sha256}" != "${SCOPE_GUARD_EXPECTED_SHA256}" ]; then
+                  scope_rc=30
+                fi
+              fi
+              if [ "${scope_rc}" -eq 0 ] && [ -f "${scope_guard_path}" ]; then
                 set +e
-                scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+                scope_violations="$(python3 "${scope_guard_path}" \
                   --issue-body-file "${ISSUE_BODY_FILE:-}" \
                   --staged-file "${scope_staged_file}" \
-                  --allowlist-out "${scope_allowlist_file}")"
+                  --allowlist-out "${scope_allowlist_file}" \
+                  --issue-author-association "${ISSUE_AUTHOR_ASSOCIATION:-}" \
+                  --issue-author-login "${ISSUE_AUTHOR_LOGIN:-}" \
+                  --generated-advisory-mode auto)"
                 scope_rc=$?
                 set -e
-              else
-                scope_rc=127
+              elif [ "${scope_rc}" -eq 0 ]; then
+                if [ "${generated_security_advisory}" = "true" ]; then scope_rc=30; else scope_rc=127; fi
               fi
               rm -f "${scope_staged_file}"
+              if [ "${generated_security_advisory}" = "true" ]; then
+                case "${scope_rc}" in
+                  0|20|30) ;;
+                  *) scope_rc=30 ;;
+                esac
+              fi
               case "${scope_rc}" in
                 0)
                   echo "files_touched scope guard: all staged paths fall within the issue allowlist."
@@ -3418,7 +3456,7 @@ jobs:
                 20)
                   scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
                   scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
-                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ] && [ "${generated_security_advisory}" != "true" ]; then
                     echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
                     printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
                   else
@@ -3437,6 +3475,21 @@ jobs:
                     rm -f "${scope_allowlist_file}"
                     exit 1
                   fi
+                  ;;
+                30)
+                  echo "::error::Refusing to commit: generated security advisory metadata, authorship, or exact path scope is invalid."
+                  {
+                    echo "scope_violation_blocked=generated-security-advisory"
+                    echo "scope_violation_count=1"
+                    echo 'scope_violation_files<<__SVF_EOF__'
+                    echo '<generated-security-advisory-metadata>'
+                    echo '__SVF_EOF__'
+                    echo 'scope_violation_allowlist<<__SVA_EOF__'
+                    sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true
+                    echo '__SVA_EOF__'
+                  } >> "$GITHUB_OUTPUT"
+                  rm -f "${scope_allowlist_file}"
+                  exit 1
                   ;;
                 *)
                   echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
@@ -4043,8 +4096,29 @@ jobs:
       - name: Commit changes
         if: env.SKIP_IMPLEMENT != 'true'
         id: commit_changes
+        env:
+          GENERATED_SECURITY_ADVISORY: ${{ steps.fetch_issue_metadata.outputs.generated_security_advisory }}
+          ISSUE_AUTHOR_ASSOCIATION: ${{ steps.fetch_issue_metadata.outputs.issue_author_association }}
+          ISSUE_AUTHOR_LOGIN: ${{ steps.fetch_issue_metadata.outputs.issue_author_login }}
+          ISSUE_BODY_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.issue_body_sha256 }}
+          SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.scope_guard_sha256 }}
+          COMMIT_CHANGES_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.commit_changes_sha256 }}
         run: |
           set -euo pipefail
+          commit_changes_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
+          if [ "${GENERATED_SECURITY_ADVISORY:-false}" = "true" ]; then
+            commit_changes_actual_sha256="$(sha256sum "${commit_changes_path}" 2>/dev/null | awk '{print $1}')"
+            if ! [[ "${COMMIT_CHANGES_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+              || [ "${commit_changes_actual_sha256}" != "${COMMIT_CHANGES_EXPECTED_SHA256}" ]; then
+              echo "::error::Refusing to commit: generated-advisory commit producer changed after staging."
+              {
+                echo "scope_violation_blocked=generated-security-advisory"
+                echo "scope_violation_count=1"
+                echo "scope_violation_files=<generated-security-advisory-commit-producer>"
+              } >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          fi
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
 
       - name: Destructive-commit guard — label + alert on rejection

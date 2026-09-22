@@ -1762,6 +1762,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        id: stage_workflow_support
         run: |
           set -euo pipefail
           helper=".codex-workflow-src/scripts/stage_workflow_support.sh"
@@ -1781,6 +1782,42 @@ jobs:
           SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
           SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+
+          # The branch-pinned staging helper can predate these artifacts. Keep
+          # every metadata producer, validator, and commit producer on one
+          # complete snapshot even while reviewing an in-flight stale branch.
+          security_sensitive_support_files=(
+            review_collect_pr_metadata.sh
+            files_touched_scope_guard.py
+            review_commit_changes.sh
+            review_conflict_prepare.sh
+            review_conflict_resolve.sh
+            review_rb_judge.sh
+          )
+          security_sensitive_support_root=".codex-workflow-src-main"
+          for security_sensitive_support_file in "${security_sensitive_support_files[@]}"; do
+            if [ ! -f "${security_sensitive_support_root}/scripts/${security_sensitive_support_file}" ]; then
+              security_sensitive_support_root=".codex-workflow-src"
+              break
+            fi
+          done
+          for security_sensitive_support_file in "${security_sensitive_support_files[@]}"; do
+            security_sensitive_support_src="${security_sensitive_support_root}/scripts/${security_sensitive_support_file}"
+            if [ ! -f "${security_sensitive_support_src}" ]; then
+              echo "::error::Required security-sensitive support set is incomplete in ${security_sensitive_support_root}; refusing to mix support snapshots."
+              exit 1
+            fi
+          done
+          for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py; do
+            install -m 0755 \
+              "${security_sensitive_support_root}/scripts/${metadata_guard_support_file}" \
+              "${SUPPORT_SCRIPTS_DIR}/${metadata_guard_support_file}"
+          done
+          for commit_producer_support_file in review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh review_rb_judge.sh; do
+            install -m 0755 \
+              "${security_sensitive_support_root}/scripts/${commit_producer_support_file}" \
+              "${SUPPORT_SCRIPTS_DIR}/${commit_producer_support_file}"
+          done
 
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
             backfill_src=".codex-workflow-src/scripts/transcript_archive.sh"
@@ -1846,6 +1883,22 @@ jobs:
               rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
             fi
           fi
+
+          publish_review_support_sha256()
+          {
+            local output_name="$1" support_path="$2" support_sha256
+            support_sha256="$(sha256sum "${support_path}" 2>/dev/null | awk '{print $1}')"
+            if ! [[ "${support_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::Could not anchor required review support ${support_path}."
+              exit 1
+            fi
+            echo "${output_name}=${support_sha256}" >> "$GITHUB_OUTPUT"
+          }
+          publish_review_support_sha256 scope_guard_sha256 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"
+          publish_review_support_sha256 review_commit_changes_sha256 "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
+          publish_review_support_sha256 review_conflict_prepare_sha256 "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"
+          publish_review_support_sha256 review_conflict_resolve_sha256 "${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
+          publish_review_support_sha256 review_rb_judge_sha256 "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh"
 
       - name: Show disk usage (post support-source staging)
         run: df -h /
@@ -1997,6 +2050,7 @@ jobs:
             echo "PR_EDITOR_COMMENT_FILE=${RUNTIME_DIR}/pr_editor_comment.txt"
             echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
             echo "LINKED_ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/linked_issue_context.txt"
+            echo "LINKED_ISSUE_METADATA_FILE=${RUNTIME_DIR}/linked_issue_metadata.json"
             echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
             echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"
             echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"
@@ -2241,11 +2295,18 @@ jobs:
           } > ./pre_assembled_static.txt
 
       - name: Collect PR metadata
+        id: collect_pr_metadata
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"
+          linked_issue_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}' || true)"
+          if ! [[ "${linked_issue_metadata_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not publish the linked-issue metadata integrity digest."
+            exit 1
+          fi
+          echo "linked_issue_metadata_sha256=${linked_issue_metadata_sha256}" >> "$GITHUB_OUTPUT"
 
       - name: Retrieve reviewer memory context (fail-open)
         run: |
@@ -4349,8 +4410,23 @@ jobs:
         id: commit_changes
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
+          REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}
+          REVIEW_COMMIT_CHANGES_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.review_commit_changes_sha256 }}
         run: |
           set -euo pipefail
+          linked_issue_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}')"
+          if [ "${linked_issue_metadata_sha256}" != "${LINKED_ISSUE_METADATA_EXPECTED_SHA256}" ]; then
+            echo "::error::Refusing to commit: linked-issue metadata changed after collection."
+            exit 1
+          fi
+          review_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+          review_commit_changes_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh" 2>/dev/null | awk '{print $1}')"
+          if [ "${review_scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ] \
+            || [ "${review_commit_changes_actual_sha256}" != "${REVIEW_COMMIT_CHANGES_EXPECTED_SHA256}" ]; then
+            echo "::error::Refusing to commit: generated-advisory review guard support changed after staging."
+            exit 1
+          fi
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
 
       - name: Run interim judge
@@ -5295,6 +5371,9 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
+          REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}
+          REVIEW_CONFLICT_PREPARE_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.review_conflict_prepare_sha256 }}
           # Kill switch for the deterministic union-merge of the generated
           # .ai/.workspace_source_manifest.txt (see the "Deterministic
           # union-merge" block in scripts/review_conflict_prepare.sh).
@@ -5303,6 +5382,13 @@ jobs:
           CONFLICT_MANIFEST_UNION_ENABLED: ${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}
         run: |
           set -euo pipefail
+          prepare_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+          prepare_producer_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh" 2>/dev/null | awk '{print $1}')"
+          if [ "${prepare_scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ] \
+            || [ "${prepare_producer_actual_sha256}" != "${REVIEW_CONFLICT_PREPARE_EXPECTED_SHA256}" ]; then
+            echo "::error::Refusing deterministic merge resolution: generated-advisory guard support changed after staging."
+            exit 1
+          fi
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"
 
       - name: Run Codex resolver, validate, stage, commit
@@ -5337,6 +5423,9 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
+          REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}
+          REVIEW_CONFLICT_RESOLVE_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.review_conflict_resolve_sha256 }}
           RESOLVER_ESCAPE_THRESHOLD_N: ${{ vars.RESOLVER_ESCAPE_THRESHOLD_N || '5' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
@@ -5374,6 +5463,11 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
         run: |
           set -euo pipefail
+          resolver_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+          if [ "${resolver_scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ]; then
+            echo "::error::Refusing merge resolution: generated-advisory scope validator changed after staging."
+            exit 1
+          fi
           if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
             source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             ensure_label_exists "ai:resolver-escalated" "${{ github.repository }}" || true
@@ -5413,9 +5507,15 @@ jobs:
           # conflated missing-file with parse-failure under a single
           # "unavailable/unparseable" label.
           _probe_resolver() {
-            local path="$1" err
+            local path="$1" err candidate_sha256
             if [ ! -f "${path}" ]; then
               printf '%s\n' "missing"
+              return
+            fi
+            candidate_sha256="$(sha256sum "${path}" 2>/dev/null | awk '{print $1}')"
+            if [ -n "${REVIEW_CONFLICT_RESOLVE_EXPECTED_SHA256:-}" ] \
+              && [ "${candidate_sha256}" != "${REVIEW_CONFLICT_RESOLVE_EXPECTED_SHA256}" ]; then
+              printf '%s\n' "digest_mismatch"
               return
             fi
             # `bash -n` writes diagnostics to stderr only; merge them
@@ -5718,6 +5818,9 @@ jobs:
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
+          REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}
+          REVIEW_RB_JUDGE_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.review_rb_judge_sha256 }}
           REPOSITORY: ${{ github.repository }}
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
@@ -5729,6 +5832,13 @@ jobs:
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
           set -euo pipefail
+          rb_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+          rb_judge_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" 2>/dev/null | awk '{print $1}')"
+          if [ "${rb_scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ] \
+            || [ "${rb_judge_actual_sha256}" != "${REVIEW_RB_JUDGE_EXPECTED_SHA256}" ]; then
+            echo "::error::Refusing review-blocked judge execution: generated-advisory guard support changed after staging."
+            exit 1
+          fi
           # Graceful-degradation wrapper.  The judge has two recognised
           # failure modes:
           #   exit 2 — transient bash syntax error from runner FS races;

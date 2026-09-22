@@ -1169,6 +1169,7 @@ def test_checkout_repository_fallback_uses_checkout_ref_output_chain() -> None:
 def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> None:
 	fetch_step = _step_block_text("Fetch issue metadata")
 	fetch_block = _extract_run_script("Fetch issue metadata")
+	precheck_block = _extract_run_script("Precheck approval phase label")
 	assert "IMPLEMENT_METADATA_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fetch_step, (
 		"Fetch issue metadata must keep PR_BASE_BRANCH anchored to the integration/default ref, not the baseline checkout override"
 	)
@@ -1177,6 +1178,15 @@ def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> 
 	assert "steps.checkout_ref.outputs.ref" not in fetch_block, (
 		"PR_BASE_BRANCH must not follow the optional prior_pr_baseline_branch checkout override"
 	)
+	assert 'echo "issue_author_association=$(jq -r \'.author_association // ""\' "${ISSUE_META_FILE}")"' in fetch_block
+	assert 'echo "issue_author_login=$(jq -r \'.user.login // ""\' "${ISSUE_META_FILE}")"' in fetch_block
+	assert 'echo "ISSUE_AUTHOR_ASSOCIATION=${ISSUE_AUTHOR_ASSOCIATION}" >> "$GITHUB_ENV"' not in precheck_block
+	assert 'echo "ISSUE_AUTHOR_LOGIN=${ISSUE_AUTHOR_LOGIN}" >> "$GITHUB_ENV"' not in precheck_block
+
+	for guarded_step_name in ("Preflight destructive-commit guard", "Commit changes"):
+		guarded_step = _step_block_text(guarded_step_name)
+		assert "ISSUE_AUTHOR_ASSOCIATION: ${{ steps.fetch_issue_metadata.outputs.issue_author_association }}" in guarded_step
+		assert "ISSUE_AUTHOR_LOGIN: ${{ steps.fetch_issue_metadata.outputs.issue_author_login }}" in guarded_step
 
 
 def test_fetch_issue_metadata_reuses_matching_cache_without_api_call() -> None:
@@ -1938,7 +1948,7 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do" in stage_block
+	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py; do" in stage_block
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
 	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"'

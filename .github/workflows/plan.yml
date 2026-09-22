@@ -283,7 +283,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh files_touched_scope_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -434,6 +434,7 @@ jobs:
           {
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
+            echo "ISSUE_BODY_FILE=${RUNTIME_DIR}/issue_body.txt"
             echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
             echo "PLANNING_CONTEXT_FILE=${RUNTIME_DIR}/planning_context.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
@@ -447,6 +448,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
+        id: fetch_issue_metadata
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -455,9 +457,27 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
 
+          jq -r '.body // ""' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}"
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+          generated_security_advisory=false
+          if grep -qF '**Generated security advisory metadata**' "${ISSUE_BODY_FILE}"; then
+            generated_security_advisory=true
+          fi
+          issue_body_sha256="$(sha256sum "${ISSUE_BODY_FILE}" 2>/dev/null | awk '{print $1}')"
+          scope_guard_sha256="$(sha256sum scripts/files_touched_scope_guard.py 2>/dev/null | awk '{print $1}')"
+          if ! [[ "${issue_body_sha256}" =~ ^[0-9a-f]{64}$ ]] || ! [[ "${scope_guard_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not anchor generated-advisory plan inputs before the planner runs."
+            exit 1
+          fi
+          {
+            echo "generated_security_advisory=${generated_security_advisory}"
+            echo "issue_author_association=$(jq -r '.author_association // ""' "${ISSUE_META_FILE}")"
+            echo "issue_author_login=$(jq -r '.user.login // ""' "${ISSUE_META_FILE}")"
+            echo "issue_body_sha256=${issue_body_sha256}"
+            echo "scope_guard_sha256=${scope_guard_sha256}"
+          } >> "$GITHUB_OUTPUT"
           ISSUE_BODY_DELIM="EOF_$(date +%s%N)_$RANDOM"
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
@@ -1546,9 +1566,15 @@ jobs:
           echo "::notice::Orchestrator auto-answer eligible (run_id=${{ github.run_id }}): ${AUTO_ANSWER_MAPPING}"
 
       - name: Guard plans targeting template-owned paths
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && !endsWith(github.repository, '/coding-workflows')
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          IS_WORKFLOW_SOURCE_REPO: ${{ endsWith(github.repository, '/coding-workflows') }}
+          GENERATED_SECURITY_ADVISORY: ${{ steps.fetch_issue_metadata.outputs.generated_security_advisory }}
+          ISSUE_AUTHOR_ASSOCIATION: ${{ steps.fetch_issue_metadata.outputs.issue_author_association }}
+          ISSUE_AUTHOR_LOGIN: ${{ steps.fetch_issue_metadata.outputs.issue_author_login }}
+          ISSUE_BODY_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.issue_body_sha256 }}
+          SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.scope_guard_sha256 }}
         run: |
           set -euo pipefail
           # Template-owned paths are fetched from coding-workflows templates
@@ -1579,9 +1605,9 @@ jobs:
           # failure), we fall back to rejecting every scripts/ path, matching
           # implement.yml's own fallback.
           #
-          # This guard is skipped entirely when the workflow is running inside
-          # the canonical `*/coding-workflows` repository, because in that repo
-          # those paths *are* the source of truth and must be editable.
+          # The template-owned-path portion is skipped when the workflow runs
+          # inside `*/coding-workflows`, where those paths are source of truth.
+          # Generated advisory scope validation still runs there.
           #
           # We only scan the plan's "Files likely to change" section (and any
           # equivalent "Files to change" heading), not prose, so that a plan
@@ -1609,8 +1635,8 @@ jobs:
           FILES_SECTION_FILE="${RUNTIME_DIR}/files_section.txt"
           perl -ne '
             BEGIN { $in = 0; $neg = 0 }
-            if (/^\s{0,3}#{1,6}\s*Files\b[^\n]*\bchange\b/i) { $in = 1; $neg = 0; next; }
-            if ($in && /^\s{0,3}#{1,6}\s+\S/) { $in = 0; $neg = 0; }
+            if (/^\s{0,3}(?:#{1,6}\s*|\d+[.)]\s+)Files\b[^\n]*\bchange\b[.:]?\s*$/i) { $in = 1; $neg = 0; next; }
+            if ($in && (m{^\s{0,3}#{1,6}\s+\S} || /^\s{0,3}\d+[.)]\s+[^`]+[.:]?\s*$/)) { $in = 0; $neg = 0; }
             next unless $in;
             if (/^\s*(?:\*\*|__)?\s*(?:no|not|none|nothing|unchanged)\b/i
                 && /(?:chang|modif|edit|touch|affect|updat)/i) { $neg = 1; next; }
@@ -1623,6 +1649,26 @@ jobs:
             }
             print;
           ' "${CODEX_OUTPUT_FILE}" > "${FILES_SECTION_FILE}"
+          if [ "${GENERATED_SECURITY_ADVISORY:-false}" = "true" ]; then
+            issue_body_actual_sha256="$(sha256sum "${ISSUE_BODY_FILE:-}" 2>/dev/null | awk '{print $1}')"
+            scope_guard_actual_sha256="$(sha256sum scripts/files_touched_scope_guard.py 2>/dev/null | awk '{print $1}')"
+            if ! [[ "${ISSUE_BODY_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+              || ! [[ "${SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+              || [ "${issue_body_actual_sha256}" != "${ISSUE_BODY_EXPECTED_SHA256}" ] \
+              || [ "${scope_guard_actual_sha256}" != "${SCOPE_GUARD_EXPECTED_SHA256}" ]; then
+              echo "::error::Generated-advisory issue body or scope validator changed after collection."
+              exit 1
+            fi
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/files_touched_scope_guard.py \
+              --issue-body-file "${ISSUE_BODY_FILE}" \
+              --plan-file "${CODEX_OUTPUT_FILE}" \
+              --issue-author-association "${ISSUE_AUTHOR_ASSOCIATION}" \
+              --issue-author-login "${ISSUE_AUTHOR_LOGIN}" \
+              --generated-advisory-mode required
+          fi
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+            exit 0
+          fi
           EXCLUDED_RE='(^|[^[:alnum:]_./-])`?(\./|/)?(scripts|prompts|ai-memory|\.github)'
           TEMPLATE_PATH_CANDIDATES_FILE="${RUNTIME_DIR}/template_path_candidates.txt"
           TEMPLATE_PATH_BLOCKED_FILE="${RUNTIME_DIR}/template_path_blocked.txt"

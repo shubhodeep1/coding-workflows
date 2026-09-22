@@ -25,15 +25,20 @@ Inputs:
                           `git diff --cached --name-only --diff-filter=ACMRD`).
                           Reads stdin when omitted.
   --allowlist-out PATH    Optional: write the normalized allowlist (one entry
-                          per line) so the caller can surface it in the alert.
+                           per line) so the caller can surface it in the alert.
+  --linked-issue-metadata-file PATH
+                          Batched linked-issue body/authorship JSON.
+  --linked-issue-metadata-sha256 HEX
+                          Collector digest required with linked metadata.
 
 Output:
   stdout — the out-of-scope staged paths, one per line (empty when none).
 
-Exit codes (the caller maps these; ANY other code => fail open / skip):
+Exit codes (the caller maps these; generated-advisory callers fail closed):
   0   evaluated, every staged path is in scope.
   10  skipped — the issue declares no (or an empty) files_touched allowlist.
   20  one or more staged paths fall outside the allowlist (stdout lists them).
+  30  generated-advisory metadata, authorship, or collector digest is invalid.
 
 Matching semantics (allowlist entry -> staged path):
   * leading "./" is stripped from both sides; surrounding whitespace trimmed.
@@ -55,6 +60,8 @@ from __future__ import annotations
 import argparse
 import fnmatch
 from functools import lru_cache
+import hashlib
+import json
 from pathlib import PurePosixPath
 import re
 import sys
@@ -63,10 +70,26 @@ import sys
 EXIT_IN_SCOPE = 0
 EXIT_SKIP_NO_ALLOWLIST = 10
 EXIT_OUT_OF_SCOPE = 20
+EXIT_INVALID_GENERATED_ADVISORY = 30
 
 STATUS_IN_SCOPE = "in-scope"
 STATUS_SKIP_NO_ALLOWLIST = "skip-no-allowlist"
 STATUS_OUT_OF_SCOPE = "out-of-scope"
+
+GENERATED_ADVISORY_HEADER = "**Generated security advisory metadata**"
+GENERATED_ADVISORY_SCHEMA = "generated-security-advisory.v1"
+TRUSTED_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+TRUSTED_GENERATED_ADVISORY_BOT_LOGINS = frozenset({"github-actions[bot]"})
+_GENERATED_ADVISORY_FOOTER_RE = re.compile(
+	r"(?:^|\n)---\n"
+	r"\*\*Generated security advisory metadata\*\*\n"
+	r"- Schema: `generated-security-advisory\.v1`\n"
+	r"- Waiver match key: `(sha256:[0-9a-f]{64})`\n"
+	r"- Audited commit: `([0-9a-f]{40,64})`\n"
+	r"- Cited file: `([^`\n]+)`\n"
+	r"files_touched:\n"
+	r"  - ([^\n]+)\n?\Z"
+)
 
 # Dependency lockfiles the implement prompt (prompts/mode-implement.txt,
 # "Dependency / lockfile discipline") instructs the editor to regenerate in the
@@ -150,6 +173,107 @@ def is_lockfile(path: str) -> bool:
 	return path.rsplit("/", 1)[-1] in LOCKFILE_BASENAMES
 
 
+def _strict_repository_file(path: str) -> str:
+	"""Return a canonical exact repository path or raise ValueError."""
+	value = normalize_path(path)
+	if not value or value == "." or value.startswith("/"):
+		raise ValueError("cited file must be a non-empty repository-relative path")
+	parts = PurePosixPath(value).parts
+	if ".." in parts or any(character in value for character in ("*", "?", "[", "]", "`")):
+		raise ValueError("cited file must be one exact repository-relative path")
+	if any(ord(character) < 32 or ord(character) == 127 for character in value):
+		raise ValueError("cited file contains a control character")
+	return PurePosixPath(*parts).as_posix()
+
+
+def parse_generated_advisory(text: str) -> dict[str, str] | None:
+	"""Parse the authenticated-shape footer used by generated security tasks.
+
+	The body remains untrusted. Presence of the header opts the issue into a
+	fail-closed parser; malformed or duplicated metadata is never treated as a
+	normal issue whose permissive files_touched rules can be used instead.
+	"""
+	if GENERATED_ADVISORY_HEADER not in text:
+		return None
+	if text.count(GENERATED_ADVISORY_HEADER) != 1:
+		raise ValueError("generated security advisory metadata must appear exactly once")
+	match = _GENERATED_ADVISORY_FOOTER_RE.search(text.replace("\r\n", "\n"))
+	if match is None:
+		raise ValueError("generated security advisory metadata footer is malformed")
+	waiver_match_key, audited_commit, cited_file_raw, allowlist_file_raw = match.groups()
+	cited_file = _strict_repository_file(cited_file_raw)
+	allowlist_file = _strict_repository_file(allowlist_file_raw)
+	if allowlist_file != cited_file:
+		raise ValueError("generated security advisory files_touched path must equal the cited file")
+	return {
+		"schema": GENERATED_ADVISORY_SCHEMA,
+		"waiver_match_key": waiver_match_key,
+		"audited_commit": audited_commit,
+		"cited_file": cited_file,
+	}
+
+
+def parse_linked_issue_metadata(text: str) -> tuple[str, str, str] | None:
+	"""Return one generated-advisory body and author, or None when verified absent."""
+	try:
+		linked_issue_rows = json.loads(text)
+	except (json.JSONDecodeError, TypeError) as exc:
+		raise ValueError("linked-issue metadata is malformed") from exc
+	if not isinstance(linked_issue_rows, list) or any(not isinstance(row, dict) for row in linked_issue_rows):
+		raise ValueError("linked-issue metadata must be an array of objects")
+	for linked_issue_row in linked_issue_rows:
+		if "_collection_status" in linked_issue_row:
+			raise ValueError("linked-issue metadata collection is unresolved")
+	linked_advisory_rows = [
+		row
+		for row in linked_issue_rows
+		if isinstance(row.get("body"), str) and GENERATED_ADVISORY_HEADER in row["body"]
+	]
+	if len(linked_advisory_rows) > 1:
+		raise ValueError("multiple generated security advisories are linked to one PR")
+	if not linked_advisory_rows:
+		return None
+	linked_advisory_row = linked_advisory_rows[0]
+	return (
+		linked_advisory_row["body"],
+		str(linked_advisory_row.get("author_association") or ""),
+		str(linked_advisory_row.get("author_login") or ""),
+	)
+
+
+def extract_plan_files(text: str) -> list[str]:
+	"""Extract concrete paths from a plan's Files-to-change section."""
+	paths: list[str] = []
+	in_files_section = False
+	for raw_line in text.replace("\r\n", "\n").splitlines():
+		if re.match(
+			r"^\s{0,3}(?:#{1,6}\s*|\d+[.)]\s+)Files\b.*\bchange\b[.:]?\s*$",
+			raw_line,
+			re.IGNORECASE,
+		):
+			in_files_section = True
+			continue
+		if in_files_section and (
+			re.match(r"^\s{0,3}#{1,6}\s+\S", raw_line)
+			or re.match(r"^\s{0,3}\d+[.)]\s+[^`]+[.:]?\s*$", raw_line)
+		):
+			break
+		if not in_files_section or not re.match(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", raw_line):
+			continue
+		path_match = re.search(r"`([^`]+)`", raw_line)
+		if path_match is None:
+			continue
+		path_matches = re.findall(r"`([^`]+)`", raw_line)
+		for path_candidate_raw in path_matches:
+			try:
+				candidate = _strict_repository_file(path_candidate_raw)
+			except ValueError:
+				candidate = path_candidate_raw
+			if candidate not in paths:
+				paths.append(candidate)
+	return paths
+
+
 def _path_glob_matches(path: str, pattern: str) -> bool:
 	"""True when a normalized path matches a normalized glob pattern."""
 	if "/" not in pattern:
@@ -188,9 +312,9 @@ def entry_matches(entry: str, path: str) -> bool:
 	return path == entry or path.startswith(entry + "/")
 
 
-def path_in_scope(path: str, allowlist: list[str]) -> bool:
+def path_in_scope(path: str, allowlist: list[str], *, auto_allow_lockfiles: bool = True) -> bool:
 	"""True when a staged path is auto-allowed or covered by any allowlist entry."""
-	if is_lockfile(path):
+	if auto_allow_lockfiles and is_lockfile(path):
 		return True
 	for entry in allowlist:
 		if entry_matches(entry, path):
@@ -198,7 +322,12 @@ def path_in_scope(path: str, allowlist: list[str]) -> bool:
 	return False
 
 
-def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[str]) -> tuple[str, list[str], list[str]]:
+def evaluate_allowlist(
+	allowlist_entries: list[str] | None,
+	staged_paths: list[str],
+	*,
+	auto_allow_lockfiles: bool = True,
+) -> tuple[str, list[str], list[str]]:
 	"""Classify staged paths against an explicit allowlist using the shared matcher.
 
 	Returns (status, allowlist, out_of_scope) where status is one of
@@ -213,7 +342,7 @@ def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[s
 		path = normalize_path(raw)
 		if not path:
 			continue
-		if not path_in_scope(path, allowlist):
+		if not path_in_scope(path, allowlist, auto_allow_lockfiles=auto_allow_lockfiles):
 			out_of_scope.append(path)
 
 	if out_of_scope:
@@ -241,6 +370,23 @@ def _read_text_file(path: str) -> str:
 		return ""
 
 
+def _read_verified_linked_issue_metadata(path: str, expected_sha256: str) -> str:
+	"""Read linked-issue metadata only when it matches the collector digest."""
+	if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+		raise ValueError("linked-issue metadata collector digest is unavailable")
+	try:
+		with open(path, "rb") as handle:
+			metadata_bytes = handle.read()
+	except OSError as exc:
+		raise ValueError("linked-issue metadata is unavailable") from exc
+	if hashlib.sha256(metadata_bytes).hexdigest() != expected_sha256:
+		raise ValueError("linked-issue metadata integrity check failed")
+	try:
+		return metadata_bytes.decode("utf-8")
+	except UnicodeDecodeError as exc:
+		raise ValueError("linked-issue metadata is malformed") from exc
+
+
 def _read_staged(path: str | None) -> list[str]:
 	if path:
 		text = _read_text_file(path)
@@ -259,13 +405,76 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--allowlist-file", default="")
 	parser.add_argument("--staged-file", default="")
 	parser.add_argument("--allowlist-out", default="")
+	parser.add_argument("--plan-file", default="")
+	parser.add_argument("--linked-issue-metadata-file", default="")
+	parser.add_argument("--linked-issue-metadata-sha256", default="")
+	parser.add_argument("--issue-author-association", default="")
+	parser.add_argument("--issue-author-login", default="")
+	parser.add_argument(
+		"--generated-advisory-mode",
+		choices=("auto", "required", "off"),
+		default="off",
+	)
 	args = parser.parse_args(argv)
 
 	issue_body = _read_text_file(args.issue_body_file) if args.issue_body_file else ""
+	issue_author_association = args.issue_author_association
+	issue_author_login = args.issue_author_login
+	if args.linked_issue_metadata_file:
+		try:
+			linked_metadata_text = _read_verified_linked_issue_metadata(
+				args.linked_issue_metadata_file,
+				args.linked_issue_metadata_sha256,
+			)
+			linked_advisory = parse_linked_issue_metadata(linked_metadata_text)
+		except ValueError as exc:
+			print(f"generated security advisory rejected: {exc}", file=sys.stderr)
+			return EXIT_INVALID_GENERATED_ADVISORY
+		if linked_advisory is None:
+			return EXIT_SKIP_NO_ALLOWLIST
+		issue_body, issue_author_association, issue_author_login = linked_advisory
 	staged_paths = _read_staged(args.staged_file or None)
 	allowlist_entries = _read_allowlist(args.allowlist_file) if args.allowlist_file else None
 
-	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries)
+	generated_advisory: dict[str, str] | None = None
+	if args.generated_advisory_mode != "off":
+		try:
+			generated_advisory = parse_generated_advisory(issue_body)
+		except ValueError as exc:
+			print(f"generated security advisory rejected: {exc}", file=sys.stderr)
+			return EXIT_INVALID_GENERATED_ADVISORY
+		if args.generated_advisory_mode == "required" and generated_advisory is None:
+			print("generated security advisory metadata is required", file=sys.stderr)
+			return EXIT_INVALID_GENERATED_ADVISORY
+	if generated_advisory is not None:
+		issue_author_association = issue_author_association.strip().upper()
+		issue_author_login = issue_author_login.strip().lower()
+		if issue_author_association not in TRUSTED_AUTHOR_ASSOCIATIONS and not (
+			issue_author_association == "NONE"
+			and issue_author_login in TRUSTED_GENERATED_ADVISORY_BOT_LOGINS
+		):
+			print("generated security advisory author association is not trusted", file=sys.stderr)
+			return EXIT_INVALID_GENERATED_ADVISORY
+		cited_file = generated_advisory["cited_file"]
+		if args.plan_file:
+			plan_files = extract_plan_files(_read_text_file(args.plan_file))
+			if plan_files != [cited_file]:
+				print(
+					"generated security advisory plan must name only its exact cited file",
+					file=sys.stderr,
+				)
+				return EXIT_INVALID_GENERATED_ADVISORY
+		allowlist = [cited_file]
+		out_of_scope = [
+			normalized_path
+			for staged_path in staged_paths
+			if (normalized_path := normalize_path(staged_path)) and normalized_path != cited_file
+		]
+		status = STATUS_OUT_OF_SCOPE if out_of_scope else STATUS_IN_SCOPE
+	else:
+		status, allowlist, out_of_scope = evaluate(
+			issue_body, staged_paths, allowlist_entries=allowlist_entries
+		)
 
 	if args.allowlist_out:
 		try:

@@ -2518,6 +2518,48 @@ if [ -n "$(git status --porcelain)" ]; then
       exit 0
     fi
   fi
+  resolver_generated_advisory_staged_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/resolver-generated-advisory-staged.XXXXXX")"
+  resolver_merge_head="$(git rev-parse --verify MERGE_HEAD 2>/dev/null || true)"
+  if [ -n "${resolver_merge_head}" ]; then
+    git diff --cached --name-only "${resolver_merge_head}" | sed '/^$/d' > "${resolver_generated_advisory_staged_file}"
+  else
+    printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${resolver_generated_advisory_staged_file}"
+  fi
+  if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+    LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
+  fi
+  resolver_generated_advisory_scope_rc=30
+  resolver_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+  resolver_generated_advisory_failure="scope validator rejected the staged paths"
+  if ! [[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then resolver_generated_advisory_failure="expected scope-validator digest is missing or invalid"
+  elif [ ! -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ]; then resolver_generated_advisory_failure="scope validator is unavailable"
+  elif ! [[ "${resolver_scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]]; then resolver_generated_advisory_failure="scope validator could not be hashed"
+  elif [ "${resolver_scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ]; then resolver_generated_advisory_failure="scope validator digest changed after staging"
+  elif [ ! -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then resolver_generated_advisory_failure="linked-issue metadata is unavailable"
+  fi
+  if [[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+    && [[ "${resolver_scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]] \
+    && [ "${resolver_scope_guard_actual_sha256}" = "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ] \
+    && [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
+    && [ -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
+    set +e
+    resolver_generated_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
+      --linked-issue-metadata-file "${LINKED_ISSUE_METADATA_FILE}" \
+      --linked-issue-metadata-sha256 "${LINKED_ISSUE_METADATA_EXPECTED_SHA256:-}" \
+      --staged-file "${resolver_generated_advisory_staged_file}" \
+      --generated-advisory-mode auto)"
+    resolver_generated_advisory_scope_rc=$?
+    set -e
+  fi
+  rm -f "${resolver_generated_advisory_staged_file}"
+  case "${resolver_generated_advisory_scope_rc}" in
+    0|10) ;;
+    *)
+      echo "::error::Refusing [ai-merge-resolve] commit: ${resolver_generated_advisory_failure}."
+      printf '%s\n' "${resolver_generated_advisory_violations:-}" | sed '/^$/d;s/^/  - /'
+      exit 1
+      ;;
+  esac
   if git diff --cached --quiet; then
     echo "No staged merge resolution changes remain; skipping merge-resolve commit."
     echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"

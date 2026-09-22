@@ -17,6 +17,18 @@ fi
 rm -f /tmp/_rb_judge_syntax_err
 
 set -euo pipefail
+
+verify_review_scope_guard_integrity()
+{
+	local scope_guard_path="${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"
+	local scope_guard_actual_sha256
+
+	if ! [[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then echo "::error::Refusing [judge-fix] commit: expected scope-validator digest is missing or invalid."; return 1; fi
+	if [ ! -f "${scope_guard_path}" ] || [ ! -r "${scope_guard_path}" ]; then echo "::error::Refusing [judge-fix] commit: generated-advisory scope validator is unavailable."; return 1; fi
+	scope_guard_actual_sha256="$(sha256sum "${scope_guard_path}" 2>/dev/null | awk '{print $1}')"
+	if ! [[ "${scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]]; then echo "::error::Refusing [judge-fix] commit: generated-advisory scope validator could not be hashed."; return 1; fi
+	if [ "${scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ]; then echo "::error::Refusing [judge-fix] commit: generated-advisory scope validator changed after the writer ran."; return 1; fi
+}
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-/tmp/codex-support}"
 if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
   if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then
@@ -1845,6 +1857,18 @@ case "${RB_ACTION}" in
       echo "Judge is applying fixes to PR #${PR_NUMBER}..."
 
       # Re-run the judge in editing mode on the PR branch
+      RB_FIX_PREEXISTING_DIRTY_FILE="${RUNTIME_DIR}/rb_fix_preexisting_dirty.txt"
+      git diff HEAD --name-only -z > "${RB_FIX_PREEXISTING_DIRTY_FILE}"
+      RB_FIX_PREEXISTING_DIFF_FILE="${RUNTIME_DIR}/rb_fix_preexisting.diff"
+      RB_FIX_PREEXISTING_INDEX_DIFF_FILE="${RUNTIME_DIR}/rb_fix_preexisting_index.diff"
+      rb_fix_preexisting_excludes=()
+      rb_fix_preexisting_literals=()
+      while IFS= read -r -d '' rb_fix_preexisting_path; do
+        rb_fix_preexisting_excludes+=(":(exclude,literal)${rb_fix_preexisting_path}")
+        rb_fix_preexisting_literals+=(":(literal)${rb_fix_preexisting_path}")
+      done < "${RB_FIX_PREEXISTING_DIRTY_FILE}"
+      git diff --binary HEAD -- "${rb_fix_preexisting_literals[@]}" > "${RB_FIX_PREEXISTING_DIFF_FILE}"
+      git diff --binary --cached HEAD -- "${rb_fix_preexisting_literals[@]}" > "${RB_FIX_PREEXISTING_INDEX_DIFF_FILE}"
       RB_FIX_PROMPT="${RUNTIME_DIR}/rb_fix_prompt.txt"
       RB_FIX_OUTPUT="${RUNTIME_DIR}/rb_fix_output.txt"
       {
@@ -1965,6 +1989,19 @@ __EDIT_DISCIPLINE__
       rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
 
       # Check for changes and commit
+      if [ "${#rb_fix_preexisting_literals[@]}" -gt 0 ]; then
+        rb_fix_current_preexisting_diff_file="$(mktemp "${RUNTIME_DIR}/rb_fix_current_preexisting.XXXXXX")"
+        rb_fix_current_preexisting_index_diff_file="$(mktemp "${RUNTIME_DIR}/rb_fix_current_preexisting_index.XXXXXX")"
+        git diff --binary HEAD -- "${rb_fix_preexisting_literals[@]}" > "${rb_fix_current_preexisting_diff_file}"
+        git diff --binary --cached HEAD -- "${rb_fix_preexisting_literals[@]}" > "${rb_fix_current_preexisting_index_diff_file}"
+        if ! cmp -s "${RB_FIX_PREEXISTING_DIFF_FILE}" "${rb_fix_current_preexisting_diff_file}" \
+          || ! cmp -s "${RB_FIX_PREEXISTING_INDEX_DIFF_FILE}" "${rb_fix_current_preexisting_index_diff_file}"; then
+          rm -f "${rb_fix_current_preexisting_diff_file}" "${rb_fix_current_preexisting_index_diff_file}"
+          echo "::error::Review-blocked fix writer modified a path that was already dirty before it ran; refusing to discard or combine overlapping changes."
+          exit 1
+        fi
+        rm -f "${rb_fix_current_preexisting_diff_file}" "${rb_fix_current_preexisting_index_diff_file}"
+      fi
       if codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
         echo "::warning::Review-blocked fix OpenCode was killed by codex stall guard; skipping commit/merge and falling back to manual intervention."
       elif [ -n "$(git status --porcelain)" ]; then
@@ -2019,9 +2056,9 @@ __EDIT_DISCIPLINE__
         unset _rb_origin_url
 
         if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' "${rb_fix_preexisting_excludes[@]}"
         else
-          git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' "${rb_fix_preexisting_excludes[@]}"
         fi
         echo "Staged files before commit:"
         STAGED_FILES="$(git diff --cached --name-only || true)"
@@ -2034,6 +2071,33 @@ __EDIT_DISCIPLINE__
           echo "Error: workflow runtime/helper artifacts are staged in consumer repo"
           exit 1
         fi
+        rb_generated_advisory_staged_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/rb-generated-advisory-staged.XXXXXX")"
+        printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${rb_generated_advisory_staged_file}"
+        if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+          LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
+        fi
+        rb_generated_advisory_scope_rc=30
+        verify_review_scope_guard_integrity
+        if [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
+          && [ -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
+          set +e
+          rb_generated_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
+            --linked-issue-metadata-file "${LINKED_ISSUE_METADATA_FILE}" \
+            --linked-issue-metadata-sha256 "${LINKED_ISSUE_METADATA_EXPECTED_SHA256:-}" \
+            --staged-file "${rb_generated_advisory_staged_file}" \
+            --generated-advisory-mode auto)"
+          rb_generated_advisory_scope_rc=$?
+          set -e
+        fi
+        rm -f "${rb_generated_advisory_staged_file}"
+        case "${rb_generated_advisory_scope_rc}" in
+          0|10) ;;
+          *)
+            echo "::error::Refusing [judge-fix] commit: generated security advisory scope is unresolved, invalid, or exceeded."
+            printf '%s\n' "${rb_generated_advisory_violations:-}" | sed '/^$/d;s/^/  - /'
+            exit 1
+            ;;
+        esac
         if ! git diff --cached --quiet; then
           git commit -m "[judge-fix] address review-blocked issues
 

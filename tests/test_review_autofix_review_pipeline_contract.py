@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -140,6 +141,10 @@ if args[:1] == ["api"]:
 		sys.stdout.write("HTTP/1.1 200 OK\nx-ratelimit-reset: 0\n")
 		sys.exit(0)
 	api_responses = state.get("api_responses", {}) or {}
+	if path == "graphql" and state.get("fail_closing_issues_graphql") and any("closingIssuesReferences" in arg for arg in args):
+		save()
+		sys.stderr.write("mock gh: synthetic closingIssuesReferences failure\n")
+		sys.exit(1)
 	matched = None
 	for pattern, response in sorted(api_responses.items(), key=lambda item: len(item[0]), reverse=True):
 		if pattern and pattern in path:
@@ -153,10 +158,15 @@ if args[:1] == ["api"]:
 	save()
 	if jq_filter == ".default_branch":
 		print((matched or {}).get("default_branch", ""))
-	elif jq_filter == ".data.repository.pullRequest.closingIssuesReferences.nodes // []":
-		nodes = (((matched or {}).get("data") or {}).get("repository") or {}).get("pullRequest") or {}
-		nodes = ((nodes.get("closingIssuesReferences") or {}).get("nodes") or [])
-		print(json.dumps(nodes))
+	elif "pullRequest.closingIssuesReferences" in jq_filter:
+		pull_request = (((matched or {}).get("data") or {}).get("repository") or {}).get("pullRequest")
+		if (matched or {}).get("errors") or not isinstance(pull_request, dict) or not isinstance(pull_request.get("closingIssuesReferences"), dict):
+			print(json.dumps({"_collection_status": "unresolved"}))
+		else:
+			connection = dict(pull_request["closingIssuesReferences"])
+			connection.setdefault("nodes", [])
+			connection.setdefault("pageInfo", {"hasNextPage": False})
+			print(json.dumps(connection))
 	elif jq_filter == '{number: (.number // 0), title: (.title // ""), body: (.body // "")}':
 		print(json.dumps({
 			"number": (matched or {}).get("number", 0) or 0,
@@ -185,6 +195,7 @@ def _run_review_collect_pr_metadata_harness(
 	head_sha_override: str,
 	base_ref_override: str,
 	review_break_glass_enabled: str = "false",
+	linked_issue_metadata_env: bool = True,
 	mock_state: dict[str, object],
 ) -> dict[str, object]:
 	with tempfile.TemporaryDirectory(prefix="review-collect-pr-metadata-") as td:
@@ -205,6 +216,7 @@ def _run_review_collect_pr_metadata_harness(
 			"pr_reviews": runtime_dir / "pr_reviews.json",
 			"pr_review_comments": runtime_dir / "pr_review_comments.json",
 			"linked_issue_context": runtime_dir / "linked_issue_context.txt",
+			"linked_issue_metadata": runtime_dir / "linked_issue_metadata.json",
 			"comments_context": runtime_dir / "pr_all_comments_context.txt",
 			"pr_diff": runtime_dir / "pr_diff.patch",
 			"github_env": runtime_dir / "github_env.txt",
@@ -218,6 +230,7 @@ def _run_review_collect_pr_metadata_harness(
 			"GITHUB_REPOSITORY": "owner/repo",
 			"GITHUB_REPOSITORY_OWNER": "owner",
 			"GH_TOKEN": "test-token",
+			"GH_RETRY_MAX_ATTEMPTS": "1",
 			"PR_NUMBER": pr_number,
 			"CLAUDE_BRANCH_REVIEW_MODE": claude_branch_review_mode,
 			"HEAD_REF_OVERRIDE_INPUT": head_ref_override,
@@ -229,11 +242,17 @@ def _run_review_collect_pr_metadata_harness(
 			"PR_REVIEWS_FILE": str(files["pr_reviews"]),
 			"PR_REVIEW_COMMENTS_FILE": str(files["pr_review_comments"]),
 			"LINKED_ISSUE_CONTEXT_FILE": str(files["linked_issue_context"]),
+			"LINKED_ISSUE_METADATA_FILE": str(files["linked_issue_metadata"]),
 			"PR_ALL_COMMENTS_CONTEXT_FILE": str(files["comments_context"]),
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"GITHUB_ENV": str(files["github_env"]),
 			"REVIEW_BREAK_GLASS_ENABLED": review_break_glass_enabled,
 			})
+		if not linked_issue_metadata_env:
+			# Older workflow contract: the export is absent and only the
+			# per-run directory is known. The helper must default the path.
+			env.pop("LINKED_ISSUE_METADATA_FILE", None)
+			env["RUNTIME_DIR"] = str(runtime_dir)
 
 		result = subprocess.run(
 			["bash", str(METADATA_HELPER)],
@@ -263,6 +282,7 @@ def _run_review_collect_pr_metadata_harness(
 			"pr_reviews": json.loads(files["pr_reviews"].read_text(encoding="utf-8")),
 			"pr_review_comments": json.loads(files["pr_review_comments"].read_text(encoding="utf-8")),
 			"linked_issue_context": files["linked_issue_context"].read_text(encoding="utf-8"),
+			"linked_issue_metadata": json.loads(files["linked_issue_metadata"].read_text(encoding="utf-8")),
 			"comments_context": files["comments_context"].read_text(encoding="utf-8"),
 			"pr_diff": files["pr_diff"].read_text(encoding="utf-8"),
 		}
@@ -2732,6 +2752,12 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 	stage_step_block = _step_block("Stage workflow support files")
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in stage_step_block
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in stage_step_block
+	assert "id: stage_workflow_support" in stage_step_block
+	assert "publish_review_support_sha256 scope_guard_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_commit_changes_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_conflict_prepare_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_conflict_resolve_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_rb_judge_sha256" in stage_step_block
 	assert "REQUIRED_BOOTSTRAP_SCRIPTS=" not in stage_step_block
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}"' not in stage_step_block
 	required_bootstrap_line = next(
@@ -3087,17 +3113,88 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	required_bootstrap_line = next(
 		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
 	)
+	main_primary_bootstrap_line = next(
+		line for line in _stage_helper_text().splitlines() if "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=" in line
+	)
 	block = _step_block("Collect PR metadata")
 	helper_text = METADATA_HELPER.read_text(encoding="utf-8")
 
 	assert METADATA_HELPER.exists(), f"missing helper: {METADATA_HELPER}"
 	assert "review_collect_pr_metadata.sh" in required_bootstrap_line, required_bootstrap_line
+	assert "review_collect_pr_metadata.sh" in main_primary_bootstrap_line, main_primary_bootstrap_line
+	for security_sensitive_support_file in (
+		"review_collect_pr_metadata.sh",
+		"files_touched_scope_guard.py",
+		"review_commit_changes.sh",
+		"review_conflict_prepare.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+	):
+		assert security_sensitive_support_file in main_primary_bootstrap_line, main_primary_bootstrap_line
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"' in block
+	stage_block = _step_block("Stage workflow support files")
+	assert 'security_sensitive_support_root=".codex-workflow-src-main"' in stage_block
+	assert 'security_sensitive_support_root=".codex-workflow-src"' in stage_block
+	assert stage_block.index('if [ ! -f "${security_sensitive_support_src}" ]; then') < stage_block.index('install -m 0755 \\')
+	for security_sensitive_support_file in (
+		"review_collect_pr_metadata.sh",
+		"files_touched_scope_guard.py",
+		"review_commit_changes.sh",
+		"review_conflict_prepare.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+	):
+		assert security_sensitive_support_file in stage_block
 	assert 'gh_retry "${PR_PAYLOAD_FILE}"' not in block
 	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in helper_text
 	assert 'gh_retry_to_file "${outfile}" gh "$@"' in helper_text
 	assert 'review_collect_pr_metadata.XXXXXX' in helper_text
 	assert '::error::Unable to determine PR base branch' in helper_text
+	assert 'LINKED_ISSUE_METADATA_EXPECTED_SHA256=%s' in helper_text
+	assert 'id: collect_pr_metadata' in block
+	assert 'linked_issue_metadata_sha256=${linked_issue_metadata_sha256}' in block
+	assert "awk '{print $1}' || true" in block
+
+
+def test_review_blocked_writer_revalidates_scope_guard_digest_before_execution() -> None:
+	rb_judge = RB_JUDGE.read_text(encoding="utf-8")
+	writer_end = rb_judge.index("# Check for changes and commit")
+	digest_check = rb_judge.index("verify_review_scope_guard_integrity", writer_end)
+	guard_execution = rb_judge.index('python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"', digest_check)
+
+	assert writer_end < digest_check < guard_execution
+	assert '[[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]' in rb_judge
+	assert '[[ "${scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]]' in rb_judge
+	assert 'scope_guard_actual_sha256="$(sha256sum "${scope_guard_path}"' in rb_judge
+
+	function_match = re.search(
+		r"(?ms)^verify_review_scope_guard_integrity\(\)\n\{.*?^\}\n",
+		rb_judge,
+	)
+	assert function_match, "missing scope-guard integrity helper"
+	with tempfile.TemporaryDirectory(prefix="test_rb_scope_guard_mutation_") as td:
+		support_scripts_dir = Path(td) / "scripts"
+		support_scripts_dir.mkdir()
+		scope_guard_path = support_scripts_dir / "files_touched_scope_guard.py"
+		scope_guard_path.write_text("trusted validator\n", encoding="utf-8")
+		expected_sha256 = hashlib.sha256(scope_guard_path.read_bytes()).hexdigest()
+		scope_guard_path.write_text("writer replacement\n", encoding="utf-8")
+		env = os.environ.copy()
+		env.update(
+			{
+				"SUPPORT_SCRIPTS_DIR": str(support_scripts_dir),
+				"REVIEW_SCOPE_GUARD_EXPECTED_SHA256": expected_sha256,
+			}
+		)
+		proc = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{function_match.group(0)}\nverify_review_scope_guard_integrity"],
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		assert proc.returncode != 0
+		assert "scope validator changed after the writer ran" in proc.stdout + proc.stderr
 
 
 def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None:
@@ -3458,6 +3555,7 @@ def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> No
 	assert result["pr_reviews"] == []
 	assert result["pr_review_comments"] == []
 	assert result["linked_issue_context"] == "No linked issues found."
+	assert result["linked_issue_metadata"] == []
 	assert "issue_comments_count: 0" in result["comments_context"]
 	assert "reviews_count: 0" in result["comments_context"]
 	assert "review_comments_count: 0" in result["comments_context"]
@@ -3472,6 +3570,129 @@ def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> No
 	assert not any(call[:2] == ["api", "graphql"] for call in result["mock_state"]["calls"])
 	assert not any(call[:2] == ["pr", "diff"] for call in result["mock_state"]["calls"])
 	assert not any("repos/owner/repo/pulls/" in " ".join(call) for call in result["mock_state"]["calls"])
+
+
+def test_review_collect_pr_metadata_helper_defaults_linked_issue_metadata_file_from_runtime_dir() -> None:
+	# Self-repo reviews run the PR-head helper under review_autofix.yml@main,
+	# which may not export LINKED_ISSUE_METADATA_FILE yet (PR #4174, run
+	# 35552937934 failed with "required env LINKED_ISSUE_METADATA_FILE is
+	# unset"). The helper must derive the path from RUNTIME_DIR, write the
+	# artifact there, and publish the resolved path for later steps.
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="",
+		claude_branch_review_mode="true",
+		head_ref_override="claude/test-no-pr",
+		head_sha_override="deadbeef",
+		base_ref_override="",
+		linked_issue_metadata_env=False,
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo": {"default_branch": "main"},
+			},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == []
+	assert result["github_env"]["LINKED_ISSUE_METADATA_FILE"].endswith("/runtime/linked_issue_metadata.json")
+	assert result["github_env"]["LINKED_ISSUE_METADATA_EXPECTED_SHA256"] == hashlib.sha256(b"[]\n").hexdigest()
+	assert "required env LINKED_ISSUE_METADATA_FILE is unset" not in result["stderr"]
+
+
+def test_review_collect_pr_metadata_helper_marks_failed_link_lookup_unresolved() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+			},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
+	assert result["linked_issue_context"] == "No linked issues found."
+	assert "Failed to fetch linked issues via GraphQL" in result["stdout"]
+
+
+def test_review_collect_pr_metadata_helper_accepts_complete_fallback_after_primary_failure() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"fail_closing_issues_graphql": True,
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7",
+					"base": {"ref": "main"},
+					"head": {"ref": "feature/ref", "sha": "abc123", "repo": {"full_name": "owner/repo"}},
+				},
+				"graphql": {
+					"data": {"repository": {"i0": {
+						"__typename": "Issue", "number": 7, "title": "Recovered issue",
+						"body": "Recovered body", "authorAssociation": "MEMBER",
+						"author": {"login": "trusted-maintainer"},
+					}}},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == [{
+		"number": 7,
+		"title": "Recovered issue",
+		"body": "Recovered body",
+		"author_association": "MEMBER",
+		"author_login": "trusted-maintainer",
+	}]
+	assert "Linked-issue body-text fallback resolved 1 issue(s)" in result["stdout"]
+
+
+def test_review_collect_pr_metadata_helper_fails_closed_on_truncated_primary_page() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title", "body": "", "base": {"ref": "main"},
+					"head": {"ref": "feature/ref", "sha": "abc123", "repo": {"full_name": "owner/repo"}},
+				},
+				"graphql": {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {
+					"nodes": [], "pageInfo": {"hasNextPage": True},
+				}}}}},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
+	assert "metadata exceeds the 50-issue GraphQL page" in result["stdout"]
 
 
 def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default() -> None:
@@ -3536,6 +3757,8 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 								"number": 7,
 								"title": "Linked fallback issue",
 								"body": "Linked fallback body",
+								"authorAssociation": "MEMBER",
+								"author": {"login": "trusted-maintainer"},
 							},
 						},
 					},
@@ -3559,6 +3782,15 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 		"Issue #7: Linked fallback issue",
 		"Linked fallback body",
 	]
+	assert result["linked_issue_metadata"] == [
+		{
+			"number": 7,
+			"title": "Linked fallback issue",
+			"body": "Linked fallback body",
+			"author_association": "MEMBER",
+			"author_login": "trusted-maintainer",
+		}
+	]
 	assert "issue_comments_count: 1" in result["comments_context"]
 	assert "reviews_count: 0" in result["comments_context"]
 	assert "review_comments_count: 1" in result["comments_context"]
@@ -3577,6 +3809,8 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 	assert len(graphql_call_texts) == 2
 	fallback_call = next(call for call in graphql_call_texts if "issueOrPullRequest(number:" in call)
 	assert "i0: issueOrPullRequest(number: 7)" in fallback_call
+	assert "authorAssociation" in fallback_call
+	assert "author { login }" in fallback_call
 	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
 	assert not any("repos/owner/repo/pulls/42/reviews" in call for call in call_texts)
 
@@ -3806,10 +4040,11 @@ def test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_e
 		},
 	)
 
-	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert "LINKED_ISSUES_JSON" not in result["github_env"]
 	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7]"
+	assert result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
 	assert result["linked_issue_context"] == "No linked issues found."
-	assert "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration failed; skipping" in result["stdout"]
+	assert "exact-file scope metadata remains unresolved" in result["stdout"]
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
 	assert len([call for call in call_texts if call.startswith("api graphql ")]) == 2
 	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
@@ -3862,7 +4097,8 @@ def test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_e
 	assert partial_result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7,8]"
 	assert "Issue #7: Linked fallback issue" in partial_result["linked_issue_context"]
 	assert "Issue #8:" not in partial_result["linked_issue_context"]
-	assert "Linked-issue body-text fallback resolved 1 issue(s) for context" in partial_result["stdout"]
+	assert partial_result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
+	assert "exact-file scope metadata remains unresolved" in partial_result["stdout"]
 	assert (
 		"::warning::Linked-issue body-text fallback: batched GraphQL issue hydration returned partial data "
 		"(hydrated 1 of 2 references); continuing with available context."
@@ -6608,6 +6844,10 @@ def main() -> int:
 	test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 	test_collect_pr_check_runs_helper_top_level_exception_is_fail_open()
 	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
+	test_review_collect_pr_metadata_helper_defaults_linked_issue_metadata_file_from_runtime_dir()
+	test_review_collect_pr_metadata_helper_marks_failed_link_lookup_unresolved()
+	test_review_collect_pr_metadata_helper_accepts_complete_fallback_after_primary_failure()
+	test_review_collect_pr_metadata_helper_fails_closed_on_truncated_primary_page()
 	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
 	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()
 	test_review_collect_pr_metadata_helper_fails_open_on_non_array_batch_input()
