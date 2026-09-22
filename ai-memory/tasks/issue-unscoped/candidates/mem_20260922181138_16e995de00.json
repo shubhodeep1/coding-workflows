@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3399-3419 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When the mergeability poll times out and sets `PHASE7_MERGEABLE=\"unknown\"`, the unconflict logic is skipped and `PHASE7_UNCONFLICT_OUTCOME` remains `\"not_needed\"`.\n  WHY: A timed-out mergeability check is unresolved, not unnecessary, so the recorded outcome is inaccurate.\n- .github/workflows/test-and-mark-stable.yml:3486-3492 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The failed base contents lookup handling does not explicitly distinguish an unavailable lookup from a file absent in the base but present in the branch.\n  WHY: This can produce spurious logs or potential misinterpretation of the merge state.\n- .github/workflows/test-and-mark-stable.yml:_phase7_merge_base_into_branch, ~line 3456 (the `if err=$(... 2>&1 >/dev/null); then` block) | \n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The current `2>&1 >/dev/null` pattern discards stdout while capturing stderr, so a `409` marker emitted only on stdout could be missed during conflict detection.\n  WHY: `gh api` emits the actual error on stderr today, but merging both streams would remove this latent false-negative.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml\n  Line or code reference: 3486-3492\n  Problem: The logic to handle a failed base content lookup is slightly flawed when merging a conflicted smoke PR.\n  Why it fails at runtime: If the base contents lookup for a file fails, the code reports `outcome=kept reason=base_blob_unavailable`. However, if the file *is* absent in the base but present in the branch, the merge should ideally proceed. The current check does not explicitly distinguish this, which might lead to spurious logs or potential misinterpretation of the merge state.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- .github/workflows/test-and-mark-stable.yml\n  Line or code reference: 3399-3419\n  Problem: When the mergeability poll (`_phase7_refresh_mergeability`) times out, it sets `PHASE7_MERGEABLE=\"unknown\"`. The subsequent logic (lines 3468 and following) checks `if [ \"${PHASE7_MERGEABLE}\" = \"false\" ] ...`.\n  Why it fails at runtime: If polling times out with \"unknown\", the unconflict logic is skipped (as \"unknown\" != \"false\"). The outcome `PHASE7_UNCONFLICT_OUTCOME` remains the initial value `\"not_needed\"`. This is inaccurate: it was not \"not needed\", it was \"unresolved\".\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"snapshot the most recent cancel-on-close run BEFORE we close the PR\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml\n  Evidence of absence: The added logic for unconflicting the PR runs before the snapshot, but the PR title and description explicitly frame the new pass as Phase 7a. The implementation appears to correctly place the snapshot after the unconflict pass (Phase 7a) and before the close command, adhering to the specified ordering requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml\n  Location: _phase7_merge_base_into_branch, ~line 3456 (the `if err=$(... 2>&1 >/dev/null); then` block)\n  Issue: The current pattern `2>&1 >/dev/null` captures stderr into `err` while discarding stdout. If `gh api` were to emit a 409 marker on stdout only (the response body line could carry the literal `409` from some intermediaries), the conflict detection would miss it. `gh api` puts the actual error on stderr today, so the pattern works in practice; making the capture symmetric removes a latent false-negative.\n  Suggested minimal fix: switch to `> /dev/null 2>&1` only after capturing, e.g.\n\n    if err=$(gh api \"repos/${TEST_REPO}/merges\" -f base=\"${BRANCH}\" -f head=\"${PHASE7_BASE_REF}\" -f commit_message=\"...\"); then\n      return 0\n    fi\n    err+=$(... stderr capture ...)\n\n  or simpler: write a tiny `out=$(gh api ... 2>&1); rc=$?; err=\"${out}\"` wrapper so both streams are merged. This is a defensive cleanliness improvement, not a runtime bug fix.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fb68eea1ac3a4d3493f8f977108d3872e9d92c729bc8586e92fbb8f415f40265",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4276,
+    "run_id": "35758949443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35758949443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922181138_16e995de00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4276,
+    "run_id": "35758949443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-22T18:11:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
