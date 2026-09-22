@@ -1220,3 +1220,92 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	staging = STAGE_SUPPORT_SCRIPT.read_text(encoding="utf-8")
 	optional = re.search(r'^OPTIONAL_BOOTSTRAP_SCRIPTS="([^"]*)"', staging, re.MULTILINE)
 	assert optional and {"workflow_failure_heal.py", "workflow_failure_heal_autofix_report.sh"} <= set(optional.group(1).split())
+
+
+def test_review_autofix_workflow_backfills_the_heal_reporter_from_main_snapshot() -> None:
+	# Regression: stage_workflow_support.sh is sourced from the PR branch
+	# (SCRIPT_REF). A PR branch forked before #4208 added the reporter pair to
+	# OPTIONAL_BOOTSTRAP_SCRIPTS never stages them, and the report step skipped
+	# with reason=reporter_missing (run 35685250882 on PR #4259). The staging
+	# step must backfill the pair from the main snapshot like the preflight set.
+	workflow = _yaml(REVIEW_AUTOFIX_WORKFLOW)
+	assert workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"].split() == [
+		"workflow_failure_heal.py",
+		"workflow_failure_heal_autofix_report.sh",
+	]
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	names = [step.get("name") for step in steps]
+	stage_run = steps[names.index("Stage workflow support files")]["run"]
+	assert 'for f in ${REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS}; do' in stage_run
+	assert "reason=reporter_missing" in stage_run
+	# Same source order as the preflight backfill: branch copy first, main
+	# snapshot second, warning (never a failure) when both are absent.
+	loop = stage_run.split('for f in ${REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS}; do', 1)[1].split("done", 1)[0]
+	assert 'backfill_src=".codex-workflow-src/scripts/${f}"' in loop
+	assert '[ -f ".codex-workflow-src-main/scripts/${f}" ]' in loop
+	assert 'install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"' in loop
+	assert "exit 1" not in loop
+
+
+def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapshot() -> None:
+	# Execute the backfill loop against a stale branch checkout that lacks the
+	# pair and a main snapshot that carries it: both land in
+	# SUPPORT_SCRIPTS_DIR, executable, and the loop leaves an already-staged
+	# branch copy alone.
+	workflow = _yaml(REVIEW_AUTOFIX_WORKFLOW)
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	names = [step.get("name") for step in steps]
+	stage_run = steps[names.index("Stage workflow support files")]["run"]
+	loop = 'for f in ${REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS}; do' + stage_run.split(
+		'for f in ${REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS}; do', 1
+	)[1].split("done\n", 1)[0] + "done\n"
+	with tempfile.TemporaryDirectory() as tmp:
+		work = Path(tmp)
+		(work / ".codex-workflow-src" / "scripts").mkdir(parents=True)
+		(work / ".codex-workflow-src-main" / "scripts").mkdir(parents=True)
+		support = work / "support" / "scripts"
+		support.mkdir(parents=True)
+		(work / ".codex-workflow-src-main" / "scripts" / "workflow_failure_heal.py").write_text("main-heal\n", encoding="utf-8")
+		(work / ".codex-workflow-src-main" / "scripts" / "workflow_failure_heal_autofix_report.sh").write_text("main-reporter\n", encoding="utf-8")
+		# Branch copy of an unrelated already-staged file must not be touched.
+		(support / "workflow_failure_heal.py").write_text("branch-heal\n", encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-euo", "pipefail", "-c", loop],
+			cwd=work,
+			env={
+				**os.environ,
+				"REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS": workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"],
+				"SUPPORT_SCRIPTS_DIR": str(support),
+				"SCRIPT_REF": SHA_A,
+			},
+			capture_output=True,
+			text=True,
+		)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert (support / "workflow_failure_heal.py").read_text(encoding="utf-8") == "branch-heal\n"
+		reporter = support / "workflow_failure_heal_autofix_report.sh"
+		assert reporter.read_text(encoding="utf-8") == "main-reporter\n"
+		assert os.access(reporter, os.X_OK)
+		assert (
+			"::notice::Backfilled workflow_failure_heal_autofix_report.sh into the runtime support bundle from "
+			".codex-workflow-src-main/scripts/workflow_failure_heal_autofix_report.sh"
+		) in result.stdout
+		# Both absent: warning only, exit 0, nothing staged.
+		reporter.unlink()
+		(work / ".codex-workflow-src-main" / "scripts" / "workflow_failure_heal_autofix_report.sh").unlink()
+		result = subprocess.run(
+			["bash", "-euo", "pipefail", "-c", loop],
+			cwd=work,
+			env={
+				**os.environ,
+				"REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS": workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"],
+				"SUPPORT_SCRIPTS_DIR": str(support),
+				"SCRIPT_REF": SHA_A,
+			},
+			capture_output=True,
+			text=True,
+		)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert not reporter.exists()
+		assert "::warning::Workflow-failure-heal reporter script workflow_failure_heal_autofix_report.sh was not staged" in result.stdout
+		assert "reason=reporter_missing" in result.stdout
