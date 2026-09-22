@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Budget and no-op behavior are intentional control-flow contracts in CI automation.",
   "timestamps": {
     "created_at": "2026-09-22T01:01:51Z",
