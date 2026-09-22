@@ -4112,6 +4112,14 @@ jobs:
               docker network rm "${review_dependency_network}" >/dev/null 2>&1 || true
               rm -rf -- "${review_dependency_git_mask}"
             }
+            review_dependency_proxy_ready()
+            {
+              for review_dependency_proxy_probe_attempt in $(seq 1 30); do
+                timeout 2 docker exec "${review_dependency_proxy}" python -c "import socket; socket.create_connection(('127.0.0.1', 8080), 1).close()" >/dev/null 2>&1 && return 0
+                sleep 0.5
+              done
+              return 1
+            }
             trap review_dependency_cleanup EXIT
             trap 'exit 1' HUP INT TERM
             python_install_command='python -m venv .ai/review-venv'
@@ -4125,6 +4133,7 @@ jobs:
                   --network bridge --read-only --cap-drop ALL --security-opt no-new-privileges \
                   --volume "${SUPPORT_SCRIPTS_DIR}/package_download_proxy.py:/package_download_proxy.py:ro" \
                   python:3.12-slim python /package_download_proxy.py \
+                || ! review_dependency_proxy_ready \
                 || ! docker network connect --alias dependency-proxy \
                   "${review_dependency_network}" "${review_dependency_proxy}" \
                 || ! docker run --rm --name "${review_dependency_installer}" \

@@ -6501,6 +6501,7 @@ def test_dependency_install_container_uses_allowlisted_network_proxy() -> None:
 	assert 'docker network create --internal "${review_dependency_network}"' in step
 	assert '--network "${review_dependency_network}"' in step
 	assert "HTTP_PROXY=http://dependency-proxy:8080" in step
+	assert 'docker exec "${review_dependency_proxy}" python -c' in step and '|| ! review_dependency_proxy_ready \\' in step
 	assert '${SUPPORT_SCRIPTS_DIR}/package_download_proxy.py:/package_download_proxy.py:ro' in step
 	assert '--volume "${review_dependency_git_mask}:/workspace/.git:ro"' in step
 	assert "trap review_dependency_cleanup EXIT" in step
