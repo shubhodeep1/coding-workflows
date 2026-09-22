@@ -47,6 +47,8 @@
 #     diagnose fails or returns unparseable JSON.
 
 set -euo pipefail
+DIAGNOSE_PROVIDER_API_KEY="${OPENROUTER_API_KEY:-}"
+unset OPENROUTER_API_KEY
 DIAGNOSE_SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 if [ "${GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false}" = "true" ]; then
 	source "${DIAGNOSE_SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
@@ -104,7 +106,7 @@ esac
 patch_diagnose_reasoning_into_config() {
 	local cfg="${CODEX_HOME:-${HOME:-/root}/.codex}/config.toml"
   mkdir -p "$(dirname "${cfg}")"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${DIAGNOSE_REASONING}" <<'PY'
+  _gh_helpers_run_isolated_python -- - "${cfg}" "${DIAGNOSE_REASONING}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -213,7 +215,10 @@ if [ ! -s "${CAPTURE_FILE}" ]; then
 fi
 
 echo "handled=true" >> "$GITHUB_OUTPUT"
-MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${DIAGNOSE_MODEL}" model_provider_broker_start
+OPENROUTER_API_KEY="${DIAGNOSE_PROVIDER_API_KEY}" \
+  MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${DIAGNOSE_MODEL}" \
+  model_provider_broker_start
+unset DIAGNOSE_PROVIDER_API_KEY
 trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
 model_provider_broker_prepare_codex_writer "${DIAGNOSE_MODEL}" "${DIAGNOSE_REASONING}" "$(pwd)"
 if ! patch_diagnose_reasoning_into_config; then
@@ -454,7 +459,7 @@ fi
 build_diagnose_semble_query() {
   local output_file="$1"
   : > "${output_file}"
-  python3 - "${FAILED_STEP_NAME}" "${CAPTURE_FILE}" "${output_file}" <<'PY' || { echo "::warning::Failed to build diagnose Semble query" >&2; :; }
+  _gh_helpers_run_isolated_python -- - "${FAILED_STEP_NAME}" "${CAPTURE_FILE}" "${output_file}" <<'PY' || { echo "::warning::Failed to build diagnose Semble query" >&2; :; }
 import os
 import re
 import sys
@@ -594,7 +599,7 @@ extract_last_json_with_key() {
   local required_key="$2"
   local output_file="$3"
 
-  python3 - "${source_file}" "${required_key}" "${output_file}" <<'PY'
+  _gh_helpers_run_isolated_python -- - "${source_file}" "${required_key}" "${output_file}" <<'PY'
 import json
 import sys
 

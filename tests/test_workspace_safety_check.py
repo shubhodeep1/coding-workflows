@@ -108,6 +108,25 @@ def test_helper_accepts_valid_reused_workspace() -> None:
 		assert result.returncode == 0, result.stderr
 
 
+def test_helper_path_resolution_ignores_checkout_sitecustomize(tmp_path: Path) -> None:
+	workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-42"
+	workspace_path.mkdir(parents=True)
+	marker = tmp_path / "sitecustomize-ran"
+	(workspace_path / "sitecustomize.py").write_text(
+		"import os\nfrom pathlib import Path\nPath(os.environ['SITE_MARKER']).write_text('ran', encoding='utf-8')\n",
+		encoding="utf-8",
+	)
+	result = _run_helper(
+		tmp_path,
+		workspace_path,
+		PYTHONPATH=str(workspace_path),
+		SITE_MARKER=str(marker),
+		OPENROUTER_API_KEY="must-not-leak",
+	)
+	assert result.returncode == 0, result.stderr
+	assert not marker.exists()
+
+
 def test_helper_accepts_launch_from_shared_workspaces_root() -> None:
 	with tempfile.TemporaryDirectory(prefix="workspace-safety-check-") as td:
 		tmp_path = Path(td)

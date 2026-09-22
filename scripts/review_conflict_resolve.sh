@@ -283,6 +283,12 @@ if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 fi
 
+resolver_run_isolated_python()
+{
+  _gh_helpers_run_isolated_python_with_paths \
+    "${SUPPORT_ROOT_DIR:-.}" "${SUPPORT_SCRIPTS_DIR:-scripts}" -- "$@"
+}
+
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
@@ -498,7 +504,7 @@ _resolver_agent_home_preflight()
 _resolver_agent_home_preflight "${RUNTIME_DIR}" || exit 1
 mkdir -p "${MODEL_PROVIDER_BROKER_AGENT_HOME}/tmp" "${MODEL_PROVIDER_BROKER_AGENT_HOME}/.cache"
 chmod 0700 "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
-model_provider_broker_start
+opencode_model_provider_broker_start
 sudo -n chown -R "${RESOLVER_ISOLATION_USER}" "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
 resolver_opencode_serena="off"
 if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
@@ -679,8 +685,9 @@ _capture_fingerprints_baseline()
     return 0
   fi
   local _baseline_capture_exit=0
-  INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+  _gh_helpers_run_isolated_python \
+    "INTEGRATION_BRANCH_NAME=${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+    -- "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
       --baseline-fingerprints-state "${RESOLVER_FP_BASELINE_STATE_FILE}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" || _baseline_capture_exit=$?
   if [ "${_baseline_capture_exit}" -ne 0 ] || [ ! -s "${RESOLVER_FP_BASELINE_STATE_FILE}" ]; then
@@ -711,7 +718,10 @@ _select_fingerprint_verification_tier()
   fi
 
   local _tier_json
-  if ! _tier_json="$(RESOLVER_ESCAPE_THRESHOLD_N="${RESOLVER_ESCAPE_THRESHOLD_N:-5}" RESOLVER_RETRY_STATE_VERIFIED_FILE="${RESOLVER_RETRY_STATE_VERIFIED_FILE}" python3 - <<'PY'
+  if ! _tier_json="$(_gh_helpers_run_isolated_python \
+    "RESOLVER_ESCAPE_THRESHOLD_N=${RESOLVER_ESCAPE_THRESHOLD_N:-5}" \
+    "RESOLVER_RETRY_STATE_VERIFIED_FILE=${RESOLVER_RETRY_STATE_VERIFIED_FILE}" \
+    -- - <<'PY'
 from __future__ import annotations
 
 import json
@@ -926,17 +936,18 @@ _build_retry_prompt() {
   # uses the uppercased key, matching the convention every existing
   # caller binds against; any key whose corresponding env var is
   # unset is replaced with the empty string.
-  PRELUDE_TPL="${_prelude_tpl}" \
-    ORIGINAL_PROMPT_FILE="${CONFLICT_RESOLVER_PROMPT_FILE}" \
-    PREVIOUS_ATTEMPT_NUMBER="${_prev_attempt}" \
-    MAX_ATTEMPTS="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" \
-    MARKER_VIOLATION_COUNT="${_marker_count}" \
-    MARKER_VIOLATION_FILES="${_marker_list}" \
-    FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
-    FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
-    SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}" \
-    PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
-    python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); tpl=re.sub(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', lambda m: os.environ.get(m.group(1).upper(), ''), tpl); orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
+  _gh_helpers_run_isolated_python \
+    "PRELUDE_TPL=${_prelude_tpl}" \
+    "ORIGINAL_PROMPT_FILE=${CONFLICT_RESOLVER_PROMPT_FILE}" \
+    "PREVIOUS_ATTEMPT_NUMBER=${_prev_attempt}" \
+    "MAX_ATTEMPTS=${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" \
+    "MARKER_VIOLATION_COUNT=${_marker_count}" \
+    "MARKER_VIOLATION_FILES=${_marker_list}" \
+    "FINGERPRINT_VIOLATION_COUNT=${_fp_count}" \
+    "FINGERPRINT_VIOLATION_DETAILS=${_fp_details}" \
+    "SERENA_TOOL_HINTS_RESOLVER=${RESOLVER_SERENA_TOOL_HINTS:-}" \
+    "PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
+    -- -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); tpl=re.sub(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', lambda m: os.environ.get(m.group(1).upper(), ''), tpl); orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
     > "${RESOLVER_RETRY_PROMPT_FILE}"
   if [ "${_failure_kind}" = "timeout" ]; then
     _retry_prompt_outcome="timeout-prelude"
@@ -1010,8 +1021,9 @@ _verify_fingerprints_soft() {
       --verification-tier "${RESOLVER_FP_VERIFICATION_TIER}"
     )
   fi
-  INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+  _gh_helpers_run_isolated_python \
+    "INTEGRATION_BRANCH_NAME=${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+    -- "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
       "${_verifier_args[@]}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" \
       > "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" 2>&1 || RESOLVER_FP_EXIT=$?
@@ -1042,7 +1054,20 @@ _verify_fingerprints_soft() {
 # compare-mode verification actually enforced.
 _build_resolver_retry_state_artifact()
 {
-  python3 - <<'PY'
+  _gh_helpers_run_isolated_python \
+    "SUPPORT_SCRIPTS_DIR=${SUPPORT_SCRIPTS_DIR}" \
+    "PR_PAYLOAD_FILE=${PR_PAYLOAD_FILE:-}" \
+    "PR_ISSUE_COMMENTS_FILE=${PR_ISSUE_COMMENTS_FILE:-}" \
+    "INTEGRATION_FINGERPRINTS_FILE=${INTEGRATION_FINGERPRINTS_FILE:-}" \
+    "RESOLVER_FP_BASELINE_STATE_FILE=${RESOLVER_FP_BASELINE_STATE_FILE:-}" \
+    "RESOLVER_RETRY_STATE_VERIFIED_FILE=${RESOLVER_RETRY_STATE_VERIFIED_FILE:-}" \
+    "RESOLVER_ESCAPE_THRESHOLD_N=${RESOLVER_ESCAPE_THRESHOLD_N:-5}" \
+    "RESOLVER_RETRY_STATE_MAX_ITEMS=${RESOLVER_RETRY_STATE_MAX_ITEMS:-10}" \
+    "GITHUB_REPOSITORY=${GITHUB_REPOSITORY:-}" \
+    "GITHUB_SERVER_URL=${GITHUB_SERVER_URL:-https://github.com}" \
+    "GITHUB_RUN_ID=${GITHUB_RUN_ID:-}" \
+    "PR_NUMBER=${PR_NUMBER:-}" \
+    -- - <<'PY'
 # AUTOFIX_RESOLVER_RETRY_STATE_PY_BEGIN
 from __future__ import annotations
 
@@ -1654,7 +1679,7 @@ TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_cont
 : > "${TARGETED_FILES_CONTEXT_FILE}"
 if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT}" ]; then
   targeted_file_context_args=(
-    python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"
+    resolver_run_isolated_python "${TARGETED_FILE_CONTEXT_SCRIPT}"
     --paths-file "${RESOLVER_ALLOWLIST_FILE}"
     --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
     --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
@@ -2265,8 +2290,9 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
           --verification-tier "${RESOLVER_FP_VERIFICATION_TIER}"
         )
       fi
-      INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-        python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      _gh_helpers_run_isolated_python \
+        "INTEGRATION_BRANCH_NAME=${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+        -- "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
           "${_final_verifier_args[@]}" \
           "${INTEGRATION_FINGERPRINTS_FILE}" || _final_fp_exit=$?
       if [ "${_final_fp_exit}" -eq 1 ]; then

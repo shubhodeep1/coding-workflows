@@ -322,6 +322,12 @@ if [ ! -f "${_validate_script_dir}/gh_helpers.sh" ] || [ ! -f "${_validate_scrip
 fi
 source "${_validate_script_dir}/gh_helpers.sh"
 source "${_validate_script_dir}/tg_helpers.sh"
+
+validate_run_isolated_python()
+{
+  _gh_helpers_run_isolated_python "$@"
+}
+
 # shellcheck source=/dev/null
 if [ ! -f "${_validate_script_dir}/codex_helpers.sh" ]; then
   local_failure_summary="Missing required support script ${_validate_script_dir}/codex_helpers.sh"
@@ -435,7 +441,7 @@ clear_stale_serena_codex_config()
     return 0
   fi
 
-  if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${codex_config_path}" <<'PY'
+  if ! validate_run_isolated_python -- - "${codex_config_path}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -513,7 +519,7 @@ build_validate_semble_query()
   local label="${1:-validation}"
   shift || true
 
-  python3 - "${label}" "$@" <<'PY'
+  validate_run_isolated_python -- - "${label}" "$@" <<'PY'
 import pathlib
 import re
 import sys
@@ -1209,7 +1215,7 @@ set_tracking_phase_label()
   fi
 
   local phase_changes
-  if ! phase_changes="$(python3 "${_validate_script_dir}/ai_labels.py" resolve-phase \
+  if ! phase_changes="$(validate_run_isolated_python -- "${_validate_script_dir}/ai_labels.py" resolve-phase \
     --contract-file "${contract_file}" \
     --phase "${phase_label}" 2>/dev/null)"; then
     echo "::warning::set_tracking_phase_label: resolve-phase failed for '${phase_label}' using ${contract_file}." >&2
@@ -1312,7 +1318,7 @@ extract_last_json_with_key()
   local required_key="$2"
   local output_file="$3"
 
-  python3 - "${source_file}" "${required_key}" "${output_file}" <<'PY'
+  validate_run_isolated_python -- - "${source_file}" "${required_key}" "${output_file}" <<'PY'
 import json
 import re
 import sys
@@ -1431,7 +1437,14 @@ append_failure()
     log_tail="$(tail -c 10000 "${log_file}" | tr -d '\000' | tail -n 30 2>/dev/null || true)"
   fi
 
-  python3 - "${FAILURES_FILE}" "${test_name}" "${error_msg}" "${log_tail}" <<'PY'
+  env -i \
+    HOME="${HOME:-}" \
+    PATH="${PATH:-/usr/bin:/bin}" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LANG="C.UTF-8" \
+    LC_ALL="C.UTF-8" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    python3 -I -B - "${FAILURES_FILE}" "${test_name}" "${error_msg}" "${log_tail}" <<'PY'
 import json
 import sys
 
@@ -1455,13 +1468,20 @@ emit_result()
 
   duration_seconds=$(( $(date +%s) - START_TS ))
 
+  env -i \
+  HOME="${HOME:-}" \
+  PATH="${PATH:-/usr/bin:/bin}" \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  LANG="C.UTF-8" \
+  LC_ALL="C.UTF-8" \
+  PYTHONDONTWRITEBYTECODE=1 \
   RESULT="${result_value}" \
   TOTAL_TESTS="${TOTAL_TESTS}" \
   PASSED_TESTS="${PASSED_TESTS}" \
   FAILED_TESTS="${FAILED_TESTS}" \
   DURATION_SECONDS="${duration_seconds}" \
   FAILURES_FILE_PATH="${FAILURES_FILE}" \
-  python3 -c 'import json, os; print(json.dumps({
+  python3 -I -B -c 'import json, os; print(json.dumps({
 "result": os.environ["RESULT"],
 "phase": "runtime_validation",
 "total_tests": int(os.environ["TOTAL_TESTS"]),
@@ -1576,7 +1596,14 @@ materialize_synthesised_behavioural_smoke_tests()
     return 0
   fi
 
-  if ! materialize_output="$(PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+  if ! materialize_output="$(env -i \
+    HOME="${HOME:-}" \
+    PATH="${PATH:-/usr/bin:/bin}" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LANG="C.UTF-8" \
+    LC_ALL="C.UTF-8" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    python3 -I -B - <<'PY'
 import json
 import re
 import shutil
@@ -2015,7 +2042,6 @@ run_template_validation_harness_renderer()
 	local schema_path="${_validate_script_dir}/templates/slot_manifest.schema.json"
 	local templates_root="workflow-templates/validation-harness"
 	local renderer_summary=""
-	local python3_bin="python3"
 
 	HARNESS_GENERATOR_MODE="templates"
 
@@ -2037,28 +2063,20 @@ run_template_validation_harness_renderer()
 		return 15
 	fi
 
-	python3_bin="$(command -v python3 2>/dev/null || printf '%s' 'python3')"
 	{
 		printf '\n--- python3 environment probe ---\n'
 		printf 'command -v python3: %s\n' "$(command -v python3 2>&1 || echo 'not found')"
-		printf 'python3 -V: %s\n' "$("${python3_bin}" -V 2>&1 || echo 'failed')"
-		"${python3_bin}" -I -B -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))' 2>&1 \
+		printf 'python3 -V: %s\n' "$(validate_run_isolated_python -- -V 2>&1 || echo 'failed')"
+		validate_run_isolated_python -- -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))' 2>&1 \
 			|| printf '(python3 -c probe failed)\n'
 		printf '--- end python3 environment probe ---\n'
 	} >> "${GENERATE_LOG_FILE}" 2>&1
-	if ! "${python3_bin}" -I -B -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
-		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $("${python3_bin}" -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
+	if ! validate_run_isolated_python -- -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(validate_run_isolated_python -- -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
 		return 17
 	fi
 
-	if ! renderer_summary="$(env -i \
-		HOME="${HOME:-}" \
-		PATH="/usr/bin:/bin" \
-		TMPDIR="${TMPDIR:-/tmp}" \
-		LANG="C.UTF-8" \
-		LC_ALL="C.UTF-8" \
-		PYTHONDONTWRITEBYTECODE="1" \
-		"${python3_bin}" -I -B "${renderer_script}" \
+	if ! renderer_summary="$(validate_run_isolated_python -- "${renderer_script}" \
 		--manifest "${manifest_path}" \
 		--schema "${schema_path}" \
 		--templates-root "${templates_root}" \
@@ -2244,7 +2262,7 @@ run_preflight_checks()
 		printf '%s\n' '{"services":{}}' > "${compose_json_file}"
 	fi
 
-	if ! python3 - "${compose_json_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY'
+	if ! validate_run_isolated_python -- - "${compose_json_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY'
 import json
 import os
 import sys
@@ -2316,7 +2334,7 @@ PY
 	# quoted delimiters (`<<'PY'`, `<<"PY"`) are checked: unquoted
 	# delimiters allow shell variable expansion, so the static body is not
 	# the source Python actually sees.
-	if ! python3 - >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY2'
+	if ! validate_run_isolated_python -- - >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY2'
 import ast
 import pathlib
 import re
@@ -2424,14 +2442,14 @@ PY2
 		local _pf_tool _pf_missing=""
 		for _pf_tool in pyflakes ruff; do
 			if ! command -v "${_pf_tool}" >/dev/null 2>&1; then
-				if ! python3 -m pip install --user --quiet "${_pf_tool}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
-					if ! python3 -m pip install --user --quiet --break-system-packages "${_pf_tool}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+				if ! validate_run_isolated_python -- -m pip install --user --quiet "${_pf_tool}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+					if ! validate_run_isolated_python -- -m pip install --user --quiet --break-system-packages "${_pf_tool}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 						_pf_missing="${_pf_missing:+${_pf_missing} }${_pf_tool}"
 					fi
 				fi
 				# Refresh PATH for --user site-packages bin dir.
 				local _pf_user_bin
-				_pf_user_bin="$(python3 -c 'import site,os; print(os.path.join(site.getuserbase(), "bin"))' 2>/dev/null || true)"
+				_pf_user_bin="$(validate_run_isolated_python -- -c 'import site,os; print(os.path.join(site.getuserbase(), "bin"))' 2>/dev/null || true)"
 				if [ -n "${_pf_user_bin}" ] && [ -d "${_pf_user_bin}" ]; then
 					case ":${PATH}:" in
 						*":${_pf_user_bin}:"*) ;;
@@ -2448,7 +2466,9 @@ PY2
 		done
 		if [ -n "${_pf_missing}" ]; then
 			echo "::warning::Preflight F-code lint fail-open: could not install ${_pf_missing}; skipping embedded-Python pyflakes/ruff lint." >&2
-		elif ! python3 - >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY3'
+		elif ! validate_run_isolated_python \
+			"VALIDATE_PREFLIGHT_PYFLAKES_RULES=${VALIDATE_PREFLIGHT_PYFLAKES_RULES}" \
+			-- - >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY3'
 import ast
 import os
 import pathlib
@@ -2826,7 +2846,9 @@ LEDGER_SUBSTATE_HELPER="${_validate_script_dir}/ledger_emit_substate.sh"
 [ -f "${LEDGER_SUBSTATE_HELPER}" ] || LEDGER_SUBSTATE_HELPER=""
 CODEX_HELPERS_SCRIPTS_DIR="${_validate_script_dir}"
 export CODEX_HELPERS_SCRIPTS_DIR
-model_provider_broker_start
+VALIDATE_PROVIDER_API_KEY="${OPENROUTER_API_KEY}"
+OPENROUTER_API_KEY="${VALIDATE_PROVIDER_API_KEY}" model_provider_broker_start
+unset OPENROUTER_API_KEY VALIDATE_PROVIDER_API_KEY
 model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
 VALIDATE_ISOLATED_CODEX_LAUNCHER="${RUNTIME_DIR}/validate-isolated-codex"
 model_provider_broker_write_isolated_codex_launcher "${VALIDATE_ISOLATED_CODEX_LAUNCHER}"
@@ -3034,7 +3056,7 @@ VALIDATE_HINTS_CACHE_FILE="${VALIDATE_HINTS_CACHE_DIR}/hints.yml"
 validate_hints_sanity_check() {
   local hints_file="$1"
   [ -s "${hints_file}" ] || return 1
-  python3 - "${hints_file}" <<'PY' 2>/dev/null
+  validate_run_isolated_python -- - "${hints_file}" <<'PY' 2>/dev/null
 import pathlib
 import re
 import sys
@@ -3182,7 +3204,7 @@ else
       fi
     elif ! grep -q '[^[:space:]]' "${DISCOVER_OUTPUT_FILE}"; then
       DISCOVER_FAILURE_MODE="codex_empty_output"
-    elif python3 - "${DISCOVER_OUTPUT_FILE}" "${VALIDATE_HINTS_FILE}" <<'PY'
+    elif validate_run_isolated_python -- - "${DISCOVER_OUTPUT_FILE}" "${VALIDATE_HINTS_FILE}" <<'PY'
 import re
 import sys
 

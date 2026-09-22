@@ -48,6 +48,24 @@ def _workflow_text() -> str:
 	return WORKFLOW.read_text(encoding="utf-8")
 
 
+def test_provider_key_is_scoped_to_model_facing_review_steps() -> None:
+	doc = yaml.safe_load(_workflow_text())
+	job = doc["jobs"]["codex-agent"]
+	assert "OPENROUTER_API_KEY" not in job.get("env", {})
+	steps = {step.get("name"): step for step in job["steps"] if isinstance(step, dict)}
+	for step_name in (
+		"Run reviewer models",
+		"Apply fixes with editor model",
+		"Run interim judge",
+		"Synthesize behavioural smoke",
+		"Run Codex resolver, validate, stage, commit",
+		"Review-blocked judge decision",
+	):
+		assert "OPENROUTER_API_KEY" in steps[step_name].get("env", {})
+	for step_name in ("Collect PR metadata", "Commit changes", "Prepare merge-conflict resolver prompt and pre-snapshot"):
+		assert "OPENROUTER_API_KEY" not in steps[step_name].get("env", {})
+
+
 def _stage_helper_text() -> str:
 	return STAGE_HELPER.read_text(encoding="utf-8")
 
@@ -729,28 +747,35 @@ def _reviewer_iteration_scope_helper_block() -> str:
 	text = _reviewers_text()
 	start = text.index("# ── Reviewer iteration-scoping helpers")
 	end = text.index("# ── End reviewer iteration-scoping helpers", start)
-	return text[start:end]
+	return _reviewer_isolation_helper_block() + "\n" + text[start:end]
+
+
+def _reviewer_isolation_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("reviewer_run_isolated_python() {")
+	end = text.index("\n}\n", start) + len("\n}\n")
+	return f'source "{REPO_ROOT / "scripts" / "gh_helpers.sh"}"\n' + text[start:end]
 
 
 def _reviewer_filter_helper_block() -> str:
 	text = _reviewers_text()
 	start = text.index("# ── Reviewer uninteresting-file filter helpers")
 	end = text.index("# ── End reviewer uninteresting-file filter helpers", start)
-	return text[start:end]
+	return _reviewer_isolation_helper_block() + "\n" + text[start:end]
 
 
 def _reviewer_risk_tier_helper_block() -> str:
 	text = _reviewers_text()
 	start = text.index("# ── Reviewer risk-tier helpers")
 	end = text.index("# ── End reviewer risk-tier helpers", start)
-	return text[start:end]
+	return _reviewer_isolation_helper_block() + "\n" + text[start:end]
 
 
 def _reviewer_failback_helper_block() -> str:
 	text = _reviewers_text()
 	start = text.index("# ── Reviewer failback / health helpers")
 	end = text.index("# ── End reviewer failback / health helpers", start)
-	return text[start:end]
+	return _reviewer_isolation_helper_block() + "\n" + text[start:end]
 
 
 def _reviewer_partial_finalize_budget_helper_block() -> str:
@@ -6078,7 +6103,7 @@ def test_reviewer_iteration_scope_fails_open_on_bad_scope_artifacts() -> None:
 def test_reviewer_iteration_scope_uses_targeted_context_helper_and_scoped_semble_labels() -> None:
 	reviewers = _reviewers_text()
 	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${TARGETED_FILE_CONTEXT_SCRIPT:-${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py}"' in reviewers
-	assert 'python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"' in reviewers
+	assert 'reviewer_run_isolated_python "${TARGETED_FILE_CONTEXT_SCRIPT}"' in reviewers
 	assert '--paths-file "${REVIEWER_SCOPE_PATHS_FILE}"' in reviewers
 	assert 'Scoped reviewer focus summary:' in reviewers
 	assert 'Scoped reviewer focus files:' in reviewers

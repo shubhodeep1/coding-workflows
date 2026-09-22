@@ -40,6 +40,11 @@ for _ledger_candidate in \
   fi
 done
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+review_rb_run_isolated_python()
+{
+  _gh_helpers_run_isolated_python_with_paths \
+    "${SUPPORT_ROOT_DIR:-.}" "${SUPPORT_SCRIPTS_DIR}" -- "$@"
+}
 OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
 CODEX_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
@@ -164,7 +169,7 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
       fi
       : > "${_tmp}" 2>/dev/null || { rm -f "${_tmp}"; echo "${_sanitize_warn}" >&2; return 0; }
     fi
-    if command -v python3 >/dev/null 2>&1 && python3 - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
+    if command -v python3 >/dev/null 2>&1 && review_rb_run_isolated_python - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
 from pathlib import Path
 import sys
 
@@ -291,7 +296,7 @@ emit_context_budget_warn_for_prompt() {
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+    review_rb_run_isolated_python - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -366,7 +371,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
       cat "${_p}"
       _emit_bytes="${_size}"
     else
-      PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
+      review_rb_run_isolated_python - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
 import sys
 
 cap = int(sys.argv[2])
@@ -438,7 +443,7 @@ emit_review_rb_lessons_learned_records() {
   telemetry_json="$(printf '%s\n' "${judge_json}" | {
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${PWD}" "${issue_number}" "${pr_number}" <<'PY'
+    review_rb_run_isolated_python - "${PWD}" "${issue_number}" "${pr_number}" <<'PY'
 import json
 import os
 import sys
@@ -538,7 +543,7 @@ render_review_rb_prior_round_decisions_file() {
   fi
 
   tmp_path="$(mktemp)" || return 0
-  if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
+  if review_rb_run_isolated_python - "${ledger_path}" > "${tmp_path}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1089,7 +1094,7 @@ if ! [[ "${PR_DIFF_BYTES_TOTAL}" =~ ^[0-9]+$ ]]; then
   PR_DIFF_BYTES_TOTAL=0
 fi
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
-  if PYTHONDONTWRITEBYTECODE=1 python3 - "${RB_JUDGE_PR_DIFF_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null <<'PY'
+  if review_rb_run_isolated_python - "${RB_JUDGE_PR_DIFF_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
@@ -1383,7 +1388,7 @@ JUDGE_ATTEMPT_COUNT="${#JUDGE_ATTEMPT_LEVELS[@]}"
 RB_OPENCODE_WORKSPACE="$(pwd)"
 RB_JUDGE_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_judge_opencode.json"
 RB_FIX_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_fix_opencode.json"
-model_provider_broker_start
+opencode_model_provider_broker_start
 if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then
   exit 1
 fi
@@ -1403,7 +1408,7 @@ fi
 _recover_judge_json() {
   local src="$1" dst="$2" recovered=""
   [ -s "${src}" ] || return 1
-  recovered="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${src}" <<'PY' 2>/dev/null
+  recovered="$(review_rb_run_isolated_python - "${src}" <<'PY' 2>/dev/null
 import json, sys
 
 src = sys.argv[1]
@@ -1587,7 +1592,7 @@ fi
 # `[ -z "${JUDGE_JSON}" ]` check fires `JUDGE_JSON: unbound variable`
 # under `set -u` and aborts the whole review_autofix job.
 JUDGE_JSON=""
-JUDGE_JSON="$(PYTHONDONTWRITEBYTECODE=1 python3 -c "
+JUDGE_JSON="$(review_rb_run_isolated_python -c "
 import json, re, sys
 
 raw = open('${RB_JUDGE_OUTPUT}', 'r').read()
@@ -1952,7 +1957,7 @@ __EDIT_DISCIPLINE__
         rb_fix_serena_mode="on"
       fi
       rb_fix_opencode_ready=true
-      model_provider_broker_start
+      opencode_model_provider_broker_start
       if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then
         rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
         exit 1
@@ -2362,13 +2367,13 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         RB_FOLLOWUP_INTEGRATION_BRANCH=""
         RB_FOLLOWUP_PARENT_DECLARED_DEFAULT="false"
         if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
-          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | review_rb_run_isolated_python -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
 print(m.group(1).strip() if m else "")
 ' 2>/dev/null || echo "")"
-          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | review_rb_run_isolated_python -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE)

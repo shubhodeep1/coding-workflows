@@ -1958,7 +1958,7 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert '--repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}"' in implement_run
 	# restore precedes the pre-Codex baseline capture and the attempt loop;
 	# reinstall follows the loop and precedes the transcript archive.
-	assert implement_run.index(restore_call) < implement_run.index('python3 "${SUPPORT_SCRIPTS_DIR}/targeted_file_context.py"')
+	assert implement_run.index(restore_call) < implement_run.index('_gh_helpers_run_isolated_python -- "${SUPPORT_SCRIPTS_DIR}/targeted_file_context.py"')
 	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
 	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
 	assert implement_run.rindex('bash "${SUPPORT_SCRIPTS_DIR}/codex_thread_reuse.sh" direct-run') < implement_run.index(reinstall_call)

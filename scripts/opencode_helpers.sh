@@ -8,6 +8,25 @@ fi
 _OPENCODE_HELPERS_LOADED="true"
 
 _opencode_helpers_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OPENCODE_HELPERS_PROVIDER_API_KEY="${OPENROUTER_API_KEY:-}"
+unset OPENROUTER_API_KEY
+
+_opencode_run_isolated_python()
+{
+	env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE="1" \
+		python3 -I -B "$@"
+}
+
+opencode_model_provider_broker_start()
+{
+	OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY}" model_provider_broker_start "$@"
+}
 
 _opencode_error()
 {
@@ -21,7 +40,7 @@ _opencode_alert_field()
 
 opencode_strip_ansi()
 {
-	python3 -c 'import re, sys; data = sys.stdin.buffer.read(); pattern = rb"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|[P^_].*?\x1b\\|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])"; sys.stdout.buffer.write(re.sub(pattern, b"", data, flags=re.DOTALL))'
+	_opencode_run_isolated_python -c 'import re, sys; data = sys.stdin.buffer.read(); pattern = rb"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|[P^_].*?\x1b\\|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])"; sys.stdout.buffer.write(re.sub(pattern, b"", data, flags=re.DOTALL))'
 }
 
 opencode_run_cmd()
@@ -93,7 +112,8 @@ opencode_run_cmd()
 
 	printf 'opencode_agent_start role=%s expected_provider=openrouter expected_model=%s variant=%s\n' \
 		"${role}" "$(_opencode_alert_field "${model_slug}")" "${variant}" >&2
-	OPENCODE_CONFIG="${config_path}" NO_COLOR=1 "${opencode_argv[@]}"
+	OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY}" \
+		OPENCODE_CONFIG="${config_path}" NO_COLOR=1 "${opencode_argv[@]}"
 }
 
 opencode_emit_failure_alert()
@@ -161,7 +181,7 @@ opencode_require_bootstrap()
 	if [ ! -r "${config_path}" ] || [ ! -s "${config_path}" ]; then
 		opencode_emit_failure_alert "${phase}" "${role}" "${model_slug}" 1 config_unreadable || return $?
 	fi
-	if ! python3 -m json.tool "${config_path}" >/dev/null 2>&1; then
+	if ! _opencode_run_isolated_python -m json.tool "${config_path}" >/dev/null 2>&1; then
 		opencode_emit_failure_alert "${phase}" "${role}" "${model_slug}" 1 config_invalid || return $?
 	fi
 

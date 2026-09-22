@@ -36,7 +36,14 @@ fi
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 
 resolved_paths="$({
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${runner_temp}" "${workspace_path}" <<'PY'
+	env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE=1 \
+		python3 -I -B - "${runner_temp}" "${workspace_path}" <<'PY'
 from pathlib import Path
 import sys
 

@@ -9,6 +9,12 @@ if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
 	source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 fi
 
+review_consolidate_run_isolated_python()
+{
+	_gh_helpers_run_isolated_python_with_paths \
+		"${SUPPORT_ROOT_DIR:-.}" "${SUPPORT_SCRIPTS_DIR:-scripts}" -- "$@"
+}
+
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
 CODEX_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_helpers.sh"
@@ -65,7 +71,7 @@ first_linked_issue_number()
 		return 0
 	fi
 
-	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' 2>/dev/null || true
+	review_consolidate_run_isolated_python - <<'PY' 2>/dev/null || true
 import json
 import os
 
@@ -107,7 +113,7 @@ emit_lessons_learned_records_from_consolidator_output()
 	telemetry_json="$({
 		PYTHONDONTWRITEBYTECODE=1 \
 		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-		python3 - "${PWD}" "${CONSOLIDATOR_RAW_FILE}" "${issue_number}" <<'PY'
+		review_consolidate_run_isolated_python - "${PWD}" "${CONSOLIDATOR_RAW_FILE}" "${issue_number}" <<'PY'
 import json
 import os
 import re
@@ -284,7 +290,7 @@ emit_context_budget_warn_for_prompt()
 	warn_line="$(
 		PYTHONDONTWRITEBYTECODE=1 \
 		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-		python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+		review_consolidate_run_isolated_python - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -326,7 +332,7 @@ render_prior_round_decisions_file()
 	fi
 
 	tmp_path="$(mktemp)"
-	if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
+	if review_consolidate_run_isolated_python - "${ledger_path}" > "${tmp_path}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -563,7 +569,7 @@ if [ ! -r "${CODEX_HELPERS_PATH}" ] || ! source "${CODEX_HELPERS_PATH}" 2>/dev/n
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=codex_helpers failopen=1 output_bytes=0"
 	exit 0
 fi
-if ! MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${REVIEW_CONSOLIDATOR_MODEL}" model_provider_broker_start; then
+if ! MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${REVIEW_CONSOLIDATOR_MODEL}" opencode_model_provider_broker_start; then
 	: > "${CONSOLIDATOR_RAW_FILE}"
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} broker_start_failed=1 failopen=1 output_bytes=0"
 	exit 0

@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+codex_thread_reuse_run_isolated_python()
+{
+	local -a isolated_python_environment=(env -i
+		HOME="${HOME:-}"
+		PATH="${PATH:-/usr/bin:/bin}"
+		TMPDIR="${TMPDIR:-/tmp}"
+		LANG="C.UTF-8"
+		LC_ALL="C.UTF-8"
+		PYTHONDONTWRITEBYTECODE="1")
+
+	"${isolated_python_environment[@]}" python3 -I -B "$@"
+}
+
 codex_thread_reuse_truthy()
 {
 	local value="${1:-}"
@@ -21,7 +34,7 @@ codex_thread_reuse_seed_run_token()
 		return 0
 	fi
 
-	CODEX_THREAD_REUSE_RUN_TOKEN="$(python3 - <<'PY'
+	CODEX_THREAD_REUSE_RUN_TOKEN="$(codex_thread_reuse_run_isolated_python - <<'PY'
 import uuid
 
 print(uuid.uuid4().hex)
@@ -95,7 +108,7 @@ codex_thread_reuse_clear_session_id()
 
 codex_thread_reuse_helper_path()
 {
-	python3 - "${BASH_SOURCE[0]:-$0}" <<'PY'
+	codex_thread_reuse_run_isolated_python - "${BASH_SOURCE[0]:-$0}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -188,7 +201,7 @@ codex_thread_reuse_begin_capture()
 	local markers_dir=""
 
 	markers_dir="$(codex_thread_reuse_ensure_runtime_root)/markers"
-	python3 - "${markers_dir}" "$(codex_thread_reuse_safe_key "${state_key}")" <<'PY'
+	codex_thread_reuse_run_isolated_python - "${markers_dir}" "$(codex_thread_reuse_safe_key "${state_key}")" <<'PY'
 from pathlib import Path
 import sys
 import time
@@ -207,7 +220,7 @@ codex_thread_reuse_extract_session_id_from_file()
 {
 	local session_file="${1:?session file required}"
 
-	python3 - "${session_file}" <<'PY'
+	codex_thread_reuse_run_isolated_python - "${session_file}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -272,7 +285,7 @@ codex_thread_reuse_record_session_from_marker()
 	local session_root="${CODEX_THREAD_REUSE_SESSION_ROOT:-${HOME:-}/.codex/sessions}"
 	local session_id=""
 
-	session_id="$(python3 - "${marker_file}" "${session_root}" "$(pwd)" <<'PY'
+	session_id="$(codex_thread_reuse_run_isolated_python - "${marker_file}" "${session_root}" "$(pwd)" <<'PY'
 from __future__ import annotations
 
 import json
@@ -348,7 +361,7 @@ codex_thread_reuse_transform_prompt()
 	local marker_start="${5:-}"
 	local marker_end="${6:-}"
 
-	python3 - "${mode}" "${source_prompt}" "${continuation_prompt}" "${output_prompt}" "${marker_start}" "${marker_end}" <<'PY'
+	codex_thread_reuse_run_isolated_python - "${mode}" "${source_prompt}" "${continuation_prompt}" "${output_prompt}" "${marker_start}" "${marker_end}" <<'PY'
 from __future__ import annotations
 
 import sys

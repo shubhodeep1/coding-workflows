@@ -42,6 +42,31 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 
+reviewer_run_isolated_python() {
+  local target="${1:?python target required}"
+  shift
+  _gh_helpers_run_isolated_python \
+    "REVIEWER_SUPPORT_ROOT=${SUPPORT_ROOT_DIR:-.}" \
+    "REVIEWER_SUPPORT_SCRIPTS=${SUPPORT_SCRIPTS_DIR:-scripts}" \
+    -- -c '
+import os
+import runpy
+import sys
+
+target = sys.argv[1]
+target_args = sys.argv[2:]
+for candidate in (os.environ["REVIEWER_SUPPORT_SCRIPTS"], os.environ["REVIEWER_SUPPORT_ROOT"]):
+	if candidate and candidate not in sys.path:
+		sys.path.insert(0, candidate)
+if target == "-":
+	sys.argv = ["-", *target_args]
+	exec(compile(sys.stdin.buffer.read(), "<stdin>", "exec"), {"__name__": "__main__"})
+else:
+	sys.argv = [target, *target_args]
+	runpy.run_path(target, run_name="__main__")
+' "${target}" "$@"
+}
+
 OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh}"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
 reviewer_helpers_alert_model="$(printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed -n '/[^[:space:]]/ { s/^[[:space:]]*//; s/[[:space:]]*$//; p; q; }')"
@@ -132,9 +157,7 @@ emit_context_budget_warn_for_prompt() {
   fi
 
   warn_line="$({
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+    reviewer_run_isolated_python - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -439,7 +462,7 @@ normalize_openrouter_usage() {
   local phase_label="$2"
   local call_label="$3"
   local model_name="$4"
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
+  reviewer_run_isolated_python - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
 import json
 import os
 import sys
@@ -681,6 +704,7 @@ EOF
 
   # shellcheck disable=SC2016
   probe_opencode_cmd=(
+	env "OPENROUTER_API_KEY=${OPENCODE_HELPERS_PROVIDER_API_KEY}"
     bash -c
     'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
     opencode-reviewer
@@ -759,7 +783,7 @@ reviewer_materialize_opencode_json_text() {
   local structured_output_file="$1"
   local reviewer_text_file="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${structured_output_file}" "${reviewer_text_file}" <<'PY'
+  reviewer_run_isolated_python - "${structured_output_file}" "${reviewer_text_file}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -836,7 +860,7 @@ filter_reviewer_paths_file_against_skips() {
   local output_file="$2"
   local skipped_file="$3"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  reviewer_run_isolated_python - \
     "$input_file" "$output_file" "$skipped_file" <<'PY'
 from pathlib import Path
 import sys
@@ -870,7 +894,7 @@ filter_reviewer_stat_file_against_skips() {
   local output_file="$2"
   local skipped_file="$3"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  reviewer_run_isolated_python - \
     "$input_file" "$output_file" "$skipped_file" <<'PY'
 from pathlib import Path
 import sys
@@ -953,7 +977,7 @@ build_reviewer_filtered_symbol_diff_summary() {
   fi
 
   if [ -s "${diff_file}" ] || [ -s "${changed_files_file}" ]; then
-    PYTHONDONTWRITEBYTECODE=1 python3 "${generator_script}" \
+    reviewer_run_isolated_python "${generator_script}" \
       --diff-file "${diff_file}" \
       --changed-files "${changed_files_file}" \
       --output "${output_file}" \
@@ -969,7 +993,7 @@ emit_reviewer_filter_skip_logs() {
   local pr_skipped_file="$1"
   local last_run_skipped_file="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$pr_skipped_file" "$last_run_skipped_file" <<'PY'
+  reviewer_run_isolated_python - "$pr_skipped_file" "$last_run_skipped_file" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1128,7 +1152,7 @@ reviewer_count_diff_loc() {
 reviewer_count_paths_file() {
   local paths_file="$1"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  reviewer_run_isolated_python - \
     "$paths_file" <<'PY'
 from pathlib import Path
 import sys
@@ -1151,7 +1175,7 @@ reviewer_any_path_matches_regex() {
   local paths_file="$1"
   local pattern="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$paths_file" "$pattern" <<'PY'
+  reviewer_run_isolated_python - "$paths_file" "$pattern" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -1397,7 +1421,7 @@ classify_reviewer_risk_tier() {
 reviewer_collect_review_tier_path_metadata() {
   local paths_file="$1"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  reviewer_run_isolated_python - \
     "$paths_file" <<'PY'
 from pathlib import Path
 import sys
@@ -1706,7 +1730,7 @@ build_reviewer_iteration_scope_artifacts() {
   local output_paths_file="$3"
   local output_summary_file="$4"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  reviewer_run_isolated_python - \
     "$changed_files_file" "$ledger_status_file" "$output_paths_file" "$output_summary_file" <<'PY'
 from pathlib import Path
 import sys
@@ -1845,7 +1869,7 @@ prepare_reviewer_scoped_context() {
   } > "${REVIEWER_SCOPE_QUERY_SEED_FILE}"
 
   local -a targeted_file_context_args=(
-    python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"
+    reviewer_run_isolated_python "${TARGETED_FILE_CONTEXT_SCRIPT}"
     --paths-file "${REVIEWER_SCOPE_PATHS_FILE}"
     --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
     --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
@@ -3046,7 +3070,7 @@ reviewer_slot_backoff_cap_secs() {
 
 reviewer_slot_backoff_budget_ratio() {
   local raw="${REVIEWER_SLOT_BACKOFF_BUDGET_RATIO:-0.05}"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${raw}" <<'PY'
+  reviewer_run_isolated_python - "${raw}" <<'PY'
 import re
 import sys
 
@@ -3080,7 +3104,7 @@ reviewer_slot_backoff_budget_secs() {
   local total_secs="${1:-0}"
   local ratio=""
   ratio="$(reviewer_slot_backoff_budget_ratio)"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${total_secs}" "${ratio}" <<'PY'
+  reviewer_run_isolated_python - "${total_secs}" "${ratio}" <<'PY'
 import math
 import sys
 
@@ -3148,7 +3172,7 @@ reviewer_random_int_upto() {
 
 reviewer_cache_status_for_model() {
   local model_name="$1"
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "${model_name}" <<'PY'
+  reviewer_run_isolated_python - "${model_name}" <<'PY'
 import sys
 
 try:
@@ -3224,7 +3248,7 @@ reviewer_catalog_declares_model() {
   if [ ! -s "${REVIEWER_MODEL_CATALOG_FILE}" ]; then
     return 0
   fi
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_MODEL_CATALOG_FILE}" "${model}" <<'PY'
+  reviewer_run_isolated_python - "${REVIEWER_MODEL_CATALOG_FILE}" "${model}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -3264,7 +3288,7 @@ reviewer_failback_target_for_model() {
       printf '%s\n' "${candidate}"
       return 0
     fi
-  done < <(PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_FAILBACK_CHAINS_FILE}" "${model}" <<'PY'
+  done < <(reviewer_run_isolated_python - "${REVIEWER_FAILBACK_CHAINS_FILE}" "${model}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -3300,7 +3324,7 @@ reviewer_health_state_action() {
   shift || true
   [ -n "${REVIEWER_HEALTH_STATE_FILE:-}" ] || return 0
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${action}" "${REVIEWER_HEALTH_STATE_FILE}" "$@" <<'PY'
+  reviewer_run_isolated_python - "${action}" "${REVIEWER_HEALTH_STATE_FILE}" "$@" <<'PY'
 import json
 import os
 import sys
@@ -4023,6 +4047,7 @@ execute_reviewer_attempt() {
   emit_reviewer_substate "StreamingTurn" "${attempt_number}"
   # shellcheck disable=SC2016
   reviewer_codex_cmd=(
+	env "OPENROUTER_API_KEY=${OPENCODE_HELPERS_PROVIDER_API_KEY}"
     bash -c
     'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
     opencode-reviewer
@@ -5006,13 +5031,15 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     # XPOLL_SUMMARISER_REASONING) produces a consensus ledger + per-reviewer
     # sections. Retries 3×; hard-fails the workflow on final failure
     # (triggers job-level Telegram failure alert).
-    bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
+    OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY}" \
+      bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
     echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
   fi
 
   if [ ! -s "${PASS1_LEDGER_FILE}" ] && [ "${pass1_successful:-0}" -gt 0 ] && [ ! -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
     echo "Resume: regenerating missing pass-1 consensus ledger from cached pass-1 reviewer outputs."
-    bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
+    OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY}" \
+      bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
     echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
   fi
 
@@ -5104,7 +5131,8 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   # ── Consolidate all pass-2 reviewer outputs into REVIEWER_CONSENSUS_FILE ──
   # Feeds editor (review_apply_fixes.sh) + memory-record step.
   if [ "${pass2_successful}" -gt 0 ] && [ ! -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
-    bash "${SUMMARISER_SCRIPT}" --prefix review --output "${REVIEWER_CONSENSUS_FILE}"
+    OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY}" \
+      bash "${SUMMARISER_SCRIPT}" --prefix review --output "${REVIEWER_CONSENSUS_FILE}"
     echo "Pass-2 consensus ledger (REVIEWER_CONSENSUS_FILE): $(wc -c < "${REVIEWER_CONSENSUS_FILE}" 2>/dev/null || echo 0) bytes"
   fi
 else
@@ -5120,7 +5148,8 @@ else
   # same ledger shape they receive in two-pass mode. Hard-fails on summariser
   # failure (triggers job-level Telegram alert).
   if [ "${reviewers_successful}" -gt 0 ] && [ ! -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
-    bash "${SUMMARISER_SCRIPT}" --prefix review --output "${REVIEWER_CONSENSUS_FILE}"
+    OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY}" \
+      bash "${SUMMARISER_SCRIPT}" --prefix review --output "${REVIEWER_CONSENSUS_FILE}"
     echo "Consensus ledger (REVIEWER_CONSENSUS_FILE): $(wc -c < "${REVIEWER_CONSENSUS_FILE}" 2>/dev/null || echo 0) bytes"
   fi
 fi
