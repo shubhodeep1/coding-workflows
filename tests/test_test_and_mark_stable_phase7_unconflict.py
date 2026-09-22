@@ -65,6 +65,8 @@ def test_unconflict_only_rewrites_files_the_base_changed_since_merge_base() -> N
 	block = _unconflict_block(_read_workflow())
 	assert '"repos/${TEST_REPO}/compare/${PHASE7_BASE_REF}...${BRANCH}"' in block
 	assert '"repos/${TEST_REPO}/pulls/${PR_NUMBER}/files?per_page=100"' in block
+	assert 'if [ -z "${PHASE7_MERGE_BASE_SHA}" ]; then' in block
+	assert "outcome=kept reason=merge_base_unavailable" in block
 	assert '[ "${phase7_base_blob}" != "${phase7_merge_base_blob}" ]' in block
 	assert 'gh api -X PUT "repos/${TEST_REPO}/contents/${path}"' in block
 
