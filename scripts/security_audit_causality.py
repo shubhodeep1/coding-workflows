@@ -420,8 +420,19 @@ def _revalidate_waiver(
 	causal_files = set(str(path) for path in current_scope["causal_scope_files"])
 	try:
 		current_symbols, _current_sources = _snapshot(repo, current_head)
+		current_target_symbol = _target_symbol(current_symbols, file_name, line)
+		if current_target_symbol is None:
+			raise ValueError("current causal target is unavailable")
+		current_causal_symbols, current_scope_ambiguous = _scope_for_target(
+			current_symbols, current_target_symbol
+		)
 	except (OSError, SyntaxError, UnicodeError, ValueError, tarfile.TarError):
 		return {"valid": False, "reason": "repository causal graph is unavailable"}
+	if current_scope_ambiguous:
+		return {"valid": False, "reason": "repository causal graph is ambiguous"}
+	causal_reference_names = {
+		symbol.leaf_name for symbol in current_causal_symbols if symbol.leaf_name != "__module__"
+	}
 	for changed_path in changed_paths:
 		if changed_path in causal_files:
 			return {"valid": False, "reason": "causal file changed"}
@@ -434,6 +445,8 @@ def _revalidate_waiver(
 				symbol.indeterminate or symbol.wildcard_import for symbol in changed_symbols
 			):
 				return {"valid": False, "reason": "changed Python module is indeterminate"}
+			if any(symbol.references.intersection(causal_reference_names) for symbol in changed_symbols):
+				return {"valid": False, "reason": "changed Python module references causal scope"}
 			continue
 		if path_suffix in {".md", ".rst", ".txt"}:
 			continue

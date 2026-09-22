@@ -313,6 +313,22 @@ def test_shared_waiver_revalidation_rejects_routing_config_changes() -> None:
 		repo.mkdir()
 		subprocess.run(["git", "init", "-q", str(repo)], check=True)
 		(repo / "app.py").write_text("def privileged_sink(user):\n\treturn user.secret\n", encoding="utf-8")
+		(repo / "caller_1.py").write_text(
+			"from app import privileged_sink\n\ndef caller_1(user):\n\treturn privileged_sink(user)\n",
+			encoding="utf-8",
+		)
+		(repo / "caller_2.py").write_text(
+			"from caller_1 import caller_1\n\ndef caller_2(user):\n\treturn caller_1(user)\n",
+			encoding="utf-8",
+		)
+		(repo / "caller_3.py").write_text(
+			"from caller_2 import caller_2\n\ndef caller_3(user):\n\treturn caller_2(user)\n",
+			encoding="utf-8",
+		)
+		(repo / "caller_4.py").write_text(
+			"from caller_3 import caller_3\n\ndef caller_4(user):\n\treturn caller_3(user)\n",
+			encoding="utf-8",
+		)
 		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
 		subprocess.run(
 			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
@@ -358,8 +374,31 @@ def test_shared_waiver_revalidation_rejects_routing_config_changes() -> None:
 		)
 		assert json.loads(valid_result.stdout)["valid"] is True
 
+		(repo / "unrelated.py").write_text(
+			"from caller_4 import caller_4\n\ndef public_route(user):\n\treturn caller_4(user)\n",
+			encoding="utf-8",
+		)
+		subprocess.run(["git", "-C", str(repo), "add", "unrelated.py"], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "new caller"],
+			check=True,
+		)
+		caller_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+		caller_result = subprocess.run(
+			[
+				"python3", str(CAUSALITY), "revalidate-waiver", "--repo", str(repo),
+				"--audited-head", base_sha, "--current-head", caller_sha,
+				"--finding-json", str(finding_path), "--waiver-json", str(waiver_path),
+			],
+			capture_output=True, text=True, check=True,
+		)
+		assert json.loads(caller_result.stdout) == {
+			"reason": "changed Python module references causal scope", "valid": False,
+		}
+
+		(repo / "unrelated.py").write_text("VALUE = 1\n", encoding="utf-8")
 		(repo / "routes.yaml").write_text("public: privileged_sink\n", encoding="utf-8")
-		subprocess.run(["git", "-C", str(repo), "add", "routes.yaml"], check=True)
+		subprocess.run(["git", "-C", str(repo), "add", "unrelated.py", "routes.yaml"], check=True)
 		subprocess.run(
 			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "route"],
 			check=True,
