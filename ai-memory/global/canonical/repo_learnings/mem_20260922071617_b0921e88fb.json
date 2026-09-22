@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Security-sensitive workflow logic favors isolation and authenticated control markers.",
   "timestamps": {
     "created_at": "2026-09-22T07:16:17Z",
