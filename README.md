@@ -1202,7 +1202,14 @@ through `clarify → plan → implement → review`.
   `REVIEW_AUTOFIX_RUN_SUMMARY_V1` line, and log tails as evidence; resolver
   escalations are left to the `ai:resolver-escalated` label path. The
   reporter never fails the review job; stable log lines are prefixed
-  `WORKFLOW_HEAL_AUTOFIX_REPORT`.
+  `WORKFLOW_HEAL_AUTOFIX_REPORT`. The reporter and
+  `scripts/workflow_failure_heal.py` are staged by the branch-pinned
+  `stage_workflow_support.sh` (`OPTIONAL_BOOTSTRAP_SCRIPTS`); because that
+  helper comes from the PR branch, the `Stage workflow support files` step
+  of `review_autofix.yml` also backfills the pair
+  (`REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS`) from the main snapshot when the
+  branch predates them, so a PR branch forked before the reporter landed
+  still reports instead of logging `skip reason=reporter_missing`.
 - **Trigger (releases):** `workflow_run: completed` with conclusion `failure`
   or `timed_out` on `Test & Mark Stable Release`, `Mark Stable Release`,
   `Promote main to stable`, `Auto release stable`, and

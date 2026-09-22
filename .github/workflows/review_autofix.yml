@@ -241,6 +241,13 @@ env:
     nag_reminder.sh opencode_helpers.sh write_opencode_config.sh
   REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
     render_prompt.py
+  # The workflow-failure-heal reporter pair the failure-path step "Report
+  # autofix failure to workflow failure heal" runs. Optional (never
+  # preflight-checked): the staging backfill copies them from the main
+  # snapshot when the branch-pinned stage_workflow_support.sh predates them,
+  # so a PR branch forked before #4208 still reports its repeated failures.
+  REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS: >-
+    workflow_failure_heal.py workflow_failure_heal_autofix_report.sh
 
 jobs:
   gate:
@@ -1817,6 +1824,30 @@ jobs:
               echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
             else
               echo "::warning::Preflight support script ${f} was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; the later preflight step will report whether this is a hard or soft miss."
+            fi
+          done
+
+          # Backfill the workflow-failure-heal reporter pair the same way. The
+          # pair rides the OPTIONAL_BOOTSTRAP_SCRIPTS loop of
+          # stage_workflow_support.sh, but that helper is sourced from the PR
+          # branch (SCRIPT_REF): a branch forked before #4208 added the pair
+          # never iterates those names, and the "Report autofix failure to
+          # workflow failure heal" step then skips with reason=reporter_missing
+          # even though this workflow (@main) and the main snapshot carry the
+          # scripts. Optional: a miss only disables the report for this run.
+          for f in ${REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS}; do
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
+              continue
+            fi
+            backfill_src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              backfill_src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ -f "${backfill_src}" ]; then
+              install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+            else
+              echo "::warning::Workflow-failure-heal reporter script ${f} was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; the Report autofix failure to workflow failure heal step will skip with reason=reporter_missing for this run."
             fi
           done
 
