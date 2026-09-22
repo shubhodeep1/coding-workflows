@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml: lines 133-136 (the `ISSUE_AUTHOR_ASSOCIATION` / `ISSUE_AUTHOR_LOGIN` block appended to `GITHUB_ENV` near the top of `Fetch issue metadata` step) | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Mutable `GITHUB_ENV` exports of issue author identity remain alongside immutable step-output publication.\n  WHY: Future callers that read the ambient environment can silently consume the mutable values and reintroduce the forgery path.\n- .github/workflows/plan.yml: the `ISSUE_AUTHOR_ASSOCIATION=$(jq -r ...) >> \"$GITHUB_ENV\"` / `ISSUE_AUTHOR_LOGIN=$(jq -r ...) >> \"$GITHUB_ENV\"` writes inside `Fetch issue metadata` | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Mutable `GITHUB_ENV` exports of issue author identity remain alongside immutable step-output publication.\n  WHY: Future callers that read the ambient environment can silently consume the mutable values and recreate the bypass.\n- scripts/review_rb_judge.sh: lines 1859-1861 (the new `RB_FIX_PREEXISTING_DIRTY_FILE` capture) and the matching `rb_fix_preexisting_excludes` pathspec list spliced into the `git add -u` invocations (around lines 2041-2046) | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Writer modifications to paths that were already dirty before the judge-fix run are excluded from the `[judge-fix]` commit and silently lost.\n  WHY: `git add -u` skips the entire excluded path, including writer-produced changes; the reviewer also noted the severity as MAJOR while the issue and acceptance criteria do not request this behavior.\n- scripts/review_conflict_resolve.sh: Lines 2529-2535 in the last run diff | severity=high | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Scope-guard digest verification permits an empty `REVIEW_SCOPE_GUARD_EXPECTED_SHA256`.\n  WHY: Missing expected digests must reject the commit, but the empty-value branch allows validation to proceed without verifying the scope-guard digest.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml\n  Line or code reference: lines 133-136 (the `ISSUE_AUTHOR_ASSOCIATION` / `ISSUE_AUTHOR_LOGIN` block appended to `GITHUB_ENV` near the top of `Fetch issue metadata`)\n  Problem: The mutable `GITHUB_ENV` export of issue author identity is still present alongside the new immutable step-output publication in the same `Fetch issue metadata` step.\n  Why it fails at runtime: A future workflow edit or new commit site can read the mutable `GITHUB_ENV` value and reintroduce the forgery path.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- .github/workflows/plan.yml\n  Line or code reference: the `ISSUE_AUTHOR_ASSOCIATION=$(jq -r ...) >> \"$GITHUB_ENV\"` / `ISSUE_AUTHOR_LOGIN=$(jq -r ...) >> \"$GITHUB_ENV\"` writes inside `Fetch issue metadata`\n  Problem: The mutable `GITHUB_ENV` export of issue author identity remains after the downstream checks were changed to use step outputs.\n  Why it fails at runtime: Any new caller that reads the ambient environment can consume the mutable value and recreate the bypass.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- scripts/review_rb_judge.sh\n  Line or code reference: lines 1859-1861 (the new `RB_FIX_PREEXISTING_DIRTY_FILE` capture) and the matching `rb_fix_preexisting_excludes` pathspec list spliced into the `git add -u` invocations (around lines 2041-2046)\n  Problem: Paths dirty before the writer runs are excluded from staging, so legitimate writer modifications to those paths are silently dropped from the `[judge-fix]` commit.\n  Why it fails at runtime: `git add -u` skips the entire excluded path, including writer-produced changes, with no warning or fallback.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- scripts/review_conflict_resolve.sh\n  Location: lines 2521-2522 (the `resolver_scope_guard_actual_sha256=\"$(sha256sum ...)\"` computed unconditionally before the back-compat if)\n  Issue: The SHA is computed even when `REVIEW_SCOPE_GUARD_EXPECTED_SHA256` is empty or unset, wasting a `sha256sum` invocation on every resolver run.\n  Suggested minimal fix: Move the `sha256sum` assignment inside the `[[ \"${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}\" =~ ^[0-9a-f]{64}$ ]]` branch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_conflict_resolve.sh\n  Line or code reference: Lines 2529-2535 in the last run diff\n  Problem: The scope-guard digest verification allows empty `REVIEW_SCOPE_GUARD_EXPECTED_SHA256`.\n  Why it fails at runtime: Empty expected digests should reject the commit, but the condition allows the guard to run without verifying its digest.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "dd541c609e6e9d7175f3f82499ba8cd9d8f2ad45aab9ad842aff474c460da0e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4261,
+    "run_id": "35685761722",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35685761722",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922045120_b5bbe394b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4261,
+    "run_id": "35685761722"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-22T04:51:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
