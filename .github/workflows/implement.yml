@@ -626,8 +626,19 @@ jobs:
               emit(status="issue-author-untrusted")
               raise SystemExit(0)
 
+          # The machine-generated footer is the last block the review-blocked
+          # judge writes, but stall recovery (scripts/orchestrate_poll_process.sh
+          # close_and_reissue) and the no-op / post-Codex re-issue paths copy the
+          # body verbatim and append their own "---" + "Re-issued from #N"
+          # trailer after it. The metadata block therefore ends at the first
+          # horizontal rule that follows the footer header, or at the end of the
+          # body when nothing was appended. Trailing prose that is not separated
+          # by a rule still fails closed below. Incident: #4242 (re-issued from
+          # #4227 by stall recovery) lost its prior_pr_baseline_branch override
+          # with "review-blocked reissue metadata footer is incomplete" in
+          # implement runs 35656715219 and 35668070395.
           metadata_footer_match = re.search(
-              r"(?:^|\n)---\n\*\*Review-blocked reissue metadata\*\*\n(?P<block>.*)\Z",
+              r"(?:^|\n)---\n\*\*Review-blocked reissue metadata\*\*\n(?P<block>.*?)(?:\n---\n.*)?\Z",
               issue_body,
               re.DOTALL,
           )
@@ -2612,6 +2623,19 @@ jobs:
               attempt_model="${MODEL_EDITOR_FALLBACK}"
               echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
             fi
+            # The editor never needs the self-repo staged-support ledger paths
+            # ("Stage workflow support files" exports them into $GITHUB_ENV for
+            # the restore / reinstall / commit steps of this job). Drop them
+            # from the editor's environment so a pytest run the editor starts
+            # to validate its own change cannot write fixture paths into the
+            # live run's ledgers: implement runs 35614385686, 35628923735,
+            # 35642366131, 35656715219 and 35668070395 (issues #4227 / #4242,
+            # project #4139) each finished the edit and then failed the
+            # post-editor reinstall with IMPLEMENT_STAGED_SUPPORT_BASE_MISSING
+            # path=scripts/helper.sh. tests/conftest.py strips the same
+            # variables on main, but a review-blocked baseline branch or an
+            # unsynced integration branch checks out an older conftest.py, so
+            # the workflow side has to hold on its own.
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${PROMPT_FILE_TO_USE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${CODEX_OUTPUT_FILE}" \
@@ -2623,6 +2647,7 @@ jobs:
               CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
               CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
+              env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
@@ -3852,6 +3877,7 @@ jobs:
             emit_implement_substate "implement_repair" "implement_repair" "LaunchingAgentProcess" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
+            # Same ledger scrub as the implementation launch above.
             if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${REPAIR_PROMPT_FILE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${REPAIR_OUTPUT_FILE}" \
@@ -3862,6 +3888,7 @@ jobs:
               CODEX_THREAD_REUSE_CONTINUATION_FILE="${repair_thread_reuse_continuation_file}" \
               CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
               CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
+              env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash scripts/codex_thread_reuse.sh direct-run; then
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
