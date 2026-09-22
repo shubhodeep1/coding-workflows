@@ -166,6 +166,10 @@ def test_sibling_workflow_python_stdin_launches_are_isolated() -> None:
 		assert f'"${{RUNNER_TEMP}}/{redis_venv_name}/bin" >> "$GITHUB_PATH"' in redis_workflow_text
 		assert redis_workflow_text.count('"${SUPPORT_SCRIPTS_DIR}/semantic_cache.py"') == 2
 		assert 'python3 "${SUPPORT_SCRIPTS_DIR}/semantic_cache.py"' not in redis_workflow_text
+		assert redis_workflow_text.count("SEMANTIC_CACHE_REDIS_KEY_NAMESPACE: ${{ vars.SEMANTIC_CACHE_REDIS_KEY_NAMESPACE || '' }}") == 2
+		assert redis_workflow_text.count("SEMANTIC_CACHE_EMBEDDING_BASE_URL: ${{ vars.SEMANTIC_CACHE_EMBEDDING_BASE_URL || 'https://openrouter.ai/api/v1' }}") == 2
+		assert redis_workflow_text.count('"SEMANTIC_CACHE_REDIS_KEY_NAMESPACE=${SEMANTIC_CACHE_REDIS_KEY_NAMESPACE}"') == 2
+		assert redis_workflow_text.count('"SEMANTIC_CACHE_EMBEDDING_BASE_URL=${SEMANTIC_CACHE_EMBEDDING_BASE_URL}"') == 2
 		assert redis_workflow_text.count('"GITHUB_REPOSITORY=${GITHUB_REPOSITORY}" --') == 2
 		assert "semantic-cache-python" not in redis_workflow_text
 		assert "pip install --user" not in redis_workflow_text
