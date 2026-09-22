@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4248` at `b98f1fe8bbf2df427e837445ea722ac89671c964`\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: This is a complete, narrowly specified fixture replacement. Only the declared file should change; tests, documentation, changelog fragments, and unrelated formatting are explicitly out of scope.\n\n## Clarification interpretation\n\nNo clarification was required. The orchestrator auto-answer confirms implementation should proceed with the issue\u2019s exact values.\n\n## Automation and wiring\n\n- Modify an existing text fixture only; introduce no script or subsystem.\n- Scheduler/PR-push entry point: none.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Future-removal registry entry: not applicable.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 replace its current three lines with exactly:\n  1. `status: ok`\n  2. `decompose-run: 35672590166`\n\nNo other files may change.\n\n## Functions or modules to implement\n\nNone. This is a literal fixture-content update.\n\n## Data structures affected\n\n- The canary\u2019s plain-text two-line record.\n- Preserve a normal trailing newline without adding a blank third line.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the fixture atomically\n\n- **Chosen:** Overwrite the complete file with the two required lines.\n- **Alternatives considered:** Edit the existing second line and delete the third line separately.\n- **Why:** Whole-file replacement most directly enforces the exact-content acceptance criteria and avoids retaining stale fields.\n\n### D2 \u2014 Perform no collateral updates\n\n- **Chosen:** Exclude tests, documentation, changelog fragments, and formatting changes elsewhere.\n- **Alternatives considered:** Add a regression test or changelog entry.\n- **Why:** The issue explicitly requires that no additional files change, and exact byte-level verification is sufficient.\n\n## Security considerations\n\n- Trust boundary: issue-provided fixture content entering the repository worktree.\n- Authorization: no endpoint, worker, credential, or runtime authorization surface is added.\n- Validation: use only the fixed literal values from the acceptance criteria.\n- Abuse cases: prevent path-scope drift, injected extra lines, or unintended file changes by checking the final diff and exact file contents.\n- Money handling: not applicable.\n\n## Risks and edge cases\n\n- The current file contains obsolete `run_id` and `updated-by` lines; both must be removed.\n- Avoid an extra blank line, whitespace, line numbering, or formatting markers.\n- Ensure only `tests/e2e_smoke_canary.txt` appears in the diff.\n- No integration-branch conflict exists: checkout and metadata both identify `orchestrator/project-4248`.\n\n## Implementation steps\n\n1. Replace `tests/e2e_smoke_canary.txt` with the two specified lines.\n2. Compare the file byte-for-byte against the expected two-line payload.\n3. Confirm the Git diff contains only that file and only the intended replacement.\n\n## Testing considerations\n\n- Assert line 1 equals `status: ok`.\n- Assert line 2 equals `decompose-run: 35672590166`.\n- Assert the file contains exactly two lines.\n- Run `git diff --name-only` and confirm the sole changed path is `tests/e2e_smoke_canary.txt`.\n- No broader test suite is necessary because no executable behavior changes.\n\n## Pre-execution self-check\n\n- Requirements are unambiguous and fully mapped to one tracked file.\n- Planning ref matches the integration branch metadata.\n- No external input, dependency, API, migration, or scheduler wiring is required.\n- Estimated implementation and verification time: under 5 minutes.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "476a47e08ff7a085f20b3333a18f09be6648d817cb923bead84287fa3b41e031",
+  "lineage": {
+    "issue_number": 4249,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35672942420",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35672942420",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4249"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260922004519_a6363a3fd5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4249,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35672942420"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4249",
+  "timestamps": {
+    "created_at": "2026-09-22T00:45:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
