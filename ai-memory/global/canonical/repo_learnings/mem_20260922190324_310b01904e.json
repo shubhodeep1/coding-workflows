@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "The repository uses contract-focused tests to protect workflow behavior and security invariants.",
   "timestamps": {
     "created_at": "2026-09-22T19:03:24Z",
