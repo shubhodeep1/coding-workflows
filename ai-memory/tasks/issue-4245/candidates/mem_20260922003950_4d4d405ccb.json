@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What specific improvement should be implemented?\nChoices:\nA. Fix a bug\u2014provide the affected workflow/file, actual behavior, expected behavior, and reproduction steps. (RECOMMENDED)\nB. Add or change a feature\u2014name the subsystem and acceptance criteria.\nC. Improve a named subsystem\u2019s reliability, security, performance, cost, documentation, or usability\u2014specify the priority and measurable goal.",
+  "fingerprint": "f71024818786ef05db6fe9fc396046f67d518aa4ced2434185e577ccd452ae34",
+  "lineage": {
+    "issue_number": 4245,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35672659878",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35672659878",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260922003950_4d4d405ccb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4245,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35672659878"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #4245 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-22T00:39:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
