@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Change both close wrappers to pull_request_target with types: [closed].\"\n  expected_change_site: .github/workflows/internal-cancel-on-pr-close.yml and workflow-templates/ai-cancel-on-pr-close.yml\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR did not implement pull_request_target. It instead added a scheduled trigger (schedule: - cron: \"*/5 * * * *\") to both wrappers as a safer alternative that avoids the security risks of pull_request_target. This deviation is intentional, documented in README.md and agents.md, and constitutes a safe resolution of the original intent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Change both close wrappers to pull_request_target with types: [closed].\"\n  Expected change site: .github/workflows/internal-cancel-on-pr-close.yml and workflow-templates/ai-cancel-on-pr-close.yml\n  Evidence of absence: The PR did not implement pull_request_target. It instead added a schedule trigger (schedule: - cron: \"*/5 * * * *\") to both wrappers as a safer alternative that avoids the security risks of pull_request_target. This deviation is intentional: the schedule falls back every five minutes on the default branch, the reusable workflow validates every linked PR before cancelling, and no PR-head code is ever executed. The linked issue's Suggested fix section itself acknowledges the November 2 2026 default public-repository policy blocking pull_request_target and says the alternative should \"explicitly allow this trusted cleanup workflow or provide an existing-scheduler fallback.\" The PR chose the scheduler-fallback approach, documented in README.md and agents.md.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"Change both close wrappers to `pull_request_target` with `types: [closed]`.\"\n  Expected change site: .github/workflows/internal-cancel-on-pr-close.yml and workflow-templates/ai-cancel-on-pr-close.yml\n  Evidence of absence: The PR did not implement `pull_request_target`. It instead implemented a scheduled trigger (`schedule: - cron: \"*/5 * * * *\"`) as a safer alternative to avoid the security risks of `pull_request_target`. This deviation is intentional, documented in README.md and agents.md, and constitutes a safe resolution of the original intent (ensuring conflicted PRs are cleaned up).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4015e6834dea03f98e790faa6ec6db9659be85d65da2ae881e428f9248c1fd6d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4262,
+    "run_id": "35689914270",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35689914270",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922060542_ba79cb7cd3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4262,
+    "run_id": "35689914270"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-22T06:05:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
