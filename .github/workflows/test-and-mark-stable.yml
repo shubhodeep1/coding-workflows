@@ -5280,6 +5280,7 @@ jobs:
           # while the test jobs run, and only the dispatched commit was tested.
           ref: ${{ github.sha }}
           fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
 
       - name: Record the tested commit
         env:

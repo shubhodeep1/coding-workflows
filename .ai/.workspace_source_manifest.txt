@@ -148,6 +148,7 @@ changelog.d/4207-release-tag-push-retry.md
 changelog.d/4208-autofix-failure-heal.md
 changelog.d/4211-release-tag-push-retry.md
 changelog.d/4228-release-creation-token-recovery.md
+changelog.d/4240-release-tag-pat.md
 changelog.d/binance-blessings-249-parked-projects-resume-without-humans.md
 changelog.d/release-gate-retry-budget.md
 codex.md
