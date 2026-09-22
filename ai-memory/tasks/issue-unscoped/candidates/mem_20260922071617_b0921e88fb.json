@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Recent security hardening introduced isolated Python execution and authenticated waiver or marker handling in orchestration and audit paths. Plans that modify security audits, analysis application, or promotion gates should preserve the trust boundary and test marker ownership/authentication rather than accepting plain text signals.",
+  "fingerprint": "46eca934756793a448776d2bbb110255a12cdc40936879d6d3e92ab9a7b775ce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35698243453",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35698243453",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4216",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4228",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4240",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4258",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4260",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4229",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4241",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260922071617_b0921e88fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Security-sensitive workflow logic favors isolation and authenticated control markers.",
+  "timestamps": {
+    "created_at": "2026-09-22T07:16:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
