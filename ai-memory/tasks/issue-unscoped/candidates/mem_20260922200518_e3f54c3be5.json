@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit_causality.py:55-61 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: _source_at is dead code after _snapshot was rewritten to use git archive instead of per-file git show.\n  WHY: No runtime failure occurs because the function is unreachable, but it is a maintenance hazard that may mislead future readers about the active snapshot mechanism.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/security_audit_causality.py:lines 55-61 (function _source_at) | severity=NIT | confidence=5\n  PROBLEM: _source_at is dead code. The _snapshot function (line 144) was rewritten in the prior autofix run to use git archive instead of per-file git show. _source_at is defined but never called.\n  WHY: No runtime failure \u2014 the function is unreachable and has no side effects. It is a maintenance hazard that occupies audit-review attention for no benefit and could mislead future readers into thinking it is part of the active code path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit_causality.py:lines 55\u201361 (function `_source_at`) | severity=NIT | confidence=5\n  PROBLEM: `_source_at` is dead code. The previous AI autofix run rewrote `_snapshot` (around lines 144+) to populate `sources` via `git archive ... | tarfile` instead of iterating `for file_name in files: source = _source_at(repo, ref, file_name)`. The helper has no remaining callers anywhere in the script.\n  WHY: It does not fail. The function is unreachable and has no side effects, but it remains a maintenance hazard that occupies review attention and could mislead future readers into believing per-file `git show` is still in use. Removing it (and the `_git` helper that only it consumed, if so) is a one-line cleanup.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit_causality.py:lines 55-61 (function `_source_at`) | severity=NIT | confidence=5\n  PROBLEM: `_source_at` is dead code. The `_snapshot` function (line 144) was rewritten in the last run to use `git archive` instead of per-file `git show`, but `_source_at` was not removed.\n  WHY: No runtime failure \u2014 the function is unreachable. It is a dead-code maintenance hazard that occupies audit attention for no benefit and may mislead future readers about the snapshot mechanism.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/security_audit_causality.py:55 (_source_at dead after git-archive rewrite in _snapshot:144)\n  PROBLEM: _source_at is dead after the git-archive rewrite in _snapshot:144.\n  WHY: The reviewer reported this as a correctness finding; no additional runtime explanation or severity/confidence was provided.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "25f2fc9a2eb73962c8b36452081648bcc3ce7198620d397a9cb4a0fbc83bdc5d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4280,
+    "run_id": "35772072162",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35772072162",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922200518_e3f54c3be5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4280,
+    "run_id": "35772072162"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-22T20:05:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
