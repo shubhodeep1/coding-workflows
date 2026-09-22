@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Orchestration changes must preserve bounded polling, state, and budget semantics.",
   "timestamps": {
     "created_at": "2026-09-22T07:14:50Z",
