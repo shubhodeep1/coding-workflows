@@ -743,6 +743,7 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 	assert 'git diff HEAD --name-only -z > "${RB_FIX_PREEXISTING_DIRTY_FILE}"' in rb_judge_text
 	assert '":(exclude,literal)${rb_fix_preexisting_path}"' in rb_judge_text
 	assert 'cmp -s "${RB_FIX_PREEXISTING_DIFF_FILE}" "${rb_fix_current_preexisting_diff_file}"' in rb_judge_text
+	assert 'cmp -s "${RB_FIX_PREEXISTING_INDEX_DIFF_FILE}" "${rb_fix_current_preexisting_index_diff_file}"' in rb_judge_text
 	assert "refusing to discard or combine overlapping changes" in rb_judge_text
 	assert "REVIEW_SCOPE_GUARD_EXPECTED_SHA256" in rb_judge_text
 
@@ -813,6 +814,10 @@ def test_judge_staging_excludes_paths_dirty_before_writer_runs() -> None:
 			["git", "diff", "--binary", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
 			capture_output=True,
 		).stdout
+		baseline_index_diff = subprocess.run(
+			["git", "diff", "--binary", "--cached", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
+			capture_output=True,
+		).stdout
 		(repo / "src/security.py").write_text("VALUE = 2\n", encoding="utf-8")
 		pathspecs = [f":(exclude,literal){path}" for path in preexisting]
 		subprocess.run(["git", "add", "-u", "--", *pathspecs], cwd=repo, check=True, env=git_env)
@@ -826,6 +831,12 @@ def test_judge_staging_excludes_paths_dirty_before_writer_runs() -> None:
 			capture_output=True,
 		).stdout
 		assert current_diff == baseline_diff
+		subprocess.run(["git", "add", "--", "manifest.txt"], cwd=repo, check=True, env=git_env)
+		staged_overlap_diff = subprocess.run(
+			["git", "diff", "--binary", "--cached", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
+			capture_output=True,
+		).stdout
+		assert staged_overlap_diff != baseline_index_diff
 		(repo / "manifest.txt").write_text("writer overlap\n", encoding="utf-8")
 		overlapping_diff = subprocess.run(
 			["git", "diff", "--binary", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,

@@ -2530,6 +2530,13 @@ if [ -n "$(git status --porcelain)" ]; then
   fi
   resolver_generated_advisory_scope_rc=30
   resolver_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+  resolver_generated_advisory_failure="scope validator rejected the staged paths"
+  if ! [[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then resolver_generated_advisory_failure="expected scope-validator digest is missing or invalid"
+  elif [ ! -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ]; then resolver_generated_advisory_failure="scope validator is unavailable"
+  elif ! [[ "${resolver_scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]]; then resolver_generated_advisory_failure="scope validator could not be hashed"
+  elif [ "${resolver_scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ]; then resolver_generated_advisory_failure="scope validator digest changed after staging"
+  elif [ ! -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then resolver_generated_advisory_failure="linked-issue metadata is unavailable"
+  fi
   if [[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
     && [[ "${resolver_scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]] \
     && [ "${resolver_scope_guard_actual_sha256}" = "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ] \
@@ -2548,7 +2555,7 @@ if [ -n "$(git status --porcelain)" ]; then
   case "${resolver_generated_advisory_scope_rc}" in
     0|10) ;;
     *)
-      echo "::error::Refusing [ai-merge-resolve] commit: generated security advisory scope is unresolved, invalid, or exceeded."
+      echo "::error::Refusing [ai-merge-resolve] commit: ${resolver_generated_advisory_failure}."
       printf '%s\n' "${resolver_generated_advisory_violations:-}" | sed '/^$/d;s/^/  - /'
       exit 1
       ;;

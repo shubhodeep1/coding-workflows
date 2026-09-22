@@ -23,13 +23,11 @@ verify_review_scope_guard_integrity()
 	local scope_guard_path="${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"
 	local scope_guard_actual_sha256
 
+	if ! [[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then echo "::error::Refusing [judge-fix] commit: expected scope-validator digest is missing or invalid."; return 1; fi
+	if [ ! -f "${scope_guard_path}" ] || [ ! -r "${scope_guard_path}" ]; then echo "::error::Refusing [judge-fix] commit: generated-advisory scope validator is unavailable."; return 1; fi
 	scope_guard_actual_sha256="$(sha256sum "${scope_guard_path}" 2>/dev/null | awk '{print $1}')"
-	if ! [[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
-		|| ! [[ "${scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]] \
-		|| [ "${scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ]; then
-		echo "::error::Refusing [judge-fix] commit: generated-advisory scope validator changed after the writer ran."
-		return 1
-	fi
+	if ! [[ "${scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]]; then echo "::error::Refusing [judge-fix] commit: generated-advisory scope validator could not be hashed."; return 1; fi
+	if [ "${scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ]; then echo "::error::Refusing [judge-fix] commit: generated-advisory scope validator changed after the writer ran."; return 1; fi
 }
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-/tmp/codex-support}"
 if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
@@ -1862,6 +1860,7 @@ case "${RB_ACTION}" in
       RB_FIX_PREEXISTING_DIRTY_FILE="${RUNTIME_DIR}/rb_fix_preexisting_dirty.txt"
       git diff HEAD --name-only -z > "${RB_FIX_PREEXISTING_DIRTY_FILE}"
       RB_FIX_PREEXISTING_DIFF_FILE="${RUNTIME_DIR}/rb_fix_preexisting.diff"
+      RB_FIX_PREEXISTING_INDEX_DIFF_FILE="${RUNTIME_DIR}/rb_fix_preexisting_index.diff"
       rb_fix_preexisting_excludes=()
       rb_fix_preexisting_literals=()
       while IFS= read -r -d '' rb_fix_preexisting_path; do
@@ -1869,6 +1868,7 @@ case "${RB_ACTION}" in
         rb_fix_preexisting_literals+=(":(literal)${rb_fix_preexisting_path}")
       done < "${RB_FIX_PREEXISTING_DIRTY_FILE}"
       git diff --binary HEAD -- "${rb_fix_preexisting_literals[@]}" > "${RB_FIX_PREEXISTING_DIFF_FILE}"
+      git diff --binary --cached HEAD -- "${rb_fix_preexisting_literals[@]}" > "${RB_FIX_PREEXISTING_INDEX_DIFF_FILE}"
       RB_FIX_PROMPT="${RUNTIME_DIR}/rb_fix_prompt.txt"
       RB_FIX_OUTPUT="${RUNTIME_DIR}/rb_fix_output.txt"
       {
@@ -1991,13 +1991,16 @@ __EDIT_DISCIPLINE__
       # Check for changes and commit
       if [ "${#rb_fix_preexisting_literals[@]}" -gt 0 ]; then
         rb_fix_current_preexisting_diff_file="$(mktemp "${RUNTIME_DIR}/rb_fix_current_preexisting.XXXXXX")"
+        rb_fix_current_preexisting_index_diff_file="$(mktemp "${RUNTIME_DIR}/rb_fix_current_preexisting_index.XXXXXX")"
         git diff --binary HEAD -- "${rb_fix_preexisting_literals[@]}" > "${rb_fix_current_preexisting_diff_file}"
-        if ! cmp -s "${RB_FIX_PREEXISTING_DIFF_FILE}" "${rb_fix_current_preexisting_diff_file}"; then
-          rm -f "${rb_fix_current_preexisting_diff_file}"
+        git diff --binary --cached HEAD -- "${rb_fix_preexisting_literals[@]}" > "${rb_fix_current_preexisting_index_diff_file}"
+        if ! cmp -s "${RB_FIX_PREEXISTING_DIFF_FILE}" "${rb_fix_current_preexisting_diff_file}" \
+          || ! cmp -s "${RB_FIX_PREEXISTING_INDEX_DIFF_FILE}" "${rb_fix_current_preexisting_index_diff_file}"; then
+          rm -f "${rb_fix_current_preexisting_diff_file}" "${rb_fix_current_preexisting_index_diff_file}"
           echo "::error::Review-blocked fix writer modified a path that was already dirty before it ran; refusing to discard or combine overlapping changes."
           exit 1
         fi
-        rm -f "${rb_fix_current_preexisting_diff_file}"
+        rm -f "${rb_fix_current_preexisting_diff_file}" "${rb_fix_current_preexisting_index_diff_file}"
       fi
       if codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
         echo "::warning::Review-blocked fix OpenCode was killed by codex stall guard; skipping commit/merge and falling back to manual intervention."
