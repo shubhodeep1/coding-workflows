@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow and orchestration changes are guarded primarily by contract-focused tests.",
   "timestamps": {
     "created_at": "2026-09-22T00:58:23Z",
