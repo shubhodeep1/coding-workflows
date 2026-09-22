@@ -128,12 +128,15 @@ analysis/workflow-optimization-2026-09-20-2.md
 analysis/workflow-optimization-2026-09-20.md
 analysis/workflow-optimization-2026-09-21-2.md
 analysis/workflow-optimization-2026-09-21-3.md
+analysis/workflow-optimization-2026-09-21-4.md
 analysis/workflow-optimization-2026-09-21.md
+analysis/workflow-optimization-2026-09-22.md
 changelog.d/.gitkeep
 changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
 changelog.d/3965-security-pass-loop-convergence.md
 changelog.d/4127-security-fix-pr-base.md
 changelog.d/4134-auto-apply-analysis-and-stable-release.md
+changelog.d/4139-reissue-footer-trailer-and-editor-ledger-scrub.md
 changelog.d/4161-smoke-test-telegram-silencing.md
 changelog.d/4163-e2e-review-blocked-budget.md
 changelog.d/4165-workflow-failure-heal.md
@@ -149,6 +152,7 @@ changelog.d/4208-autofix-failure-heal.md
 changelog.d/4211-release-tag-push-retry.md
 changelog.d/4228-release-creation-token-recovery.md
 changelog.d/4240-release-tag-pat.md
+changelog.d/4242-staged-support-env-test-isolation.md
 changelog.d/binance-blessings-249-parked-projects-resume-without-humans.md
 changelog.d/release-gate-retry-budget.md
 codex.md

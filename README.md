@@ -707,14 +707,18 @@ jobs:
     secrets: inherit
 ```
 
-**`.github/workflows/ai-cancel-on-pr-close.yml`** — Cancels orphaned workflow runs when PRs close
+**`.github/workflows/ai-cancel-on-pr-close.yml`** — Cancels orphaned workflow runs when PRs close. The close event handles conflict-free PRs immediately; the five-minute schedule safely recovers conflicted closures after live, batched PR-state validation.
 ```yaml
 name: AI Cancel on PR Close
 on:
   pull_request:
     types: [closed]
+  schedule:
+    - cron: "*/5 * * * *"
 permissions:
   actions: write
+  contents: read
+  pull-requests: read
 jobs:
   cancel:
     uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@<40-character-release-sha> # stable

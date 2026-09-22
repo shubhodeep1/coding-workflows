@@ -1553,3 +1553,9 @@ workflow-templates/review_rb_judge_dispatch.yml
 ## Phase wrapper predicate parity
 
 - Internal `internal-{clarify,plan,implement,orchestrate-clarify-respond}.yml` callers and their `workflow-templates/ai-*.yml` consumer counterparts mirror the complete job-level `if` predicate from the reusable workflow they invoke. Reusable predicates are canonical; `tests/test_phase_wrapper_predicate_contract.py` prevents actor, association, command-marker, issue-kind, and tracker-exclusion drift.
+
+## Conflict-safe PR-close cleanup
+
+- `.github/workflows/internal-cancel-on-pr-close.yml` and `workflow-templates/ai-cancel-on-pr-close.yml` retain the immediate `pull_request.closed` path and also run every five minutes. The schedule covers conflicted PRs for which GitHub suppresses the close event without introducing `pull_request_target` trust.
+- Scheduled mode in `.github/workflows/cancel_on_pr_close.yml` snapshots queued and in-progress `pull_request` runs, resolves every linked PR through aliased GraphQL batches of at most 50, and cancels a run only when every association is known and terminal (`CLOSED` or `MERGED`). Missing, malformed, open, or partial state preserves the run. Event mode remains branch- and PR-scoped.
+- Cleanup jobs share repository-scoped concurrency. Scheduled ticks run the merge train's existing global release scan; event runs retain the closed PR's base filter.
