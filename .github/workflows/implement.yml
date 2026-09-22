@@ -4480,10 +4480,17 @@ jobs:
 
           local_head_sha="$(git rev-parse HEAD)"
           expected_remote_head="absent"
-          if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
+          remote_target_ref="refs/heads/${TARGET_BRANCH}"
+          if ! remote_target_listing="$(git ls-remote --heads origin "${remote_target_ref}")"; then
+            echo "::error::Could not read the current remote head for ${TARGET_BRANCH}; refusing publication."
+            exit 1
+          fi
+          if [ -n "${remote_target_listing}" ]; then
+            read -r expected_remote_head _ <<< "${remote_target_listing}"
+            git fetch --no-tags origin "+${remote_target_ref}:refs/remotes/origin/${TARGET_BRANCH}"
             expected_remote_head="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
             if ! git merge-base --is-ancestor "${expected_remote_head}" "${local_head_sha}"; then
-              echo "::error::Local implementation does not contain the checked-out remote branch head; refusing publication."
+              echo "::error::Local implementation does not contain the current remote branch head; refusing publication."
               exit 1
             fi
           fi

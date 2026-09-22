@@ -5272,6 +5272,8 @@ def test_implementation_commit_and_push_use_trusted_git_boundary() -> None:
 	assert "trusted_git_write.sh" in workflow
 	push_block = "\n".join(_step_block("Push branch"))
 	assert "trusted_git_write.sh" in push_block
+	assert 'git ls-remote --heads origin "${remote_target_ref}"' in push_block
+	assert 'git fetch --no-tags origin "+${remote_target_ref}:refs/remotes/origin/${TARGET_BRANCH}"' in push_block
 	assert "--expected-remote-head \"${expected_remote_head}\"" in push_block
 	assert "git remote set-url" not in push_block
 

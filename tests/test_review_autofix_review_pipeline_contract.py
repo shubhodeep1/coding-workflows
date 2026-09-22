@@ -6935,15 +6935,18 @@ def main() -> int:
 	test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trailing_punctuation()
 	test_reviewer_iteration_scope_prepare_path_preserves_hidden_directory_prefixes()
 	test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_helper()
-	test_dependency_install_bootstraps_pytest_when_pyproject_declares_it()
+	test_dependency_install_never_bootstraps_pytest_on_the_privileged_host()
+	test_dependency_install_container_uses_allowlisted_network_proxy()
 	test_dependency_install_warns_when_pytest_bootstrap_does_not_take()
-	test_dependency_install_bootstraps_pytest_for_nested_conftest()
+	test_dependency_install_does_not_host_install_pytest_for_nested_conftest()
 	test_dependency_install_skips_pytest_bootstrap_when_already_importable()
 	test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos()
 	test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha()
 	test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha()
 	test_review_blocked_judge_merges_are_bound_to_judged_head_sha()
 	test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha()
+	test_review_python_dependencies_never_enter_host_path()
+	test_review_commits_and_pushes_use_trusted_git_boundary()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 
@@ -6959,7 +6962,11 @@ def test_review_python_dependencies_never_enter_host_path() -> None:
 	validation_block = _step_block("Validate Python changes in secretless container")
 	assert "--network none" in validation_block
 	assert '"${PWD}:/workspace:ro"' in validation_block
-	assert "/review-venv/bin/python -m pytest" in validation_block
+	assert "--env PYTHONPATH=/workspace:/workspace/src" in validation_block
+	assert 'review_python_test_targets=()' in validation_block
+	assert "tests/*.py|test_*.py|*_test.py" in validation_block
+	assert 'skipping repository-wide pytest execution' in validation_block
+	assert '/review-venv/bin/python -m pytest "${review_python_test_targets[@]}"' in validation_block
 	cleanup_block = _step_block("Cleanup temporary artifacts")
 	assert 'docker volume rm -f "${REVIEW_PYTHON_DEPENDENCY_VOLUME}"' in cleanup_block
 

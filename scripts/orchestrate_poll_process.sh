@@ -169,21 +169,14 @@ TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"
 UNTRUSTED_POLLER_SANDBOX="${RUNTIME_DIR}/untrusted_process_sandbox.sh"
 UNTRUSTED_POLLER_PROVIDER_PROXY="${RUNTIME_DIR}/model_provider_proxy.py"
 prepare_untrusted_poller_runtime() {
-  if [ ! -x "${TRUSTED_POLLER_GIT_WRITER}" ]; then
-    [ -f scripts/trusted_git_write.sh ] || {
-      echo "::error::Required trusted Git writer is unavailable" >&2
-      return 1
-    }
-    install -m 0755 scripts/trusted_git_write.sh "${TRUSTED_POLLER_GIT_WRITER}"
-  fi
-	if [ ! -x "${UNTRUSTED_POLLER_SANDBOX}" ]; then
-		[ -f scripts/untrusted_process_sandbox.sh ] && [ -f scripts/model_provider_proxy.py ] || {
-		  echo "::error::Required untrusted-process runtime is unavailable" >&2
-		  return 1
-		}
-		install -m 0755 scripts/untrusted_process_sandbox.sh "${UNTRUSTED_POLLER_SANDBOX}"
-		install -m 0755 scripts/model_provider_proxy.py "${UNTRUSTED_POLLER_PROVIDER_PROXY}"
-	fi
+	[ -x "${TRUSTED_POLLER_GIT_WRITER}" ] || {
+		echo "::error::Pre-staged trusted Git writer is unavailable" >&2
+		return 1
+	}
+	[ -x "${UNTRUSTED_POLLER_SANDBOX}" ] && [ -x "${UNTRUSTED_POLLER_PROVIDER_PROXY}" ] || {
+		echo "::error::Pre-staged untrusted-process runtime is unavailable" >&2
+		return 1
+	}
 }
 
 run_untrusted_poller_codex() {
@@ -5701,6 +5694,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -5710,6 +5704,13 @@ state_path = Path(sys.argv[2])
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
 waivers = [row for row in state.get("security_pass_waived_findings", []) if isinstance(row, dict)]
+boundary_change_pattern = re.compile(
+	r"(?ix)(?:"
+	r"^\s*@\s*(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*\b"
+	r"|^\s*(?:await\s+)?(?:[A-Za-z_]\w*\.)*(?:auth\w*|authori[sz]\w*|login_required|check_\w+|verify_\w+|require_\w+|enforce_\w+|ensure_\w+|has_\w+|can_\w+|rate_limit\w*)\s*\("
+	r"|^\s*(?:if|elif|while|assert|return|raise)\b[^\n]*\b(?:authori[sz]\w*|permission\w*|privilege\w*|access[_ -]?control|entitlement|is_admin|is_authenticated|login_required|forbidden|(?:has|can|may)_\w+)\b"
+	r")"
+)
 
 
 def waiver_for(finding: dict) -> str | None:
@@ -5718,9 +5719,12 @@ def waiver_for(finding: dict) -> str | None:
 		return None
 	finding_causal_status = str(finding.get("causal_scope_status") or "")
 	finding_causal_fingerprint = str(finding.get("causal_scope_fingerprint") or "")
+	finding_causal_files = finding.get("causal_scope_files")
 	if (
 		finding_causal_status != "complete"
 		or re.fullmatch(r"sha256:[0-9a-f]{64}", finding_causal_fingerprint) is None
+		or not isinstance(finding_causal_files, list)
+		or any(not isinstance(path, str) or not path for path in finding_causal_files)
 	):
 		return None
 	for waiver in waivers:
@@ -5730,6 +5734,7 @@ def waiver_for(finding: dict) -> str | None:
 		if (
 			str(waiver.get("causal_scope_status") or "") != "complete"
 			or str(waiver.get("causal_scope_fingerprint") or "") != finding_causal_fingerprint
+			or waiver.get("causal_scope_files") != finding_causal_files
 		):
 			continue
 		audited_head_sha = str(waiver.get("audited_head_sha") or "")
@@ -5744,9 +5749,45 @@ def waiver_for(finding: dict) -> str | None:
 				capture_output=True,
 				check=False,
 			)
+			file_diff = subprocess.run(
+				["git", "diff", "--no-color", "--no-ext-diff", f"{audited_head_sha}..{current_head_sha}", "--", str(finding.get("file") or "")],
+				capture_output=True,
+				text=True,
+				check=False,
+			)
+			project_diff = subprocess.run(
+				["git", "diff", "--no-color", "--no-ext-diff", "--unified=0", f"{audited_head_sha}..{current_head_sha}"],
+				capture_output=True,
+				text=True,
+				check=False,
+			)
+			changed_paths = subprocess.run(
+				["git", "diff", "--name-only", f"{audited_head_sha}..{current_head_sha}"],
+				capture_output=True,
+				text=True,
+				check=False,
+			)
 		except (OSError, subprocess.SubprocessError):
 			continue
-		if ancestor.returncode == 0:
+		boundary_changed = any(
+			line[:1] in {"+", "-"}
+			and not line.startswith(("+++", "---"))
+			and boundary_change_pattern.search(line[1:]) is not None
+			for line in project_diff.stdout.splitlines()
+		)
+		outside_causal_python = any(
+			path.endswith(".py") and path not in set(finding_causal_files)
+			for path in changed_paths.stdout.splitlines()
+		)
+		if (
+			ancestor.returncode == 0
+			and file_diff.returncode == 0
+			and project_diff.returncode == 0
+			and changed_paths.returncode == 0
+			and not file_diff.stdout
+			and not boundary_changed
+			and not outside_causal_python
+		):
 			return waived_key
 	return None
 
@@ -8772,6 +8813,10 @@ invoke_judge_for_integration_conflict() {
 		fi
 		if git -C "${integration_judge_workspace}" diff --name-only --diff-filter=U | grep -q .; then
 			echo "::warning::Integration-conflict resolver left unresolved paths for PR #${final_pr}."
+			git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+			rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}" \
+				"${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_fingerprints_file}"
+			return 1
 		else
 			{
 				git -C "${integration_judge_workspace}" diff --name-only HEAD --

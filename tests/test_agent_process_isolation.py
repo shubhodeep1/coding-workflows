@@ -188,3 +188,6 @@ def test_causal_scope_includes_new_reverse_route_caller() -> None:
 		assert payload["causal_scope_files"] == ["route.py", "sink.py"]
 		assert payload["causal_scope_changed_files"] == ["route.py"]
 		assert payload["causal_scope_fingerprint"].startswith("sha256:")
+		causality_text = CAUSALITY.read_text(encoding="utf-8")
+		assert '["git", "archive", "--format=tar", ref, "--", *files]' in causality_text
+		assert 'if not files:\n\t\treturn symbols, sources' in causality_text

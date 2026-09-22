@@ -1517,6 +1517,7 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 	causal_files = causal_scope.get("causal_scope_files")
 	causal_symbol = str(causal_scope.get("causal_scope_symbol") or "")
 	causal_changed_files = causal_scope.get("causal_scope_changed_files")
+	causal_reason = re.sub(r"[\r\n]+", " ", str(causal_scope.get("reason") or ""))[:300]
 	if (
 		causal_status not in {"complete", "indeterminate"}
 		or (causal_fingerprint and re.fullmatch(r"sha256:[0-9a-f]{64}", causal_fingerprint) is None)
@@ -1531,6 +1532,11 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		causal_files = []
 		causal_symbol = ""
 		causal_changed_files = []
+	if causal_status != "complete" and causal_reason:
+		print(
+			f"::warning::security-audit: causal analysis indeterminate for {normalized_file}:{line}: {causal_reason}",
+			file=sys.stderr,
+		)
 
 	return (
 		{
@@ -1626,7 +1632,7 @@ cross_file_guard_deletion_pattern = re.compile(
 access_control_finding_pattern = re.compile(
 	r"(?i)\b(?:broken access control|authori[sz]ation|authentication|permission|privilege|elevation of privilege|spoofing)\b"
 )
-waiver_revalidation_cache: dict[tuple[str, str, str], bool] = {}
+waiver_revalidation_cache: dict[tuple[str, str, str, tuple[str, ...]], bool] = {}
 
 
 def waiver_causality_unchanged(
@@ -1639,7 +1645,10 @@ def waiver_causality_unchanged(
 	finding_causal_fingerprint = str(finding.get("causal_scope_fingerprint") or "")
 	waiver_causal_status = str(waiver.get("causal_scope_status") or "")
 	waiver_causal_fingerprint = str(waiver.get("causal_scope_fingerprint") or "")
-	cache_key = (audited_head_sha, file_name, finding_causal_fingerprint)
+	finding_causal_files = finding.get("causal_scope_files")
+	waiver_causal_files = waiver.get("causal_scope_files")
+	causal_file_key = tuple(finding_causal_files) if isinstance(finding_causal_files, list) else ()
+	cache_key = (audited_head_sha, file_name, finding_causal_fingerprint, causal_file_key)
 	if cache_key in waiver_revalidation_cache:
 		return waiver_revalidation_cache[cache_key]
 	if (
@@ -1647,6 +1656,8 @@ def waiver_causality_unchanged(
 		or waiver_causal_status != "complete"
 		or re.fullmatch(r"sha256:[0-9a-f]{64}", finding_causal_fingerprint) is None
 		or waiver_causal_fingerprint != finding_causal_fingerprint
+		or not causal_file_key
+		or waiver_causal_files != finding_causal_files
 	):
 		waiver_revalidation_cache[cache_key] = False
 		return False
@@ -1666,11 +1677,56 @@ def waiver_causality_unchanged(
 		if audited_head_sha == audit_scope_head_sha:
 			waiver_revalidation_cache[cache_key] = True
 			return True
+		file_diff_result = subprocess.run(
+			["git", "diff", "--no-color", "--no-ext-diff", f"{audited_head_sha}..{audit_scope_head_sha}", "--", file_name],
+			cwd=repo_root,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			check=False,
+		)
+		project_diff_result = subprocess.run(
+			["git", "diff", "--no-color", "--no-ext-diff", "--unified=0", f"{audited_head_sha}..{audit_scope_head_sha}"],
+			cwd=repo_root,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			check=False,
+		)
+		changed_paths_result = subprocess.run(
+			["git", "diff", "--name-only", f"{audited_head_sha}..{audit_scope_head_sha}"],
+			cwd=repo_root,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			check=False,
+		)
 	except (OSError, ValueError):
 		waiver_revalidation_cache[cache_key] = False
 		return False
-	waiver_revalidation_cache[cache_key] = True
-	return True
+	cross_file_boundary_changed = any(
+		diff_line[:1] in {"+", "-"}
+		and not diff_line.startswith(("+++", "---"))
+		and cross_file_guard_deletion_pattern.search(diff_line[1:]) is not None
+		for diff_line in project_diff_result.stdout.splitlines()
+	)
+	outside_causal_python_changed = any(
+		changed_path.endswith(".py") and changed_path not in set(causal_file_key)
+		for changed_path in changed_paths_result.stdout.splitlines()
+	)
+	unchanged = (
+		file_diff_result.returncode == 0
+		and project_diff_result.returncode == 0
+		and changed_paths_result.returncode == 0
+		and not file_diff_result.stdout
+		and not cross_file_boundary_changed
+		and not outside_causal_python_changed
+	)
+	waiver_revalidation_cache[cache_key] = unchanged
+	return unchanged
 
 
 def warn_ownership_once(file_name: str) -> None:

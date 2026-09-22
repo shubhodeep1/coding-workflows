@@ -722,11 +722,13 @@ when the bounded fix-cycle budget is exhausted.
   produced changes. Commits disable hooks and signing under fixed trusted
   identity. Pushes require exact local/remote heads and a validated branch,
   use an unauthenticated HTTPS URL plus an ephemeral askpass credential, and
-  reject concurrent branch movement instead of rebasing or overwriting it.
+  reject concurrent branch movement instead of rebasing or overwriting it. The
+  poller pre-stages this writer, the sandbox, and the provider proxy outside the
+  model-writable checkout before any model call and refuses a checkout fallback.
 - Review Python dependencies remain in a Docker-managed volume. They are never
   appended to host `PATH`, `PYTHONPATH`, or `VIRTUAL_ENV`; post-editor pytest
-  runs with no network, read-only source and Git metadata, and unconditional
-  volume cleanup.
+  runs only editor-changed Python test targets, with no network, read-only
+  source and Git metadata, and unconditional volume cleanup.
 - `scripts/security_audit_causality.py` emits
   `security_audit_causal_scope.v1` metadata for Python findings. A waiver is
   authoritative only when its complete causal fingerprint still matches.

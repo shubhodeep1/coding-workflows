@@ -389,6 +389,13 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Freeze the privilege-boundary helpers before any model process can
+          # write the checkout. The poller refuses to source these from the
+          # model-writable worktree at runtime.
+          for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh; do
+            install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"
+          done
+
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
           # #3043 refactor.  main ships a self-contained bash render_prompt.sh

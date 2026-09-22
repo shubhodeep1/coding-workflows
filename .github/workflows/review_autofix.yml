@@ -4474,6 +4474,17 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.REVIEW_PYTHON_DEPENDENCY_VOLUME != ''
         run: |
           set -euo pipefail
+          review_python_test_targets=()
+          while IFS= read -r -d '' review_python_candidate; do
+            [ -f "${review_python_candidate}" ] || continue
+            case "${review_python_candidate}" in
+              tests/*.py|test_*.py|*_test.py) review_python_test_targets+=("${review_python_candidate}") ;;
+            esac
+          done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.py'; git ls-files --others --exclude-standard -z -- '*.py'; } | sort -zu)
+          if [ "${#review_python_test_targets[@]}" -eq 0 ]; then
+            echo "No editor-changed Python test targets; skipping repository-wide pytest execution."
+            exit 0
+          fi
           review_validation_git_mask="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-validation-git.XXXXXX")"
           review_validation_cleanup()
           {
@@ -4486,12 +4497,13 @@ jobs:
             --tmpfs /tmp:rw,nosuid,nodev,size=1g \
             --user "$(id -u):$(id -g)" \
             --env HOME=/tmp/agent-home \
+            --env PYTHONPATH=/workspace:/workspace/src \
             --env PYTHONDONTWRITEBYTECODE=1 \
             --volume "${PWD}:/workspace:ro" \
             --volume "${review_validation_git_mask}:/workspace/.git:ro" \
             --volume "${REVIEW_PYTHON_DEPENDENCY_VOLUME}:/review-venv:ro" \
             --workdir /workspace \
-            python:3.12-slim /review-venv/bin/python -m pytest
+            python:3.12-slim /review-venv/bin/python -m pytest "${review_python_test_targets[@]}"
 
       - name: Commit changes
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'

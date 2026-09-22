@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import io
 import json
 import re
 import subprocess
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -151,11 +153,30 @@ def _snapshot(repo: Path, ref: str) -> tuple[list[Symbol], dict[str, str]]:
 		raise ValueError("Python file graph exceeds analysis bound")
 	symbols: list[Symbol] = []
 	sources: dict[str, str] = {}
-	for file_name in files:
-		source = _source_at(repo, ref, file_name)
-		if source is None:
-			continue
-		sources[file_name] = source
+	if not files:
+		return symbols, sources
+	archive_result = subprocess.run(
+		["git", "archive", "--format=tar", ref, "--", *files],
+		cwd=repo,
+		capture_output=True,
+		check=False,
+	)
+	if archive_result.returncode != 0:
+		raise ValueError("Git snapshot archive is unavailable")
+	with tarfile.open(fileobj=io.BytesIO(archive_result.stdout), mode="r:") as archive:
+		for archive_member in archive.getmembers():
+			if not archive_member.isfile():
+				continue
+			file_name = _safe_relative_path(archive_member.name)
+			if file_name not in files or archive_member.size > MAX_FILE_BYTES:
+				raise ValueError("Python source exceeds analysis bound")
+			extracted_source = archive.extractfile(archive_member)
+			if extracted_source is None:
+				raise ValueError("Python source is unavailable from archive")
+			sources[file_name] = extracted_source.read().decode("utf-8")
+	if set(sources) != set(files):
+		raise ValueError("Python snapshot contains unsupported file entries")
+	for file_name, source in sources.items():
 		symbols.extend(_symbols_for_source(file_name, source))
 		if len(symbols) > MAX_SYMBOLS:
 			raise ValueError("Python symbol graph exceeds analysis bound")
@@ -286,7 +307,7 @@ def main() -> int:
 		) is None:
 			raise ValueError("base and head must be immutable commit IDs")
 		result = analyze(repo, file_name, args.line, args.base, args.head)
-	except (OSError, SyntaxError, UnicodeError, ValueError) as exc:
+	except (OSError, SyntaxError, UnicodeError, ValueError, tarfile.TarError) as exc:
 		result = {
 			"causal_scope_schema": SCHEMA,
 			"causal_scope_status": "indeterminate",
