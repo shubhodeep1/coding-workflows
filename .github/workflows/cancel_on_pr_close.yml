@@ -151,7 +151,7 @@ jobs:
 
           # Batching contract: input is a newline-delimited set of numeric PR
           # numbers; output is one JSON object keyed by PR number with live
-          # state/head/base fields. Each group of at most 50 PRs costs one
+          # state fields. Each group of at most 50 PRs costs one
           # aliased GraphQL call. A failed or malformed batch is omitted so
           # callers fail open by preserving every run that depends on it.
           _cpr_fetch_pr_state_batches()
@@ -177,7 +177,7 @@ jobs:
                 case "${pr_number}" in
                   ''|*[!0-9]*) continue ;;
                 esac
-                query+="pr_${pr_number}:pullRequest(number:${pr_number}){number state headRefName baseRefName}"
+                query+="pr_${pr_number}:pullRequest(number:${pr_number}){number state}"
               done < "${batch_file_part}"
               query+='}}'
 
@@ -206,9 +206,7 @@ jobs:
                 | map({
                     key: (.number | tostring),
                     value: {
-                      state: .state,
-                      headRefName: .headRefName,
-                      baseRefName: .baseRefName
+                      state: .state
                     }
                   })
                 | from_entries
@@ -221,6 +219,10 @@ jobs:
           if [ "${EVENT_NAME}" = "schedule" ]; then
             echo "Running scheduled closed-PR cleanup for ${REPOSITORY}."
             _cpr_fetch_active_runs > "${active_runs_file}"
+            unlinked_active_run_count="$(jq '[.workflow_runs[] | select(((.pull_requests // []) | length) == 0)] | length' "${active_runs_file}")"
+            if [ "${unlinked_active_run_count}" -gt 0 ]; then
+              echo "::warning::Scheduled close cleanup preserved ${unlinked_active_run_count} active run(s) without pull-request linkage."
+            fi
             jq -r '
               .workflow_runs[]
               | (.pull_requests // [])[].number
@@ -283,10 +285,14 @@ jobs:
           fi
 
           if [ "${#target_run_ids[@]}" -eq 0 ]; then
-            echo "No matching queued/in-progress" \
-              "pull_request workflow runs" \
-              "found for head ref" \
-              "'${PR_HEAD_REF}'."
+            if [ "${EVENT_NAME}" = "schedule" ]; then
+              echo "Scheduled cleanup found no cancellable queued/in-progress pull_request workflow runs."
+            else
+              echo "No matching queued/in-progress" \
+                "pull_request workflow runs" \
+                "found for head ref" \
+                "'${PR_HEAD_REF}'."
+            fi
             exit 0
           fi
 

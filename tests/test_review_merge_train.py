@@ -497,11 +497,14 @@ def test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe() -> None:
 	assert workflow.count("-f status=queued") == 1
 	assert workflow.count("-f status=in_progress") == 1
 	assert "split -l 50" in workflow
-	assert "pullRequest(number:${pr_number}){number state headRefName baseRefName}" in workflow
+	assert "pullRequest(number:${pr_number}){number state}" in workflow
+	assert "headRefName baseRefName" not in workflow
+	assert "active run(s) without pull-request linkage" in workflow
 	assert "select(all($linked_prs[];" in workflow
 	assert '$live_pr.state == "CLOSED" or $live_pr.state == "MERGED"' in workflow
 	assert 'endswith("/internal-cancel-on-pr-close.yml")' in workflow
 	assert 'endswith("/ai-cancel-on-pr-close.yml")' in workflow
+	assert "Scheduled cleanup found no cancellable queued/in-progress pull_request workflow runs." in workflow
 	assert "Scheduled cleanup is running the global merge-train release scan." in workflow
 	assert "BASE_BRANCH: ${{ github.event.pull_request.base.ref }}" in workflow
 
