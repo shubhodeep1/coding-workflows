@@ -1,0 +1,40 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:837-839, 915-917, 927 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The new comment describes the artifact as the secondary channel and the state-snapshot branch as what consumers read, contradicting existing comments that describe the artifact as authoritative and branch publication as best-effort.\n  WHY: No runtime failure occurs, but contradictory documentation could mislead a future maintainer into making both snapshot channels non-fatal, leaving no durable record.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/orchestrate_poll.yml:837-839 (new comment) contradict lines 915-917 and 927 (existing comments) | severity=low | confidence=4\n  PROBLEM: The new comment declares the artifact the \u201csecondary\u201d channel and the state-snapshot branch what consumers read, contradicting existing comments that declare the artifact authoritative and branch publication best-effort.\n  WHY: No runtime failure occurs, but the contradictory descriptions create a maintainability hazard that could lead to both channels becoming non-fatal with no fallback.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate_poll.yml:Lines 838-839 and existing comments for the \"Publish state snapshot branch\" step | severity=low | confidence=4\n  PROBLEM: The added comment defines the artifact upload as the \u201csecondary\u201d channel, whereas existing comments frame the artifact as \u201cauthoritative for this tick.\u201d\n  WHY: Contradictory documentation creates maintenance confusion and could lead a future maintainer to downgrade the branch publication step, eliminating the only fatal failure path for snapshot persistence.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/orchestrate_poll.yml:Lines 837-839 (new comment) vs lines 915-917 and 927 (existing comments) | severity=low | confidence=4\n  PROBLEM: The new comment states the artifact is the \u201csecondary\u201d channel and the state-snapshot branch is what consumers read, contradicting existing comments that state the uploaded artifact is authoritative and branch publication is best-effort.\n  WHY: No runtime failure occurs, but the documentation inconsistency could lead a future maintainer to make the publish step non-fatal, leaving both channels non-fatal with no durable record.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/orchestrate_poll.yml:upload comment (837-848) vs publish comments (915-917, 927) | severity=low | confidence=4\n  PROBLEM: The new comment calls the artifact \u201csecondary\u201d while existing comments call it \u201cauthoritative for this tick.\u201d\n  WHY: No runtime failure occurs, but the contradictory documentation risks maintainer error on future channel changes.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/orchestrate_poll.yml:New comment at lines 838-839 (\"The artifact is the *secondary* channel for the snapshot; `Publish state snapshot branch` below writes the same state.json to the `state-snapshot` branch and is what consumers read\") contradicts existing comments at lines 915-917 (\"The uploaded artifact is authoritative for this tick; keep branch publication best-effort so a transient push failure does not fail the full poll run\") and the warning at line 927 (\"artifact upload remains authoritative for this tick\"). | severity=low | confidence=4\n  PROBLEM: The PR introduces a comment framing the artifact upload as the secondary channel and the state-snapshot branch as the durable one consumers read, while existing publish-step comments assert the opposite.\n  WHY: No runtime failure occurs, but the documentation inconsistency could mislead a future maintainer into making an incorrect operational decision.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e968f4b58863870ffe5d5cd7dfb8561e1e04c9db62f95d664254886bdab790e3",
+  "injection_suspected": true,
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4254,
+    "run_id": "35677436610",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35677436610",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922024503_78089b62c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4254,
+    "run_id": "35677436610"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-22T02:45:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
