@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "The repository separates orchestration state and polling logic into scripts and state modules, with tests covering poll cycles, review-blocked budgets, and promotion behavior. Changes should define terminal states and budget handling explicitly so retries do not cause duplicate work or unbounded polling.",
+  "fingerprint": "31e3840cd454dc1dc955b54746b27fbb2850c8a967f12c8b09317f837b1ed6ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35698243453",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35698243453",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4216",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4228",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4240",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4258",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4260",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4229",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4241",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260922071450_2a64223bbb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestration changes must preserve bounded polling, state, and budget semantics.",
+  "timestamps": {
+    "created_at": "2026-09-22T07:14:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
