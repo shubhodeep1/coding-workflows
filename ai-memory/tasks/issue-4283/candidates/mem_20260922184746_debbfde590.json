@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/e2e_smoke_canary.txt`\nScope-mode justification: The request is exact and limited to one existing fixture. No broader changes are necessary.\n\n## Planning context\n\n- Ref: `main` at `de069d811c31119cd24b9aa5e426720f2487b694`\n- Clarification: Auto-answer confirms no questions were required.\n- Integration branch metadata: absent; no known mismatch.\n- Verified current `run_id` is `26151428977`, requiring replacement.\n\n## Automation and lifecycle\n\n- Change type: Modify existing data file only.\n- Scheduler/PR-push entry point: None; existing pipeline handles the commit.\n- New script or supervisor: No.\n- Database gate: Not applicable.\n- Removal-registry entry: Not applicable.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 replace its complete contents.\n- No other files may change.\n\n## Implementation steps\n\n1. Overwrite the file with exactly:\n   ```text\n   status: ok\n   run_id: 35768550507\n   updated-by: ai-pipeline\n   ```\n2. Preserve a single trailing newline after the final line.\n3. Confirm the Git diff contains only this file and only the `run_id` value changes.\n\n## Functions or modules\n\nNone.\n\n## Data structures affected\n\nThe three-line smoke-canary record; its `run_id` scalar changes to `35768550507`.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Perform an exact whole-file replacement\n\n- **Chosen:** Overwrite the existing fixture with the specified three-line byte sequence.\n- **Alternatives considered:** Edit only the `run_id` line or regenerate the fixture through tooling.\n- **Why:** Whole-file replacement directly enforces the exact-content and trailing-newline contract with minimal risk.\n\n## Security considerations\n\n- No endpoint, authorization surface, secret, money flow, or external input is involved.\n- Treat the issue-provided content as fixed fixture data; do not execute it.\n- Abuse prevention: reject accidental extra lines, comments, paths, or file modifications during verification.\n\n## Risks and edge cases\n\n- Missing final newline.\n- Extra whitespace or blank lines.\n- Accidental edits to another file.\n- Conflict detected: the existing file has a different `run_id`, as expected by the task.\n\n## Testing considerations\n\n- Compare file bytes against the exact expected string.\n- Verify the file has exactly three lines.\n- Run `git diff --check`.\n- Verify `git diff --name-only` reports only `tests/e2e_smoke_canary.txt`.\n- No broader test suite is warranted for this fixture-only update.\n\n## Pre-execution self-check\n\n- Requirements are complete and unambiguous.\n- The target exists and is clean.\n- The plan respects the one-file scope and introduces no interfaces or automation.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e5cf8febfdf14b86aecd50fcf51d077dd15b8eecde102670bc051163e51b2645",
+  "lineage": {
+    "issue_number": 4283,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35769027197",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35769027197",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4283"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260922184746_debbfde590",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4283,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35769027197"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4283",
+  "timestamps": {
+    "created_at": "2026-09-22T18:47:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
