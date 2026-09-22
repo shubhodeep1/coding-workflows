@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh: lines 20707-20708 and 18687-18688 | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The truncation/elision NOTE prefix is added to PR_DIFF but is not subtracted from the shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES budget.\n  WHY: Raising JUDGE_PR_DIFFS_TOTAL_MAX_BYTES near the codex character cap can cause the NOTE overhead from multiple PRs to trigger the hard prompt-size skip.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh\n  Location: lines 20707-20708 (wave judge NOTE prefix) and 18687-18688 (review-blocked judge NOTE prefix)\n  Issue: The truncation/elision NOTE prefix (~230-250 bytes per PR) is added to PR_DIFF but is NOT subtracted from the shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES budget. With default values (524288 budget + ~250 KB static context) this stays under the 1 MB codex cap, but an operator who raises JUDGE_PR_DIFFS_TOTAL_MAX_BYTES near the cap (e.g. 786432) will trip the hard skip because N truncated/elided PRs each inject ~250 bytes that the budget doesn't account for.\n  Suggested minimal fix: Track per-PR note overhead in the budget decrement \u2014 e.g. deduct the prefix's byte length (computed once as `${#NOTE_PREFIX}`) in the same `_judge_pr_diff_budget_left=$(( ... ))` line, so the NOTE bytes count against the budget just like the embedded diff bytes do.\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5381e82bac0f0fa9c713083bbdbe6ceedbfacca5f1daf706fe127593bfe9ae89",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35717729910",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35717729910",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922111038_51305b827b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35717729910"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-22T11:10:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
