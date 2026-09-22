@@ -424,3 +424,116 @@ No workflow exceeds the 800 KB warning threshold. The largest is `.github/workfl
 | Code modularization | 8–10 | Large |
 | Expression size reduction | 2–3 | Medium |
 | Medium/Low fixes | 6–9 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-22)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is implementation-ready; `NEEDS_VERIFICATION` requires the stated checks; `RISKY_SKIP` must not be auto-implemented because pagination, retry, race-defense, or poller semantics are involved.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Clarify fetches issue comments twice when semantic caching is enabled
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `.github/workflows/clarify.yml:457-488`, specifically calls at `468` and `472-473`.
+- **Current call count:** 2 logical calls.
+- **Proposed call count:** 1 logical paginated call.
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`, ordered by creation ascending.
+- **Evidence:**
+  ```bash
+  gh_retry gh api ".../comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+  gh_retry gh api --paginate --slurp \
+    ".../comments?sort=created&direction=asc&per_page=100"
+  ```
+  The second response strictly contains the first call’s first-50-comment snapshot.
+- **Proposed fix:** In the `Fetch issue comments` step, capture the paginated response once. Write `add // [] | .[:50]` to `ISSUE_COMMENTS_FILE` and render `THREAD_HISTORY_FILE` from the complete array.
+- **Safety rationale:** `RISKY_SKIP` is mandatory because the consolidation changes pagination and could collapse the current fatal first-page failure versus fail-open full-history failure semantics.
+- **Downstream signal:** Do not auto-implement; manually test one-page, multi-page, and later-page-failure cases while preserving the fatal/fail-open split.
+
+#### MERGE-002 — PR metadata and three comment surfaces can use the existing consolidated GraphQL helper
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/review_collect_pr_metadata.sh:209-226`; existing batching pattern at `scripts/gh_helpers.sh:783-947`.
+- **Current call count:** 3 logical calls normally; 4 when `REVIEW_BREAK_GLASS_ENABLED=true`.
+- **Proposed call count:** 1 GraphQL call in the non-overflow case.
+- **Endpoint(s):**
+  - `GET /repos/{repo}/pulls/{pr}`
+  - Paginated `GET /repos/{repo}/issues/{pr}/comments`
+  - Optional paginated `GET /repos/{repo}/pulls/{pr}/reviews`
+  - Paginated `GET /repos/{repo}/pulls/{pr}/comments`
+  - Proposed GraphQL: `repository.pullRequest` with `comments`, `reviews`, and nested review comments.
+- **Evidence:**
+  ```bash
+  gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+  gh_retry "${issue_comments_raw}" api --paginate ".../issues/${PR_NUMBER}/comments"
+  gh_retry "${reviews_raw}" api --paginate ".../pulls/${PR_NUMBER}/reviews"
+  gh_retry "${review_comments_raw}" api --paginate ".../pulls/${PR_NUMBER}/comments"
+  ```
+  `gh_pr_with_all_comments` already retrieves the overlapping metadata and comment connections in one query.
+- **Proposed fix:** Extend `gh_pr_with_all_comments` with additive raw-artifact fields for:
+  - PR number/body/head SHA and repository/base metadata.
+  - Issue-comment IDs, timestamps, authors, and bodies.
+  - Review IDs, state, timestamps, authors, and bodies.
+  - Review-comment IDs, timestamps, path, line/original line, author, and body.
+
+  Update `review_collect_pr_metadata.sh` to populate its existing artifact files from that response while retaining REST fallback on any `hasNextPage=true`.
+- **Safety rationale:** `RISKY_SKIP` applies because every comment source currently implements pagination, and required PR/comment failures versus optional review failures have different error semantics.
+- **Downstream signal:** Do not auto-implement; manually verify every artifact consumer and pagination fixture, including break-glass reviews, thread IDs, materiality comments, resolver retry state, and workflow-heal payloads.
+
+#### MERGE-003 — E2E stability probe immediately re-fetches the same PR
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `.github/workflows/test-and-mark-stable.yml:1143-1160` and `1181-1187`.
+- **Current call count:** `2A + 1`, where `A` is the number of stability attempts; normally 3.
+- **Proposed call count:** `2A`; normally 2.
+- **Endpoint(s):** `GET /repos/{repo}/pulls/{pr_number}`.
+- **Evidence:**
+  ```bash
+  HEAD_B=$(gh api ".../pulls/${PR_NUMBER}" --jq '.head.sha // ""')
+  ...
+  PR_META=$(gh api ".../pulls/${PR_NUMBER}")
+  ```
+- **Proposed fix:** Fetch the full PR JSON for `HEAD_B`, parse its head SHA for the stability comparison, and retain that JSON as the prospective `PR_META`.
+- **Safety rationale:** `RISKY_SKIP` applies because the call is inside a retry/race-defense loop, and the final read intentionally detects closure or merge after the stability probe.
+- **Downstream signal:** Do not auto-implement; manual review must prove that reusing the second probe cannot miss a merge or close occurring immediately after the loop.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Partial orchestrator classification causes known issues to be fetched again
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `.github/workflows/issue_pr_status.yml:192-206`, `358-426`, and `584-606`; REST calls at `406` and `595-601`.
+- **Current call count:** After a failed batch, `N` classification reads plus up to `N` alert-step re-reads.
+- **Proposed call count:** `N + U`, where `U` is only the number of unresolved classifications.
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}`.
+- **Evidence:**
+  ```bash
+  _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" ...)"
+  ```
+  The step exports known tracking and managed issues, but not successfully classified standalone or unresolved issues. An incomplete classification therefore causes the Telegram step to scan every linked issue again.
+- **Proposed fix:** Extend `export_orchestrator_issue_classification` to export an `ORCHESTRATOR_CLASSIFICATION_JSON` map keyed by issue number with `tracking`, `managed`, `standalone`, or `unknown`. Update `Send PR merged Telegram alert` to reuse known entries and call `_safe_gh_jq` only for `unknown`.
+- **Safety rationale:** `NEEDS_VERIFICATION` applies because reuse crosses workflow steps and static reading cannot fully prove that classification inputs remain unchanged between them.
+- **Downstream signal:** Verify a partial-failure fixture containing known standalone, known tracking, and unresolved managed issues; confirm only unresolved issues are re-read and alert suppression remains fail-closed.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — all sites are in `orchestrate_poll_process.sh`, including stall/reissue paths explicitly excluded from automatic consolidation.
+- API-002: RISKY_SKIP — the duplicate reads are in the poller’s final-merge race-sensitive path.
+- API-003: RISKY_SKIP — the source comment listing is paginated.
+- API-004: RISKY_SKIP — changing calls inside retry wrappers requires manual validation of attempt and error-classification semantics.
+- BATCH-001: RISKY_SKIP — PR-file reads are paginated and participate in merge-train ordering.
+- BATCH-002: NEEDS_VERIFICATION — verify label pagination and per-issue fail-open behavior before replacing the fallback loop with GraphQL.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-001, BATCH-002 |
+| RISKY_SKIP | 8 | MERGE-001, MERGE-002, MERGE-003, API-001, API-002, API-003, API-004, BATCH-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
