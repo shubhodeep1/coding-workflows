@@ -386,10 +386,11 @@ a new value, add it to the appropriate overrides file with a
   editor-head ledger. Incident: implement runs 35614385686, 35628923735,
   35642366131 and 35656715219 (issues #4227 / #4242, project #4139) each
   finished the editor with a complete change set, then the editor's own
-  pytest run of `tests/test_implement_post_codex_recovery.py` appended
-  `scripts/helper.sh` to `/tmp/codex-implement-<run>/staged_support_editor_head.txt`,
-  and the post-editor `reinstall` failed closed with
-  `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh`. The stall
+  pytest run of `tests/test_implement_post_codex_recovery.py` appended a
+  fixture-only `scripts/` + `helper.sh` path to
+  `/tmp/codex-implement-<run>/staged_support_editor_head.txt`, and the
+  post-editor `reinstall` failed closed with
+  `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING` for that path. The stall
   poller retried twice, the stall judge re-issued #4227 as #4242, and the
   replacement failed the same way. The second nested run in
   `tests/test_pytest_git_env_isolation.py` pins this contract against a

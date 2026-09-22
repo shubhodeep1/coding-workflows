@@ -2583,15 +2583,49 @@ jobs:
           PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
           PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
 
+          # PR_TITLE is retained deliberately. Free-text fixture-tag
+          # matching on the PR title/body was removed (see below), so
+          # nothing in this step reads it any more, but it is an existing
+          # identifier and CLAUDE.md §6 forbids removing one without the
+          # ask flow. PR_BODY is still used by the linked-issue lookup.
+
           IS_SMOKE=false
 
-          # Direct match on PR title/body
-          if echo "${PR_TITLE}" | grep -qi '\[E2E Smoke Test\]' \
-             || echo "${PR_BODY}" | grep -qi '\[E2E Smoke Test\]'; then
+          # Primary signal: the `e2e-smoke-test` label.
+          #
+          # This replaces a free-text scan of the PR title and body for a
+          # `[E2E <variant>]` fixture tag. That scan misclassified any real
+          # PR that merely *discussed* the fixture tags -- documentation
+          # changes, and changes to this detection logic itself. The
+          # consequences were not cosmetic: a misclassified PR had its
+          # reviewer/editor reasoning pinned, its review alerts silenced,
+          # and IS_SMOKE_TEST exported, which makes
+          # scripts/review_apply_fixes.sh append a "must call apply_patch
+          # on tests/e2e_smoke_canary.txt" directive to the editor prompt
+          # -- i.e. it could push the autofix editor to touch the canary
+          # file on an unrelated PR.
+          #
+          # The label is a reliable primary because implement.yml applies
+          # it atomically at `gh pr create` (see its "Atomically apply
+          # force-review + e2e-smoke-test labels at PR creation time"
+          # comment), specifically so it is already in the
+          # `pull_request: opened` payload this gate snapshots -- a label
+          # added post-creation cannot rewind the gate decision. Confirmed
+          # on release run 35672590166: PR #4252 (from the
+          # `[E2E Smoke Test]` canary fixture) and PR #4253 (from the
+          # `[E2E Smoke Test alt-model]` fixture) both carried
+          # `force-review` + `e2e-smoke-test`.
+          if jq -e '[.labels[]?.name] | index("e2e-smoke-test") != null' "${PR_PAYLOAD_FILE}" >/dev/null 2>&1; then
             IS_SMOKE=true
           fi
 
-          # Check linked issue title. Only honour GitHub's closing-keyword
+          # Fallback: the linked issue's title. Kept as a second signal so
+          # a smoke PR whose label somehow did not land is still detected,
+          # and safe to keep because it is anchored and resolves a real
+          # issue rather than scanning prose -- a documentation PR's linked
+          # issue title does not begin with the fixture tag.
+          #
+          # Only honour GitHub's closing-keyword
           # pattern (Closes/Fixes/Resolves + #N or issue URL, case-insensitive)
           # to avoid false-matching loose "issue #N" mentions inside log
           # citations or backticked fragments quoted in the PR body — which
@@ -2606,7 +2640,11 @@ jobs:
             ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' || true)
             if [ -n "${ISSUE_NUM:-}" ]; then
               ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
-              if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+              # Anchored, matching the `^\[E2E ` convention used by
+              # clarify.yml, plan.yml and implement.yml: real AI issue
+              # titles never begin with the fixture tag, so this cannot
+              # fire on a production issue that merely quotes one.
+              if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
                 IS_SMOKE=true
               fi
             fi

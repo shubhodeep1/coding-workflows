@@ -445,7 +445,18 @@ jobs:
       - name: Detect smoke test and tune LLM settings
         run: |
           set -euo pipefail
-          if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+          # Match every `[E2E <variant>]` fixture title the release gate
+          # creates, not just `[E2E Smoke Test]`. The gate builds four
+          # shapes (test-and-mark-stable.yml:544, 2661, 4664, 4942) and the
+          # old literal `\[E2E Smoke Test\]` pattern matched only two:
+          # `[E2E Clarify Negative Test]` has a different middle token, and
+          # `[E2E Smoke Test alt-model]` has no `]` directly after `Test`.
+          # The negative-test fixture therefore sent a CRITICAL
+          # "Clarification required" Telegram alert on every release run.
+          # Anchored at `^` so a production issue that merely mentions a
+          # fixture tag mid-title is not mistaken for the fixture itself;
+          # real AI issue titles never begin with `[E2E `.
+          if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
             echo "🔬 Smoke test detected — switching to low reasoning effort"
             echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             # Suppress per-phase Telegram alerts from this clarify run; the
