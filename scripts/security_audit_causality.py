@@ -31,9 +31,10 @@ class Symbol:
 	start: int
 	end: int
 	semantic_dump: str
-	references: frozenset[str]
+	calls: frozenset[str]
 	wildcard_import: bool
 	indeterminate: bool
+	references: frozenset[str] = frozenset()
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -74,6 +75,7 @@ def _module_import_dump(source: str, file_name: str) -> str:
 
 class _CallCollector(ast.NodeVisitor):
 	def __init__(self) -> None:
+		self.calls: set[str] = set()
 		self.references: set[str] = set()
 		self.wildcard_import = False
 		self.indeterminate = False
@@ -90,6 +92,7 @@ class _CallCollector(ast.NodeVisitor):
 	def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
 		if any(alias.name == "*" for alias in node.names):
 			self.wildcard_import = True
+		self.references.update(alias.name for alias in node.names if alias.asname)
 		self.generic_visit(node)
 
 	def visit_Name(self, node: ast.Name) -> None:
@@ -98,10 +101,12 @@ class _CallCollector(ast.NodeVisitor):
 
 	def visit_Call(self, node: ast.Call) -> None:
 		if isinstance(node.func, ast.Name):
+			self.calls.add(node.func.id)
 			self.references.add(node.func.id)
 			if node.func.id in {"eval", "exec", "__import__"}:
 				self.indeterminate = True
 		elif isinstance(node.func, ast.Attribute):
+			self.calls.add(node.func.attr)
 			self.references.add(node.func.attr)
 			if node.func.attr in {"import_module", "getattr", "setattr"}:
 				self.indeterminate = True
@@ -142,6 +147,7 @@ def _symbols_for_source(file_name: str, source: str) -> list[Symbol]:
 			start=1,
 			end=max((int(getattr(node, "end_lineno", 1)) for node in tree.body), default=1),
 			semantic_dump=_semantic_dump(ast.Module(body=module_body, type_ignores=[])),
+			calls=frozenset(module_collector.calls),
 			references=frozenset(module_collector.references),
 			wildcard_import=module_collector.wildcard_import,
 			indeterminate=module_indeterminate or module_collector.indeterminate,
@@ -176,6 +182,7 @@ def _symbols_for_source(file_name: str, source: str) -> list[Symbol]:
 					start=int(getattr(node, "lineno", 1)),
 					end=int(getattr(node, "end_lineno", getattr(node, "lineno", 1))),
 					semantic_dump=_semantic_dump(semantic_node),
+					calls=frozenset(collector.calls),
 					references=frozenset(collector.references),
 					wildcard_import=collector.wildcard_import,
 					indeterminate=collector.indeterminate,
@@ -340,6 +347,8 @@ def analyze(repo: Path, file_name: str, line: int, base: str, head: str) -> dict
 		"causal_scope_files": causal_files,
 		"causal_scope_symbol": target.qualified_name[:300],
 		"causal_scope_changed_files": changed_files,
+		"_head_symbols": head_symbols,
+		"_head_scope": head_scope,
 	}
 
 
@@ -392,7 +401,9 @@ def _revalidate_waiver(
 		return {"valid": False, "reason": "finding line is invalid"}
 	try:
 		current_scope = analyze(repo, file_name, line, audited_head, current_head)
-	except (OSError, SyntaxError, UnicodeError, ValueError, tarfile.TarError):
+		current_symbols = current_scope.pop("_head_symbols")
+		current_causal_symbols = current_scope.pop("_head_scope")
+	except (KeyError, OSError, SyntaxError, UnicodeError, ValueError, tarfile.TarError):
 		return {"valid": False, "reason": "current causal scope is unavailable"}
 	if current_scope.get("causal_scope_status") != "complete":
 		return {"valid": False, "reason": "current causal scope is indeterminate"}
@@ -418,18 +429,6 @@ def _revalidate_waiver(
 	except (UnicodeError, ValueError):
 		return {"valid": False, "reason": "changed path set is invalid"}
 	causal_files = set(str(path) for path in current_scope["causal_scope_files"])
-	try:
-		current_symbols, _current_sources = _snapshot(repo, current_head)
-		current_target_symbol = _target_symbol(current_symbols, file_name, line)
-		if current_target_symbol is None:
-			raise ValueError("current causal target is unavailable")
-		current_causal_symbols, current_scope_ambiguous = _scope_for_target(
-			current_symbols, current_target_symbol
-		)
-	except (OSError, SyntaxError, UnicodeError, ValueError, tarfile.TarError):
-		return {"valid": False, "reason": "repository causal graph is unavailable"}
-	if current_scope_ambiguous:
-		return {"valid": False, "reason": "repository causal graph is ambiguous"}
 	causal_reference_names = {
 		symbol.leaf_name for symbol in current_causal_symbols if symbol.leaf_name != "__module__"
 	}
@@ -504,6 +503,8 @@ def main() -> int:
 			"causal_scope_changed_files": [],
 			"reason": str(exc)[:300],
 		}
+	result.pop("_head_symbols", None)
+	result.pop("_head_scope", None)
 	print(json.dumps(result, ensure_ascii=True, sort_keys=True))
 	return 0
 

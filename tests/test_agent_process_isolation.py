@@ -375,7 +375,8 @@ def test_shared_waiver_revalidation_rejects_routing_config_changes() -> None:
 		assert json.loads(valid_result.stdout)["valid"] is True
 
 		(repo / "unrelated.py").write_text(
-			"from caller_4 import caller_4\n\ndef public_route(user):\n\treturn caller_4(user)\n",
+			"from caller_4 import caller_4 as final_caller\n\n"
+			"def public_route(user):\n\treturn final_caller(user)\n",
 			encoding="utf-8",
 		)
 		subprocess.run(["git", "-C", str(repo), "add", "unrelated.py"], check=True)
