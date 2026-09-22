@@ -3365,6 +3365,160 @@ jobs:
           fi
 
           # PR is still open — exercise the close path end to end.
+
+          # ── Phase 7a: bring a conflicted smoke PR back to mergeable ──────
+          # GitHub never runs `pull_request` workflows for a PR that has a
+          # merge conflict (docs: events-that-trigger-workflows), so closing a
+          # conflicted smoke PR emits no `pull_request.closed` run and Phase 7
+          # fails `no_run` although the cancel wrapper is healthy. Run
+          # 35672590166 hit exactly that: the forward-merge of stable into
+          # main landed 75 s before the close and rewrote the same hunk of
+          # .ai/.workspace_source_manifest.txt that the smoke PR's workspace
+          # init had regenerated. The scheduled cleanup sweep (#4258) is the
+          # production backstop for such closures, not a substitute for the
+          # close trigger, and its observed cadence (median ~12 min) exceeds
+          # PHASE7_WAIT_BUDGET_MINUTES, so a conflicted PR would still fail.
+          #
+          # Before closing, merge the PR's base into the throwaway ai/issue-N
+          # branch through the merges API. On a 409, overwrite every PR file
+          # that the base also changed since the merge base with the base's
+          # version (the smoke PR's own content is no longer load-bearing once
+          # Phase 4b has verified the canary), retry the merge once, then wait
+          # for GitHub to recompute mergeability. A branch that still cannot be
+          # made mergeable is closed anyway and left to the scheduled fallback;
+          # the outcome is recorded either way so a later `no_run` is
+          # diagnosable from the log (PHASE7_UNCONFLICT_* lines).
+          #
+          # API calls (§15): one mergeability poll (≤18 calls at 5 s while
+          # GitHub reports mergeable=null), one `/merges` (two on conflict),
+          # and on conflict one `/compare`, one `/pulls/N/files` page, and up
+          # to four calls per overlapping file (base contents, merge-base blob,
+          # branch blob, PUT). The snapshot and close calls below are unchanged.
+          PHASE7_UNCONFLICT_OUTCOME="not_needed"
+          PHASE7_BASE_REF=""
+          PHASE7_MERGEABLE="unknown"
+          PHASE7_MERGEABLE_STATE="unknown"
+          _phase7_refresh_mergeability()
+          {
+            # Sets PHASE7_MERGEABLE / PHASE7_MERGEABLE_STATE / PHASE7_BASE_REF,
+            # polling while GitHub still reports mergeable=null (it recomputes
+            # lazily after any push to the base or the head).
+            local deadline info
+            deadline=$(( $(date +%s) + 90 ))
+            while :; do
+              info=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+                --jq '{mergeable, mergeable_state, base_ref: .base.ref}' 2>/dev/null || echo "{}")
+              PHASE7_MERGEABLE=$(printf '%s' "${info}" | jq -r 'if .mergeable == null then "unknown" else (.mergeable | tostring) end')
+              PHASE7_MERGEABLE_STATE=$(printf '%s' "${info}" | jq -r '.mergeable_state // "unknown"')
+              PHASE7_BASE_REF=$(printf '%s' "${info}" | jq -r '.base_ref // ""')
+              if [ "${PHASE7_MERGEABLE}" != "unknown" ] || [ "$(date +%s)" -ge "${deadline}" ]; then
+                return 0
+              fi
+              sleep 5
+            done
+          }
+          _phase7_merge_base_into_branch()
+          {
+            # 0 = merged or already up to date, 2 = merge conflict, 1 = other error.
+            local err
+            if err=$(gh api "repos/${TEST_REPO}/merges" \
+                -f base="${BRANCH}" -f head="${PHASE7_BASE_REF}" \
+                -f commit_message="[E2E Smoke Test] merge ${PHASE7_BASE_REF} into ${BRANCH} before close (run ${GITHUB_RUN_ID})" \
+                2>&1 >/dev/null); then
+              return 0
+            fi
+            if printf '%s' "${err}" | grep -Eqi 'HTTP 409|status code 409|conflict'; then
+              return 2
+            fi
+            echo "::warning::PHASE7_UNCONFLICT merge of ${PHASE7_BASE_REF} into ${BRANCH} failed with a non-conflict error: ${err}"
+            return 1
+          }
+          _phase7_take_base_version()
+          {
+            # Overwrite one PR file on the branch with the base's version,
+            # taken from the contents JSON the caller already fetched (one
+            # base read per file, reused for the blob comparison and the
+            # payload). The commit subject is prefixed `[E2E Smoke Test]`,
+            # never `[ai-autofix]`, for the same reason as the bait commit.
+            local path="$1" base_json="$2" branch_sha content
+            local -a sha_args=()
+            content=$(printf '%s' "${base_json}" | jq -r '.content // empty' 2>/dev/null | tr -d '\n')
+            if [ -z "${content}" ]; then
+              echo "PHASE7_UNCONFLICT_FILE path=${path} outcome=skipped reason=base_content_unavailable"
+              return 1
+            fi
+            branch_sha=$(gh api "repos/${TEST_REPO}/contents/${path}?ref=${BRANCH}" --jq '.sha // empty' 2>/dev/null || echo "")
+            if [ -n "${branch_sha}" ]; then
+              sha_args=(-f "sha=${branch_sha}")
+            fi
+            if ! gh api -X PUT "repos/${TEST_REPO}/contents/${path}" \
+                -f message="[E2E Smoke Test] take ${PHASE7_BASE_REF} version of ${path} to clear the merge conflict (run ${GITHUB_RUN_ID})" \
+                -f content="${content}" \
+                "${sha_args[@]}" \
+                -f branch="${BRANCH}" >/dev/null 2>&1; then
+              echo "PHASE7_UNCONFLICT_FILE path=${path} outcome=put_failed"
+              return 1
+            fi
+            echo "PHASE7_UNCONFLICT_FILE path=${path} outcome=replaced_with_base"
+            return 0
+          }
+
+          _phase7_refresh_mergeability
+          echo "PHASE7_UNCONFLICT_CHECK pr=${PR_NUMBER} branch=${BRANCH} base=${PHASE7_BASE_REF} mergeable=${PHASE7_MERGEABLE} mergeable_state=${PHASE7_MERGEABLE_STATE}"
+          if [ "${PHASE7_MERGEABLE}" = "false" ] && [ -n "${PHASE7_BASE_REF}" ]; then
+            PHASE7_UNCONFLICT_OUTCOME="merge_failed"
+            PHASE7_MERGE_RC=0
+            _phase7_merge_base_into_branch || PHASE7_MERGE_RC=$?
+            if [ "${PHASE7_MERGE_RC}" -eq 2 ]; then
+              PHASE7_MERGE_BASE_SHA=$(gh api "repos/${TEST_REPO}/compare/${PHASE7_BASE_REF}...${BRANCH}" \
+                --jq '.merge_base_commit.sha // ""' 2>/dev/null || echo "")
+              PHASE7_PR_FILES=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}/files?per_page=100" \
+                --jq '.[].filename' 2>/dev/null || echo "")
+              while IFS= read -r phase7_path; do
+                [ -n "${phase7_path}" ] || continue
+                phase7_base_json=$(gh api "repos/${TEST_REPO}/contents/${phase7_path}?ref=${PHASE7_BASE_REF}" 2>/dev/null || echo "")
+                phase7_base_blob=$(printf '%s' "${phase7_base_json}" | jq -r '.sha // ""' 2>/dev/null || echo "")
+                phase7_merge_base_blob=""
+                if [ -n "${PHASE7_MERGE_BASE_SHA}" ]; then
+                  phase7_merge_base_blob=$(gh api "repos/${TEST_REPO}/contents/${phase7_path}?ref=${PHASE7_MERGE_BASE_SHA}" \
+                    --jq '.sha // ""' 2>/dev/null || echo "")
+                fi
+                if [ -z "${PHASE7_MERGE_BASE_SHA}" ]; then
+                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=merge_base_unavailable"
+                elif [ -z "${phase7_merge_base_blob}" ]; then
+                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=merge_base_blob_unavailable"
+                elif [ -z "${phase7_base_blob}" ]; then
+                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=base_blob_unavailable"
+                elif [ -n "${phase7_base_blob}" ] && [ "${phase7_base_blob}" != "${phase7_merge_base_blob}" ]; then
+                  _phase7_take_base_version "${phase7_path}" "${phase7_base_json}" || true
+                else
+                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=base_unchanged_since_merge_base"
+                fi
+              done <<< "${PHASE7_PR_FILES}"
+              PHASE7_MERGE_RC=0
+              _phase7_merge_base_into_branch || PHASE7_MERGE_RC=$?
+            fi
+            if [ "${PHASE7_MERGE_RC}" -eq 0 ]; then
+              _phase7_refresh_mergeability
+              if [ "${PHASE7_MERGEABLE}" = "true" ]; then
+                PHASE7_UNCONFLICT_OUTCOME="unconflicted"
+              else
+                PHASE7_UNCONFLICT_OUTCOME="still_${PHASE7_MERGEABLE_STATE}"
+              fi
+            elif [ "${PHASE7_MERGE_RC}" -eq 2 ]; then
+              PHASE7_UNCONFLICT_OUTCOME="still_conflicted"
+            fi
+            echo "PHASE7_UNCONFLICT_RESULT pr=${PR_NUMBER} branch=${BRANCH} outcome=${PHASE7_UNCONFLICT_OUTCOME} mergeable=${PHASE7_MERGEABLE} mergeable_state=${PHASE7_MERGEABLE_STATE}"
+            if [ "${PHASE7_UNCONFLICT_OUTCOME}" != "unconflicted" ]; then
+              echo "::warning::Smoke PR #${PR_NUMBER} could not be made mergeable before close (outcome=${PHASE7_UNCONFLICT_OUTCOME}); GitHub will not fire pull_request.closed for a conflicted PR, so Phase 7 now depends on the scheduled cleanup fallback."
+            fi
+          elif [ "${PHASE7_MERGEABLE}" != "true" ]; then
+            PHASE7_UNCONFLICT_OUTCOME="still_${PHASE7_MERGEABLE_STATE}"
+            echo "PHASE7_UNCONFLICT_RESULT pr=${PR_NUMBER} branch=${BRANCH} outcome=${PHASE7_UNCONFLICT_OUTCOME} mergeable=${PHASE7_MERGEABLE} mergeable_state=${PHASE7_MERGEABLE_STATE}"
+            echo "::warning::Smoke PR #${PR_NUMBER} mergeability could not be confirmed before close (outcome=${PHASE7_UNCONFLICT_OUTCOME}, base=${PHASE7_BASE_REF:-unknown}); Phase 7 may depend on the scheduled cleanup fallback."
+          fi
+          echo "unconflict=${PHASE7_UNCONFLICT_OUTCOME}" >> "$GITHUB_OUTPUT"
+
           # Snapshot the most recent cancel-on-close run BEFORE we close the
           # PR so we can detect a fresh run by monotonic ID after the close.
           if ! PRE_RUNS_JSON=$(gh api \
@@ -3631,14 +3785,18 @@ jobs:
             PASSED=false
           fi
 
-          # Check cancel_on_pr_close (Phase 7)
+          # Check cancel_on_pr_close (Phase 7). `unconflict` records whether
+          # Phase 7a had to make the smoke PR mergeable before the close
+          # (not_needed / unconflicted / still_conflicted / merge_failed /
+          # still_<mergeable_state>).
           CANCEL="${{ steps.verify-cancel-on-close.outputs.status }}"
+          CANCEL_UNCONFLICT="${{ steps.verify-cancel-on-close.outputs.unconflict }}"
           if [ "$CANCEL" = "success" ]; then
-            echo "  ✓ Cancel-PR .. PASSED (cancel_on_pr_close ran successfully)"
+            echo "  ✓ Cancel-PR .. PASSED (cancel_on_pr_close ran successfully; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
           elif [ -z "$CANCEL" ]; then
             echo "  - Cancel-PR .. SKIPPED (no PR to close)"
           else
-            echo "  ✗ Cancel-PR .. FAILED (${CANCEL})"
+            echo "  ✗ Cancel-PR .. FAILED (${CANCEL}; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
             PASSED=false
           fi
 
