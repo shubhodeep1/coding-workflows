@@ -3487,6 +3487,8 @@ jobs:
                   echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=merge_base_unavailable"
                 elif [ -z "${phase7_merge_base_blob}" ]; then
                   echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=merge_base_blob_unavailable"
+                elif [ -z "${phase7_base_blob}" ]; then
+                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=base_blob_unavailable"
                 elif [ -n "${phase7_base_blob}" ] && [ "${phase7_base_blob}" != "${phase7_merge_base_blob}" ]; then
                   _phase7_take_base_version "${phase7_path}" "${phase7_base_json}" || true
                 else

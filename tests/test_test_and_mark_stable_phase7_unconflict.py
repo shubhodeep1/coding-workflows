@@ -69,6 +69,8 @@ def test_unconflict_only_rewrites_files_the_base_changed_since_merge_base() -> N
 	assert "outcome=kept reason=merge_base_unavailable" in block
 	assert 'elif [ -z "${phase7_merge_base_blob}" ]; then' in block
 	assert "outcome=kept reason=merge_base_blob_unavailable" in block
+	assert 'elif [ -z "${phase7_base_blob}" ]; then' in block
+	assert "outcome=kept reason=base_blob_unavailable" in block
 	assert '[ "${phase7_base_blob}" != "${phase7_merge_base_blob}" ]' in block
 	assert 'gh api -X PUT "repos/${TEST_REPO}/contents/${path}"' in block
 
