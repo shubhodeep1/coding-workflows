@@ -138,7 +138,7 @@ jobs:
           # in the job env). Every Telegram step reads
           # `env.ALERT_MSG_LEVEL` first so this value takes effect.
           ISSUE_TITLE_PRECHECK="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
-          if printf '%s' "${ISSUE_TITLE_PRECHECK}" | grep -qiE '\[E2E Smoke Test\b'; then
+          if printf '%s' "${ISSUE_TITLE_PRECHECK}" | grep -qiE '^\[E2E '; then
             echo "🔬 Smoke test detected at precheck — suppressing per-phase Telegram alerts"
             echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
           fi
@@ -1572,17 +1572,24 @@ jobs:
           # skip-merge job in review_autofix.yml will otherwise enable
           # auto-merge before the e2e gate's bait-injection phase has
           # a chance to push (race observed in run 25150961704).
-          # Match both the regular fixture title `[E2E Smoke Test]` and
-          # the alt-model variant `[E2E Smoke Test alt-model]`. The
-          # original `\[E2E Smoke Test\]` pattern (literal `]` after
+          # Match every `[E2E <variant>]` fixture title the release gate
+          # creates. The original `\[E2E Smoke Test\]` pattern (literal `]` after
           # `Test`) silently never matched the alt-model title, so the
           # alt-model implement never silenced Telegram, never set
           # IS_SMOKE_TEST, and never reached the alt-model override
-          # branch added below. Use `\[E2E Smoke Test\b` so any token
-          # boundary after `Test` (closing bracket, space + sub-tag, …)
-          # qualifies; AI issue titles in production never start with
-          # `[E2E Smoke Test`, so broadening is safe.
-          if echo "${ISSUE_TITLE}" | grep -qiE '\[E2E Smoke Test\b'; then
+          # branch added below. `\[E2E Smoke Test\b` fixed that one
+          # variant but still missed `[E2E Clarify Negative Test]`, whose
+          # middle token differs, so use `^\[E2E ` instead: it covers all
+          # four shapes the gate builds (test-and-mark-stable.yml:544,
+          # 2661, 4664, 4942) and any future `[E2E <variant>]` fixture.
+          #
+          # Anchoring at `^` also narrows one false positive the previous
+          # unanchored pattern had: a production issue titled e.g.
+          # "Fix [E2E Smoke Test] flake" was treated as the fixture itself
+          # and silenced. Real AI issue titles never begin with `[E2E `,
+          # so the fixture path is now exact. The alt-model sub-tag check
+          # further below stays on its own narrower literal.
+          if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
             echo "🔬 Smoke test detected — suppressing per-phase Telegram alerts"
             echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
             echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"

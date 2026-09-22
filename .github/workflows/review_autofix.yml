@@ -2586,8 +2586,17 @@ jobs:
           IS_SMOKE=false
 
           # Direct match on PR title/body
-          if echo "${PR_TITLE}" | grep -qi '\[E2E Smoke Test\]' \
-             || echo "${PR_BODY}" | grep -qi '\[E2E Smoke Test\]'; then
+          # Broadened from `\[E2E Smoke Test\]` to any `[E2E <variant>]`
+          # fixture tag: the gate builds four title shapes and the old
+          # literal missed `[E2E Clarify Negative Test]` (different middle
+          # token) and `[E2E Smoke Test alt-model]` (no `]` after `Test`).
+          # Deliberately NOT anchored at `^` here, unlike the issue-title
+          # detectors in clarify.yml / plan.yml / implement.yml: a smoke PR
+          # is titled "AI implementation for issue #N" and carries the
+          # fixture tag inside the body, so the marker is mid-string on the
+          # only path that actually matches.
+          if echo "${PR_TITLE}" | grep -qiE '\[E2E ' \
+             || echo "${PR_BODY}" | grep -qiE '\[E2E '; then
             IS_SMOKE=true
           fi
 
@@ -2606,7 +2615,10 @@ jobs:
             ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' || true)
             if [ -n "${ISSUE_NUM:-}" ]; then
               ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
-              if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+              # Anchored: this is an issue title, so it matches the
+              # `^\[E2E ` convention used by clarify.yml, plan.yml and
+              # implement.yml rather than the mid-string PR-body form above.
+              if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
                 IS_SMOKE=true
               fi
             fi
