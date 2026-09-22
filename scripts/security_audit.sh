@@ -1091,6 +1091,9 @@ for index, finding in enumerate(waived_findings):
 	waiver_match_key = text_field(finding, "waiver_match_key")
 	if waiver_match_key and not re.fullmatch(r"sha256:[0-9a-f]{64}", waiver_match_key):
 		raise SystemExit(f"waived finding #{index} has an invalid waiver_match_key")
+	audited_head_sha = text_field(finding, "audited_head_sha")
+	if audited_head_sha and not re.fullmatch(r"[0-9a-fA-F]{40,64}", audited_head_sha):
+		raise SystemExit(f"waived finding #{index} has an invalid audited_head_sha")
 	normalized.append(
 		{
 			"finding_id": finding_id,
@@ -1098,6 +1101,7 @@ for index, finding in enumerate(waived_findings):
 			"file": relative_file,
 			"line": line_number,
 			"owasp_or_stride_category": category,
+			"audited_head_sha": audited_head_sha,
 		}
 	)
 	location = relative_file or "(location not recorded)"
@@ -1494,7 +1498,11 @@ def matching_waiver(finding: dict[str, object]) -> str | None:
 		if not isinstance(waiver, dict):
 			continue
 		waived_key = str(waiver.get("waiver_match_key") or "")
-		if re.fullmatch(r"sha256:[0-9a-f]{64}", waived_key) and waived_key == finding_key:
+		if (
+			re.fullmatch(r"sha256:[0-9a-f]{64}", waived_key)
+			and waived_key == finding_key
+			and waiver_causality_unchanged(waiver, finding)
+		):
 			return waived_key
 	return None
 
@@ -1504,7 +1512,9 @@ ancestry_cache: dict[str, bool | None] = {}
 ownership_warned_files: set[str] = set()
 causal_diff_cache: dict[str, tuple[bool | None, list[tuple[int, int, bool, bool, bool, bool]]]] = {}
 cross_file_causal_change_cache: tuple[bool, bool] | None = None
-causal_diff_base_sha = audit_scope_since_sha or audit_scope_base_sha
+# DIFF_SINCE selects candidate files only. Ownership and deleted-guard
+# causality always cover the complete project range.
+causal_diff_base_sha = audit_scope_base_sha
 guard_deletion_pattern = re.compile(
 	r"(?i)\b(?:auth\w*|permission|privilege|admin|guard|middleware|before_request|require_\w+|login_required|is_authenticated|authenticated|authori[sz]e|can_access|forbidden|check_(?:user|permission|access)|role|access[_ -]?control|policy|allow|deny)\b"
 )
@@ -1518,6 +1528,64 @@ cross_file_guard_deletion_pattern = re.compile(
 access_control_finding_pattern = re.compile(
 	r"(?i)\b(?:broken access control|authori[sz]ation|authentication|permission|privilege|elevation of privilege|spoofing)\b"
 )
+waiver_revalidation_cache: dict[tuple[str, str], bool] = {}
+
+
+def waiver_causality_unchanged(
+	waiver: dict[str, object], finding: dict[str, object]
+) -> bool:
+	"""Fail closed unless the waived trust boundary is unchanged."""
+	audited_head_sha = str(waiver.get("audited_head_sha") or "")
+	file_name = str(finding.get("file") or "")
+	cache_key = (audited_head_sha, file_name)
+	if cache_key in waiver_revalidation_cache:
+		return waiver_revalidation_cache[cache_key]
+	if not re.fullmatch(r"[0-9a-fA-F]{40,64}", audited_head_sha):
+		waiver_revalidation_cache[cache_key] = False
+		return False
+	try:
+		ancestor_result = subprocess.run(
+			["git", "merge-base", "--is-ancestor", audited_head_sha, audit_scope_head_sha],
+			cwd=repo_root,
+			capture_output=True,
+			check=False,
+		)
+		if ancestor_result.returncode != 0:
+			waiver_revalidation_cache[cache_key] = False
+			return False
+		if audited_head_sha == audit_scope_head_sha:
+			waiver_revalidation_cache[cache_key] = True
+			return True
+		file_diff = subprocess.run(
+			["git", "diff", "--no-color", "--no-ext-diff", f"{audited_head_sha}..{audit_scope_head_sha}", "--", file_name],
+			cwd=repo_root,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			check=False,
+		)
+		project_diff = subprocess.run(
+			["git", "diff", "--no-color", "--no-ext-diff", "--unified=0", f"{audited_head_sha}..{audit_scope_head_sha}"],
+			cwd=repo_root,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			check=False,
+		)
+	except (OSError, ValueError):
+		waiver_revalidation_cache[cache_key] = False
+		return False
+	guard_deleted = any(
+		line.startswith("-")
+		and not line.startswith("---")
+		and cross_file_guard_deletion_pattern.search(line[1:]) is not None
+		for line in project_diff.stdout.splitlines()
+	)
+	unchanged = file_diff.returncode == 0 and project_diff.returncode == 0 and not file_diff.stdout and not guard_deleted
+	waiver_revalidation_cache[cache_key] = unchanged
+	return unchanged
 
 
 def warn_ownership_once(file_name: str) -> None:
@@ -1729,6 +1797,7 @@ for raw_finding in raw_findings:
 	if rule_id is not None:
 		excluded_findings.append({"finding_id": finding_id, "rule_id": rule_id})
 		continue
+	project_owned = finding_is_project_owned(normalized_finding)
 	waived_id = matching_waiver(normalized_finding)
 	if waived_id is not None:
 		waived_findings.append({"finding_id": finding_id, "waived_finding_id": waived_id})
@@ -1744,7 +1813,7 @@ for raw_finding in raw_findings:
 		normalized_finding["finding_id"] = finding_id
 	seen_ids.add(finding_id)
 	seen_waiver_keys.add(waiver_match_key)
-	if not finding_is_project_owned(normalized_finding):
+	if not project_owned:
 		advisory_findings.append(normalized_finding)
 		continue
 	kept_findings.append(normalized_finding)

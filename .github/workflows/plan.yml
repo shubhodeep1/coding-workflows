@@ -283,7 +283,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh files_touched_scope_guard.py; do
+          for f in gh_helpers.sh run_plan_codex.sh untrusted_process_sandbox.sh model_provider_proxy.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh files_touched_scope_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1112,7 +1112,6 @@ jobs:
       - name: Run Codex planning
         if: env.SKIP_PLAN != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
         run: |

@@ -297,8 +297,9 @@ def test_workspace_shell_context_activates_before_repo_sensitive_steps() -> None
 	validate_activate = _step_run_text(VALIDATE_WORKFLOW, "Activate workspace shell context")
 	for block in (implement_activate, validate_activate):
 		assert 'cd "${WORKSPACE_PATH}"' in block
-		assert 'echo "BASH_ENV=${workspace_shell_env}"' in block
 		assert 'echo "GIT_WORK_TREE=${WORKSPACE_PATH}"' in block
+	assert 'echo "BASH_ENV=${workspace_shell_env}"' in validate_activate
+	assert _step(IMPLEMENT_WORKFLOW, "Run Codex implementation")["env"]["BASH_ENV"] == ""
 	assert implement_text.find("- name: Activate workspace shell context") < implement_text.find("- name: Run Codex implementation")
 	assert validate_text.find("- name: Activate workspace shell context") < validate_text.find("- name: Run validation process")
 

@@ -4818,41 +4818,27 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 		"abort the job — the underlying Codex failure is still the "
 		"primary signal"
 	)
-	# CRITICAL: the gh-issue-comment guard checks `[ -n "${GH_TOKEN:-}" ]`.
-	# If GH_TOKEN isn't in the step's `env:` block, the guard always
-	# fails and the entire diagnostics-posting branch is dead code —
-	# the same regression that the multi-model consensus review caught
-	# on commit 523cc99. Parse the workflow YAML and look up the
-	# step's env directly so this assertion is robust to harmless
-	# workflow refactors (re-ordering, run-syntax changes, etc.) — a
-	# previous fixed-anchor implementation was flagged as brittle in
-	# review.
+	# The untrusted implementation step must be tokenless. A separate trusted
+	# continuation posts the already-sanitized diagnostics after model exit.
 	import yaml as _yaml
 	wf_doc = _yaml.safe_load(_workflow_text())
 	codex_step_env: dict | None = None
+	diagnostics_step: dict | None = None
 	for job in (wf_doc.get("jobs") or {}).values():
 		for step in (job.get("steps") or []):
 			if isinstance(step, dict) and step.get("name") == "Run Codex implementation":
 				codex_step_env = step.get("env") or {}
-				break
-		if codex_step_env is not None:
+			if isinstance(step, dict) and step.get("name") == "Post implementation failure diagnostics":
+				diagnostics_step = step
+		if codex_step_env is not None and diagnostics_step is not None:
 			break
 	assert codex_step_env is not None, (
 		"could not locate `Run Codex implementation` step in workflow YAML"
 	)
-	assert "GH_TOKEN" in codex_step_env, (
-		"`Run Codex implementation` step must declare GH_TOKEN in its "
-		"env: block so the Fix #5 diagnostics-posting branch (`gh issue "
-		"comment`) can authenticate. Without it, the `[ -n \"${GH_TOKEN:-}\" ]` "
-		"guard is always false and the whole diagnostics feature is dead "
-		f"code at runtime. Step env keys: {sorted(codex_step_env.keys())}"
-	)
-	assert "${{ secrets.GH_PAT }}" in str(codex_step_env["GH_TOKEN"]), (
-		"GH_TOKEN must reference `${{ secrets.GH_PAT }}` (the workflow's "
-		"canonical secret name for GitHub auth — every other gh-using "
-		"step in this workflow uses the same name). Found: "
-		f"{codex_step_env['GH_TOKEN']!r}"
-	)
+	assert "GH_TOKEN" not in codex_step_env
+	assert diagnostics_step is not None
+	assert "${{ secrets.GH_PAT }}" in str((diagnostics_step.get("env") or {}).get("GH_TOKEN"))
+	assert 'gh issue comment "${ISSUE_NUMBER}"' in diagnostics_step.get("run", "")
 
 
 def test_validator_offending_bytes_redacts_secrets() -> None:

@@ -6462,7 +6462,10 @@ def _run_dependency_install_step(
 			"esac\n"
 			"exit 0\n" % (0 if pytest_importable else 1)
 		)
-		for stub in ("pip", "python3"):
+		(bin_dir / "docker").write_text(
+			'#!/bin/sh\necho "docker $*" >> "$STUB_CALL_LOG"\nexit 1\n'
+		)
+		for stub in ("docker", "pip", "python3"):
 			(bin_dir / stub).chmod(0o755)
 		env = _git_clean_env()
 		env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -6482,20 +6485,29 @@ def _run_dependency_install_step(
 		}
 
 
-def test_dependency_install_bootstraps_pytest_when_pyproject_declares_it() -> None:
-	"""A tool-only pyproject must still leave pytest importable for the editor.
-
-	`pip install -e .` exits 0 on a pyproject.toml that carries no [project]
-	table (setuptools builds an UNKNOWN-0.0.0 package), so the pre-existing
-	`install_failed` guard never fires and pytest silently stays missing.
-	"""
+def test_dependency_install_never_bootstraps_pytest_on_the_privileged_host() -> None:
+	"""Missing pytest must not trigger a PR-controlled host installation."""
 	result = _run_dependency_install_step(
 		{"pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" in result["calls"], result["calls"]
-	assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
-	assert "pytest is not importable" in result["output"], result["output"]
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "refusing privileged host installation" in result["output"], result["output"]
+
+
+def test_dependency_install_container_uses_allowlisted_network_proxy() -> None:
+	step = _step_run_script("Install project dependencies (best-effort)")
+	assert "--network none" not in step
+	assert 'docker network create --internal "${review_dependency_network}"' in step
+	assert '--network "${review_dependency_network}"' in step
+	assert "HTTP_PROXY=http://dependency-proxy:8080" in step
+	assert 'docker exec "${review_dependency_proxy}" python -c' in step and '|| ! review_dependency_proxy_ready \\' in step
+	assert '${SUPPORT_SCRIPTS_DIR}/package_download_proxy.py:/package_download_proxy.py:ro' in step
+	assert '--volume "${review_dependency_git_mask}:/workspace/.git:ro"' in step
+	assert "trap review_dependency_cleanup EXIT" in step
+	assert "docker rm -f" in step
+	assert "GH_TOKEN" not in step
+	assert "GH_PAT" not in step
 
 
 def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
@@ -6503,19 +6515,20 @@ def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
 		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
 	assert (
 		"::warning::pytest is declared by this repository but could not be installed"
 		in result["output"]
 	), result["output"]
 
 
-def test_dependency_install_bootstraps_pytest_for_nested_conftest() -> None:
+def test_dependency_install_does_not_host_install_pytest_for_nested_conftest() -> None:
 	result = _run_dependency_install_step(
 		{"tests/conftest.py": ""},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "refusing privileged host installation" in result["output"], result["output"]
 
 
 def test_dependency_install_skips_pytest_bootstrap_when_already_importable() -> None:

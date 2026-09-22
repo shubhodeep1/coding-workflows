@@ -1878,6 +1878,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     sanitize_codex_prompt_file "${_effective_prompt_file}"
   fi
   resolver_opencode_cmd=(
+    env UNTRUSTED_AGENT_ROLE=resolver
     bash -c
     # shellcheck disable=SC2016
     'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
