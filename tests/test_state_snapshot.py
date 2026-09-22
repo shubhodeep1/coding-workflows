@@ -444,7 +444,8 @@ def test_snapshot_workflow_upload_step_is_non_fatal_but_still_requires_the_file(
 	# A missing snapshot file is a real defect, so keep it surfacing as a failed step.
 	assert "if-no-files-found: error" in upload_block
 
-	# The branch publication is the durable channel and must stay fatal-by-default.
+	# Do not blanket-ignore unexpected branch-step failures; the expected push
+	# failure path already retries and degrades to a warning inside the script.
 	publish_block = "\n".join(_extract_snapshot_workflow_step_lines("Publish state snapshot branch"))
 	assert "continue-on-error" not in publish_block
 
