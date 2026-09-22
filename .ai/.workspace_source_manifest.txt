@@ -130,6 +130,7 @@ analysis/workflow-optimization-2026-09-21-2.md
 analysis/workflow-optimization-2026-09-21-3.md
 analysis/workflow-optimization-2026-09-21-4.md
 analysis/workflow-optimization-2026-09-21.md
+analysis/workflow-optimization-2026-09-22-2.md
 analysis/workflow-optimization-2026-09-22.md
 changelog.d/.gitkeep
 changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
@@ -151,8 +152,12 @@ changelog.d/4207-release-tag-push-retry.md
 changelog.d/4208-autofix-failure-heal.md
 changelog.d/4211-release-tag-push-retry.md
 changelog.d/4228-release-creation-token-recovery.md
-changelog.d/4240-release-tag-pat.md
 changelog.d/4242-staged-support-env-test-isolation.md
+changelog.d/4245-smoke-detection-fixture-title-coverage.md
+changelog.d/4254-state-snapshot-artifact-upload-non-fatal.md
+changelog.d/4258-conflict-safe-pr-close.md
+changelog.d/4258-smoke-pr-unconflict-before-close.md
+changelog.d/4263-heal-reporter-main-snapshot-backfill.md
 changelog.d/binance-blessings-249-parked-projects-resume-without-humans.md
 changelog.d/release-gate-retry-budget.md
 codex.md
@@ -187,6 +192,7 @@ docs/plans/claude-code-tooling-learnings-plan.md
 docs/plans/complete-squad-improvements-plan.md
 docs/plans/gsd-inspired-improvements-plan.md
 docs/plans/gstack-learnings-plan.md
+docs/plans/heal-deterministic-autofix-failures-plan.md
 docs/plans/integration-sync-resolver-self-heal-plan.md
 docs/plans/open-agents-learnings-plan.md
 docs/plans/opencode-clarify-cutover-plan.md
@@ -785,6 +791,7 @@ tests/test_task_state.py
 tests/test_task_state_unblock.py
 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py
 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
+tests/test_test_and_mark_stable_phase7_unconflict.py
 tests/test_test_and_mark_stable_plan_polling_guard.py
 tests/test_test_and_mark_stable_review_blocked_budget.py
 tests/test_transcript_archive.sh
