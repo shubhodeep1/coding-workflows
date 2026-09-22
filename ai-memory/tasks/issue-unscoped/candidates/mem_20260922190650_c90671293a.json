@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Many merged workflow changes update `.ai/.workspace_source_manifest.txt`, while others touch workflow templates, README, agents guidance, or changelog entries. When planning changes to workflow infrastructure, check whether source manifests, templates, documentation, and changelog fragments are repository-maintained companions that must remain synchronized.",
+  "fingerprint": "f780a6a887fc621e1601d30de13d0f0405723a0821af8a7de2940cc0510e8480",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35770815180",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35770815180",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4216",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4240",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4258",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4260",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4270",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4241",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4273"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260922190650_c90671293a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "The repository maintains generated or mirrored workspace metadata alongside workflow changes.",
+  "timestamps": {
+    "created_at": "2026-09-22T19:06:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
