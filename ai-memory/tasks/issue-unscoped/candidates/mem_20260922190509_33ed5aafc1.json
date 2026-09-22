@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Several merged changes address release-tag creation, push retries, token recovery, and refspec handling in `mark-stable` and related workflows. Changes involving release automation should account for transient push/authentication failures and verify the exact refspec and retry behavior with dedicated tests.",
+  "fingerprint": "94bf37085e82ed94278e0f4f3c4883ad3fe977638e3a823be88aca00083c7555",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35770815180",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35770815180",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4216",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4240",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4258",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4260",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4270",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4241",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4273"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260922190509_33ed5aafc1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Release and promotion workflows require explicit recovery for Git ref and token failures.",
+  "timestamps": {
+    "created_at": "2026-09-22T19:05:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
