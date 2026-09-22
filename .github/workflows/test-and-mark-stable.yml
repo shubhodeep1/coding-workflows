@@ -3282,17 +3282,19 @@ jobs:
           # cancel_on_pr_close already ran successfully on the original
           # close. Detect that case and verify the cancel run that fired
           # for the prior close instead.
-          # Default to '{}' on gh failure so subsequent jq parses don't
-          # blow up under `set -euo pipefail`.
           PR_INFO=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-            --jq '{state, head_sha: .head.sha}' 2>/dev/null || echo "{}")
+            --jq '{state, head_sha: .head.sha, closed_at, mergeable, mergeable_state}' 2>/dev/null || echo "{}")
           PR_STATE=$(echo "${PR_INFO}" | jq -r '.state // ""')
           PR_HEAD_SHA=$(echo "${PR_INFO}" | jq -r '.head_sha // ""')
+          PR_CLOSED_AT=$(echo "${PR_INFO}" | jq -r '.closed_at // ""')
+          PR_MERGEABLE=$(echo "${PR_INFO}" | jq -r 'if .mergeable == null then "unknown" else (.mergeable | tostring) end')
+          PR_MERGEABLE_STATE=$(echo "${PR_INFO}" | jq -r '.mergeable_state // "unknown"')
           if [ -z "${PR_STATE}" ]; then
             echo "::error::Could not read state of PR #${PR_NUMBER} (gh api returned empty)"
             echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          echo "Pre-close PR diagnostics: mergeable=${PR_MERGEABLE}, mergeable_state=${PR_MERGEABLE_STATE}"
           if [ "${PR_STATE}" = "closed" ]; then
             if ! [[ "${PR_HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
               echo "::error::Closed PR head is not a valid 40-hex SHA."
@@ -3300,11 +3302,29 @@ jobs:
               exit 1
             fi
             echo "PR #${PR_NUMBER} is already closed (head_sha=${PR_HEAD_SHA}); looking up the cancel-on-close run that fired for that closure."
-            EXISTING=$(gh api \
-              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=20&head_sha=${PR_HEAD_SHA}" \
-              --jq '[.workflow_runs[] | select(.event == "pull_request")] | sort_by(.created_at) | last' 2>/dev/null || echo "")
+            if [ -z "${PR_CLOSED_AT}" ]; then
+              echo "::error::Closed PR #${PR_NUMBER} has no closed_at timestamp."
+              echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            if ! EXISTING_RUNS_JSON=$(gh api \
+              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=50"); then
+              echo "::error::Could not list internal-cancel-on-pr-close runs for already-closed PR #${PR_NUMBER}."
+              echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            EXISTING=$(printf '%s' "${EXISTING_RUNS_JSON}" | jq -c \
+              --arg head_sha "${PR_HEAD_SHA}" \
+              --arg closed_at "${PR_CLOSED_AT}" \
+              '[.workflow_runs[]
+                | select(
+                    (.event == "pull_request" and .head_sha == $head_sha) or
+                    (.event == "schedule" and .created_at >= $closed_at)
+                  )]
+                | sort_by(.created_at)
+                | last')
             if [ -z "${EXISTING}" ] || [ "${EXISTING}" = "null" ]; then
-              echo "::error::PR #${PR_NUMBER} already closed but no internal-cancel-on-pr-close run found for head_sha=${PR_HEAD_SHA}"
+              echo "::error::PR #${PR_NUMBER} already closed but no event or scheduled internal-cancel-on-pr-close run was found after closed_at=${PR_CLOSED_AT}"
               echo "status=no_run" >> "$GITHUB_OUTPUT"
               exit 1
             fi
@@ -3347,15 +3367,25 @@ jobs:
           # PR is still open — exercise the close path end to end.
           # Snapshot the most recent cancel-on-close run BEFORE we close the
           # PR so we can detect a fresh run by monotonic ID after the close.
-          PRE_RUN_ID=$(gh api \
-            "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=1" \
-            --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          if ! PRE_RUNS_JSON=$(gh api \
+            "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=1"); then
+            echo "::error::Could not snapshot internal-cancel-on-pr-close runs before closing PR #${PR_NUMBER}."
+            echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          PRE_RUN_ID=$(printf '%s' "${PRE_RUNS_JSON}" | jq -r '.workflow_runs[0].id // 0')
           echo "Pre-close cancel run head: ${PRE_RUN_ID}"
 
           # Close the PR (this is what triggers internal-cancel-on-pr-close).
-          gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-            -X PATCH -f state=closed >/dev/null 2>&1 \
+          CLOSE_RESPONSE=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+            -X PATCH -f state=closed --jq '{closed_at}' 2>/dev/null) \
             || { echo "::error::Could not close PR #${PR_NUMBER}"; echo "status=close_failed" >> "$GITHUB_OUTPUT"; exit 1; }
+          PR_CLOSED_AT=$(printf '%s' "${CLOSE_RESPONSE}" | jq -r '.closed_at // ""')
+          if [ -z "${PR_CLOSED_AT}" ]; then
+            echo "::error::Close response for PR #${PR_NUMBER} did not include closed_at."
+            echo "status=close_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           echo "✓ Closed PR #${PR_NUMBER}"
 
           # Event-propagation grace: GitHub's webhook delivery for the
@@ -3378,9 +3408,23 @@ jobs:
           NEW_RUN_ID=""
           NEW_CONCLUSION=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            CANDIDATE=$(gh api \
-              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=10" \
-              --jq "[.workflow_runs[] | select(.id > ${PRE_RUN_ID})] | sort_by(.created_at) | last" 2>/dev/null || echo "")
+            if ! CANDIDATE_RUNS_JSON=$(gh api \
+              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=10"); then
+              echo "::error::Could not list internal-cancel-on-pr-close runs after closing PR #${PR_NUMBER}."
+              echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            CANDIDATE=$(printf '%s' "${CANDIDATE_RUNS_JSON}" | jq -c \
+              --argjson pre_run_id "${PRE_RUN_ID}" \
+              --arg closed_at "${PR_CLOSED_AT}" \
+              '[.workflow_runs[]
+                | select(.id > $pre_run_id)
+                | select(
+                    .event == "pull_request" or
+                    (.event == "schedule" and .created_at >= $closed_at)
+                  )]
+                | sort_by(.created_at)
+                | last')
             if [ -n "${CANDIDATE}" ] && [ "${CANDIDATE}" != "null" ]; then
               NEW_RUN_ID=$(echo "${CANDIDATE}" | jq -r '.id // ""')
               STATUS=$(echo "${CANDIDATE}" | jq -r '.status // ""')

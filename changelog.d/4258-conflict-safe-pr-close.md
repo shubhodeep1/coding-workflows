@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Conflicted pull requests now receive the same automatic close cleanup as conflict-free pull requests.** The existing close-event path remains immediate, while a five-minute scheduled fallback batch-validates live pull-request state before cancelling orphaned runs and releasing merge-queued pull requests. The release smoke test now records mergeability diagnostics and recognizes either cleanup path without masking workflow-list API failures.
