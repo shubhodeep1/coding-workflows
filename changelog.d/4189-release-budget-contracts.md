@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Release budget contracts now allow memory compaction to finish and stay synchronized with their workflow limits.** Memory maintenance receives a 20-minute job cap, while its 40-minute release watcher covers the 15-minute registration window, the full child runtime, and 5 minutes of slack. Contract tests enforce the complete timeout hierarchy and derive the E2E smoke limit from the workflow's named budget.

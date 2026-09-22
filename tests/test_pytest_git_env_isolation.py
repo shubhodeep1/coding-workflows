@@ -18,6 +18,19 @@ pytest run of the changelog tests with ``GIT_DIR`` / ``GIT_WORK_TREE``
 pointed at a sentinel repository and asserts the sentinel repository is
 untouched afterwards and the nested run passed. Before the conftest fix the
 nested run switched the sentinel repository's branch and two tests failed.
+
+The same workflow also exports the self-repo staged-support ledger paths
+(``STAGED_SUPPORT_LEDGER``, ``STAGED_SUPPORT_BASE_DIR``,
+``STAGED_SUPPORT_EDITOR_HEAD_LEDGER``, ``IMPLEMENT_STAGED_SUPPORT_RUN_DIR``).
+During the implement runs for issues #4227 / #4242 (35614385686,
+35628923735, 35642366131, 35656715219) the editor's pytest run of
+``tests/test_implement_post_codex_recovery.py`` inherited
+``STAGED_SUPPORT_EDITOR_HEAD_LEDGER``, the round-trip test appended its
+fixture path ``scripts/helper.sh`` to the workflow's real editor-head
+ledger, and the post-editor ``reinstall`` failed with
+``IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh``. The second
+nested run below points that variable at a sentinel ledger and asserts the
+sentinel stays empty.
 """
 
 from __future__ import annotations
@@ -27,19 +40,25 @@ import subprocess
 import sys
 from pathlib import Path
 
-from conftest import REPO_PINNING_GIT_ENV_VARS
+from conftest import (
+	REPO_PINNING_GIT_ENV_VARS,
+	STAGED_SUPPORT_RUNTIME_ENV_VARS,
+	WORKFLOW_RUNTIME_ENV_VARS,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROBE_TEST_FILE = "tests/test_assemble_changelog.py"
 PROBE_TEST_SELECTION = "concurrent_prs or union_backstop"
 SENTINEL_BRANCH = "sentinel"
+STAGED_SUPPORT_PROBE_TEST_FILE = "tests/test_implement_post_codex_recovery.py"
+STAGED_SUPPORT_PROBE_TEST_SELECTION = "staged_support_workspace_restore_then_reinstall_round_trip"
 
 
 def _clean_git_env(home: Path) -> dict[str, str]:
 	env = {
 		key: value
 		for key, value in os.environ.items()
-		if key not in REPO_PINNING_GIT_ENV_VARS
+		if key not in WORKFLOW_RUNTIME_ENV_VARS
 	}
 	env["HOME"] = str(home)
 	env["GIT_CONFIG_NOSYSTEM"] = "1"
@@ -68,6 +87,85 @@ def test_repo_pinning_git_env_vars_are_stripped_in_session() -> None:
 		assert variable_name not in os.environ, (
 			f"{variable_name} leaked into the pytest session; tests/conftest.py must strip it"
 		)
+
+
+def test_staged_support_runtime_env_vars_are_stripped_in_session() -> None:
+	assert STAGED_SUPPORT_RUNTIME_ENV_VARS == (
+		"STAGED_SUPPORT_LEDGER",
+		"STAGED_SUPPORT_BASE_DIR",
+		"STAGED_SUPPORT_EDITOR_HEAD_LEDGER",
+		"IMPLEMENT_STAGED_SUPPORT_RUN_DIR",
+	)
+	for variable_name in STAGED_SUPPORT_RUNTIME_ENV_VARS:
+		assert variable_name in WORKFLOW_RUNTIME_ENV_VARS
+		assert variable_name not in os.environ, (
+			f"{variable_name} leaked into the pytest session; tests/conftest.py must strip it"
+		)
+
+
+def test_nested_pytest_with_workflow_staged_support_env_leaves_sentinel_ledger_untouched(tmp_path: Path) -> None:
+	"""The workflow shape of implement runs 35614385686..35656715219 (#4227 / #4242).
+
+	The implement job exports the live ledger paths into the editor's
+	environment; the editor validates its change with pytest; the staged-support
+	round-trip test runs ``implement_staged_support_workspace.sh restore``
+	against its own scratch ledger. Before the conftest fix the helper appended
+	``scripts/helper.sh`` to the *inherited* editor-head ledger and the test
+	failed on its own ledger assertion; the workflow's later ``reinstall`` then
+	failed closed on the polluted entry.
+	"""
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _clean_git_env(home)
+
+	live_runtime_dir = tmp_path / "codex-implement-sentinel"
+	live_runtime_dir.mkdir()
+	sentinel_editor_head_ledger = live_runtime_dir / "staged_support_editor_head.txt"
+	sentinel_editor_head_ledger.write_text("", encoding="utf-8")
+	sentinel_ledger = live_runtime_dir / "staged_support_overwrites.txt"
+	sentinel_ledger.write_text("scripts/codex_helpers.sh\n", encoding="utf-8")
+	sentinel_base_dir = live_runtime_dir / "staged_support_base"
+	sentinel_base_dir.mkdir()
+	sentinel_run_dir = live_runtime_dir / "staged_support_run" / "scripts"
+	sentinel_run_dir.mkdir(parents=True)
+
+	nested_env = dict(env)
+	nested_env["STAGED_SUPPORT_LEDGER"] = str(sentinel_ledger)
+	nested_env["STAGED_SUPPORT_BASE_DIR"] = str(sentinel_base_dir)
+	nested_env["STAGED_SUPPORT_EDITOR_HEAD_LEDGER"] = str(sentinel_editor_head_ledger)
+	nested_env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"] = str(sentinel_run_dir)
+
+	completed = subprocess.run(
+		[
+			sys.executable,
+			"-m",
+			"pytest",
+			"-q",
+			"-p",
+			"no:cacheprovider",
+			STAGED_SUPPORT_PROBE_TEST_FILE,
+			"-k",
+			STAGED_SUPPORT_PROBE_TEST_SELECTION,
+		],
+		cwd=str(REPO_ROOT),
+		env=nested_env,
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=300,
+	)
+	assert completed.returncode == 0, (
+		"nested pytest run failed under the workflow's staged-support environment\n"
+		f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+	)
+	assert "1 passed" in completed.stdout, completed.stdout
+
+	assert sentinel_editor_head_ledger.read_text(encoding="utf-8") == "", (
+		"the round-trip test wrote into the inherited editor-head ledger"
+	)
+	assert sentinel_ledger.read_text(encoding="utf-8") == "scripts/codex_helpers.sh\n"
+	assert sorted(path.name for path in sentinel_base_dir.iterdir()) == []
+	assert sorted(path.name for path in sentinel_run_dir.iterdir()) == []
 
 
 def test_nested_pytest_with_workflow_git_env_leaves_sentinel_repo_untouched(tmp_path: Path) -> None:

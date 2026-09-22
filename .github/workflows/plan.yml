@@ -473,10 +473,58 @@ jobs:
 
       - name: Detect smoke test and tune LLM settings
         if: env.SKIP_PLAN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
-          if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+
+          IS_SMOKE_PLAN="false"
+
+          # Direct match on the issue's own title. Matches every
+          # `[E2E <variant>]` fixture title the release gate creates, not
+          # just `[E2E Smoke Test]`. The gate builds four shapes
+          # (test-and-mark-stable.yml:544, 2661, 4664, 4942) and the old
+          # literal `\[E2E Smoke Test\]` pattern matched only two:
+          # `[E2E Clarify Negative Test]` has a different middle token, and
+          # `[E2E Smoke Test alt-model]` has no `]` directly after `Test`.
+          # Anchored at `^` so a production issue that merely mentions a
+          # fixture tag mid-title is not mistaken for the fixture itself;
+          # real AI issue titles never begin with `[E2E `.
+          if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
+            IS_SMOKE_PLAN="true"
+          fi
+
+          # Orchestrator-managed children carry NO fixture marker at all.
+          # The gate's orchestrate-decompose-test job feeds a
+          # `[E2E Orchestrate Smoke <run_id>]` project description to the
+          # decomposer, which then writes the child titles itself (e.g.
+          # "Update E2E smoke canary A for run 35672590166", issues #4249
+          # and #4250 of run 35672590166). No title pattern can ever match
+          # those, so fall back to the parent tracking issue's title, the
+          # same signal orchestrate_clarify_respond.yml already uses
+          # (`^\[Orchestrator\] E2E `). Gated behind the title check and a
+          # present `Tracking issue: #N` ref, so this costs at most one
+          # extra API call and only on orchestrator-managed plan runs
+          # (CLAUDE.md §15). Fails open: an unreachable or unparseable
+          # parent leaves alerts enabled rather than silencing a real
+          # project.
+          if [ "${IS_SMOKE_PLAN}" = "false" ]; then
+            SMOKE_ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+            SMOKE_TRACKING_NUM="$(printf '%s' "${SMOKE_ISSUE_BODY}" | sed -n 's/.*Tracking issue: #\([0-9][0-9]*\).*/\1/p' | head -n1)"
+            if [ -n "${SMOKE_TRACKING_NUM:-}" ]; then
+              SMOKE_TRACKING_TITLE=""
+              if SMOKE_TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${SMOKE_TRACKING_NUM}" 2>/dev/null)"; then
+                SMOKE_TRACKING_TITLE="$(printf '%s' "${SMOKE_TRACKING_PAYLOAD}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+              fi
+              if printf '%s' "${SMOKE_TRACKING_TITLE}" | grep -qiE '^\[Orchestrator\] E2E '; then
+                echo "🔬 Smoke orchestrator parent (#${SMOKE_TRACKING_NUM}) detected"
+                IS_SMOKE_PLAN="true"
+              fi
+            fi
+          fi
+
+          if [ "${IS_SMOKE_PLAN}" = "true" ]; then
             echo "🔬 Smoke test detected — switching to low reasoning effort"
             echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             # Suppress per-phase Telegram alerts from this plan run; the
@@ -1350,7 +1398,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           BLOCKED_REASON: ${{ steps.parse_plan.outputs.blocked_reason }}
         run: |
           set -euo pipefail
@@ -1877,7 +1925,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           IS_ORCHESTRATOR_MANAGED: ${{ steps.orchestrator_auto_answer_eval.outputs.is_orchestrator }}
           AUTO_ANSWER_POSTED: ${{ steps.post_orchestrator_auto_answer.outputs.auto_answer_posted }}
           AUTO_ANSWER_PARSE_FAILED: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_parse_failed }}
@@ -2055,7 +2103,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -2219,7 +2267,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
