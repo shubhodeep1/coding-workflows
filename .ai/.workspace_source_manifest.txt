@@ -215,6 +215,7 @@ changelog.d/4109-bind-auto-merge-to-evaluated-head.md
 changelog.d/4127-security-fix-pr-base.md
 changelog.d/4134-auto-apply-analysis-and-stable-release.md
 changelog.d/4139-security-agent-isolation.md
+changelog.d/4139-security-pass-cycle-3-isolation.md
 changelog.d/4143-security-pass-line-ownership-poller.md
 changelog.d/4161-smoke-test-telegram-silencing.md
 changelog.d/4173-security-pass-integrity-hardening.md
@@ -548,6 +549,7 @@ scripts/run_plan_codex.sh
 scripts/run_validation_repo_checks.sh
 scripts/run_workspace_hook.sh
 scripts/security_audit.sh
+scripts/security_audit_causality.py
 scripts/security_audit_fp_exclusions.json
 scripts/self_heal_validation.sh
 scripts/semantic_cache.py
@@ -565,6 +567,7 @@ scripts/templates/slot_manifest.schema.json
 scripts/tg_helpers.sh
 scripts/transcript_archive.sh
 scripts/truncate_to_utf8_byte_cap.py
+scripts/trusted_git_write.sh
 scripts/untrusted_process_sandbox.sh
 scripts/validate_changed_files_syntax.sh
 scripts/validate_driver.sh

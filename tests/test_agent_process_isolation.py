@@ -6,8 +6,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import runpy
 import subprocess
 import tempfile
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -27,6 +29,7 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 		config_dir = root / "codex"
 		config_dir.mkdir()
 		(config_dir / "config.toml").write_text(
+			'model = "openai/gpt-5.6-sol"\n'
 			'[model_providers.openrouter]\nbase_url = "https://openrouter.ai/api/v1"\nenv_key = "OPENROUTER_API_KEY"\n',
 			encoding="utf-8",
 		)
@@ -81,9 +84,80 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "_runner_file_commands" in sandbox_text
 	assert "IPAddressDeny=any" in sandbox_text
 	assert "summary|audit" in sandbox_text
+	assert "implement-repair|diagnose|reviewer" in sandbox_text
 	assert 'find "${workspace}" -xdev -name .git -print0' in sandbox_text
 	assert 'InaccessiblePaths=${protected_git_path}' in sandbox_text
 	assert "GIT_DIR|GIT_WORK_TREE" not in sandbox_text
+
+
+def test_provider_proxy_enforces_model_tokens_usage_and_accounting() -> None:
+	proxy_namespace = runpy.run_path(str(PROXY))
+	model_policy = proxy_namespace["ModelPolicy"](
+		model_id="openai/allowed",
+		context_length=1000,
+		max_completion_tokens=200,
+		prompt_price=Decimal("0.001"),
+		completion_price=Decimal("0.002"),
+		request_price=Decimal("0.01"),
+		public_row={"id": "openai/allowed"},
+	)
+	prepare_request = proxy_namespace["_prepare_request"]
+	prepared, reservation = prepare_request(
+		"/chat/completions",
+		json.dumps({"model": "openai/allowed", "messages": [], "max_tokens": 100}).encode(),
+		{"openai/allowed": model_policy},
+		150,
+	)
+	payload = json.loads(prepared)
+	assert payload["usage"] == {"include": True}
+	assert reservation == Decimal("1.21")
+	for rejected_payload in (
+		{"model": "openai/denied", "messages": []},
+		{"model": "openai/allowed", "models": ["openai/denied"], "messages": []},
+	):
+		try:
+			prepare_request(
+				"/chat/completions", json.dumps(rejected_payload).encode(),
+				{"openai/allowed": model_policy}, 150,
+			)
+		except PermissionError:
+			pass
+		else:
+			raise AssertionError("unauthorized model selection was accepted")
+	try:
+		prepare_request(
+			"/responses",
+			json.dumps({"model": "openai/allowed", "input": "x", "max_output_tokens": 151}).encode(),
+			{"openai/allowed": model_policy},
+			150,
+		)
+	except ValueError:
+		pass
+	else:
+		raise AssertionError("oversized output request was accepted")
+	try:
+		prepare_request(
+			"/chat/completions",
+			json.dumps({"model": "openai/allowed", "messages": [], "plugins": [{"id": "web"}]}).encode(),
+			{"openai/allowed": model_policy},
+			150,
+		)
+	except ValueError:
+		pass
+	else:
+		raise AssertionError("provider-side paid plugin was accepted")
+
+	usage_parser = proxy_namespace["_usage_cost_from_tail"]
+	assert usage_parser(b'{"usage":{"cost":0.25}}') == Decimal("0.25")
+	assert usage_parser(b'x' * 32 + b'"usage":{"cost":0.375}}') == Decimal("0.375")
+	assert usage_parser(b'data: {"usage":{"cost":0.5}}\n\ndata: [DONE]\n') == Decimal("0.5")
+	accounting = proxy_namespace["ProxyAccounting"](2, 1, Decimal("2"))
+	assert accounting.reserve(Decimal("1")) is True
+	assert accounting.reserve(Decimal("1.01")) is False
+	accounting.settle(Decimal("1"), Decimal("0.5"))
+	assert accounting.reserve(Decimal("1.5")) is True
+	accounting.settle(Decimal("1.5"), None)
+	assert accounting.reserve(Decimal("0.01")) is False
 
 
 def test_package_download_proxy_allows_only_pypi_tls_tunnels() -> None:
@@ -191,3 +265,112 @@ def test_causal_scope_includes_new_reverse_route_caller() -> None:
 		causality_text = CAUSALITY.read_text(encoding="utf-8")
 		assert '["git", "archive", "--format=tar", ref, "--", *files]' in causality_text
 		assert 'if not files:\n\t\treturn symbols, sources' in causality_text
+
+
+def test_causal_scope_tracks_module_level_route_guard_deletion() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo = Path(directory) / "repo"
+		repo.mkdir()
+		source_with_guard = (
+			"def require_admin(user):\n\treturn user.is_admin\n\n"
+			"def privileged_sink(user):\n\treturn user.secret\n\n"
+			"ROUTES = {'/admin': (privileged_sink, require_admin)}\n"
+		)
+		(repo / "app.py").write_text(source_with_guard, encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+			check=True,
+		)
+		base_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+		(repo / "app.py").write_text(
+			source_with_guard.replace("(privileged_sink, require_admin)", "(privileged_sink, None)"),
+			encoding="utf-8",
+		)
+		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "remove guard"],
+			check=True,
+		)
+		head_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+		result = subprocess.run(
+			[
+				"python3", str(CAUSALITY), "--repo", str(repo), "--file", "app.py",
+				"--line", "4", "--base", base_sha, "--head", head_sha,
+			],
+			capture_output=True, text=True, check=True,
+		)
+		payload = json.loads(result.stdout)
+		assert payload["causal_scope_status"] == "complete"
+		assert payload["causal_scope_changed_files"] == ["app.py"]
+		assert "app.py" in payload["causal_scope_files"]
+
+
+def test_shared_waiver_revalidation_rejects_routing_config_changes() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo = Path(directory) / "repo"
+		repo.mkdir()
+		subprocess.run(["git", "init", "-q", str(repo)], check=True)
+		(repo / "app.py").write_text("def privileged_sink(user):\n\treturn user.secret\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+			check=True,
+		)
+		base_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+		scope_result = subprocess.run(
+			[
+				"python3", str(CAUSALITY), "--repo", str(repo), "--file", "app.py",
+				"--line", "1", "--base", base_sha, "--head", base_sha,
+			],
+			capture_output=True, text=True, check=True,
+		)
+		scope = json.loads(scope_result.stdout)
+		waiver_key = "sha256:" + "a" * 64
+		finding = {
+			"file": "app.py", "line": 1, "waiver_match_key": waiver_key,
+			"causal_scope_schema": scope["causal_scope_schema"],
+			"causal_scope_status": scope["causal_scope_status"],
+			"causal_scope_fingerprint": scope["causal_scope_fingerprint"],
+			"causal_scope_files": scope["causal_scope_files"],
+		}
+		waiver = dict(finding, audited_head_sha=base_sha)
+		finding_path = repo / "finding.json"
+		waiver_path = repo / "waiver.json"
+		finding_path.write_text(json.dumps(finding), encoding="utf-8")
+		waiver_path.write_text(json.dumps(waiver), encoding="utf-8")
+
+		(repo / "unrelated.py").write_text("VALUE = 1\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "unrelated.py"], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "unrelated"],
+			check=True,
+		)
+		unrelated_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+		valid_result = subprocess.run(
+			[
+				"python3", str(CAUSALITY), "revalidate-waiver", "--repo", str(repo),
+				"--audited-head", base_sha, "--current-head", unrelated_sha,
+				"--finding-json", str(finding_path), "--waiver-json", str(waiver_path),
+			],
+			capture_output=True, text=True, check=True,
+		)
+		assert json.loads(valid_result.stdout)["valid"] is True
+
+		(repo / "routes.yaml").write_text("public: privileged_sink\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "routes.yaml"], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "route"],
+			check=True,
+		)
+		route_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+		invalid_result = subprocess.run(
+			[
+				"python3", str(CAUSALITY), "revalidate-waiver", "--repo", str(repo),
+				"--audited-head", base_sha, "--current-head", route_sha,
+				"--finding-json", str(finding_path), "--waiver-json", str(waiver_path),
+			],
+			capture_output=True, text=True, check=True,
+		)
+		assert json.loads(invalid_result.stdout)["valid"] is False

@@ -2508,10 +2508,8 @@ def test_security_audit_model_and_waivers_use_shared_security_boundaries() -> No
 	assert "--role audit" in script
 	assert 'SECURITY_AUDIT_CAUSALITY_HELPER=' in script
 	assert '"causal_scope_schema": "security_audit_causal_scope.v1"' in script
-	assert 'waiver_causal_fingerprint != finding_causal_fingerprint' in script
-	assert 'waiver_causal_files != finding_causal_files' in script
-	assert 'outside_causal_python_changed' in script
-	assert 'cross_file_boundary_changed' in script
+	assert '"revalidate-waiver"' in script
+	assert 'validation_payload.get("valid") is True' in script
 	assert 'causal analysis indeterminate for' in script
 
 

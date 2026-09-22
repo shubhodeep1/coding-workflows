@@ -22,7 +22,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ "$#" -gt 0 ] || { echo "untrusted_process_sandbox: command is required" >&2; exit 2; }
 case "${role}" in
-	plan|implement|implement-repair|reviewer|editor|resolver|judge|judge-fix|summary|audit) ;;
+	plan|implement|implement-repair|diagnose|reviewer|editor|resolver|judge|judge-fix|summary|audit) ;;
 	*) echo "untrusted_process_sandbox: invalid role" >&2; exit 2 ;;
 esac
 case "${config_format}" in
@@ -45,6 +45,7 @@ fi
 sandbox_dir="$(mktemp -d "${runtime_dir%/}/agent-sandbox.XXXXXX")"
 ready_file="${sandbox_dir}/proxy-ready.json"
 proxy_log="${sandbox_dir}/proxy.log"
+proxy_policy_file="${sandbox_dir}/proxy-policy.json"
 proxy_pid=""
 cleanup()
 {
@@ -61,17 +62,68 @@ trap cleanup EXIT HUP INT TERM
 
 proxy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/model_provider_proxy.py"
 [ -r "${proxy_script}" ] || { echo "untrusted_process_sandbox: provider proxy is unavailable" >&2; exit 1; }
-PYTHONDONTWRITEBYTECODE=1 python3 "${proxy_script}" \
-	--credential-file "${credential_file}" --ready-file "${ready_file}" >"${proxy_log}" 2>&1 &
-proxy_pid=$!
-for _proxy_wait in $(seq 1 100); do
-	[ -s "${ready_file}" ] && break
-	kill -0 "${proxy_pid}" 2>/dev/null || { cat "${proxy_log}" >&2; exit 1; }
-	sleep 0.05
+python3 - "${config_format}" "${config_path}" "${proxy_policy_file}" "$@" <<'PY'
+import json
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+config_format, config_path, output_path, *command = sys.argv[1:]
+models: set[str] = set()
+if config_format == "opencode":
+	payload = json.loads(Path(config_path).read_text(encoding="utf-8"))
+	provider_models = payload.get("provider", {}).get("openrouter", {}).get("models", {})
+	if isinstance(provider_models, dict):
+		models.update(key for key in provider_models if isinstance(key, str))
+	for key in ("model", "small_model"):
+		value = payload.get(key)
+		if isinstance(value, str):
+			models.add(value.removeprefix("openrouter/"))
+else:
+	config_file = Path(config_path) / "config.toml"
+	payload = tomllib.loads(config_file.read_text(encoding="utf-8"))
+	value = payload.get("model")
+	if isinstance(value, str):
+		models.add(value.removeprefix("openrouter/"))
+for index, value in enumerate(command):
+	if value in {"--model", "-m"} and index + 1 < len(command):
+		models.add(command[index + 1].removeprefix("openrouter/"))
+	elif value.startswith("--model=") or value.startswith("-m="):
+		models.add(value.split("=", 1)[1].removeprefix("openrouter/"))
+pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]*(?:/[A-Za-z0-9][A-Za-z0-9._:+-]*)+$")
+models = {model for model in models if pattern.fullmatch(model)}
+if not models:
+	raise SystemExit("trusted model configuration produced an empty allowlist")
+Path(output_path).write_text(json.dumps({"models": sorted(models)}) + "\n", encoding="utf-8")
+PY
+mapfile -t proxy_allowed_models < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["models"]))' "${proxy_policy_file}")
+proxy_args=()
+for proxy_allowed_model in "${proxy_allowed_models[@]}"; do
+	proxy_args+=(--allowed-model "${proxy_allowed_model}")
 done
-[ -s "${ready_file}" ] || { echo "untrusted_process_sandbox: provider proxy did not become ready" >&2; exit 1; }
-proxy_host="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["host"])' "${ready_file}")"
-proxy_port="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "${ready_file}")"
+if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then
+	proxy_host="127.0.0.2"
+	proxy_port="1"
+else
+	PYTHONDONTWRITEBYTECODE=1 python3 "${proxy_script}" \
+		--credential-file "${credential_file}" \
+		--ready-file "${ready_file}" \
+		--max-requests "${MODEL_PROVIDER_PROXY_MAX_REQUESTS:-64}" \
+		--max-concurrency "${MODEL_PROVIDER_PROXY_MAX_CONCURRENCY:-1}" \
+		--max-output-tokens "${MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS:-65536}" \
+		--max-spend-usd "${MODEL_PROVIDER_PROXY_MAX_SPEND_USD:-25}" \
+		"${proxy_args[@]}" >"${proxy_log}" 2>&1 &
+	proxy_pid=$!
+	for _proxy_wait in $(seq 1 100); do
+		[ -s "${ready_file}" ] && break
+		kill -0 "${proxy_pid}" 2>/dev/null || { cat "${proxy_log}" >&2; exit 1; }
+		sleep 0.05
+	done
+	[ -s "${ready_file}" ] || { echo "untrusted_process_sandbox: provider proxy did not become ready" >&2; exit 1; }
+	proxy_host="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["host"])' "${ready_file}")"
+	proxy_port="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "${ready_file}")"
+fi
 proxy_url="http://${proxy_host}:${proxy_port}/api/v1"
 
 sandbox_config="${sandbox_dir}/agent-config"
@@ -228,7 +280,7 @@ else
 fi
 
 if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then
-	for test_environment_name in MOCK_CODEX_OUTPUT MOCK_CODEX_STDERR MOCK_CODEX_EXIT_CODE MOCK_GH_STATE_FILE MOCK_GIT_FAILURE_MODE MOCK_GIT_BASE_SHA MOCK_REAL_GIT; do
+	for test_environment_name in MOCK_CODEX_OUTPUT MOCK_CODEX_STDERR MOCK_CODEX_EXIT_CODE MOCK_OPENCODE_OUTPUT_FILE MOCK_GH_STATE_FILE MOCK_GIT_FAILURE_MODE MOCK_GIT_BASE_SHA MOCK_REAL_GIT; do
 		if [ -n "${!test_environment_name:-}" ]; then
 			common_env+=("${test_environment_name}=${!test_environment_name}")
 		fi

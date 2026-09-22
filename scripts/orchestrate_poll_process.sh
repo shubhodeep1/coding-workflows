@@ -166,11 +166,16 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 fi
 
 TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"
+TRUSTED_POLLER_RESOLVER_GUARD="${RUNTIME_DIR}/check_resolver_diff.sh"
 UNTRUSTED_POLLER_SANDBOX="${RUNTIME_DIR}/untrusted_process_sandbox.sh"
 UNTRUSTED_POLLER_PROVIDER_PROXY="${RUNTIME_DIR}/model_provider_proxy.py"
 prepare_untrusted_poller_runtime() {
 	[ -x "${TRUSTED_POLLER_GIT_WRITER}" ] || {
 		echo "::error::Pre-staged trusted Git writer is unavailable" >&2
+		return 1
+	}
+	[ -x "${TRUSTED_POLLER_RESOLVER_GUARD}" ] || {
+		echo "::error::Pre-staged integration resolver guard is unavailable" >&2
 		return 1
 	}
 	[ -x "${UNTRUSTED_POLLER_SANDBOX}" ] && [ -x "${UNTRUSTED_POLLER_PROVIDER_PROXY}" ] || {
@@ -5689,106 +5694,57 @@ security_pass_apply_waivers_to_findings() {
   waived_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
   [[ "${waived_count}" =~ ^[0-9]+$ ]] || waived_count=0
   [ "${waived_count}" -gt 0 ] || return 0
-  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}" <<'PY'
+	local current_waiver_head causality_helper
+	current_waiver_head="$(git rev-parse HEAD 2>/dev/null || true)"
+	causality_helper="scripts/security_audit_causality.py"
+	if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${current_waiver_head}" "${causality_helper}" <<'PY'
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 findings_path = Path(sys.argv[1])
 state_path = Path(sys.argv[2])
+current_head_sha = sys.argv[3]
+causality_helper = Path(sys.argv[4])
 
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
 waivers = [row for row in state.get("security_pass_waived_findings", []) if isinstance(row, dict)]
-boundary_change_pattern = re.compile(
-	r"(?ix)(?:"
-	r"^\s*@\s*(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*\b"
-	r"|^\s*(?:await\s+)?(?:[A-Za-z_]\w*\.)*(?:auth\w*|authori[sz]\w*|login_required|check_\w+|verify_\w+|require_\w+|enforce_\w+|ensure_\w+|has_\w+|can_\w+|rate_limit\w*)\s*\("
-	r"|^\s*(?:if|elif|while|assert|return|raise)\b[^\n]*\b(?:authori[sz]\w*|permission\w*|privilege\w*|access[_ -]?control|entitlement|is_admin|is_authenticated|login_required|forbidden|(?:has|can|may)_\w+)\b"
-	r")"
-)
 
 
 def waiver_for(finding: dict) -> str | None:
 	finding_key = str(finding.get("waiver_match_key") or "")
-	if re.fullmatch(r"sha256:[0-9a-f]{64}", finding_key) is None:
-		return None
-	finding_causal_status = str(finding.get("causal_scope_status") or "")
-	finding_causal_fingerprint = str(finding.get("causal_scope_fingerprint") or "")
-	finding_causal_files = finding.get("causal_scope_files")
-	if (
-		finding_causal_status != "complete"
-		or re.fullmatch(r"sha256:[0-9a-f]{64}", finding_causal_fingerprint) is None
-		or not isinstance(finding_causal_files, list)
-		or any(not isinstance(path, str) or not path for path in finding_causal_files)
-	):
-		return None
 	for waiver in waivers:
-		waived_key = str(waiver.get("waiver_match_key") or "")
-		if not (re.fullmatch(r"sha256:[0-9a-f]{64}", waived_key) and waived_key == finding_key):
+		if str(waiver.get("waiver_match_key") or "") != finding_key:
 			continue
-		if (
-			str(waiver.get("causal_scope_status") or "") != "complete"
-			or str(waiver.get("causal_scope_fingerprint") or "") != finding_causal_fingerprint
-			or waiver.get("causal_scope_files") != finding_causal_files
-		):
-			continue
-		audited_head_sha = str(waiver.get("audited_head_sha") or "")
-		if re.fullmatch(r"[0-9a-fA-F]{40,64}", audited_head_sha) is None:
-			continue
-		try:
-			current_head_sha = subprocess.run(
-				["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-			).stdout.strip()
-			ancestor = subprocess.run(
-				["git", "merge-base", "--is-ancestor", audited_head_sha, current_head_sha],
-				capture_output=True,
-				check=False,
-			)
-			file_diff = subprocess.run(
-				["git", "diff", "--no-color", "--no-ext-diff", f"{audited_head_sha}..{current_head_sha}", "--", str(finding.get("file") or "")],
+		with tempfile.TemporaryDirectory(prefix="poller-waiver-") as temporary_directory:
+			finding_file = Path(temporary_directory) / "finding.json"
+			waiver_file = Path(temporary_directory) / "waiver.json"
+			finding_file.write_text(json.dumps(finding, ensure_ascii=True), encoding="utf-8")
+			waiver_file.write_text(json.dumps(waiver, ensure_ascii=True), encoding="utf-8")
+			validation = subprocess.run(
+				[
+					sys.executable, str(causality_helper), "revalidate-waiver",
+					"--repo", ".",
+					"--audited-head", str(waiver.get("audited_head_sha") or ""),
+					"--current-head", current_head_sha,
+					"--finding-json", str(finding_file),
+					"--waiver-json", str(waiver_file),
+				],
 				capture_output=True,
 				text=True,
 				check=False,
 			)
-			project_diff = subprocess.run(
-				["git", "diff", "--no-color", "--no-ext-diff", "--unified=0", f"{audited_head_sha}..{current_head_sha}"],
-				capture_output=True,
-				text=True,
-				check=False,
-			)
-			changed_paths = subprocess.run(
-				["git", "diff", "--name-only", f"{audited_head_sha}..{current_head_sha}"],
-				capture_output=True,
-				text=True,
-				check=False,
-			)
-		except (OSError, subprocess.SubprocessError):
-			continue
-		boundary_changed = any(
-			line[:1] in {"+", "-"}
-			and not line.startswith(("+++", "---"))
-			and boundary_change_pattern.search(line[1:]) is not None
-			for line in project_diff.stdout.splitlines()
-		)
-		outside_causal_python = any(
-			path.endswith(".py") and path not in set(finding_causal_files)
-			for path in changed_paths.stdout.splitlines()
-		)
-		if (
-			ancestor.returncode == 0
-			and file_diff.returncode == 0
-			and project_diff.returncode == 0
-			and changed_paths.returncode == 0
-			and not file_diff.stdout
-			and not boundary_changed
-			and not outside_causal_python
-		):
-			return waived_key
+			try:
+				validation_payload = json.loads(validation.stdout)
+			except json.JSONDecodeError:
+				continue
+			if validation.returncode == 0 and validation_payload.get("valid") is True:
+				return finding_key
 	return None
 
 
@@ -8618,6 +8574,10 @@ invoke_judge_for_integration_conflict() {
 	local default_head_sha=""
 	local integration_allowed_paths_file=""
 	local integration_actual_paths_file=""
+	local integration_conflict_spans_file=""
+	local integration_clean_manifest_file=""
+	local integration_merge_tree_output=""
+	local integration_expected_tree=""
 	local integration_fingerprints_file=""
 	local poller_repo_root="${PWD}"
 
@@ -8649,7 +8609,22 @@ invoke_judge_for_integration_conflict() {
 	fi
 	integration_allowed_paths_file="${RUNTIME_DIR}/integration_judge_allowed_${final_pr}.txt"
 	integration_actual_paths_file="${RUNTIME_DIR}/integration_judge_actual_${final_pr}.txt"
+	integration_conflict_spans_file="${RUNTIME_DIR}/integration_judge_conflict_spans_${final_pr}.json"
+	integration_clean_manifest_file="${RUNTIME_DIR}/integration_judge_clean_manifest_${final_pr}.tsv"
+	integration_merge_tree_output="${RUNTIME_DIR}/integration_judge_merge_tree_${final_pr}.txt"
 	integration_fingerprints_file="${RUNTIME_DIR}/integration_judge_fingerprints_${final_pr}.json"
+	integration_merge_tree_rc=0
+	git -C "${integration_judge_workspace}" merge-tree --write-tree \
+		"${integration_head_sha}" "${default_head_sha}" > "${integration_merge_tree_output}" 2>/dev/null \
+		|| integration_merge_tree_rc=$?
+	integration_expected_tree="$(head -n1 "${integration_merge_tree_output}" | tr -d '\r')"
+	if ! [[ "${integration_expected_tree}" =~ ^[0-9a-f]{40,64}$ ]] \
+		|| ! git -C "${integration_judge_workspace}" cat-file -e "${integration_expected_tree}^{tree}" 2>/dev/null \
+		|| { [ "${integration_merge_tree_rc}" -ne 0 ] && [ "${integration_merge_tree_rc}" -ne 1 ]; }; then
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		echo "::warning::Could not deterministically recompute the integration merge tree for PR #${final_pr}."
+		return 1
+	fi
 	if git -C "${integration_judge_workspace}" -c core.hooksPath=/dev/null merge \
 		--no-commit --no-ff "${default_head_sha}" >/dev/null 2>&1; then
 		:
@@ -8658,15 +8633,118 @@ invoke_judge_for_integration_conflict() {
 		echo "::warning::Integration merge preparation failed without resolvable conflicts for PR #${final_pr}."
 		return 1
 	fi
-	{
-		git -C "${integration_judge_workspace}" diff --name-only HEAD --
-		git -C "${integration_judge_workspace}" ls-files --others --exclude-standard
-	} | sed '/^$/d' | LC_ALL=C sort -u > "${integration_allowed_paths_file}"
+	git -C "${integration_judge_workspace}" diff --name-only --diff-filter=U \
+		| sed '/^$/d' | LC_ALL=C sort -u > "${integration_allowed_paths_file}"
 	if [ ! -s "${integration_allowed_paths_file}" ]; then
 		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
 		echo "::warning::Prepared integration merge for PR #${final_pr} has no bounded changed-path set."
 		return 1
 	fi
+	if grep -n $'[\t\r]' "${integration_allowed_paths_file}" >/dev/null 2>&1; then
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		echo "::warning::Integration conflict paths cannot be represented safely for PR #${final_pr}."
+		return 1
+	fi
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 - \
+		"${integration_judge_workspace}" "${integration_allowed_paths_file}" "${integration_conflict_spans_file}" \
+		"${integration_expected_tree}" <<'PY'
+import base64
+import json
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+
+workspace = Path(sys.argv[1]).resolve()
+paths = [line for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines() if line]
+output = Path(sys.argv[3])
+expected_tree = sys.argv[4]
+manifest = {}
+for path_name in paths:
+	path = PurePosixPath(path_name)
+	if path.is_absolute() or ".." in path.parts or any(ord(char) < 32 for char in path_name):
+		raise SystemExit("unsafe conflict path")
+	file_path = workspace / path
+	if not file_path.is_file() or file_path.is_symlink():
+		raise SystemExit("binary, delete/modify, or non-regular conflict")
+	data = file_path.read_bytes()
+	if b"\0" in data:
+		raise SystemExit("binary conflict")
+	lines = data.splitlines(keepends=True)
+	anchors = []
+	anchor_start = 0
+	offset = 0
+	index = 0
+	while index < len(lines):
+		line = lines[index]
+		if not line.startswith(b"<<<<<<< "):
+			offset += len(line)
+			index += 1
+			continue
+		anchors.append(data[anchor_start:offset])
+		index += 1
+		offset += len(line)
+		separator_seen = False
+		while index < len(lines):
+			line = lines[index]
+			offset += len(line)
+			index += 1
+			if line.startswith(b"<<<<<<< "):
+				raise SystemExit("nested conflict marker")
+			if line.startswith(b"======="):
+				separator_seen = True
+				break
+		if not separator_seen:
+			raise SystemExit("missing conflict separator")
+		end_seen = False
+		while index < len(lines):
+			line = lines[index]
+			offset += len(line)
+			index += 1
+			if line.startswith(b">>>>>>> "):
+				end_seen = True
+				break
+		if not end_seen:
+			raise SystemExit("missing conflict terminator")
+		anchor_start = offset
+	anchors.append(data[anchor_start:])
+	if len(anchors) < 2:
+		raise SystemExit("conflicted path has no textual markers")
+	ls_tree = subprocess.run(
+		["git", "ls-tree", expected_tree, "--", path_name], cwd=workspace,
+		capture_output=True, text=True, check=False,
+	)
+	if ls_tree.returncode != 0 or not ls_tree.stdout.strip():
+		raise SystemExit("conflicted path has no deterministic merged mode")
+	expected_mode = ls_tree.stdout.split(" ", 1)[0]
+	if expected_mode not in {"100644", "100755"}:
+		raise SystemExit("conflicted path has unsupported merged mode")
+	manifest[path_name] = {
+		"anchors": [base64.b64encode(anchor).decode("ascii") for anchor in anchors],
+		"mode": expected_mode,
+	}
+output.write_text(json.dumps(manifest, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+PY
+	then
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		echo "::warning::Integration conflicts are not safely text-resolvable for PR #${final_pr}."
+		return 1
+	fi
+	: > "${integration_clean_manifest_file}"
+	while IFS= read -r integration_merge_path; do
+		[ -n "${integration_merge_path}" ] || continue
+		grep -Fxq -- "${integration_merge_path}" "${integration_allowed_paths_file}" && continue
+		integration_tree_row="$(git -C "${integration_judge_workspace}" ls-tree "${integration_expected_tree}" -- "${integration_merge_path}" 2>/dev/null || true)"
+		if [ -z "${integration_tree_row}" ]; then
+			printf '000000\t-\t%s\n' "${integration_merge_path}" >> "${integration_clean_manifest_file}"
+			continue
+		fi
+		integration_tree_mode="${integration_tree_row%% *}"
+		integration_tree_rest="${integration_tree_row#* }"
+		integration_tree_blob="${integration_tree_rest#* }"
+		integration_tree_blob="${integration_tree_blob%%$'\t'*}"
+		printf '%s\t%s\t%s\n' "${integration_tree_mode}" "${integration_tree_blob}" "${integration_merge_path}" >> "${integration_clean_manifest_file}"
+	done < <(git -C "${integration_judge_workspace}" diff-tree --no-commit-id --name-only -r \
+		"${integration_head_sha}" "${integration_expected_tree}" | LC_ALL=C sort -u)
 
   # Ensure codex config exists — mirrors the review-blocked judge setup.
   # Centralised in scripts/write_codex_config.sh — see that script's
@@ -8754,12 +8832,14 @@ invoke_judge_for_integration_conflict() {
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
-    echo "Context:"
+	    echo "Context:"
     echo "- Tracking issue: #${TRACKING_NUM}"
     echo "- Final PR number: ${final_pr}"
     echo "- Integration branch: ${integration_branch}"
     echo "- Default branch: ${default_branch}"
-    echo "- Automated resolver attempts so far: ${retries}"
+	    echo "- Automated resolver attempts so far: ${retries}"
+	    echo "- Initially conflicted paths (the only editable paths):"
+	    sed 's/^/  - /' "${integration_allowed_paths_file}"
     echo
     echo "Changed files in final PR (JSON):"
     printf '%s\n' "${pr_files}"
@@ -8804,21 +8884,29 @@ invoke_judge_for_integration_conflict() {
 		exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
 		--sandbox workspace-write < "${prompt_file}" > "${output_file}" \
 		2>> "${RUNTIME_DIR}/integration_judge.log"; then
-		if ! git -C "${integration_judge_workspace}" add -A --; then
+		{
+			git -C "${integration_judge_workspace}" diff --name-only "${integration_expected_tree}" --
+			git -C "${integration_judge_workspace}" ls-files --others --exclude-standard
+		} | sed '/^$/d' | LC_ALL=C sort -u > "${integration_actual_paths_file}"
+		if ! bash "${TRUSTED_POLLER_RESOLVER_GUARD}" \
+			--repo-root "${integration_judge_workspace}" \
+			--conflicted-set "${integration_allowed_paths_file}" \
+			--touched-set "${integration_actual_paths_file}" \
+			--conflict-spans "${integration_conflict_spans_file}" \
+			--clean-manifest "${integration_clean_manifest_file}"; then
+			echo "::warning::Integration-conflict resolver violated the prepared merge boundary for PR #${final_pr}."
+			git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+			rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}" \
+				"${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_conflict_spans_file}" \
+				"${integration_clean_manifest_file}" "${integration_merge_tree_output}" "${integration_fingerprints_file}"
+			return 1
+		elif ! git -C "${integration_judge_workspace}" add -A --; then
 			echo "::warning::Could not stage isolated integration-conflict output for PR #${final_pr}."
-			git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
-			rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}" \
-				"${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_fingerprints_file}"
-			return 1
-		fi
-		if git -C "${integration_judge_workspace}" diff --name-only --diff-filter=U | grep -q .; then
-			echo "::warning::Integration-conflict resolver left unresolved paths for PR #${final_pr}."
-			git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
-			rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}" \
-				"${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_fingerprints_file}"
-			return 1
 		else
-			{
+			if git -C "${integration_judge_workspace}" diff --name-only --diff-filter=U | grep -q .; then
+				echo "::warning::Integration-conflict resolver left unresolved paths for PR #${final_pr}."
+			else
+				{
 				git -C "${integration_judge_workspace}" diff --name-only HEAD --
 				git -C "${integration_judge_workspace}" ls-files --others --exclude-standard
 			} | sed '/^$/d' | LC_ALL=C sort -u > "${integration_actual_paths_file}"
@@ -8869,13 +8957,15 @@ invoke_judge_for_integration_conflict() {
 						echo "::warning::Integration-conflict resolver failed fingerprint verification for PR #${final_pr}."
 					fi
 				fi
+				fi
 			fi
 		fi
 	fi
 
   echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
 	git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
-	rm -f "${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_fingerprints_file}"
+	rm -f "${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_conflict_spans_file}" \
+		"${integration_clean_manifest_file}" "${integration_merge_tree_output}" "${integration_fingerprints_file}"
   rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
   return 1
 }
