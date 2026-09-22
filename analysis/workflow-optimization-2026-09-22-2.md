@@ -236,3 +236,141 @@ Executed, non-skipped runs were 83.3% successful, 11.4% failed, and 5.2% cancell
 | Rate-limit events observed | 0 |
 | Phase 7 estimated calls in failed smoke | ~69 |
 | Retry/latency/response-byte coverage | Not collected |
+
+## Deep Audit — Workflows & Scripts (2026-09-22)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001 — Required standalone validation can be silently skipped
+
+- **File:** `.github/workflows/review_autofix.yml:1126-1250`
+- **Severity:** High
+- **Category:** `bug`
+- **Description:** Post-merge validation dispatch uses raw `gh workflow run`. If both the configured and fallback workflows fail, the step only warns and exits successfully. Repository-wide references show no scheduled recovery consumer for the retained `ai:orchestrator-validate-required` label, so a transient dispatch failure can permanently omit required validation.
+- **Recommended fix:** Stage and use `scripts/dispatch_and_watch_workflow_run.sh` in registration-only mode. Fail the job if neither workflow registers, and remove the label through `gh_retry` only after confirmed registration.
+
+All workflow YAML and Python files parsed successfully, and every shell script passed `bash -n`. No direct secret-value logging or unsafe issue/PR-body interpolation was found. Previously reported stale-helper, CI-order, and editor-preflight incidents are not duplicated here.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001 — Same resources are fetched twice for adjacent fields
+
+- **File:** `scripts/orchestrate_poll_process.sh:10230-10242`, `scripts/orchestrate_poll_process.sh:13731-13733`, `scripts/orchestrate_poll_process.sh:16413-16421`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** Three paths issue two consecutive GETs for one PR or issue, separately extracting state/merged status or title/body.
+- **Current calls:** 2 per path; up to 6 across the three paths.
+- **Proposed calls:** 1 per path; up to 3 total.
+- **Recommended fix:** Fetch one JSON object and parse all required fields locally, following the existing `final_pr_json_snapshot` and `_candidate_details_json` cache patterns.
+
+#### BATCH-001 — Standalone recovery lists issues once per phase label
+
+- **File:** `scripts/orchestrate_poll_process.sh:15504-15510`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** The loop executes seven `gh issue list --limit 1000` calls every standalone-recovery sweep. Pagination can increase this to approximately 70 underlying requests.
+- **Current calls:** 7 logical calls per sweep.
+- **Proposed calls:** 1 initial aliased GraphQL call, with pagination only for overflowing aliases.
+- **Recommended fix:** Add `_fetch_phase_issue_numbers_graphql(labels...)`, following `_fetch_candidate_issue_details_graphql`, and locally union the seven alias results.
+
+#### BATCH-002 — Promote-cycle baseline lookup fetches comments per search result
+
+- **File:** `scripts/promote_main_cycle.sh:237-265`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** `last_cycle_baseline_sha` searches for up to ten issues, then fetches each issue’s comments individually.
+- **Current calls:** Up to 11: one search plus ten comment requests.
+- **Proposed calls:** 2: one search plus one aliased GraphQL comments query.
+- **Recommended fix:** Batch candidate issues with `comments(last:100)` aliases, extending the batching pattern used by `_fetch_candidate_issue_details_graphql`.
+
+#### BATCH-003 — Body-fallback linked issues trigger per-issue label reads
+
+- **File:** `.github/workflows/review_autofix.yml:1206-1247`
+- **Severity:** Low
+- **Category:** `api-batching`
+- **Description:** When linked issues come from PR text rather than GraphQL, each issue causes a separate `gh issue view` label request.
+- **Current calls:** N label reads for N fallback issues.
+- **Proposed calls:** `ceil(N/25)`; normally one.
+- **Recommended fix:** Move the generic `_fetch_issue_labels_batch_graphql(numbers_json)` pattern from `orchestrate_poll_process.sh:2972-3049` into `gh_helpers.sh` and reuse it here. Mutation calls remain per issue.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Release publication logic is duplicated byte-for-byte
+
+- **File:** `.github/workflows/mark-stable.yml:678-892`, `.github/workflows/test-and-mark-stable.yml:5415-5629`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** The 6,306-character tag-publication block and 2,345-character release-creation block are exact duplicates in both release workflows. Security or recovery fixes can drift between release paths.
+- **Recommended fix:** Create `scripts/release_publish_helpers.sh` containing:
+  - `release_publish_tags <version> <source_branch> <tested_sha>`
+  - `release_create_github_release <repository> <version> <notes_file> <source_branch>`
+  
+  Update both workflows to call these functions.
+
+#### DUP-002 — Review runtime helpers have three exact duplicate families
+
+- **File:** `scripts/review_apply_fixes.sh:164-202,909-918`, `scripts/review_rb_judge.sh:168-182,256-294`, `scripts/review_run_reviewers.sh:69-107,324-338,1760-1769`, `scripts/review_conflict_resolve.sh:255-269`, `scripts/review_conflict_prepare.sh:605-614`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** Exact copies exist for context-budget warning emission, stall-state parsing, and bounded Semble-section rendering.
+- **Recommended fix:** Add `scripts/review_runtime_helpers.sh` with:
+  - `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>`
+  - `read_codex_stall_guard_state <status_file>`
+  - `append_semble_query_section <label> <path> [max_bytes]`
+  
+  Source it from the five callers above.
+
+No workflow pair was found to be more than 70% structurally identical overall.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging block exceeds the medium-risk threshold
+
+- **File:** `.github/workflows/implement.yml:979-1337`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The interpolated `Stage workflow support files` run block is approximately **16,985 characters**, contains three `${{ }}` expressions, and has only **4,015 characters** of headroom before GitHub’s 21,000-character limit.
+- **Recommended fix:** Extend `scripts/stage_workflow_support.sh` with an implement/in-tree ledger mode and replace the inline block with a short invocation. Pass repository variables through `env:` rather than interpolating them into `run:`.
+
+No block exceeds 18,000 characters. No workflow exceeds 800 KB; the largest is `review_autofix.yml` at 505,283 bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001 — Review thread-reuse flag contradicts its documented contract
+
+- **File:** `scripts/review_apply_fixes.sh:1598-1606`, `scripts/review_conflict_resolve.sh:1659-1671`
+- **Severity:** Medium
+- **Category:** `consistency`
+- **Description:** `README.md:129` says `CODEX_THREAD_REUSE_ENABLED` enables reuse for `review_autofix`, but both OpenCode editor paths explicitly ignore it and use fresh full prompts. Their thread-reuse resolution functions are consequently unreachable.
+- **Recommended fix:** Update the documented “Used By” contract to `implement, validate`, explicitly document that OpenCode review phases ignore the flag, and retain the existing function names as compatibility shims under §6.
+
+#### DEAD-001 — Three poller functions have no callers
+
+- **File:** `scripts/orchestrate_poll_process.sh:11348-11356`, `scripts/orchestrate_poll_process.sh:12958-12977`, `scripts/orchestrate_poll_process.sh:13087-13097`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `get_last_validation_run_conclusion`, `read_standalone_state_json`, and `stall_recovery_action_is_terminal` occur only at their definitions across the repository.
+- **Recommended fix:** Remove them in an explicitly approved §6 cleanup after confirming no external sourcing contract; otherwise annotate them as compatibility-reserved and add a contract test establishing that status.
+
+No `TODO`, `FIXME`, `HACK`, or standalone `XXX` markers were found. Reviewed ShellCheck warnings were intentional dynamic exports, glob matching, or documented compatibility no-ops; no separate high-confidence shellcheck finding remains.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 6 | API-001, BATCH-001, BATCH-002, DUP-001, EXPR-001, CONSIST-001 |
+| Low | 3 | BATCH-003, DUP-002, DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2–3 | Medium |
+| API call optimization | 3–5 | Medium |
+| Code modularization | 8–10 | Large |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 3–5 | Medium |
