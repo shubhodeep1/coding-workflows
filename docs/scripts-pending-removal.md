@@ -53,6 +53,17 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/package_download_proxy.py`
+
+- **Introduced in:** #4273 (2026-09-22)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'package_download_proxy\.py' .github/workflows/review_autofix.yml scripts/stage_workflow_support.sh` shows the review dependency-install caller and trusted support-staging entries.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_agent_process_isolation.py tests/test_review_autofix_review_pipeline_contract.py -k 'package_download_proxy or dependency_install'` returns exit code 0.
+  - `.github/workflows/review_autofix.yml` still creates an internal Docker network for the dependency installer and does not grant that container direct external networking.
+- **Owner:** @shubhodeep1
+
 ### `scripts/promote_main_cycle.sh` + `scripts/apply_analysis_on_main.sh` + the `cycle` job of `.github/workflows/promote-main-to-stable.yml`
 
 - **Introduced in:** #4134 (2026-09-19)

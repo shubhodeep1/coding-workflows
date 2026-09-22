@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -13,6 +14,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SANDBOX = REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh"
 PROXY = REPO_ROOT / "scripts" / "model_provider_proxy.py"
+PACKAGE_PROXY = REPO_ROOT / "scripts" / "package_download_proxy.py"
 
 
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
@@ -76,6 +78,24 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "-/var/run/docker.sock" in sandbox_text
 	assert "_runner_file_commands" in sandbox_text
 	assert "IPAddressDeny=any" in sandbox_text
+
+
+def test_package_download_proxy_allows_only_pypi_tls_tunnels() -> None:
+	package_proxy_spec = importlib.util.spec_from_file_location("package_download_proxy", PACKAGE_PROXY)
+	assert package_proxy_spec is not None and package_proxy_spec.loader is not None
+	package_proxy_module = importlib.util.module_from_spec(package_proxy_spec)
+	package_proxy_spec.loader.exec_module(package_proxy_module)
+	assert package_proxy_module._parse_connect_target("pypi.org:443") == ("pypi.org", 443)
+	assert package_proxy_module._parse_connect_target("files.pythonhosted.org:443") == (
+		"files.pythonhosted.org", 443
+	)
+	assert package_proxy_module._parse_connect_target("github.com:443") is None
+	assert package_proxy_module._parse_connect_target("pypi.org.evil.example:443") is None
+	assert package_proxy_module._parse_connect_target("pypi.org:80") is None
+	stage_helper_text = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(
+		encoding="utf-8"
+	)
+	assert "package_download_proxy.py" in stage_helper_text
 
 
 def test_workflows_do_not_give_github_tokens_to_primary_model_steps() -> None:

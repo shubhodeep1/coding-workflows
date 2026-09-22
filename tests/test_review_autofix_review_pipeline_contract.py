@@ -6462,7 +6462,10 @@ def _run_dependency_install_step(
 			"esac\n"
 			"exit 0\n" % (0 if pytest_importable else 1)
 		)
-		for stub in ("pip", "python3"):
+		(bin_dir / "docker").write_text(
+			'#!/bin/sh\necho "docker $*" >> "$STUB_CALL_LOG"\nexit 1\n'
+		)
+		for stub in ("docker", "pip", "python3"):
 			(bin_dir / stub).chmod(0o755)
 		env = _git_clean_env()
 		env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -6492,10 +6495,16 @@ def test_dependency_install_never_bootstraps_pytest_on_the_privileged_host() -> 
 	assert "refusing privileged host installation" in result["output"], result["output"]
 
 
-def test_dependency_install_container_can_download_without_git_metadata() -> None:
+def test_dependency_install_container_uses_allowlisted_network_proxy() -> None:
 	step = _step_run_script("Install project dependencies (best-effort)")
 	assert "--network none" not in step
+	assert 'docker network create --internal "${review_dependency_network}"' in step
+	assert '--network "${review_dependency_network}"' in step
+	assert "HTTP_PROXY=http://dependency-proxy:8080" in step
+	assert '${SUPPORT_SCRIPTS_DIR}/package_download_proxy.py:/package_download_proxy.py:ro' in step
 	assert '--volume "${review_dependency_git_mask}:/workspace/.git:ro"' in step
+	assert "trap review_dependency_cleanup EXIT" in step
+	assert "docker rm -f" in step
 	assert "GH_TOKEN" not in step
 	assert "GH_PAT" not in step
 

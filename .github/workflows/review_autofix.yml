@@ -239,7 +239,7 @@ env:
     codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh
     review_run_reviewers.sh render_prompt.sh assemble_prompt.sh
     nag_reminder.sh opencode_helpers.sh untrusted_process_sandbox.sh
-    model_provider_proxy.py write_opencode_config.sh
+    model_provider_proxy.py package_download_proxy.py write_opencode_config.sh
   REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
     render_prompt.py
 
@@ -4102,15 +4102,41 @@ jobs:
             rm -rf .ai/review-venv
             mkdir -p .ai
             review_dependency_git_mask="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-dependency-git.XXXXXX")"
+            review_dependency_suffix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${RANDOM}"
+            review_dependency_network="review-dependency-${review_dependency_suffix}"
+            review_dependency_proxy="review-dependency-proxy-${review_dependency_suffix}"
+            review_dependency_installer="review-dependency-installer-${review_dependency_suffix}"
+            review_dependency_cleanup()
+            {
+              docker rm -f "${review_dependency_installer}" "${review_dependency_proxy}" >/dev/null 2>&1 || true
+              docker network rm "${review_dependency_network}" >/dev/null 2>&1 || true
+              rm -rf -- "${review_dependency_git_mask}"
+            }
+            trap review_dependency_cleanup EXIT
+            trap 'exit 1' HUP INT TERM
             python_install_command='python -m venv .ai/review-venv'
             if [ -f requirements.txt ]; then
               python_install_command="${python_install_command} && .ai/review-venv/bin/pip install -r requirements.txt"
             else
               python_install_command="${python_install_command} && (.ai/review-venv/bin/pip install -e '.[dev]' || .ai/review-venv/bin/pip install -e .)"
             fi
-            if ! docker run --rm \
+            if ! docker network create --internal "${review_dependency_network}" >/dev/null \
+                || ! docker run --detach --rm --name "${review_dependency_proxy}" \
+                  --network bridge --read-only --cap-drop ALL --security-opt no-new-privileges \
+                  --volume "${SUPPORT_SCRIPTS_DIR}/package_download_proxy.py:/package_download_proxy.py:ro" \
+                  python:3.12-slim python /package_download_proxy.py \
+                || ! docker network connect --alias dependency-proxy \
+                  "${review_dependency_network}" "${review_dependency_proxy}" \
+                || ! docker run --rm --name "${review_dependency_installer}" \
+                --network "${review_dependency_network}" \
+                --read-only --cap-drop ALL --security-opt no-new-privileges \
+                --tmpfs /tmp:rw,nosuid,nodev,size=512m \
                 --user "$(id -u):$(id -g)" \
                 --env HOME=/tmp/agent-home \
+                --env HTTP_PROXY=http://dependency-proxy:8080 \
+                --env HTTPS_PROXY=http://dependency-proxy:8080 \
+                --env http_proxy=http://dependency-proxy:8080 \
+                --env https_proxy=http://dependency-proxy:8080 \
                 --env PIP_DISABLE_PIP_VERSION_CHECK=1 \
                 --volume "${PWD}:/workspace" \
                 --volume "${review_dependency_git_mask}:/workspace/.git:ro" \
@@ -4124,7 +4150,8 @@ jobs:
                 echo "PATH=${PWD}/.ai/review-venv/bin:${PATH}"
               } >> "$GITHUB_ENV"
             fi
-            rm -rf "${review_dependency_git_mask}"
+            review_dependency_cleanup
+            trap - EXIT HUP INT TERM
           fi
           if [ "${install_failed}" = "true" ]; then
             echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
