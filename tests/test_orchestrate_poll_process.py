@@ -21526,5 +21526,29 @@ def test_stall_recovery_retrigger_implement_arms_swap_label_before_posting_appro
 		assert "\n/approved\n" not in arm_prefix, arm_prefix
 
 
+def test_security_sensitive_poller_models_use_credentialless_sandbox() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "run_untrusted_poller_codex()" in script
+	assert "--role judge" in script
+	assert "run_untrusted_poller_codex resolver" in script
+	assert "run_untrusted_poller_codex judge-fix" in script
+	assert '< "${stall_judge_prompt_file}"' in script
+	assert '< "${judge_effective_prompt_file}"' in script
+	for forbidden in (
+		'codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}"',
+		'cat "${judge_effective_prompt_file}" | codex',
+		'cat "${RB_JUDGE_PROMPT_FILE}" | codex',
+	):
+		assert forbidden not in script
+
+
+def test_poller_review_blocked_writer_uses_immutable_trusted_git_boundary() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"' in script
+	assert 'install -m 0755 scripts/trusted_git_write.sh "${TRUSTED_POLLER_GIT_WRITER}"' in script
+	assert 'bash "${TRUSTED_POLLER_GIT_WRITER}" commit' in script
+	assert '--expected-remote-head "${RB_HEAD_SHA}"' in script
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

@@ -709,6 +709,31 @@ The security-pass helpers update the same pinned comment to `waiting` while
 the audit engine or consolidated fix issue gates completion, and to `failed`
 when the bounded fix-cycle budget is exhausted.
 
+### Credentialless model and trusted Git boundary
+
+- `scripts/untrusted_process_sandbox.sh` is the mandatory boundary for planner,
+  reviewer/editor, resolver, poller judge, and security-audit model processes.
+  Read-only roles cannot write the checkout; writer roles can edit ordinary
+  worktree files but cannot access the main repository, linked-worktree, or
+  nested `.git` metadata. The sandbox exposes only the loopback provider proxy
+  and never passes GitHub tokens, runner command files, authenticated remotes,
+  provider credentials, or host Codex auth caches.
+- `scripts/trusted_git_write.sh` is the only commit/push boundary for model-
+  produced changes. Commits disable hooks and signing under fixed trusted
+  identity. Pushes require exact local/remote heads and a validated branch,
+  use an unauthenticated HTTPS URL plus an ephemeral askpass credential, and
+  reject concurrent branch movement instead of rebasing or overwriting it.
+- Review Python dependencies remain in a Docker-managed volume. They are never
+  appended to host `PATH`, `PYTHONPATH`, or `VIRTUAL_ENV`; post-editor pytest
+  runs with no network, read-only source and Git metadata, and unconditional
+  volume cleanup.
+- `scripts/security_audit_causality.py` emits
+  `security_audit_causal_scope.v1` metadata for Python findings. A waiver is
+  authoritative only when its complete causal fingerprint still matches.
+  Unsupported, ambiguous, oversized, or unparsable graphs fail closed, and
+  changed/deleted reverse callers or guards keep access-control findings
+  blocking.
+
 The same change also adds a defensive preflight inside
 `dispatch_validation_if_needed`: when the current wave's PRs are not all
 merged into the integration branch (`WAVE_COMPLETE != "true"`) at dispatch

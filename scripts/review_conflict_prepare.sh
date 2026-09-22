@@ -308,7 +308,8 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
                 exit 1
                 ;;
             esac
-            git commit -m "[ai-merge-resolve] resolve merge conflicts"
+            bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/trusted_git_write.sh" \
+              commit --repo . --message "[ai-merge-resolve] resolve merge conflicts"
             for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
               if [ -d "${RESOLVE_STASH}/${d}" ]; then
                 cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"

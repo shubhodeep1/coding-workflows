@@ -135,7 +135,10 @@ def _install_security_audit_support_tree(base_dir: Path, *, failure_mode: str) -
 	scripts_dir.mkdir(parents=True, exist_ok=True)
 	prompts_dir.mkdir(parents=True, exist_ok=True)
 
-	for script_name in ("label_helpers.sh", "gh_helpers.sh", "render_prompt.py", "assemble_prompt.sh"):
+	for script_name in (
+		"label_helpers.sh", "gh_helpers.sh", "render_prompt.py", "assemble_prompt.sh",
+		"untrusted_process_sandbox.sh", "model_provider_proxy.py", "security_audit_causality.py",
+	):
 		(scripts_dir / script_name).symlink_to(REPO_ROOT / "scripts" / script_name)
 
 	render_helper_path = scripts_dir / "render_prompt.sh"
@@ -224,8 +227,9 @@ os.execv(real_git, [real_git, *args])
 				"MOCK_CODEX_OUTPUT": codex_output,
 				"MOCK_GH_STATE_FILE": str(state_file),
 				"PATH": os.pathsep.join((str(bin_dir), *existing_path_entries)),
-				"PYTHONDONTWRITEBYTECODE": "1",
-				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
+					"PYTHONDONTWRITEBYTECODE": "1",
+					"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+					"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
 			}
 		)
 		if support_failure_mode is not None:
@@ -2100,11 +2104,12 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	assert [finding["finding_id"] for finding in payload["findings"]] == [
 		"waived-exact",
 		"different-category-same-spot",
+		"fresh-id-same-spot",
 		"waived-id-only",
 	]
 	assert payload["verified_fixed_finding_ids"] == ["missing-prior"]
-	assert payload["counts"]["kept"] == 3
-	assert payload["counts"]["suppressed_waived"] == 1
+	assert payload["counts"]["kept"] == 4
+	assert payload["counts"]["suppressed_waived"] == 0
 	assert "waived-findings=3 (provenance-key match only)" in proc.stdout
 	prompt = final_state["codex_stdin"][0]
 	assert prompt.count("=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===") == 1
@@ -2411,6 +2416,15 @@ def main() -> int:
 			else:
 				globals()[name]()
 	return 0
+
+
+def test_security_audit_model_and_waivers_use_shared_security_boundaries() -> None:
+	script = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert 'SECURITY_AUDIT_SANDBOX_HELPER=' in script
+	assert "--role audit" in script
+	assert 'SECURITY_AUDIT_CAUSALITY_HELPER=' in script
+	assert '"causal_scope_schema": "security_audit_causal_scope.v1"' in script
+	assert 'waiver_causal_fingerprint != finding_causal_fingerprint' in script
 
 
 if __name__ == "__main__":

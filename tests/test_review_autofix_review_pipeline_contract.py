@@ -6948,5 +6948,33 @@ def main() -> int:
 	return 0
 
 
+def test_review_python_dependencies_never_enter_host_path() -> None:
+	workflow = WORKFLOW.read_text(encoding="utf-8")
+	install_block = _step_block("Install project dependencies (best-effort)")
+	assert ".ai/review-venv" not in install_block
+	assert 'echo "PATH=' not in install_block
+	assert 'echo "VIRTUAL_ENV=' not in install_block
+	assert "docker volume create" in install_block
+	assert '"${review_dependency_volume}:/review-venv"' in install_block
+	validation_block = _step_block("Validate Python changes in secretless container")
+	assert "--network none" in validation_block
+	assert '"${PWD}:/workspace:ro"' in validation_block
+	assert "/review-venv/bin/python -m pytest" in validation_block
+	cleanup_block = _step_block("Cleanup temporary artifacts")
+	assert 'docker volume rm -f "${REVIEW_PYTHON_DEPENDENCY_VOLUME}"' in cleanup_block
+
+
+def test_review_commits_and_pushes_use_trusted_git_boundary() -> None:
+	workflow = WORKFLOW.read_text(encoding="utf-8")
+	push_block = _step_block("Push all pending commits")
+	assert "trusted_git_write.sh" in push_block
+	assert "--expected-remote-head \"${INITIAL_HEAD_SHA}\"" in push_block
+	assert "git remote set-url" not in push_block
+	assert 'git push origin "HEAD:${TARGET_BRANCH}"' not in push_block
+	for script_name in ("review_commit_changes.sh", "review_conflict_prepare.sh", "review_conflict_resolve.sh"):
+		script = (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+		assert "trusted_git_write.sh" in script
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

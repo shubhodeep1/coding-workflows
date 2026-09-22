@@ -2101,14 +2101,21 @@ __EDIT_DISCIPLINE__
             ;;
         esac
         if ! git diff --cached --quiet; then
-          git commit -m "[judge-fix] address review-blocked issues
+          rb_fix_commit_message="[judge-fix] address review-blocked issues
 
 Review-blocked judge applied fixes to unblock the review pipeline.
 Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
 ${RB_FIX_DESC}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}"
-          if git push origin "HEAD:${TARGET_BRANCH}"; then
+          bash "${SUPPORT_SCRIPTS_DIR}/trusted_git_write.sh" commit \
+            --repo . --message "${rb_fix_commit_message}"
+          rb_fix_local_head="$(git rev-parse HEAD)"
+          if GH_TOKEN="${GH_TOKEN}" bash "${SUPPORT_SCRIPTS_DIR}/trusted_git_write.sh" push \
+            --repo . \
+            --branch "${TARGET_BRANCH}" \
+            --expected-local-head "${rb_fix_local_head}" \
+            --expected-remote-head "${RB_JUDGED_HEAD_SHA}" \
+            --remote-url "https://github.com/${REPOSITORY}.git"; then
             echo "Pushed [judge-fix] commit to ${TARGET_BRANCH}."
             echo "judge_handled=true" >> "$GITHUB_OUTPUT"
             echo "judge_action=fix" >> "$GITHUB_OUTPUT"

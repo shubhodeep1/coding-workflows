@@ -2590,8 +2590,8 @@ if [ -n "$(git status --porcelain)" ]; then
   # match.
   # ============================================================
 
-  git commit -m "[ai-merge-resolve] resolve merge conflicts"
-  git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
+  bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/trusted_git_write.sh" \
+    commit --repo . --message "[ai-merge-resolve] resolve merge conflicts"
   # NOTE: push deferred to final "Push all pending commits" step.
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
   echo "Conflicts resolved and committed (push deferred)"

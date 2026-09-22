@@ -632,7 +632,8 @@ if [ -z "$(git diff --cached --name-only)" ]; then
   echo "did_commit=false" >> "$GITHUB_OUTPUT"
   exit 0
 fi
-git commit -m "AI implementation for issue #${ISSUE_NUMBER}"
+bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/trusted_git_write.sh" \
+  commit --repo . --message "AI implementation for issue #${ISSUE_NUMBER}"
 
 # >>> ai:scope label post-commit verifier >>>
 # Optional defense-in-depth for per-issue scope-lock labels. When enabled and
