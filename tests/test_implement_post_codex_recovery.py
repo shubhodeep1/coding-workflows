@@ -1966,6 +1966,76 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD" in commit_helper
 
 
+EDITOR_LEDGER_ENV_SCRUB = (
+	"env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR"
+	" -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \\"
+)
+
+
+def test_editor_launches_drop_staged_support_ledger_env() -> None:
+	"""Every codex editor launch runs without the staged-support ledger paths.
+
+	Incident: implement runs 35614385686, 35628923735, 35642366131,
+	35656715219 and 35668070395 (issues #4227 / #4242, project #4139). The
+	editor inherited STAGED_SUPPORT_EDITOR_HEAD_LEDGER from $GITHUB_ENV, its own
+	pytest run of this file appended scripts/helper.sh to the live ledger, and
+	the post-editor reinstall failed closed. tests/conftest.py strips the same
+	variables, but a review-blocked baseline branch checks out an older
+	conftest.py, so the launch line has to scrub them itself.
+	"""
+	for step_name, launch_line in (
+		("Run Codex implementation", "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?"),
+		("Attempt post-Codex syntax repair", "bash scripts/codex_thread_reuse.sh direct-run; then"),
+	):
+		script_lines = _extract_run_script(step_name).splitlines()
+		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]
+		assert len(launch_indexes) == 1, (step_name, launch_indexes)
+		preceding = script_lines[launch_indexes[0] - 1].strip()
+		assert preceding == EDITOR_LEDGER_ENV_SCRUB, (step_name, preceding)
+		# The scrub sits inside the CODEX_THREAD_REUSE_* prefix assignment chain,
+		# so the helper still receives its own configuration.
+		assert script_lines[launch_indexes[0] - 2].rstrip().endswith("\\"), step_name
+	assert _workflow_text().count(EDITOR_LEDGER_ENV_SCRUB) == 2
+
+
+def test_editor_env_scrub_keeps_helper_config_and_drops_ledger_paths() -> None:
+	"""`VAR=x env -u LEDGER bash helper` hands VAR through and removes LEDGER."""
+	with tempfile.TemporaryDirectory(prefix="test_editor_env_scrub_") as td:
+		probe = Path(td) / "probe.sh"
+		probe.write_text(
+			"#!/usr/bin/env bash\n"
+			"printf 'key=%s\\n' \"${CODEX_THREAD_REUSE_STATE_KEY:-unset}\"\n"
+			"for v in STAGED_SUPPORT_LEDGER STAGED_SUPPORT_BASE_DIR STAGED_SUPPORT_EDITOR_HEAD_LEDGER IMPLEMENT_STAGED_SUPPORT_RUN_DIR; do\n"
+			"  printf '%s=%s\\n' \"$v\" \"${!v:-unset}\"\n"
+			"done\n",
+			encoding="utf-8",
+		)
+		script = (
+			'CODEX_THREAD_REUSE_STATE_KEY="implement" \\\n'
+			f"  {EDITOR_LEDGER_ENV_SCRUB}\n"
+			f'  bash "{probe}"\n'
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"STAGED_SUPPORT_LEDGER": f"{td}/ledger.txt",
+				"STAGED_SUPPORT_BASE_DIR": f"{td}/base",
+				"STAGED_SUPPORT_EDITOR_HEAD_LEDGER": f"{td}/head.txt",
+				"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": f"{td}/run",
+			}
+		)
+		proc = subprocess.run(["bash", "-c", script], cwd=td, env=env, text=True, capture_output=True, timeout=30)
+		assert proc.returncode == 0, proc.stderr
+		lines = proc.stdout.splitlines()
+		assert lines == [
+			"key=implement",
+			"STAGED_SUPPORT_LEDGER=unset",
+			"STAGED_SUPPORT_BASE_DIR=unset",
+			"STAGED_SUPPORT_EDITOR_HEAD_LEDGER=unset",
+			"IMPLEMENT_STAGED_SUPPORT_RUN_DIR=unset",
+		], lines
+
+
 def test_commit_helper_fails_closed_when_staged_support_base_is_missing() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_commit_staged_base_missing_") as td:
 		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)

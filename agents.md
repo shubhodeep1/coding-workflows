@@ -259,6 +259,18 @@ a new value, add it to the appropriate overrides file with a
   `IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR`, `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING`,
   `IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED`, `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT`,
   `IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
+- Both codex editor launches in `implement.yml` (the "Run Codex implementation"
+  attempt loop and the "Attempt post-Codex syntax repair" loop) run
+  `bash scripts/codex_thread_reuse.sh direct-run` through
+  `env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR`.
+  The editor never reads those paths; only the restore / reinstall / commit
+  steps of the job do. A `pytest` the editor starts to validate its own change
+  therefore cannot write fixture paths into the live run's ledgers even when
+  the checkout (a review-blocked `ai/reissue-baseline/*` branch, or an
+  integration branch that has not synced `main`) carries a `tests/conftest.py`
+  older than the session-wide strip. `tests/test_implement_post_codex_recovery.py`
+  pins both launch lines and the pass-through of the `CODEX_THREAD_REUSE_*`
+  prefix assignments.
 - `scripts/implement_staged_support_workspace.sh` (staged into the run dir with the other
   helpers, self-repo only, no-op without a ledger) changes what the *editor* sees:
   `restore` runs right before the Codex implementation loop and before the post-Codex
@@ -381,7 +393,12 @@ a new value, add it to the appropriate overrides file with a
   poller retried twice, the stall judge re-issued #4227 as #4242, and the
   replacement failed the same way. The second nested run in
   `tests/test_pytest_git_env_isolation.py` pins this contract against a
-  sentinel ledger.
+  sentinel ledger. The conftest strip only protects checkouts that carry it: #4242's
+  runs 35656715219 / 35668070395 checked out `orchestrator/project-4139`
+  and the preserved `ai/reissue-baseline/pr-4174-*` head predates it, so
+  `implement.yml` also drops the four variables from the editor's
+  environment at both launch sites (see "Implement self-repo staged-support
+  ledger").
 
 ## Models in use (defaults; overridable via repo-vars)
 
