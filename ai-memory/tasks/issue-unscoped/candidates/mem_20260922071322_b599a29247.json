@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.92,
+  "details": "Recent fixes repeatedly targeted stable-release tag creation, refspec correctness, push retries, and recovery when the release token or creation step fails. Any plan touching mark-stable or promotion workflows should account for both the initial tag operation and retry/recovery behavior.",
+  "fingerprint": "6ce1282065f683177dc8bb73e7e72b84ac944a8239039674ea76a448e9d306fc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35698243453",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35698243453",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4216",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4228",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4240",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4258",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4260",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4229",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4241",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260922071322_b599a29247",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Release promotion workflows require explicit tag/ref handling and recovery paths.",
+  "timestamps": {
+    "created_at": "2026-09-22T07:13:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
