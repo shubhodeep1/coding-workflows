@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Recent security work spans workflow permissions, editor or Python isolation, security-audit scripts, pass-marker ownership, and authenticated fallback behavior. Changes in these areas should be planned across the workflow, helper scripts, prompts or documentation when applicable, and dedicated security contract tests rather than treating the YAML edit in isolation.",
+  "fingerprint": "bdc9245fd8aa884f9d36148f33e9d1529d9788491de9d1a25b6da0ae0a891b1b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35673822400",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35673822400",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4175",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4190",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4207",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4228",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4240",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4176",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4192",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4209",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4229",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4241"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260922010007_307afe5b20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Security-sensitive automation requires explicit isolation and ownership boundaries.",
+  "timestamps": {
+    "created_at": "2026-09-22T01:00:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
