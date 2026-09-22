@@ -75,11 +75,16 @@ STEP_DECL_RE = re.compile(r"^\s+ALERT_MSG_LEVEL:\s*(\$\{\{.*\}\})\s*$")
 # fixture path.
 ISSUE_TITLE_DETECTOR = r"^\[E2E "
 
-# Detector used in review_autofix.yml for PR title/body. Deliberately
-# NOT anchored: a smoke PR is titled "AI implementation for issue #N"
-# (implement.yml:4551) and carries the fixture tag inside the body, so
-# the marker is mid-string on the only path that matches.
-PR_TEXT_DETECTOR = r"\[E2E "
+# review_autofix.yml's primary smoke signal. Free-text fixture-tag
+# matching on the PR title/body was removed: it misclassified any real PR
+# that merely discussed the tags, which pinned reasoning, silenced that
+# PR's review alerts, and exported IS_SMOKE_TEST -- making
+# review_apply_fixes.sh tell the editor it "must call apply_patch on
+# tests/e2e_smoke_canary.txt" on an unrelated PR.
+SMOKE_LABEL_JQ = (
+	"""jq -e '[.labels[]?.name] | index("e2e-smoke-test") != null' """
+	'"${PR_PAYLOAD_FILE}"'
+)
 
 # Number of issue-title detector sites expected per workflow, so a future
 # edit cannot drop one or silently re-narrow it.
@@ -223,15 +228,72 @@ def test_issue_title_detector_sites_are_pinned() -> None:
 		)
 
 
-def test_review_autofix_pr_text_detector_is_unanchored() -> None:
-	"""PR title/body detection must stay mid-string, unlike issue titles."""
+def test_review_autofix_uses_label_as_primary_smoke_signal() -> None:
+	"""The `e2e-smoke-test` label, not PR prose, decides smoke classification.
+
+	implement.yml applies the label atomically at `gh pr create`, so it is
+	already in the `pull_request: opened` payload this gate snapshots.
+	Confirmed on release run 35672590166: PR #4252 (from the plain canary
+	fixture) and PR #4253 (from the alt-model fixture) both carried it.
+	"""
 	wf = _read("review_autofix.yml")
-	assert f"""grep -qiE '{PR_TEXT_DETECTOR}' \\\n""" in wf, (
-		"review_autofix.yml PR-title check must use the unanchored detector"
+	start = wf.index("- name: Detect smoke test and tune LLM settings")
+	end = wf.index("if [ \"$IS_SMOKE\" = \"true\" ]; then", start)
+	block = wf[start:end]
+
+	assert SMOKE_LABEL_JQ in block, (
+		"review_autofix.yml must gate IS_SMOKE on the e2e-smoke-test label"
 	)
-	assert f"""|| echo "${{PR_BODY}}" | grep -qiE '{PR_TEXT_DETECTOR}'; then""" in wf, (
-		"review_autofix.yml PR-body check must use the unanchored detector"
+	# The anchored linked-issue title remains as the second signal.
+	assert f"grep -qiE '{ISSUE_TITLE_DETECTOR}'" in block
+
+
+def test_review_autofix_does_not_free_text_match_pr_title_or_body() -> None:
+	"""Regression guard for the misclassification described in SMOKE_LABEL_JQ."""
+	wf = _read("review_autofix.yml")
+	for forbidden in (
+		'echo "${PR_TITLE}" | grep -qiE \'\\[E2E ',
+		'echo "${PR_BODY}" | grep -qiE \'\\[E2E ',
+		"echo \"${PR_TITLE}\" | grep -qi '\\[E2E Smoke Test\\]'",
+		"echo \"${PR_BODY}\" | grep -qi '\\[E2E Smoke Test\\]'",
+	):
+		assert forbidden not in wf, (
+			"review_autofix.yml must not classify a PR as a smoke fixture from "
+			f"its own title/body prose: {forbidden!r}"
+		)
+
+
+def test_implement_resolves_orchestrator_parent_for_label_reliability() -> None:
+	"""implement.yml must detect decomposed children, or the label never lands.
+
+	IS_SMOKE_TEST gates the atomic `force-review` + `e2e-smoke-test` labels
+	at PR creation, and review_autofix.yml now treats that label as its
+	primary signal. An orchestrator-decomposed child carries no fixture
+	marker in its own title, so without the parent lookup its PR would be
+	unlabelled and the whole downstream chain would misclassify it.
+	"""
+	wf = _read("implement.yml")
+	precheck_start = wf.index("- name: Precheck approval phase label")
+	precheck_end = wf.index("- name: Telegram duplicate PR notification")
+	precheck = wf[precheck_start:precheck_end]
+
+	# Parent lookup lives in the precheck, resolved once.
+	assert "Tracking issue: #" in precheck
+	assert "grep -qiE '^\\[Orchestrator\\] E2E '" in precheck
+	assert 'echo "IS_SMOKE_PARENT=${IS_SMOKE_PARENT}" >> "$GITHUB_ENV"' in precheck
+	# Fail-open on an unreachable parent.
+	assert "2>/dev/null" in precheck
+
+	# The main detect step reuses it rather than repeating the lookup, so
+	# the run issues at most one extra API call (CLAUDE.md §15).
+	main_start = wf.index("- name: Detect smoke test and silence Telegram alerts")
+	main_end = wf.index("- name: Fetch issue comments", main_start)
+	main = wf[main_start:main_end]
+	assert '[ "${IS_SMOKE_PARENT:-false}" = "true" ]' in main
+	assert "Tracking issue: #" not in main, (
+		"main detect step must reuse IS_SMOKE_PARENT, not repeat the lookup"
 	)
+	assert 'echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"' in main
 
 
 def test_plan_falls_back_to_orchestrator_parent_title() -> None:
