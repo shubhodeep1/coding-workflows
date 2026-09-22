@@ -306,6 +306,17 @@ def test_retry_exhaustion_preserves_failure_exit() -> None:
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == ""
 
 
+def test_planner_checkouts_drop_credentials_and_nested_git_metadata() -> None:
+	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
+	assert workflow_text.count("persist-credentials: false") >= 4
+	cleanup_at = workflow_text.index("      - name: Remove support checkout Git metadata before planning")
+	model_at = workflow_text.index("      - name: Run Codex planning")
+	assert cleanup_at < model_at
+	cleanup_block = workflow_text[cleanup_at:model_at]
+	assert "for support_checkout in .codex-workflow-src .codex-workflow-src-main" in cleanup_block
+	assert 'rm -rf -- "${support_checkout}/.git"' in cleanup_block
+
+
 def main() -> int:
 	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
 	for test in tests:

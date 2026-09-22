@@ -202,6 +202,7 @@ jobs:
           # Implementation workflows use fetch-depth: 0 for full history.
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
 
       - name: Log checkout ref
         env:
@@ -247,6 +248,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
@@ -257,6 +259,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout
         run: |
@@ -276,6 +279,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow support files
         run: |
@@ -1081,6 +1085,16 @@ jobs:
           else:
               output_path.write_text("", encoding="utf-8")
           PY
+
+      - name: Remove support checkout Git metadata before planning
+        if: env.SKIP_PLAN != 'true'
+        run: |
+          set -euo pipefail
+          for support_checkout in .codex-workflow-src .codex-workflow-src-main; do
+            if [ -e "${support_checkout}/.git" ]; then
+              rm -rf -- "${support_checkout}/.git"
+            fi
+          done
 
       - name: Capture pre-Codex plan write-guard snapshot
         if: env.SKIP_PLAN != 'true'

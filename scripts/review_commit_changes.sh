@@ -700,14 +700,14 @@ PY
   fi
   rm -f "${OVERLAP_REPORT_FILE}" "${OVERLAP_VALIDATION_STDERR_FILE}"
 
-  git commit -m "[ai-autofix] apply PR fixes"
+  bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/trusted_git_write.sh" \
+    commit --repo . --message "[ai-autofix] apply PR fixes"
   {
     git diff-tree --no-commit-id --name-only -r -z HEAD \
       | while IFS= read -r -d '' changed_file; do
           printf -- '- %s\n' "${changed_file}"
         done
   } > "${COMMITTED_FILES_FILE}"
-  git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
   # NOTE: do NOT push here. The push is deferred to the final
   # "Push all pending commits" step so that conflict resolution,
   # labeling, and auto-merge complete before the synchronize event

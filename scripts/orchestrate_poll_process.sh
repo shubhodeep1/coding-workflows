@@ -164,6 +164,39 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+
+TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"
+UNTRUSTED_POLLER_SANDBOX="${RUNTIME_DIR}/untrusted_process_sandbox.sh"
+UNTRUSTED_POLLER_PROVIDER_PROXY="${RUNTIME_DIR}/model_provider_proxy.py"
+prepare_untrusted_poller_runtime() {
+	[ -x "${TRUSTED_POLLER_GIT_WRITER}" ] || {
+		echo "::error::Pre-staged trusted Git writer is unavailable" >&2
+		return 1
+	}
+	[ -x "${UNTRUSTED_POLLER_SANDBOX}" ] && [ -x "${UNTRUSTED_POLLER_PROVIDER_PROXY}" ] || {
+		echo "::error::Pre-staged untrusted-process runtime is unavailable" >&2
+		return 1
+	}
+}
+
+run_untrusted_poller_codex() {
+  local sandbox_role="$1"
+  local sandbox_workspace="$2"
+  shift 2
+  local sandbox_helper="${UNTRUSTED_POLLER_SANDBOX}"
+	prepare_untrusted_poller_runtime || return 1
+  if [ ! -x "${sandbox_helper}" ]; then
+    echo "::error::Required untrusted-process sandbox is unavailable: ${sandbox_helper}" >&2
+    return 1
+  fi
+  bash "${sandbox_helper}" \
+    --role "${sandbox_role}" \
+    --workspace "${sandbox_workspace}" \
+    --config-format codex \
+    --config "${CODEX_HOME:-${HOME}/.codex}" \
+    --runtime-dir "${RUNTIME_DIR}" \
+    -- "$@"
+}
 if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
   nag_reminder_enabled() { return 1; }
 fi
@@ -4674,6 +4707,33 @@ ensure_security_pass_state_fields() {
       if (.security_pass_waived_findings | type) == "array" then
         .security_pass_waived_findings
         | map(select(type == "object" and (.finding_id | type) == "string" and (.finding_id | length) > 0))
+		| map(
+			.causal_scope_schema = (
+			  if (.causal_scope_schema // "") == "security_audit_causal_scope.v1"
+			  then .causal_scope_schema else "" end
+			)
+			| .causal_scope_status = (
+			  if (.causal_scope_status // "") | IN("complete", "indeterminate")
+			  then .causal_scope_status else "indeterminate" end
+			)
+			| .causal_scope_fingerprint = (
+			  if (.causal_scope_fingerprint | type) == "string"
+				and (.causal_scope_fingerprint | test("^sha256:[0-9a-f]{64}$"))
+			  then .causal_scope_fingerprint else "" end
+			)
+			| .causal_scope_files = (
+			  if (.causal_scope_files | type) == "array"
+				and (.causal_scope_files | length) <= 200
+				and all(.causal_scope_files[];
+				  (type == "string") and (length > 0) and (startswith("/") | not)
+				  and ((split("/") | index("..")) == null))
+			  then (.causal_scope_files | unique | sort) else [] end
+			)
+			| .causal_scope_symbol = (
+			  if (.causal_scope_symbol | type) == "string"
+			  then .causal_scope_symbol[0:300] else "" end
+			)
+		)
       else [] end
     )
     | .security_pass_advisory_backlog = (
@@ -4900,6 +4960,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -5633,6 +5694,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -5642,15 +5704,38 @@ state_path = Path(sys.argv[2])
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
 waivers = [row for row in state.get("security_pass_waived_findings", []) if isinstance(row, dict)]
+boundary_change_pattern = re.compile(
+	r"(?ix)(?:"
+	r"^\s*@\s*(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*\b"
+	r"|^\s*(?:await\s+)?(?:[A-Za-z_]\w*\.)*(?:auth\w*|authori[sz]\w*|login_required|check_\w+|verify_\w+|require_\w+|enforce_\w+|ensure_\w+|has_\w+|can_\w+|rate_limit\w*)\s*\("
+	r"|^\s*(?:if|elif|while|assert|return|raise)\b[^\n]*\b(?:authori[sz]\w*|permission\w*|privilege\w*|access[_ -]?control|entitlement|is_admin|is_authenticated|login_required|forbidden|(?:has|can|may)_\w+)\b"
+	r")"
+)
 
 
 def waiver_for(finding: dict) -> str | None:
 	finding_key = str(finding.get("waiver_match_key") or "")
 	if re.fullmatch(r"sha256:[0-9a-f]{64}", finding_key) is None:
 		return None
+	finding_causal_status = str(finding.get("causal_scope_status") or "")
+	finding_causal_fingerprint = str(finding.get("causal_scope_fingerprint") or "")
+	finding_causal_files = finding.get("causal_scope_files")
+	if (
+		finding_causal_status != "complete"
+		or re.fullmatch(r"sha256:[0-9a-f]{64}", finding_causal_fingerprint) is None
+		or not isinstance(finding_causal_files, list)
+		or any(not isinstance(path, str) or not path for path in finding_causal_files)
+	):
+		return None
 	for waiver in waivers:
 		waived_key = str(waiver.get("waiver_match_key") or "")
 		if not (re.fullmatch(r"sha256:[0-9a-f]{64}", waived_key) and waived_key == finding_key):
+			continue
+		if (
+			str(waiver.get("causal_scope_status") or "") != "complete"
+			or str(waiver.get("causal_scope_fingerprint") or "") != finding_causal_fingerprint
+			or waiver.get("causal_scope_files") != finding_causal_files
+		):
 			continue
 		audited_head_sha = str(waiver.get("audited_head_sha") or "")
 		if re.fullmatch(r"[0-9a-fA-F]{40,64}", audited_head_sha) is None:
@@ -5676,15 +5761,33 @@ def waiver_for(finding: dict) -> str | None:
 				text=True,
 				check=False,
 			)
+			changed_paths = subprocess.run(
+				["git", "diff", "--name-only", f"{audited_head_sha}..{current_head_sha}"],
+				capture_output=True,
+				text=True,
+				check=False,
+			)
 		except (OSError, subprocess.SubprocessError):
 			continue
-		guard_deleted = any(
-			line.startswith("-")
-			and not line.startswith("---")
-			and re.search(r"(?i)\b(auth\w*|authori[sz]\w*|permission|privilege|guard|middleware|login_required|access[_ -]?control|policy|allow|deny)\b", line[1:])
+		boundary_changed = any(
+			line[:1] in {"+", "-"}
+			and not line.startswith(("+++", "---"))
+			and boundary_change_pattern.search(line[1:]) is not None
 			for line in project_diff.stdout.splitlines()
 		)
-		if ancestor.returncode == 0 and file_diff.returncode == 0 and project_diff.returncode == 0 and not file_diff.stdout and not guard_deleted:
+		outside_causal_python = any(
+			path.endswith(".py") and path not in set(finding_causal_files)
+			for path in changed_paths.stdout.splitlines()
+		)
+		if (
+			ancestor.returncode == 0
+			and file_diff.returncode == 0
+			and project_diff.returncode == 0
+			and changed_paths.returncode == 0
+			and not file_diff.stdout
+			and not boundary_changed
+			and not outside_causal_python
+		):
 			return waived_key
 	return None
 
@@ -6356,6 +6459,10 @@ security_pass_exhaustion_judge() {
   fi
 
   judge_success="false"
+	if ! prepare_untrusted_poller_runtime; then
+		echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=sandbox_runtime_unavailable"
+		return 1
+	fi
   for attempt in 1 2; do
     : > "${output_file}"
     if [ -n "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
@@ -6366,7 +6473,13 @@ security_pass_exhaustion_judge() {
         --phase "orchestrate-security-pass-judge" \
         --stdout-file "${output_file}" \
         --stderr-file "${error_file}" \
-        -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
+        -- bash "${UNTRUSTED_POLLER_SANDBOX}" \
+          --role judge \
+          --workspace "${PWD}" \
+          --config-format codex \
+          --config "${CODEX_HOME:-${HOME}/.codex}" \
+          --runtime-dir "${RUNTIME_DIR}" \
+          -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
           --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true
     fi
     judge_json="$(_robust_parse_json_file "${output_file}")"
@@ -6478,8 +6591,13 @@ ${decisions_table}}"
         file: .finding.file,
         line: .finding.line,
         owasp_or_stride_category: .finding.owasp_or_stride_category,
-        severity: .finding.severity,
-        justification: .justification,
+	        severity: .finding.severity,
+	        causal_scope_schema: .finding.causal_scope_schema,
+	        causal_scope_status: .finding.causal_scope_status,
+	        causal_scope_fingerprint: .finding.causal_scope_fingerprint,
+	        causal_scope_files: .finding.causal_scope_files,
+	        causal_scope_symbol: .finding.causal_scope_symbol,
+	        justification: .justification,
         source: "judge",
         waived_by: "security-pass-exhaustion-judge",
         waived_at_cycle: $cycle,
@@ -7013,8 +7131,13 @@ run_security_pass_inline() {
         file: .file,
         line: .line,
         owasp_or_stride_category: .owasp_or_stride_category,
-        severity: .severity,
-        justification: $justification,
+	        severity: .severity,
+	        causal_scope_schema: .causal_scope_schema,
+	        causal_scope_status: .causal_scope_status,
+	        causal_scope_fingerprint: .causal_scope_fingerprint,
+	        causal_scope_files: .causal_scope_files,
+	        causal_scope_symbol: .causal_scope_symbol,
+	        justification: $justification,
         source: "preexisting",
         waived_by: "line-ownership",
         waived_at_cycle: $cycle,
@@ -8490,10 +8613,60 @@ invoke_judge_for_integration_conflict() {
   local final_pr="$1"
   local integration_branch="$2"
   local default_branch="$3"
+	local integration_judge_workspace=""
+	local integration_head_sha=""
+	local default_head_sha=""
+	local integration_allowed_paths_file=""
+	local integration_actual_paths_file=""
+	local integration_fingerprints_file=""
+	local poller_repo_root="${PWD}"
 
   [ -n "${final_pr}" ] || return 1
 
   echo "  [integration-heal] Escalating to judge for final PR #${final_pr} (${integration_branch} -> ${default_branch})."
+	if [ -n "${GH_MOCK_STORE:-}" ]; then
+		echo "  [integration-heal] Fixture mode records a successful isolated judge dispatch."
+		return 0
+	fi
+	prepare_untrusted_poller_runtime || return 1
+	if ! git fetch --no-tags origin \
+		"refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+		"refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1; then
+		echo "::warning::Could not fetch exact integration-conflict refs for PR #${final_pr}."
+		return 1
+	fi
+	integration_head_sha="$(git rev-parse "refs/remotes/origin/${integration_branch}" 2>/dev/null || true)"
+	default_head_sha="$(git rev-parse "refs/remotes/origin/${default_branch}" 2>/dev/null || true)"
+	if ! [[ "${integration_head_sha}" =~ ^[0-9a-f]{40,64}$ ]] || ! [[ "${default_head_sha}" =~ ^[0-9a-f]{40,64}$ ]]; then
+		echo "::warning::Could not resolve immutable integration-conflict refs for PR #${final_pr}."
+		return 1
+	fi
+	integration_judge_workspace="$(mktemp -d "${RUNTIME_DIR}/integration-judge-worktree.XXXXXX")"
+	rmdir "${integration_judge_workspace}"
+	if ! git worktree add --detach "${integration_judge_workspace}" "${integration_head_sha}" >/dev/null 2>&1; then
+		echo "::warning::Could not create isolated integration-conflict worktree for PR #${final_pr}."
+		return 1
+	fi
+	integration_allowed_paths_file="${RUNTIME_DIR}/integration_judge_allowed_${final_pr}.txt"
+	integration_actual_paths_file="${RUNTIME_DIR}/integration_judge_actual_${final_pr}.txt"
+	integration_fingerprints_file="${RUNTIME_DIR}/integration_judge_fingerprints_${final_pr}.json"
+	if git -C "${integration_judge_workspace}" -c core.hooksPath=/dev/null merge \
+		--no-commit --no-ff "${default_head_sha}" >/dev/null 2>&1; then
+		:
+	elif ! git -C "${integration_judge_workspace}" diff --name-only --diff-filter=U | grep -q .; then
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		echo "::warning::Integration merge preparation failed without resolvable conflicts for PR #${final_pr}."
+		return 1
+	fi
+	{
+		git -C "${integration_judge_workspace}" diff --name-only HEAD --
+		git -C "${integration_judge_workspace}" ls-files --others --exclude-standard
+	} | sed '/^$/d' | LC_ALL=C sort -u > "${integration_allowed_paths_file}"
+	if [ ! -s "${integration_allowed_paths_file}" ]; then
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		echo "::warning::Prepared integration merge for PR #${final_pr} has no bounded changed-path set."
+		return 1
+	fi
 
   # Ensure codex config exists — mirrors the review-blocked judge setup.
   # Centralised in scripts/write_codex_config.sh — see that script's
@@ -8572,12 +8745,12 @@ invoke_judge_for_integration_conflict() {
     echo "mergeable state. Final PR #${final_pr} (${integration_branch} -> ${default_branch})"
     echo "is currently unmergeable."
     echo
-    echo "Your task: fetch both branches, resolve the merge conflicts in a"
+		echo "The privileged poller prepared the exact merge state before this call."
+		echo "Your task: resolve only the conflicts already present in the working tree"
     echo "way that preserves the intent of every sub-issue already merged"
-    echo "into ${integration_branch}, push the resolution to"
-    echo "${integration_branch}, and then verify GitHub reports the final"
-    echo "PR as mergeable=true. Do NOT merge the PR yourself — the poller"
-    echo "will do that once mergeability is restored."
+		echo "into ${integration_branch}. Do not fetch, commit, push, access GitHub, or"
+		echo "modify Git metadata. Deterministic privileged code validates and publishes"
+		echo "an accepted resolution after this process exits."
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -8626,13 +8799,83 @@ invoke_judge_for_integration_conflict() {
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
-  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
-    echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
-    return 0
-  fi
+	if run_untrusted_poller_codex resolver "${integration_judge_workspace}" \
+		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
+		exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
+		--sandbox workspace-write < "${prompt_file}" > "${output_file}" \
+		2>> "${RUNTIME_DIR}/integration_judge.log"; then
+		if ! git -C "${integration_judge_workspace}" add -A --; then
+			echo "::warning::Could not stage isolated integration-conflict output for PR #${final_pr}."
+			git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+			rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}" \
+				"${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_fingerprints_file}"
+			return 1
+		fi
+		if git -C "${integration_judge_workspace}" diff --name-only --diff-filter=U | grep -q .; then
+			echo "::warning::Integration-conflict resolver left unresolved paths for PR #${final_pr}."
+			git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+			rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}" \
+				"${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_fingerprints_file}"
+			return 1
+		else
+			{
+				git -C "${integration_judge_workspace}" diff --name-only HEAD --
+				git -C "${integration_judge_workspace}" ls-files --others --exclude-standard
+			} | sed '/^$/d' | LC_ALL=C sort -u > "${integration_actual_paths_file}"
+			integration_out_of_scope="$(LC_ALL=C comm -23 "${integration_actual_paths_file}" "${integration_allowed_paths_file}" || true)"
+			if [ -n "${integration_out_of_scope}" ]; then
+				echo "::warning::Integration-conflict resolver changed paths outside the prepared merge set: ${integration_out_of_scope//$'\n'/,}"
+			elif ! git -C "${integration_judge_workspace}" diff --check HEAD --; then
+				echo "::warning::Integration-conflict resolver output failed diff validation for PR #${final_pr}."
+			else
+				integration_syntax_ok=true
+				while IFS= read -r integration_changed_path; do
+					[ -n "${integration_changed_path}" ] || continue
+					case "${integration_changed_path}" in
+						*.sh) bash -n "${integration_judge_workspace}/${integration_changed_path}" || integration_syntax_ok=false ;;
+						*.py) PYTHONDONTWRITEBYTECODE=1 python3 -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])' "${integration_judge_workspace}/${integration_changed_path}" || integration_syntax_ok=false ;;
+					esac
+				done < "${integration_actual_paths_file}"
+				if [ "${integration_syntax_ok}" = "true" ]; then
+					jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${integration_fingerprints_file}"
+					integration_fingerprint_rc=0
+					(
+						cd "${integration_judge_workspace}"
+						INTEGRATION_BRANCH_NAME="${integration_branch}" \
+							PYTHONDONTWRITEBYTECODE=1 python3 "${poller_repo_root}/scripts/verify_integration_fingerprints.py" \
+							"${integration_fingerprints_file}"
+					) || integration_fingerprint_rc=$?
+					if [ "${integration_fingerprint_rc}" -eq 0 ]; then
+						git -C "${integration_judge_workspace}" add -A --
+						if bash "${TRUSTED_POLLER_GIT_WRITER}" commit \
+							--repo "${integration_judge_workspace}" \
+							--expected-local-head "${integration_head_sha}" \
+							--message "[ai-merge-resolve] resolve integration conflict for PR #${final_pr}"; then
+							integration_resolved_head="$(git -C "${integration_judge_workspace}" rev-parse HEAD)"
+							if GH_TOKEN="${GH_TOKEN}" bash "${TRUSTED_POLLER_GIT_WRITER}" push \
+								--repo "${integration_judge_workspace}" \
+								--branch "${integration_branch}" \
+								--expected-local-head "${integration_resolved_head}" \
+								--expected-remote-head "${integration_head_sha}" \
+								--remote-url "https://github.com/${GITHUB_REPOSITORY}.git"; then
+								git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+								rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}" \
+									"${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_fingerprints_file}"
+								echo "  [integration-heal] Validated resolution pushed for PR #${final_pr}."
+								return 0
+							fi
+						fi
+					else
+						echo "::warning::Integration-conflict resolver failed fingerprint verification for PR #${final_pr}."
+					fi
+				fi
+			fi
+		fi
+	fi
 
   echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
+	git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+	rm -f "${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_fingerprints_file}"
   rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
   return 1
 }
@@ -14408,7 +14651,11 @@ invoke_stall_judge() {
         printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
       else
         sanitize_codex_prompt_file "${stall_judge_prompt_file}"
-        codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
+        run_untrusted_poller_codex judge "${PWD}" \
+          codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
+          exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only \
+          < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" \
+          2>> "${RUNTIME_DIR}/stall_judge.log" || true
       fi
       if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
         judge_success="true"
@@ -17472,8 +17719,13 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
                   file: ($known.file // ""),
                   line: ($known.line // 0),
                   owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
-                  severity: ($known.severity // ""),
-                  justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
+	                  severity: ($known.severity // ""),
+	                  causal_scope_schema: ($known.causal_scope_schema // ""),
+	                  causal_scope_status: ($known.causal_scope_status // ""),
+	                  causal_scope_fingerprint: ($known.causal_scope_fingerprint // ""),
+	                  causal_scope_files: ($known.causal_scope_files // []),
+	                  causal_scope_symbol: ($known.causal_scope_symbol // ""),
+	                  justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
                   source: "operator",
                   waived_by: $by,
                   waived_at_cycle: $cycle,
@@ -20180,7 +20432,10 @@ ${FOLLOWUP_BLOCK_REASON}"
       else
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
-          cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+          run_untrusted_poller_codex judge-fix "${PWD}" \
+            codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
+            exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox workspace-write \
+            < "${RB_JUDGE_PROMPT_FILE}" > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
           if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
             break
@@ -20533,14 +20788,19 @@ sys.exit(1)
                   echo "Error: .github/prompts or .github/scripts is staged"
                   exit 1
                 fi
-                git commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
+                prepare_untrusted_poller_runtime || exit 1
+                rb_fix_commit_message="[orchestrator-fix] address review-blocked issues for #${rb_issue}
 
 Orchestrator judge applied fixes to unblock the review pipeline.
 Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
-${RB_FIX_DESC}" || true
-
-                git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+${RB_FIX_DESC}"
+                if ! bash "${TRUSTED_POLLER_GIT_WRITER}" commit --repo . --message "${rb_fix_commit_message}"; then
+                  echo "::warning::Trusted commit rejected orchestrator fix for PR #${RB_PR}."
+                  rb_cleanup_combined_workspace
+                  continue
+                fi
+                rb_fix_local_head="$(git rev-parse HEAD)"
 
                 if [ "${RB_TARGET_MERGED}" = "true" ]; then
                   # Push follow-up branch and create a new PR
@@ -20550,7 +20810,12 @@ ${RB_FIX_DESC}" || true
                     tg_notify "Refused merged follow-up PR creation for review-blocked issue #${rb_issue} (PR #${RB_PR}): integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base was '${BASE_REF}'."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
                     RB_FOLLOWUP_REFUSED="true"
                     REVIEW_BLOCKED_STATE_CHANGED=true
-                  elif git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                  elif GH_TOKEN="${GH_TOKEN}" bash "${TRUSTED_POLLER_GIT_WRITER}" push \
+                    --repo . \
+                    --branch "${FOLLOWUP_BRANCH}" \
+                    --expected-local-head "${rb_fix_local_head}" \
+                    --expected-remote-head absent \
+                    --remote-url "https://github.com/${GITHUB_REPOSITORY}.git"; then
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
 
                     if [ "${STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
@@ -20611,7 +20876,12 @@ ${RB_FIX_DESC}
                   fi
                 else
                   # Push to existing open PR branch
-                  if git push origin "HEAD:${HEAD_REF}" 2>/dev/null; then
+                  if GH_TOKEN="${GH_TOKEN}" bash "${TRUSTED_POLLER_GIT_WRITER}" push \
+                    --repo . \
+                    --branch "${HEAD_REF}" \
+                    --expected-local-head "${rb_fix_local_head}" \
+                    --expected-remote-head "${RB_HEAD_SHA}" \
+                    --remote-url "https://github.com/${GITHUB_REPOSITORY}.git"; then
                     echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
                     # Remove review-blocked label — the push triggers synchronize
                     # which re-runs review_autofix with a reset autofix counter.
@@ -22088,7 +22358,11 @@ ${PR_DIFF}
     # The pipeline may return 141 (SIGPIPE) when the prompt is larger
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.
-    cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    run_untrusted_poller_codex judge "${PWD}" \
+      codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
+      exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only \
+      < "${judge_effective_prompt_file}" > "${JUDGE_OUTPUT_FILE}" \
+      2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
     rm -f "${judge_attempt_prompt_file}"
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
     if [ -n "${judge_json_candidate}" ]; then

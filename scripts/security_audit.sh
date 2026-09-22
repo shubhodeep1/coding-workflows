@@ -1094,6 +1094,31 @@ for index, finding in enumerate(waived_findings):
 	audited_head_sha = text_field(finding, "audited_head_sha")
 	if audited_head_sha and not re.fullmatch(r"[0-9a-fA-F]{40,64}", audited_head_sha):
 		raise SystemExit(f"waived finding #{index} has an invalid audited_head_sha")
+	causal_scope_schema = text_field(finding, "causal_scope_schema")
+	causal_scope_status = text_field(finding, "causal_scope_status")
+	causal_scope_fingerprint = text_field(finding, "causal_scope_fingerprint")
+	causal_scope_symbol = text_field(finding, "causal_scope_symbol")
+	causal_scope_files = finding.get("causal_scope_files")
+	if causal_scope_schema and causal_scope_schema != "security_audit_causal_scope.v1":
+		raise SystemExit(f"waived finding #{index} has an invalid causal_scope_schema")
+	if causal_scope_status and causal_scope_status not in {"complete", "indeterminate"}:
+		raise SystemExit(f"waived finding #{index} has an invalid causal_scope_status")
+	if causal_scope_fingerprint and not re.fullmatch(r"sha256:[0-9a-f]{64}", causal_scope_fingerprint):
+		raise SystemExit(f"waived finding #{index} has an invalid causal_scope_fingerprint")
+	if len(causal_scope_symbol) > 300:
+		raise SystemExit(f"waived finding #{index} has an oversized causal_scope_symbol")
+	if causal_scope_files is None:
+		causal_scope_files = []
+	if not isinstance(causal_scope_files, list) or len(causal_scope_files) > 200:
+		raise SystemExit(f"waived finding #{index} has invalid causal_scope_files")
+	normalized_causal_files: list[str] = []
+	for causal_file in causal_scope_files:
+		if not isinstance(causal_file, str):
+			raise SystemExit(f"waived finding #{index} has invalid causal_scope_files")
+		causal_path = PurePosixPath(causal_file)
+		if causal_path.is_absolute() or ".." in causal_path.parts or not causal_file:
+			raise SystemExit(f"waived finding #{index} has invalid causal_scope_files")
+		normalized_causal_files.append(causal_path.as_posix())
 	normalized.append(
 		{
 			"finding_id": finding_id,
@@ -1102,6 +1127,11 @@ for index, finding in enumerate(waived_findings):
 			"line": line_number,
 			"owasp_or_stride_category": category,
 			"audited_head_sha": audited_head_sha,
+			"causal_scope_schema": causal_scope_schema,
+			"causal_scope_status": causal_scope_status,
+			"causal_scope_fingerprint": causal_scope_fingerprint,
+			"causal_scope_files": normalized_causal_files,
+			"causal_scope_symbol": causal_scope_symbol,
 		}
 	)
 	location = relative_file or "(location not recorded)"
@@ -1133,8 +1163,12 @@ fi
 
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
 SECURITY_AUDIT_PROMPT_PATH="${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"
+SECURITY_AUDIT_SANDBOX_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/untrusted_process_sandbox.sh"
+SECURITY_AUDIT_CAUSALITY_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit_causality.py"
 security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_RENDER_HELPER}"
 security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_PROMPT_PATH}"
+security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_SANDBOX_HELPER}"
+security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_CAUSALITY_HELPER}"
 security_audit_require_directory "prompt-preflight" "${SECURITY_AUDIT_RUNTIME_DIR}"
 security_audit_require_writable_destination "prompt-preflight" "${RENDERED_PROMPT_FILE}"
 security_audit_require_writable_destination "prompt-preflight" "${RENDER_PROMPT_ERROR_FILE}"
@@ -1181,7 +1215,13 @@ fi
 security_audit_require_writable_destination "codex-preflight" "${CODEX_OUTPUT_FILE}"
 security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FILE}"
 
-if codex --ask-for-approval never \
+if bash "${SECURITY_AUDIT_SANDBOX_HELPER}" \
+		--role audit \
+		--workspace "${REPO_ROOT}" \
+		--config-format codex \
+		--config "${SECURITY_AUDIT_CODEX_HOME}" \
+		--runtime-dir "${SECURITY_AUDIT_RUNTIME_DIR}" \
+		-- codex --ask-for-approval never \
 		-c model_verbosity=low \
 		-c include_apply_patch_tool=true \
 		exec \
@@ -1215,7 +1255,8 @@ python3 - \
 	"${PRIOR_FINDINGS_IDS_FILE}" \
 	"${ADVISORY_FINDINGS_FILE}" \
 	"${VERIFIED_FIXED_FINDING_IDS_FILE}" \
-	"${AUDIT_SCOPE_SINCE_SHA:-}" <<'PY'
+	"${AUDIT_SCOPE_SINCE_SHA:-}" \
+	"${SECURITY_AUDIT_CAUSALITY_HELPER}" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -1243,6 +1284,7 @@ prior_finding_ids_path = Path(sys.argv[15])
 advisory_findings_path = Path(sys.argv[16])
 verified_fixed_finding_ids_path = Path(sys.argv[17])
 audit_scope_since_sha = sys.argv[18]
+causality_helper_path = Path(sys.argv[19])
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -1439,6 +1481,62 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		separators=(",", ":"),
 	)
 	waiver_match_key = "sha256:" + hashlib.sha256(waiver_key_payload.encode("utf-8")).hexdigest()
+	causal_scope = {
+		"causal_scope_schema": "security_audit_causal_scope.v1",
+		"causal_scope_status": "indeterminate",
+		"causal_scope_fingerprint": "",
+		"causal_scope_files": [],
+		"causal_scope_symbol": "",
+		"causal_scope_changed_files": [],
+	}
+	if normalized_file.endswith(".py"):
+		try:
+			causal_result = subprocess.run(
+				[
+					sys.executable, str(causality_helper_path),
+					"--repo", str(repo_root),
+					"--file", normalized_file,
+					"--line", str(line),
+					"--base", audit_scope_base_sha,
+					"--head", audit_scope_head_sha,
+				],
+				cwd=repo_root,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+				errors="replace",
+				check=False,
+			)
+			parsed_causal_scope = json.loads(causal_result.stdout)
+			if causal_result.returncode == 0 and isinstance(parsed_causal_scope, dict):
+				causal_scope = parsed_causal_scope
+		except (OSError, ValueError, json.JSONDecodeError):
+			pass
+	causal_status = str(causal_scope.get("causal_scope_status") or "")
+	causal_fingerprint = str(causal_scope.get("causal_scope_fingerprint") or "")
+	causal_files = causal_scope.get("causal_scope_files")
+	causal_symbol = str(causal_scope.get("causal_scope_symbol") or "")
+	causal_changed_files = causal_scope.get("causal_scope_changed_files")
+	causal_reason = re.sub(r"[\r\n]+", " ", str(causal_scope.get("reason") or ""))[:300]
+	if (
+		causal_status not in {"complete", "indeterminate"}
+		or (causal_fingerprint and re.fullmatch(r"sha256:[0-9a-f]{64}", causal_fingerprint) is None)
+		or not isinstance(causal_files, list)
+		or len(causal_files) > 200
+		or any(not isinstance(path, str) or not path or path.startswith("/") or ".." in PurePosixPath(path).parts for path in causal_files)
+		or len(causal_symbol) > 300
+		or not isinstance(causal_changed_files, list)
+	):
+		causal_status = "indeterminate"
+		causal_fingerprint = ""
+		causal_files = []
+		causal_symbol = ""
+		causal_changed_files = []
+	if causal_status != "complete" and causal_reason:
+		print(
+			f"::warning::security-audit: causal analysis indeterminate for {normalized_file}:{line}: {causal_reason}",
+			file=sys.stderr,
+		)
 
 	return (
 		{
@@ -1451,6 +1549,12 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 			"exploit_scenario": exploit_scenario,
 			"recommendation": recommendation,
 			"waiver_match_key": waiver_match_key,
+			"causal_scope_schema": "security_audit_causal_scope.v1",
+			"causal_scope_status": causal_status,
+			"causal_scope_fingerprint": causal_fingerprint,
+			"causal_scope_files": causal_files,
+			"causal_scope_symbol": causal_symbol,
+			"causal_scope_changed_files": causal_changed_files,
 		},
 		None,
 	)
@@ -1528,7 +1632,7 @@ cross_file_guard_deletion_pattern = re.compile(
 access_control_finding_pattern = re.compile(
 	r"(?i)\b(?:broken access control|authori[sz]ation|authentication|permission|privilege|elevation of privilege|spoofing)\b"
 )
-waiver_revalidation_cache: dict[tuple[str, str], bool] = {}
+waiver_revalidation_cache: dict[tuple[str, str, str, tuple[str, ...]], bool] = {}
 
 
 def waiver_causality_unchanged(
@@ -1537,9 +1641,26 @@ def waiver_causality_unchanged(
 	"""Fail closed unless the waived trust boundary is unchanged."""
 	audited_head_sha = str(waiver.get("audited_head_sha") or "")
 	file_name = str(finding.get("file") or "")
-	cache_key = (audited_head_sha, file_name)
+	finding_causal_status = str(finding.get("causal_scope_status") or "")
+	finding_causal_fingerprint = str(finding.get("causal_scope_fingerprint") or "")
+	waiver_causal_status = str(waiver.get("causal_scope_status") or "")
+	waiver_causal_fingerprint = str(waiver.get("causal_scope_fingerprint") or "")
+	finding_causal_files = finding.get("causal_scope_files")
+	waiver_causal_files = waiver.get("causal_scope_files")
+	causal_file_key = tuple(finding_causal_files) if isinstance(finding_causal_files, list) else ()
+	cache_key = (audited_head_sha, file_name, finding_causal_fingerprint, causal_file_key)
 	if cache_key in waiver_revalidation_cache:
 		return waiver_revalidation_cache[cache_key]
+	if (
+		finding_causal_status != "complete"
+		or waiver_causal_status != "complete"
+		or re.fullmatch(r"sha256:[0-9a-f]{64}", finding_causal_fingerprint) is None
+		or waiver_causal_fingerprint != finding_causal_fingerprint
+		or not causal_file_key
+		or waiver_causal_files != finding_causal_files
+	):
+		waiver_revalidation_cache[cache_key] = False
+		return False
 	if not re.fullmatch(r"[0-9a-fA-F]{40,64}", audited_head_sha):
 		waiver_revalidation_cache[cache_key] = False
 		return False
@@ -1556,7 +1677,7 @@ def waiver_causality_unchanged(
 		if audited_head_sha == audit_scope_head_sha:
 			waiver_revalidation_cache[cache_key] = True
 			return True
-		file_diff = subprocess.run(
+		file_diff_result = subprocess.run(
 			["git", "diff", "--no-color", "--no-ext-diff", f"{audited_head_sha}..{audit_scope_head_sha}", "--", file_name],
 			cwd=repo_root,
 			capture_output=True,
@@ -1565,8 +1686,17 @@ def waiver_causality_unchanged(
 			errors="replace",
 			check=False,
 		)
-		project_diff = subprocess.run(
+		project_diff_result = subprocess.run(
 			["git", "diff", "--no-color", "--no-ext-diff", "--unified=0", f"{audited_head_sha}..{audit_scope_head_sha}"],
+			cwd=repo_root,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			check=False,
+		)
+		changed_paths_result = subprocess.run(
+			["git", "diff", "--name-only", f"{audited_head_sha}..{audit_scope_head_sha}"],
 			cwd=repo_root,
 			capture_output=True,
 			text=True,
@@ -1577,13 +1707,24 @@ def waiver_causality_unchanged(
 	except (OSError, ValueError):
 		waiver_revalidation_cache[cache_key] = False
 		return False
-	guard_deleted = any(
-		line.startswith("-")
-		and not line.startswith("---")
-		and cross_file_guard_deletion_pattern.search(line[1:]) is not None
-		for line in project_diff.stdout.splitlines()
+	cross_file_boundary_changed = any(
+		diff_line[:1] in {"+", "-"}
+		and not diff_line.startswith(("+++", "---"))
+		and cross_file_guard_deletion_pattern.search(diff_line[1:]) is not None
+		for diff_line in project_diff_result.stdout.splitlines()
 	)
-	unchanged = file_diff.returncode == 0 and project_diff.returncode == 0 and not file_diff.stdout and not guard_deleted
+	outside_causal_python_changed = any(
+		changed_path.endswith(".py") and changed_path not in set(causal_file_key)
+		for changed_path in changed_paths_result.stdout.splitlines()
+	)
+	unchanged = (
+		file_diff_result.returncode == 0
+		and project_diff_result.returncode == 0
+		and changed_paths_result.returncode == 0
+		and not file_diff_result.stdout
+		and not cross_file_boundary_changed
+		and not outside_causal_python_changed
+	)
 	waiver_revalidation_cache[cache_key] = unchanged
 	return unchanged
 
@@ -1605,6 +1746,15 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 		return True
 	file_name = str(finding["file"])
 	line_number = int(finding["line"])
+	causal_status = str(finding.get("causal_scope_status") or "")
+	causal_changed_files = finding.get("causal_scope_changed_files")
+	category = str(finding.get("owasp_or_stride_category") or "")
+	if access_control_finding_pattern.search(category):
+		if causal_status != "complete" or not isinstance(causal_changed_files, list):
+			warn_ownership_once(file_name)
+			return True
+		if causal_changed_files:
+			return True
 	if cross_file_causal_change_cache is None:
 		try:
 			cross_file_causal_result = subprocess.run(

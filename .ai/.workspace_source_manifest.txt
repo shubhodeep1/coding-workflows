@@ -214,6 +214,7 @@ changelog.d/4109-bind-auto-merge-head.md
 changelog.d/4109-bind-auto-merge-to-evaluated-head.md
 changelog.d/4127-security-fix-pr-base.md
 changelog.d/4134-auto-apply-analysis-and-stable-release.md
+changelog.d/4139-security-agent-isolation.md
 changelog.d/4143-security-pass-line-ownership-poller.md
 changelog.d/4161-smoke-test-telegram-silencing.md
 changelog.d/4173-security-pass-integrity-hardening.md
@@ -503,6 +504,7 @@ scripts/mcp_handshake_probe.py
 scripts/memory_helpers.sh
 scripts/memory_injection_patterns.py
 scripts/memory_maintenance_extract_learnings.py
+scripts/model_provider_proxy.py
 scripts/nag_reminder.sh
 scripts/opencode_helpers.sh
 scripts/openrouter_prompt_cache.py
@@ -511,6 +513,7 @@ scripts/orchestrate_lib.py
 scripts/orchestrate_parse_and_post_answer.sh
 scripts/orchestrate_poll_process.sh
 scripts/orchestrate_state_v2.py
+scripts/package_download_proxy.py
 scripts/post_review_comment.sh
 scripts/pr_checks_lib.sh
 scripts/promote_main_cycle.sh
@@ -562,6 +565,7 @@ scripts/templates/slot_manifest.schema.json
 scripts/tg_helpers.sh
 scripts/transcript_archive.sh
 scripts/truncate_to_utf8_byte_cap.py
+scripts/untrusted_process_sandbox.sh
 scripts/validate_changed_files_syntax.sh
 scripts/validate_driver.sh
 scripts/validate_editor_audit.sh
@@ -684,6 +688,7 @@ tests/inventory_exemptions.txt
 tests/inventory_parity.py
 tests/prompt_size_budget.py
 tests/test_actions_runs_fetch_unconfirmed_warning.py
+tests/test_agent_process_isolation.py
 tests/test_ai_label_precreation_contract.py
 tests/test_ai_labels.py
 tests/test_ai_memory_cli.py

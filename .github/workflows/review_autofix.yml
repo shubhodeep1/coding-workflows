@@ -4099,13 +4099,12 @@ jobs:
           fi
           if [ -f requirements.txt ] || { [ -f pyproject.toml ] && [ ! -f package.json ]; }; then
             echo "Preparing Python dependencies in a disposable secretless container"
-            rm -rf .ai/review-venv
-            mkdir -p .ai
             review_dependency_git_mask="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-dependency-git.XXXXXX")"
             review_dependency_suffix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${RANDOM}"
             review_dependency_network="review-dependency-${review_dependency_suffix}"
             review_dependency_proxy="review-dependency-proxy-${review_dependency_suffix}"
             review_dependency_installer="review-dependency-installer-${review_dependency_suffix}"
+            review_dependency_volume="review-python-${review_dependency_suffix}"
             review_dependency_cleanup()
             {
               docker rm -f "${review_dependency_installer}" "${review_dependency_proxy}" >/dev/null 2>&1 || true
@@ -4122,13 +4121,18 @@ jobs:
             }
             trap review_dependency_cleanup EXIT
             trap 'exit 1' HUP INT TERM
-            python_install_command='python -m venv .ai/review-venv'
+            python_install_command='python -m venv /review-venv'
             if [ -f requirements.txt ]; then
-              python_install_command="${python_install_command} && .ai/review-venv/bin/pip install -r requirements.txt"
+              python_install_command="${python_install_command} && /review-venv/bin/pip install -r requirements.txt"
             else
-              python_install_command="${python_install_command} && (.ai/review-venv/bin/pip install -e '.[dev]' || .ai/review-venv/bin/pip install -e .)"
+              python_install_command="${python_install_command} && (/review-venv/bin/pip install '.[dev]' || /review-venv/bin/pip install .)"
             fi
-            if ! docker network create --internal "${review_dependency_network}" >/dev/null \
+            python_install_command="${python_install_command} && /review-venv/bin/pip install pytest"
+            if ! docker volume create "${review_dependency_volume}" >/dev/null \
+                || ! docker network create --internal "${review_dependency_network}" >/dev/null \
+                || ! docker run --rm --network "${review_dependency_network}" --read-only --cap-drop ALL --cap-add CHOWN \
+                  --volume "${review_dependency_volume}:/review-venv" \
+                  python:3.12-slim chown "$(id -u):$(id -g)" /review-venv \
                 || ! docker run --detach --rm --name "${review_dependency_proxy}" \
                   --network bridge --read-only --cap-drop ALL --security-opt no-new-privileges \
                   --volume "${SUPPORT_SCRIPTS_DIR}/package_download_proxy.py:/package_download_proxy.py:ro" \
@@ -4147,16 +4151,16 @@ jobs:
                 --env http_proxy=http://dependency-proxy:8080 \
                 --env https_proxy=http://dependency-proxy:8080 \
                 --env PIP_DISABLE_PIP_VERSION_CHECK=1 \
-                --volume "${PWD}:/workspace" \
+                --volume "${PWD}:/workspace:ro" \
                 --volume "${review_dependency_git_mask}:/workspace/.git:ro" \
+                --volume "${review_dependency_volume}:/review-venv" \
                 --workdir /workspace \
                 python:3.12-slim sh -ceu "${python_install_command}"; then
               install_failed=true
-              rm -rf .ai/review-venv
-            elif [ -x .ai/review-venv/bin/python ]; then
+              docker volume rm -f "${review_dependency_volume}" >/dev/null 2>&1 || true
+            else
               {
-                echo "VIRTUAL_ENV=${PWD}/.ai/review-venv"
-                echo "PATH=${PWD}/.ai/review-venv/bin:${PATH}"
+                echo "REVIEW_PYTHON_DEPENDENCY_VOLUME=${review_dependency_volume}"
               } >> "$GITHUB_ENV"
             fi
             review_dependency_cleanup
@@ -4465,6 +4469,41 @@ jobs:
             echo "AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}"
             echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"
           } >> "$GITHUB_ENV"
+
+      - name: Validate Python changes in secretless container
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.REVIEW_PYTHON_DEPENDENCY_VOLUME != ''
+        run: |
+          set -euo pipefail
+          review_python_test_targets=()
+          while IFS= read -r -d '' review_python_candidate; do
+            [ -f "${review_python_candidate}" ] || continue
+            case "${review_python_candidate}" in
+              tests/*.py|test_*.py|*_test.py) review_python_test_targets+=("${review_python_candidate}") ;;
+            esac
+          done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.py'; git ls-files --others --exclude-standard -z -- '*.py'; } | sort -zu)
+          if [ "${#review_python_test_targets[@]}" -eq 0 ]; then
+            echo "No editor-changed Python test targets; skipping repository-wide pytest execution."
+            exit 0
+          fi
+          review_validation_git_mask="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-validation-git.XXXXXX")"
+          review_validation_cleanup()
+          {
+            rm -rf -- "${review_validation_git_mask}"
+          }
+          trap review_validation_cleanup EXIT HUP INT TERM
+          timeout 900 docker run --rm \
+            --network none \
+            --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp/agent-home \
+            --env PYTHONPATH=/workspace:/workspace/src \
+            --env PYTHONDONTWRITEBYTECODE=1 \
+            --volume "${PWD}:/workspace:ro" \
+            --volume "${review_validation_git_mask}:/workspace/.git:ro" \
+            --volume "${REVIEW_PYTHON_DEPENDENCY_VOLUME}:/review-venv:ro" \
+            --workdir /workspace \
+            python:3.12-slim /review-venv/bin/python -m pytest "${review_python_test_targets[@]}"
 
       - name: Commit changes
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
@@ -6181,85 +6220,16 @@ jobs:
             echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping pre-push gate)."
           fi
 
-          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
-
-          # Retry non-fast-forward rejections with fetch+merge.  A concurrent
-          # push to ${TARGET_BRANCH} (another workflow run, a human push, a
-          # sibling autofix job) during this ~30-minute job would otherwise
-          # cause an unrecoverable `! [rejected] (fetch first)` failure and
-          # lose the deferred autofix / [ai-merge-resolve] commit.  We merge
-          # the advanced remote tip into our local HEAD and retry up to 3
-          # times with exponential backoff.
-          #
-          # Why `git merge` and NOT `git rebase` here: the conflict-resolver
-          # step above (see the "NOTE: git is intentionally left in merge
-          # state" block around the `git commit -m "[ai-merge-resolve]…"`
-          # call) deliberately creates the ai-merge-resolve commit as a
-          # real two-parent merge commit.  That second parent is load-
-          # bearing — without it, git's merge-base walker rewinds to the
-          # original merge base on every subsequent `git merge` attempt
-          # and re-raises the identical conflict (observed on PR #908,
-          # which left the PR in mergeable_state=dirty).  A plain
-          # `git rebase` would flatten that merge commit into a single-
-          # parent commit and resurrect the exact bug PR #908 was designed
-          # to fix.  `git rebase --rebase-merges` would rewrite the merge
-          # commit SHA too.  `git merge` preserves the existing commit
-          # exactly and simply adds another merge commit on top when
-          # origin has genuinely advanced — never rewriting history and
-          # never clobbering other pushers' commits (no --force / no
-          # --force-with-lease on this path).  If the merge itself would
-          # introduce new conflicts we abort the merge and fail loudly —
-          # we must never silently resurrect conflict markers that the
-          # resolver just cleared.
-          max_push_attempts=3
-          push_attempt=1
-          push_backoff=2
-          push_stderr_file="$(mktemp)"
-          trap 'rm -f "${push_stderr_file}"' EXIT
-          while :; do
-            push_exit=0
-            # Capture BOTH stdout and stderr: `git push` normally emits
-            # rejection details on stderr, but remote helpers and some
-            # git versions can surface `! [rejected]` / `non-fast-forward`
-            # on stdout, which would cause stderr-only classification to
-            # mis-route a retryable failure to the hard-fail branch.
-            git push origin "HEAD:${TARGET_BRANCH}" >"${push_stderr_file}" 2>&1 || push_exit=$?
-            cat "${push_stderr_file}" >&2
-            if [ "${push_exit}" -eq 0 ]; then
-              echo "Push complete."
-              echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"
-              break
-            fi
-            if ! grep -qE '\[rejected\].*\((fetch first|non-fast-forward)\)' "${push_stderr_file}"; then
-              echo "::error::git push failed (exit ${push_exit}) for a reason other than [rejected] (fetch first/non-fast-forward); not retrying."
-              exit "${push_exit}"
-            fi
-            if [ "${push_attempt}" -ge "${max_push_attempts}" ]; then
-              echo "::error::git push still rejected as non-fast-forward after ${max_push_attempts} attempts; giving up."
-              exit 1
-            fi
-            echo "::warning::git push rejected as non-fast-forward (attempt ${push_attempt}/${max_push_attempts}); fetching ${TARGET_BRANCH} and merging before retry in ${push_backoff}s."
-            sleep "${push_backoff}"
-            push_backoff=$((push_backoff * 2))
-            push_attempt=$((push_attempt + 1))
-            fetch_attempt=1
-            while ! git fetch origin "${TARGET_BRANCH}"; do
-              if [ "${fetch_attempt}" -ge 2 ]; then
-                echo "::error::git fetch origin ${TARGET_BRANCH} failed twice during push-retry; giving up to avoid pushing a stale tree."
-                exit 1
-              fi
-              echo "::warning::git fetch origin ${TARGET_BRANCH} failed during push-retry (attempt ${fetch_attempt}/2); retrying in 2s."
-              fetch_attempt=$((fetch_attempt + 1))
-              sleep 2
-            done
-            if ! git merge --no-edit --no-ff "origin/${TARGET_BRANCH}"; then
-              echo "::error::git merge origin/${TARGET_BRANCH} failed — merge would introduce new conflicts. Aborting merge and failing the job; refusing to silently resurrect conflict markers."
-              git merge --abort || true
-              exit 1
-            fi
-            : > "${push_stderr_file}"
-          done
+          pending_head_sha="$(git rev-parse HEAD)"
+          GH_TOKEN="${GH_TOKEN}" bash "${SUPPORT_SCRIPTS_DIR}/trusted_git_write.sh" push \
+            --repo . \
+            --branch "${TARGET_BRANCH}" \
+            --expected-local-head "${pending_head_sha}" \
+            --expected-remote-head "${INITIAL_HEAD_SHA}" \
+            --remote-url "https://github.com/${GITHUB_REPOSITORY}.git"
+          echo "Push complete."
+          echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"
 
       - name: Resolve addressed PR review threads
         # The editor stage audits every PR review comment it saw (the
@@ -8627,6 +8597,9 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          if [ -n "${REVIEW_PYTHON_DEPENDENCY_VOLUME:-}" ]; then
+            docker volume rm -f "${REVIEW_PYTHON_DEPENDENCY_VOLUME}" >/dev/null 2>&1 || true
+          fi
           rm -rf "${GITHUB_WORKSPACE}/.codex-workflow-src-main"
 
           # Guard: RUNTIME_DIR is only written to $GITHUB_ENV by the

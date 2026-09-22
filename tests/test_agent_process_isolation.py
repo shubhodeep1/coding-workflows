@@ -15,6 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SANDBOX = REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh"
 PROXY = REPO_ROOT / "scripts" / "model_provider_proxy.py"
 PACKAGE_PROXY = REPO_ROOT / "scripts" / "package_download_proxy.py"
+TRUSTED_GIT_WRITE = REPO_ROOT / "scripts" / "trusted_git_write.sh"
+CAUSALITY = REPO_ROOT / "scripts" / "security_audit_causality.py"
 
 
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
@@ -78,6 +80,10 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "-/var/run/docker.sock" in sandbox_text
 	assert "_runner_file_commands" in sandbox_text
 	assert "IPAddressDeny=any" in sandbox_text
+	assert "summary|audit" in sandbox_text
+	assert 'find "${workspace}" -xdev -name .git -print0' in sandbox_text
+	assert 'InaccessiblePaths=${protected_git_path}' in sandbox_text
+	assert "GIT_DIR|GIT_WORK_TREE" not in sandbox_text
 
 
 def test_package_download_proxy_allows_only_pypi_tls_tunnels() -> None:
@@ -113,3 +119,75 @@ def test_workflows_do_not_give_github_tokens_to_primary_model_steps() -> None:
 	assert "untrusted_process_sandbox.sh" in (REPO_ROOT / "scripts/opencode_helpers.sh").read_text(encoding="utf-8")
 	assert 'BASH_ENV: ""' in implement_step
 	assert 'BASH_ENV: ""' in editor_step
+
+
+def test_trusted_git_writer_never_executes_repository_hooks() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo = Path(directory) / "repo"
+		repo.mkdir()
+		subprocess.run(["git", "init", "-q", str(repo)], check=True)
+		(repo / "tracked.txt").write_text("before\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+			check=True,
+		)
+		sentinel = repo / "hook-ran"
+		hook = repo / ".git" / "hooks" / "pre-commit"
+		hook.write_text(f"#!/usr/bin/env bash\ntouch {sentinel}\nexit 1\n", encoding="utf-8")
+		hook.chmod(0o755)
+		(repo / "tracked.txt").write_text("after\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+		result = subprocess.run(
+			["bash", str(TRUSTED_GIT_WRITE), "commit", "--repo", str(repo), "--message", "safe"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert not sentinel.exists()
+
+
+def test_causal_scope_includes_new_reverse_route_caller() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo = Path(directory) / "repo"
+		repo.mkdir()
+		subprocess.run(["git", "init", "-q", str(repo)], check=True)
+		(repo / "sink.py").write_text(
+			"def privileged_sink(user):\n\treturn user.secret\n", encoding="utf-8"
+		)
+		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+			check=True,
+		)
+		base_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+		(repo / "route.py").write_text(
+			"from sink import privileged_sink\n\n"
+			"@app.route('/public')\n"
+			"def public_route():\n\treturn privileged_sink(None)\n",
+			encoding="utf-8",
+		)
+		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "route"],
+			check=True,
+		)
+		head_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+		result = subprocess.run(
+			[
+				"python3", str(CAUSALITY), "--repo", str(repo), "--file", "sink.py",
+				"--line", "1", "--base", base_sha, "--head", head_sha,
+			],
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		payload = json.loads(result.stdout)
+		assert payload["causal_scope_status"] == "complete"
+		assert payload["causal_scope_files"] == ["route.py", "sink.py"]
+		assert payload["causal_scope_changed_files"] == ["route.py"]
+		assert payload["causal_scope_fingerprint"].startswith("sha256:")
+		causality_text = CAUSALITY.read_text(encoding="utf-8")
+		assert '["git", "archive", "--format=tar", ref, "--", *files]' in causality_text
+		assert 'if not files:\n\t\treturn symbols, sources' in causality_text

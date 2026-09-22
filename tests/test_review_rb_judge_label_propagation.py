@@ -2409,5 +2409,13 @@ def test_resilient_phase_swap_allows_terminal_to_terminal() -> None:
 	assert len(_put_label_calls(state)) == 1, state.get("api_calls")
 
 
+def test_judge_fix_commit_and_push_use_trusted_git_boundary() -> None:
+	script = RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
+	assert '"${SUPPORT_SCRIPTS_DIR}/trusted_git_write.sh" commit' in script
+	assert '"${SUPPORT_SCRIPTS_DIR}/trusted_git_write.sh" push' in script
+	assert "--expected-remote-head \"${RB_JUDGED_HEAD_SHA}\"" in script
+	assert 'git remote set-url origin "https://x-access-token:${GH_TOKEN}' not in script
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

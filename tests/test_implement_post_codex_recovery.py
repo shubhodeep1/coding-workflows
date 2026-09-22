@@ -22,6 +22,7 @@ import textwrap
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+TRUSTED_GIT_WRITE_SCRIPT = REPO_ROOT / "scripts" / "trusted_git_write.sh"
 IMPLEMENT_STAGED_SUPPORT_WORKSPACE_SCRIPT = REPO_ROOT / "scripts" / "implement_staged_support_workspace.sh"
 IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
@@ -1364,6 +1365,7 @@ def test_commit_helper_fails_closed_on_unsafe_fetched_manifest_paths() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, repo_dir / "scripts" / "trusted_git_write.sh")
 		outside_path.write_text("keep\n", encoding="utf-8")
 		github_output = repo_dir / "github_output.txt"
 		github_output.write_text("", encoding="utf-8")
@@ -1402,7 +1404,8 @@ def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
-		_git(["git", "add", "scripts/implement_commit_changes.sh"], cwd=repo_dir)
+		shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, repo_dir / "scripts" / "trusted_git_write.sh")
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/trusted_git_write.sh"], cwd=repo_dir)
 		_git(["git", "commit", "-m", "add helper"], cwd=repo_dir)
 		github_output = tmp_path / "github_output.txt"
 		github_output.write_text("", encoding="utf-8")
@@ -1441,8 +1444,9 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, repo_dir / "scripts" / "trusted_git_write.sh")
 		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, repo_dir / "scripts" / "files_touched_scope_guard.py")
-		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py", "scripts/trusted_git_write.sh"], cwd=repo_dir)
 		_git(["git", "commit", "-m", "add scope helpers"], cwd=repo_dir)
 		baseline_head = subprocess.run(
 			["git", "rev-parse", "HEAD"],
@@ -1530,10 +1534,11 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 	_bootstrap_git_repo(repo_dir)
 	(repo_dir / "scripts").mkdir()
 	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+	shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, repo_dir / "scripts" / "trusted_git_write.sh")
 	helper = repo_dir / "scripts" / "helper.sh"
 	helper.write_text(_STAGED_HELPER_BRANCH, encoding="utf-8")
 	helper.chmod(0o644)
-	_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/helper.sh"], cwd=repo_dir)
+	_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/trusted_git_write.sh", "scripts/helper.sh"], cwd=repo_dir)
 	_git(["git", "commit", "-m", "branch-side helper edit"], cwd=repo_dir)
 	baseline_head = subprocess.run(
 		["git", "rev-parse", "HEAD"],
@@ -1549,6 +1554,7 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
 	support_run_dir.mkdir(parents=True)
 	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, support_run_dir / "implement_commit_changes.sh")
+	shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, support_run_dir / "trusted_git_write.sh")
 	base_dir = runtime_dir / "staged_support_base"
 	(base_dir / "scripts").mkdir(parents=True)
 	(base_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
@@ -1963,7 +1969,7 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert implement_run.index(restore_call) < implement_run.index("python3 scripts/targeted_file_context.py")
 	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
 	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
-	assert implement_run.rindex("bash scripts/codex_thread_reuse.sh direct-run") < implement_run.index(reinstall_call)
+	assert implement_run.rindex('bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run') < implement_run.index(reinstall_call)
 	assert implement_run.index(reinstall_call) < implement_run.index('if [ "${implement_succeeded}" = "true" ]; then')
 	repair_run = _extract_run_script("Attempt post-Codex syntax repair")
 	assert repair_run.count(restore_call) == 1
@@ -5257,6 +5263,20 @@ def main() -> int:
 			failed += 1
 	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 	return 1 if failed > 0 else 0
+
+def test_implementation_commit_and_push_use_trusted_git_boundary() -> None:
+	workflow = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	commit_script = (REPO_ROOT / "scripts" / "implement_commit_changes.sh").read_text(encoding="utf-8")
+	assert "trusted_git_write.sh" in commit_script
+	assert 'git commit -m "AI implementation for issue #' not in commit_script
+	assert "trusted_git_write.sh" in workflow
+	push_block = "\n".join(_step_block("Push branch"))
+	assert "trusted_git_write.sh" in push_block
+	assert 'git ls-remote --heads origin "${remote_target_ref}"' in push_block
+	assert 'git fetch --no-tags origin "+${remote_target_ref}:refs/remotes/origin/${TARGET_BRANCH}"' in push_block
+	assert "--expected-remote-head \"${expected_remote_head}\"" in push_block
+	assert "git remote set-url" not in push_block
+
 
 if __name__ == "__main__":
 	raise SystemExit(main())

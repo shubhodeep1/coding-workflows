@@ -22,7 +22,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ "$#" -gt 0 ] || { echo "untrusted_process_sandbox: command is required" >&2; exit 2; }
 case "${role}" in
-	plan|implement|implement-repair|reviewer|editor|resolver|judge|judge-fix|summary) ;;
+	plan|implement|implement-repair|reviewer|editor|resolver|judge|judge-fix|summary|audit) ;;
 	*) echo "untrusted_process_sandbox: invalid role" >&2; exit 2 ;;
 esac
 case "${config_format}" in
@@ -92,13 +92,27 @@ with open(destination, "w", encoding="utf-8") as handle:
 PY
 else
 	mkdir -p "${sandbox_config}"
-	cp -a "${config_path}/." "${sandbox_config}/"
-	python3 - "${sandbox_config}/config.toml" "${proxy_url}" <<'PY'
-import re, sys
-path, proxy_url = sys.argv[1:]
+	[ -r "${config_path}/config.toml" ] \
+		|| { echo "untrusted_process_sandbox: Codex config.toml is unavailable" >&2; exit 1; }
+	install -m 0600 "${config_path}/config.toml" "${sandbox_config}/config.toml"
+	python3 - "${sandbox_config}/config.toml" "${proxy_url}" "${sandbox_config}/model-catalog.json" <<'PY'
+import re, shutil, sys
+from pathlib import Path
+path, proxy_url, sandbox_catalog = sys.argv[1:]
 text = open(path, encoding="utf-8").read()
 text = re.sub(r'(?m)^base_url\s*=\s*"[^"]*"', f'base_url = "{proxy_url}"', text)
 text = re.sub(r'(?m)^env_key\s*=\s*"[^"]*"', 'env_key = "SANDBOX_PROVIDER_TOKEN"', text)
+catalog_match = re.search(r'(?m)^model_catalog_json\s*=\s*"([^"]+)"', text)
+if catalog_match is not None:
+	catalog_source = Path(catalog_match.group(1))
+	if not catalog_source.is_file():
+		raise SystemExit("configured model catalog is unavailable")
+	shutil.copyfile(catalog_source, sandbox_catalog)
+	text = re.sub(
+		r'(?m)^model_catalog_json\s*=\s*"[^"]+"',
+		f'model_catalog_json = "{sandbox_catalog}"',
+		text,
+	)
 open(path, "w", encoding="utf-8").write(text)
 PY
 fi
@@ -123,6 +137,54 @@ if git_config_path="$(git -C "${workspace}" rev-parse --git-path config 2>/dev/n
 	fi
 fi
 
+# Repository metadata is privileged state.  Writer roles need the ordinary
+# worktree writable, but no model process may alter hooks, remotes, refs, the
+# index, or credentials.  Cover the primary repository, linked-worktree
+# indirection, and nested support checkouts rather than protecting only the
+# current repository's config file.
+git_metadata_paths=()
+append_git_metadata_path()
+{
+	local candidate_path="${1:-}"
+	[ -n "${candidate_path}" ] || return 0
+	case "${candidate_path}" in
+		/*) ;;
+		*) candidate_path="${workspace}/${candidate_path}" ;;
+	esac
+	if [ -e "${candidate_path}" ]; then
+		candidate_path="$(cd "$(dirname "${candidate_path}")" && pwd -P)/$(basename "${candidate_path}")"
+	fi
+	case "${candidate_path}" in
+		*$'\n'*|*$'\r'*|*$'\t'*|*' '*)
+			echo "untrusted_process_sandbox: Git metadata path cannot be represented safely" >&2
+			exit 1
+			;;
+	esac
+	for recorded_path in "${git_metadata_paths[@]:-}"; do
+		[ "${recorded_path}" = "${candidate_path}" ] && return 0
+	done
+	git_metadata_paths+=("${candidate_path}")
+}
+
+for git_path_query in --absolute-git-dir --git-common-dir; do
+	if discovered_git_path="$(git -C "${workspace}" rev-parse "${git_path_query}" 2>/dev/null)"; then
+		append_git_metadata_path "${discovered_git_path}"
+	fi
+done
+while IFS= read -r -d '' nested_git_entry; do
+	append_git_metadata_path "${nested_git_entry}"
+	if [ -f "${nested_git_entry}" ]; then
+		nested_git_target="$(sed -n 's/^gitdir: //p' "${nested_git_entry}" | head -n1)"
+		if [ -n "${nested_git_target}" ]; then
+			case "${nested_git_target}" in
+				/*) ;;
+				*) nested_git_target="$(dirname "${nested_git_entry}")/${nested_git_target}" ;;
+			esac
+			append_git_metadata_path "${nested_git_target}"
+		fi
+	fi
+done < <(find "${workspace}" -xdev -name .git -print0 2>/dev/null)
+
 common_env=(
 	"HOME=${sandbox_home}"
 	"PATH=${PATH}"
@@ -146,10 +208,7 @@ while IFS='=' read -r environment_name environment_value; do
 	case "${environment_name}" in
 		CODEX_THREAD_REUSE_RUNTIME_DIR|RUNTIME_DIR)
 			;;
-		GIT_DIR|GIT_WORK_TREE)
-			common_env+=("${environment_name}=${environment_value}")
-			;;
-		CODEX_THREAD_REUSE_OUTPUT_FILE|CODEX_THREAD_REUSE_LOG_FILE|CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE|CODEX_THREAD_REUSE_STATUS_FILE)
+			CODEX_THREAD_REUSE_OUTPUT_FILE|CODEX_THREAD_REUSE_LOG_FILE|CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE|CODEX_THREAD_REUSE_STATUS_FILE)
 			if [ -n "${environment_value}" ]; then
 				mkdir -p "$(dirname "${environment_value}")"
 				touch "${environment_value}"
@@ -169,6 +228,11 @@ else
 fi
 
 if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then
+	for test_environment_name in MOCK_CODEX_OUTPUT MOCK_CODEX_STDERR MOCK_CODEX_EXIT_CODE MOCK_GH_STATE_FILE MOCK_GIT_FAILURE_MODE MOCK_GIT_BASE_SHA MOCK_REAL_GIT; do
+		if [ -n "${!test_environment_name:-}" ]; then
+			common_env+=("${test_environment_name}=${!test_environment_name}")
+		fi
+	done
 	set +e
 	env -i "${common_env[@]}" "$@"
 	test_command_rc=$?
@@ -192,11 +256,17 @@ systemd_properties=(
 	--property="IPAddressAllow=${proxy_host}/32"
 	--property="InaccessiblePaths=${credential_file} -/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh"
 	--property=ReadOnlyPaths=/
-	--property="ReadWritePaths=${workspace} ${sandbox_dir}${runtime_write_paths[*]:+ ${runtime_write_paths[*]}}"
+	--property="ReadWritePaths=${sandbox_dir}${runtime_write_paths[*]:+ ${runtime_write_paths[*]}}"
 )
-if [ -n "${git_config_path}" ] && [ -e "${git_config_path}" ]; then
-	systemd_properties+=(--property="BindReadOnlyPaths=${safe_git_config}:${git_config_path}")
-fi
+case "${role}" in
+	implement|implement-repair|editor|resolver|judge-fix)
+		systemd_properties+=(--property="ReadWritePaths=${workspace}")
+		;;
+esac
+for protected_git_path in "${git_metadata_paths[@]:-}"; do
+	[ -n "${protected_git_path}" ] || continue
+	systemd_properties+=(--property="InaccessiblePaths=${protected_git_path}")
+done
 "${systemd_run[@]}" --quiet --wait --pipe --collect --service-type=exec \
 	"${systemd_properties[@]}" \
 	--working-directory="${workspace}" \

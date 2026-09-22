@@ -135,7 +135,10 @@ def _install_security_audit_support_tree(base_dir: Path, *, failure_mode: str) -
 	scripts_dir.mkdir(parents=True, exist_ok=True)
 	prompts_dir.mkdir(parents=True, exist_ok=True)
 
-	for script_name in ("label_helpers.sh", "gh_helpers.sh", "render_prompt.py", "assemble_prompt.sh"):
+	for script_name in (
+		"label_helpers.sh", "gh_helpers.sh", "render_prompt.py", "assemble_prompt.sh",
+		"untrusted_process_sandbox.sh", "model_provider_proxy.py", "security_audit_causality.py",
+	):
 		(scripts_dir / script_name).symlink_to(REPO_ROOT / "scripts" / script_name)
 
 	render_helper_path = scripts_dir / "render_prompt.sh"
@@ -224,8 +227,9 @@ os.execv(real_git, [real_git, *args])
 				"MOCK_CODEX_OUTPUT": codex_output,
 				"MOCK_GH_STATE_FILE": str(state_file),
 				"PATH": os.pathsep.join((str(bin_dir), *existing_path_entries)),
-				"PYTHONDONTWRITEBYTECODE": "1",
-				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
+					"PYTHONDONTWRITEBYTECODE": "1",
+					"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+					"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
 			}
 		)
 		if support_failure_mode is not None:
@@ -2100,11 +2104,12 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	assert [finding["finding_id"] for finding in payload["findings"]] == [
 		"waived-exact",
 		"different-category-same-spot",
+		"fresh-id-same-spot",
 		"waived-id-only",
 	]
 	assert payload["verified_fixed_finding_ids"] == ["missing-prior"]
-	assert payload["counts"]["kept"] == 3
-	assert payload["counts"]["suppressed_waived"] == 1
+	assert payload["counts"]["kept"] == 4
+	assert payload["counts"]["suppressed_waived"] == 0
 	assert "waived-findings=3 (provenance-key match only)" in proc.stdout
 	prompt = final_state["codex_stdin"][0]
 	assert prompt.count("=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===") == 1
@@ -2160,6 +2165,90 @@ def test_security_audit_waived_findings_fail_closed_on_malformed_input() -> None
 		)
 		assert proc.returncode != 0
 		assert "SECURITY_AUDIT_WAIVED_FINDINGS is only valid in findings-json mode" in proc.stderr
+
+
+def test_security_audit_waiver_rejects_out_of_scope_python_addition() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-waiver-causal-") as fixture_td:
+		repo_dir = Path(fixture_td) / "repo"
+		repo_dir.mkdir()
+		git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		git_env.update(
+			{
+				"GIT_AUTHOR_NAME": "t",
+				"GIT_AUTHOR_EMAIL": "t@example.invalid",
+				"GIT_COMMITTER_NAME": "t",
+				"GIT_COMMITTER_EMAIL": "t@example.invalid",
+			}
+		)
+
+		def fixture_git(*args: str) -> str:
+			return subprocess.run(
+				["git", *args], cwd=repo_dir, env=git_env, check=True,
+				capture_output=True, text=True, encoding="utf-8",
+			).stdout.strip()
+
+		fixture_git("init", "-q")
+		(repo_dir / "README.md").write_text("baseline\n", encoding="utf-8")
+		fixture_git("add", "README.md")
+		fixture_git("commit", "-q", "-m", "baseline")
+		base_sha = fixture_git("rev-parse", "HEAD")
+		(repo_dir / "sink.py").write_text(
+			"def privileged_sink(user):\n\treturn user.secret\n", encoding="utf-8"
+		)
+		fixture_git("add", "sink.py")
+		fixture_git("commit", "-q", "-m", "add sink")
+		audited_sha = fixture_git("rev-parse", "HEAD")
+		finding_payload = _finding_payload(
+			"causal-waiver", file_path="sink.py", category="A01: Broken Access Control"
+		)
+		initial_output_path = Path(fixture_td) / "initial-findings.json"
+		initial_proc, initial_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([finding_payload]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(initial_output_path),
+				"SECURITY_AUDIT_DIFF_BASE": base_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": audited_sha,
+			},
+		)
+		assert initial_proc.returncode == 0, initial_proc.stderr
+		initial_finding = json.loads(initial_state["security_audit_findings_output"])["findings"][0]
+		assert initial_finding["causal_scope_status"] == "complete"
+		waiver_payload = {
+			**initial_finding,
+			"audited_head_sha": audited_sha,
+			"justification": "Accepted before a new caller existed.",
+			"source": "operator",
+		}
+		waiver_path = Path(fixture_td) / "waivers.json"
+		waiver_path.write_text(json.dumps([waiver_payload]), encoding="utf-8")
+		(repo_dir / "dynamic_route.py").write_text(
+			"def public_route():\n\treturn globals()['privileged_sink'](None)\n", encoding="utf-8"
+		)
+		fixture_git("add", "dynamic_route.py")
+		fixture_git("commit", "-q", "-m", "add dynamic route")
+		advanced_sha = fixture_git("rev-parse", "HEAD")
+		advanced_output_path = Path(fixture_td) / "advanced-findings.json"
+		advanced_proc, advanced_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([finding_payload]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(advanced_output_path),
+				"SECURITY_AUDIT_DIFF_BASE": base_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": advanced_sha,
+				"SECURITY_AUDIT_WAIVED_FINDINGS": str(waiver_path),
+			},
+		)
+		assert advanced_proc.returncode == 0, advanced_proc.stderr
+		advanced_payload = json.loads(advanced_state["security_audit_findings_output"])
+		assert [finding["finding_id"] for finding in advanced_payload["findings"]] == ["causal-waiver"]
+		assert advanced_payload["counts"]["suppressed_waived"] == 0
 
 
 def test_security_audit_delta_since_requires_explicit_range_and_valid_inputs() -> None:
@@ -2411,6 +2500,19 @@ def main() -> int:
 			else:
 				globals()[name]()
 	return 0
+
+
+def test_security_audit_model_and_waivers_use_shared_security_boundaries() -> None:
+	script = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert 'SECURITY_AUDIT_SANDBOX_HELPER=' in script
+	assert "--role audit" in script
+	assert 'SECURITY_AUDIT_CAUSALITY_HELPER=' in script
+	assert '"causal_scope_schema": "security_audit_causal_scope.v1"' in script
+	assert 'waiver_causal_fingerprint != finding_causal_fingerprint' in script
+	assert 'waiver_causal_files != finding_causal_files' in script
+	assert 'outside_causal_python_changed' in script
+	assert 'cross_file_boundary_changed' in script
+	assert 'causal analysis indeterminate for' in script
 
 
 if __name__ == "__main__":

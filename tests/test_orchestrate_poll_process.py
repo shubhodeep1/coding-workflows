@@ -22,6 +22,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+POLLER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 
 # Upper bound for a single poller invocation under test. The mocked poller
 # should complete in a few seconds; anything longer indicates a hang (e.g. an
@@ -1023,6 +1024,10 @@ def _run_poller(
 		bin_dir.mkdir(parents=True)
 		home_dir.mkdir(parents=True)
 		runtime_dir.mkdir(parents=True)
+		for runtime_helper_name in (
+			"trusted_git_write.sh", "untrusted_process_sandbox.sh", "model_provider_proxy.py",
+		):
+			shutil.copy2(sandbox / "scripts" / runtime_helper_name, runtime_dir / runtime_helper_name)
 		if capture_telegram_calls:
 			with (sandbox / "scripts" / "tg_helpers.sh").open("a", encoding="utf-8") as telegram_helpers_file:
 				telegram_helpers_file.write(
@@ -21524,6 +21529,44 @@ def test_stall_recovery_retrigger_implement_arms_swap_label_before_posting_appro
 		# prefix may already post it.
 		assert "gh api" not in arm_prefix, arm_prefix
 		assert "\n/approved\n" not in arm_prefix, arm_prefix
+
+
+def test_security_sensitive_poller_models_use_credentialless_sandbox() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "run_untrusted_poller_codex()" in script
+	assert "--role judge" in script
+	assert "run_untrusted_poller_codex resolver" in script
+	assert "run_untrusted_poller_codex judge-fix" in script
+	assert '< "${stall_judge_prompt_file}"' in script
+	assert '< "${judge_effective_prompt_file}"' in script
+	for forbidden in (
+		'codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}"',
+		'cat "${judge_effective_prompt_file}" | codex',
+		'cat "${RB_JUDGE_PROMPT_FILE}" | codex',
+	):
+		assert forbidden not in script
+
+
+def test_poller_review_blocked_writer_uses_immutable_trusted_git_boundary() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	workflow = POLLER_WORKFLOW.read_text(encoding="utf-8")
+	assert 'TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"' in script
+	assert 'install -m 0755 scripts/trusted_git_write.sh "${TRUSTED_POLLER_GIT_WRITER}"' not in script
+	assert 'for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh' in workflow
+	assert 'install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"' in workflow
+	assert 'bash "${TRUSTED_POLLER_GIT_WRITER}" commit' in script
+	assert '--expected-remote-head "${RB_HEAD_SHA}"' in script
+
+
+def test_integration_resolver_unresolved_paths_exit_after_specific_warning() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	unresolved_branch = script.split(
+		'if git -C "${integration_judge_workspace}" diff --name-only --diff-filter=U | grep -q .; then',
+		1,
+	)[1].split("\n\t\telse", 1)[0]
+	assert "Integration-conflict resolver left unresolved paths" in unresolved_branch
+	assert 'git worktree remove --force "${integration_judge_workspace}"' in unresolved_branch
+	assert "return 1" in unresolved_branch
 
 
 if __name__ == "__main__":
