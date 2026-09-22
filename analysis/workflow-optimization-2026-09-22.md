@@ -263,3 +263,164 @@ Semble’s apparent runtime fallback rate is about **3.4%** of successful querie
 - Queue time is not separated from execution time.
 - GitHub API calls, pagination, retries, and cache hits are not counted.
 - `success_sample_rate` is configured at 7%, but `sampled_success_runs` is reported as zero.
+
+## Deep Audit — Workflows & Scripts (2026-09-22)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001 — Transient API failures can select the wrong checkout branch
+- **File path and line range:** `scripts/resolve_integration_ref.sh:51-100`; `.github/workflows/clarify.yml:118-129`; `.github/workflows/implement.yml:459-470`
+- **Severity:** High
+- **Category:** `bug`
+- **Description:** Issue and branch metadata use raw `gh api` under `set -euo pipefail`. A transient failure exits the resolver, after which callers write an empty ref and fall back to the default branch. Planning or implementation can therefore run against the default branch instead of the issue’s declared integration branch.
+- **Recommended fix:** Source sibling `gh_helpers.sh`, use `gh_retry`/`_safe_gh_jq`, and distinguish confirmed 404 from indeterminate API failure. Make callers fail closed or defer when resolution is indeterminate rather than selecting the default branch.
+
+#### SEC-001 — PAT is interpolated into shell source and persisted in the remote URL
+- **File path and line range:** `.github/workflows/implement.yml:4328-4340`; `.github/workflows/review_autofix.yml:5974-6010`
+- **Severity:** Medium
+- **Category:** `security`
+- **Description:** Both steps interpolate `${{ secrets.GH_PAT }}` directly into a `run:` body and store it in `.git/config` through `git remote set-url`. GitHub masking reduces log exposure but does not prevent the credential from entering generated shell source or persisting in repository configuration.
+- **Recommended fix:** Pass only `GH_TOKEN` through `env:` and authenticate pushes with a transient `http.extraHeader`, following the `resolver_git()` pattern at `.github/workflows/implement.yml:424-427`. Keep the configured remote credential-free.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001 — Reissue paths fetch the same issue twice for title and body
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:13731-13733`, `16413-16421`, `21397-21399`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** Three reissue paths make two consecutive `GET /issues/{n}` calls, selecting `.title` and `.body` separately. Current count is **2 calls per reissued issue**; proposed count is **1**.
+- **Recommended fix:** Fetch `{title, body}` once and parse both locally. Prefer `_candidate_details_json` when populated; otherwise cache one `_safe_gh_jq` response, following the poller’s cycle-local cache pattern.
+
+#### API-002 — Final-PR state and merge status use duplicate PR reads
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:10230-10242`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** On a snapshot miss, `.state` and `.merged_at` are read through two identical `GET /pulls/{n}` calls. Current count is **2**; proposed count is **1**.
+- **Recommended fix:** Fetch the PR JSON once and parse both fields, then retain it in `final_pr_json_snapshot` for later checks.
+
+#### API-003 — Merge-train comment upsert discards an already-fetched body
+- **File path and line range:** `scripts/review_merge_train.sh:255-290`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** `_mt_find_marker_comment_id` lists comments but returns only the ID; `_mt_upsert_comment` then fetches the selected comment again for its body. Existing-comment paths use **2 calls** instead of **1**.
+- **Recommended fix:** Return/cache `{id, body}` from the paginated comment listing. Extend the script’s existing `_MT_FILES_CACHE` approach with a marker-comment cache.
+
+#### API-004 — Inline retry wrappers retry permanent failures
+- **File path and line range:** `.github/workflows/review_autofix.yml:1123-1136`, `1326-1338`; `.github/workflows/implement.yml:492-529`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** These wrappers retry every failure without classifying authentication, permission, 404, or validation errors. One logical request can become **4 attempts** in review or **3 attempts** in implement; permanent failures should require **1 attempt**.
+- **Recommended fix:** Reuse `gh_helpers.sh::_is_gh_permanent_failure` and the canonical `gh_retry`. If a lightweight job cannot stage the full helper, extract the classifier into a minimal shared helper.
+
+#### BATCH-001 — Merge train performs one files request per older PR
+- **File path and line range:** `scripts/review_merge_train.sh:41-59`, `110-137`, `304-329`, `423-458`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** The gate issues one paginated `/pulls/{n}/files` request for each older PR, capped at 20. The file-read phase is currently **N calls, up to 20**; an aliased GraphQL batch could reduce the normal case to **1 batch call**, with REST fallback only for pagination overflow. [NEEDS VERIFICATION]
+- **Recommended fix:** Extend `_fetch_candidate_issue_details_graphql`’s alias-builder pattern to batch PR file connections and populate `_MT_FILES_CACHE`. End-to-end gate cost would typically fall from `1 + N` reads to `2`.
+
+#### BATCH-002 — Body-derived linked issues trigger per-issue label reads
+- **File path and line range:** `.github/workflows/review_autofix.yml:1144-1240`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** When closing-issue GraphQL data is unavailable and issue numbers are extracted from PR text, the loop calls `gh issue view` once per issue. Current count is **N**; proposed count is **ceil(N/50)**, normally **1**.
+- **Recommended fix:** Batch the extracted issue numbers using aliased GraphQL and return labels keyed by issue number, extending `_fetch_candidate_issue_details_graphql`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Context-budget warning function is copied three times
+- **File path and line range:** `scripts/review_apply_fixes.sh:164-202`; `scripts/review_rb_judge.sh:256-294`; `scripts/review_run_reviewers.sh:69-107`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `emit_context_budget_warn_for_prompt` is byte-equivalent across all three scripts.
+- **Recommended fix:** Move it to a new `scripts/prompt_budget_helpers.sh` as `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>`. Source it from all three callers.
+
+#### DUP-002 — Semble query-section rendering is copied three times
+- **File path and line range:** `scripts/review_apply_fixes.sh:909-918`; `scripts/review_conflict_prepare.sh:605-614`; `scripts/review_run_reviewers.sh:1760-1769`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `append_semble_query_section` has the same implementation in three review paths.
+- **Recommended fix:** Add `semble_append_query_section <label> <path> [max_bytes]` to `scripts/semble_helpers.sh` and update all three callers.
+
+#### DUP-003 — Integration-ref bootstrap is repeated across five workflows
+- **File path and line range:** `.github/workflows/clarify.yml:57-130`; `.github/workflows/plan.yml:120-196`; `.github/workflows/implement.yml:397-471`; `.github/workflows/orchestrate_clarify_respond.yml:110-184`; `.github/workflows/validate.yml:96-170`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** Each workflow contains approximately 70 lines for cloning the resolver source, configuring auth, redacting logs, executing `resolve_integration_ref.sh`, and applying fallback behavior. Drift here directly affects branch selection.
+- **Recommended fix:** Checkout the resolver support source through one shared step pattern and invoke a canonical `resolve_integration_ref_bootstrap <repo> <issue> <resolver_ref>` script. Update all five workflows.
+
+#### DUP-004 — Codex tool-cache persistence is repeated five times
+- **File path and line range:** `.github/workflows/plan.yml:90-119`; `.github/workflows/workflow-log-analysis.yml:230-255`, `718-747`, `1405-1434`, `1916-1945`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** Identical npm-root discovery, package copying, symlink restoration, and validation blocks are repeated across five jobs.
+- **Recommended fix:** Add `scripts/codex_tool_cache.sh persist|restore <tool_cache>` and replace the duplicated shell bodies with calls to that script.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Support-staging expression is within 674 characters of rejection
+- **File path and line range:** `.github/workflows/implement.yml:932-1288`
+- **Severity:** High
+- **Category:** `expression-limit`
+- **Description:** The interpolated `Stage workflow support files` block is approximately **20,326 characters**, leaving **674 characters** before the 21,000-character runner limit.
+- **Recommended fix:** Extract the body to `scripts/implement_stage_workflow_support.sh` and pass `github.repository` and repository variables through `env:`. Execute the script from the checked-out workflow-support source.
+
+#### EXPR-002 — Preflight guard has limited expression headroom
+- **File path and line range:** `.github/workflows/implement.yml:3143-3449`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The interpolated `Preflight destructive-commit guard` block is approximately **17,313 characters**, leaving **3,687 characters** of headroom.
+- **Recommended fix:** Extract it to `scripts/implement_preflight_commit_guard.sh`, passing repository identity through environment variables.
+
+No workflow exceeds the 800 KB warning threshold. The largest is `.github/workflows/review_autofix.yml` at approximately 500,224 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001 — Documented review thread reuse is intentionally ignored
+- **File path and line range:** `scripts/review_apply_fixes.sh:1598-1606`; `scripts/review_conflict_resolve.sh:1659-1671`; `README.md:129`
+- **Severity:** Medium
+- **Category:** `consistency`
+- **Description:** `CODEX_THREAD_REUSE_ENABLED` is documented as supporting `review_autofix`, but both the editor and conflict resolver only log that OpenCode will use a fresh full-prompt path. The review-side enablement functions are consequently uncalled.
+- **Recommended fix:** Either implement OpenCode continuation/session reuse for these paths or narrow the documented workflow scope and remove the inactive review/conflict helpers under the repository’s compatibility rules.
+
+#### DEAD-001 — Three poller helpers are definition-only
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:11348-11356`, `12958-12977`, `13087-13097`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `get_last_validation_run_conclusion`, `read_standalone_state_json`, and `stall_recovery_action_is_terminal` have no callers in the repository.
+- **Recommended fix:** Remove them after confirming no sourced external consumer relies on them, or add explicit runtime call sites and tests if they represent intended fallback behavior.
+
+#### DEAD-002 — Label-repair evidence resolver is not wired into production
+- **File path and line range:** `scripts/orchestrate_lib.py:2017-2089`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `resolve_label_repair_evidence` is implemented but never called. Documentation explicitly describes it as contract-defined/reserved while active reconciliation uses separate logic.
+- **Recommended fix:** Wire it into `reconcile_managed_issue_labels` behind a guarded rollout, or move it to a clearly marked experimental module until activation.
+
+#### SHELL-001 — CI suppresses all warning-level ShellCheck findings
+- **File path and line range:** `.github/workflows/ci.yml:976-981`; `.github/workflows/mark-stable.yml:197-202`
+- **Severity:** Low
+- **Category:** `shellcheck`
+- **Description:** Both gates invoke `shellcheck --severity=error`, so warning-level diagnostics never fail CI. Current examples include SC2043 in `stage_workflow_support.sh` and SC2178/SC2128 in `codex_thread_reuse.sh`, whether intentional or not.
+- **Recommended fix:** Raise enforcement to `warning` after adding targeted inline suppressions for intentional constructs. Keep suppressions adjacent to the relevant line with a reason.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, EXPR-001 |
+| Medium | 7 | SEC-001, API-004, BATCH-001, BATCH-002, DUP-003, EXPR-002, CONSIST-001 |
+| Low | 9 | API-001, API-002, API-003, DUP-001, DUP-002, DUP-004, DEAD-001, DEAD-002, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 4–7 | Medium |
+| API call optimization | 4–5 | Medium |
+| Code modularization | 8–10 | Large |
+| Expression size reduction | 2–3 | Medium |
+| Medium/Low fixes | 6–9 | Medium |
