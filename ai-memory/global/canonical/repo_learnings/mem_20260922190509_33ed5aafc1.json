@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Release and promotion workflows require explicit recovery for Git ref and token failures.",
   "timestamps": {
     "created_at": "2026-09-22T19:05:09Z",
