@@ -267,3 +267,144 @@ No other MCP servers were observed.
 | Primary gap | Endpoint, cache-hit, retry, and quota telemetry absent |
 
 **Material data gap:** aggregate marker counts can be inflated when the same source event appears in both an aggregate job log and a split step log.
+
+## Deep Audit — Workflows & Scripts (2026-09-22)
+
+### Section 1: Bug & Correctness Sweep
+
+Audit coverage: 50 workflows, 85 shell scripts, and 57 Python scripts. Bash syntax, Python AST parsing, and YAML linting passed. No actionable SC2086/SC2046 findings, direct issue-body shell interpolation, or secret logging was found.
+
+#### BUG-001 — Integration-ref API reads lack transient-failure handling
+
+- **File:** `scripts/resolve_integration_ref.sh:51-69`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** `get_issue_body` and `branch_exists` call raw `gh api` under `set -euo pipefail`. A transient 5xx, rate limit, or network failure therefore aborts plan/implement branch resolution immediately; `branch_exists` converts every non-404 failure into exit 2 without first applying the repository’s reset-aware retry policy.
+- **Recommended fix:** Source `scripts/gh_helpers.sh` and use `gh_retry`/`gh_retry_to_file`. Preserve 404 as “branch absent,” but retry transient failures before failing closed.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001 — Fallback linked-issue labels are fetched one issue at a time
+
+- **File:** `.github/workflows/review_autofix.yml:1208-1227`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** When linked issue numbers come from the PR text fallback, each issue enters the loop with `labels: null`, causing one `gh issue view` call per issue. Current read count is **N**; an aliased GraphQL request could reduce this to **ceil(N/50)**.
+- **Recommended fix:** Prefetch labels for all fallback issue numbers before the loop, extending the `_fetch_candidate_issue_details_graphql` alias-and-cache pattern from `scripts/orchestrate_poll_process.sh`. Keep workflow dispatch and label-removal mutations unchanged.
+
+#### BATCH-002 — Security advisory follow-up state reads are per-item
+
+- **File:** `scripts/orchestrate_poll_process.sh:5964-6028`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** The final-merge follow-up sweep issues one state/labels GET for each unchecked issue, then one comments GET for each blocked issue. For **N** unchecked issues and **B** blocked issues, the current read count is **N+B**. State/labels can be batched, reducing it to **ceil(N/50)+B**.
+- **Recommended fix:** Add a cycle-local aliased GraphQL prefetch keyed by issue number, following `_fetch_candidate_issue_details_graphql`. Retain paginated per-issue comment reads because marker bodies and pagination are required.
+
+#### API-001 — No-op ancestry performs two API reads per hop in two implementations
+
+- **Files:** `.github/workflows/implement.yml:4314-4332`; `scripts/orchestrate_poll_process.sh:12866-12897`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** Both ancestry walkers separately fetch the current issue body and parent comments for every hop. Current maximum is **2T** calls for depth **T**—four calls at the default depth of two. The implement path already has the current issue body cached. [NEEDS VERIFICATION]
+- **Recommended fix:** Create a shared helper accepting an optional cached initial body. Query each parent’s body and comments together via GraphQL, with REST pagination fallback when `pageInfo.hasNextPage` is true. Projected count: **T** for implement and **T–T+1** for the poller. Model it after `gh_pr_with_all_comments` in `gh_helpers.sh`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Release-tag publication logic has three independently maintained paths
+
+- **Files:** `.github/workflows/mark-stable.yml:678-831`; `.github/workflows/test-and-mark-stable.yml:5573-5726`; `scripts/mark-stable.sh:1-110`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** The two workflow blocks are byte-equivalent 8,910-character implementations of tag publication, verification, stale-tip checks, and partial-release recovery. `scripts/mark-stable.sh` separately implements the same operation with different safeguards, creating drift risk in a release-critical path.
+- **Recommended fix:** Move the canonical logic into `scripts/release_tag_helpers.sh`, exposing `publish_release_tags <version> <source-branch> <tested-sha>`. Make both workflows and `scripts/mark-stable.sh` call it, preserving existing CLI and log identifiers.
+
+#### DUP-002 — Context-budget warning helper is copied three times
+
+- **Files:** `scripts/review_apply_fixes.sh:164-202`; `scripts/review_rb_judge.sh:256-294`; `scripts/review_run_reviewers.sh:69-107`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `emit_context_budget_warn_for_prompt` is identical in all three scripts, including Python import fallback and output handling.
+- **Recommended fix:** Move it to `scripts/cost_audit_helpers.sh` with signature `emit_context_budget_warn_for_prompt <phase> <prompt-path> <model>`, then source that module from all three callers.
+
+#### DUP-003 — Codex runtime-resolution helpers are repeated across model paths
+
+- **Files:** `scripts/review_apply_fixes.sh:680-710`; `scripts/review_conflict_resolve.sh:150-171,209-269`; `scripts/review_rb_judge.sh:168-182`; `scripts/review_run_reviewers.sh:308-338`; `scripts/validate_process.sh:2890-2911`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** Asset resolution, thread-reuse enablement, ledger-helper resolution, and stall-state parsing have identical or near-identical implementations in three or more files.
+- **Recommended fix:** Add `scripts/codex_runtime_helpers.sh` owning:
+  - `resolve_codex_runtime_asset <repo-path>`
+  - `codex_thread_reuse_enabled`
+  - `resolve_ledger_substate_helper`
+  - `read_codex_stall_guard_state <status-file>`
+
+  Keep existing function names as compatibility wrappers where necessary.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Support-staging block is within 674 characters of the hard limit
+
+- **File:** `.github/workflows/implement.yml:981-1337`
+- **Severity:** High
+- **Category:** `expression-limit`
+- **Description:** The interpolated `run:` body is approximately **20,326 characters**, leaving only **674 characters** before GitHub’s 21,000-character template-expression limit. Routine additions can make the workflow unloadable.
+- **Recommended fix:** Extract the block into `scripts/implement_stage_workflow_support.sh`, or extend `scripts/stage_workflow_support.sh` with an implement/self-repository ledger mode. Pass expression values through step-local environment variables.
+
+#### EXPR-002 — Commit preflight block has limited growth headroom
+
+- **File:** `.github/workflows/implement.yml:3218-3524`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The interpolated body is approximately **17,313 characters**, leaving **3,687 characters** of headroom. It combines temporary-index construction, artifact filtering, destructive-delete checks, staged-support restoration, and scope enforcement.
+- **Recommended fix:** Extract it to `scripts/implement_preflight_commit_guard.sh`, sharing staging and guard primitives with `scripts/implement_commit_changes.sh`.
+
+#### EXPR-003 — Workflow-analysis prompt steps remain growth-prone inline templates
+
+- **File:** `.github/workflows/workflow-log-analysis.yml:881-1139,1529-1745,2033-2247`
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:** The three interpolated analysis blocks measure approximately **13,245**, **10,903**, and **10,880** characters, leaving **7,755**, **10,097**, and **10,120** characters respectively. They are below the threshold today but contain large inline prompt and orchestration literals likely to grow.
+- **Recommended fix:** Move stable prompt text under `prompts/` and reduce each workflow step to artifact preparation plus `scripts/render_prompt.sh` invocation.
+
+No workflow exceeds 800 KB. The largest, `review_autofix.yml`, is approximately 505,283 characters. The largest `if:` expression measured 794 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001 — Phase-failure evidence engine is not wired into production paths
+
+- **File:** `scripts/orchestrate_lib.py:1709-1760,1816-2014,2017-2115`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `evaluate_phase_failure_resume` and `resolve_label_repair_evidence` are implemented using the marker parser and evidence selector, but no workflow or production script calls either function. The active poller uses other `orchestrate_lib.py` entry points instead.
+- **Recommended fix:** Either wire these helpers into stall recovery and label reconciliation behind the documented feature gates, or isolate them as reserved APIs. Preserve exported names if removal would affect external consumers.
+
+#### SHELL-001 — Branch-rebuild diagnostics are computed but never consumed
+
+- **File:** `scripts/orchestrate_poll_process.sh:9183-9259`
+- **Severity:** Low
+- **Category:** `shellcheck`
+- **Description:** `BRANCH_REBUILD_SKIP_REASON` is assigned on every eligibility rejection and `BRANCH_REBUILD_LAST_REBUILD_AT` is populated from audit state, but neither variable is read afterward. ShellCheck reports both as unused, and operators lose the detailed reason already calculated.
+- **Recommended fix:** Emit both values in the caller’s skip telemetry or return a structured eligibility result. Remove the assignments only if the diagnostics are intentionally unnecessary.
+
+No `TODO`, `FIXME`, `HACK`, or `XXX` markers were present in the audited scope. Focused shell tests for events, transcript archives, reminders, log prefixes, watchdog budgets, and worktree registry behavior passed.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | EXPR-001 |
+| Medium | 5 | BUG-001, BATCH-001, BATCH-002, DUP-001, EXPR-002 |
+| Low | 6 | API-001, DUP-002, DUP-003, EXPR-003, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 3–4 | Medium |
+| Code modularization | 8–10 | Medium |
+| Expression size reduction | 3–5 | Medium |
+| Medium/Low fixes | 4–6 | Medium |
