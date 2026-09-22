@@ -6073,12 +6073,12 @@ def test_security_pass_exhaustion_judge_kill_switch_and_round_cap_keep_terminal_
 	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=8" in unbounded["stdout"] + unbounded["stderr"]
 
 
-def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() -> None:
-	"""A waiver reaches the engine as accepted and is enforced poller-side too.
+def test_security_pass_legacy_waivers_reach_engine_but_do_not_suppress_re_reports() -> None:
+	"""Legacy waivers remain readable but cannot authorize suppression.
 
 	The mock engine ignores SECURITY_AUDIT_WAIVED_FINDINGS (an older staged
-	engine would), so the re-reports below prove the poller's own exact
-	provenance-key suppression. Model IDs and proximity are not authoritative.
+	engine would), so the re-reports below prove the poller fails closed when
+	a waiver lacks immutable audited-head provenance.
 	"""
 	state = _security_pass_exhausted_state(
 		security_pass_cycle=0,
@@ -6122,18 +6122,20 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	assert [row["finding_id"] for row in capture["waived_findings"]] == ["SEC-TEST-1", "OLD-DOS"]
 	latest_state = result["latest_state"]
 	assert latest_state["status"] == "security-pass-fixing"
-	assert [row["finding_id"] for row in latest_state["security_pass_reported_findings"]] == ["SURVIVOR"]
+	assert [row["finding_id"] for row in latest_state["security_pass_reported_findings"]] == [
+		"SEC-TEST-1", "NEW-DOS-ID", "SURVIVOR"
+	]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "waived_findings=2" in combined_log
-	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=2 ids=SEC-TEST-1,NEW-DOS-ID" in combined_log
+	assert "SECURITY_PASS_WAIVED_SUPPRESSED" not in combined_log
 	assert "SECURITY_PASS_BLOCKED tracking_issue=192" in combined_log
-	assert "findings=1 cycle=0" in combined_log
+	assert "findings=3 cycle=0" in combined_log
 	created = result.get("created_issues", [])
 	assert len(created) == 1
 	fix_body = result["issues"][str(created[0]["number"])]["body"]
 	assert "| SURVIVOR |" in fix_body
-	assert "| SEC-TEST-1 |" not in fix_body
-	assert "| NEW-DOS-ID |" not in fix_body
+	assert "| SEC-TEST-1 |" in fix_body
+	assert "| NEW-DOS-ID |" in fix_body
 
 
 def _security_pass_waive_failed_state() -> dict:

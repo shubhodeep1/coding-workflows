@@ -1430,6 +1430,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} (reasoning=${level})..."
   emit_review_rb_substate "review_rb_judge" "judge" "PreparingWorkspace" "${attempt}"
   judge_codex_cmd=(
+    env UNTRUSTED_AGENT_ROLE=judge
     bash -c
     # shellcheck disable=SC2016
     'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
@@ -1926,6 +1927,7 @@ __EDIT_DISCIPLINE__
         exit 1
       fi
       rb_fix_opencode_cmd=(
+        env UNTRUSTED_AGENT_ROLE=judge-fix
         bash -c
         # shellcheck disable=SC2016
         'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'

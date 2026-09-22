@@ -6482,20 +6482,14 @@ def _run_dependency_install_step(
 		}
 
 
-def test_dependency_install_bootstraps_pytest_when_pyproject_declares_it() -> None:
-	"""A tool-only pyproject must still leave pytest importable for the editor.
-
-	`pip install -e .` exits 0 on a pyproject.toml that carries no [project]
-	table (setuptools builds an UNKNOWN-0.0.0 package), so the pre-existing
-	`install_failed` guard never fires and pytest silently stays missing.
-	"""
+def test_dependency_install_never_bootstraps_pytest_on_the_privileged_host() -> None:
+	"""Missing pytest must not trigger a PR-controlled host installation."""
 	result = _run_dependency_install_step(
 		{"pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" in result["calls"], result["calls"]
-	assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
-	assert "pytest is not importable" in result["output"], result["output"]
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "refusing privileged host installation" in result["output"], result["output"]
 
 
 def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
@@ -6503,19 +6497,20 @@ def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
 		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
 	assert (
 		"::warning::pytest is declared by this repository but could not be installed"
 		in result["output"]
 	), result["output"]
 
 
-def test_dependency_install_bootstraps_pytest_for_nested_conftest() -> None:
+def test_dependency_install_does_not_host_install_pytest_for_nested_conftest() -> None:
 	result = _run_dependency_install_step(
 		{"tests/conftest.py": ""},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "refusing privileged host installation" in result["output"], result["output"]
 
 
 def test_dependency_install_skips_pytest_bootstrap_when_already_importable() -> None:

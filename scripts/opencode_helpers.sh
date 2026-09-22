@@ -37,6 +37,10 @@ opencode_run_cmd()
 	local config_path="$4"
 	local working_directory="$5"
 	local output_format="${6:-default}"
+	local effective_config_path="${UNTRUSTED_OPENCODE_CONFIG:-${config_path}}"
+	local effective_working_directory="${UNTRUSTED_SANDBOX_WORKSPACE:-${working_directory}}"
+	local sandbox_helper="${UNTRUSTED_PROCESS_SANDBOX_HELPER:-${_opencode_helpers_dir}/untrusted_process_sandbox.sh}"
+	local sandbox_role="${UNTRUSTED_AGENT_ROLE:-}"
 	local -a opencode_argv
 
 	case "${role}" in
@@ -64,18 +68,36 @@ opencode_run_cmd()
 			return 2
 			;;
 	esac
-	[ -r "${config_path}" ] || {
-		_opencode_error "config is not readable: ${config_path}"
+	[ -r "${effective_config_path}" ] || {
+		_opencode_error "config is not readable: ${effective_config_path}"
 		return 2
 	}
-	[ -d "${working_directory}" ] || {
-		_opencode_error "working directory does not exist: ${working_directory}"
+	[ -d "${effective_working_directory}" ] || {
+		_opencode_error "working directory does not exist: ${effective_working_directory}"
 		return 2
 	}
+	if [ "${UNTRUSTED_PROCESS_ISOLATED:-}" != "1" ]; then
+		[ -x "${sandbox_helper}" ] || {
+			_opencode_error "required untrusted-process sandbox is unavailable: ${sandbox_helper}"
+			return 79
+		}
+		if [ -z "${sandbox_role}" ]; then
+			[ "${role}" = "writer" ] && sandbox_role="editor" || sandbox_role="reviewer"
+		fi
+		exec "${sandbox_helper}" \
+			--role "${sandbox_role}" \
+			--workspace "${working_directory}" \
+			--config-format opencode \
+			--config "${config_path}" \
+			--runtime-dir "${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}" \
+			-- bash -c 'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"' \
+			opencode-isolated "${BASH_SOURCE[0]}" "${role}" "${model_slug}" "${variant}" \
+			"${config_path}" "${working_directory}" "${output_format}"
+	fi
 
 	opencode_argv=(
 		opencode run
-		--dir "${working_directory}"
+		--dir "${effective_working_directory}"
 		-m "openrouter/${model_slug}"
 		--agent "${role}"
 		--variant "${variant}"
@@ -93,7 +115,7 @@ opencode_run_cmd()
 
 	printf 'opencode_agent_start role=%s expected_provider=openrouter expected_model=%s variant=%s\n' \
 		"${role}" "$(_opencode_alert_field "${model_slug}")" "${variant}" >&2
-	OPENCODE_CONFIG="${config_path}" NO_COLOR=1 "${opencode_argv[@]}"
+	OPENCODE_CONFIG="${effective_config_path}" NO_COLOR=1 "${opencode_argv[@]}"
 }
 
 opencode_emit_failure_alert()

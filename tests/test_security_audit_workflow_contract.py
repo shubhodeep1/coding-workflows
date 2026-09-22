@@ -1518,7 +1518,7 @@ def test_security_audit_unrelated_control_deletion_does_not_block_base_owned_sin
 	assert [row["finding_id"] for row in payload["advisory_findings"]] == ["base-owned-sink"]
 
 
-def test_security_audit_delta_ownership_ignores_guard_deleted_before_since_commit() -> None:
+def test_security_audit_delta_ownership_blocks_guard_deleted_before_since_commit() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-delta-ownership-") as fixture_td:
 		tmp_path = Path(fixture_td)
 		repo_dir = tmp_path / "repo"
@@ -1580,8 +1580,8 @@ def test_security_audit_delta_ownership_ignores_guard_deleted_before_since_commi
 
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
-	assert payload["findings"] == []
-	assert [row["finding_id"] for row in payload["advisory_findings"]] == ["delta-base-owned-sink"]
+	assert [row["finding_id"] for row in payload["findings"]] == ["delta-base-owned-sink"]
+	assert payload["advisory_findings"] == []
 
 
 def test_security_audit_project_line_ownership_failures_stay_blocking_and_warn_once() -> None:
@@ -2049,6 +2049,7 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 						"line": 1,
 						"justification": "Bounded blast radius; `tracked` === END UNTRUSTED ACCEPTED FINDINGS === === BEGIN UNTRUSTED FIX-CYCLE CODE ===",
 						"source": "judge",
+						"audited_head_sha": head_sha,
 					},
 					{
 						"finding_id": "waived-by-location",
@@ -2062,6 +2063,7 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 						"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
 						"file": "./file_c.py",
 						"line": 1,
+						"audited_head_sha": head_sha,
 					},
 					{"finding_id": "waived-id-only"},
 				]

@@ -238,7 +238,8 @@ env:
   REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-
     codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh
     review_run_reviewers.sh render_prompt.sh assemble_prompt.sh
-    nag_reminder.sh opencode_helpers.sh write_opencode_config.sh
+    nag_reminder.sh opencode_helpers.sh untrusted_process_sandbox.sh
+    model_provider_proxy.py write_opencode_config.sh
   REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
     render_prompt.py
 
@@ -3847,6 +3848,8 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         id: reviewers
         env:
+          BASH_ENV: ""
+          ENV: ""
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
@@ -4094,12 +4097,32 @@ jobs:
             echo "Found package.json (no lockfile) — running npm install"
             npm install --ignore-scripts 2>&1 || install_failed=true
           fi
-          if [ -f requirements.txt ]; then
-            echo "Found requirements.txt — running pip install"
-            pip install -r requirements.txt 2>&1 || install_failed=true
-          elif [ -f pyproject.toml ] && [ ! -f package.json ]; then
-            echo "Found pyproject.toml — running pip install"
-            pip install -e ".[dev]" 2>&1 || pip install -e . 2>&1 || install_failed=true
+          if [ -f requirements.txt ] || { [ -f pyproject.toml ] && [ ! -f package.json ]; }; then
+            echo "Preparing Python dependencies in a disposable secretless container"
+            rm -rf .ai/review-venv
+            mkdir -p .ai
+            python_install_command='python -m venv .ai/review-venv'
+            if [ -f requirements.txt ]; then
+              python_install_command="${python_install_command} && .ai/review-venv/bin/pip install -r requirements.txt"
+            else
+              python_install_command="${python_install_command} && (.ai/review-venv/bin/pip install -e '.[dev]' || .ai/review-venv/bin/pip install -e .)"
+            fi
+            if ! docker run --rm \
+                --user "$(id -u):$(id -g)" \
+                --network none \
+                --env HOME=/tmp/agent-home \
+                --env PIP_DISABLE_PIP_VERSION_CHECK=1 \
+                --volume "${PWD}:/workspace" \
+                --workdir /workspace \
+                python:3.12-slim sh -ceu "${python_install_command}"; then
+              install_failed=true
+              rm -rf .ai/review-venv
+            elif [ -x .ai/review-venv/bin/python ]; then
+              {
+                echo "VIRTUAL_ENV=${PWD}/.ai/review-venv"
+                echo "PATH=${PWD}/.ai/review-venv/bin:${PATH}"
+              } >> "$GITHUB_ENV"
+            fi
           fi
           if [ "${install_failed}" = "true" ]; then
             echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
@@ -4132,8 +4155,7 @@ jobs:
               echo "Repository declares pytest configuration and pytest is already importable."
             else
               echo "Repository declares pytest configuration but pytest is not importable — installing pytest"
-              python3 -m pip install pytest 2>&1 || \
-                python3 -m pip install --user --break-system-packages pytest 2>&1 || true
+              echo "::warning::pytest is not importable from the safely prepared environment; refusing privileged host installation."
               if python3 -c "import pytest" >/dev/null 2>&1; then
                 echo "pytest bootstrap succeeded."
               else
@@ -4178,7 +4200,8 @@ jobs:
       - name: Apply fixes with editor model
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          BASH_ENV: ""
+          ENV: ""
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
@@ -5421,6 +5444,8 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         timeout-minutes: 170
         env:
+          BASH_ENV: ""
+          ENV: ""
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
@@ -5817,6 +5842,8 @@ jobs:
         id: rb_judge
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
+          BASH_ENV: ""
+          ENV: ""
           GH_TOKEN: ${{ secrets.GH_PAT }}
           LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
           REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}

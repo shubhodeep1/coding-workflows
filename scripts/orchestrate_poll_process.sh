@@ -247,6 +247,7 @@ extract_judge_json_with_status() {
   parsed_json="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${output_file}" <<'PY' 2>/dev/null || true
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -5649,7 +5650,41 @@ def waiver_for(finding: dict) -> str | None:
 		return None
 	for waiver in waivers:
 		waived_key = str(waiver.get("waiver_match_key") or "")
-		if re.fullmatch(r"sha256:[0-9a-f]{64}", waived_key) and waived_key == finding_key:
+		if not (re.fullmatch(r"sha256:[0-9a-f]{64}", waived_key) and waived_key == finding_key):
+			continue
+		audited_head_sha = str(waiver.get("audited_head_sha") or "")
+		if re.fullmatch(r"[0-9a-fA-F]{40,64}", audited_head_sha) is None:
+			continue
+		try:
+			current_head_sha = subprocess.run(
+				["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+			).stdout.strip()
+			ancestor = subprocess.run(
+				["git", "merge-base", "--is-ancestor", audited_head_sha, current_head_sha],
+				capture_output=True,
+				check=False,
+			)
+			file_diff = subprocess.run(
+				["git", "diff", "--no-color", "--no-ext-diff", f"{audited_head_sha}..{current_head_sha}", "--", str(finding.get("file") or "")],
+				capture_output=True,
+				text=True,
+				check=False,
+			)
+			project_diff = subprocess.run(
+				["git", "diff", "--no-color", "--no-ext-diff", "--unified=0", f"{audited_head_sha}..{current_head_sha}"],
+				capture_output=True,
+				text=True,
+				check=False,
+			)
+		except (OSError, subprocess.SubprocessError):
+			continue
+		guard_deleted = any(
+			line.startswith("-")
+			and not line.startswith("---")
+			and re.search(r"(?i)\b(auth\w*|authori[sz]\w*|permission|privilege|guard|middleware|login_required|access[_ -]?control|policy|allow|deny)\b", line[1:])
+			for line in project_diff.stdout.splitlines()
+		)
+		if ancestor.returncode == 0 and file_diff.returncode == 0 and project_diff.returncode == 0 and not file_diff.stdout and not guard_deleted:
 			return waived_key
 	return None
 
@@ -6448,8 +6483,9 @@ ${decisions_table}}"
         source: "judge",
         waived_by: "security-pass-exhaustion-judge",
         waived_at_cycle: $cycle,
+        audited_head_sha: $head_sha,
         issue: null
-      } + (if $defer then {followup_pending: true, audited_head_sha: $head_sha, finding: .finding} else {} end)]' "${verdict_file}")"
+      } + (if $defer then {followup_pending: true, finding: .finding} else {} end)]' "${verdict_file}")"
     if ! security_pass_record_waivers "${waivers_json}"; then
       echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=waiver_state_write_failed round=${judge_round}"
       return 1
@@ -6970,7 +7006,7 @@ run_security_pass_inline() {
   SECURITY_PASS_ADVISORY_ROUTED_COUNT="${security_pass_advisory_count}"
   if [ "${security_pass_advisory_count}" -gt 0 ]; then
     security_pass_advisory_justification="The cited line predates this project's merge-base and already exists on the default branch; routed as a non-blocking advisory by line ownership."
-    security_pass_advisory_waivers="$(jq -c --argjson cycle "${completed_cycles}" --arg justification "${security_pass_advisory_justification}" '
+    security_pass_advisory_waivers="$(jq -c --argjson cycle "${completed_cycles}" --arg justification "${security_pass_advisory_justification}" --arg head_sha "${current_head_sha}" '
       [(.advisory_findings // [])[] | {
         finding_id: .finding_id,
         waiver_match_key: .waiver_match_key,
@@ -6982,6 +7018,7 @@ run_security_pass_inline() {
         source: "preexisting",
         waived_by: "line-ownership",
         waived_at_cycle: $cycle,
+        audited_head_sha: $head_sha,
         issue: null
       }]
     ' "${findings_file}")"
@@ -17423,7 +17460,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was not applied: ${SECURITY_PASS_WAIVE_REJECT_TEXT}."
       else
         echo "  /security-pass-waive requested for project #${TRACKING_NUM} by ${SECURITY_PASS_WAIVE_AUTHOR}: $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'join(" ")')"
-        SECURITY_PASS_WAIVERS_JSON="$(jq -c --argjson ids "${SECURITY_PASS_WAIVE_IDS_JSON}" --arg by "${SECURITY_PASS_WAIVE_AUTHOR}" '
+        SECURITY_PASS_WAIVERS_JSON="$(jq -c --argjson ids "${SECURITY_PASS_WAIVE_IDS_JSON}" --arg by "${SECURITY_PASS_WAIVE_AUTHOR}" --arg head_sha "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" '
           (.security_pass_reported_findings // []) as $reported
           | (.security_pass_cycle // 0) as $cycle
           | [
@@ -17440,6 +17477,7 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
                   source: "operator",
                   waived_by: $by,
                   waived_at_cycle: $cycle,
+                  audited_head_sha: $head_sha,
                   issue: null,
                   finding: $known
                 }
@@ -17461,8 +17499,8 @@ Every requested finding must still be reported with a provenance-bound waiver ke
         # security_pass_file_deferred_advisory_followups can file the
         # advisory after the final merge (same contract as the judge path).
         if [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ]; then
-          SECURITY_PASS_WAIVERS_STATE_JSON="$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c --arg head_sha "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" '
-            map(if .finding != null then . + {followup_pending: true, audited_head_sha: $head_sha} else del(.finding) end)
+          SECURITY_PASS_WAIVERS_STATE_JSON="$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c '
+            map(if .finding != null then . + {followup_pending: true} else del(.finding) end)
           ')"
         else
           SECURITY_PASS_WAIVERS_STATE_JSON="$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c 'map(del(.finding))')"
