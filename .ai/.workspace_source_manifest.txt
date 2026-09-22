@@ -126,6 +126,8 @@ analysis/workflow-optimization-2026-09-16.md
 analysis/workflow-optimization-2026-09-18.md
 analysis/workflow-optimization-2026-09-20-2.md
 analysis/workflow-optimization-2026-09-20.md
+analysis/workflow-optimization-2026-09-21-2.md
+analysis/workflow-optimization-2026-09-21-3.md
 analysis/workflow-optimization-2026-09-21.md
 changelog.d/.gitkeep
 changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
@@ -136,9 +138,18 @@ changelog.d/4161-smoke-test-telegram-silencing.md
 changelog.d/4163-e2e-review-blocked-budget.md
 changelog.d/4165-workflow-failure-heal.md
 changelog.d/4172-gh-token-web-proxy-substitution.md
+changelog.d/4174-linked-issue-metadata-default.md
+changelog.d/4185-release-dispatcher-guards.md
 changelog.d/4189-release-budget-contracts.md
+changelog.d/4196-reviewer-roster-cost-refresh.md
+changelog.d/4207-changelog-push-stable-refspec.md
+changelog.d/4207-release-tag-push-retry.md
+changelog.d/4208-autofix-failure-heal.md
+changelog.d/4211-release-tag-push-retry.md
+changelog.d/4228-release-creation-token-recovery.md
 changelog.d/4240-release-tag-pat.md
 changelog.d/binance-blessings-249-parked-projects-resume-without-humans.md
+changelog.d/release-gate-retry-budget.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -473,6 +484,7 @@ scripts/validation_template_bootstrap.py
 scripts/verify_integration_fingerprints.py
 scripts/watchdog_helpers.sh
 scripts/workflow_failure_heal.py
+scripts/workflow_failure_heal_autofix_report.sh
 scripts/workflow_failure_heal_intake.sh
 scripts/workflow_failure_heal_report.sh
 scripts/workflow_retro.py
