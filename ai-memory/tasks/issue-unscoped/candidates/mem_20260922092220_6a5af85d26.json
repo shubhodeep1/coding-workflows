@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4112 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The Docker container that installs project dependencies runs with `--network none`, preventing pip from downloading external dependencies.\n  WHY: For repositories with uncached dependencies, pip fails and the editor runs without the project venv; severity disagreement: deepseek_deepseek-v4-pro rated this MAJOR while qwen_qwen3_7-plus rated it BLOCKER.\n- .github/workflows/review_autofix.yml:4115 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The Docker container mounts the entire working tree including `.git/config`, exposing the PAT embedded in the origin URL to malicious package build hooks.\n  WHY: Stripping credential environment variables does not remove the PAT persisted in `.git/config`, allowing a build hook to write it into the workspace for later editor access; severity disagreement: deepseek_deepseek-v4-pro rated this MAJOR while qwen_qwen3_7-plus rated it BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:4115 | severity=high | confidence=[4]\n  PROBLEM: The Docker container mounts the entire working tree, including `.git/config`, which on GitHub-hosted runners carries the remote URL in the form `https://x-access-token:<GH_PAT>@github.com/owner/repo.git`.\n  WHY: A malicious package build hook can read `.git/config`, extract the PAT, and write it into the workspace for the subsequent editor step.\n- .github/workflows/review_autofix.yml:4112 | severity=high | confidence=[5]\n  PROBLEM: The Docker container that runs `python -m venv` and pip installation is started with `--network none`.\n  WHY: pip cannot resolve or download external dependencies, so the venv is removed and editor validation runs without the project's third-party imports.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:4110-4117 | severity=critical | confidence=[5]\n  PROBLEM: The Docker container that builds the Python venv runs with `--network none`, which prevents pip from reaching PyPI.\n  WHY: For dependencies not pre-cached in the base image, pip exits non-zero, the venv is removed, and the editor runs without the project's dependencies.\n- .github/workflows/review_autofix.yml:4115 | severity=critical | confidence=[4]\n  PROBLEM: The Docker container mounts the entire workspace, including `.git/config`, which can contain the PAT in the origin URL.\n  WHY: A malicious package build hook can read `.git/config`, extract the PAT, and write it into a workspace path visible to the subsequent editor step.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8459caf5b202519ce3ee41bc9a1f653794e5efd013795ab021e288095fc8d0d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4273,
+    "run_id": "35701080313",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35701080313",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922092220_6a5af85d26",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4273,
+    "run_id": "35701080313"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-22T09:22:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
