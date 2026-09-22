@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Release and stable-marking behavior is maintained as a cross-workflow contract.",
   "timestamps": {
     "created_at": "2026-09-22T00:56:38Z",
