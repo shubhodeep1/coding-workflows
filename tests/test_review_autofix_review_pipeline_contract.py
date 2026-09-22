@@ -6492,6 +6492,14 @@ def test_dependency_install_never_bootstraps_pytest_on_the_privileged_host() -> 
 	assert "refusing privileged host installation" in result["output"], result["output"]
 
 
+def test_dependency_install_container_can_download_without_git_metadata() -> None:
+	step = _step_run_script("Install project dependencies (best-effort)")
+	assert "--network none" not in step
+	assert '--volume "${review_dependency_git_mask}:/workspace/.git:ro"' in step
+	assert "GH_TOKEN" not in step
+	assert "GH_PAT" not in step
+
+
 def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
 	result = _run_dependency_install_step(
 		{"pyproject.toml": "[tool.pytest.ini_options]\n"},

@@ -4101,6 +4101,7 @@ jobs:
             echo "Preparing Python dependencies in a disposable secretless container"
             rm -rf .ai/review-venv
             mkdir -p .ai
+            review_dependency_git_mask="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-dependency-git.XXXXXX")"
             python_install_command='python -m venv .ai/review-venv'
             if [ -f requirements.txt ]; then
               python_install_command="${python_install_command} && .ai/review-venv/bin/pip install -r requirements.txt"
@@ -4109,10 +4110,10 @@ jobs:
             fi
             if ! docker run --rm \
                 --user "$(id -u):$(id -g)" \
-                --network none \
                 --env HOME=/tmp/agent-home \
                 --env PIP_DISABLE_PIP_VERSION_CHECK=1 \
                 --volume "${PWD}:/workspace" \
+                --volume "${review_dependency_git_mask}:/workspace/.git:ro" \
                 --workdir /workspace \
                 python:3.12-slim sh -ceu "${python_install_command}"; then
               install_failed=true
@@ -4123,6 +4124,7 @@ jobs:
                 echo "PATH=${PWD}/.ai/review-venv/bin:${PATH}"
               } >> "$GITHUB_ENV"
             fi
+            rm -rf "${review_dependency_git_mask}"
           fi
           if [ "${install_failed}" = "true" ]; then
             echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
