@@ -269,7 +269,7 @@ def _extract_break_glass_python_snippet() -> str:
 	python_start = None
 	python_end = None
 	for idx in range(step_start, step_end):
-		if "python3 - <<'PY' >> \"$GITHUB_ENV\"" in lines[idx]:
+		if "-- - <<'PY' >> \"$GITHUB_ENV\"" in lines[idx]:
 			python_start = idx + 1
 			break
 	if python_start is None:

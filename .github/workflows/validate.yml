@@ -755,7 +755,9 @@ jobs:
           set -euo pipefail
 
           if [ -f "${SUPPORT_SCRIPTS_DIR}/render_validation_templates.py" ]; then
-            python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
+            python3 -I -B -m venv "${RUNNER_TEMP}/validation-renderer-venv"
+            "${RUNNER_TEMP}/validation-renderer-venv/bin/python" -I -B -m pip install --disable-pip-version-check --quiet pyyaml jsonschema jinja2
+            printf '%s\n' "${RUNNER_TEMP}/validation-renderer-venv/bin" >> "$GITHUB_PATH"
           else
             echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
           fi

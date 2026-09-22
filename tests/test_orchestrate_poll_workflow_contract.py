@@ -10,6 +10,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATE_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 ORCHESTRATE_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
+IMPLEMENT_WF = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+REVIEW_AUTOFIX_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+CLARIFY_WF = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
+ORCHESTRATE_CLARIFY_RESPOND_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_clarify_respond.yml"
+VALIDATE_WF = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 ORCHESTRATE_POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 SYNC_LIST_UNION_REQUIREMENTS = REPO_ROOT / "scripts" / "sync_contract_list_union.requirements.txt"
 
@@ -89,6 +95,84 @@ def test_orchestrate_run_start_support_is_immutable_and_fail_closed() -> None:
 	assert "::error::Immutable support source checkout unavailable" in stage
 	assert "::error::Missing required immutable run-start support script" in stage
 	assert "if: steps.run_start_support_checkout.outcome == 'success' && steps.run_start_support_stage.outcome == 'success'" in record
+
+
+def test_orchestrate_python_launches_are_isolated() -> None:
+	wf = _workflow(ORCHESTRATE_WF)
+	active_python_launches = [
+		(line_number, line)
+		for line_number, line in enumerate(wf.splitlines(), 1)
+		if not line.lstrip().startswith("#")
+		and re.search(r"\bpython(?:3)?\s+\S", line)
+	]
+	assert active_python_launches == [
+		(next(
+			line_number
+			for line_number, line in enumerate(wf.splitlines(), 1)
+			if 'python3 -I -B "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py"' in line
+		), '            python3 -I -B "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py" \\')
+	]
+	bootstrap_line = active_python_launches[0][0]
+	bootstrap_prefix = "\n".join(wf.splitlines()[bootstrap_line - 9:bootstrap_line - 1])
+	assert "env -i \\" in bootstrap_prefix
+	assert 'PYTHONDONTWRITEBYTECODE="1" \\' in bootstrap_prefix
+	assert wf.count("_gh_helpers_run_isolated_python") >= 12
+	isolated_python_step_blocks = [
+		block for block in re.split(r"\n(?=[ \t]+- name: )", wf)[1:]
+		if "_gh_helpers_run_isolated_python" in block
+	]
+	assert isolated_python_step_blocks
+	for isolated_python_step_block in isolated_python_step_blocks:
+		assert 'source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' in isolated_python_step_block
+		assert isolated_python_step_block.index('source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"') < isolated_python_step_block.index("_gh_helpers_run_isolated_python")
+	assert '"PROJECT_DESCRIPTION=${PROJECT_DESCRIPTION}" -- -' in wf
+	assert wf.count('"ORCHESTRATOR_STATE_AUTH_KEYRING=${ORCHESTRATOR_STATE_AUTH_KEYRING}" --') == 2
+	assert "PYTHONDONTWRITEBYTECODE=1 python3" not in wf
+
+
+def test_sibling_workflow_python_stdin_launches_are_isolated() -> None:
+	unsafe_launch_pattern = re.compile(
+		r"\bpython(?:3)?\s+(?!-I(?:\s|$)).*?(?:-(?:c|m)(?:\s|$)|-(?:\s|$))"
+	)
+	for workflow_path in (
+		IMPLEMENT_WF,
+		REVIEW_AUTOFIX_WF,
+		PLAN_WF,
+		CLARIFY_WF,
+		ORCHESTRATE_CLARIFY_RESPOND_WF,
+		VALIDATE_WF,
+	):
+		workflow_text = _workflow(workflow_path)
+		unsafe_launches = [
+			(line_number, line)
+			for line_number, line in enumerate(workflow_text.splitlines(), 1)
+			if not line.lstrip().startswith("#") and unsafe_launch_pattern.search(line)
+		]
+		assert unsafe_launches == [], f"unsafe Python launch in {workflow_path}: {unsafe_launches}"
+		for step_block in re.split(r"\n(?=[ \t]+- name: )", workflow_text)[1:]:
+			if "_gh_helpers_run_isolated_python" not in step_block:
+				continue
+			source_index = step_block.find("gh_helpers.sh\"")
+			call_index = step_block.find("_gh_helpers_run_isolated_python")
+			step_name = step_block.splitlines()[0].strip()
+			assert 0 <= source_index < call_index, f"isolated Python helper is not sourced first in {workflow_path} step {step_name}"
+	for redis_workflow_path, redis_venv_name in (
+		(CLARIFY_WF, "clarify-semantic-cache-venv"),
+		(ORCHESTRATE_CLARIFY_RESPOND_WF, "orchestrate-clarify-respond-semantic-cache-venv"),
+	):
+		redis_workflow_text = _workflow(redis_workflow_path)
+		assert f'python3 -I -B -m venv "${{RUNNER_TEMP}}/{redis_venv_name}"' in redis_workflow_text
+		assert f'"${{RUNNER_TEMP}}/{redis_venv_name}/bin/python" -I -B -m pip install --disable-pip-version-check "redis>=5,<6"' in redis_workflow_text
+		assert f'"${{RUNNER_TEMP}}/{redis_venv_name}/bin" >> "$GITHUB_PATH"' in redis_workflow_text
+		assert redis_workflow_text.count('"${SUPPORT_SCRIPTS_DIR}/semantic_cache.py"') == 2
+		assert 'python3 "${SUPPORT_SCRIPTS_DIR}/semantic_cache.py"' not in redis_workflow_text
+		assert redis_workflow_text.count("SEMANTIC_CACHE_REDIS_KEY_NAMESPACE: ${{ vars.SEMANTIC_CACHE_REDIS_KEY_NAMESPACE || '' }}") == 2
+		assert redis_workflow_text.count("SEMANTIC_CACHE_EMBEDDING_BASE_URL: ${{ vars.SEMANTIC_CACHE_EMBEDDING_BASE_URL || 'https://openrouter.ai/api/v1' }}") == 2
+		assert redis_workflow_text.count('"SEMANTIC_CACHE_REDIS_KEY_NAMESPACE=${SEMANTIC_CACHE_REDIS_KEY_NAMESPACE}"') == 2
+		assert redis_workflow_text.count('"SEMANTIC_CACHE_EMBEDDING_BASE_URL=${SEMANTIC_CACHE_EMBEDDING_BASE_URL}"') == 2
+		assert redis_workflow_text.count('"GITHUB_REPOSITORY=${GITHUB_REPOSITORY}" --') == 2
+		assert "semantic-cache-python" not in redis_workflow_text
+		assert "pip install --user" not in redis_workflow_text
 
 
 def test_nag_reminder_assets_and_judge_wiring_are_present() -> None:
@@ -261,6 +345,8 @@ def main() -> int:
 	test_stall_recovery_prompt_is_bootstrapped_from_immutable_workflow_source()
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
+	test_orchestrate_python_launches_are_isolated()
+	test_sibling_workflow_python_stdin_launches_are_isolated()
 	test_nag_reminder_assets_and_judge_wiring_are_present()
 	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
 	test_security_pass_dark_launch_env_and_assets_are_wired()

@@ -37,13 +37,17 @@ archive_transcript()
 		return 0
 	fi
 
-	if ! GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" \
-		PYTHONDONTWRITEBYTECODE=1 \
-		python3 - "${run_id}" "${phase}" "${source_path}" <<'PY'
+	if ! env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE="1" \
+		python3 -I -B - "${run_id}" "${phase}" "${source_path}" "${GITHUB_WORKSPACE:-$PWD}" <<'PY'
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -63,8 +67,8 @@ def sanitize_segment(value: str, fallback: str) -> str:
 	return cleaned or fallback
 
 
-run_id, phase, source_path = sys.argv[1:4]
-workspace_root = Path(os.environ.get("GITHUB_WORKSPACE") or os.getcwd())
+run_id, phase, source_path, workspace_path = sys.argv[1:5]
+workspace_root = Path(workspace_path)
 source_file = Path(source_path)
 
 if not source_file.is_file():

@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Hardened issue-pipeline and security-audit Python trust boundaries.** Clarification, planning, implementation, review/autofix, orchestration, validation, prompt rendering, transcript archiving, and audit filtering now run checkout-sensitive Python launches in isolated environments; security audits use immutable installer and exclusion policy sources, reject path escapes and matcher-less suppression rules, and no longer trust audited-checkout overrides.

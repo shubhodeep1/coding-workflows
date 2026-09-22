@@ -71,11 +71,6 @@ jobs:
             exit 1
           fi
           echo "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" >> "$GITHUB_ENV"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SECURITY_AUDIT_IS_SOURCE_REPO=true" >> "$GITHUB_ENV"
-          else
-            echo "SECURITY_AUDIT_IS_SOURCE_REPO=false" >> "$GITHUB_ENV"
-          fi
 
       - name: Checkout workflow support source
         uses: actions/checkout@v5
@@ -103,12 +98,7 @@ jobs:
           rm -rf .codex-workflow-src
           echo "SECURITY_AUDIT_SUPPORT_DIR=${SUPPORT_DIR}" >> "$GITHUB_ENV"
 
-      - name: Install Codex CLI (source repo)
-        if: env.SECURITY_AUDIT_IS_SOURCE_REPO == 'true'
-        uses: ./.github/actions/install-codex
-
-      - name: Install Codex CLI (consumer repos)
-        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'
+      - name: Install Codex CLI
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@f03b8d657a63d64b87324e8a1047a8b90d3221e0
 
       - name: Create Codex config

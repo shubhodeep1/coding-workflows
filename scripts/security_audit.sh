@@ -350,9 +350,11 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "${REPO_ROOT}"
 
 # Workflow runs stage this repo's scripts/prompts outside the audited checkout
-# and point SECURITY_AUDIT_SUPPORT_DIR at that immutable tree. Direct callers
-# that do not provide a staged path retain the repository-root fallback.
-SECURITY_AUDIT_SUPPORT_DIR="${SECURITY_AUDIT_SUPPORT_DIR:-${REPO_ROOT}}"
+# and point SECURITY_AUDIT_SUPPORT_DIR at that immutable tree.
+if [ -z "${SECURITY_AUDIT_SUPPORT_DIR:-}" ]; then
+	security_audit_emit_failure "support-preflight" "SECURITY_AUDIT_SUPPORT_DIR" "immutable support directory is required"
+	exit 1
+fi
 SECURITY_AUDIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! SECURITY_AUDIT_CANONICAL_SUPPORT_DIR="$(cd "${SECURITY_AUDIT_SUPPORT_DIR}" 2>/dev/null && pwd -P)"; then
 	security_audit_emit_failure "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}" "support directory is unavailable"
@@ -376,19 +378,31 @@ case "${SECURITY_AUDIT_ORCHESTRATE_LIB_PATH}" in
 esac
 SECURITY_AUDIT_ORCHESTRATE_LIB_DIR="$(dirname -- "${SECURITY_AUDIT_ORCHESTRATE_LIB_PATH}")"
 
-# Resolve the exclusion catalog: a copy in the audited repository wins (so a
-# consumer can pin its own catalog at the default relative path); otherwise a
-# relative path falls back to the staged support tree.
-if [ ! -f "${SECURITY_AUDIT_FP_EXCLUSIONS}" ] \
-	&& [[ "${SECURITY_AUDIT_FP_EXCLUSIONS}" != /* ]] \
-	&& [ -f "${SECURITY_AUDIT_SUPPORT_DIR}/${SECURITY_AUDIT_FP_EXCLUSIONS}" ]; then
-	SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_SUPPORT_DIR}/${SECURITY_AUDIT_FP_EXCLUSIONS}"
+# Exclusion policy is executable audit policy, not audited-repository data.
+# Resolve relative paths only beneath immutable support, and canonicalize the
+# final file so traversal and symlink escapes fail closed.
+if [[ "${SECURITY_AUDIT_FP_EXCLUSIONS}" = /* ]]; then
+	SECURITY_AUDIT_FP_EXCLUSIONS_CANDIDATE="${SECURITY_AUDIT_FP_EXCLUSIONS}"
+else
+	SECURITY_AUDIT_FP_EXCLUSIONS_CANDIDATE="${SECURITY_AUDIT_SUPPORT_DIR}/${SECURITY_AUDIT_FP_EXCLUSIONS}"
 fi
-
-[ -f "${SECURITY_AUDIT_FP_EXCLUSIONS}" ] || {
-	echo "SECURITY_AUDIT_FP_EXCLUSIONS not found: ${SECURITY_AUDIT_FP_EXCLUSIONS}" >&2
+if ! SECURITY_AUDIT_FP_EXCLUSIONS_PATH="$(realpath -e -- "${SECURITY_AUDIT_FP_EXCLUSIONS_CANDIDATE}" 2>/dev/null)"; then
+	security_audit_emit_failure "support-preflight" "${SECURITY_AUDIT_FP_EXCLUSIONS_CANDIDATE}" "exclusion catalog cannot be canonicalized"
 	exit 1
-}
+fi
+case "${SECURITY_AUDIT_FP_EXCLUSIONS_PATH}" in
+	"${SECURITY_AUDIT_SUPPORT_DIR}"/*)
+		;;
+	*)
+		security_audit_emit_failure "support-preflight" "${SECURITY_AUDIT_FP_EXCLUSIONS_CANDIDATE}" "exclusion catalog resolves outside the canonical support directory"
+		exit 1
+		;;
+esac
+if [ ! -f "${SECURITY_AUDIT_FP_EXCLUSIONS_PATH}" ]; then
+	security_audit_emit_failure "support-preflight" "${SECURITY_AUDIT_FP_EXCLUSIONS_CANDIDATE}" "exclusion catalog is not a regular file"
+	exit 1
+fi
+SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_FP_EXCLUSIONS_PATH}"
 
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 
@@ -1344,6 +1358,8 @@ def normalize_exclusions(raw_exclusions: object) -> list[dict[str, object]]:
 					fail(f"security-audit exclusion rule {rule_id} contains entries must be non-empty strings")
 				needles.append(needle.strip().lower())
 			normalized_contains[key] = needles
+		if not normalized_fields and not any(normalized_contains.values()):
+			fail(f"security-audit exclusion rule {rule_id} requires at least one effective matcher")
 		normalized_rules.append(
 			{
 				"id": rule_id,

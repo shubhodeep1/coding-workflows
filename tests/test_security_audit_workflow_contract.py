@@ -152,6 +152,10 @@ def _install_security_audit_support_tree(base_dir: Path, *, failure_mode: str) -
 		(REPO_ROOT / "scripts" / "orchestrate_lib.py").read_text(encoding="utf-8"),
 		encoding="utf-8",
 	)
+	(scripts_dir / "security_audit_fp_exclusions.json").write_text(
+		(REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json").read_text(encoding="utf-8"),
+		encoding="utf-8",
+	)
 
 	render_helper_path = scripts_dir / "render_prompt.sh"
 	if failure_mode == "render_failure":
@@ -184,6 +188,7 @@ def _run_security_audit(
 	extra_env: dict | None = None,
 	cwd: Path | None = None,
 	support_failure_mode: str | None = None,
+	support_dir: Path | None = None,
 	script_args: tuple[str, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="security-audit-test-") as td:
@@ -238,10 +243,14 @@ def _run_security_audit(
 				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
 			}
 		)
-		if support_failure_mode is not None:
+		if support_dir is not None:
+			env["SECURITY_AUDIT_SUPPORT_DIR"] = str(support_dir)
+		elif support_failure_mode is not None:
 			env["SECURITY_AUDIT_SUPPORT_DIR"] = str(
 				_install_security_audit_support_tree(tmp_path, failure_mode=support_failure_mode)
 			)
+		else:
+			env["SECURITY_AUDIT_SUPPORT_DIR"] = str(REPO_ROOT)
 		env.update(extra_env or {})
 		proc = subprocess.run(
 			["bash", "--noprofile", "--norc", str(SCRIPT_PATH), *script_args],
@@ -383,11 +392,11 @@ def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	assert "if:" not in support_stage_block
 	assert "ref: ${{ env.SCRIPT_REF }}" in support_checkout_block
 	assert 'rm -rf .codex-workflow-src' in support_stage_block
-	# Source-repo runs must keep using the local action so branch-local changes
-	# to install-codex stay testable; consumer-called runs use the reviewed immutable ref.
-	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO == 'true'" in content
-	assert 'uses: ./.github/actions/install-codex' in content
-	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'" in content
+	# The audited checkout is data for both source and consumer runs. Installer
+	# execution must therefore come only from the reviewed immutable ref.
+	assert "SECURITY_AUDIT_IS_SOURCE_REPO" not in content
+	assert 'uses: ./.github/actions/install-codex' not in content
+	assert content.count("- name: Install Codex CLI") == 1
 	assert 'uses: shubhodeep1/coding-workflows/.github/actions/install-codex@f03b8d657a63d64b87324e8a1047a8b90d3221e0' in content
 	assert 'scripts/write_codex_config.sh' in content
 	assert '--catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/codex_model_catalog.json"' in content
@@ -476,8 +485,10 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 	assert codex_helpers_content.count("_codex_helpers_run_isolated_python") == 5
 	assert 'RENDER_PROMPT_PYTHON_ARGS=(-I -B)' in render_prompt_content
 	assert 'ASSEMBLE_PROMPT_PYTHON_ARGS=(-I -B)' in assemble_prompt_content
-	assert '1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])' in render_prompt_content
-	assert '1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])' in assemble_prompt_content
+	assert "render_prompt_run_isolated_python" in render_prompt_content
+	assert "assemble_prompt_run_isolated_python" in assemble_prompt_content
+	assert "local -a isolated_environment=(env -i" in render_prompt_content
+	assert "local -a isolated_environment=(env -i" in assemble_prompt_content
 
 
 def test_security_audit_uses_workflow_editor_model_with_stable_fallback() -> None:
@@ -969,6 +980,131 @@ def test_security_audit_isolated_python_blocks_checkout_startup_forgery_and_loca
 	assert payload["counts"]["kept"] == 1
 	assert not local_import_marker.exists()
 	assert not startup_marker.exists()
+
+
+def test_security_audit_ignores_audited_checkout_exclusion_catalog() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-exclusion-provenance-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, head_sha = _git_fixture_repo(tmp_path)
+		support_dir = _install_security_audit_support_tree(tmp_path, failure_mode="")
+		output_path = tmp_path / "findings.json"
+		checkout_catalog = repo_dir / "scripts" / "security_audit_fp_exclusions.json"
+		checkout_catalog.parent.mkdir(parents=True, exist_ok=True)
+		checkout_catalog.write_text(
+			json.dumps(
+				{
+					"schema_version": "security_audit_fp_exclusions.v1",
+					"rules": [
+						{
+							"id": "checkout-controlled-suppression",
+							"reason": "This untrusted rule must never be loaded.",
+							"fields": {"file": "file_b.py"},
+							"contains": {},
+						}
+					],
+				}
+			),
+			encoding="utf-8",
+		)
+		proc, final_state = _run_security_audit(
+			{},
+			cwd=repo_dir,
+			support_dir=support_dir,
+			codex_output=json.dumps([_finding_payload("must-survive", file_path="file_b.py")]),
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_FP_EXCLUSIONS": "scripts/security_audit_fp_exclusions.json",
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["must-survive"]
+
+
+def test_security_audit_requires_explicit_support_directory() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-support-provenance-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, _, _ = _git_fixture_repo(tmp_path)
+		proc, final_state = _run_security_audit(
+			{},
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"SECURITY_AUDIT_SUPPORT_DIR": "",
+			},
+		)
+
+	assert proc.returncode != 0
+	assert "error=immutable\\ support\\ directory\\ is\\ required" in proc.stderr
+	assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_rejects_exclusion_catalog_path_escapes() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-exclusion-path-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		support_dir = _install_security_audit_support_tree(tmp_path, failure_mode="")
+		outside_catalog = tmp_path / "outside.json"
+		outside_catalog.write_text(
+			json.dumps({"schema_version": "security_audit_fp_exclusions.v1", "rules": []}),
+			encoding="utf-8",
+		)
+		symlink_catalog = support_dir / "scripts" / "escaping.json"
+		symlink_catalog.symlink_to(outside_catalog)
+
+		for configured_path in ("../outside.json", "scripts/escaping.json", str(outside_catalog)):
+			proc, final_state = _run_security_audit(
+				{},
+				support_dir=support_dir,
+				extra_env={
+					"SECURITY_AUDIT_FP_EXCLUSIONS": configured_path,
+					"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+					"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				},
+			)
+			assert proc.returncode != 0
+			assert "error=exclusion\\ catalog\\ resolves\\ outside\\ the\\ canonical\\ support\\ directory" in proc.stderr
+			assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_rejects_matcherless_exclusion_rules() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-exclusion-matcher-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		support_dir = _install_security_audit_support_tree(tmp_path, failure_mode="")
+		matcherless_catalog = support_dir / "scripts" / "matcherless.json"
+		matcherless_catalog.write_text(
+			json.dumps(
+				{
+					"schema_version": "security_audit_fp_exclusions.v1",
+					"rules": [
+						{
+							"id": "suppress-everything",
+							"reason": "An empty predicate would match every finding.",
+							"fields": {},
+							"contains": {},
+						}
+					],
+				}
+			),
+			encoding="utf-8",
+		)
+		proc, _ = _run_security_audit(
+			{},
+			support_dir=support_dir,
+			codex_output=json.dumps([_finding_payload("must-not-be-suppressed")]),
+			extra_env={
+				"SECURITY_AUDIT_FP_EXCLUSIONS": "scripts/matcherless.json",
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+			},
+		)
+
+	assert proc.returncode != 0
+	assert "requires at least one effective matcher" in proc.stderr
 
 
 def test_security_audit_explicit_diff_scope_filters_changed_files() -> None:

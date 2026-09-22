@@ -640,6 +640,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --ensure-branch
 
@@ -969,6 +970,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
           memory_bootstrap --require memory_retrieve
 
@@ -990,7 +992,7 @@ jobs:
             --scope-level "global" \
             --max "10"
 
-          python3 - <<'PY' "${RUNTIME_DIR}/repo_learnings_context.txt" "${RUNTIME_DIR}/repo_learnings.txt"
+          _gh_helpers_run_isolated_python -- - "${RUNTIME_DIR}/repo_learnings_context.txt" "${RUNTIME_DIR}/repo_learnings.txt" <<'PY'
           from pathlib import Path
           import sys
 
@@ -1505,6 +1507,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           # Template-owned paths are fetched from coding-workflows templates
           # at runtime and excluded from Codex commits in implement.yml.  A
           # plan that targets those paths cannot be committed by the
@@ -1586,7 +1589,7 @@ jobs:
           : > "${TEMPLATE_PATH_BLOCKED_FILE}"
           : > "${FETCHED_SCRIPTS_IGNORE_FILE}"
           if [ -f "${IMPLEMENT_WORKFLOW_SOURCE_FILE}" ] && [ -f scripts/.gitignore ]; then
-            if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${IMPLEMENT_WORKFLOW_SOURCE_FILE}" scripts/.gitignore "${FETCHED_SCRIPTS_IGNORE_FILE}" <<'PY'; then
+            if ! _gh_helpers_run_isolated_python -- - "${IMPLEMENT_WORKFLOW_SOURCE_FILE}" scripts/.gitignore "${FETCHED_SCRIPTS_IGNORE_FILE}" <<'PY'; then
           import re
           import sys
           from pathlib import Path
@@ -1636,7 +1639,7 @@ jobs:
           fi
           while IFS= read -r template_path_candidate; do
             [ -n "${template_path_candidate}" ] || continue
-            normalized_template_path_candidate="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import posixpath, sys; print(posixpath.normpath(sys.argv[1]))' "${template_path_candidate}")"
+            normalized_template_path_candidate="$(_gh_helpers_run_isolated_python -- -c 'import posixpath, sys; print(posixpath.normpath(sys.argv[1]))' "${template_path_candidate}")"
             # Fail closed when lexical normalization escapes the roots this
             # guard knows how to classify.
             case "${normalized_template_path_candidate}" in

@@ -2042,16 +2042,23 @@ run_template_validation_harness_renderer()
 		printf '\n--- python3 environment probe ---\n'
 		printf 'command -v python3: %s\n' "$(command -v python3 2>&1 || echo 'not found')"
 		printf 'python3 -V: %s\n' "$("${python3_bin}" -V 2>&1 || echo 'failed')"
-		"${python3_bin}" -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))' 2>&1 \
+		"${python3_bin}" -I -B -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))' 2>&1 \
 			|| printf '(python3 -c probe failed)\n'
 		printf '--- end python3 environment probe ---\n'
 	} >> "${GENERATE_LOG_FILE}" 2>&1
-	if ! "${python3_bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+	if ! "${python3_bin}" -I -B -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
 		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $("${python3_bin}" -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
 		return 17
 	fi
 
-	if ! renderer_summary="$("${python3_bin}" "${renderer_script}" \
+	if ! renderer_summary="$(env -i \
+		HOME="${HOME:-}" \
+		PATH="/usr/bin:/bin" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE="1" \
+		"${python3_bin}" -I -B "${renderer_script}" \
 		--manifest "${manifest_path}" \
 		--schema "${schema_path}" \
 		--templates-root "${templates_root}" \

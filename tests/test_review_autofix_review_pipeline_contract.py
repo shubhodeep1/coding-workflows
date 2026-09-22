@@ -558,6 +558,7 @@ def _git_clean_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
 		for key, value in os.environ.items()
 		if not key.startswith("GIT_") and key not in {"BASH_ENV", "ENV"}
 	}
+	env.setdefault("SUPPORT_SCRIPTS_DIR", str(REPO_ROOT / "scripts"))
 	if overrides:
 		env.update(overrides)
 	return env
@@ -854,8 +855,11 @@ def _diff_changed_paths(diff_text: str) -> list[str]:
 def _gate_agents_md_materiality_classifier_script() -> str:
 	gate_block = _step_block("Evaluate review gate").splitlines()
 	start_idx = -1
+	materiality_environment_seen = False
 	for idx, line in enumerate(gate_block):
-		if "gate_materiality_json" in line and "python3 - <<'PY'" in line:
+		if 'PR_FILES_JSON="${pr_files_json}"' in line:
+			materiality_environment_seen = True
+		elif materiality_environment_seen and "python3 -I -B - <<'PY'" in line:
 			start_idx = idx + 1
 			break
 	if start_idx < 0:
@@ -2190,6 +2194,7 @@ def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | Non
 		env.update({
 			"RUNTIME_DIR": str(runtime),
 			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 			"EDITOR_SUMMARY_FILE": str(runtime / "editor_summary.txt"),
 			"COMMITTED_FILES_FILE": str(runtime / "committed_files.txt"),
 			"GITHUB_STEP_SUMMARY": str(step_summary),
@@ -2451,7 +2456,7 @@ def _build_partial_finalize_step_context(tmp: Path) -> dict[str, object]:
 	support_scripts_dir = tmp / "support_scripts"
 	support_scripts_dir.mkdir()
 	(support_scripts_dir / "gh_helpers.sh").write_text(
-		"#!/usr/bin/env bash\nset -euo pipefail\ngh_retry() { \"$@\"; }\n",
+		(REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8"),
 		encoding="utf-8",
 	)
 	bin_dir = tmp / "bin"
@@ -4285,7 +4290,8 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert 'issues/${PR_NUMBER}/comments' in advisory_block
 	assert 'AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality' in gate_block
 	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in gate_block
-	assert 'PR_FILES_JSON="${pr_files_json}" python3 - <<\'PY\'' in gate_block
+	assert 'PR_FILES_JSON="${pr_files_json}" \\' in gate_block
+	assert "python3 -I -B - <<'PY'" in gate_block
 	assert "=== BEGIN UNTRUSTED AGENTS MD MATERIALITY RESULT ===" in prompt_text
 	assert "SEVERITY: high` by default" in prompt_text
 
@@ -5045,7 +5051,7 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		"${RUNTIME_DIR}/consolidator_raw.txt",
 		"${RUNTIME_DIR}/parser_stats.txt",
 		"${RUNTIME_DIR}/ledger_status.txt",
-		'COMMITTED_FILES_FILE="${committed_files_file}"',
+		'"COMMITTED_FILES_FILE=${committed_files_file}"',
 		"grep -c 'CONSOLIDATOR_OVERRIDDEN:' \"${EDITOR_SUMMARY_FILE}\"",
 		"EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}",
 		"MAX_ITERATIONS_REACHED: ${{ steps.retrigger_guard.outputs.max_iterations_reached }}",
@@ -5370,8 +5376,8 @@ def test_review_partial_finalize_workflow_path_is_wired() -> None:
 
 	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in early_save_block
 	for expected in (
-		'CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}"',
-		'CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}"',
+		'"CURRENT_PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR:-}"',
+		'"CURRENT_RUNTIME_DIR=${RUNTIME_DIR:-}"',
 		'"AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT": "0",',
 		'selected_marker_root / "previous_reviews"',
 		'selected_marker_root / "runtime"',
@@ -5396,9 +5402,9 @@ def test_review_partial_finalize_workflow_path_is_wired() -> None:
 		"resume_round_limit=${resume_round_limit}",
 		"resume_state=${RESUME_STATE}",
 		"resume_should_continue=${RESUME_SHOULD_CONTINUE}",
-		'VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}"',
-		'EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}"',
-		'WITHHELD_REASON="${withheld_reason}"',
+		'"VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}"',
+		'"EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}"',
+		'"WITHHELD_REASON=${withheld_reason}"',
 		'"validation_tail_can_complete": parse_bool("VALIDATION_TAIL_CAN_COMPLETE"),',
 		'"edits_withheld_for_safety": parse_bool("EDITS_WITHHELD_FOR_SAFETY"),',
 		'"withheld_reason": os.environ.get("WITHHELD_REASON", "").strip() or "none",',

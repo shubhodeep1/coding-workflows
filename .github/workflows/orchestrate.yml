@@ -454,7 +454,14 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py" \
+          env -i \
+            HOME="${HOME:-}" \
+            PATH="${PATH:-/usr/bin:/bin}" \
+            TMPDIR="${TMPDIR:-/tmp}" \
+            LANG="C.UTF-8" \
+            LC_ALL="C.UTF-8" \
+            PYTHONDONTWRITEBYTECODE="1" \
+            python3 -I -B "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "${orchestrate_immutable_support_root}/ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
@@ -661,7 +668,8 @@ jobs:
           # whole step (which is the common case for non-enumerated
           # dispatches) — Python's regex returns an empty list cleanly
           # and the `or 1` fallback handles it.
-          EXPECTED_MIN_ISSUES="$(PROJECT_DESCRIPTION="${PROJECT_DESCRIPTION}" python3 - <<'PYEOF'
+          EXPECTED_MIN_ISSUES="$(_gh_helpers_run_isolated_python \
+            "PROJECT_DESCRIPTION=${PROJECT_DESCRIPTION}" -- - <<'PYEOF'
           import os, re
           text = os.environ.get("PROJECT_DESCRIPTION", "")
           # Accepted marker forms: case-insensitive `Issue`, optional
@@ -741,7 +749,7 @@ jobs:
                 last_status="empty output"
               else
                 # Try to extract a JSON object from the response.
-                if python3 - "${CODEX_OUTPUT_FILE}" "${DECOMPOSITION_FILE}" <<'PYEOF'
+                if _gh_helpers_run_isolated_python -- - "${CODEX_OUTPUT_FILE}" "${DECOMPOSITION_FILE}" <<'PYEOF'
           import json, re, sys
 
           raw = open(sys.argv[1]).read()
@@ -897,6 +905,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
+
           git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
           export GIT_CONFIG_COUNT=1
           export GIT_CONFIG_KEY_0=http.extraHeader
@@ -908,7 +918,7 @@ jobs:
           # `len(issues) >= EXPECTED_MIN_ISSUES`. This step only re-runs
           # the schema-shape validation (id uniqueness, edge references,
           # cycle detection, files_touched normalization).
-          python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" validate --input-file "${DECOMPOSITION_FILE}"
+          _gh_helpers_run_isolated_python -- "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" validate --input-file "${DECOMPOSITION_FILE}"
           echo "Decomposition validated successfully."
 
           # Fetch the conflict-telemetry JSONL from the ai-memory branch
@@ -947,7 +957,7 @@ jobs:
           HOT_FILE_MIN_EVENTS="${ORCHESTRATOR_HOT_FILE_MIN_EVENTS:-3}"
           HOT_FILE_MIN_PROJECTS="${ORCHESTRATOR_HOT_FILE_MIN_PROJECTS:-2}"
           PARTITION_REPORT_FILE="${RUNTIME_DIR}/partition_report.json"
-          python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" check-partition \
+          _gh_helpers_run_isolated_python -- "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" check-partition \
             --input-file "${DECOMPOSITION_FILE}" \
             --conflict-telemetry-jsonl "${TELEMETRY_JSONL}" \
             --telemetry-window-days "${HOT_FILE_WINDOW_DAYS}" \
@@ -975,7 +985,7 @@ jobs:
           # Compute waves with auto-serialize and write the resulting
           # dependency_edges back into DECOMPOSITION_FILE so tracking-body
           # build + Wave 1 dispatch consume the post-serialization graph.
-          python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" compute-waves \
+          _gh_helpers_run_isolated_python -- "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" compute-waves \
             --input-file "${DECOMPOSITION_FILE}" \
             --conflict-telemetry-jsonl "${TELEMETRY_JSONL}" \
             --telemetry-window-days "${HOT_FILE_WINDOW_DAYS}" \
@@ -1010,7 +1020,7 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
 
           # Build tracking issue body
-          python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" build-tracking-body \
+          _gh_helpers_run_isolated_python -- "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" build-tracking-body \
             --input-file "${DECOMPOSITION_FILE}" > "${TRACKING_BODY_FILE}"
 
           PROJECT_TITLE="$(jq -r '.project_title' "${DECOMPOSITION_FILE}")"
@@ -1060,16 +1070,21 @@ jobs:
             _tracking_marker_bound_file="$(mktemp)"
             jq -n --arg body "${TRACKING_COMMENT_INPUT}" '[{body: $body, user: {id: 41898282}}]' > "${_tracking_marker_comments_file}"
             if [ -z "${ORCHESTRATOR_STATE_AUTH_KEYRING:-}" ] \
-              || ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" select-comprehensive-marker \
+              || ! _gh_helpers_run_isolated_python \
+                "ORCHESTRATOR_STATE_AUTH_KEYRING=${ORCHESTRATOR_STATE_AUTH_KEYRING}" -- \
+                "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" select-comprehensive-marker \
                 --comments-json "${_tracking_marker_comments_file}" --repository "${{ github.repository }}" \
                 --producer-id 41898282 --tracking-issue 0 --out-file "${_tracking_marker_selected_file}" >/dev/null \
               || [ "$(jq -r '.marker.smoke_actor_id // 0' "${_tracking_marker_selected_file}" 2>/dev/null || echo 0)" != "${TRACKING_COMMENT_CALLER_ACTOR_ID:-}" ]; then
               _binding_failed_stage="comment-auth"
             elif ! jq -e '.marker' "${_tracking_marker_selected_file}" > "${_tracking_marker_unbound_file}" \
-              || ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" bind-comprehensive-marker \
+              || ! _gh_helpers_run_isolated_python \
+                "ORCHESTRATOR_STATE_AUTH_KEYRING=${ORCHESTRATOR_STATE_AUTH_KEYRING}" -- \
+                "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" bind-comprehensive-marker \
                 --envelope-file "${_tracking_marker_unbound_file}" --repository "${{ github.repository }}" \
                 --producer-id 41898282 --tracking-issue "${TRACKING_ISSUE_NUMBER}" --out-file "${_tracking_marker_bound_file}" >/dev/null \
-              || ! TRACKING_COMMENT_INPUT="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${_tracking_marker_comments_file}" "${_tracking_marker_bound_file}" <<'PY'
+              || ! TRACKING_COMMENT_INPUT="$(_gh_helpers_run_isolated_python -- - \
+                "${_tracking_marker_comments_file}" "${_tracking_marker_bound_file}" <<'PY'
           import json
           import sys
           from pathlib import Path
@@ -1157,7 +1172,7 @@ jobs:
             echo "Created integration branch ${INTEGRATION_BRANCH} from ${DEFAULT_BRANCH}@${BASE_SHA}"
           fi
 
-          python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" build-tracking-body \
+          _gh_helpers_run_isolated_python -- "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" build-tracking-body \
             --input-file "${DECOMPOSITION_FILE}" \
             --integration-branch "${INTEGRATION_BRANCH}" > "${TRACKING_BODY_FILE}"
 
@@ -1184,19 +1199,23 @@ jobs:
           # Only create Wave 1 issues now. Later-wave issues are created by the
           # poller when their dependencies are met (deferred creation). This
           # ensures clarify.yml fires on issues.opened at the right time.
-          WAVE1_IDS="$(python3 -I -B -c "
-          import json, sys
-          sys.path.insert(0, '${SUPPORT_SCRIPTS_DIR}')
-          from orchestrate_lib import validate_decomposition, compute_waves
+          WAVE1_IDS="$(_gh_helpers_run_isolated_python -- - \
+            "${SUPPORT_SCRIPTS_DIR}" "${DECOMPOSITION_FILE}" <<'PY'
+          import json
+          import sys
 
-          with open('${DECOMPOSITION_FILE}') as f:
-              data = json.load(f)
+          sys.path.insert(0, sys.argv[1])
+          from orchestrate_lib import compute_waves, validate_decomposition
+
+          with open(sys.argv[2], encoding="utf-8") as handle:
+              data = json.load(handle)
 
           validate_decomposition(data)
           waves = compute_waves(data)
           for issue in waves[0]:
-              print(issue['id'])
-          ")"
+              print(issue["id"])
+          PY
+          )"
 
           echo "Wave 1 issue IDs: ${WAVE1_IDS}"
 
@@ -1268,31 +1287,33 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 
           # Build state using Python helper
-          python3 -I -B -c "
+          _gh_helpers_run_isolated_python -- - \
+            "${SUPPORT_SCRIPTS_DIR}" \
+            "${DECOMPOSITION_FILE}" \
+            "${RUNTIME_DIR}/issue_map.json" \
+            "${INTEGRATION_BRANCH}" \
+            "${TRACKING_ISSUE_NUMBER}" \
+            "${STATE_FILE}" <<'PY'
           import json
-
-          with open('${DECOMPOSITION_FILE}') as f:
-              data = json.load(f)
-
-          with open('${RUNTIME_DIR}/issue_map.json') as f:
-              issue_map_raw = json.load(f)
-
-          # Convert string values to ints
-          issue_map = {k: int(v) for k, v in issue_map_raw.items()}
-
-          # Import the library
           import sys
-          sys.path.insert(0, '${SUPPORT_SCRIPTS_DIR}')
-          from orchestrate_lib import validate_decomposition, compute_waves, build_tracking_state
 
+          sys.path.insert(0, sys.argv[1])
+          from orchestrate_lib import build_tracking_state, compute_waves, validate_decomposition
+
+          with open(sys.argv[2], encoding="utf-8") as handle:
+              data = json.load(handle)
+          with open(sys.argv[3], encoding="utf-8") as handle:
+              issue_map_raw = json.load(handle)
+
+          issue_map = {key: int(value) for key, value in issue_map_raw.items()}
           validate_decomposition(data)
           waves = compute_waves(data)
-          state = build_tracking_state(data, waves, issue_map, integration_branch='${INTEGRATION_BRANCH}')
-          state['tracking_issue'] = int('${TRACKING_ISSUE_NUMBER}')
+          state = build_tracking_state(data, waves, issue_map, integration_branch=sys.argv[4])
+          state["tracking_issue"] = int(sys.argv[5])
 
-          with open('${STATE_FILE}', 'w') as f:
-              json.dump(state, f, indent=2)
-          "
+          with open(sys.argv[6], "w", encoding="utf-8") as handle:
+              json.dump(state, handle, indent=2)
+          PY
 
           # Post state as a hidden comment on the tracking issue for the poller
           STATE_COMMENT="$(cat <<EOF
@@ -1346,7 +1367,8 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 
           # Get wave 1 issues from state
-          WAVE1_ISSUES="$(python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" next-wave --state-file "${STATE_FILE}")"
+          WAVE1_ISSUES="$(_gh_helpers_run_isolated_python -- \
+            "${SUPPORT_SCRIPTS_DIR}/orchestrate_lib.py" next-wave --state-file "${STATE_FILE}")"
           echo "Wave 1 dispatch: ${WAVE1_ISSUES}"
 
           ACTION="$(echo "${WAVE1_ISSUES}" | jq -r '.action')"
