@@ -494,11 +494,18 @@ def test_guard_skips_the_canonical_coding_workflows_repository() -> None:
 
 def test_workflow_materializes_issue_body_for_generated_advisory_guard() -> None:
 	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
+	workflow = yaml.safe_load(workflow_text)
+	steps = workflow["jobs"]["plan"]["steps"]
+	guard = next(step for step in steps if step.get("name") == GUARD_STEP_NAME)
 	assert 'echo "ISSUE_BODY_FILE=${RUNTIME_DIR}/issue_body.txt"' in workflow_text
 	assert 'jq -r \'.body // ""\' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}"' in workflow_text
 	assert 'echo "ISSUE_AUTHOR_LOGIN=$(jq -r \'.user.login // ""\' "${ISSUE_META_FILE}")"' in workflow_text
 	assert '--issue-author-login "${ISSUE_AUTHOR_LOGIN}"' in workflow_text
 	assert "id: fetch_issue_metadata" in workflow_text
+	assert 'echo "issue_author_association=$(jq -r \'.author_association // ""\' "${ISSUE_META_FILE}")"' in workflow_text
+	assert 'echo "issue_author_login=$(jq -r \'.user.login // ""\' "${ISSUE_META_FILE}")"' in workflow_text
+	assert guard["env"]["ISSUE_AUTHOR_ASSOCIATION"] == "${{ steps.fetch_issue_metadata.outputs.issue_author_association }}"
+	assert guard["env"]["ISSUE_AUTHOR_LOGIN"] == "${{ steps.fetch_issue_metadata.outputs.issue_author_login }}"
 	assert 'echo "issue_body_sha256=${issue_body_sha256}"' in workflow_text
 	assert 'echo "scope_guard_sha256=${scope_guard_sha256}"' in workflow_text
 	assert "ISSUE_BODY_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.issue_body_sha256 }}" in workflow_text

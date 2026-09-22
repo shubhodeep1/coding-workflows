@@ -1177,6 +1177,13 @@ def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> 
 	assert "steps.checkout_ref.outputs.ref" not in fetch_block, (
 		"PR_BASE_BRANCH must not follow the optional prior_pr_baseline_branch checkout override"
 	)
+	assert 'echo "issue_author_association=$(jq -r \'.author_association // ""\' "${ISSUE_META_FILE}")"' in fetch_block
+	assert 'echo "issue_author_login=$(jq -r \'.user.login // ""\' "${ISSUE_META_FILE}")"' in fetch_block
+
+	for guarded_step_name in ("Preflight destructive-commit guard", "Commit changes"):
+		guarded_step = _step_block_text(guarded_step_name)
+		assert "ISSUE_AUTHOR_ASSOCIATION: ${{ steps.fetch_issue_metadata.outputs.issue_author_association }}" in guarded_step
+		assert "ISSUE_AUTHOR_LOGIN: ${{ steps.fetch_issue_metadata.outputs.issue_author_login }}" in guarded_step
 
 
 def test_fetch_issue_metadata_reuses_matching_cache_without_api_call() -> None:

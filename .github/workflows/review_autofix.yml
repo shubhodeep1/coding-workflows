@@ -1784,18 +1784,39 @@ jobs:
           SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
 
           # The branch-pinned staging helper can predate these artifacts. Keep
-          # the metadata producer, validator, and main-primary commit producers
-          # on one revision even while reviewing an in-flight stale branch.
-          for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py; do
-            metadata_guard_support_src=".codex-workflow-src-main/scripts/${metadata_guard_support_file}"
-            if [ ! -f "${metadata_guard_support_src}" ]; then
-              metadata_guard_support_src=".codex-workflow-src/scripts/${metadata_guard_support_file}"
+          # every metadata producer, validator, and commit producer on one
+          # complete snapshot even while reviewing an in-flight stale branch.
+          security_sensitive_support_files=(
+            review_collect_pr_metadata.sh
+            files_touched_scope_guard.py
+            review_commit_changes.sh
+            review_conflict_prepare.sh
+            review_conflict_resolve.sh
+            review_rb_judge.sh
+          )
+          security_sensitive_support_root=".codex-workflow-src-main"
+          for security_sensitive_support_file in "${security_sensitive_support_files[@]}"; do
+            if [ ! -f "${security_sensitive_support_root}/scripts/${security_sensitive_support_file}" ]; then
+              security_sensitive_support_root=".codex-workflow-src"
+              break
             fi
-            if [ ! -f "${metadata_guard_support_src}" ]; then
-              echo "::error::Required metadata guard support ${metadata_guard_support_file} is unavailable in both support snapshots."
+          done
+          for security_sensitive_support_file in "${security_sensitive_support_files[@]}"; do
+            security_sensitive_support_src="${security_sensitive_support_root}/scripts/${security_sensitive_support_file}"
+            if [ ! -f "${security_sensitive_support_src}" ]; then
+              echo "::error::Required security-sensitive support set is incomplete in ${security_sensitive_support_root}; refusing to mix support snapshots."
               exit 1
             fi
-            install -m 0755 "${metadata_guard_support_src}" "${SUPPORT_SCRIPTS_DIR}/${metadata_guard_support_file}"
+          done
+          for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py; do
+            install -m 0755 \
+              "${security_sensitive_support_root}/scripts/${metadata_guard_support_file}" \
+              "${SUPPORT_SCRIPTS_DIR}/${metadata_guard_support_file}"
+          done
+          for commit_producer_support_file in review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh review_rb_judge.sh; do
+            install -m 0755 \
+              "${security_sensitive_support_root}/scripts/${commit_producer_support_file}" \
+              "${SUPPORT_SCRIPTS_DIR}/${commit_producer_support_file}"
           done
 
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then

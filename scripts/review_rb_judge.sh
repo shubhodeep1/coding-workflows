@@ -17,6 +17,20 @@ fi
 rm -f /tmp/_rb_judge_syntax_err
 
 set -euo pipefail
+
+verify_review_scope_guard_integrity()
+{
+	local scope_guard_path="${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"
+	local scope_guard_actual_sha256
+
+	scope_guard_actual_sha256="$(sha256sum "${scope_guard_path}" 2>/dev/null | awk '{print $1}')"
+	if ! [[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+		|| ! [[ "${scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]] \
+		|| [ "${scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ]; then
+		echo "::error::Refusing [judge-fix] commit: generated-advisory scope validator changed after the writer ran."
+		return 1
+	fi
+}
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-/tmp/codex-support}"
 if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
   if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then
@@ -2046,6 +2060,7 @@ __EDIT_DISCIPLINE__
           LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
         fi
         rb_generated_advisory_scope_rc=30
+        verify_review_scope_guard_integrity
         if [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
           && [ -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
           set +e

@@ -3122,9 +3122,29 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	assert METADATA_HELPER.exists(), f"missing helper: {METADATA_HELPER}"
 	assert "review_collect_pr_metadata.sh" in required_bootstrap_line, required_bootstrap_line
 	assert "review_collect_pr_metadata.sh" in main_primary_bootstrap_line, main_primary_bootstrap_line
-	assert "files_touched_scope_guard.py" in main_primary_bootstrap_line, main_primary_bootstrap_line
+	for security_sensitive_support_file in (
+		"review_collect_pr_metadata.sh",
+		"files_touched_scope_guard.py",
+		"review_commit_changes.sh",
+		"review_conflict_prepare.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+	):
+		assert security_sensitive_support_file in main_primary_bootstrap_line, main_primary_bootstrap_line
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"' in block
-	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py; do" in _workflow_text()
+	stage_block = _step_block("Stage workflow support files")
+	assert 'security_sensitive_support_root=".codex-workflow-src-main"' in stage_block
+	assert 'security_sensitive_support_root=".codex-workflow-src"' in stage_block
+	assert stage_block.index('if [ ! -f "${security_sensitive_support_src}" ]; then') < stage_block.index('install -m 0755 \\')
+	for security_sensitive_support_file in (
+		"review_collect_pr_metadata.sh",
+		"files_touched_scope_guard.py",
+		"review_commit_changes.sh",
+		"review_conflict_prepare.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+	):
+		assert security_sensitive_support_file in stage_block
 	assert 'gh_retry "${PR_PAYLOAD_FILE}"' not in block
 	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in helper_text
 	assert 'gh_retry_to_file "${outfile}" gh "$@"' in helper_text
@@ -3134,6 +3154,47 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	assert 'id: collect_pr_metadata' in block
 	assert 'linked_issue_metadata_sha256=${linked_issue_metadata_sha256}' in block
 	assert "awk '{print $1}' || true" in block
+
+
+def test_review_blocked_writer_revalidates_scope_guard_digest_before_execution() -> None:
+	rb_judge = RB_JUDGE.read_text(encoding="utf-8")
+	writer_end = rb_judge.index("# Check for changes and commit")
+	digest_check = rb_judge.index("verify_review_scope_guard_integrity", writer_end)
+	guard_execution = rb_judge.index('python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"', digest_check)
+
+	assert writer_end < digest_check < guard_execution
+	assert '[[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]' in rb_judge
+	assert '[[ "${scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]]' in rb_judge
+	assert 'scope_guard_actual_sha256="$(sha256sum "${scope_guard_path}"' in rb_judge
+
+	function_match = re.search(
+		r"(?ms)^verify_review_scope_guard_integrity\(\)\n\{.*?^\}\n",
+		rb_judge,
+	)
+	assert function_match, "missing scope-guard integrity helper"
+	with tempfile.TemporaryDirectory(prefix="test_rb_scope_guard_mutation_") as td:
+		support_scripts_dir = Path(td) / "scripts"
+		support_scripts_dir.mkdir()
+		scope_guard_path = support_scripts_dir / "files_touched_scope_guard.py"
+		scope_guard_path.write_text("trusted validator\n", encoding="utf-8")
+		expected_sha256 = hashlib.sha256(scope_guard_path.read_bytes()).hexdigest()
+		scope_guard_path.write_text("writer replacement\n", encoding="utf-8")
+		env = os.environ.copy()
+		env.update(
+			{
+				"SUPPORT_SCRIPTS_DIR": str(support_scripts_dir),
+				"REVIEW_SCOPE_GUARD_EXPECTED_SHA256": expected_sha256,
+			}
+		)
+		proc = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{function_match.group(0)}\nverify_review_scope_guard_integrity"],
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		assert proc.returncode != 0
+		assert "scope validator changed after the writer ran" in proc.stdout + proc.stderr
 
 
 def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None:

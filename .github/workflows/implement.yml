@@ -1545,6 +1545,8 @@ jobs:
           fi
           {
             echo "generated_security_advisory=${generated_security_advisory}"
+            echo "issue_author_association=$(jq -r '.author_association // ""' "${ISSUE_META_FILE}")"
+            echo "issue_author_login=$(jq -r '.user.login // ""' "${ISSUE_META_FILE}")"
             echo "issue_body_sha256=${issue_body_sha256}"
             echo "scope_guard_sha256=${scope_guard_sha256}"
             echo "commit_changes_sha256=${commit_changes_sha256}"
@@ -3154,6 +3156,8 @@ jobs:
         id: preflight_destructive_guard
         env:
           GENERATED_SECURITY_ADVISORY: ${{ steps.fetch_issue_metadata.outputs.generated_security_advisory }}
+          ISSUE_AUTHOR_ASSOCIATION: ${{ steps.fetch_issue_metadata.outputs.issue_author_association }}
+          ISSUE_AUTHOR_LOGIN: ${{ steps.fetch_issue_metadata.outputs.issue_author_login }}
           ISSUE_BODY_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.issue_body_sha256 }}
           SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.scope_guard_sha256 }}
         run: |
@@ -4098,6 +4102,8 @@ jobs:
         id: commit_changes
         env:
           GENERATED_SECURITY_ADVISORY: ${{ steps.fetch_issue_metadata.outputs.generated_security_advisory }}
+          ISSUE_AUTHOR_ASSOCIATION: ${{ steps.fetch_issue_metadata.outputs.issue_author_association }}
+          ISSUE_AUTHOR_LOGIN: ${{ steps.fetch_issue_metadata.outputs.issue_author_login }}
           ISSUE_BODY_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.issue_body_sha256 }}
           SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.scope_guard_sha256 }}
           COMMIT_CHANGES_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.commit_changes_sha256 }}
