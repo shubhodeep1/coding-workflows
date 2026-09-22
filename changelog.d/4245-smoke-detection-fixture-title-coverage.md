@@ -12,7 +12,7 @@ Orchestrator-decomposed children carry no marker at all: the `orchestrate-decomp
 | Detection sites corrected | 7 across 4 workflows |
 | Fixture title shapes now matched | 4 of 4 (was 2 of 4) |
 | Extra API calls | at most 1 per plan run and 1 per implement run, only when the title check misses and a `Tracking issue: #N` ref is present |
-| Contract test | `tests/test_smoke_alert_silencing_contract.py` (14 tests, was 7) |
+| Contract test | `tests/test_smoke_alert_silencing_contract.py` (15 tests, was 7) |
 
 What this means for operators: a release or promote run posts its `Release … SUCCEEDED` / `FAILED` message and nothing else. Run 35672590166 sent a `CRITICAL` "Clarification required" for the negative-test fixture plus two `DEBUG` "Implementation plan generated" pings for the decomposed canary children; all three are now suppressed. Alerts on real issues are unchanged, and both parent lookups fail open, so an unreachable tracking issue leaves a genuine project's alerts on rather than silencing it or mislabelling its PR.
 

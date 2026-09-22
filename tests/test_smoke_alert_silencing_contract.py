@@ -30,6 +30,7 @@ operator.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -246,6 +247,34 @@ def test_review_autofix_uses_label_as_primary_smoke_signal() -> None:
 	)
 	# The anchored linked-issue title remains as the second signal.
 	assert f"grep -qiE '{ISSUE_TITLE_DETECTOR}'" in block
+
+
+def test_review_autofix_label_filter_handles_missing_labels() -> None:
+	"""The exact workflow filter must treat an absent labels key as non-smoke."""
+	jq_filter_match = re.search(r"jq -e '([^']+)'", SMOKE_LABEL_JQ)
+	assert jq_filter_match is not None
+	jq_filter_text = jq_filter_match.group(1)
+
+	missing_labels_result = subprocess.run(
+		["jq", "-e", jq_filter_text],
+		input='{"title":"No pull request payload"}',
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert missing_labels_result.returncode == 1, missing_labels_result.stderr
+	assert missing_labels_result.stdout.strip() == "false"
+	assert missing_labels_result.stderr == ""
+
+	smoke_labels_result = subprocess.run(
+		["jq", "-e", jq_filter_text],
+		input='{"labels":[{"name":"bug"},{"name":"e2e-smoke-test"}]}',
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert smoke_labels_result.returncode == 0, smoke_labels_result.stderr
+	assert smoke_labels_result.stdout.strip() == "true"
 
 
 def test_review_autofix_does_not_free_text_match_pr_title_or_body() -> None:
