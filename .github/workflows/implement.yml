@@ -130,10 +130,6 @@ jobs:
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
           ISSUE_STATE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.state // "open"')"
           ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -c '[.labels[]?.name]')"
-          ISSUE_AUTHOR_ASSOCIATION="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.author_association // ""')"
-          ISSUE_AUTHOR_LOGIN="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.user.login // ""')"
-          echo "ISSUE_AUTHOR_ASSOCIATION=${ISSUE_AUTHOR_ASSOCIATION}" >> "$GITHUB_ENV"
-          echo "ISSUE_AUTHOR_LOGIN=${ISSUE_AUTHOR_LOGIN}" >> "$GITHUB_ENV"
           # Early smoke-fixture detection. The "Telegram duplicate PR
           # notification" step runs before the main "Detect smoke test and
           # silence Telegram alerts" step below, so it needs the SILENT

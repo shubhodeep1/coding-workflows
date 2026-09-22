@@ -679,7 +679,8 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	text = _implement_text()
 	commit_text = _implement_commit_text()
 	combined_text = text + "\n" + commit_text
-	assert 'ISSUE_AUTHOR_LOGIN="$(printf \'%s\' "${ISSUE_PAYLOAD}" | jq -r \'.user.login // ""\')"' in text
+	assert 'echo "ISSUE_AUTHOR_ASSOCIATION=${ISSUE_AUTHOR_ASSOCIATION}" >> "$GITHUB_ENV"' not in text
+	assert 'echo "ISSUE_AUTHOR_LOGIN=${ISSUE_AUTHOR_LOGIN}" >> "$GITHUB_ENV"' not in text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
 	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
 	assert combined_text.count('python3 "${scope_guard_path}"') == 2
@@ -734,10 +735,15 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 		assert "files_touched_scope_guard.py" in commit_text, commit_script
 	assert 'git diff --cached --name-only "${prepare_merge_head}"' in REVIEW_CONFLICT_PREPARE_SCRIPT.read_text(encoding="utf-8")
 	assert 'git diff --cached --name-only "${resolver_merge_head}"' in REVIEW_CONFLICT_RESOLVE_SCRIPT.read_text(encoding="utf-8")
-	assert "REVIEW_SCOPE_GUARD_EXPECTED_SHA256" in REVIEW_CONFLICT_RESOLVE_SCRIPT.read_text(encoding="utf-8")
+	resolver_text = REVIEW_CONFLICT_RESOLVE_SCRIPT.read_text(encoding="utf-8")
+	assert '[[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]' in resolver_text
+	assert '[[ "${resolver_scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]]' in resolver_text
+	assert '[ -z "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" ]' not in resolver_text
 	rb_judge_text = REVIEW_RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
 	assert 'git diff HEAD --name-only -z > "${RB_FIX_PREEXISTING_DIRTY_FILE}"' in rb_judge_text
 	assert '":(exclude,literal)${rb_fix_preexisting_path}"' in rb_judge_text
+	assert 'cmp -s "${RB_FIX_PREEXISTING_DIFF_FILE}" "${rb_fix_current_preexisting_diff_file}"' in rb_judge_text
+	assert "refusing to discard or combine overlapping changes" in rb_judge_text
 	assert "REVIEW_SCOPE_GUARD_EXPECTED_SHA256" in rb_judge_text
 
 
@@ -802,6 +808,11 @@ def test_judge_staging_excludes_paths_dirty_before_writer_runs() -> None:
 			["git", "diff", "HEAD", "--name-only"], cwd=repo, check=True, env=git_env,
 			capture_output=True, text=True,
 		).stdout.splitlines()
+		preexisting_literals = [f":(literal){path}" for path in preexisting]
+		baseline_diff = subprocess.run(
+			["git", "diff", "--binary", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
+			capture_output=True,
+		).stdout
 		(repo / "src/security.py").write_text("VALUE = 2\n", encoding="utf-8")
 		pathspecs = [f":(exclude,literal){path}" for path in preexisting]
 		subprocess.run(["git", "add", "-u", "--", *pathspecs], cwd=repo, check=True, env=git_env)
@@ -810,6 +821,17 @@ def test_judge_staging_excludes_paths_dirty_before_writer_runs() -> None:
 			capture_output=True, text=True,
 		).stdout.splitlines()
 		assert staged == ["src/security.py"]
+		current_diff = subprocess.run(
+			["git", "diff", "--binary", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
+			capture_output=True,
+		).stdout
+		assert current_diff == baseline_diff
+		(repo / "manifest.txt").write_text("writer overlap\n", encoding="utf-8")
+		overlapping_diff = subprocess.run(
+			["git", "diff", "--binary", "HEAD", "--", *preexisting_literals], cwd=repo, check=True, env=git_env,
+			capture_output=True,
+		).stdout
+		assert overlapping_diff != baseline_diff
 
 
 def test_alert_step_handles_scope() -> None:

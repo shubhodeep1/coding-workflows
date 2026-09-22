@@ -499,7 +499,8 @@ def test_workflow_materializes_issue_body_for_generated_advisory_guard() -> None
 	guard = next(step for step in steps if step.get("name") == GUARD_STEP_NAME)
 	assert 'echo "ISSUE_BODY_FILE=${RUNTIME_DIR}/issue_body.txt"' in workflow_text
 	assert 'jq -r \'.body // ""\' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}"' in workflow_text
-	assert 'echo "ISSUE_AUTHOR_LOGIN=$(jq -r \'.user.login // ""\' "${ISSUE_META_FILE}")"' in workflow_text
+	assert 'echo "ISSUE_AUTHOR_ASSOCIATION=$(jq -r \'.author_association // ""\' "${ISSUE_META_FILE}")"' not in workflow_text
+	assert 'echo "ISSUE_AUTHOR_LOGIN=$(jq -r \'.user.login // ""\' "${ISSUE_META_FILE}")"' not in workflow_text
 	assert '--issue-author-login "${ISSUE_AUTHOR_LOGIN}"' in workflow_text
 	assert "id: fetch_issue_metadata" in workflow_text
 	assert 'echo "issue_author_association=$(jq -r \'.author_association // ""\' "${ISSUE_META_FILE}")"' in workflow_text

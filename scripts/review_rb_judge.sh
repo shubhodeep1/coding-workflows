@@ -1861,6 +1861,14 @@ case "${RB_ACTION}" in
       # Re-run the judge in editing mode on the PR branch
       RB_FIX_PREEXISTING_DIRTY_FILE="${RUNTIME_DIR}/rb_fix_preexisting_dirty.txt"
       git diff HEAD --name-only -z > "${RB_FIX_PREEXISTING_DIRTY_FILE}"
+      RB_FIX_PREEXISTING_DIFF_FILE="${RUNTIME_DIR}/rb_fix_preexisting.diff"
+      rb_fix_preexisting_excludes=()
+      rb_fix_preexisting_literals=()
+      while IFS= read -r -d '' rb_fix_preexisting_path; do
+        rb_fix_preexisting_excludes+=(":(exclude,literal)${rb_fix_preexisting_path}")
+        rb_fix_preexisting_literals+=(":(literal)${rb_fix_preexisting_path}")
+      done < "${RB_FIX_PREEXISTING_DIRTY_FILE}"
+      git diff --binary HEAD -- "${rb_fix_preexisting_literals[@]}" > "${RB_FIX_PREEXISTING_DIFF_FILE}"
       RB_FIX_PROMPT="${RUNTIME_DIR}/rb_fix_prompt.txt"
       RB_FIX_OUTPUT="${RUNTIME_DIR}/rb_fix_output.txt"
       {
@@ -1981,6 +1989,16 @@ __EDIT_DISCIPLINE__
       rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
 
       # Check for changes and commit
+      if [ "${#rb_fix_preexisting_literals[@]}" -gt 0 ]; then
+        rb_fix_current_preexisting_diff_file="$(mktemp "${RUNTIME_DIR}/rb_fix_current_preexisting.XXXXXX")"
+        git diff --binary HEAD -- "${rb_fix_preexisting_literals[@]}" > "${rb_fix_current_preexisting_diff_file}"
+        if ! cmp -s "${RB_FIX_PREEXISTING_DIFF_FILE}" "${rb_fix_current_preexisting_diff_file}"; then
+          rm -f "${rb_fix_current_preexisting_diff_file}"
+          echo "::error::Review-blocked fix writer modified a path that was already dirty before it ran; refusing to discard or combine overlapping changes."
+          exit 1
+        fi
+        rm -f "${rb_fix_current_preexisting_diff_file}"
+      fi
       if codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
         echo "::warning::Review-blocked fix OpenCode was killed by codex stall guard; skipping commit/merge and falling back to manual intervention."
       elif [ -n "$(git status --porcelain)" ]; then
@@ -2034,10 +2052,6 @@ __EDIT_DISCIPLINE__
         esac
         unset _rb_origin_url
 
-        rb_fix_preexisting_excludes=()
-        while IFS= read -r -d '' rb_fix_preexisting_path; do
-          rb_fix_preexisting_excludes+=(":(exclude,literal)${rb_fix_preexisting_path}")
-        done < "${RB_FIX_PREEXISTING_DIRTY_FILE}"
         if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
           git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' "${rb_fix_preexisting_excludes[@]}"
         else

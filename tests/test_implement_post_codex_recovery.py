@@ -1169,6 +1169,7 @@ def test_checkout_repository_fallback_uses_checkout_ref_output_chain() -> None:
 def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> None:
 	fetch_step = _step_block_text("Fetch issue metadata")
 	fetch_block = _extract_run_script("Fetch issue metadata")
+	precheck_block = _extract_run_script("Precheck approval phase label")
 	assert "IMPLEMENT_METADATA_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fetch_step, (
 		"Fetch issue metadata must keep PR_BASE_BRANCH anchored to the integration/default ref, not the baseline checkout override"
 	)
@@ -1179,6 +1180,8 @@ def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> 
 	)
 	assert 'echo "issue_author_association=$(jq -r \'.author_association // ""\' "${ISSUE_META_FILE}")"' in fetch_block
 	assert 'echo "issue_author_login=$(jq -r \'.user.login // ""\' "${ISSUE_META_FILE}")"' in fetch_block
+	assert 'echo "ISSUE_AUTHOR_ASSOCIATION=${ISSUE_AUTHOR_ASSOCIATION}" >> "$GITHUB_ENV"' not in precheck_block
+	assert 'echo "ISSUE_AUTHOR_LOGIN=${ISSUE_AUTHOR_LOGIN}" >> "$GITHUB_ENV"' not in precheck_block
 
 	for guarded_step_name in ("Preflight destructive-commit guard", "Commit changes"):
 		guarded_step = _step_block_text(guarded_step_name)
