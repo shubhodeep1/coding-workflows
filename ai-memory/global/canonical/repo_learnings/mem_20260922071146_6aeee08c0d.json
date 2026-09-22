@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow behavior in this repository is guarded by focused contract tests.",
   "timestamps": {
     "created_at": "2026-09-22T07:11:46Z",
