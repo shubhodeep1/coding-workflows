@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4115-4121 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The readiness loop allows approximately 75 seconds of worst-case waiting with 30 probes at 2 seconds each plus a 0.5-second sleep, while the AI editor summary claims the gate waits up to 15 seconds.\n  WHY: The function exits correctly and has no runtime failure, but the excessive probe count creates a documentation/transparency and latency mismatch; the reviewers uniformly rated this NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml\nLine or code reference: review_dependency_proxy_ready function, lines 4115-4121\nProblem: The readiness probe performs 30 iterations. Each iteration has a timeout 2 on docker exec and a 0.5s sleep after failure. The worst-case wall-clock wait when the proxy never becomes ready is at least 45 seconds (30 \u00d7 ~1.5s) and up to 75 seconds (30 \u00d7 2.5s) depending on Docker responsiveness. The function would still return 1 after exhausting probes and the install would correctly fail, so the behavioral impact is nil. The probe count is conservative rather than incorrect.\nWhy it fails at runtime: Does not fail at runtime. The loop exits correctly to install_failed=true after all probes are exhausted. The only issue is the probe count is substantially larger than needed for a Python server that binds and writes a ready file in milliseconds; 5-10 iterations would achieve the same reliability at lower worst-case latency.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n- .github/workflows/review_autofix.yml\nLocation: review_dependency_proxy_ready function, line 4117\nIssue: 30 probe iterations with 2s timeout each is excessive for a local proxy that should start in under a second.\nSuggested minimal fix: Reduce iteration count to 10 (seq 1 10) which still provides ~15s worst-case wait while keeping the existing 2s timeout and 0.5s sleep. The proxy is a local Python process, not a remote service; it either starts immediately or never starts.\nEstimated lines changed: 1\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml\nLine or code reference: review_dependency_proxy_ready() at lines 4115-4121; AI editor summary in PR comment 5776854524\nProblem: The AI editor's PR summary claims the new readiness gate \"waits up to 15 seconds\", but the implemented function performs 30 iterations \u00d7 (2 s timeout + 0.5 s sleep) \u2248 75 s worst case when every probe times out. The on-record expectation operators will read into the comment does not match the actual bound enforced in code.\nWhy it fails at runtime: Not a runtime defect (the function correctly returns 1 after 30 attempts and the install continues with whatever state exists). The runtime failure is a documentation/transparency defect: an operator reading the AI summary would plan for a 15 s budget, then observe up to ~75 s of startup latency before pip runs \u2014 most visibly on slow runners where the python:3.12-slim image pull or container first start dominates.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml\nLine or code reference: review_dependency_proxy_ready() function, lines 4115-4121\nProblem: The function performs 30 probe iterations with a 2-second timeout and 0.5-second sleep between attempts, resulting in a worst-case duration of approximately 75 seconds (30 \u00d7 2.5s). However, the editor summary in PR comment 5776854524 states the gate \"waits up to 15 seconds before starting the dependency installer.\"\nWhy it fails at runtime: When every probe times out (proxy startup delay or resource contention), operators debugging installation failures will expect a 15-second bound based on the documented behavior, but the actual wait is 5\u00d7 longer. This mismatch between documented and actual behavior can mislead troubleshooting and mask real proxy startup issues.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:4117 (readiness loop)\nProblem: max ~75s (30*2.5s) vs prior summary claim of 15s.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f1376e7a7e91080a97b87a77cc972dfdc2e50dc21180c98183c3dda9922a2d2e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4273,
+    "run_id": "35729867628",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35729867628",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922133550_5173f158be",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4273,
+    "run_id": "35729867628"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-22T13:35:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
