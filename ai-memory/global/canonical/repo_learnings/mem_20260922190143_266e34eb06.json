@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow security hardening is implemented across both GitHub Actions definitions and shared shell/Python helpers.",
   "timestamps": {
     "created_at": "2026-09-22T19:01:43Z",
