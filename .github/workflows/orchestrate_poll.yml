@@ -834,6 +834,19 @@ jobs:
 
       - name: Upload state snapshot artifact
         if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        # Non-fatal on purpose. The artifact is a secondary, best-effort copy;
+        # consumers read state.json from the `state-snapshot` branch when that
+        # branch's independently retried, best-effort publication succeeds.
+        # GitHub's artifact backend can reject FinalizeArtifact with a
+        # non-retryable 403 ("Error from intermediary") for a minute or two at a
+        # time, which @actions/artifact does not retry. On 2026-09-22 ~00:00 UTC
+        # one such window failed the poll job in all four orchestrated repos
+        # (runs 35669827207, 35669899082, 35669889742, 35669957264) even though
+        # the poll cycle and the branch publication had both succeeded — the job
+        # went red and fired a Telegram ERROR alert for a blip that cost nothing.
+        # `if-no-files-found: error` is kept so a genuinely missing snapshot,
+        # which is a real defect, still surfaces as a failed-step annotation.
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: state-snapshot
@@ -899,9 +912,9 @@ jobs:
           if [ -n "$(git -C "${PUBLISH_DIR}" status --porcelain)" ]; then
             git -C "${PUBLISH_DIR}" add -A state.json snapshots
             git -C "${PUBLISH_DIR}" commit --quiet -m "Update state snapshot ${TICK_SLUG}"
-            # The uploaded artifact is authoritative for this tick; keep branch
-            # publication best-effort so a transient push failure does not fail
-            # the full poll run.
+            # Keep the branch push best-effort so a transient publication
+            # failure does not fail an otherwise successful poll cycle. The
+            # run artifact provides an independent best-effort copy.
             publish_ok=false
             for attempt in 1 2 3; do
               if git -C "${PUBLISH_DIR}" push --quiet --force origin "HEAD:${BRANCH_NAME}"; then
@@ -911,7 +924,7 @@ jobs:
               if [ "${attempt}" -lt 3 ]; then sleep 2; fi
             done
             if [ "${publish_ok}" != "true" ]; then
-              echo "::warning::State snapshot branch publish failed after 3 attempts; artifact upload remains authoritative for this tick"
+              echo "::warning::State snapshot branch publish failed after 3 attempts; this tick may be available only from the run artifact"
             fi
           else
             echo "State snapshot branch already up to date."
