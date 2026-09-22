@@ -14158,9 +14158,9 @@ def test_judge_prompt_caps_embedded_pr_diffs_by_bytes():
 		issue_labels={10: ["ai:merged"], 11: ["ai:merged"], 12: ["ai:merged"]},
 		issue_linked_prs={10: 77, 11: 78, 12: 79},
 		prs=[
-			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "body": huge_line},
-			{"number": 78, "state": "closed", "merged": True, "headRefName": "ai/issue-11", "body": huge_line},
-			{"number": 79, "state": "closed", "merged": True, "headRefName": "ai/issue-12", "body": huge_line},
+			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "diff": huge_line},
+			{"number": 78, "state": "closed", "merged": True, "headRefName": "ai/issue-11", "diff": huge_line},
+			{"number": 79, "state": "closed", "merged": True, "headRefName": "ai/issue-12", "diff": huge_line},
 		],
 		codex_json={
 			"status": "in_progress",
@@ -14266,7 +14266,7 @@ def test_judge_prompt_keeps_small_pr_diffs_intact_under_default_byte_caps():
 		issue_labels={10: ["ai:merged"]},
 		issue_linked_prs={10: 77},
 		prs=[
-			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "body": "ordinary small diff"},
+			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "diff": "ordinary small diff"},
 		],
 		codex_json={
 			"status": "in_progress",
