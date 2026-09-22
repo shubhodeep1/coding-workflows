@@ -613,6 +613,8 @@ What this means for consumer repos: a tracked `agents.md`, `ai_pipeline.md`, `un
 
 `mark-stable.yml` and `test-and-mark-stable.yml` retain an existing immutable version tag only when it points to the intended release commit. They treat an existing matching GitHub Release as complete, while conflicting tags and non-404 lookup errors still fail closed. Operators can rerun after tag publication without deleting or retargeting immutable tags.
 
+- **Stable release Git pushes now prefer the repository PAT.** Release checkouts use `GH_PAT` for changelog and tag publication when configured, while retaining `github.token` as a fallback.
+
 ### For contributors
 
 The merge-conflict resolver deleted `binance-blessings`'s tracked `agents.md`, which carried the production App Platform ID, even though both merge parents still had the file. The next review round's editor tried to restore it, the restore was wiped by the "editor may not create new files" cleanup in `review_commit_changes.sh`, and the run dead-ended with `DID_COMMIT=false` and `EDITOR_CHANGES_LOST=true` (AI Review run 34099352704). `review_commit_changes.sh` already carried the tracked-path guard; the other cleanup sites did not. This is the same bug class as the ~10,700-line deletion in PRs #917/#931, where the remedy was the git-remote-URL gate. That gate only protects the coding-workflows checkout itself, so the per-path guard is the second layer that covers consumer repos legitimately owning one of these names.
