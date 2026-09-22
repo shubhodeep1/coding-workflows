@@ -153,6 +153,10 @@ changelog.d/4211-release-tag-push-retry.md
 changelog.d/4228-release-creation-token-recovery.md
 changelog.d/4240-release-tag-pat.md
 changelog.d/4242-staged-support-env-test-isolation.md
+changelog.d/4245-smoke-detection-fixture-title-coverage.md
+changelog.d/4254-state-snapshot-artifact-upload-non-fatal.md
+changelog.d/4258-conflict-safe-pr-close.md
+changelog.d/4263-heal-reporter-main-snapshot-backfill.md
 changelog.d/binance-blessings-249-parked-projects-resume-without-humans.md
 changelog.d/release-gate-retry-budget.md
 codex.md
