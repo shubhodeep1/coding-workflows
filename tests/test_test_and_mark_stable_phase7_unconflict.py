@@ -89,6 +89,13 @@ def test_unconflict_never_fails_the_step_and_exports_its_outcome() -> None:
 	assert "::warning::Smoke PR #${PR_NUMBER} could not be made mergeable before close" in block
 
 
+def test_unresolved_mergeability_is_not_reported_as_not_needed() -> None:
+	block = _unconflict_block(_read_workflow())
+	assert 'elif [ "${PHASE7_MERGEABLE}" != "true" ]; then' in block
+	assert 'PHASE7_UNCONFLICT_OUTCOME="still_${PHASE7_MERGEABLE_STATE}"' in block
+	assert "mergeability could not be confirmed before close" in block
+
+
 def test_results_table_reports_the_unconflict_outcome() -> None:
 	wf = _read_workflow()
 	assert 'CANCEL_UNCONFLICT="${{ steps.verify-cancel-on-close.outputs.unconflict }}"' in wf

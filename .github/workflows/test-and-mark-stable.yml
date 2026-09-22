@@ -3506,6 +3506,10 @@ jobs:
             if [ "${PHASE7_UNCONFLICT_OUTCOME}" != "unconflicted" ]; then
               echo "::warning::Smoke PR #${PR_NUMBER} could not be made mergeable before close (outcome=${PHASE7_UNCONFLICT_OUTCOME}); GitHub will not fire pull_request.closed for a conflicted PR, so Phase 7 now depends on the scheduled cleanup fallback."
             fi
+          elif [ "${PHASE7_MERGEABLE}" != "true" ]; then
+            PHASE7_UNCONFLICT_OUTCOME="still_${PHASE7_MERGEABLE_STATE}"
+            echo "PHASE7_UNCONFLICT_RESULT pr=${PR_NUMBER} branch=${BRANCH} outcome=${PHASE7_UNCONFLICT_OUTCOME} mergeable=${PHASE7_MERGEABLE} mergeable_state=${PHASE7_MERGEABLE_STATE}"
+            echo "::warning::Smoke PR #${PR_NUMBER} mergeability could not be confirmed before close (outcome=${PHASE7_UNCONFLICT_OUTCOME}, base=${PHASE7_BASE_REF:-unknown}); Phase 7 may depend on the scheduled cleanup fallback."
           fi
           echo "unconflict=${PHASE7_UNCONFLICT_OUTCOME}" >> "$GITHUB_OUTPUT"
 
