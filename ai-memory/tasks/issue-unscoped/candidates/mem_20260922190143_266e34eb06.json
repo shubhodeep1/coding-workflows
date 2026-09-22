@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.92,
+  "details": "Security-related changes commonly span orchestrator, implement, review, and security-audit workflows together with scripts such as `security_audit.sh` and `orchestrate_poll_process.sh`. When planning security changes, inspect the shared helper scripts and all workflow callers rather than treating a single workflow file as the complete boundary.",
+  "fingerprint": "5916aeb83ad207aabd2bec668c1a0f4e9a65e6b3e64ad6c70a6f4a42701b083d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35770815180",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35770815180",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4216",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4240",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4258",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4260",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4270",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4241",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4273"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260922190143_266e34eb06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow security hardening is implemented across both GitHub Actions definitions and shared shell/Python helpers.",
+  "timestamps": {
+    "created_at": "2026-09-22T19:01:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
