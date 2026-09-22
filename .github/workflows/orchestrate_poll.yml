@@ -834,6 +834,19 @@ jobs:
 
       - name: Upload state snapshot artifact
         if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        # Non-fatal on purpose. The artifact is the *secondary* channel for the
+        # snapshot; `Publish state snapshot branch` below writes the same
+        # state.json to the `state-snapshot` branch and is what consumers read.
+        # GitHub's artifact backend can reject FinalizeArtifact with a
+        # non-retryable 403 ("Error from intermediary") for a minute or two at a
+        # time, which @actions/artifact does not retry. On 2026-09-22 ~00:00 UTC
+        # one such window failed the poll job in all four orchestrated repos
+        # (runs 35669827207, 35669899082, 35669889742, 35669957264) even though
+        # the poll cycle and the branch publication had both succeeded — the job
+        # went red and fired a Telegram ERROR alert for a blip that cost nothing.
+        # `if-no-files-found: error` is kept so a genuinely missing snapshot,
+        # which is a real defect, still surfaces as a failed-step annotation.
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: state-snapshot

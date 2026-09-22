@@ -180,6 +180,21 @@ def _extract_workflow_step_if(step_name: str) -> str:
 	raise AssertionError(f"missing workflow step {step_name}")
 
 
+def _extract_snapshot_workflow_step_lines(step_name: str) -> list[str]:
+	lines = WORKFLOW_PATH.read_text(encoding="utf-8").splitlines()
+	for idx, line in enumerate(lines):
+		if line.strip() != f"- name: {step_name}":
+			continue
+		indent = len(line) - len(line.lstrip())
+		block = [line]
+		for candidate in lines[idx + 1:]:
+			if candidate.strip() and (len(candidate) - len(candidate.lstrip())) <= indent:
+				break
+			block.append(candidate)
+		return block
+	raise AssertionError(f"missing workflow step {step_name}")
+
+
 def test_snapshot_builder_generates_schema_valid_payload_with_enrichment_and_deferred_entries() -> None:
 	with tempfile.TemporaryDirectory() as tmp_dir:
 		tmp_path = Path(tmp_dir)
@@ -419,6 +434,19 @@ def test_snapshot_workflow_artifact_steps_are_not_gated_on_has_work() -> None:
 	assert "env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false'" in condition
 	assert "env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true'" in condition
 	assert "steps.find_tracking.outputs.has_work == 'true'" not in condition
+
+
+def test_snapshot_workflow_upload_step_is_non_fatal_but_still_requires_the_file() -> None:
+	# A transient artifact-backend 403 on FinalizeArtifact must not fail the poll
+	# job: the snapshot also reaches consumers via the state-snapshot branch.
+	upload_block = "\n".join(_extract_snapshot_workflow_step_lines("Upload state snapshot artifact"))
+	assert "continue-on-error: true" in upload_block
+	# A missing snapshot file is a real defect, so keep it surfacing as a failed step.
+	assert "if-no-files-found: error" in upload_block
+
+	# The branch publication is the durable channel and must stay fatal-by-default.
+	publish_block = "\n".join(_extract_snapshot_workflow_step_lines("Publish state snapshot branch"))
+	assert "continue-on-error" not in publish_block
 
 
 def main() -> int:
