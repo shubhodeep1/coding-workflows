@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends existing `tests/e2e_smoke_canary.txt` fixture contract\nScope-mode justification: The issue explicitly restricts changes to one existing fixture. A single-line replacement is the complete, lowest-risk implementation consistent with \u00a76 priorities.\n\n## Automation impact\n\n- Existing code only: modify one fixture; no new script.\n- Scheduler/PR-push entry point: unchanged.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Removal registry entry: not required.\n\n## Planning ref\n\n- Commit: `9370fd3eccfbf142e092f223a6d20946ce6ab56f`\n- Branch: `orchestrator/project-4267`\n- Integration branch matches the issue metadata.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Preserve line 1 as `status: ok`.\n  - Replace line 2 with `decompose-run: 35696603462`.\n  - Preserve line 3 and all subsequent content unchanged.\n\n## Functions or modules\n\nNone. This is a fixture-only update.\n\n## Data structures affected\n\nThe canary\u2019s line-oriented text contract changes its second record from `run_id: 26151428977` to `decompose-run: 35696603462`.\n\n## API/interface changes\n\nNo runtime API changes. The fixture\u2019s exact first-two-line interface becomes:\n\n```text\nstatus: ok\ndecompose-run: 35696603462\n```\n\n## Decisions\n\n### D1 \u2014 Preserve trailing fixture content\n\n- **Chosen:** Replace only the current second line and retain all later lines.\n- **Alternatives considered:** Rewrite the entire file with only the two required lines.\n- **Why:** The issue requires preservation of subsequent content unless removal is necessary, and no existing conflict requires deletion.\n\n### D2 \u2014 Keep verification narrowly scoped\n\n- **Chosen:** Verify exact first and second lines plus the single-file Git diff.\n- **Alternatives considered:** Run the full repository test suite.\n- **Why:** No executable logic changes, so focused textual and scope checks provide the relevant signal without unnecessary work.\n\n## Security considerations\n\n- Trust boundaries: none; no external input or executable surface changes.\n- Authorization: not applicable; no endpoint, workflow permission, or worker surface changes.\n- Input validation: verify the run identifier is copied exactly as the required decimal string.\n- Abuse cases: prevent accidental extra-file edits or insertion of executable/template content by checking the final diff.\n- Secrets and money handling: not applicable.\n\n## Risks and edge cases\n\n- The current second line uses a conflicting key and value; this is the intended replacement.\n- Preserve exact lowercase spelling, punctuation, and spacing.\n- Avoid removing `updated-by: ai-pipeline`.\n- Avoid newline normalization or unrelated reformatting.\n- Ensure no other files appear in the resulting diff.\n\n## Testing considerations\n\n1. Assert line 1 equals `status: ok`.\n2. Assert line 2 equals `decompose-run: 35696603462`.\n3. Confirm line 3 remains `updated-by: ai-pipeline`.\n4. Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n5. Inspect the scoped diff to ensure only line 2 changed.\n\n## Pre-execution self-check\n\n- Requirements are unambiguous.\n- Clarification continuation was confirmed.\n- Planning and integration refs match.\n- The target file exists and its current contents support a one-line surgical edit.\n- No additional files, automation wiring, documentation, or tests are required.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5f7ced2e2f23805c6291865c91f1348f03fc750655ed83c070037e415cd2b3c2",
+  "lineage": {
+    "issue_number": 4268,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35697017861",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35697017861",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4268"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260922065937_0b7f73e932",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4268,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35697017861"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4268",
+  "timestamps": {
+    "created_at": "2026-09-22T06:59:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
