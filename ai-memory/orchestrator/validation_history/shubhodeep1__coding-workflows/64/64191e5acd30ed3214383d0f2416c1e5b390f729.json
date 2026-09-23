@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "context": "## \u26a0\ufe0f Runtime validation harness generation failed Template renderer subprocess (`scripts/render_validation_templates.py`) exited non-zero (exit 14). Common causes: missing renderer dependencies (",
+      "cycle": 1,
+      "outcome": "failed",
+      "raw_conclusion": "failure",
+      "raw_status": "harness_error",
+      "recorded_at": "2026-09-23T08:54:43Z",
+      "run_attempt": null,
+      "run_id": null,
+      "run_url": null,
+      "source": "orchestrate_poll.mark_validation_failed"
+    }
+  ],
+  "integration_sha": "64191e5acd30ed3214383d0f2416c1e5b390f729",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
