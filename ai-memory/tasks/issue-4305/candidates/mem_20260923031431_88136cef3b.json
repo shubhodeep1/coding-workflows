@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4305,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4305\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4306\",\"pr_number\":4306,\"branch\":\"ai/issue-4305\",\"run_id\":\"35812727189\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35812727189\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/mark-stable.yml\",\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/4305-release-gate-reference-and-editor-wait.md\",\"scripts/check_workflow_script_refs.py\",\"tests/test_test_and_mark_stable_review_blocked_budget.py\"]}",
+  "fingerprint": "0c368f6fee1db83b591b84d8857f80491a9d69d77e0f2f1272b96b8924d0bc44",
+  "lineage": {
+    "issue_number": 4305,
+    "parent_ids": [],
+    "pr_number": 4306,
+    "run_id": "35812727189",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35812727189",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4306"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260923031431_88136cef3b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4305,
+    "level": "run",
+    "pr_number": 4306,
+    "run_id": "35812727189"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4305: https://github.com/shubhodeep1/coding-workflows/pull/4306",
+  "timestamps": {
+    "created_at": "2026-09-23T03:14:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
