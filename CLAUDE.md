@@ -1529,9 +1529,10 @@ stall recovery — those keep their own policies.
 After an interactive Claude Code session pushes work and a pull request
 exists for it, the session **arms a 3-hourly status check-in for that pull
 request** and keeps it armed until the PR is terminal (merged, or closed
-without merging). The check-in reads the PR's state and nothing else. When
-the PR is terminal, the session reports the next steps, or says the session
-can be closed because there are none. This section applies in this repo
+without merging). The check-in runs in a small Haiku checker session,
+reads the PR's state and nothing else, and when the PR is terminal reports
+the next steps, or says the pushing session can be closed because there
+are none. This section applies in this repo
 and in every consumer repo that receives this file via the `@stable` sync.
 
 The check-in is the scheduled self check-in §25.C allows, not the PR
@@ -1543,12 +1544,13 @@ CI or review events, and never touches the PR. §25 and its
 
 - **Every pull request the session opens**, and **every existing pull
   request the session pushes new commits to**, including PRs opened by a
-  slash command (`/seed-repo`, `/implement-plan-claude`,
-  `/investigate-issue`, and the rest).
-- **One check-in chain per PR.** Arm it once the PR exists (right after
+  slash command (`/seed-repo`, `/investigate-issue`, and the rest).
+  `/implement-plan-claude` is the exception: its own Haiku checker is the
+  check-in for every PR it opens, so it arms no second one.
+- **One check-in per PR.** Arm it once the PR exists (right after
   `create_pull_request`, or right after the first push to an existing PR).
-  If a chain is already armed for that PR in this session, a later push
-  does not arm another.
+  If a check-in is already armed for that PR, a later push does not arm
+  another.
 - **Opt-out is per task and explicit.** When the user says for a task
   that no check-in is wanted ("no check-in", "don't check back on this
   PR", or an equivalent), skip arming for that task's PRs and say so in
@@ -1558,63 +1560,78 @@ CI or review events, and never touches the PR. §25 and its
 
 ### B) How to arm
 
-Use `send_later` (Claude Code Remote MCP server) with `delay_minutes: 180`,
-`initiation: own_followup`, and a message that names the repository, the
-PR number and URL, and restates the §26.C steps, so the fired turn can act
-without scrolling back. `send_later` binds the reminder to this session
-and survives container restarts, so the check-in outlives the turn that
-armed it. Re-arm the same way after every non-terminal check.
+Waking the session that pushed costs its whole conversation on every
+check, and a 3-hour gap outlives the prompt cache. The check-in therefore
+runs in its own small **Haiku checker session**, and the pushing session is
+never woken:
 
-When `send_later` is not available (a local CLI, desktop, or IDE session
-without the Claude Code Remote MCP server), use the harness's in-session
-scheduler instead (`CronCreate`, recurring, every 3 hours, deleted with
+1. Call `create_session` (Claude Code Remote MCP server) with
+   `source_url` = the repository, `model: claude-haiku-4-5-20251001`,
+   `permission_mode` = this session's mode, `title` =
+   `PR #<n> status check-in`, and a standalone prompt that names the
+   repository, the PR number and URL, the §26.C steps, and the **next
+   steps for each terminal state**, written now by the pushing session,
+   which still has the context: what remains if the PR merges (follow-up
+   work, a release or consumer sync it waits on, an action the user must
+   take, or "none — the pushing session can be closed"), and what to ask
+   if it is closed without merging.
+2. Report the checker's session id in this session's reply.
+
+A session started by a Routine with `create_new_session_on_fire` has no
+MCP tools and no repository, so it cannot run the check; `create_session`
+gives the checker both, and the checker re-arms itself with `send_later`.
+A checker only runs unattended when this session is in Auto mode (or
+every tool it calls is allowlisted); otherwise it waits on a permission
+prompt.
+
+When `create_session` is not available (a local CLI, desktop, or IDE
+session without the Claude Code Remote MCP server), arm `send_later` into
+this session with `delay_minutes: 180`, `initiation: own_followup`, and a
+message that restates §26.C; on each wake, delegate the check to a Haiku
+subagent (the Agent tool with `model: "haiku"`) and continue with §26.D on
+this session when it reports a terminal state. When `send_later` is
+missing too, use `CronCreate` (recurring, every 3 hours, deleted with
 `CronDelete` once the PR is terminal) and tell the user once that this
-scheduler lives only as long as the session. When neither scheduler
-exists, say so once in the report and stop; do not poll in a loop and do
-not delegate the wait to a subagent or another session.
+scheduler lives only as long as the session. When no scheduler exists, say
+so once in the report and stop; do not poll in a loop.
 
 ### C) What each check-in does
 
-The fired turn runs on the session's model, but the model cannot switch
-itself, so the work is kept off it:
-
-1. **Delegate the status read to a Sonnet subagent** — the Agent tool with
-   `model: "sonnet"` — before doing anything else in the turn. The
-   subagent performs **one read** of the PR (`pull_request_read` with
-   `method: get`, or `gh api repos/<owner>/<repo>/pulls/<n>` per §23.D)
-   and returns only: the state (`open` / `closed`), whether it merged,
-   the merge commit SHA when merged, and the closed-at time when closed.
-   It reads nothing else and writes nothing.
-2. **Not terminal** → re-arm per §26.B and end the turn. No message to
-   the user, no PR comment, no CI, review, comment, conflict, or branch
-   work. A red check or an open review thread does not change this:
-   fixing CI or addressing comments happens only when the user asks for
-   it directly, under §12.
-3. **Terminal** → stop re-arming (delete the cron job when §26.B used
-   one) and continue with §26.D on the session's own model.
-
-The check-in turn issues exactly one GitHub API call (§15). If the read
-fails (network, 403, rate limit), re-arm and try again on the next
-check-in; after three consecutive failed reads, report the failure to the
-user once and keep re-arming.
+1. Run `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py
+   --repo <owner>/<repo> --pr <n> --terminal-only`. It makes one REST read
+   of the PR (§15) and prints one JSON line: `done`, `state` (`merged` /
+   `closed` / `open`), and `reason`. The script decides; the model does not
+   interpret the PR.
+2. **Not terminal** → call `send_later` with `delay_minutes: 180` and
+   `initiation: own_followup` into the checker session, and end the turn.
+   No message to the user, no PR comment, no CI, review, comment,
+   conflict, or branch work. A red check or an open review thread does not
+   change this: fixing CI or addressing comments happens only when the
+   user asks for it directly, under §12.
+3. **Read failed** (exit 2) → re-arm the same way; after three consecutive
+   failures, report the failure once (§26.D, with the error as the state)
+   and keep re-arming.
+4. **Terminal** → stop re-arming and continue with §26.D.
 
 ### D) What to report when the PR is terminal
 
-Reply in the session, on the session's default model, with:
+The checker writes the report in its own session, from the next steps the
+pushing session gave it:
 
 - which terminal state the PR reached (merged, with the merge commit, or
   closed without merging, with when);
-- the concrete next steps that still exist, if any — follow-up work the
-  user asked for, a consumer sync or release the change waits on, an
-  action the user must take, or, for a PR closed without merging, whether
-  to rebuild or drop the work;
-- when no next steps exist, say plainly that the session can be closed
-  safely.
+- the concrete next steps that still exist, if any, or, for a PR closed
+  without merging, the question of whether to rebuild or drop the work;
+- when no next steps exist, say plainly that the pushing session can be
+  closed safely.
 
-Then send one `PushNotification` (one line, under 200 characters) with
-the terminal state and whether action is needed, since the user is
-unlikely to be watching the session hours after the push. Send it only on
-the terminal check-in, never on a non-terminal one.
+Then it renames itself (`set_session_title`) to
+`PR #<n> merged — <no action needed | action needed>` or
+`PR #<n> closed — decision needed`, and sends one `PushNotification` (one
+line, under 200 characters) with the terminal state and whether action is
+needed, since the user is unlikely to be watching hours after the push.
+It sends it only on the terminal check-in, never on a non-terminal one,
+and it does not archive itself: its report is what the user opens.
 
 ### E) Enforcement
 

@@ -500,18 +500,24 @@ model, not the command file. A file that starts with `---` would be parsed
 as frontmatter, so the command body must remain the first line.
 
 One deliberate exception that is **not** a command pin: `/implement-plan-claude`
-waits for each phase PR to merge through a 3-hourly check-in built from
-claude-code-remote Routines (its **Check-in Loop** section). The checker
-Routine is created with `create_new_session_on_fire: true` and
-`model: claude-sonnet-5`, so each firing is a fresh, throwaway read-only
-Sonnet session that inspects one PR / run / issue list and fires a
-schedule-less poke Routine bound to the operator's session when the wait is
-over. The operator's session — and every turn of the command that edits code
-— still runs on the model the operator picked; only the idle check runs on
-the cheaper model, because a 3-hour gap outlives the prompt cache and a wake
-of the main session re-sends its whole context at full price. Progress
-between wakes is persisted in `docs/implement-plan/<slug>.md`
-(`docs/implement-plan/README.md`).
+waits for each phase PR to merge through a 3-hourly check-in (its **Check-in
+Loop** section). The checker is a Haiku session started with
+`create_session` (`model: claude-haiku-4-5-20251001`) that runs
+`.claude/scripts/check_in_status.py`, re-arms itself with `send_later`, and,
+when the wait is over, starts the next **stage session** on the model the
+operator picked. Every stage (a phase, a blocked-PR fix, a security or
+validation read, the completion PR, a `/verify-activation` cycle, the
+`/deploy-activate` hand-off) runs in its own fresh session titled
+`implement-plan <slug> — <stage>`, which archives the previous stage session
+unless it is waiting on the user; the command's session is never woken to
+continue, because a 3-hour gap outlives the prompt cache and a wake would
+re-send the whole history at full price. Routines created with
+`create_new_session_on_fire` are not used: their sessions get no MCP tools
+and no repository, so they cannot report. Stage sessions need Auto mode (the
+command asks for it in step 0), because allow rules cannot match the
+generated MCP server name of a `create_session` child. Progress between
+stages is persisted in `docs/implement-plan/<slug>.md`
+(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt.
 
 No field here changes what any consumer repo receives on the `@stable`
 sync: `.claude/commands/` is not part of the synced surface, and the
@@ -523,13 +529,18 @@ carried frontmatter.
 ## Interactive post-push PR status check-in
 
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
-pushes a branch and a pull request exists for it, the session arms a
-`send_later` self check-in 180 minutes out and re-arms it after every
-non-terminal check; the fired turn delegates one PR status read to a Sonnet
-subagent (Agent tool, `model: "sonnet"`) and does nothing else until the PR
-is merged or closed, when the session model reports the next steps or that
-the session can be closed, plus one `PushNotification`. It never handles
-CI, reviews, comments, or conflicts; that stays a direct §12 request.
+pushes a branch and a pull request exists for it, the session starts a
+Haiku checker session (`create_session`, titled `PR #<n> status check-in`)
+whose prompt carries the next steps for each terminal state. The checker
+runs `.claude/scripts/check_in_status.py --terminal-only` (one REST read),
+re-arms itself with `send_later` every 180 minutes while the PR is open, and
+once it merges or closes writes the report in its own session, renames
+itself `PR #<n> merged — …`, and sends one `PushNotification`. The pushing
+session is never woken. PRs opened by `/implement-plan-claude` are covered
+by that command's own checker. Without `create_session` the session falls
+back to a `send_later` self check-in with a Haiku subagent doing the read.
+It never handles CI, reviews, comments, or conflicts; that stays a direct
+§12 request.
 
 - Hook: `.claude/hooks/pr_check_in_reminder.py`, a `PostToolUse` hook wired
   in `.claude/settings.json` under the anchored matcher
@@ -539,7 +550,18 @@ CI, reviews, comments, or conflicts; that stays a direct §12 request.
   tools; it never blocks, issues no API calls, and reads no environment
   variables. `workflow-templates/.claude/hooks/pr_check_in_reminder.py` must
   stay byte-identical to the root copy.
-- Tests: `tests/test_pr_check_in_reminder.py` (own `ci.yml` step).
+- Verdict helper: `.claude/scripts/check_in_status.py` (PR / run / issue-list
+  modes, REST only, one JSON line, exit 2 on a failed read), shared with the
+  `/implement-plan-claude` checker; `workflow-templates/.claude/scripts/`
+  holds a byte-identical copy.
+- Permissions: `.claude/settings.json` `permissions.allow` pre-approves the
+  tools the check-in and `/implement-plan-claude` call (file edits,
+  `claude/*` pushes, `gh` REST and run reads, the security-audit / validate
+  dispatches, GitHub MCP and claude-code-remote tools, the helper), and
+  `permissions.ask` keeps `gh api` writes (`-X`, `--method`, `-f`/`-F`,
+  `--field`, `--raw-field`, `--input`) behind a prompt.
+- Tests: `tests/test_pr_check_in_reminder.py` and
+  `tests/test_check_in_status.py` (own `ci.yml` steps).
 - Relationship to §25: the check-in is the scheduled self check-in §25.C
   allows; `pr_watch_guard.py` keeps blocking `subscribe_pr_activity`.
 - Consumers receive the hook, the settings entry, and the §26 prose through

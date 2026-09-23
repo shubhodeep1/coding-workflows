@@ -28,8 +28,9 @@ internal exception, the same contract as `pr_watch_guard.py`; empty or
 whitespace-only input is treated as an empty object and allowed silently.
 
 The reminder is the §26 mechanism, not a §25 subscription: it tells the
-session to schedule a status read (`send_later`), never to subscribe to PR
-activity, and the §25 guard keeps blocking `subscribe_pr_activity`.
+session to start a Haiku checker session (`create_session`, re-armed with
+`send_later`), never to subscribe to PR activity, and the §25 guard keeps
+blocking `subscribe_pr_activity`.
 """
 
 from __future__ import annotations
@@ -64,13 +65,16 @@ REMINDER = (
 	"PR status check-in reminder (CLAUDE.md §26): this call pushed a branch, "
 	"opened a pull request, or wrote to a remote branch. Once the pull request "
 	"for the pushed branch exists, arm the 3-hourly status check-in for it "
-	"unless one is already armed for that PR or the user opted out for this "
-	"task: call send_later with delay_minutes=180 and a message naming the "
-	"repository, the PR number and URL, and the §26 check-in steps (delegate "
-	"the status read to a Sonnet subagent; re-arm silently while the PR is "
-	"open; on merged or closed, summarise the next steps, say whether the "
-	"session can be closed, and send one PushNotification). Never subscribe "
-	"to PR activity (§25)."
+	"unless one is already armed for that PR, /implement-plan-claude opened "
+	"it (its own checker is the check-in), or the user opted out for this "
+	"task: call create_session with a Haiku model and a prompt naming the "
+	"repository, the PR number and URL, the §26 check-in steps (run "
+	".claude/scripts/check_in_status.py --terminal-only; re-arm with "
+	"send_later delay_minutes=180 while the PR is open; on merged or closed, "
+	"report the next steps, say whether the pushing session can be closed, "
+	"and send one PushNotification), and the next steps for each terminal "
+	"state. Without create_session, use send_later into this session and a "
+	"Haiku subagent for the read. Never subscribe to PR activity (§25)."
 )
 
 

@@ -142,7 +142,8 @@ def test_evaluate_reminds_after_pr_write_tools(tool_name):
 	assert "§26" in context
 	assert "send_later" in context
 	assert "delay_minutes=180" in context
-	assert "Sonnet" in context
+	assert "Haiku" in context
+	assert "create_session" in context
 	assert "Never subscribe" in context
 
 
@@ -354,7 +355,10 @@ def test_claude_md_documents_the_rule():
 	assert "tests/test_pr_check_in_reminder.py" in text
 	joined = " ".join(text.split())
 	assert "`delay_minutes: 180`" in joined
-	assert '`model: "sonnet"`' in joined
+	assert "`model: claude-haiku-4-5-20251001`" in joined
+	assert '`model: "haiku"`' in joined
+	assert ".claude/scripts/check_in_status.py" in joined
+	assert "`/implement-plan-claude` is the exception" in joined
 	assert "PushNotification" in joined
 	assert (
 		"fails open with a `systemMessage` warning when the hook payload cannot be read, "
