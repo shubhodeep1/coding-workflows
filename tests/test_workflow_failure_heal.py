@@ -1415,3 +1415,525 @@ def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapsh
 		assert not reporter.exists()
 		assert "::warning::Workflow-failure-heal reporter script workflow_failure_heal_autofix_report.sh was not staged" in result.stdout
 		assert "reason=reporter_missing" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Identical-failure fingerprint cap (review_autofix.yml gate + helpers)
+# ---------------------------------------------------------------------------
+
+CAP_AUTHOR = "workflow-pat-user"
+EDITOR_STDERR_RUN_1 = (
+	"2026-09-22T08:00:01.123Z scripts/review_apply_fixes.sh: line 168: OPENROUTER_API_KEY: OPENROUTER_API_KEY is required\n"
+	"::error::editor exited in run 35713627310 at /tmp/codex-pr-35713627310-1-4242/editor.log on f9d7196c0ffee0000000000000000000000000ab\n"
+)
+EDITOR_STDERR_RUN_2 = (
+	"2026-09-22T09:10:44.901Z scripts/review_apply_fixes.sh: line 168: OPENROUTER_API_KEY: OPENROUTER_API_KEY is required\n"
+	"::error::editor exited in run 35719487197 at /tmp/codex-pr-35719487197-2-17/editor.log on 0123456789abcdef0123456789abcdef01234567\n"
+)
+
+
+def _cap_fp(reason: str = "editor_empty_noop", evidence: str = EDITOR_STDERR_RUN_1) -> str:
+	return heal.autofix_failure_fingerprint(failure_reason=reason, evidence_text=evidence)["fp"]
+
+
+def _failure_marker_comment(text: str, *, head: str = SHA_A, fp: str | None = None, run: str = "1", author: str = CAP_AUTHOR, reason: str = "editor_empty_noop") -> dict:
+	marker = heal.render_failure_marker(head, reason, fp or _cap_fp(reason), False, run)
+	assert marker, "marker must render for a valid head and fingerprint"
+	return {"id": int(run) if run.isdigit() else 0, "author_login": author, "body": f"{text}\n\n{marker}"}
+
+
+def test_autofix_failure_fingerprint_is_stable_across_volatile_tokens() -> None:
+	first = heal.autofix_failure_fingerprint(failure_reason="editor_empty_noop", evidence_text=EDITOR_STDERR_RUN_1)
+	second = heal.autofix_failure_fingerprint(failure_reason="editor_empty_noop", evidence_text=EDITOR_STDERR_RUN_2)
+	assert first == second and first["degraded"] is False
+	assert re.fullmatch(r"[0-9a-f]{64}", first["fp"])
+	other_reason = heal.autofix_failure_fingerprint(failure_reason="workflow_failure", evidence_text=EDITOR_STDERR_RUN_1)
+	assert other_reason["fp"] != first["fp"]
+	other_message = heal.autofix_failure_fingerprint(failure_reason="editor_empty_noop", evidence_text="::error::PR diff unavailable\n")
+	assert other_message["fp"] != first["fp"]
+	# No evidence: degraded, and the fingerprint collapses to head + reason.
+	degraded = heal.autofix_failure_fingerprint(failure_reason="editor_empty_noop", evidence_text="  \n")
+	assert degraded["degraded"] is True
+	assert degraded["fp"] == heal.autofix_failure_fingerprint(failure_reason="editor_empty_noop", evidence_text="")["fp"]
+
+
+def test_render_failure_marker_is_log_safe_and_rejects_bad_input() -> None:
+	fp = _cap_fp()
+	marker = heal.render_failure_marker(SHA_A.upper(), "editor_empty_noop", fp, False, "35713627310")
+	assert marker == f"<!-- review-autofix-failure:v1 head={SHA_A} reason=editor_empty_noop fp={fp} degraded=0 run=35713627310 -->"
+	assert heal.render_failure_marker(SHA_A, "bad reason; rm -rf", fp, True, "x") == f"<!-- review-autofix-failure:v1 head={SHA_A} reason=badreasonrm-rf fp={fp} degraded=1 -->"
+	assert heal.render_failure_marker("abc", "editor_empty_noop", fp, False) == ""
+	assert heal.render_failure_marker(SHA_A, "editor_empty_noop", "not-a-fingerprint", False) == ""
+	parsed = heal.parse_failure_markers([{"id": 9, "author_login": CAP_AUTHOR, "body": "x\n" + marker}], head_sha=SHA_A, author_login=CAP_AUTHOR)
+	assert parsed == [{"fp": fp, "reason": "editor_empty_noop", "degraded": False, "run": "35713627310", "comment_id": "9"}]
+	assert heal.parse_failure_markers([{"author_login": "someone-else", "body": marker}], head_sha=SHA_A, author_login=CAP_AUTHOR) == []
+	assert heal.parse_failure_markers([{"user": {"login": CAP_AUTHOR}, "body": marker}], head_sha=SHA_B, author_login=CAP_AUTHOR) == []
+
+
+def test_count_identical_failures_rules() -> None:
+	fp = _cap_fp()
+	three = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (1, 2, 3)]
+	result = heal.count_identical_failures(three, head_sha=SHA_A, author_login=CAP_AUTHOR)
+	assert result == {"count": 3, "fp": fp, "reason": "editor_empty_noop", "cap_applied": False}
+	# Unrelated comments, markers for another head and forged markers are skipped.
+	mixed = [
+		three[0],
+		{"author_login": "reviewer-bot", "body": "unrelated reviewer note"},
+		_failure_marker_comment(AUTOFIX_NOOP_COMMENT, head=SHA_B, run="7"),
+		three[1],
+		_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run="8", author="attacker", fp="0" * 64),
+		three[2],
+	]
+	assert heal.count_identical_failures(mixed, head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 3
+	# An editor summary (a productive-looking run) ends the scan.
+	assert heal.count_identical_failures([three[0], three[1], {"author_login": CAP_AUTHOR, "body": AUTOFIX_SUMMARY_COMMENT}, three[2]], head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 1
+	# ...unless it is the summary a post-editor failure of the same run posted first.
+	paired = []
+	for run in ("4", "5", "6"):
+		paired.append({"author_login": CAP_AUTHOR, "body": AUTOFIX_SUMMARY_COMMENT})
+		paired.append(_failure_marker_comment(AUTOFIX_POST_EDITOR_FAILED_COMMENT, run=run, reason="workflow_failure"))
+	assert heal.count_identical_failures(paired, head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 3
+	# Two failure comments of one run count once.
+	same_run = [three[0], _failure_marker_comment("⚠️ **Editor no-op suspicious** — x", run="2"), three[1]]
+	assert heal.count_identical_failures(same_run, head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 2
+	# A different fingerprint or a legacy failure comment without a marker ends the scan.
+	changed = [three[0], three[1], _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="9", reason="workflow_failure")]
+	assert heal.count_identical_failures(changed, head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 1
+	legacy = [three[0], {"author_login": CAP_AUTHOR, "body": AUTOFIX_FAILED_COMMENT}, three[1], three[2]]
+	assert heal.count_identical_failures(legacy, head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 2
+	# The cap marker is detected per head and per trusted author.
+	cap = {"author_login": CAP_AUTHOR, "body": f"**AI review/autofix stopped: identical failure repeated**\n\n<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={fp} reason=editor_empty_noop count=3 -->"}
+	assert heal.count_identical_failures([*three, cap], head_sha=SHA_A, author_login=CAP_AUTHOR) == {"count": 3, "fp": fp, "reason": "editor_empty_noop", "cap_applied": True}
+	assert heal.count_identical_failures([*three, cap], head_sha=SHA_B, author_login=CAP_AUTHOR)["cap_applied"] is False
+	assert heal.count_identical_failures([*three, {**cap, "author_login": "attacker"}], head_sha=SHA_A, author_login=CAP_AUTHOR)["cap_applied"] is False
+	# No authenticated author: nothing is trusted.
+	assert heal.count_identical_failures(three, head_sha=SHA_A, author_login="")["count"] == 0
+
+
+def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-fp-cli-") as tmp_name:
+		tmp = Path(tmp_name)
+		(tmp / "editor_stage_stderr.txt").write_text(EDITOR_STDERR_RUN_1, encoding="utf-8")
+		env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}
+		env.pop("AUTOFIX_FAILURE_REASON", None)
+		result = subprocess.run(
+			[
+				"python3", str(LIB_PATH), "autofix-failure-fingerprint",
+				"--evidence-file", str(tmp / "editor_stage_stderr.txt"),
+				"--evidence-file", str(tmp / "missing.txt"),
+				"--evidence-out", str(tmp / "failure_evidence_tail.txt"),
+				"--head-sha", SHA_A, "--run-id", "42",
+			],
+			capture_output=True, text=True, check=True, env=env,
+		)
+		lines = dict(line.split("=", 1) for line in result.stdout.splitlines())
+		fp = _cap_fp()
+		assert lines == {"fp": fp, "degraded": "0", "reason": "editor_empty_noop", "marker": heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "42")}
+		assert "OPENROUTER_API_KEY is required" in (tmp / "failure_evidence_tail.txt").read_text(encoding="utf-8")
+		comments = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (1, 2, 3)]
+		(tmp / "comments.json").write_text(json.dumps(comments), encoding="utf-8")
+		result = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
+			capture_output=True, text=True, check=True, env=env,
+		)
+		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false"]
+		(tmp / "comments.json").write_text("{}", encoding="utf-8")
+		bad = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
+			capture_output=True, text=True, check=False, env=env,
+		)
+		assert bad.returncode == 2 and bad.stdout == ""
+
+
+def test_derived_failure_reason_matches_the_reporter_precedence() -> None:
+	cases = [
+		({"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, RUN_SUMMARY_LINE),
+		({"AUTOFIX_FAILURE_REASON": "Not A Reason", "EDITOR_CHANGES_LOST": "true"}, RUN_SUMMARY_LINE),
+		({"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "EDITOR_CHANGES_LOST": "true"}, None),
+		({"EDITOR_CHANGES_LOST": "true", "EDITOR_NOOP_REFUSAL": "true"}, None),
+		({"EDITOR_NOOP_REFUSAL": "true"}, RUN_SUMMARY_LINE),
+		({}, RUN_SUMMARY_LINE.replace("editor_empty_noop", "reviewers_unavailable")),
+		({}, None),
+	]
+	for flags, summary_line in cases:
+		finalize = ""
+		if summary_line is not None:
+			finalize = json.loads(summary_line.split(" ", 1)[1])["finalize_reason"]
+		expected = heal.derive_autofix_failure_reason(flags, finalize)
+		with tempfile.TemporaryDirectory(prefix="heal-reason-parity-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, _state_file, env = _stage_autofix_report(tmp, comments=[], flags={**flags, "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "99"}, summary_line=summary_line)
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert f"skip reason=below_streak pr=4174 reason={expected} " in result.stdout, (flags, expected, result.stdout)
+
+
+def test_autofix_report_honours_cap_reason_and_carries_fingerprint() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(
+			tmp,
+			comments=[],
+			flags={"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_FAILURE_FP": FP_HEX, "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "1", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"},
+		)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=identical_failure_cap streak=1" in result.stdout, result.stdout + result.stderr
+		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+		assert payload["failure_reason"] == "identical_failure_cap" and payload["failure_fingerprint"] == FP_HEX
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-badfp-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_FAILURE_FP": "nothex", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "1"})
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		report = _state(state_file)["dispatches"][0]["body"]["client_payload"]["report"]
+		assert "failure_fingerprint" not in report
+		assert heal.validate_payload(report)["failure_fingerprint"] is None
+
+
+def test_validate_payload_failure_fingerprint_is_optional_and_strict() -> None:
+	assert heal.validate_payload(_autofix_payload())["failure_fingerprint"] is None
+	assert heal.validate_payload(_autofix_payload(failure_fingerprint=FP_HEX.upper()))["failure_fingerprint"] == FP_HEX
+	assert heal.validate_payload(_autofix_payload(failure_fingerprint="f" * 63))["failure_fingerprint"] is None
+	built = heal.build_autofix_failure_payload(
+		repo=CONSUMER_REPO, pr=_pr(), comments=[], workflow_name="AI Review", failure_reason="identical_failure_cap",
+		failure_evidence="", failure_streak=1, run_id="500", run_url=None, wrapper_sha=None, reporter_run_url=None, failure_fingerprint=FP_HEX,
+	)
+	assert built["failure_fingerprint"] == FP_HEX
+	assert len(heal.wrap_dispatch(built)["client_payload"]) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+	issue_payload = heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=None, reporter_run_url=None)
+	assert heal.validate_payload({**issue_payload, "failure_fingerprint": FP_HEX})["failure_fingerprint"] is None
+
+
+def test_fingerprint_cap_log_prefixes_are_registered() -> None:
+	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	for prefix in ("AUTOFIX_FINGERPRINT", "AUTOFIX_FINGERPRINT_CAP_TRIPPED", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED"):
+		assert f"- `{prefix}`" in agents_text, prefix
+		assert f"LOG_PREFIX.name={prefix}" in agents_text, prefix
+	workflow_text = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	for prefix in ("AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=", "AUTOFIX_FINGERPRINT pr="):
+		assert prefix in workflow_text, prefix
+
+
+GATE_MOCK_GH = r'''#!/usr/bin/env python3
+import json, os, subprocess, sys
+from pathlib import Path
+
+state = Path(os.environ["MOCK_GATE_STATE"])
+data = json.loads(state.read_text())
+args = sys.argv[1:]
+data.setdefault("calls", []).append(args)
+state.write_text(json.dumps(data))
+jq = None
+if "--jq" in args:
+	jq = args[args.index("--jq") + 1]
+path = next((a for a in args[1:] if a.startswith("repos/") or a == "user"), "")
+
+def emit(value):
+	text = json.dumps(value)
+	if jq is not None:
+		text = subprocess.run(["jq", "-rc", jq], input=text, capture_output=True, text=True, check=True).stdout
+	sys.stdout.write(text if text.endswith("\n") else text + "\n")
+
+if args[:1] != ["api"]:
+	sys.exit(1)
+if path == "user":
+	if data.get("user_fail"):
+		sys.exit(1)
+	emit({"login": data["login"]})
+elif path.endswith("/comments"):
+	if data.get("comments_fail"):
+		sys.exit(1)
+	emit(data["comments"])
+elif path.endswith("/files"):
+	emit([{"filename": "scripts/big_change.sh"}])
+elif "/pulls/" in path:
+	emit(data["pr"])
+else:
+	sys.exit(1)
+'''
+
+
+def _gate_run_script() -> str:
+	workflow = _yaml(REVIEW_AUTOFIX_WORKFLOW)
+	steps = workflow["jobs"]["gate"]["steps"]
+	return next(step for step in steps if step.get("name") == "Evaluate review gate")["run"]
+
+
+def _run_gate(tmp: Path, *, comments: list[dict], event_name: str = "workflow_dispatch", extra_env: dict[str, str] | None = None, state_overrides: dict | None = None, with_helper: bool = True) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict]:
+	work = tmp / "work"
+	(work / ".codex-workflow-src-main" / "scripts").mkdir(parents=True)
+	if with_helper:
+		shutil.copy(LIB_PATH, work / ".codex-workflow-src-main" / "scripts" / LIB_PATH.name)
+	# The branch-pinned copy predates the cap: the gate must fall back to main's.
+	(work / ".codex-workflow-src" / "scripts").mkdir(parents=True)
+	(work / ".codex-workflow-src" / "scripts" / LIB_PATH.name).write_text("# old helper without the cap subcommand\n", encoding="utf-8")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "gh").write_text(GATE_MOCK_GH, encoding="utf-8")
+	(bin_dir / "gh").chmod(0o755)
+	state_file = tmp / "gate_state.json"
+	# The API shape: the gate's jq projection reads the author from user.login.
+	api_comments = [{"id": comment.get("id", 0), "user": {"login": comment.get("author_login", "")}, "created_at": "2026-09-22T08:00:00Z", "body": comment["body"]} for comment in comments]
+	state = {
+		"login": CAP_AUTHOR,
+		"comments": api_comments,
+		"pr": {"state": "open", "merged": False, "head": {"ref": "ai/issue-4255", "sha": SHA_A}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "AI implementation for issue #4255", "body": "Fixes #4255"},
+	}
+	state.update(state_overrides or {})
+	state_file.write_text(json.dumps(state), encoding="utf-8")
+	output_file = tmp / "github_output.txt"
+	output_file.write_text("", encoding="utf-8")
+	(tmp / "runner_temp").mkdir()
+	env = {
+		"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+		"HOME": str(tmp),
+		"MOCK_GATE_STATE": str(state_file),
+		"GITHUB_OUTPUT": str(output_file),
+		"RUNNER_TEMP": str(tmp / "runner_temp"),
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"GH_TOKEN": "x",
+		"REPOSITORY": SELF_REPO,
+		"EVENT_NAME": event_name,
+		"EVENT_ACTION": "",
+		"PR_NUMBER": "4259",
+		"PR_HEAD_SHA": "",
+		"PR_IS_DRAFT": "false",
+		"PR_SKIP_AI": "false",
+		"PR_TITLE": "AI implementation for issue #4255",
+		"PR_BODY": "Fixes #4255",
+		"AUTOFIX_SKIP_SELF_TRIGGERED": "",
+		"AUTOFIX_BOT_LOGIN": "",
+		"AUTOFIX_SKIP_TERMINAL_SAME_HEAD": "",
+		"FORCE_RB_JUDGE": "false",
+		"AUTOFIX_SKIP_DOC_ONLY": "",
+		"AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT": "",
+		"AUTOFIX_SKIP_MAX_ADDITIONS": "",
+		"AUTOFIX_SKIP_MAX_DELETIONS": "",
+		"FORCE_CLAUDE_BRANCH_REVIEW": "",
+		"HEAD_REF_OVERRIDE": "",
+		"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "true",
+		"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL": "3",
+	}
+	env.update(extra_env or {})
+	script = tmp / "gate.sh"
+	script.write_text(_gate_run_script(), encoding="utf-8")
+	result = subprocess.run(["bash", str(script)], cwd=work, env=env, capture_output=True, text=True, check=False)
+	outputs = dict(line.split("=", 1) for line in output_file.read_text(encoding="utf-8").splitlines() if "=" in line)
+	return result, outputs, json.loads(state_file.read_text(encoding="utf-8"))
+
+
+def _comment_calls(state: dict) -> int:
+	return sum(1 for call in state["calls"] if any(str(arg).endswith("/comments") for arg in call))
+
+
+def test_gate_stops_a_head_with_three_identical_failure_markers() -> None:
+	fp = _cap_fp()
+	comments = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (101, 102, 103)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-") as tmp_name:
+		result, outputs, state = _run_gate(Path(tmp_name), comments=comments)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=4259 head={SHA_A} fp={fp} reason=editor_empty_noop count=3 max=3 already_applied=false" in result.stdout
+		assert outputs["should_run"] == "false" and outputs["skip_reason"] == "fingerprint_cap"
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_fp"] == fp
+		assert outputs["fingerprint_cap_count"] == "3" and outputs["fingerprint_cap_max"] == "3"
+		assert outputs["fingerprint_cap_reason"] == "editor_empty_noop" and outputs["fingerprint_cap_already_applied"] == "false"
+		assert outputs["deterministic_skip"] == "false"
+		# §15: the terminal same-head skip and the cap share one comments call.
+		assert _comment_calls(state) == 1
+		assert sum(1 for call in state["calls"] if "user" in call) == 1
+
+
+def test_gate_cap_already_applied_threshold_bypass_and_fail_open() -> None:
+	fp = _cap_fp()
+	three = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (101, 102, 103)]
+	cap = {"id": 200, "author_login": CAP_AUTHOR, "body": f"**AI review/autofix stopped: identical failure repeated**\n\n<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={fp} reason=editor_empty_noop count=3 -->"}
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-applied-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[*three, cap], event_name="pull_request")
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_already_applied"] == "true", result.stdout
+		assert f"AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=4259 head={SHA_A} fp={fp} count=3" in result.stdout
+	# Two identical failures stay below the default threshold of 3.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-below-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=three[:2])
+		assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", result.stdout
+		assert f"AUTOFIX_FINGERPRINT cap=not_tripped pr=4259 head={SHA_A} fp={fp} reason=editor_empty_noop count=2 max=3" in result.stdout
+	# A malformed threshold falls back to 3; a lower threshold trips earlier.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-max2-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=three[:2], extra_env={"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL": "2"})
+		assert outputs["fingerprint_cap"] == "true"
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-badmax-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=three[:2], extra_env={"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL": "abc"})
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_max"] == "3"
+	# The kill switch, the force_rb_judge dispatch and the fail-open paths keep the run.
+	cases = [
+		("disabled", {"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"}, {}, True, None),
+		("force_rb_judge", {"FORCE_RB_JUDGE": "true"}, {}, True, "AUTOFIX_FINGERPRINT cap=bypassed pr=4259"),
+		("helper_missing", {}, {}, False, "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=4259 head=" + SHA_A + " reason=helper_missing"),
+		("comments_fail", {}, {"comments_fail": True}, True, "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=4259 head=" + SHA_A + " reason=api_error"),
+		("user_fail", {}, {"user_fail": True}, True, "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=4259 head=" + SHA_A + " reason=marker_author_unavailable"),
+	]
+	for name, extra_env, overrides, with_helper, expected in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-cap-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=three, extra_env=extra_env, state_overrides=overrides, with_helper=with_helper)
+			assert result.returncode == 0, (name, result.stderr)
+			assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", (name, result.stdout)
+			if expected:
+				assert expected in result.stdout, (name, result.stdout)
+	# Markers for an older head do not count against a new head.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-newhead-") as tmp_name:
+		pr = {"state": "open", "merged": False, "head": {"ref": "ai/issue-4255", "sha": SHA_B}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "t", "body": "b"}
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=three, state_overrides={"pr": pr})
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_count"] == "0"
+
+
+CAP_JOB_MOCK_GH = r'''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+
+state = Path(os.environ["MOCK_CAP_STATE"])
+data = json.loads(state.read_text())
+args = sys.argv[1:]
+data.setdefault("calls", []).append(args)
+
+def save():
+	state.write_text(json.dumps(data))
+
+def field(name):
+	for index, arg in enumerate(args):
+		if arg == "-f" and args[index + 1].startswith(name + "="):
+			return args[index + 1].split("=", 1)[1]
+	return None
+
+if args[:2] == ["label", "create"]:
+	save()
+	sys.exit(0)
+if args[:1] != ["api"]:
+	save()
+	sys.exit(1)
+method = "GET"
+if "-X" in args:
+	method = args[args.index("-X") + 1]
+elif "--method" in args:
+	method = args[args.index("--method") + 1]
+elif any(arg == "-f" for arg in args):
+	method = "POST"
+path = next((a for a in args[1:] if a.startswith("repos/")), "")
+if path.endswith("/dispatches"):
+	body = json.loads(Path(args[args.index("--input") + 1]).read_text())
+	data.setdefault("dispatches", []).append(body)
+elif path.endswith("/comments") and method == "GET":
+	print(json.dumps(data.get("comments", [])))
+elif path.endswith("/comments") and method == "POST":
+	data.setdefault("comments_posted", []).append(field("body"))
+elif path.endswith("/labels") and method == "GET":
+	print(json.dumps(["ai:done"]))
+elif path.endswith("/labels"):
+	number = path.split("/")[-2]
+	if method == "PUT":
+		body = json.loads(sys.stdin.read())
+		data.setdefault("labels_set", []).append([number, body["labels"]])
+	else:
+		data.setdefault("labels_set", []).append([number, [field("labels[]")]])
+elif "/pulls/" in path:
+	print(json.dumps(data["pr"]))
+else:
+	save()
+	sys.exit(1)
+save()
+'''
+
+
+def _cap_job_script() -> str:
+	workflow = _yaml(REVIEW_AUTOFIX_WORKFLOW)
+	job = workflow["jobs"]["fingerprint-cap-block"]
+	return next(step for step in job["steps"] if step.get("name") == "Apply identical-failure cap outcome")["run"]
+
+
+def _run_cap_job(tmp: Path, *, pr_body: str, already_applied: str = "false", head: str = SHA_A, fresh_cap_marker: bool = False) -> tuple[subprocess.CompletedProcess[str], dict]:
+	work = tmp / "work"
+	scripts = work / ".codex-workflow-src" / "scripts"
+	scripts.mkdir(parents=True)
+	for name in ("gh_helpers.sh", "label_helpers.sh", "tg_helpers.sh", "workflow_failure_heal.py", "workflow_failure_heal_autofix_report.sh"):
+		shutil.copy(SCRIPTS_DIR / name, scripts / name)
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "gh").write_text(CAP_JOB_MOCK_GH, encoding="utf-8")
+	(bin_dir / "gh").chmod(0o755)
+	state_file = tmp / "cap_state.json"
+	pr = {"number": 4259, "state": "open", "title": "AI implementation for issue #4255", "body": pr_body, "html_url": f"https://github.com/{SELF_REPO}/pull/4259", "labels": [], "head": {"ref": "ai/issue-4255", "sha": head}}
+	comments = [{"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 -->"}] if fresh_cap_marker else []
+	state_file.write_text(json.dumps({"pr": pr, "comments": comments}), encoding="utf-8")
+	(tmp / "runner_temp").mkdir()
+	summary = tmp / "summary.md"
+	env = {
+		"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+		"HOME": str(tmp),
+		"MOCK_CAP_STATE": str(state_file),
+		"RUNNER_TEMP": str(tmp / "runner_temp"),
+		"GITHUB_STEP_SUMMARY": str(summary),
+		"GITHUB_REPOSITORY": SELF_REPO,
+		"GITHUB_RUN_ID": "900",
+		"GITHUB_SERVER_URL": "https://github.com",
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"GH_TOKEN": "x",
+		"REPOSITORY": SELF_REPO,
+		"PR_NUMBER": "4259",
+		"PR_HEAD_SHA": SHA_A,
+		"FINGERPRINT_CAP_FP": FP_HEX,
+		"FINGERPRINT_CAP_REASON": "editor_empty_noop",
+		"FINGERPRINT_CAP_COUNT": "3",
+		"FINGERPRINT_CAP_MAX": "3",
+		"FINGERPRINT_CAP_ALREADY_APPLIED": already_applied,
+		"FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN": CAP_AUTHOR,
+		"WORKFLOW_SUPPORT_REF": SHA_B,
+		"WORKFLOW_HEAL_ENABLED": "true",
+		"REPORT_WORKFLOW_NAME": "Internal Review",
+		"REPORT_RUN_URL": f"https://github.com/{SELF_REPO}/actions/runs/900",
+		"TG_BOT_SECRET": "",
+		"TG_CHAT_ID": "",
+	}
+	script = tmp / "cap_job.sh"
+	script.write_text(_cap_job_script(), encoding="utf-8")
+	result = subprocess.run(["bash", str(script)], cwd=work, env=env, capture_output=True, text=True, check=False)
+	return result, json.loads(state_file.read_text(encoding="utf-8"))
+
+
+def test_fingerprint_cap_block_labels_comments_and_reports() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255\n\nRefs #3965")
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert state["labels_set"] == [["4255", ["ai:review-blocked"]]]
+		assert len(state["comments_posted"]) == 1
+		comment = state["comments_posted"][0]
+		assert comment.startswith("**AI review/autofix stopped: identical failure repeated**")
+		assert f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 -->" in comment
+		assert "linked issue(s) #4255" in comment
+		# The cap marker the job posts is the one the gate's scan recognises.
+		assert heal.count_identical_failures([{"author_login": CAP_AUTHOR, "body": comment}], head_sha=SHA_A, author_login=CAP_AUTHOR)["cap_applied"] is True
+		report = heal.validate_payload(state["dispatches"][0]["client_payload"]["report"])
+		assert report["failure_reason"] == "identical_failure_cap" and report["failure_fingerprint"] == FP_HEX
+		assert report["issue_number"] == 4259 and report["failure_streak"] == 1
+		assert "identical_failure_cap: 3 identical review/autofix failures" in report["failure_evidence"]
+		assert f"AUTOFIX_FINGERPRINT cap=applied pr=4259 head={SHA_A} fp={FP_HEX} count=3" in result.stdout
+		assert "WORKFLOW_HEAL_AUTOFIX_REPORT dispatched pr=4259 failure=identical_failure_cap streak=1" in result.stdout
+
+
+def test_fingerprint_cap_block_pr_label_idempotency_and_head_moved() -> None:
+	# No linked issue: the PR itself is labeled.
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-pr-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Manual change, no linked issue.")
+		assert result.returncode == 0, result.stderr
+		assert state["labels_set"] == [["4259", ["ai:review-blocked"]]]
+		assert "this pull request (no linked issue found)" in state["comments_posted"][0]
+	# A cap marker already on the head: log and write nothing.
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-applied-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", already_applied="true")
+		assert f"AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=4259 head={SHA_A} fp={FP_HEX} count=3" in result.stdout
+		assert state.get("calls", []) == []
+	# A queued cap job re-checks after acquiring the per-PR lock and writes nothing.
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-fresh-marker-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", fresh_cap_marker=True)
+		assert f"AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=4259 head={SHA_A} fp={FP_HEX} count=3" in result.stdout
+		assert "labels_set" not in state and "comments_posted" not in state and "dispatches" not in state
+	# A push after the gate: the new head gets its own run.
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-moved-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", head=SHA_B)
+		assert "reason=head_moved" in result.stdout
+		assert "labels_set" not in state and "comments_posted" not in state and "dispatches" not in state

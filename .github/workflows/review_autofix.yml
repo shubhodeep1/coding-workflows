@@ -265,7 +265,46 @@ jobs:
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
       post_merge_validate_context_definitely_empty: ${{ steps.evaluate.outputs.post_merge_validate_context_definitely_empty }}
+      # Identical-failure fingerprint cap (consumed by fingerprint-cap-block).
+      fingerprint_cap: ${{ steps.evaluate.outputs.fingerprint_cap }}
+      fingerprint_cap_fp: ${{ steps.evaluate.outputs.fingerprint_cap_fp }}
+      fingerprint_cap_reason: ${{ steps.evaluate.outputs.fingerprint_cap_reason }}
+      fingerprint_cap_count: ${{ steps.evaluate.outputs.fingerprint_cap_count }}
+      fingerprint_cap_max: ${{ steps.evaluate.outputs.fingerprint_cap_max }}
+      fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
+      fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
     steps:
+      # The identical-failure fingerprint cap in "Evaluate review gate" runs
+      # scripts/workflow_failure_heal.py. Only that file is checked out
+      # (sparse, depth 1), from the support ref codex-agent uses and from the
+      # main snapshot; the gate uses the first copy that carries the
+      # autofix-identical-failure-count subcommand and fails open without one.
+      - name: Checkout fingerprint cap helper
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          sparse-checkout: scripts/workflow_failure_heal.py
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout fingerprint cap helper main snapshot
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src-main
+          fetch-depth: 1
+          sparse-checkout: scripts/workflow_failure_heal.py
+          sparse-checkout-cone-mode: false
+
       - name: Evaluate review gate
         id: evaluate
         env:
@@ -320,6 +359,12 @@ jobs:
           # No-PR claude-branch-review path inputs (push-without-PR caller).
           FORCE_CLAUDE_BRANCH_REVIEW: ${{ inputs.force_claude_branch_review }}
           HEAD_REF_OVERRIDE: ${{ inputs.head_ref_override }}
+          # Identical-failure fingerprint cap (see the block below the
+          # terminal same-head skip). Default on, three identical failures on
+          # one head; set REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false to stop
+          # evaluating the cap (failure comments keep their marker).
+          REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}
+          REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
         run: |
           set -euo pipefail
 
@@ -534,6 +579,51 @@ jobs:
             fi
           fi
 
+          # ----- PR comments shared by the terminal same-head skip and the
+          # identical-failure fingerprint cap (CLAUDE.md §15) -----
+          # Both checks authenticate workflow-owned PR-comment markers against
+          # the login GH_PAT posts as, and both read the PR's issue comments.
+          # gate_fetch_marker_comments issues the `gh api user` lookup and the
+          # paginated comments call at most once per gate evaluation, on first
+          # use, so enabling both checks still costs one comments call. The
+          # file keeps only the comments either parser reads: the
+          # REVIEW_AUTOFIX_PARTIAL_V1 markers (verbatim), and the failure /
+          # cap markers, failure comment texts and editor summaries the cap
+          # scan reads (other bodies clipped to their first and last 2000
+          # characters; both markers sit at the ends of their comments).
+          # gate_marker_fetch_state: pending | ok | marker_author_unavailable
+          # | api_error.
+          gate_marker_fetch_state="pending"
+          gate_marker_author_login=""
+          gate_marker_comments_file="${RUNNER_TEMP:-/tmp}/review_gate_marker_comments.json"
+          gate_fetch_marker_comments()
+          {
+            if [ "${gate_marker_fetch_state}" != "pending" ]; then
+              return 0
+            fi
+            # The existing PR and comments calls do not expose the identity
+            # authenticated by GH_PAT, so this lookup cannot be merged into
+            # either response. Resolve it once for this gate evaluation.
+            if ! gate_marker_author_login="$(gh api user --jq '.login // ""' 2>/dev/null)"; then
+              gate_marker_author_login=""
+            fi
+            if [ -z "${gate_marker_author_login}" ]; then
+              gate_marker_fetch_state="marker_author_unavailable"
+              return 0
+            fi
+            # $b is a jq variable, not a shell expansion.
+            # shellcheck disable=SC2016
+            if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -f per_page=100 \
+              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious"))) | {id: .id, author_login: (.user.login // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
+              2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
+              && [ -s "${gate_marker_comments_file}" ]; then
+              gate_marker_fetch_state="ok"
+            else
+              gate_marker_fetch_state="api_error"
+            fi
+          }
+
           # ----- Terminal same-head skip (workflow_dispatch only) -----
           # The partial-finalize path caps same-head resume rounds at
           # REVIEW_MAX_RESUME_ROUNDS and marks the cycle terminal
@@ -569,8 +659,8 @@ jobs:
           # Cost (CLAUDE.md §15): head_sha rides on the existing /pulls fetch
           # above. The authenticated marker author cannot be derived from that
           # response or the comments response, so eligible dispatches issue one
-          # GET /user plus one paginated GET /issues/{n}/comments. Both calls
-          # are skipped unless every earlier gate passed and the PR is mergeable.
+          # GET /user plus one paginated GET /issues/{n}/comments, shared with
+          # the fingerprint cap below through gate_fetch_marker_comments.
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
             && [ "${AUTOFIX_SKIP_TERMINAL_SAME_HEAD:-true}" != "false" ] \
@@ -590,24 +680,19 @@ jobs:
             elif [ -z "${pr_head_sha_gate}" ]; then
               echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED pr=${PR_NUMBER} head_sha=unknown reason=head_sha_unavailable"
             else
-              terminal_marker_author_login=""
-              # The existing PR and comments calls do not expose the identity
-              # authenticated by GH_PAT, so this lookup cannot be merged into
-              # either response. Resolve it once for this gate evaluation.
-              if ! terminal_marker_author_login="$(gh api user --jq '.login // ""' 2>/dev/null)"; then
-                terminal_marker_author_login=""
-              fi
+              gate_fetch_marker_comments
+              terminal_marker_author_login="${gate_marker_author_login}"
               if [ -z "${terminal_marker_author_login}" ]; then
                 echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=marker_author_unavailable"
               else
-                # Keep only marker comments (id, author, created_at, body) so
-                # the parser below can authenticate the workflow-owned state.
+                # Keep only the partial-finalize marker comments (id, author,
+                # created_at, body) so the parser below can authenticate the
+                # workflow-owned state.
                 partial_marker_comments_json=""
-                if ! partial_marker_comments_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-                  -f per_page=100 \
-                  --jq '[.[] | select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) | {id: .id, author_login: (.user.login // ""), created_at: (.created_at // ""), body: (.body // "")}]' \
-                  2>/dev/null | jq -c -s 'add // []' 2>/dev/null)"; then
-                  partial_marker_comments_json=""
+                if [ "${gate_marker_fetch_state}" = "ok" ]; then
+                  if ! partial_marker_comments_json="$(jq -c '[.[] | select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->"))]' "${gate_marker_comments_file}" 2>/dev/null)"; then
+                    partial_marker_comments_json=""
+                  fi
                 fi
                 if [ -z "${partial_marker_comments_json}" ]; then
                   echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error"
@@ -715,6 +800,96 @@ jobs:
                     elif [ "${terminal_matching_markers:-0}" != "0" ] || [ "${terminal_untrusted_markers:-0}" != "0" ]; then
                       echo "AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} matching_markers=${terminal_matching_markers:-0} untrusted_markers=${terminal_untrusted_markers:-0} commit_bot_markers=${terminal_commit_bot_markers:-0} marker_author_login=${terminal_marker_author_login}"
                     fi
+                  fi
+                fi
+              fi
+            fi
+          fi
+
+          # ----- Identical-failure fingerprint cap -----
+          # Every failure comment the codex-agent job posts ends with a
+          # `<!-- review-autofix-failure:v1 head=<sha> reason=<r> fp=<sha256>
+          # degraded=<0|1> run=<id> -->` marker (fp = the failure reason plus
+          # the normalised error signature of the failing stage's stderr).
+          # When the trailing markers for the current head written by the
+          # GH_PAT identity share one fingerprint REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL
+          # (default 3) times, the failure is deterministic: another run on
+          # this head spends reviewer and editor models to fail the same way
+          # (PR #4259: seven identical editor failures on one head, about 75
+          # minutes each). Stop here instead and hand the PR to the sibling
+          # fingerprint-cap-block job, which labels the linked issues (or the
+          # PR) ai:review-blocked, posts one cap comment and reports the
+          # failure to workflow failure heal. A push (new head) resets the
+          # count by construction.
+          #
+          # Scope and fail-open rules:
+          #   * Every event (pull_request and workflow_dispatch) of a PR with
+          #     a known head SHA, once every earlier gate passed.
+          #   * force_rb_judge dispatches (stall poller) bypass the cap: the
+          #     review-blocked judge is the cap's intended consumer.
+          #   * A missing helper, a comments / identity lookup failure, or a
+          #     parse failure logs AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED and
+          #     keeps the normal gate result.
+          #   * vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false disables it.
+          # Cost (CLAUDE.md §15): the comments are the ones
+          # gate_fetch_marker_comments already fetched for the terminal
+          # same-head skip, or one GET /user plus one paginated GET
+          # /issues/{n}/comments when that skip did not run.
+          FINGERPRINT_CAP="false"
+          FINGERPRINT_CAP_FP=""
+          FINGERPRINT_CAP_REASON=""
+          FINGERPRINT_CAP_COUNT="0"
+          FINGERPRINT_CAP_ALREADY_APPLIED="false"
+          FINGERPRINT_CAP_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3}"
+          case "${FINGERPRINT_CAP_MAX}" in
+            ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
+          esac
+          if [ "${SHOULD_RUN}" = "true" ] \
+            && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \
+            && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            fingerprint_cap_helper=""
+            for fingerprint_cap_candidate in .codex-workflow-src/scripts/workflow_failure_heal.py .codex-workflow-src-main/scripts/workflow_failure_heal.py; do
+              if [ -f "${fingerprint_cap_candidate}" ] && grep -q 'autofix-identical-failure-count' "${fingerprint_cap_candidate}"; then
+                fingerprint_cap_helper="${fingerprint_cap_candidate}"
+                break
+              fi
+            done
+            if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then
+              echo "AUTOFIX_FINGERPRINT cap=bypassed pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} reason=force_rb_judge"
+            elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=unknown reason=head_sha_unavailable"
+            elif [ -z "${fingerprint_cap_helper}" ]; then
+              echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=helper_missing"
+            else
+              gate_fetch_marker_comments
+              if [ "${gate_marker_fetch_state}" != "ok" ]; then
+                echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=${gate_marker_fetch_state}"
+              else
+                fingerprint_cap_decision=""
+                if ! fingerprint_cap_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
+                  --comments-json "${gate_marker_comments_file}" \
+                  --head-sha "${pr_head_sha_gate}" \
+                  --author-login "${gate_marker_author_login}" 2>/dev/null)"; then
+                  fingerprint_cap_decision=""
+                fi
+                fingerprint_cap_count="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
+                if ! [[ "${fingerprint_cap_count}" =~ ^[0-9]+$ ]]; then
+                  echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=parse_error"
+                else
+                  FINGERPRINT_CAP_COUNT="${fingerprint_cap_count}"
+                  FINGERPRINT_CAP_FP="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "fp" { print $2 }' | tail -n 1)"
+                  FINGERPRINT_CAP_REASON="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
+                  if [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "cap_applied" { print $2 }' | tail -n 1)" = "true" ]; then
+                    FINGERPRINT_CAP_ALREADY_APPLIED="true"
+                    echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
+                  fi
+                  if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ]; then
+                    FINGERPRINT_CAP="true"
+                    SHOULD_RUN="false"
+                    SKIP_REASON="fingerprint_cap"
+                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}"
+                  else
+                    echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX}"
                   fi
                 fi
               fi
@@ -1095,6 +1270,13 @@ jobs:
           printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
           echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap=${FINGERPRINT_CAP}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_fp=${FINGERPRINT_CAP_FP}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_reason=${FINGERPRINT_CAP_REASON}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_count=${FINGERPRINT_CAP_COUNT}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_max=${FINGERPRINT_CAP_MAX}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -1505,6 +1687,256 @@ jobs:
           # 4) Workflow run summary
           write_deterministic_skip_summary
 
+  fingerprint-cap-block:
+    # Outcome of the gate's identical-failure fingerprint cap: the same
+    # failure repeated REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL times on one
+    # head, so the gate stopped this run before codex-agent. Label the linked
+    # issues ai:review-blocked (the stall poller then dispatches the
+    # review-blocked judge) or, with no linked issue, the PR itself; post one
+    # cap comment; and report the failure to workflow failure heal. Later
+    # dispatches on the same head see the cap marker in the gate's comment
+    # scan, log AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED, and skip this job.
+    # API cost (CLAUDE.md §15): one fresh paginated comments GET after the
+    # concurrency lock, one GET /pulls/{n} (linked issues and the reporter's
+    # PR payload), then the label and comment writes.
+    needs: gate
+    runs-on: ubuntu-latest
+    concurrency:
+      group: fingerprint-cap-${{ github.repository }}-${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    if: ${{ needs.gate.outputs.fingerprint_cap == 'true' && needs.gate.outputs.fingerprint_cap_already_applied != 'true' }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      FINGERPRINT_CAP_FP: ${{ needs.gate.outputs.fingerprint_cap_fp }}
+      FINGERPRINT_CAP_REASON: ${{ needs.gate.outputs.fingerprint_cap_reason }}
+      FINGERPRINT_CAP_COUNT: ${{ needs.gate.outputs.fingerprint_cap_count }}
+      FINGERPRINT_CAP_MAX: ${{ needs.gate.outputs.fingerprint_cap_max }}
+      FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
+      FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
+      WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+      REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.WORKFLOW_SUPPORT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/gh_helpers.sh
+            scripts/label_helpers.sh
+            scripts/tg_helpers.sh
+            scripts/workflow_failure_heal.py
+            scripts/workflow_failure_heal_autofix_report.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout workflow support source main snapshot
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src-main
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/gh_helpers.sh
+            scripts/label_helpers.sh
+            scripts/tg_helpers.sh
+            scripts/workflow_failure_heal.py
+            scripts/workflow_failure_heal_autofix_report.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Apply identical-failure cap outcome
+        run: |
+          set -uo pipefail
+
+          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Skipping fingerprint-cap-block: invalid PR number '${PR_NUMBER}'."
+            exit 0
+          fi
+          if [ "${FINGERPRINT_CAP_ALREADY_APPLIED}" = "true" ]; then
+            echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
+            exit 0
+          fi
+
+          # The branch-pinned support copy wins; the main snapshot fills in
+          # a file the pinned ref predates.
+          support_file()
+          {
+            local name="$1"
+            if [ -f ".codex-workflow-src/scripts/${name}" ]; then
+              printf '%s' ".codex-workflow-src/scripts/${name}"
+            elif [ -f ".codex-workflow-src-main/scripts/${name}" ]; then
+              printf '%s' ".codex-workflow-src-main/scripts/${name}"
+            fi
+          }
+          helper="$(support_file gh_helpers.sh)"
+          # shellcheck disable=SC1090
+          [ -n "${helper}" ] && source "${helper}" 2>/dev/null
+          helper="$(support_file label_helpers.sh)"
+          # shellcheck disable=SC1090
+          [ -n "${helper}" ] && source "${helper}" 2>/dev/null
+          helper="$(support_file tg_helpers.sh)"
+          # shellcheck disable=SC1090
+          [ -n "${helper}" ] && source "${helper}" 2>/dev/null
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          if ! type ensure_label_exists >/dev/null 2>&1; then
+            ensure_label_exists() {
+              gh_retry gh label create "$1" --repo "$2" \
+                --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
+                >/dev/null 2>&1 || true
+            }
+          fi
+          if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
+            set_issue_phase_label_resilient() {
+              ensure_label_exists "$2" "$3" || true
+              gh_retry gh api -X POST "repos/$3/issues/$1/labels" -f "labels[]=$2" >/dev/null 2>&1 \
+                || echo "::warning::Fallback label add failed for #$1."
+            }
+          fi
+
+          work_dir="${RUNNER_TEMP:-/tmp}/fingerprint_cap"
+          mkdir -p "${work_dir}"
+          # The gate snapshot can predate another queued cap job. The
+          # per-PR concurrency lock above serializes writers; re-read comments
+          # after acquiring it so only the first job applies side effects.
+          # The PR read below cannot provide comments or their author (§15).
+          fresh_cap_comments_file="${work_dir}/fresh_comments.json"
+          if [ -z "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" ] \
+            || ! gh_retry gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
+              --jq '[.[] | {author_login: (.user.login // ""), body: (.body // "")}]' \
+              | jq -c -s 'add // []' > "${fresh_cap_comments_file}"; then
+            echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=fresh_cap_marker_lookup_failed"
+            exit 0
+          fi
+          if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" \
+            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")))' \
+            "${fresh_cap_comments_file}" >/dev/null; then
+            echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
+            exit 0
+          fi
+          pr_json="${work_dir}/pr_payload.json"
+          if ! gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "${pr_json}" 2>/dev/null; then
+            echo "::warning::Could not fetch PR #${PR_NUMBER}; labeling the PR itself ai:review-blocked without linked-issue resolution."
+            printf '{}' > "${pr_json}"
+          fi
+          pr_state="$(jq -r '.state // ""' "${pr_json}" 2>/dev/null || echo "")"
+          current_head="$(jq -r '.head.sha // ""' "${pr_json}" 2>/dev/null || echo "")"
+          if [ "${pr_state}" = "closed" ]; then
+            echo "AUTOFIX_FINGERPRINT cap=skipped pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=pr_closed"
+            exit 0
+          fi
+          if [ -n "${current_head}" ] && [ "${current_head}" != "${PR_HEAD_SHA}" ]; then
+            # A push landed after the gate: the new head has no identical
+            # failures yet and gets its own run.
+            echo "AUTOFIX_FINGERPRINT cap=skipped pr=${PR_NUMBER} head=${PR_HEAD_SHA} current_head=${current_head} reason=head_moved"
+            exit 0
+          fi
+
+          # Linked issues: strict current-repo closing-keyword refs and
+          # repo-scoped issue URLs in the PR title/body (the same fallback the
+          # workflow-failure review-blocked step uses).
+          issue_numbers=""
+          pr_text="$(jq -r '[.title // "", .body // ""] | join(" ")' "${pr_json}" 2>/dev/null || echo "")"
+          if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
+            issue_numbers="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${pr_text}" || true)"
+          else
+            echo "::warning::extract_repo_scoped_issue_refs_from_text unavailable; labeling the PR itself."
+          fi
+
+          ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
+          labeled_summary=""
+          if [ -n "${issue_numbers}" ]; then
+            while IFS= read -r issue_number; do
+              [ -n "${issue_number}" ] || continue
+              echo "Setting ai:review-blocked on issue #${issue_number} (identical-failure cap)"
+              set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
+              labeled_summary="${labeled_summary:+${labeled_summary}, }#${issue_number}"
+            done <<< "${issue_numbers}"
+            labeled_summary="linked issue(s) ${labeled_summary}"
+          else
+            if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null 2>&1; then
+              echo "::warning::Failed to add ai:review-blocked to PR #${PR_NUMBER}."
+            fi
+            labeled_summary="this pull request (no linked issue found)"
+          fi
+
+          cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} -->"
+          BODY="$(cat <<EOF
+          **AI review/autofix stopped: identical failure repeated**
+
+          The last ${FINGERPRINT_CAP_COUNT} review/autofix runs on head \`${PR_HEAD_SHA:0:12}\` failed the same way (failure reason \`${FINGERPRINT_CAP_REASON}\`, fingerprint \`${FINGERPRINT_CAP_FP:0:16}\`). Another run on this head would fail again, so this run stopped in the gate before any reviewer or editor model call.
+
+          - Labeled \`ai:review-blocked\`: ${labeled_summary}.
+          - This failure is also sent to workflow failure heal (run log line \`WORKFLOW_HEAL_AUTOFIX_REPORT\`).
+          - A push to this branch (a new head) resets the count.
+          - Operators: set the repository variable \`REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false\` to disable the cap, or raise \`REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL\` (currently ${FINGERPRINT_CAP_MAX}).
+
+          [View workflow run](${REPORT_RUN_URL})
+
+          ${cap_marker}
+          EOF
+          )"
+          if ! gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1; then
+            echo "::warning::Failed to post the identical-failure cap comment on PR #${PR_NUMBER}."
+          fi
+          echo "AUTOFIX_FINGERPRINT cap=applied pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT} labeled=$(printf '%s' "${labeled_summary}" | tr -c 'A-Za-z0-9#,_.-' '_')"
+
+          if type tg_send_msg >/dev/null 2>&1; then
+            MSG="⚠️ Review/autofix stopped: identical failure repeated ${FINGERPRINT_CAP_COUNT}x on #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="Reason: ${FINGERPRINT_CAP_REASON} — labeled ai:review-blocked (${labeled_summary})"
+            MSG+=$'\n'
+            MSG+="PR: ${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/pull/${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="Run: ${REPORT_RUN_URL}"
+            tg_send_msg "${MSG}" "WARNING" >/dev/null || true
+          fi
+
+          # Heal report: the cap is the streak, so the reporter sends it on
+          # the first call. The evidence is the gate's marker data, written to
+          # a *log*.txt file because the reporter tails those from RUNTIME_DIR.
+          reporter="$(support_file workflow_failure_heal_autofix_report.sh)"
+          heal_py="$(support_file workflow_failure_heal.py)"
+          if [ -z "${reporter}" ] || [ -z "${heal_py}" ]; then
+            echo "WORKFLOW_HEAL_AUTOFIX_REPORT skip reason=reporter_missing path=${reporter:-workflow_failure_heal_autofix_report.sh}"
+          else
+            {
+              echo "identical_failure_cap: ${FINGERPRINT_CAP_COUNT} identical review/autofix failures on head ${PR_HEAD_SHA} (max ${FINGERPRINT_CAP_MAX})"
+              echo "repeated failure_reason=${FINGERPRINT_CAP_REASON}"
+              echo "failure_fingerprint=${FINGERPRINT_CAP_FP}"
+            } > "${work_dir}/fingerprint_cap_log.txt"
+            AUTOFIX_FAILURE_REASON="identical_failure_cap" \
+              AUTOFIX_FAILURE_FP="${FINGERPRINT_CAP_FP}" \
+              WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK="1" \
+              WORKFLOW_HEAL_PY="${heal_py}" \
+              RUNTIME_DIR="${work_dir}" \
+              PR_PAYLOAD_FILE="${pr_json}" \
+              REPORT_WRAPPER_SHA="${WORKFLOW_SUPPORT_REF}" \
+              REPORT_SUMMARY_LINE_FILE="${work_dir}/no_summary_line.txt" \
+              bash "${reporter}" || true
+          fi
+
+          {
+            echo "## Identical-failure cap tripped"
+            echo ""
+            echo "- **PR:** #${PR_NUMBER} at \`${PR_HEAD_SHA}\`"
+            echo "- **Identical failures:** ${FINGERPRINT_CAP_COUNT} (max ${FINGERPRINT_CAP_MAX}), reason \`${FINGERPRINT_CAP_REASON}\`"
+            echo "- **Labeled ai:review-blocked:** ${labeled_summary}"
+            echo "- **Reviewer panel + editor cycle:** SKIPPED"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   codex-agent:
     needs: gate
     # Display name surfaces the gate's no-PR claude_branch_review decision in
@@ -1559,6 +1991,10 @@ jobs:
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      # Head the gate evaluated; the review-autofix-failure:v1 marker on every
+      # failure comment records it so the gate's identical-failure cap can
+      # match markers to the current head.
+      AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
       WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
       # Review-pipeline knobs: mirror the landed script defaults so repo-var
       # overrides are honored without changing current branch behaviour.
@@ -1850,6 +2286,23 @@ jobs:
               echo "::warning::Workflow-failure-heal reporter script ${f} was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; the Report autofix failure to workflow failure heal step will skip with reason=reporter_missing for this run."
             fi
           done
+
+          # Identical-failure fingerprint cap: the failure-comment steps and
+          # "Assemble failure evidence" stamp each failure comment with a
+          # review-autofix-failure:v1 marker computed by
+          # workflow_failure_heal.py autofix-failure-fingerprint. A branch
+          # forked before that subcommand stages an older copy, so point
+          # AUTOFIX_FAILURE_HEAL_PY at the first copy that carries it (staged
+          # bundle, then the main snapshot). Empty → those steps post their
+          # comments without a marker (fail open).
+          AUTOFIX_FAILURE_HEAL_PY=""
+          for failure_heal_py_candidate in "${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal.py" "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/workflow_failure_heal.py"; do
+            if [ -f "${failure_heal_py_candidate}" ] && grep -q 'autofix-failure-fingerprint' "${failure_heal_py_candidate}"; then
+              AUTOFIX_FAILURE_HEAL_PY="${failure_heal_py_candidate}"
+              break
+            fi
+          done
+          echo "AUTOFIX_FAILURE_HEAL_PY=${AUTOFIX_FAILURE_HEAL_PY}" >> "$GITHUB_ENV"
 
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then
             src=".codex-workflow-src/prompts/_nag_reminders.txt"
@@ -2277,7 +2730,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"
+          # Keep the stage's stderr for the failure fingerprint ("Assemble
+          # failure evidence"); it still reaches the step log through tee.
+          bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh" 2> >(tee -a "${RUNTIME_DIR}/collect_metadata_stderr.txt" >&2)
 
       - name: Retrieve reviewer memory context (fail-open)
         run: |
@@ -4251,7 +4706,9 @@ jobs:
             echo "Pre-editor snapshot captured: $(wc -l < "${PRE_EDITOR_STATE_FILE}") entries"
           fi
 
-          bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"
+          # Keep the editor's stderr for the failure fingerprint ("Assemble
+          # failure evidence"); it still reaches the step log through tee.
+          bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)
 
           # Bounded in-step retry for first-iteration empty-output failures.
           #
@@ -4333,7 +4790,7 @@ jobs:
             if [ "${_prior_autofix_count}" = "0" ]; then
               echo "::warning::Editor produced no summary on first iteration — retrying once after ${_instep_retry_sleep}s before falling through to noop-comment path."
               sleep "${_instep_retry_sleep}"
-              bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" || {
+              bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2) || {
                 echo "::warning::Editor in-step retry also failed; downstream noop-comment path will fire."
               }
             fi
@@ -4521,6 +4978,24 @@ jobs:
           if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
             echo "::warning::Editor produced no summary and no committed changes — treating as retryable no-op."
             RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            # review-autofix-failure:v1 marker for the gate's identical-failure
+            # fingerprint cap. Same evidence files and reason precedence as
+            # "Assemble failure evidence", so every failure comment of one run
+            # carries one fingerprint. Empty when the helper is unavailable.
+            AUTOFIX_FAILURE_MARKER_SUFFIX=""
+            if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+              autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+                --failure-reason "editor_empty_noop" \
+                --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+                --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+                --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+              if [ -n "${autofix_failure_marker_line}" ]; then
+                AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
+              fi
+            fi
             NOOP_BODY="$(cat <<EOF
           **AI review/autofix produced no output — will retry**
 
@@ -4529,6 +5004,7 @@ jobs:
           [View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
           EOF
           )"
+            NOOP_BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${NOOP_BODY}" >/dev/null 2>&1 || true
             echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"
             exit 1
@@ -7009,6 +7485,24 @@ jobs:
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+          # review-autofix-failure:v1 marker for the gate's identical-failure
+          # fingerprint cap. Same evidence files and reason precedence as
+          # "Assemble failure evidence", so every failure comment of one run
+          # carries one fingerprint. Empty when the helper is unavailable.
+          AUTOFIX_FAILURE_MARKER_SUFFIX=""
+          if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+            autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+              --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+              --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+              --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+            if [ -n "${autofix_failure_marker_line}" ]; then
+              AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
+            fi
+          fi
+
           if [ "${CHANGES_LOST_REDISPATCHED:-false}" = "true" ]; then
             MSG="⚠️ Editor changes lost (retrying): #${PR_NUMBER}"
             MSG+=$'\n'
@@ -7052,6 +7546,7 @@ jobs:
               BODY+="**Next steps:** re-run the review workflow manually or apply the changes from the editor summary above."
               BODY+=$'\n\n'
               BODY+="Run: ${RUN_URL}"
+              BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
               gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
             else
               MSG="⚠️ Editor changes lost (push disabled): #${PR_NUMBER}"
@@ -7077,6 +7572,24 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # review-autofix-failure:v1 marker for the gate's identical-failure
+          # fingerprint cap. Same evidence files and reason precedence as
+          # "Assemble failure evidence", so every failure comment of one run
+          # carries one fingerprint. Empty when the helper is unavailable.
+          AUTOFIX_FAILURE_MARKER_SUFFIX=""
+          if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+            autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+              --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+              --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+              --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+            if [ -n "${autofix_failure_marker_line}" ]; then
+              AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
+            fi
+          fi
 
           # Branch the operator-facing alert on EDITOR_NOOP_REFUSAL (set by
           # the "Validate editor no-op disposition" step's Check 1b when the
@@ -7113,6 +7626,7 @@ jobs:
             BODY+="This is typically transient. Re-running the AI Review workflow after the provider-side prompt cache expires usually clears it; manual review is only needed if the refusal recurs."
             BODY+=$'\n'
             BODY+="Auto-merge has been **blocked**."
+            BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
           elif [ "${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}" = "true" ]; then
             # Every editor attempt failed and review_apply_fixes.sh wrote
@@ -7163,6 +7677,7 @@ jobs:
             BODY+="Last provider error from the final attempt: \`${editor_last_error}\`"
             BODY+=$'\n\n'
             BODY+="Auto-merge has been **blocked**. The review run is re-dispatched automatically; if the same error recurs, inspect the editor step log of the linked run — a re-run will not clear a deterministic failure."
+            BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
           else
             MSG="⚠️ Editor no-op suspicious: #${PR_NUMBER}"
@@ -7181,6 +7696,7 @@ jobs:
             BODY+="Possible causes: editor failed silently, did not read reviewer files, or audit counts are inconsistent."
             BODY+=$'\n'
             BODY+="Auto-merge has been **blocked**. Please review the editor summary and re-run the workflow if appropriate."
+            BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
           fi
 
@@ -7281,6 +7797,51 @@ jobs:
             echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"
           fi
+
+      - name: Assemble failure evidence
+        # Identical-failure fingerprint cap: fingerprint this run's failure
+        # from the bounded stderr tails of the stages the deterministic
+        # failures were seen in (editor, Collect PR metadata) and export the
+        # review-autofix-failure:v1 marker, the fingerprint and the failure
+        # reason for the failure comment and the heal reporter below. The
+        # gate counts these markers per head. Fail-open: without the helper
+        # the marker is empty and the comments post without it.
+        if: always() && (failure() || env.EDITOR_NOOP_SUSPICIOUS == 'true' || env.EDITOR_CHANGES_LOST == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ -z "${AUTOFIX_FAILURE_HEAL_PY:-}" ] || [ ! -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+            echo "AUTOFIX_FAILURE_MARKER=" >> "$GITHUB_ENV"
+            echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_missing"
+            exit 0
+          fi
+          evidence_out=""
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
+            evidence_out="${RUNTIME_DIR}/failure_evidence_tail.txt"
+          fi
+          fingerprint_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+            --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+            --evidence-out "${evidence_out}" \
+            --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+            --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
+          failure_fp="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^fp=//p' | head -n 1)"
+          failure_degraded="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^degraded=//p' | head -n 1)"
+          failure_reason="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^reason=//p' | head -n 1)"
+          failure_marker="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^marker=//p' | head -n 1)"
+          if ! [[ "${failure_fp}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "AUTOFIX_FAILURE_MARKER=" >> "$GITHUB_ENV"
+            echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_failed"
+            exit 0
+          fi
+          {
+            echo "AUTOFIX_FAILURE_FP=${failure_fp}"
+            echo "AUTOFIX_FAILURE_REASON=${failure_reason}"
+            echo "AUTOFIX_FAILURE_MARKER=${failure_marker}"
+          } >> "$GITHUB_ENV"
+          echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${failure_reason} fp=${failure_fp} degraded=${failure_degraded:-1}"
 
       - name: Mark linked issues review-blocked (workflow failure)
         if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
@@ -7416,6 +7977,10 @@ jobs:
           Linked issues have been labeled \`ai:review-blocked\`.
           EOF
           )"
+          fi
+          # review-autofix-failure:v1 marker ("Assemble failure evidence").
+          if [ -n "${AUTOFIX_FAILURE_MARKER:-}" ]; then
+            BODY+=$'\n\n'"${AUTOFIX_FAILURE_MARKER}"
           fi
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
