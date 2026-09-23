@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_apply_fixes_reviewer_manifest_validation.py: lines 98 and 116 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Docstrings for test_garbled_checksum_warns_but_passes and test_truncated_checksum_warns_but_passes reference review run 35803994060 instead of the release gate run 35802596362.\n  WHY: The reference may mislead future incident investigation; other reviewers disputed this finding, stating that 35803994060 is the correct run for the editor attempts while 35802596362 is the enclosing release-gate run.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_apply_fixes_reviewer_manifest_validation.py: lines 98 and 116 | severity=NIT | confidence=4\n  PROBLEM: Docstrings for test_garbled_checksum_warns_but_passes and test_truncated_checksum_warns_but_passes reference review run 35803994060.\n  WHY: 35803994060 is a prior completed run used as the PRIOR_REVIEW_RUN exclusion filter, while the release gate run that failed and is the subject of the changelog/README is 35802596362; this misleads future incident investigation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1251321b08149c901ce9c34d208cdb44557c609641cf71e342addc8a20f58fbe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4331,
+    "run_id": "35886827198",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35886827198",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923170141_980cd3343d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4331,
+    "run_id": "35886827198"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-23T17:01:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
