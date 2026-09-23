@@ -43,7 +43,13 @@ def _run(
 	full_env = os.environ.copy()
 	# Strip ambient context that would otherwise auto-elevate. Tests opt
 	# into elevation explicitly via env_overrides or --allow-elevation.
-	for k in ("GITHUB_ACTIONS", "VALIDATE_FORCE_FULL_ACCESS"):
+	for k in (
+		"BASH_ENV",
+		"ENV",
+		"GITHUB_ACTIONS",
+		"VALIDATE_FORCE_FULL_ACCESS",
+		"WORKSPACE_PATH",
+	):
 		full_env.pop(k, None)
 	if env_overrides:
 		full_env.update(env_overrides)
