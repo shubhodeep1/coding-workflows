@@ -2002,10 +2002,11 @@ jobs:
       # known-flaky (seven prior in-tree fixes targeting reasoning
       # effort and prompt content; production runs hit empty-completion
       # state non-deterministically). On first pytest failure we
-      # snapshot the branch head SHA, re-dispatch ${REVIEW_WORKFLOW_FILE}
-      # via `--ref "${BRANCH}"`, and poll for a new workflow_dispatch
-      # run whose head_sha matches the snapshotted SHA. We allow up
-      # to 25 minutes for the new run to complete (raised from 10 min
+      # snapshot the branch head SHA, adopt the oldest active review run
+      # for the bait/current head when one exists, or re-dispatch
+      # ${REVIEW_WORKFLOW_FILE} via `--ref "${BRANCH}"` and register the
+      # oldest matching post-snapshot run. We allow up to 25 minutes for
+      # the pinned run to complete (raised from 10 min
       # after run 25371432937 truncated a still-running successful
       # retry); if the second verification also fails, we hard-fail
       # this step. The retry
@@ -2027,8 +2028,8 @@ jobs:
       #   fetch_failed_after_retry — same, after retry
       #   pytest_unavailable       — pip + apt fallback both failed (infra error)
       #   pr_head_fetch_failed     — pulls/<n> API failed; refused to fail-open commit guard
-      #   retry_dispatch_failed    — gh workflow run failed, or wait-review id non-numeric
-      #   retry_timeout            — re-dispatched run did not complete in 25 min
+      #   retry_dispatch_failed    — run discovery/dispatch/registration failed, or wait-review id non-numeric
+      #   retry_timeout            — pinned retry run did not complete in 25 min
       #   retry_workflow_failed    — retry run completed but conclusion != success
       #   pr_closed_during_retry   — PR closed/merged while waiting for the retry run
       #   pr_state_check_failed    — fetch_pr_state returned "unknown" 4 consecutive times
@@ -2290,28 +2291,31 @@ jobs:
             exit 0
           fi
 
-          echo "::warning::Phase 4b first attempt failed — re-dispatching review_autofix and retrying once"
+          echo "::warning::Phase 4b first attempt failed — adopting or dispatching review_autofix and retrying once"
 
-          # ── Retry: redispatch ${REVIEW_WORKFLOW_FILE} on the current branch head ──
-          # Mirrors the Phase 3c fallback dispatch (lines ~1101-1109),
-          # which uses ${REVIEW_WORKFLOW_FILE} as the public entry-point
-          # that gates into review_autofix.yml without an `[ai-autofix]`
-          # self-trigger guard.
+          # ── Retry: adopt active work or redispatch ${REVIEW_WORKFLOW_FILE} ──
+          # Mirrors the fallback dispatch in Phase 3c's
+          # `Inject editor bait commit on PR branch` step, which uses
+          # ${REVIEW_WORKFLOW_FILE} as the public entry-point that gates into
+          # review_autofix.yml without an `[ai-autofix]` self-trigger guard.
           #
-          # Capture the branch head SHA right before dispatch — that's
-          # what the new workflow_dispatch run will carry as head_sha,
-          # and what we'll poll for. Filtering on BAIT_SHA would miss
-          # the retry run whenever the editor's first attempt already
-          # advanced the branch past the bait (e.g. the editor pushed
-          # a wrong-fix commit but pytest still failed); we'd hit
-          # retry_timeout even though the dispatch succeeded.
+          # Capture the branch head SHA before discovery. An active run
+          # for either the bait or current head may already be queued by
+          # Phase 3c or pull_request:synchronize; adopting the oldest one
+          # avoids adding another run behind it in pr-autofix concurrency.
           #
           # `gh workflow run` is dispatched with --ref "${BRANCH}"
           # (its documented contract is branch/tag, not raw SHA);
-          # RETRY_DISPATCH_SHA is used only as the poll filter. Tiny
-          # race window if the branch advances between snapshot and
-          # dispatch — acceptable, and the retry_timeout path catches
-          # it cleanly.
+          # RETRY_DISPATCH_SHA and BAIT_SHA select already-active work before
+          # dispatch. After dispatch, the branch-scoped baseline identifies
+          # the oldest new run even if the branch advanced. Once selected,
+          # one positive run id is polled directly so a newer peer cannot
+          # replace it.
+          if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]] || [ "${PRIOR_REVIEW_RUN}" -lt 1 ]; then
+            echo "::error::wait-review.outputs.review_run_id is not a positive integer ('${PRIOR_REVIEW_RUN}'); refusing retry discovery with a no-op exclusion filter"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           if ! RETRY_DISPATCH_SHA=$(gh_api_with_retry "repos/${TEST_REPO}/git/refs/heads/${BRANCH}" --jq '.object.sha // empty'); then
             echo "::error::Could not resolve ${BRANCH} head SHA before retry dispatch"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
@@ -2324,32 +2328,71 @@ jobs:
           fi
           echo "  resolved ${BRANCH} head for retry dispatch: ${RETRY_DISPATCH_SHA:0:7}"
 
-          if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
-              --repo "${TEST_REPO}" \
-              --ref "${BRANCH}" \
-              -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
-            echo "::error::Retry dispatch failed; cannot recover"
-            cat /tmp/retry_dispatch.txt >&2 || true
+          RETRY_RUNS_QUERY="repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?branch=${BRANCH}&per_page=100"
+          if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
+            echo "::error::Could not discover existing review runs before retry dispatch"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — polling for the new review run"
+          if ! printf '%s\n' "${RETRY_RUNS_JSON}" | jq -e '
+            type == "object" and
+            (.workflow_runs | type == "array") and
+            all(.workflow_runs[];
+              type == "object" and
+              (.id | type == "number") and .id > 0 and .id == (.id | floor) and
+              (.head_sha | type == "string") and
+              (.status | type == "string") and
+              (.created_at | type == "string") and
+              ((.conclusion == null) or (.conclusion | type == "string")))
+          ' >/dev/null 2>&1; then
+            echo "::error::Malformed review run-list payload before retry dispatch"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          RETRY_BASELINE_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r '[.workflow_runs[].id] | max // 0')
+          if ! [[ "${RETRY_BASELINE_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Malformed review run baseline id: '${RETRY_BASELINE_ID}'"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
 
-          # Poll for the new review run on RETRY_DISPATCH_SHA (the
-          # branch head we snapshotted at dispatch time). Skip the run
-          # we already saw via wait-review by recording its id. We
-          # gate Phase 4b on wait-review having succeeded, which means
-          # review_run_id should be a non-empty numeric string here;
-          # if it's somehow empty/non-numeric, the jq exclusion filter
-          # would default to `select(.id != 0)` (no-op, since GitHub
-          # run ids are always positive) and could pick up the
-          # original review run as the "retry run". Fail fast in that
-          # case rather than silently misattribute.
-          if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]] || [ "${PRIOR_REVIEW_RUN}" -lt 1 ]; then
-            echo "::error::wait-review.outputs.review_run_id is not a positive integer ('${PRIOR_REVIEW_RUN}'); refusing to enter retry poll loop with a no-op exclusion filter"
-            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-            exit 1
+          RETRY_ACTIVE_RUN=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -c \
+            --arg bait_sha "${BAIT_SHA}" \
+            --arg retry_sha "${RETRY_DISPATCH_SHA}" \
+            --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
+            '[.workflow_runs[]
+              | select(.id != $prior_run_id)
+              | select(.status != "completed")
+              | select(.head_sha == $bait_sha or .head_sha == $retry_sha)]
+            | sort_by(.created_at, .id)
+            | .[0] // empty')
+
+          RETRY_RUN_ID=""
+          RETRY_STATUS=""
+          RETRY_CONCL=""
+          RETRY_REGISTRATION_DEADLINE=0
+          if [ -n "${RETRY_ACTIVE_RUN}" ]; then
+            RETRY_RUN_ID=$(printf '%s\n' "${RETRY_ACTIVE_RUN}" | jq -r '.id')
+            if ! [[ "${RETRY_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${RETRY_RUN_ID}" -lt 1 ]; then
+              echo "::error::Adopted review run id is not a positive integer: '${RETRY_RUN_ID}'"
+              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            echo "✓ Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work"
+          else
+            if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
+                --repo "${TEST_REPO}" \
+                --ref "${BRANCH}" \
+                -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
+              echo "::error::Retry dispatch failed; cannot recover"
+              cat /tmp/retry_dispatch.txt >&2 || true
+              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))
+            echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — registering the oldest new branch run after baseline ${RETRY_BASELINE_ID}"
           fi
+
           # EDITOR_RETRY_BUDGET_MINUTES defaults to 25 (was 10; raised after
           # run 25371432937 timed out
           # during the retry's reviewer pass — full review_autofix pipeline
@@ -2358,9 +2401,6 @@ jobs:
           # genuine successful retries. 25 min keeps the upper bound below
           # the orchestrator phase budget while covering the observed P95).
           DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))
-          RETRY_RUN_ID=""
-          RETRY_STATUS=""
-          RETRY_CONCL=""
           # Circuit breaker: if fetch_pr_state returns "unknown" (API
           # failure / parse failure) for too many consecutive iterations
           # we're effectively polling blind and the closed-PR guard
@@ -2391,19 +2431,62 @@ jobs:
               # *consecutive* failures, not cumulative.
               PR_STATE_FAILURES=0
             fi
-            CANDIDATES=$(gh_api_with_retry \
-              "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=10" \
-              --jq ".workflow_runs[] | select(.head_sha == \"${RETRY_DISPATCH_SHA}\") | select(.id != ${PRIOR_REVIEW_RUN:-0}) | \"\(.id) \(.status) \(.conclusion // \"null\")\"") || CANDIDATES=""
-            if [ -z "${CANDIDATES}" ]; then
-              echo "  (no new review run yet, pr_state=${PR_STATE})"
+            if [ -z "${RETRY_RUN_ID}" ]; then
+              if [ "$(date +%s)" -ge "${RETRY_REGISTRATION_DEADLINE}" ]; then
+                echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
+                echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+              if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
+                echo "::warning::Could not list post-dispatch review runs; retrying within the registration window"
+                continue
+              fi
+              if ! printf '%s\n' "${RETRY_RUNS_JSON}" | jq -e '
+                type == "object" and
+                (.workflow_runs | type == "array") and
+                all(.workflow_runs[];
+                  type == "object" and
+                  (.id | type == "number") and .id > 0 and .id == (.id | floor) and
+                  (.head_sha | type == "string") and
+                  (.status | type == "string") and
+                  (.created_at | type == "string") and
+                  ((.conclusion == null) or (.conclusion | type == "string")))
+              ' >/dev/null 2>&1; then
+                echo "::warning::Malformed post-dispatch review run-list payload; retrying within the registration window"
+                continue
+              fi
+              RETRY_RUN_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r \
+                --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
+                --argjson baseline_id "${RETRY_BASELINE_ID}" \
+                '[.workflow_runs[]
+                  | select(.id > $baseline_id and .id != $prior_run_id)]
+                | sort_by(.created_at, .id)
+                | .[0].id // empty')
+              if [ -z "${RETRY_RUN_ID}" ]; then
+                echo "  (retry review run not registered yet, pr_state=${PR_STATE})"
+                continue
+              fi
+              if ! [[ "${RETRY_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${RETRY_RUN_ID}" -lt 1 ]; then
+                echo "::error::Registered review run id is not a positive integer: '${RETRY_RUN_ID}'"
+                echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+              echo "✓ Registered retry review run #${RETRY_RUN_ID}; polling that exact run"
+            fi
+
+            if ! RETRY_RUN_JSON=$(gh_api_with_retry "repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"); then
+              echo "::warning::Could not read retry review run #${RETRY_RUN_ID}; retrying within the retry window"
               continue
             fi
-            # GitHub returns runs newest-first; the matching list is in
-            # the same order so head -n 1 picks the most recent
-            # candidate (the run we just dispatched).
-            RETRY_RUN_ID=$(echo "${CANDIDATES}" | head -n 1 | awk '{print $1}')
-            RETRY_STATUS=$(echo "${CANDIDATES}" | head -n 1 | awk '{print $2}')
-            RETRY_CONCL=$(echo "${CANDIDATES}" | head -n 1 | awk '{print $3}')
+            if ! printf '%s\n' "${RETRY_RUN_JSON}" | jq -e \
+              --argjson retry_run_id "${RETRY_RUN_ID}" \
+              'type == "object" and .id == $retry_run_id and (.status | type == "string") and ((.conclusion == null) or (.conclusion | type == "string"))' \
+              >/dev/null 2>&1; then
+              echo "::warning::Malformed payload for retry review run #${RETRY_RUN_ID}; retrying within the retry window"
+              continue
+            fi
+            RETRY_STATUS=$(printf '%s\n' "${RETRY_RUN_JSON}" | jq -r '.status')
+            RETRY_CONCL=$(printf '%s\n' "${RETRY_RUN_JSON}" | jq -r '.conclusion // "null"')
             echo "  retry run #${RETRY_RUN_ID}: status=${RETRY_STATUS} conclusion=${RETRY_CONCL}"
             if [ "${RETRY_STATUS}" = "completed" ]; then
               break
