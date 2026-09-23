@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:2196-2204 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: Each checksum mismatch emits a separate warning without an aggregate mismatch count for the editor attempt.\n  WHY: The per-file warnings make it difficult for operators to distinguish an isolated typo from a fabricated multi-file manifest; this is an observability gap rather than a runtime failure.\n- .github/workflows/test-and-mark-stable.yml:2348-2365 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The ADOPTED_REVIEW_RUN_ID lookup limits the branch's workflow-run results to per_page=20.\n  WHY: If more than 20 active runs exist for the branch, the lookup may miss an existing matching run and dispatch a duplicate; severity is reported as MAJOR by the reviewer.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_apply_fixes.sh\n  Location: after the manifest validation loop (after line 2202)\n  HARDENING_SUGGESTION: Each file's checksum mismatch is logged individually as EDITOR_REVIEWER_CHECKSUM_UNVERIFIED. When the editor fabricates review entries, every file gets a warning; a genuine single-typo produces only one or two. Operators scanning logs must manually count occurrences to distinguish the two cases.\n  SUGGESTED_MINIMAL_FIX: increment a counter inside the loop and emit one aggregate summary warning after done < \"${REVIEWER_MANIFEST_FILE}\", e.g. ::warning::EDITOR_REVIEWER_CHECKSUM_MISMATCHES attempt=<n> total_files=<N> mismatch_count=<M>. ~6 lines.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_apply_fixes.sh\n  Line or code reference: 2164-2195\n  Problem: The new processed_entry_counts awk logic calculates path_count and match_count for each reviewer file. While this handles the intended looseness for checksums, the path_count and match_count are derived from the same awk pass over the file, which is correct. However, if a reviewer file lists the same path multiple times in the \"Reviewer files processed:\" section, path_count could be > 1.\n  Why it fails at runtime: If a reviewer file lists the same file path multiple times in the \"Reviewer files processed:\" section, processed_path_count will exceed 1, potentially triggering false positives or unexpected validation results in future logic. While not currently failing the attempt, it could hide issues.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- .github/workflows/test-and-mark-stable.yml\n  Line or code reference: 2348-2365 (in ADOPTED_REVIEW_RUN_ID lookup)\n  Problem: The lookup query uses branch=${BRANCH} and sorts by created_at. If there are many active runs for that branch, the per_page=20 limit might not capture all of them.\n  Why it fails at runtime: The gate might fail to find an existing active run if it's outside the first 20 results, causing it to dispatch a new one unnecessarily, which is exactly what this change tries to avoid.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- scripts/review_apply_fixes.sh\n  Location: 2196\n  HARDENING_SUGGESTION: The aggregate warning ::warning::EDITOR_REVIEWER_CHECKSUM_UNVERIFIED ... is inside the loop, meaning if 5 files have checksum mismatches, 5 warnings are emitted.\n  SUGGESTED_MINIMAL_FIX: Collect the list of mismatched files in a variable inside the loop, and emit a single ::warning:: summarizing all mismatches after the loop finishes.\n  ESTIMATED_LINES_CHANGED: ~5\n  HARDENING_RISK_SCORE: 1\n- .github/workflows/test-and-mark-stable.yml\n  Location: 2362\n  HARDENING_SUGGESTION: per_page=20 might be insufficient for looking up active runs if there are many.\n  SUGGESTED_MINIMAL_FIX: Increase per_page to 100 (max allowed by GitHub API) to increase the chance of finding the active run.\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_apply_fixes.sh\n  Line or code reference: 2196-2200 (inside the reviewer manifest loop), 2202-2204 (post-loop behavior)\n  Problem: When multiple reviewer files have garbled checksums in a single editor attempt, each one emits its own ::warning::EDITOR_REVIEWER_CHECKSUM_UNVERIFIED attempt=<n> file=<path> expected_sha=<sha> path_entries=<n> checksum_matches=<n> line. A real typo (model garbled 1-2 hashes) is hard to distinguish from a fabricated entry (model claimed to read files it didn't), because both produce N warnings for N files. Operators scanning the workflow log have to manually count occurrences to distinguish the cases \u2014 the current implementation does not expose an aggregate count of checksum mismatches per attempt.\n  Why it fails at runtime: After this PR, the checksum is warn-only and no longer a hard gate. The audit check (Review file issue audit:) still gates the attempt, but the audit is the same line the editor produces, so it doesn't independently verify the editor read the file. The per-file warning is the only signal that the editor's checksum claim is wrong; without an aggregate, a fabricated entry for one or two files slips by undetected by anyone not grepping + counting the warnings.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_apply_fixes.sh\n  Location: lines 2196-2200 (inside the reviewer manifest validation loop)\n  HARDENING_SUGGESTION: Each checksum mismatch emits its own ::warning::EDITOR_REVIEWER_CHECKSUM_UNVERIFIED line, but there is no aggregate count at the end of the validation block. An operator scanning the log must count occurrences to distinguish a one-off model typo (1-2 warnings) from a fabricated manifest (N warnings for N files).\n  SUGGESTED_MINIMAL_FIX: add a counter variable before the done < \"${REVIEWER_MANIFEST_FILE}\" loop, increment it inside the match_count -ne 1 branch, and emit one summary ::warning:: after the loop when the counter is > 0. Estimated 5-6 lines.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a0bada4fda9124592838f6aeeb902bd09ef886b81faeca1f4b3ca44e516adaf1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4331,
+    "run_id": "35864634099",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35864634099",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923135232_fa9a0b5853",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4331,
+    "run_id": "35864634099"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-23T13:52:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
