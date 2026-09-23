@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Several merged changes targeted release creation, tag push retries, token recovery, and release-tag refspec handling in the mark-stable and promotion workflows. Changes in this area should preserve retry-safe behavior and validate the exact fetch, tag, and push refspecs through the existing release contract tests.",
+  "fingerprint": "8e0e74894370ff07cabb396b63cfc8e181a6ee76119a8f98c5a209aec5f57314",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35803983971",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35803983971",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4216",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4258",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4260",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4270",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4279",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4273",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4280"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260923005838_1a83d77584",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Release tagging and promotion workflows need explicit retry and recovery handling for refspec, token, and push failures.",
+  "timestamps": {
+    "created_at": "2026-09-23T00:58:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
