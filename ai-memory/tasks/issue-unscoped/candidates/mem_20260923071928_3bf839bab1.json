@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Implementation and review flows repeatedly use trusted Git-write helpers, staging support, conflict preparation/resolution, and files-touched scope guards. Changes that commit, resolve conflicts, or stage workflow support should preserve these boundaries and verify that generated or modified paths remain within the permitted scope.",
+  "fingerprint": "349a1ec3edc8fdc48d490be74e1155c5caf6ac565ad6ed1e0b85bf3357d884fd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35830638126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35830638126",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4255",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4279",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4290",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4300",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4305",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4259",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4280",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4291",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4301",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4306"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260923071928_3bf839bab1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Repository writes and changed-file scope are guarded through centralized helpers and explicit path validation.",
+  "timestamps": {
+    "created_at": "2026-09-23T07:19:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
