@@ -185,9 +185,16 @@ def test_empty_head_sha_exits_2_with_error(monkeypatch, capsys):
 
 
 def test_run_completed_and_pending(monkeypatch, capsys):
-	_stub(monkeypatch, {"repos/o/r/actions/runs/9": {"status": "completed", "conclusion": "failure"}})
+	for conclusion in (
+		"failure", "cancelled", "timed_out", "action_required",
+		"startup_failure", "skipped", "neutral", "stale", None,
+	):
+		_stub(monkeypatch, {"repos/o/r/actions/runs/9": {"status": "completed", "conclusion": conclusion}})
+		_, out = _run(["--run", "9"], capsys)
+		assert out["done"] is True and out["conclusion"] == conclusion and out["state"] == "failed"
+	_stub(monkeypatch, {"repos/o/r/actions/runs/9": {"status": "completed", "conclusion": "success"}})
 	_, out = _run(["--run", "9"], capsys)
-	assert out["done"] is True and out["conclusion"] == "failure"
+	assert out["done"] is True and out["state"] == "completed"
 	_stub(monkeypatch, {"repos/o/r/actions/runs/9": {"status": "in_progress"}})
 	_, out = _run(["--run", "9"], capsys)
 	assert out["done"] is False

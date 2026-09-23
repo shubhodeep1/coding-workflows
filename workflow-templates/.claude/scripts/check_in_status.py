@@ -31,7 +31,9 @@ failed (the JSON then carries `error` and `done` is false).
     is older than --stuck-hours (default 6), AND no workflow run on the head
     branch is queued or in progress. With --terminal-only (the §26 status
     check-in) only merged / closed count.
-  * Run: `status` is `completed` (any conclusion).
+  * Run: `status` is `completed` (any conclusion). `state` is `completed`
+    only for a `success` conclusion and `failed` for any other, so a checker
+    routes a failed run to its block stage.
   * Issues: every issue is closed or labelled ai:merged.
 
 API budget (CLAUDE.md §15): REST only, never GraphQL. PR mode issues 1 call
@@ -54,6 +56,7 @@ import sys
 BLOCKING_LABELS = ("ai:review-blocked", "ai:review-autofix-failed", "ai:needs-human")
 FAILED_CHECK_CONCLUSIONS = ("failure", "timed_out", "action_required", "startup_failure")
 MERGED_ISSUE_LABEL = "ai:merged"
+SUCCESSFUL_RUN_CONCLUSIONS = ("success",)
 DEFAULT_STUCK_HOURS = 6.0
 MAX_PAGINATED_API_PAGES = 10
 
@@ -165,7 +168,9 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 def check_run(repo: str, run_id: int) -> dict:
 	run = gh_api(f"repos/{repo}/actions/runs/{run_id}")
 	if run.get("status") == "completed":
-		return {"done": True, "state": "completed", "reason": f"run {run_id} completed: {run.get('conclusion')}", "conclusion": run.get("conclusion")}
+		conclusion = run.get("conclusion")
+		state = "completed" if conclusion in SUCCESSFUL_RUN_CONCLUSIONS else "failed"
+		return {"done": True, "state": state, "reason": f"run {run_id} completed: {conclusion}", "conclusion": conclusion}
 	return {"done": False, "state": run.get("status"), "reason": f"run {run_id} {run.get('status')}"}
 
 
