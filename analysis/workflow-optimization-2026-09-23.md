@@ -238,3 +238,182 @@ Queueing is also material: several review runs were cancelled before their first
 | Runtime endpoint breakdown | unavailable |
 
 **Coverage gaps:** one repository only; success sampling was 7%; deep folders covered 38 unique runs; dynamic GH API totals and full Serena availability telemetry were absent.
+
+## Deep Audit — Workflows & Scripts (2026-09-23)
+
+### Section 1: Bug & Correctness Sweep
+
+Audit coverage: 50 workflows, 85 shell scripts, and 57 Python scripts. All YAML parsed, all Python files passed AST parsing, and all shell scripts passed `bash -n`.
+
+#### SEC-001 — Untrusted issue body can inject job environment variables
+
+- **File path and line range:** `.github/workflows/implement.yml:1590-1606`
+- **Severity:** High
+- **Category tag:** `security`
+- **Description:** `ISSUE_BODY` and `ISSUE_TITLE` are user-controlled but are written to `$GITHUB_ENV` using the fixed delimiter `EOF`. A body containing `EOF` on its own line can terminate the value and inject additional environment assignments. The following comment incorrectly claims this prevents injection.
+- **Recommended fix:** Prefer exporting only `ISSUE_BODY_FILE`. If the body must remain in the environment, generate a collision-checked delimiter, following `.github/workflows/plan.yml:461-472`, and add a regression test containing `EOF` plus a forged assignment.
+
+#### BUG-001 — Workflow-reference validator treats comments as executable references
+
+- **File path and line range:** `scripts/check_workflow_script_refs.py:43-52,78-94`; `.github/workflows/implement.yml:2681-2688`
+- **Severity:** High
+- **Category tag:** `bug`
+- **Description:** `EXPLICIT_REF.findall(text)` scans raw YAML, including comments. The sole reported missing path, `scripts/helper.sh`, appears only in an incident comment at `implement.yml:2685`; it is not executed or staged. This refines Reliability Improvement 3 in the existing report: the failing contract check is a false positive, not a missing runtime dependency.
+- **Recommended fix:** Parse YAML scalar nodes and inspect only executable `run`, `uses`, and relevant `with` values, or strip YAML comments before regex matching. Add tests proving comments are ignored while real missing references still fail.
+
+#### BUG-002 — Failure handler reads stale labels and can leave issues stuck in `ai:implementing`
+
+- **File path and line range:** `.github/workflows/implement.yml:5300-5317,5352-5358`
+- **Severity:** High
+- **Category tag:** `bug`
+- **Description:** The cached `ISSUE_META_FILE` was captured before `ai:awaiting-approval` is replaced with `ai:implementing` at lines 1774-1777. The failure handler reuses that stale snapshot, so its `index("ai:implementing")` check is normally false and the issue is not restored to `ai:awaiting-approval`.
+- **Recommended fix:** Refresh labels immediately before the failure-state transition and restore only when the live label set contains `ai:implementing`. On read failure, warn and leave labels unchanged. Add a test with stale cached labels and live `ai:implementing`.
+
+#### SEC-002 — Almost all external actions use mutable tags or branches
+
+- **File path and line range:** `.github/workflows/ci.yml:23`; `.github/workflows/clarify.yml:651`; `.github/workflows/review_autofix.yml:1661`
+- **Severity:** Medium
+- **Category tag:** `security`
+- **Description:** Repository-wide inspection found 188 of 189 non-local `uses:` directives are not pinned to a 40-character commit SHA. Examples include `actions/checkout@v5`, `astral-sh/setup-uv@v7`, and `jlumbroso/free-disk-space@v1.3.1`. Mutable tags create supply-chain drift.
+- **Recommended fix:** Pin third-party and official actions to full commit SHAs with version comments. Replace same-repository `@main` reusable-workflow calls with relative workflow references where supported. Automate updates through the existing release process.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001 — JSON fetch helper retries permanent failures and sleeps after the final attempt
+
+- **File path and line range:** `scripts/gh_helpers.sh:610-663`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** Unlike `gh_retry` and `gh_retry_to_file`, `gh_api_json_to_file` never calls `_is_gh_permanent_failure`. A 404, 422, or permission failure therefore consumes up to five identical requests and all backoff sleeps; it also sleeps after the final failed attempt.
+- **Current call count:** Up to 5 calls for a permanent error.
+- **Proposed call count:** 1 call for permanent errors; retain the configured retry count for transient failures.
+- **Recommended fix:** Reuse `_is_gh_permanent_failure` from `gh_helpers.sh:91-94` and guard every sleep with `attempt < max_attempts`.
+
+#### API-002 — Clarify fetches the same comments twice
+
+- **File path and line range:** `.github/workflows/clarify.yml:468-499`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** When semantic caching is enabled, the step first fetches 50 comments into `ISSUE_COMMENTS_FILE`, then performs a second paginated fetch of the same endpoint for `THREAD_HISTORY_FILE`.
+- **Current call count:** 2 logical snapshot calls, with the second potentially issuing multiple pagination requests.
+- **Proposed call count:** 1 paginated snapshot, locally deriving both the bounded 50-comment context and full history.
+- **Recommended fix:** Fetch once through `gh_retry_to_file`, flatten the pages, then generate both artifacts from the cached JSON.
+
+#### BATCH-001 — Body-fallback linked issues trigger one label read per issue
+
+- **File path and line range:** `.github/workflows/review_autofix.yml:1151-1209,1213-1247`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** When linked issues come from PR body/title fallback, their `labels` field is `null`. The subsequent loop calls `gh issue view` once per issue. `[NEEDS VERIFICATION]`
+- **Current call count:** N label reads for N fallback issues.
+- **Proposed call count:** `ceil(N / 25)` GraphQL calls.
+- **Recommended fix:** Batch-hydrate fallback issue labels using the alias pattern in `scripts/orchestrate_poll_process.sh:14483-14613`, then preserve per-issue REST only as a cache-miss fallback.
+
+#### API-003 — No-op ancestry walks perform two sequential reads per hop
+
+- **File path and line range:** `.github/workflows/implement.yml:4314-4332`; `scripts/orchestrate_poll_process.sh:12845-12897`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** Each hop fetches the current issue body and then the parent issue’s comments. The parent payload can include both its body and comments, allowing the next hop to reuse the body.
+- **Current call count:** `2D` calls for depth D; defaults are 4 calls in implement and 6 in the poller.
+- **Proposed call count:** `D+1`, or D when the initial issue body is already cached; defaults become 3/4 or 2/3.
+- **Recommended fix:** Carry the fetched parent body into the next iteration and accept an optional initial-body cache. Extend the cycle-local cache pattern used by `_fetch_candidate_issue_details_graphql`.
+
+#### API-004 — Generic retries can duplicate non-idempotent writes
+
+- **File path and line range:** `scripts/gh_helpers.sh:430-494`; `scripts/security_audit.sh:1763-1774`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** `gh_retry` retries arbitrary commands, including issue creation and comment POSTs. If GitHub accepts a write but the response is lost, the wrapper can submit it again, creating duplicates. This is an inference from the retry semantics. `[NEEDS VERIFICATION]`
+- **Current call count:** Up to 5 POST attempts for one intended write.
+- **Proposed call count:** 1 POST, followed by at most 1 marker-based reconciliation GET on an ambiguous result.
+- **Recommended fix:** Separate read/idempotent retries from non-idempotent creates. For issue/comment creation, use stable body markers and the upsert pattern already present in `scripts/review_merge_train.sh:254-291`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — No-op ancestry logic is duplicated
+
+- **File path and line range:** `.github/workflows/implement.yml:4293-4332`; `scripts/orchestrate_poll_process.sh:12845-12897`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** Both paths independently parse `Re-issued from #N`, inspect the same comment marker, apply the same depth validation, and fail open. Their defaults already differ, increasing drift risk.
+- **Recommended fix:** Add `gh_count_reissued_noop_ancestors <repo> <issue> <max-depth> <marker> [initial-body-file]` to `scripts/gh_helpers.sh`. Replace both callers and implement API-003 within that helper.
+
+#### DUP-002 — `_safe_gh_jq` is repeatedly reimplemented inline
+
+- **File path and line range:** `.github/workflows/plan.yml:2048-2067`; `.github/workflows/implement.yml:5165-5179`; `.github/workflows/orchestrate.yml:1078-1095`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** Three workflow blocks reproduce the temp-file/error-suppression implementation already owned by `scripts/gh_helpers.sh:564-594`.
+- **Recommended fix:** Ensure the shared helper is staged before these steps and call existing `_safe_gh_jq <endpoint> [args...]`. Retain only a minimal fail-closed stub when helper staging genuinely fails.
+
+#### DUP-003 — Support-file staging remains duplicated across large workflow blocks
+
+- **File path and line range:** `.github/workflows/implement.yml:979-1336`; `.github/workflows/clarify.yml:224`; `.github/workflows/plan.yml:286`; `.github/workflows/orchestrate_poll.yml:373-584`; `scripts/stage_workflow_support.sh:714-983`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** Multiple workflows maintain independent required/optional file lists and nearly identical source/fallback/install loops despite the existing manifest-driven staging helper.
+- **Recommended fix:** Extend `stage_workflow_support.sh` with `implement --manifest <json> --workspace-root <path> --runtime-dir <path>`. Move phase-specific file lists into manifests and update implement, clarify, plan, orchestrate, orchestrate-poll, and clarify-respond callers.
+
+No workflow pair exceeded the evidence threshold for a safe “more than 70% identical” consolidation; the internal wrappers differ primarily by contract and trigger predicate.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging expression is above the medium-risk threshold
+
+- **File path and line range:** `.github/workflows/implement.yml:981-1336`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Description:** The interpolated `Stage workflow support files` run block is approximately **16,985 characters**, leaving **4,015 characters** before GitHub’s 21,000-character hard limit.
+- **Recommended fix:** Extract the block through the manifest-driven `stage_workflow_support.sh implement` entrypoint proposed in DUP-003. Keep workflow expressions limited to environment wiring and one script invocation.
+
+No interpolated run block exceeded 18,000 characters, and no large `if:` condition approached the limit. No workflow exceeded 800 KB; the largest was `review_autofix.yml` at 505,283 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001 — Critical implementation guard bypasses shared retry and notification helpers
+
+- **File path and line range:** `scripts/implement_handle_guard_block.sh:13-77,86-182,212-313`; `.github/workflows/implement.yml:1028-1031`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** The guard performs critical latch writes through raw `gh` and sends three near-identical raw Telegram requests. The workflow preserves only the guard script after cleanup, even though `gh_helpers.sh`, `label_helpers.sh`, and `tg_helpers.sh` were staged earlier. Transient API failures can therefore leave a failed issue without its intended blocking label.
+- **Recommended fix:** Preserve the three helper files beside the runtime guard, source them, and use `gh_retry`, `ensure_label_exists`, and `tg_send_msg`. Keep the existing post-write verification.
+
+#### DEAD-001 — Deprecated workflow inputs have no runtime consumers
+
+- **File path and line range:** `.github/workflows/orchestrate_poll.yml:7-20`; `.github/workflows/workflow-log-analysis.yml:16-20`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `caller_workflow` and `codex_mode` are explicitly documented no-op compatibility inputs and are never read.
+- **Recommended fix:** Preserve them until consumer wrappers are migrated, but record a deprecation version, emit a notice when callers explicitly pass them, and remove them only in a documented breaking release.
+
+#### DEAD-002 — Several assignments are never consumed
+
+- **File path and line range:** `scripts/review_run_reviewers.sh:755-761,3533-3549,4120-4128`; `scripts/orchestrate_poll_process.sh:19270-19291`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE`, `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE`, `REVIEWER_HEALTH_LAST_OPEN_UNTIL_EPOCH`, `REVIEWER_ATTEMPT_WD_REASON`, and `LINKED_PR_NUM` are assigned but have no repository consumer. Sourceable-script consumers remain possible. `[NEEDS VERIFICATION]`
+- **Recommended fix:** Confirm no external sourced-call contract relies on them, then either remove the assignments or wire them into the intended telemetry/state output.
+
+No `TODO`, `FIXME`, `HACK`, or `XXX` markers were found. Shellcheck found no SC2086, SC2046, SC2006, or SC2015 violations; remaining warnings were intentional glob matching, dynamic output variables, or the dead assignments above.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | SEC-001, BUG-001, BUG-002 |
+| Medium | 8 | SEC-002, API-001, BATCH-001, API-004, DUP-001, DUP-003, EXPR-001, CONSIST-001 |
+| Low | 5 | API-002, API-003, DUP-002, DEAD-001, DEAD-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3–5 | Medium |
+| API call optimization | 6–9 | Large |
+| Code modularization | 7–10 | Large |
+| Expression size reduction | 2–3 | Medium |
+| Medium/Low fixes | 15–50 | Large |
