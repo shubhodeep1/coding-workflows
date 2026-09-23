@@ -38,6 +38,14 @@ def _phase6(workflow: str) -> str:
 	)
 
 
+def _phase4b_retry(workflow: str) -> str:
+	return _slice_between(
+		workflow,
+		'# ── Retry: adopt active work or redispatch ${REVIEW_WORKFLOW_FILE}',
+		'# ── Attempt 2',
+	)
+
+
 def _integer_contract_value(job: str, name: str) -> int:
 	match = re.search(rf"^\s+{re.escape(name)}:\s+(\d+)\s*$", job, re.MULTILINE)
 	assert match is not None, f"Missing integer contract value: {name}"
@@ -172,6 +180,48 @@ def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
 	job = _e2e_job(_read_workflow())
 	assert "DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))" in job
 	assert job.count("(PHASE7_WAIT_BUDGET_MINUTES * 60)") == 2
+
+
+def test_phase4b_adopts_the_oldest_eligible_active_review_run() -> None:
+	retry = _phase4b_retry(_read_workflow())
+	prior_validation = 'if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]]'
+	discovery = 'if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then'
+	dispatch = 'if ! gh workflow run "${REVIEW_WORKFLOW_FILE}"'
+	assert retry.index(prior_validation) < retry.index(discovery) < retry.index(dispatch)
+	assert 'runs?branch=${BRANCH}&per_page=100' in retry
+	assert '(.workflow_runs | type == "array")' in retry
+	assert '(.id | type == "number") and .id > 0 and .id == (.id | floor)' in retry
+	assert 'select(.id != $prior_run_id)' in retry
+	assert 'select(.status != "completed")' in retry
+	assert 'select(.head_sha == $bait_sha or .head_sha == $retry_sha)' in retry
+	assert 'sort_by(.created_at, .id)' in retry
+	assert 'if [ -n "${RETRY_ACTIVE_RUN}" ]; then' in retry
+	assert 'Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work' in retry
+
+
+def test_phase4b_dispatches_only_without_active_work_and_pins_one_run() -> None:
+	retry = _phase4b_retry(_read_workflow())
+	active_branch = _slice_between(
+		retry,
+		'if [ -n "${RETRY_ACTIVE_RUN}" ]; then',
+		'          else\n',
+	)
+	dispatch_branch = _slice_between(
+		retry,
+		'          else\n',
+		'          fi\n\n          # EDITOR_RETRY_BUDGET_MINUTES',
+	)
+	assert 'gh workflow run "${REVIEW_WORKFLOW_FILE}"' not in active_branch
+	assert 'gh workflow run "${REVIEW_WORKFLOW_FILE}"' in dispatch_branch
+	assert "RETRY_BASELINE_ID=" in retry
+	assert 'select(.id > $baseline_id and .id != $prior_run_id)' in retry
+	assert 'RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))' in retry
+	assert '"repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"' in retry
+	assert 'select(.head_sha == "${RETRY_DISPATCH_SHA}")' not in retry
+	assert 'actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch' not in retry
+	assert 'echo "status=retry_timeout" >> "$GITHUB_OUTPUT"' in retry
+	assert 'echo "status=pr_closed_during_retry" >> "$GITHUB_OUTPUT"' in retry
+	assert 'echo "status=pr_state_check_failed" >> "$GITHUB_OUTPUT"' in retry
 
 
 def test_phase6_registers_once_and_polls_only_the_pinned_run() -> None:
