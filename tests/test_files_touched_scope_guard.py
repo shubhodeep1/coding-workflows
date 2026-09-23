@@ -728,7 +728,11 @@ def _strip_comments(fragment: str) -> str:
 def test_preflight_and_commit_fragments_share_logic() -> None:
 	# Both guard sites must run identical executable logic (only the marker
 	# label and surrounding comments differ).
-	assert _strip_comments(_scope_fragment("preflight")) == _strip_comments(_scope_fragment("commit"))
+	preflight = _strip_comments(_scope_fragment("preflight"))
+	commit = _strip_comments(_scope_fragment("commit")).replace(
+		"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}", "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
+	)
+	assert preflight == commit
 
 
 # --------------------------------------------------------------------------
@@ -773,7 +777,8 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	assert 'echo "ISSUE_AUTHOR_LOGIN=${ISSUE_AUTHOR_LOGIN}" >> "$GITHUB_ENV"' not in text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
 	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
-	assert combined_text.count('python3 "${scope_guard_path}"') == 2
+	assert combined_text.count('"${scope_validator_cmd[@]}" "${scope_guard_path}"') == 2
+	assert combined_text.count("/usr/bin/python3 -I -S") >= 2
 	assert combined_text.count('--issue-author-login "${ISSUE_AUTHOR_LOGIN:-}"') == 2
 	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
 	assert "scope_violation_blocked=scope-lock-label" in commit_text
@@ -795,7 +800,7 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 	assert "files_touched_scope_guard.py" in stage_text
 	assert "review_collect_pr_metadata.sh" in main_primary_line
 	assert "files_touched_scope_guard.py" in main_primary_line
-	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py check_resolver_diff.sh; do" in workflow_text
+	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py post_agent_workspace_guard.py check_resolver_diff.sh; do" in workflow_text
 	assert "id: stage_workflow_support" in workflow_text
 	for digest_output in (
 		"scope_guard_sha256",
@@ -970,7 +975,7 @@ def test_failure_gates_mirror_scope() -> None:
 	for needle in (
 		"- name: Handle no-op implementation",
 		"- name: Capture post-Codex validation errors",
-		"- name: Diagnose post-Codex failure and create fix-up issues",
+		"- name: Diagnose post-Codex failure without GitHub authorization",
 		"- name: Comment on issue failure",
 		"- name: Telegram failure notification",
 	):
@@ -986,7 +991,7 @@ def test_redispatch_refusal_checks_scope_label() -> None:
 
 def test_bootstrap_fetches_guard_helper() -> None:
 	text = _implement_text()
-	assert "implement_staged_support_workspace.sh files_touched_scope_guard.py; do" in text
+	assert "implement_staged_support_workspace.sh files_touched_scope_guard.py post_agent_workspace_guard.py; do" in text
 
 
 def test_label_contract_and_helper_have_scope_blocked() -> None:

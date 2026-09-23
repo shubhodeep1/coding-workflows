@@ -719,6 +719,15 @@ when the bounded fix-cycle budget is exhausted.
   nested `.git` metadata. The sandbox exposes only the loopback provider proxy
   and never passes GitHub tokens, runner command files, authenticated remotes,
   provider credentials, or host Codex auth caches.
+- `scripts/post_agent_workspace_guard.py` snapshots every worktree object
+  independently of Git ignore rules before a writer model starts. Immediately
+  after the complete model process group exits, its credentialless
+  `workspace-guard` pass quarantines ignored, hidden, symlink, special, or
+  otherwise unauthorized changes before output parsing or privileged
+  validation; authorized new regular files are restored and emitted in the
+  complete changed-path manifest. Post-agent Python validators run through the
+  provider-free `validator` sandbox role as `/usr/bin/python3 -I -S`, from an
+  external working directory with no credentials or network access.
 - `scripts/model_provider_proxy.py` derives a non-empty model allowlist from
 	trusted configuration and defaults to 64 requests, one concurrent request,
 	65,536 output tokens, and USD 25 cumulative spend. It reserves worst-case
@@ -958,6 +967,8 @@ and shipped:
 - `WORKTREE_REGISTER_FAIL`
 - `WORKTREE_DEREGISTER_FAIL`
 - `opencode_agent_failure`
+- `POST_AGENT_WORKSPACE_GUARD_OK`
+- `POST_AGENT_WORKSPACE_GUARD_BLOCKED`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1121,6 +1132,8 @@ LOG_PREFIX.name=WORKTREE_REGISTER_INVALID_NAME
 LOG_PREFIX.name=WORKTREE_REGISTER_FAIL
 LOG_PREFIX.name=WORKTREE_DEREGISTER_FAIL
 LOG_PREFIX.name=opencode_agent_failure
+LOG_PREFIX.name=POST_AGENT_WORKSPACE_GUARD_OK
+LOG_PREFIX.name=POST_AGENT_WORKSPACE_GUARD_BLOCKED
 
 ---
 

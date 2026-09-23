@@ -1974,7 +1974,7 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py; do" in stage_block
+	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py post_agent_workspace_guard.py; do" in stage_block
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
 	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_staged_support_workspace.sh"'
@@ -2105,7 +2105,7 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	commit_block = _step_block_text("Commit changes")
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_commit_changes.sh"' in commit_block
 	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh"' in _step_block_text("Push branch")
-	assert 'python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/lint_pr_body_auto_close.py"' in _step_block_text(
+	assert '/usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/lint_pr_body_auto_close.py"' in _step_block_text(
 		"Pre-flight — lint PR title/body for auto-close keywords against tracking issues"
 	)
 

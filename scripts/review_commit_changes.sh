@@ -39,7 +39,6 @@
 #   LAST_RUN_DIFF_FILE                Diff from previous autofix iteration.
 #   EDITOR_SUMMARY_FILE               Editor-produced summary (used by overlap validation).
 #   REVIEW_LEDGER_PATH                Path to review-issue ledger (defaults to .ai/review_issue_ledger/pr-${PR_NUMBER}.txt). Gitignored; persisted across autofix iterations via actions/cache in review_autofix.yml.
-#   GH_PAT                            GitHub token used to rewrite the origin remote URL.
 #   GITHUB_REPOSITORY                 owner/repo slug (auto-set by GitHub Actions).
 #
 # Outputs:
@@ -71,6 +70,18 @@ set -euo pipefail
 _review_commit_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${_review_commit_script_dir}/write_guard.sh"
+
+run_review_validator_python() {
+  local sandbox_helper="${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh"
+  if [ -x "${sandbox_helper}" ]; then
+    bash "${sandbox_helper}" \
+      --role validator --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}" \
+      -- /usr/bin/python3 -I -S "$@"
+    return $?
+  fi
+  echo "::error::Review validator sandbox is unavailable." >&2
+  return 1
+}
 
 if [ -z "${COMMITTED_FILES_FILE:-}" ]; then
   if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
@@ -533,8 +544,19 @@ if [ "${review_advisory_count}" -eq 1 ]; then
   review_advisory_author_login="$(jq -r '.[0].author_login // ""' "${review_advisory_rows_file}")"
   review_advisory_scope_rc=30
   if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+    review_scope_validator_cmd=(
+      env -i HOME="${TMPDIR:-/tmp}" PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8
+      PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S
+    )
+    if [ -x "${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh" ]; then
+      review_scope_validator_cmd=(
+        bash "${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh"
+        --role validator --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}"
+        -- /usr/bin/python3 -I -S
+      )
+    fi
     set +e
-    review_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py" \
+    review_advisory_violations="$("${review_scope_validator_cmd[@]}" "${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py" \
       --issue-body-file "${review_advisory_body_file}" \
       --staged-file "${review_advisory_staged_file}" \
       --issue-author-association "${review_advisory_author_association}" \
@@ -570,7 +592,7 @@ else
   OVERLAP_REPORT_FILE="$(mktemp)"
   OVERLAP_VALIDATION_STDERR_FILE="$(mktemp)"
   set +e
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
+  run_review_validator_python - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
 import re
 import subprocess
 import sys

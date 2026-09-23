@@ -400,6 +400,26 @@ def test_main_exit_codes():
 		shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_offline_issue_label_map_avoids_github_lookup():
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory(prefix="lint-pr-body-map-") as directory:
+		label_map = Path(directory) / "labels.json"
+		label_map.write_text(
+			'{"owner/repo#7":["ai:orchestrator-tracking"],"owner/repo#8":[]}\n',
+			encoding="utf-8",
+		)
+		loaded = mod._load_issue_label_map(label_map)
+		violations, errors = mod.lint(
+			pr_body="Fixes #7\nCloses #8\n",
+			commit_messages=[],
+			repo="owner/repo",
+			fail_open_on_lookup_error=False,
+			label_lookup=lambda repo, issue: loaded.get((repo, issue)),
+		)
+		assert [violation.issue for violation in violations] == [7]
+		assert errors == []
+
+
 def main() -> int:
 	try:
 		import sys as _sys

@@ -40,6 +40,17 @@ fi
 SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR}/codex_stall_guard.sh"
+post_agent_workspace_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" 2>/dev/null | awk '{print $1}')"
+if ! [[ "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+  || [ "${post_agent_workspace_guard_actual_sha256}" != "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256}" ]; then
+  echo "::error::Post-agent workspace guard is unavailable or changed after staging." >&2
+  exit 1
+fi
+run_review_rb_validator_python() {
+  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+    --role validator --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+    -- /usr/bin/python3 -I -S "$@"
+}
 LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
   "${SUPPORT_SCRIPTS_DIR}/ledger_emit_substate.sh" \
@@ -2000,6 +2011,14 @@ __EDIT_DISCIPLINE__
       emit_review_rb_substate "review_rb_fix" "judge_fix" "LaunchingAgentProcess" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "InitializingSession" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "StreamingTurn" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
+      rb_fix_workspace_manifest="${RUNTIME_DIR}/post-agent-rb-fix-${rb_fix_attempt}.manifest.json"
+      rb_fix_workspace_paths="${RUNTIME_DIR}/post-agent-rb-fix-${rb_fix_attempt}.paths.txt"
+      rb_fix_workspace_report="${RUNTIME_DIR}/post-agent-rb-fix-${rb_fix_attempt}.report.json"
+      rb_fix_workspace_quarantine="${RUNTIME_DIR}/post-agent-rb-fix-${rb_fix_attempt}.quarantine"
+      bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+        --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+        -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
+        --workspace "${PWD}" --manifest "${rb_fix_workspace_manifest}"
       : > "${RB_FIX_OUTPUT}"
       if [ "${rb_fix_opencode_ready}" = "true" ] && [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
         "${CODEX_STALL_GUARD_HELPER}" \
@@ -2016,6 +2035,14 @@ __EDIT_DISCIPLINE__
           -- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" || rb_fix_rc=$?
       elif [ "${rb_fix_opencode_ready}" = "true" ]; then
         "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>"${RB_FIX_STDERR}" || rb_fix_rc=$?
+      fi
+      if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+        --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+        -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
+        --workspace "${PWD}" --manifest "${rb_fix_workspace_manifest}" \
+        --quarantine-dir "${rb_fix_workspace_quarantine}" \
+        --changed-paths-out "${rb_fix_workspace_paths}" --report "${rb_fix_workspace_report}"; then
+        rb_fix_rc=78
       fi
       if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix OpenCode" )"; then
         :
@@ -2123,12 +2150,13 @@ __EDIT_DISCIPLINE__
 	        rb_fix_allowed_file="${RUNTIME_DIR}/review_fix_allowed.txt"
 	        rb_fix_spans_file="${RUNTIME_DIR}/review_fix_spans.json"
 	        rb_fix_clean_manifest="${RUNTIME_DIR}/review_fix_clean.tsv"
-	        {
-	          git diff --name-only HEAD --
-	          git ls-files --others --exclude-standard
-	        } | sed '/^$/d' | LC_ALL=C sort -u > "${rb_fix_touched_file}"
+	        if [ -s "${rb_fix_workspace_paths:-/nonexistent}" ]; then
+	          cp "${rb_fix_workspace_paths}" "${rb_fix_touched_file}"
+	        else
+	          : > "${rb_fix_touched_file}"
+	        fi
 	        : > "${rb_fix_clean_manifest}"
-	        if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
+	        if ! run_review_rb_validator_python "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
 	          --validate-review-fix-authorization \
 	          --review-fix-repo "${PWD}" \
 	          --review-fix-repository "${REPOSITORY}" \
@@ -2148,7 +2176,9 @@ __EDIT_DISCIPLINE__
 	          echo "::error::Protected review-fix path is disabled by ALLOW_WORKFLOW_EDITS=false."
 	          exit 1
 	        fi
-	        if ! bash "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
+	        if ! POST_AGENT_VALIDATION_SANDBOX="${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+	          POST_AGENT_VALIDATION_RUNTIME_DIR="${RUNTIME_DIR}" \
+	          bash "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
 	          --repo-root "${PWD}" \
 	          --conflicted-set "${rb_fix_allowed_file}" \
 	          --touched-set "${rb_fix_touched_file}" \
@@ -2184,7 +2214,7 @@ __EDIT_DISCIPLINE__
         if [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
           && [ -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
           set +e
-          rb_generated_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
+          rb_generated_advisory_violations="$(run_review_rb_validator_python "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
             --linked-issue-metadata-file "${LINKED_ISSUE_METADATA_FILE}" \
             --linked-issue-metadata-sha256 "${LINKED_ISSUE_METADATA_EXPECTED_SHA256:-}" \
             --staged-file "${rb_generated_advisory_staged_file}" \

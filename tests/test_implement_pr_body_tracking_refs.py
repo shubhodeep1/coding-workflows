@@ -109,6 +109,9 @@ def _run_preflight(*, issue_meta: dict, issue_url: str) -> str:
 
 		runtime_dir = tmp / "runtime"
 		runtime_dir.mkdir()
+		verify_helper = runtime_dir / "verify-support.sh"
+		verify_helper.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		verify_helper.chmod(0o755)
 		issue_meta_file = runtime_dir / "issue_meta.json"
 		issue_meta_file.write_text(json.dumps(issue_meta), encoding="utf-8")
 
@@ -124,10 +127,14 @@ def _run_preflight(*, issue_meta: dict, issue_url: str) -> str:
 				"ISSUE_META_FILE": str(issue_meta_file),
 				"ISSUE_NUMBER": "123",
 				"ISSUE_URL": issue_url,
+				"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(REPO_ROOT / "scripts"),
+				"IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER": str(verify_helper),
 				"MOCK_GH_ISSUE_LABELS_JSON": json.dumps({"123": []}),
 				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
 				"PYTHONDONTWRITEBYTECODE": "1",
 				"RUNTIME_DIR": str(runtime_dir),
+				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+				"WORKSPACE_PATH": str(REPO_ROOT),
 			}
 		)
 
@@ -175,6 +182,10 @@ def test_create_pr_step_uses_the_linted_body_artifact() -> None:
 	step = _step_text(CREATE_PR_STEP_NAME)
 	assert 'PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"' in step
 	assert '--body-file "${PR_BODY_FILE}"' in step
+	preflight = _step_text(STEP_NAME)
+	assert "--issue-label-map" in preflight
+	assert "--role validator" in preflight
+	assert "/usr/bin/python3 -I -S" in preflight
 
 
 def main() -> int:

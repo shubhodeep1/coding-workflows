@@ -243,7 +243,7 @@ env:
     codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh
     review_run_reviewers.sh render_prompt.sh assemble_prompt.sh
     nag_reminder.sh opencode_helpers.sh untrusted_process_sandbox.sh
-    model_provider_proxy.py package_download_proxy.py write_opencode_config.sh
+    model_provider_proxy.py package_download_proxy.py post_agent_workspace_guard.py write_opencode_config.sh
   REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
     render_prompt.py
 
@@ -1794,6 +1794,7 @@ jobs:
           security_sensitive_support_files=(
             review_collect_pr_metadata.sh
             files_touched_scope_guard.py
+            post_agent_workspace_guard.py
             check_resolver_diff.sh
             review_commit_changes.sh
             review_conflict_prepare.sh
@@ -1814,7 +1815,7 @@ jobs:
               exit 1
             fi
           done
-          for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py check_resolver_diff.sh; do
+          for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py post_agent_workspace_guard.py check_resolver_diff.sh; do
             install -m 0755 \
               "${security_sensitive_support_root}/scripts/${metadata_guard_support_file}" \
               "${SUPPORT_SCRIPTS_DIR}/${metadata_guard_support_file}"
@@ -1824,6 +1825,12 @@ jobs:
               "${security_sensitive_support_root}/scripts/${commit_producer_support_file}" \
               "${SUPPORT_SCRIPTS_DIR}/${commit_producer_support_file}"
           done
+          post_agent_workspace_guard_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" 2>/dev/null | awk '{print $1}')"
+          if ! [[ "${post_agent_workspace_guard_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not anchor post-agent workspace guard."
+            exit 1
+          fi
+          echo "POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256=${post_agent_workspace_guard_sha256}" >> "$GITHUB_ENV"
 
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
             backfill_src=".codex-workflow-src/scripts/transcript_archive.sh"
@@ -4515,7 +4522,6 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         id: commit_changes
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
           LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
           REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}
           REVIEW_COMMIT_CHANGES_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.review_commit_changes_sha256 }}
@@ -5157,7 +5163,7 @@ jobs:
           # commit step (caller repos delete fetched scripts before committing)
           # or wiped by git clean -ffdx above.
           # Re-stage any missing scripts from checked-out support source.
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh cost_audit.py codex_helpers.sh codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh watchdog_helpers.sh check_external_branch_advance.sh workspace_safety_check.sh; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh cost_audit.py codex_helpers.sh codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh post_agent_workspace_guard.py summarize_reviewer_consensus.sh watchdog_helpers.sh check_external_branch_advance.sh workspace_safety_check.sh; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               src="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/${f}"

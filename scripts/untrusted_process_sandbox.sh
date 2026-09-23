@@ -23,24 +23,35 @@ done
 [ "$#" -gt 0 ] || { echo "untrusted_process_sandbox: command is required" >&2; exit 2; }
 case "${role}" in
 	plan|implement|implement-repair|diagnose|reviewer|editor|resolver|judge|judge-fix|summary|audit) ;;
+	validator|workspace-guard) ;;
 	*) echo "untrusted_process_sandbox: invalid role" >&2; exit 2 ;;
 esac
-case "${config_format}" in
-	opencode|codex) ;;
-	*) echo "untrusted_process_sandbox: invalid config format" >&2; exit 2 ;;
-esac
 workspace="$(cd "${workspace}" && pwd -P)"
-[ -r "${config_path}" ] || { echo "untrusted_process_sandbox: config is unreadable" >&2; exit 2; }
+provider_required=true
+case "${role}" in
+	validator|workspace-guard)
+		provider_required=false
+		[ "${1:-}" = /usr/bin/python3 ] && [ "${2:-}" = -I ] && [ "${3:-}" = -S ] \
+			|| { echo "untrusted_process_sandbox: validator roles require /usr/bin/python3 -I -S" >&2; exit 2; }
+		case "${config_format}" in ""|none) ;; *) echo "untrusted_process_sandbox: validator roles do not accept provider config" >&2; exit 2 ;; esac
+		;;
+	*)
+		case "${config_format}" in opencode|codex) ;; *) echo "untrusted_process_sandbox: invalid config format" >&2; exit 2 ;; esac
+		[ -r "${config_path}" ] || { echo "untrusted_process_sandbox: config is unreadable" >&2; exit 2; }
+		;;
+esac
 
 credential_file="${MODEL_PROVIDER_CREDENTIAL_FILE:-}"
 credential_file_is_temporary=false
-if [ -z "${credential_file}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
+if [ "${provider_required}" = true ] && [ -z "${credential_file}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
 	credential_file="$(mktemp "${runtime_dir%/}/provider-credential.XXXXXX")"
 	credential_file_is_temporary=true
 	chmod 600 "${credential_file}"
 	printf '%s' "${OPENROUTER_API_KEY}" > "${credential_file}"
 fi
-[ -r "${credential_file}" ] || { echo "untrusted_process_sandbox: provider credential is unavailable" >&2; exit 1; }
+if [ "${provider_required}" = true ]; then
+	[ -r "${credential_file}" ] || { echo "untrusted_process_sandbox: provider credential is unavailable" >&2; exit 1; }
+fi
 
 sandbox_dir="$(mktemp -d "${runtime_dir%/}/agent-sandbox.XXXXXX")"
 ready_file="${sandbox_dir}/proxy-ready.json"
@@ -60,6 +71,10 @@ cleanup()
 }
 trap cleanup EXIT HUP INT TERM
 
+proxy_host="127.0.0.1"
+proxy_port="0"
+sandbox_config="${sandbox_dir}/agent-config"
+if [ "${provider_required}" = true ]; then
 proxy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/model_provider_proxy.py"
 [ -r "${proxy_script}" ] || { echo "untrusted_process_sandbox: provider proxy is unavailable" >&2; exit 1; }
 python3 - "${config_format}" "${config_path}" "${proxy_policy_file}" "$@" <<'PY'
@@ -129,7 +144,6 @@ else
 fi
 proxy_url="http://${proxy_host}:${proxy_port}/api/v1"
 
-sandbox_config="${sandbox_dir}/agent-config"
 sandbox_home="${sandbox_dir}/home"
 sandbox_runtime="${sandbox_dir}/runtime"
 mkdir -p "${sandbox_home}" "${sandbox_runtime}"
@@ -170,6 +184,11 @@ if catalog_match is not None:
 	)
 open(path, "w", encoding="utf-8").write(text)
 PY
+fi
+else
+	sandbox_home="${sandbox_dir}/home"
+	sandbox_runtime="${sandbox_dir}/runtime"
+	mkdir -p "${sandbox_home}" "${sandbox_runtime}"
 fi
 
 safe_git_config="${sandbox_dir}/gitconfig"
@@ -240,13 +259,16 @@ while IFS= read -r -d '' nested_git_entry; do
 	fi
 done < <(find "${workspace}" -xdev -name .git -print0 2>/dev/null)
 
+sandbox_path="${PATH}"
+if [ "${provider_required}" != true ]; then
+	sandbox_path="/usr/bin:/bin"
+fi
 common_env=(
 	"HOME=${sandbox_home}"
-	"PATH=${PATH}"
+	"PATH=${sandbox_path}"
 	"LANG=${LANG:-C.UTF-8}"
 	"LC_ALL=${LC_ALL:-C.UTF-8}"
 	"NO_COLOR=1"
-	"SANDBOX_PROVIDER_TOKEN=sandbox-proxy"
 	"UNTRUSTED_PROCESS_ISOLATED=1"
 	"UNTRUSTED_SANDBOX_WORKSPACE=${workspace}"
 	"GIT_CONFIG_GLOBAL=${safe_git_config}"
@@ -258,6 +280,9 @@ common_env=(
 	"RUNTIME_DIR=${sandbox_runtime}"
 	"CODEX_THREAD_REUSE_RUNTIME_DIR=${sandbox_runtime}/thread-reuse"
 )
+if [ "${provider_required}" = true ]; then
+	common_env+=("SANDBOX_PROVIDER_TOKEN=sandbox-proxy")
+fi
 runtime_write_paths=()
 while IFS='=' read -r environment_name environment_value; do
 	case "${environment_name}" in
@@ -278,7 +303,7 @@ while IFS='=' read -r environment_name environment_value; do
 done < <(env)
 if [ "${config_format}" = opencode ]; then
 	common_env+=("UNTRUSTED_OPENCODE_CONFIG=${sandbox_config}" "OPENCODE_CONFIG=${sandbox_config}")
-else
+elif [ "${config_format}" = codex ]; then
 	common_env+=("CODEX_HOME=${sandbox_config}")
 fi
 
@@ -289,7 +314,10 @@ if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then
 		fi
 	done
 	set +e
-	env -i "${common_env[@]}" "$@"
+	(
+		cd "${sandbox_runtime}"
+		env -i "${common_env[@]}" "$@"
+	)
 	test_command_rc=$?
 	set -e
 	exit "${test_command_rc}"
@@ -371,21 +399,30 @@ systemd_properties=(
 	--property=OOMPolicy=kill
 	--property="TimeoutStopSec=${sandbox_stop_timeout_sec}"
 	--property=IPAddressDeny=any
-	--property="IPAddressAllow=${proxy_host}/32"
-	--property="InaccessiblePaths=${credential_file} -/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh"
+	--property="InaccessiblePaths=${credential_file:+${credential_file} }-/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh"
 	--property=ReadOnlyPaths=/
 	--property="ReadWritePaths=${sandbox_dir}${runtime_write_paths[*]:+ ${runtime_write_paths[*]}}"
 )
+if [ "${provider_required}" = true ]; then
+	systemd_properties+=(--property="IPAddressAllow=${proxy_host}/32")
+fi
 case "${role}" in
 	implement|implement-repair|editor|resolver|judge-fix)
 		systemd_properties+=(--property="ReadWritePaths=${workspace}")
 		;;
+	workspace-guard)
+		systemd_properties+=(--property="ReadWritePaths=${workspace} ${runtime_dir}")
+		;;
 esac
 for protected_git_path in "${git_metadata_paths[@]:-}"; do
 	[ -n "${protected_git_path}" ] || continue
-	systemd_properties+=(--property="InaccessiblePaths=${protected_git_path}")
+	if [ "${provider_required}" = true ]; then
+		systemd_properties+=(--property="InaccessiblePaths=${protected_git_path}")
+	else
+		systemd_properties+=(--property="ReadOnlyPaths=${protected_git_path}")
+	fi
 done
 "${systemd_run[@]}" --quiet --wait --pipe --collect --service-type=exec \
 	"${systemd_properties[@]}" \
-	--working-directory="${workspace}" \
+	--working-directory="$([ "${provider_required}" = true ] && printf '%s' "${workspace}" || printf '%s' "${sandbox_runtime}")" \
 	env -i "${common_env[@]}" "$@"

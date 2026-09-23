@@ -42,7 +42,7 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh untrusted_process_sandbox.sh model_provider_proxy.py package_download_proxy.py trusted_git_write.sh security_audit_causality.py write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh files_touched_scope_guard.py review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh untrusted_process_sandbox.sh model_provider_proxy.py package_download_proxy.py trusted_git_write.sh post_agent_workspace_guard.py security_audit_causality.py write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh files_touched_scope_guard.py review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh"
 # Main-primary bootstrap scripts: prefer the fresh main snapshot so
 # wedged integration branches still pick up resolver safety fixes
 # shipped on main. Entries staged only via this list fail open when
@@ -65,7 +65,7 @@ REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.
 # absent. Staging them from the same snapshot as the resolver keeps the
 # resolver and its dependencies in lockstep, so a main-side resolver change
 # can never land in a bundle whose helpers came from an older ref.
-MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_collect_pr_metadata.sh files_touched_scope_guard.py check_resolver_diff.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh review_rb_judge.sh trusted_git_write.sh render_prompt.py opencode_helpers.sh untrusted_process_sandbox.sh model_provider_proxy.py package_download_proxy.py write_opencode_config.sh"
+MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_collect_pr_metadata.sh files_touched_scope_guard.py post_agent_workspace_guard.py check_resolver_diff.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh review_rb_judge.sh trusted_git_write.sh render_prompt.py opencode_helpers.sh untrusted_process_sandbox.sh model_provider_proxy.py package_download_proxy.py write_opencode_config.sh"
 # Optional bootstrap scripts: allowed to be missing from both
 # refs.  The bootstrap emits a warning and continues — callers
 # that depend on these must themselves tolerate absence.  Keep
@@ -108,6 +108,13 @@ for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
+
+post_agent_workspace_guard_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" 2>/dev/null | awk '{print $1}')"
+if ! [[ "${post_agent_workspace_guard_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "::error::Could not anchor post-agent workspace guard."
+  exit 1
+fi
+echo "POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256=${post_agent_workspace_guard_sha256}" >> "$GITHUB_ENV"
 
 for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
   src=".codex-workflow-src/scripts/${f}"

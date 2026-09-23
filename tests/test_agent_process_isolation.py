@@ -23,6 +23,113 @@ PROXY = REPO_ROOT / "scripts" / "model_provider_proxy.py"
 PACKAGE_PROXY = REPO_ROOT / "scripts" / "package_download_proxy.py"
 TRUSTED_GIT_WRITE = REPO_ROOT / "scripts" / "trusted_git_write.sh"
 CAUSALITY = REPO_ROOT / "scripts" / "security_audit_causality.py"
+WORKSPACE_GUARD = REPO_ROOT / "scripts" / "post_agent_workspace_guard.py"
+
+
+def test_workspace_guard_quarantines_ignored_python_startup_payload() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		(workspace / ".gitignore").write_text("*.py\n", encoding="utf-8")
+		(workspace / "tracked.txt").write_text("base\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(workspace), "add", ".gitignore", "tracked.txt"], check=True)
+		subprocess.run(
+			["git", "-C", str(workspace), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+			check=True,
+		)
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "sitecustomize.py").write_text("raise RuntimeError('loaded')\n", encoding="utf-8")
+		changed = runtime / "changed.txt"
+		report = runtime / "report.json"
+		quarantine = runtime / "quarantine"
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(quarantine), "--changed-paths-out", str(changed),
+				"--report", str(report),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20
+		assert not (workspace / "sitecustomize.py").exists()
+		assert (quarantine / "sitecustomize.py").is_file()
+		assert "sitecustomize.py" in changed.read_text(encoding="utf-8").splitlines()
+		assert json.loads(report.read_text(encoding="utf-8"))["rejected"][0]["reason"] == "python-startup-path"
+
+
+def test_workspace_guard_restores_authorized_new_regular_file() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "new-source.txt").write_text("safe\n", encoding="utf-8")
+		changed = runtime / "changed.txt"
+		report = runtime / "report.json"
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"), "--changed-paths-out", str(changed),
+				"--report", str(report),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert (workspace / "new-source.txt").read_text(encoding="utf-8") == "safe\n"
+		assert json.loads(report.read_text(encoding="utf-8"))["restored"] == ["new-source.txt"]
+
+
+def test_validator_role_uses_isolated_no_site_python_outside_workspace() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		sentinel = root / "startup-ran"
+		(workspace / "sitecustomize.py").write_text(
+			f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('bad')\n",
+			encoding="utf-8",
+		)
+		environment = os.environ.copy()
+		environment.update(
+			{
+				"GH_PAT": "synthetic-secret",
+				"PYTHONPATH": str(workspace),
+				"RUNTIME_DIR": str(runtime),
+				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+			}
+		)
+		result = subprocess.run(
+			[
+				"bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+				"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S", "-c",
+				"import json,os,sys; print(json.dumps([sys.flags.isolated,sys.flags.no_site,os.getcwd(),os.getenv('GH_PAT')]))",
+			],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		isolated, no_site, cwd, credential = json.loads(result.stdout)
+		assert (isolated, no_site, credential) == (1, 1, None)
+		assert Path(cwd) != workspace
+		assert not sentinel.exists()
 
 
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
@@ -248,6 +355,30 @@ def test_workflows_do_not_give_github_tokens_to_primary_model_steps() -> None:
 	assert "untrusted_process_sandbox.sh" in (REPO_ROOT / "scripts/opencode_helpers.sh").read_text(encoding="utf-8")
 	assert 'BASH_ENV: ""' in implement_step
 	assert 'BASH_ENV: ""' in editor_step
+
+
+def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
+	implement = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	for role in ("implement", "repair"):
+		assert f"post-agent-{role}-" in implement
+	assert implement.count("post_agent_workspace_guard.py\" snapshot") >= 2
+	assert implement.count("post_agent_workspace_guard.py\" reconcile") >= 2
+
+	for script_name in (
+		"review_apply_fixes.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+		"orchestrate_poll_process.sh",
+	):
+		script = (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+		assert "post_agent_workspace_guard.py" in script or "TRUSTED_POLLER_WORKSPACE_GUARD" in script
+		assert "workspace-guard" in script
+		assert "reconcile" in script
+
+	commit_step = (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8").split(
+		"      - name: Commit changes\n", 1
+	)[1].split("\n      - name:", 1)[0]
+	assert "GH_PAT: ${{ secrets.GH_PAT }}" not in commit_step
 
 
 def test_trusted_git_writer_never_executes_repository_hooks() -> None:

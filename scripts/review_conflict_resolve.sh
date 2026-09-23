@@ -60,6 +60,17 @@ fi
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+post_agent_workspace_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR:-scripts}/post_agent_workspace_guard.py" 2>/dev/null | awk '{print $1}')"
+if ! [[ "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+  || [ "${post_agent_workspace_guard_actual_sha256}" != "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256}" ]; then
+  echo "::error::Post-agent workspace guard is unavailable or changed after staging." >&2
+  exit 1
+fi
+run_resolver_validator_python() {
+  bash "${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh" \
+    --role validator --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+    -- /usr/bin/python3 -I -S "$@"
+}
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
@@ -941,7 +952,7 @@ _verify_fingerprints_soft() {
     )
   fi
   INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+    run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
       "${_verifier_args[@]}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" \
       > "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" 2>&1 || RESOLVER_FP_EXIT=$?
@@ -1873,6 +1884,14 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # _build_retry_prompt and the retry-log line for every iteration.
   _codex_exit=0
   _attempt_started_at=$(date +%s)
+  resolver_workspace_manifest="${RUNTIME_DIR}/post-agent-resolver-${attempt}.manifest.json"
+  resolver_workspace_paths="${RUNTIME_DIR}/post-agent-resolver-${attempt}.paths.txt"
+  resolver_workspace_report="${RUNTIME_DIR}/post-agent-resolver-${attempt}.report.json"
+  resolver_workspace_quarantine="${RUNTIME_DIR}/post-agent-resolver-${attempt}.quarantine"
+  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
+    --workspace "${PWD}" --manifest "${resolver_workspace_manifest}"
   # Strip any invalid UTF-8 bytes that may have leaked into the
   # retry-prompt (rebuilt inside the loop, so we sanitise each
   # iteration). See sanitize_codex_prompt_file in scripts/gh_helpers.sh.
@@ -1923,6 +1942,14 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" > "${tmp_output}" \
         || _codex_exit=$?
     fi
+  fi
+  if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
+    --workspace "${PWD}" --manifest "${resolver_workspace_manifest}" \
+    --quarantine-dir "${resolver_workspace_quarantine}" \
+    --changed-paths-out "${resolver_workspace_paths}" --report "${resolver_workspace_report}"; then
+    _codex_exit=78
   fi
   resolver_clean_output="${tmp_output}.ansi-clean"
   if opencode_strip_ansi < "${tmp_output}" > "${resolver_clean_output}"; then
@@ -2212,7 +2239,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         )
       fi
       INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-        python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+        run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
           "${_final_verifier_args[@]}" \
           "${INTEGRATION_FINGERPRINTS_FILE}" || _final_fp_exit=$?
       if [ "${_final_fp_exit}" -eq 1 ]; then
@@ -2292,7 +2319,11 @@ if [ -n "$(git status --porcelain)" ]; then
     # comment block below the pre-snapshot diff for the full
     # rationale).
     RESOLVER_TOUCHED_FILE="${RUNTIME_DIR}/codex_touched_resolver.txt"
-    : > "${RESOLVER_TOUCHED_FILE}"
+    if [ -s "${resolver_workspace_paths:-/nonexistent}" ]; then
+      cp "${resolver_workspace_paths}" "${RESOLVER_TOUCHED_FILE}"
+    else
+      : > "${RESOLVER_TOUCHED_FILE}"
+    fi
     if [ -f "${PRE_RESOLVER_STATE_FILE:-/nonexistent}" ]; then
       PRE_UNTRACKED_LIST="$(mktemp)"
       POST_UNTRACKED_LIST="$(mktemp)"
@@ -2422,7 +2453,9 @@ if [ -n "$(git status --porcelain)" ]; then
       exit 1
     fi
 
-    if ! "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
+    if ! POST_AGENT_VALIDATION_SANDBOX="${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+      POST_AGENT_VALIDATION_RUNTIME_DIR="${RUNTIME_DIR}" \
+      "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
         --conflicted-set "${CONFLICTED_PATHS_FILE}" \
         --touched-set    "${RESOLVER_TOUCHED_FILE}" \
         --conflict-spans "${CONFLICT_SPANS_FILE}" \
@@ -2536,7 +2569,7 @@ if [ -n "$(git status --porcelain)" ]; then
     && [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
     && [ -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
     set +e
-    resolver_generated_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
+    resolver_generated_advisory_violations="$(run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
       --linked-issue-metadata-file "${LINKED_ISSUE_METADATA_FILE}" \
       --linked-issue-metadata-sha256 "${LINKED_ISSUE_METADATA_EXPECTED_SHA256:-}" \
       --staged-file "${resolver_generated_advisory_staged_file}" \

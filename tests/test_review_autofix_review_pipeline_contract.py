@@ -3160,7 +3160,7 @@ def test_review_blocked_writer_revalidates_scope_guard_digest_before_execution()
 	rb_judge = RB_JUDGE.read_text(encoding="utf-8")
 	writer_end = rb_judge.index("# Check for changes and commit")
 	digest_check = rb_judge.index("verify_review_scope_guard_integrity", writer_end)
-	guard_execution = rb_judge.index('python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"', digest_check)
+	guard_execution = rb_judge.index('run_review_rb_validator_python "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"', digest_check)
 
 	assert writer_end < digest_check < guard_execution
 	assert '[[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]' in rb_judge

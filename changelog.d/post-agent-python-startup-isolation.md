@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Post-agent validation now rejects ignored Python startup payloads before privileged workflow steps.** Implement, review editor, conflict resolver, review-blocked, and poller writer paths compare complete pre/post worktree manifests, quarantine hidden or ignored changes, and run Python validation with isolated no-site startup in a credentialless, network-denied sandbox.

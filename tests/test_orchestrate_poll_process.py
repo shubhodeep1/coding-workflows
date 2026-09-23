@@ -21552,7 +21552,7 @@ def test_poller_review_blocked_writer_uses_immutable_trusted_git_boundary() -> N
 	workflow = POLLER_WORKFLOW.read_text(encoding="utf-8")
 	assert 'TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"' in script
 	assert 'install -m 0755 scripts/trusted_git_write.sh "${TRUSTED_POLLER_GIT_WRITER}"' not in script
-	assert 'for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh check_resolver_diff.sh files_touched_scope_guard.py' in workflow
+	assert 'for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py check_resolver_diff.sh files_touched_scope_guard.py' in workflow
 	assert 'install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"' in workflow
 	assert 'TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${RUNTIME_DIR}/files_touched_scope_guard.py"' in script
 	assert "--build-review-fix-authorization" in script

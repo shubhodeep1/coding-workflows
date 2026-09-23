@@ -964,7 +964,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py post_agent_workspace_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -2655,11 +2655,21 @@ jobs:
             attempt_log_file="${RUNTIME_DIR}/codex_log_attempt_${attempt}.txt"
             : > "${attempt_log_file}"
             attempt_stall_status_file="$(mktemp /tmp/codex_stall_status_implement.XXXXXX)"
+            attempt_workspace_manifest="${RUNTIME_DIR}/post-agent-implement-${attempt}.manifest.json"
+            attempt_workspace_paths="${RUNTIME_DIR}/post-agent-implement-${attempt}.paths.txt"
+            attempt_workspace_report="${RUNTIME_DIR}/post-agent-implement-${attempt}.report.json"
+            attempt_workspace_quarantine="${RUNTIME_DIR}/post-agent-implement-${attempt}.quarantine"
             stall_state=""
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${PROMPT_FILE_TO_USE}"
             fi
             bash scripts/workspace_safety_check.sh
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
+              --role workspace-guard \
+              --workspace "${WORKSPACE_PATH}" \
+              --runtime-dir "${RUNTIME_DIR}" \
+              -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" snapshot \
+              --workspace "${WORKSPACE_PATH}" --manifest "${attempt_workspace_manifest}"
             emit_implement_substate "implement" "implement" "LaunchingAgentProcess" "${attempt}" "${attempt_log_file}"
             emit_implement_substate "implement" "implement" "InitializingSession" "${attempt}" "${attempt_log_file}"
             emit_implement_substate "implement" "implement" "StreamingTurn" "${attempt}" "${attempt_log_file}"
@@ -2694,6 +2704,17 @@ jobs:
                 --config "${CODEX_HOME:-${HOME}/.codex}" \
                 --runtime-dir "${RUNTIME_DIR}" \
                 -- bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_thread_reuse.sh" direct-run || cmd_rc=$?
+
+            if ! bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
+              --role workspace-guard \
+              --workspace "${WORKSPACE_PATH}" \
+              --runtime-dir "${RUNTIME_DIR}" \
+              -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" reconcile \
+              --workspace "${WORKSPACE_PATH}" --manifest "${attempt_workspace_manifest}" \
+              --quarantine-dir "${attempt_workspace_quarantine}" \
+              --changed-paths-out "${attempt_workspace_paths}" --report "${attempt_workspace_report}"; then
+              cmd_rc=78
+            fi
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3503,8 +3524,19 @@ jobs:
                 fi
               fi
               if [ "${scope_rc}" -eq 0 ] && [ -f "${scope_guard_path}" ]; then
+                scope_validator_cmd=(
+                  env -i HOME="${TMPDIR:-/tmp}" PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8
+                  PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S
+                )
+                if [ -x "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" ]; then
+                  scope_validator_cmd=(
+                    bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh"
+                    --role validator --workspace "${WORKSPACE_PATH:-${PWD}}" --runtime-dir "${RUNTIME_DIR}"
+                    -- /usr/bin/python3 -I -S
+                  )
+                fi
                 set +e
-                scope_violations="$(python3 "${scope_guard_path}" \
+                scope_violations="$("${scope_validator_cmd[@]}" "${scope_guard_path}" \
                   --issue-body-file "${ISSUE_BODY_FILE:-}" \
                   --staged-file "${scope_staged_file}" \
                   --allowlist-out "${scope_allowlist_file}" \
@@ -3980,6 +4012,16 @@ jobs:
               sanitize_codex_prompt_file "${REPAIR_PROMPT_FILE}"
             fi
             bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/workspace_safety_check.sh"
+            repair_workspace_manifest="${RUNTIME_DIR}/post-agent-repair-${attempt}.manifest.json"
+            repair_workspace_paths="${RUNTIME_DIR}/post-agent-repair-${attempt}.paths.txt"
+            repair_workspace_report="${RUNTIME_DIR}/post-agent-repair-${attempt}.report.json"
+            repair_workspace_quarantine="${RUNTIME_DIR}/post-agent-repair-${attempt}.quarantine"
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
+              --role workspace-guard \
+              --workspace "${WORKSPACE_PATH}" \
+              --runtime-dir "${RUNTIME_DIR}" \
+              -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" snapshot \
+              --workspace "${WORKSPACE_PATH}" --manifest "${repair_workspace_manifest}"
             emit_implement_substate "implement_repair" "implement_repair" "LaunchingAgentProcess" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
@@ -4000,11 +4042,23 @@ jobs:
                 --config "${CODEX_HOME:-${HOME}/.codex}" \
                 --runtime-dir "${RUNTIME_DIR}" \
                 -- bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_thread_reuse.sh" direct-run; then
+              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
+                --role workspace-guard --workspace "${WORKSPACE_PATH}" --runtime-dir "${RUNTIME_DIR}" \
+                -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" reconcile \
+                --workspace "${WORKSPACE_PATH}" --manifest "${repair_workspace_manifest}" \
+                --quarantine-dir "${repair_workspace_quarantine}" \
+                --changed-paths-out "${repair_workspace_paths}" --report "${repair_workspace_report}" || exit 78
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
               continue
             fi
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
+              --role workspace-guard --workspace "${WORKSPACE_PATH}" --runtime-dir "${RUNTIME_DIR}" \
+              -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" reconcile \
+              --workspace "${WORKSPACE_PATH}" --manifest "${repair_workspace_manifest}" \
+              --quarantine-dir "${repair_workspace_quarantine}" \
+              --changed-paths-out "${repair_workspace_paths}" --report "${repair_workspace_report}" || exit 78
             emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
 
             tracked_strays=()
@@ -4599,6 +4653,7 @@ jobs:
           PR_TITLE_FILE="${RUNTIME_DIR}/pr-body-lint/title.txt"
           PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"
           PR_LINT_FILE="${RUNTIME_DIR}/pr-body-lint/lint-input.txt"
+          PR_LABEL_MAP_FILE="${RUNTIME_DIR}/pr-body-lint/issue-label-map.json"
           PR_TITLE="AI implementation for issue #${ISSUE_NUMBER}"
           printf '%s\n' "${PR_TITLE}" > "${PR_TITLE_FILE}"
           # Build the exact body that the next step will pass to gh pr
@@ -4606,45 +4661,11 @@ jobs:
           # lint validates. Keep these strings in lockstep — drift means
           # the lint is checking a different artifact than the one
           # submitted.
-          TRACKING_ISSUE_NUMBER="$(
-            python3 - "${ISSUE_META_FILE}" <<'PY'
-          import json
-          import re
-          import sys
-          from pathlib import Path
-
-          TRACKING_ISSUE_LINE_RE = re.compile(
-              r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$",
-              re.MULTILINE,
-          )
-
-          try:
-              issue_meta = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          except (IndexError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-              raise SystemExit(0)
-
-          label_names = []
-          for raw_label in issue_meta.get("labels") or []:
-              if not isinstance(raw_label, dict):
-                  continue
-              name = raw_label.get("name")
-              if isinstance(name, str):
-                  label_names.append(name)
-
-          if "ai:orchestrator-managed" not in label_names:
-              raise SystemExit(0)
-
-          issue_body = issue_meta.get("body")
-          if not isinstance(issue_body, str):
-              raise SystemExit(0)
-
-          match = TRACKING_ISSUE_LINE_RE.search(issue_body)
-          if match is None:
-              raise SystemExit(0)
-
-          print(match.group(1))
-          PY
-          )"
+          TRACKING_ISSUE_NUMBER="$(jq -r '
+            if ([.labels[]?.name] | index("ai:orchestrator-managed")) == null then ""
+            else ((.body // "") | (try match("(?m)^\\s*(?:-\\s*)?(?:\\*\\*Tracking issue:\\*\\*|Tracking issue:)\\s*#([0-9]+)\\s*$") catch null) | (.captures[0].string // ""))
+            end
+          ' "${ISSUE_META_FILE}")"
           printf 'Automated implementation. Closes %s\n' "${ISSUE_URL}" > "${PR_BODY_FILE}"
           # Child PRs must keep auto-closing the child issue while linking
           # back to the tracking issue with a non-closing reference for
@@ -4652,11 +4673,20 @@ jobs:
           if [ -n "${TRACKING_ISSUE_NUMBER}" ]; then
             printf 'Refs #%s\n' "${TRACKING_ISSUE_NUMBER}" >> "${PR_BODY_FILE}"
           fi
+          jq -n \
+            --arg current_key "${GITHUB_REPOSITORY}#${ISSUE_NUMBER}" \
+            --argjson current_labels "$(jq -c '[.labels[]?.name | select(type == "string")]' "${ISSUE_META_FILE}")" \
+            --arg tracking_key "${GITHUB_REPOSITORY}#${TRACKING_ISSUE_NUMBER}" \
+            --argjson tracking_labels "$([ -n "${TRACKING_ISSUE_NUMBER}" ] && printf '["ai:orchestrator-tracking"]' || printf '[]')" \
+            '{($current_key): $current_labels} + (if ($tracking_key | endswith("#")) then {} else {($tracking_key): $tracking_labels} end)' \
+            > "${PR_LABEL_MAP_FILE}"
           printf '%s\n\n' "${PR_TITLE}" > "${PR_LINT_FILE}"
           cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"
-          PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/lint_pr_body_auto_close.py" \
-            --pr-body-file "${PR_LINT_FILE}" \
-            --repo "${GITHUB_REPOSITORY}"
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
+            --role validator --workspace "${WORKSPACE_PATH}" --runtime-dir "${RUNTIME_DIR}" \
+            -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/lint_pr_body_auto_close.py" \
+            --pr-body-file "${PR_LINT_FILE}" --repo "${GITHUB_REPOSITORY}" \
+            --issue-label-map "${PR_LABEL_MAP_FILE}"
 
       - name: Create Pull Request
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'

@@ -52,6 +52,31 @@ trap on_step_exit EXIT
 exec 3>&2
 exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
+run_implement_validator_python() {
+  local sandbox_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh"
+  local validator_entry="${1:-}"
+  if [ -n "${validator_entry}" ] && [[ "${validator_entry}" != -* ]]; then
+    if [ -f "${validator_entry}" ]; then
+      shift
+      set -- "$(cd "$(dirname "${validator_entry}")" && pwd -P)/$(basename "${validator_entry}")" "$@"
+    elif [ -f "scripts/$(basename "${validator_entry}")" ]; then
+      shift
+      set -- "${PWD}/scripts/$(basename "${validator_entry}")" "$@"
+    fi
+  fi
+  if [ -x "${sandbox_helper}" ]; then
+    bash "${sandbox_helper}" \
+      --role validator --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}" \
+      -- /usr/bin/python3 -I -S "$@"
+    return $?
+  fi
+  (
+    cd "${TMPDIR:-/tmp}"
+    env -i HOME="${TMPDIR:-/tmp}" PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+      PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S "$@"
+  )
+}
+
 # Remove workflow-generated/fetched artifacts BEFORE checking for
 # changes so they don't cause false-positive "file changes" detection.
 # Restore pre_assembled_static.txt from HEAD when the consumer tracks it;
@@ -491,8 +516,19 @@ else
       fi
     fi
     if [ "${scope_rc}" -eq 0 ] && [ -f "${scope_guard_path}" ]; then
+      scope_validator_cmd=(
+        env -i HOME="${TMPDIR:-/tmp}" PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8
+        PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S
+      )
+      if [ -x "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh" ]; then
+        scope_validator_cmd=(
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh"
+          --role validator --workspace "${WORKSPACE_PATH:-${PWD}}" --runtime-dir "${RUNTIME_DIR}"
+          -- /usr/bin/python3 -I -S
+        )
+      fi
       set +e
-      scope_violations="$(python3 "${scope_guard_path}" \
+      scope_violations="$("${scope_validator_cmd[@]}" "${scope_guard_path}" \
         --issue-body-file "${ISSUE_BODY_FILE:-}" \
         --staged-file "${scope_staged_file}" \
         --allowlist-out "${scope_allowlist_file}" \
@@ -654,7 +690,7 @@ if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ] && [ -n "${ISSUE_SCOPE_LOCK
     scope_rc=0
     if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
       set +e
-      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+      scope_violations="$(run_implement_validator_python "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
         --staged-file "${scope_committed_file}" \
         --allowlist-file "${scope_glob_file}" \
         --allowlist-out "${scope_allowlist_file}")"
