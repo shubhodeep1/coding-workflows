@@ -364,21 +364,82 @@ def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
 	assert implement.count("post_agent_workspace_guard.py\" snapshot") >= 2
 	assert implement.count("post_agent_workspace_guard.py\" reconcile") >= 2
 
-	for script_name in (
-		"review_apply_fixes.sh",
-		"review_conflict_resolve.sh",
-		"review_rb_judge.sh",
-		"orchestrate_poll_process.sh",
+	for script_name, model_invocation in (
+		("review_apply_fixes.sh", 'run_editor_codex_attempt "${attempt_prompt_file}"'),
+		("review_conflict_resolve.sh", '-- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}"'),
+		("review_rb_judge.sh", '-- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}"'),
 	):
 		script = (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
-		assert "post_agent_workspace_guard.py" in script or "TRUSTED_POLLER_WORKSPACE_GUARD" in script
-		assert "workspace-guard" in script
+		assert "post_agent_workspace_guard.py" in script
+		assert 'env -i HOME="${RUNTIME_DIR}" PATH=/usr/bin:/bin' in script
+		assert '"/usr/bin/python3" -I -S' in script
+		assert "--role workspace-guard" not in script
 		assert "reconcile" in script
+		snapshot_index = script.index(" snapshot ")
+		model_index = script.index(model_invocation, snapshot_index)
+		reconcile_index = script.index(" reconcile ", model_index)
+		assert snapshot_index < model_index < reconcile_index
+		assert "opencode_run_cmd" in script
 
-	commit_step = (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8").split(
+	opencode_helpers = (REPO_ROOT / "scripts/opencode_helpers.sh").read_text(encoding="utf-8")
+	assert "untrusted_process_sandbox.sh" in opencode_helpers
+
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert "post_agent_workspace_guard.py" in poller or "TRUSTED_POLLER_WORKSPACE_GUARD" in poller
+	assert "workspace-guard" in poller
+	assert "reconcile" in poller
+
+	review_workflow = (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	stage_helper = (REPO_ROOT / "scripts/stage_workflow_support.sh").read_text(encoding="utf-8")
+	assert "post_agent_workspace_guard.py" in review_workflow
+	assert "POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256" in review_workflow
+	assert "post_agent_workspace_guard.py" in stage_helper
+
+	commit_step = review_workflow.split(
 		"      - name: Commit changes\n", 1
 	)[1].split("\n      - name:", 1)[0]
 	assert "GH_PAT: ${{ secrets.GH_PAT }}" not in commit_step
+
+
+def test_direct_workspace_guard_does_not_depend_on_systemd_run() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		fake_bin = root / "bin"
+		workspace.mkdir()
+		runtime.mkdir()
+		fake_bin.mkdir()
+		marker = root / "systemd-run-called"
+		(fake_bin / "systemd-run").write_text(
+			f"#!/bin/sh\ntouch {marker}\nexit 226\n", encoding="utf-8"
+		)
+		(fake_bin / "systemd-run").chmod(0o755)
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		manifest = runtime / "manifest.json"
+		inherited_environment = os.environ.copy()
+		inherited_environment["PATH"] = f"{fake_bin}:{inherited_environment.get('PATH', '')}"
+		for guard_arguments in (
+			["snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			[
+				"reconcile", "--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"),
+				"--changed-paths-out", str(runtime / "changed.txt"),
+				"--report", str(runtime / "report.json"),
+			],
+		):
+			result = subprocess.run(
+				[
+					"/usr/bin/env", "-i", f"HOME={runtime}", "PATH=/usr/bin:/bin",
+					"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), *guard_arguments,
+				],
+				env=inherited_environment,
+				capture_output=True,
+				text=True,
+				check=False,
+			)
+			assert result.returncode == 0, result.stderr
+		assert not marker.exists()
 
 
 def test_trusted_git_writer_never_executes_repository_hooks() -> None:

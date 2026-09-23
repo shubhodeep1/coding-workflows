@@ -2014,9 +2014,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   editor_workspace_paths="${RUNTIME_DIR}/post-agent-editor-${attempt}.paths.txt"
   editor_workspace_report="${RUNTIME_DIR}/post-agent-editor-${attempt}.report.json"
   editor_workspace_quarantine="${RUNTIME_DIR}/post-agent-editor-${attempt}.quarantine"
-  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
-    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
+  env -i HOME="${RUNTIME_DIR}" PATH=/usr/bin:/bin \
+    "/usr/bin/python3" -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
     --workspace "${PWD}" --manifest "${editor_workspace_manifest}"
   # Run OpenCode: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   emit_editor_substate "LaunchingAgentProcess" "${attempt}"
@@ -2076,9 +2075,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
 
-  if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
-    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
+  if ! env -i HOME="${RUNTIME_DIR}" PATH=/usr/bin:/bin \
+    "/usr/bin/python3" -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
     --workspace "${PWD}" --manifest "${editor_workspace_manifest}" \
     --quarantine-dir "${editor_workspace_quarantine}" \
     --changed-paths-out "${editor_workspace_paths}" --report "${editor_workspace_report}"; then

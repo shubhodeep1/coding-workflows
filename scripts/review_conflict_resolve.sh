@@ -1888,9 +1888,8 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   resolver_workspace_paths="${RUNTIME_DIR}/post-agent-resolver-${attempt}.paths.txt"
   resolver_workspace_report="${RUNTIME_DIR}/post-agent-resolver-${attempt}.report.json"
   resolver_workspace_quarantine="${RUNTIME_DIR}/post-agent-resolver-${attempt}.quarantine"
-  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
-    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
+  env -i HOME="${RUNTIME_DIR}" PATH=/usr/bin:/bin \
+    "/usr/bin/python3" -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
     --workspace "${PWD}" --manifest "${resolver_workspace_manifest}"
   # Strip any invalid UTF-8 bytes that may have leaked into the
   # retry-prompt (rebuilt inside the loop, so we sanitise each
@@ -1943,9 +1942,8 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         || _codex_exit=$?
     fi
   fi
-  if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
-    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
+  if ! env -i HOME="${RUNTIME_DIR}" PATH=/usr/bin:/bin \
+    "/usr/bin/python3" -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
     --workspace "${PWD}" --manifest "${resolver_workspace_manifest}" \
     --quarantine-dir "${resolver_workspace_quarantine}" \
     --changed-paths-out "${resolver_workspace_paths}" --report "${resolver_workspace_report}"; then
