@@ -5,7 +5,15 @@ PATH=/usr/bin:/bin
 TMPDIR=/tmp
 export PATH TMPDIR
 unset BASH_ENV ENV GH_TOKEN GH_PAT GITHUB_TOKEN OPENROUTER_API_KEY TG_BOT_SECRET \
-	ORCHESTRATOR_STATE_AUTH_KEYRING GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STEP_SUMMARY
+	ORCHESTRATOR_STATE_AUTH_KEYRING GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STEP_SUMMARY \
+	ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+	ACTIONS_ID_TOKEN_REQUEST_URL
+while IFS= read -r behavioural_smoke_env_name; do
+	case "${behavioural_smoke_env_name}" in
+		*_TOKEN|*_SECRET|*_KEY) unset "${behavioural_smoke_env_name}" ;;
+	esac
+done < <(compgen -e)
+unset behavioural_smoke_env_name
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_PATH="${1:?behavioural smoke bundle path required}"
@@ -49,7 +57,8 @@ install -m 0555 "${EVALUATOR_PATH}" "${sandbox_root}/evaluate_behavioural_smoke.
 chmod 0755 "${sandbox_root}"
 
 bundle_relative="${BUNDLE_PATH#"${REPO_ROOT}"/}"
-sudo -n unshare --mount --net --pid --fork --mount-proc \
+env -i PATH="${PATH}" TMPDIR="${TMPDIR}" \
+	sudo -n unshare --mount --net --pid --fork --mount-proc \
 	bash -c '
 		set -euo pipefail
 		source_root="$1"

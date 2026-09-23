@@ -584,7 +584,16 @@ def test_workflows_wire_authenticated_scoped_behavioural_smoke() -> None:
 
 def test_sandbox_launcher_is_secret_free_networkless_and_read_only() -> None:
 	launcher = (REPO_ROOT / "scripts/run_behavioural_smoke_assertions.sh").read_text(encoding="utf-8")
+	launcher_prelude = launcher.split("SCRIPT_DIR=", 1)[0]
 	assert "unset BASH_ENV ENV GH_TOKEN GH_PAT" in launcher
+	for actions_environment_name in (
+		"ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL",
+	):
+		assert actions_environment_name in launcher_prelude
+	assert "*_TOKEN|*_SECRET|*_KEY" in launcher_prelude
+	assert "compgen -e" in launcher_prelude
+	assert 'env -i PATH="${PATH}" TMPDIR="${TMPDIR}"' in launcher
 	assert "unshare --mount --net --pid" in launcher
 	assert "mount -o remount,bind,ro" in launcher
 	assert 'mount -t tmpfs -o ro,nosuid,nodev,noexec,size=4096 tmpfs "${sandbox_repo}/.git"' in launcher
