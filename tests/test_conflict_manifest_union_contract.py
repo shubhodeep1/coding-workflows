@@ -234,6 +234,7 @@ fi
 		)
 		assert result.returncode == 0, result.stderr
 		assert "Failed to stage conflict resolver path: tracked.txt" in result.stdout
+		assert "git exit=42" in result.stdout
 		assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=false\n"
 
 

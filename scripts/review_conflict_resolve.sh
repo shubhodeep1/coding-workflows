@@ -43,16 +43,21 @@ set -euo pipefail
 
 stage_resolver_touched_path_or_fail() {
   local resolver_staging_path="$1"
+  local resolver_staging_exit_code=0
 
   if [ -e "${resolver_staging_path}" ] || [ -L "${resolver_staging_path}" ]; then
     if git add -- "${resolver_staging_path}"; then
       return 0
+    else
+      resolver_staging_exit_code=$?
     fi
   elif git rm -q -- "${resolver_staging_path}"; then
     return 0
+  else
+    resolver_staging_exit_code=$?
   fi
 
-  echo "::error::Failed to stage conflict resolver path: ${resolver_staging_path}"
+  echo "::error::Failed to stage conflict resolver path: ${resolver_staging_path} (git exit=${resolver_staging_exit_code})"
   echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
   return 1
 }
