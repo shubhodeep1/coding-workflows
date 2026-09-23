@@ -110,6 +110,11 @@ def test_human_needed_label_parity_across_workflows() -> None:
 	assert "importlib.util" not in report_script
 
 
+def test_reporters_share_dispatch_envelope_failure_reason() -> None:
+	assert "reason=dispatch_envelope_failed" in REPORT_SCRIPT.read_text(encoding="utf-8")
+	assert "reason=dispatch_envelope_failed" in AUTOFIX_REPORT_SCRIPT.read_text(encoding="utf-8")
+
+
 def test_consumer_template_is_pinned_and_in_full_profile() -> None:
 	text = CONSUMER_TEMPLATE.read_text(encoding="utf-8")
 	assert "uses: shubhodeep1/coding-workflows/.github/workflows/workflow_failure_heal.yml@stable" in text
@@ -303,6 +308,98 @@ def test_skip_reason_gates() -> None:
 # ---------------------------------------------------------------------------
 # Library: signature, fingerprint, budget, classification, composition
 # ---------------------------------------------------------------------------
+
+
+def test_wrap_dispatch_stays_within_client_payload_limits() -> None:
+	# GitHub rejects a client_payload with more than 10 top-level properties
+	# (HTTP 422); every flat report kind exceeds that, the envelope never does.
+	payloads = [
+		heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=SHA_A, reporter_run_url=None),
+		heal.build_workflow_run_payload(repo=SELF_REPO, workflow_run={"id": 9, "head_sha": SHA_A, "head_branch": "stable", "conclusion": "failure", "name": "Mark Stable Release", "html_url": "u"}),
+	]
+	for payload in payloads:
+		assert len(payload) > heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+		body = heal.wrap_dispatch(payload)
+		assert body["event_type"] == heal.DISPATCH_EVENT_TYPE
+		assert body["client_payload"] == {"schema_version": heal.SCHEMA_VERSION, "report": payload}
+		assert len(body["client_payload"]) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+		assert heal.validate_payload(heal.unwrap_dispatch(body["client_payload"]))["source_repo"] == payload["source_repo"]
+	# Every excerpt at its limit: the enveloped body stays under the 60 KB bound.
+	huge = "x" * 20_000
+	payload = heal.build_autofix_failure_payload(
+		repo=CONSUMER_REPO,
+		pr={"number": 7, "title": huge, "body": huge, "html_url": "u", "labels": [{"name": f"l{i}"} for i in range(80)], "head": {"sha": SHA_B, "ref": "ai/issue-7"}},
+		comments=[{"body": huge} for _ in range(10)],
+		workflow_name=huge,
+		failure_reason="editor_empty_noop",
+		failure_evidence=huge,
+		failure_streak=3,
+		run_id="500",
+		run_url=huge,
+		wrapper_sha=SHA_A,
+		reporter_run_url=huge,
+	)
+	encoded = json.dumps(heal.wrap_dispatch(payload)).encode("utf-8")
+	assert len(encoded) < heal.MAX_PAYLOAD_BYTES
+
+
+def test_unwrap_dispatch_accepts_flat_and_enveloped() -> None:
+	flat = _consumer_payload()
+	assert heal.unwrap_dispatch(flat) is flat
+	assert heal.unwrap_dispatch({"schema_version": heal.SCHEMA_VERSION, "report": flat}) == flat
+	# Not an envelope: wrong schema, non-dict report, or not a dict at all.
+	wrong_schema = {"schema_version": "other.v9", "report": flat}
+	assert heal.unwrap_dispatch(wrong_schema) is wrong_schema
+	bad_report = {"schema_version": heal.SCHEMA_VERSION, "report": "x"}
+	assert heal.unwrap_dispatch(bad_report) is bad_report
+	assert heal.unwrap_dispatch(["x"]) == ["x"]
+	# CLI round trip: wrap-dispatch then unwrap-dispatch returns the report.
+	with tempfile.TemporaryDirectory(prefix="heal-wrap-") as tmp_name:
+		tmp = Path(tmp_name)
+		(tmp / "payload.json").write_text(json.dumps(flat), encoding="utf-8")
+		wrapped = subprocess.run(["python3", str(LIB_PATH), "wrap-dispatch", "--payload-json", str(tmp / "payload.json")], capture_output=True, text=True, check=True)
+		body = json.loads(wrapped.stdout)
+		(tmp / "client_payload.json").write_text(json.dumps(body["client_payload"]), encoding="utf-8")
+		unwrapped = subprocess.run(["python3", str(LIB_PATH), "unwrap-dispatch", "--payload-json", str(tmp / "client_payload.json")], capture_output=True, text=True, check=True)
+		assert json.loads(unwrapped.stdout) == flat
+		# A non-object report is refused by wrap-dispatch.
+		(tmp / "list.json").write_text("[]", encoding="utf-8")
+		refused = subprocess.run(["python3", str(LIB_PATH), "wrap-dispatch", "--payload-json", str(tmp / "list.json")], capture_output=True, text=True, check=False)
+		assert refused.returncode == 2 and "payload must be a JSON object" in refused.stderr
+
+
+def test_intake_materialize_step_unwraps_enveloped_repository_dispatch() -> None:
+	# Execute the "Materialize the report payload" step body as the runner would
+	# for both repository_dispatch shapes: enveloped (current reporters) and
+	# flat (reporters staged from an older release).
+	intake = _yaml(INTAKE_WORKFLOW)
+	step = [s for s in intake["jobs"]["intake"]["steps"] if s.get("id") == "payload"][0]
+	flat = _consumer_payload()
+	for client_payload in (heal.wrap_dispatch(flat)["client_payload"], flat):
+		with tempfile.TemporaryDirectory(prefix="heal-materialize-") as tmp_name:
+			tmp = Path(tmp_name)
+			output_file = tmp / "github_output"
+			payload_file = tmp / "payload_raw.json"
+			result = subprocess.run(
+				["bash", "-c", step["run"]],
+				cwd=REPO_ROOT,
+				env={
+					**os.environ,
+					"EVENT_NAME": "repository_dispatch",
+					"CLIENT_PAYLOAD_JSON": json.dumps(client_payload),
+					"RUNTIME_DIR": str(tmp),
+					"WORKFLOW_HEAL_PAYLOAD_FILE": str(payload_file),
+					"GITHUB_OUTPUT": str(output_file),
+					"PYTHONDONTWRITEBYTECODE": "1",
+				},
+				capture_output=True,
+				text=True,
+				check=False,
+			)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert json.loads(payload_file.read_text(encoding="utf-8")) == flat
+			assert heal.validate_payload(json.loads(payload_file.read_text(encoding="utf-8")))["source_kind"] == "issue"
+			assert f"source_repo={CONSUMER_REPO}" in output_file.read_text(encoding="utf-8")
 
 
 def test_error_signature_ignores_volatile_tokens_and_prefers_error_annotations() -> None:
@@ -663,7 +760,10 @@ def test_report_script_dispatches_thin_payload() -> None:
 		dispatch = state["dispatches"][0]
 		assert dispatch["path"] == f"repos/{SELF_REPO}/dispatches"
 		assert dispatch["body"]["event_type"] == "workflow-failure-heal"
-		payload = heal.validate_payload(dispatch["body"]["client_payload"])
+		client_payload = dispatch["body"]["client_payload"]
+		assert set(client_payload) == {"schema_version", "report"}
+		assert len(client_payload) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+		payload = heal.validate_payload(client_payload["report"])
 		assert payload["source_repo"] == CONSUMER_REPO
 		assert payload["wrapper_sha"] == SHA_A
 		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500", "501"]
@@ -705,6 +805,8 @@ def test_report_script_dispatch_failure_is_red() -> None:
 		result = _run(REPORT_SCRIPT, work, env)
 		assert result.returncode == 1
 		assert "error dispatch_failed" in result.stdout
+		# The rejection is visible: the POST's stderr is logged, bounded.
+		assert "detail=HTTP 422" in result.stdout
 
 
 def _consumer_payload(**overrides) -> dict:
@@ -1123,7 +1225,11 @@ def test_autofix_report_dispatches_past_streak_threshold() -> None:
 		assert len(state["dispatches"]) == 1
 		dispatch = state["dispatches"][0]
 		assert dispatch["path"] == f"repos/{SELF_REPO}/dispatches"
-		payload = heal.validate_payload(dispatch["body"]["client_payload"])
+		assert dispatch["body"]["event_type"] == "workflow-failure-heal"
+		client_payload = dispatch["body"]["client_payload"]
+		assert set(client_payload) == {"schema_version", "report"}
+		assert len(client_payload) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+		payload = heal.validate_payload(client_payload["report"])
 		assert payload["source_kind"] == "autofix_failure" and payload["failure_reason"] == "editor_empty_noop"
 		assert payload["failure_streak"] == 2 and payload["issue_number"] == 4174
 		assert payload["wrapper_sha"] == SHA_A and payload["workflow_name"] == "AI Review"
@@ -1157,7 +1263,7 @@ def test_autofix_report_skip_paths() -> None:
 		("below_streak", [], {"AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, "skip reason=below_streak pr=4174 reason=editor_empty_noop streak=1 threshold=2"),
 		("disabled", [{"body": AUTOFIX_NOOP_COMMENT}], {"WORKFLOW_HEAL_ENABLED": "false"}, "skip reason=disabled"),
 		("resolver", [{"body": AUTOFIX_NOOP_COMMENT}], {"RESOLVER_ESCALATED": "true"}, "skip reason=resolver_escalated"),
-		("dispatch_denied", [{"body": AUTOFIX_NOOP_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, "skip reason=dispatch_denied"),
+		("dispatch_denied", [{"body": AUTOFIX_NOOP_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, "skip reason=dispatch_denied pr=4174 failure=editor_empty_noop streak=2 upstream=shubhodeep1/coding-workflows detail=HTTP 422"),
 	]
 	for name, comments, flags, expected in cases:
 		with tempfile.TemporaryDirectory(prefix=f"heal-autofix-{name}-") as tmp_name:

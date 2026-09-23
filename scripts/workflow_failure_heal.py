@@ -104,6 +104,10 @@ ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
 MAX_RUN_REFS = 3
 MAX_PAYLOAD_BYTES = 60_000
+# GitHub's "Create a repository dispatch event" API rejects a `client_payload`
+# with more than 10 top-level properties (HTTP 422). The report has ~20 keys,
+# so reporters wrap it in a {schema_version, report} envelope (wrap_dispatch).
+DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 SIGNATURE_LINE_LIMIT = 5
 SIGNATURE_CHAR_LIMIT = 500
 
@@ -536,6 +540,35 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
+
+
+def wrap_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
+	"""Build the ``repository_dispatch`` request body for a report.
+
+	The report travels one level down under ``report`` so ``client_payload``
+	stays within GitHub's top-level property limit
+	(``DISPATCH_CLIENT_PAYLOAD_MAX_KEYS``).
+	"""
+	return {
+		"event_type": DISPATCH_EVENT_TYPE,
+		"client_payload": {"schema_version": SCHEMA_VERSION, "report": payload},
+	}
+
+
+def unwrap_dispatch(client_payload: Any) -> Any:
+	"""Return the report inside an enveloped ``client_payload``.
+
+	An envelope is a dict whose ``schema_version`` matches and whose ``report``
+	is a dict. Anything else (the legacy flat report, or garbage that
+	``validate_payload`` rejects later) is returned unchanged.
+	"""
+	if (
+		isinstance(client_payload, dict)
+		and client_payload.get("schema_version") == SCHEMA_VERSION
+		and isinstance(client_payload.get("report"), dict)
+	):
+		return client_payload["report"]
+	return client_payload
 
 
 def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str) -> str:
@@ -988,6 +1021,19 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_wrap_dispatch(args: argparse.Namespace) -> int:
+	payload = _load_json_file(args.payload_json)
+	if not isinstance(payload, dict):
+		raise ValueError("payload must be a JSON object")
+	_write_json(wrap_dispatch(payload))
+	return 0
+
+
+def _cmd_unwrap_dispatch(args: argparse.Namespace) -> int:
+	_write_json(unwrap_dispatch(_load_json_file(args.payload_json)))
+	return 0
+
+
 def _cmd_filter_log(args: argparse.Namespace) -> int:
 	text = Path(args.log_file).read_text(encoding="utf-8", errors="replace")
 	sys.stdout.write(filter_log(text, max_lines=args.max_lines, max_bytes=args.max_bytes))
@@ -1109,6 +1155,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--registry-json", default="")
 	p.add_argument("--self-repo", required=True)
 	p.set_defaults(func=_cmd_skip_reason)
+
+	p = sub.add_parser("wrap-dispatch", help="Print the repository_dispatch body with the report enveloped under client_payload.report")
+	p.add_argument("--payload-json", required=True)
+	p.set_defaults(func=_cmd_wrap_dispatch)
+
+	p = sub.add_parser("unwrap-dispatch", help="Print the report inside an enveloped client_payload (flat payloads pass through)")
+	p.add_argument("--payload-json", required=True)
+	p.set_defaults(func=_cmd_unwrap_dispatch)
 
 	p = sub.add_parser("filter-log", help="Keep high-signal lines + tail of a job log")
 	p.add_argument("--log-file", required=True)

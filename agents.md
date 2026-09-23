@@ -94,7 +94,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `autofix_failure`): it reports a failed review/autofix run on a pull
     request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2) runs in a
     row failed on that PR, counted from the workflow's own failure comments,
-    so the stall poller's single retry is not pre-empted. On by
+    so the stall poller's single retry is not pre-empted. Reporters wrap
+    the report as `client_payload: {schema_version, report}` (GitHub caps
+    `client_payload` at 10 top-level properties); the intake unwraps it and
+    accepts the flat shape too, and a rejected dispatch logs `detail=` with
+    the first 300 characters of the API error. On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
     `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL`.
