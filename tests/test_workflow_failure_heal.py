@@ -1183,6 +1183,56 @@ def test_intake_autofix_failure_opens_upstream_issue_with_reason_fingerprint() -
 	assert "Failure evidence from the reporting run (UNTRUSTED)" in prompt and RUN_SUMMARY_LINE in prompt
 	# The escalated PR gets the outcome comment.
 	assert any(c["path"] == f"repos/{CONSUMER_REPO}/issues/4174/comments" for c in state_after["comments_posted"])
+	# A consumer PR ran the released workflows, so its fix stays a stable hotfix.
+	assert "target_branch_source=default" in result.stdout
+
+
+def _self_repo_autofix_payload() -> dict:
+	return _autofix_payload(
+		source_repo=SELF_REPO,
+		issue_url=f"https://github.com/{SELF_REPO}/pull/4174",
+		run_refs=[{"repo": SELF_REPO, "run_id": "500", "url": f"https://github.com/{SELF_REPO}/actions/runs/500"}],
+	)
+
+
+def _self_repo_autofix_state(branches: list[str]) -> dict:
+	return _intake_state(
+		jobs={"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]},
+		job_logs={"9001": "2026-09-23T13:51:28.000Z ##[error]Process completed with exit code 226.\n"},
+		branches=branches,
+	)
+
+
+def test_intake_self_repo_autofix_failure_targets_source_pr_branch() -> None:
+	# A review/autofix run on a PR in coding-workflows itself executes the PR's
+	# own scripts (SCRIPT_REF = github.sha), so a fix aimed at stable can
+	# neither unblock the PR nor merge without dragging the PR's unreleased
+	# changes into stable (issue #4329 / PR #4332 against PR #4323).
+	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(), _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	assert created["repo"] == SELF_REPO
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "ai/issue-4173"
+	assert "target_branch=ai/issue-4173" in result.stdout and "target_branch_source=source_pr_head" in result.stdout
+	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
+	assert outcome and "on this pull request's own branch `ai/issue-4173`" in outcome[0]["body"]
+	assert "hotfix on `stable`" not in outcome[0]["body"]
+	# One branch lookup: the PR branch exists, so the default is never probed.
+	branch_calls = [call for call in state_after["calls"] if any("/branches/" in part for part in call)]
+	assert len(branch_calls) == 1
+
+
+def test_intake_self_repo_autofix_failure_falls_back_to_stable_when_pr_branch_is_gone() -> None:
+	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(), _self_repo_autofix_state(["stable", "main"]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn source_pr_branch_missing branch=ai/issue-4173; falling back to stable" in result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert "target_branch=stable" in result.stdout and "target_branch_source=default" in result.stdout
+	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
+	assert outcome and "as a hotfix on `stable`" in outcome[0]["body"]
 
 
 def _stage_autofix_report(tmp: Path, *, comments: list[dict], flags: dict[str, str], summary_line: str | None = RUN_SUMMARY_LINE) -> tuple[Path, Path, dict[str, str]]:
@@ -1375,11 +1425,12 @@ def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapsh
 		(work / ".codex-workflow-src-main" / "scripts" / "workflow_failure_heal_autofix_report.sh").write_text("main-reporter\n", encoding="utf-8")
 		# Branch copy of an unrelated already-staged file must not be touched.
 		(support / "workflow_failure_heal.py").write_text("branch-heal\n", encoding="utf-8")
+		reporter_backfill_env = {key: value for key, value in os.environ.items() if key not in {"BASH_ENV", "ENV"}}
 		result = subprocess.run(
 			["bash", "-euo", "pipefail", "-c", loop],
 			cwd=work,
 			env={
-				**os.environ,
+				**reporter_backfill_env,
 				"REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS": workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"],
 				"SUPPORT_SCRIPTS_DIR": str(support),
 				"SCRIPT_REF": SHA_A,
@@ -1403,7 +1454,7 @@ def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapsh
 			["bash", "-euo", "pipefail", "-c", loop],
 			cwd=work,
 			env={
-				**os.environ,
+				**reporter_backfill_env,
 				"REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS": workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"],
 				"SUPPORT_SCRIPTS_DIR": str(support),
 				"SCRIPT_REF": SHA_A,

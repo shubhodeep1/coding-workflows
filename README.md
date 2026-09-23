@@ -1268,7 +1268,16 @@ through `clarify → plan → implement → review`.
   implement work against the stable line and the PR is a hotfix on `stable`;
   `auto-release-stable.yml` releases it within its 6-hourly schedule and
   `forward-merge-stable-to-main.yml` carries it to `main`. A failed release run
-  targets the branch it failed on. `consumer-app-defect` opens the issue **in
+  targets the branch it failed on. A failed review/autofix run on a pull
+  request **in coding-workflows itself** targets that pull request's head
+  branch instead: `review_autofix.yml` resolves `SCRIPT_REF` to `github.sha`
+  here, so the run executed the PR's own workflow code, and the defect may not
+  exist on `stable` at all. A `stable` hotfix could not unblock the PR, and
+  merging it would carry the PR's unreleased changes into `stable`. When the
+  PR branch no longer exists, the issue falls back to `stable` and the intake
+  logs `warn source_pr_branch_missing`. The `created` log line records the
+  choice as `target_branch_source=default|failed_run_branch|source_pr_head`.
+  `consumer-app-defect` opens the issue **in
   the consumer repository** for its own pipeline. `consumer-config` (missing
   secret, variable, permission) sends a Telegram ERROR with the diagnosis and
   opens nothing; `transient` sends a DEBUG note and opens nothing. Every
@@ -1530,7 +1539,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` | `3` | coding-workflows only. Max heal generations for one failure fingerprint before the chain is escalated (`ai:workflow-heal-escalated` + Telegram CRITICAL) instead of opening another issue. |
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
-| `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead. |
+| `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets that PR's head branch (falling back to this value when the branch is gone). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
 | `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED` | `true` | Identical-failure fingerprint cap in the `gate` job of `review_autofix.yml`. Every review/autofix failure comment ends with a `<!-- review-autofix-failure:v1 head=… reason=… fp=… degraded=… run=… -->` marker, where `fp` fingerprints the failure reason plus the normalised stderr of the editor and Collect PR metadata stages. When the trailing markers for the current head (authored by the `GH_PAT` account) share one fingerprint `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` times, the gate logs `AUTOFIX_FINGERPRINT_CAP_TRIPPED`, skips the run (`skip_reason=fingerprint_cap`, no reviewer or editor call), and the `fingerprint-cap-block` job labels the linked issues `ai:review-blocked` (the PR itself when it has none), posts one `review-autofix-failure-cap:v1` comment, sends an `identical_failure_cap` heal report and a Telegram WARNING. Later dispatches on the same head log `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`; a push resets the count; `force_rb_judge` dispatches bypass it; lookup failures log `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED` and run normally. Set to `false` to stop evaluating the cap (the markers keep being written). |
 | `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` | `3` | Identical failures on one head that trip the fingerprint cap above. Non-numeric or `0` falls back to `3`. |

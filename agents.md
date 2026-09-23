@@ -93,7 +93,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
     the intake fetches the failed job logs, diagnoses against the source at
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
-    `Target branch: stable`; `consumer-app-defect` → issue in the consumer;
+    `Target branch: stable`, or the PR's head branch when a review/autofix
+    failure comes from a PR in this repo, since that run executed the PR's
+    own workflow code; `consumer-app-defect` → issue in the consumer;
     `consumer-config` / `transient` → Telegram + comment only), de-dupes by
     fingerprint (label `ai:workflow-heal`), caps the lineage at
     `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
