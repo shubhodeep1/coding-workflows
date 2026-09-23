@@ -65,6 +65,10 @@ B) **fix** — You can see specific, concrete fixes for the remaining issues.
    `fix_description`, applies the changes, commits, and pushes. That push
    re-triggers the review with a reset autofix counter. Keep the described
    changes minimal and focused — only the issues that blocked the review.
+   This option is available only when the trusted review-fix authorization
+   section contains one or more targets. Include every target you intend the
+   writer to modify in `fix_targets[]`; never invent or alter target IDs. If no
+   trusted targets exist, do not choose `fix`.
 
 C) **close_and_reissue** — The PR is fundamentally broken (wrong approach,
    missing critical functionality, build-breaking errors you cannot fix).
@@ -208,6 +212,7 @@ Output contract:
         "symptom": "<brief grounded gap>"
       }
     ],
+	"fix_targets": ["<exact target id from TRUSTED REVIEW-FIX AUTHORIZATION>"],
     "lessons_learned": [
       {
         "lesson_kind": "unexpected_judge_verdict",
@@ -238,6 +243,8 @@ Output contract:
   `lesson_kind` should be one of `out_of_plan_fix`,
   `unexpected_judge_verdict`, or `review_finding_outside_plan_scope`.
 - fix_description: empty string unless action is fix.
+- fix_targets: always include. It must be a non-empty array of exact trusted
+  target IDs when action is fix, and `[]` for every other action.
 - Primary deliverable: this JSON object IS your output. Emit it before
   you exhaust your context window or tool-call budget. An empty
   completion is treated as a workflow failure, not as "no decision."

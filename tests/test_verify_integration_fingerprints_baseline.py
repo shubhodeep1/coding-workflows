@@ -1067,6 +1067,32 @@ def test_verify_integration_fingerprints_rejects_out_of_tree_fingerprint_paths()
 			assert "fingerprint verifier could not read" in list_err
 
 
+def test_verify_integration_fingerprints_lists_structured_violations():
+	mod = _verifier_module()
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"}],
+			"must_not_contain": [{"file": "scripts/example.py", "regex": r"FORBIDDEN_LINE"}],
+			"must_not_exist": [{"file": "scripts/deleted.py"}],
+		}
+	}
+	files = {
+		"scripts/example.py": "FORBIDDEN_LINE\n",
+		"scripts/deleted.py": "resurrected\n",
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		rc, out, err = _run_verifier(mod, ["--list-violations-json", str(fp_path)], sandbox)
+		assert rc == 0
+		assert err == ""
+		assert json.loads(out) == [
+			{"kind": "must_not_exist", "path": "scripts/deleted.py", "regex": None},
+			{"kind": "must_contain", "path": "scripts/example.py", "regex": "EXPECTED_LINE"},
+			{"kind": "must_not_contain", "path": "scripts/example.py", "regex": "FORBIDDEN_LINE"},
+		]
+
+
 if __name__ == "__main__":
 	for _name, _value in sorted(globals().items()):
 		if _name.startswith("test_") and callable(_value):

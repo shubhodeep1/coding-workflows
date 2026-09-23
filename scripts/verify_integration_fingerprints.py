@@ -22,7 +22,7 @@ Three constraint kinds per merged sub-issue:
                            intent is enforced regardless of where in
                            the consumer repo's tree the file lives.
 
-Four modes:
+Five modes:
 
   1. Default (verify): exit 0 if all fingerprints are satisfied, 1 on
      violation, 2 on plumbing failure. Used by the conflict-resolver
@@ -46,18 +46,22 @@ Four modes:
       warnings to stderr does not suppress the operator-visible
       annotation in the run log.
 
-  3. --baseline-fingerprints-state <out>: capture the current per-
+  3. --list-violations-json <fingerprints.json>: emit the same violations
+     as structured JSON, including fingerprint kind and regex. The resolver
+     boundary builder uses this to authorize only violated hunks.
+
+  4. --baseline-fingerprints-state <out>: capture the current per-
      fingerprint satisfaction state and write it to <out>, fail-open
      on output errors, always exit 0.
 
-  4. --compare-against-baseline <in>: compare the current verification
+  5. --compare-against-baseline <in>: compare the current verification
      result against a previously captured baseline and only hard-fail on
      resolver-introduced regressions. Pre-existing drift emits
      PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers and passes.
 
 Exit codes:
   0 — verify: all fingerprints satisfied (or none recorded — fail-open
-      empty).  list-violated-files: always (prints zero or more paths).
+      empty). Both list modes always succeed on parseable input.
   1 — verify: at least one fingerprint violation. Not used in
       list-violated-files mode.
   2 — Plumbing failure (file missing, JSON unparseable). Caller is
@@ -1865,17 +1869,9 @@ def compare_against_baseline_with_tier(
 	return 0
 
 
-def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) -> list[str]:
-	"""Return a sorted, de-duplicated list of file paths that currently
-	fail at least one fingerprint check against the cwd tree (or the
-	tree at ``ref`` when supplied).
-
-	Mirrors the matching logic in :func:`verify` but records only the
-	offending file paths (for expanding the resolver's working set
-	pre-codex) — does not emit ::error:: annotations and never fails
-	hard on a violation.
-	"""
-	violated: set[str] = set()
+def list_violated_fingerprints(fingerprints: dict[str, Any], ref: str | None = None) -> list[dict[str, Any]]:
+	"""Return de-duplicated fingerprint rows that fail against the target tree."""
+	violated: dict[tuple[str, str, str | None], dict[str, Any]] = {}
 	file_cache: dict[str, tuple[str | None, str | None]] = {}
 	exists_cache: dict[str, tuple[bool, str | None]] = {}
 	cross_issue_exact_drops, _ = _cross_issue_exact_conflict_drops(fingerprints)
@@ -1885,47 +1881,45 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 			continue
 		issue_num = entry.get("issue", issue_key)
 		pr_num = entry.get("pr", "?")
-		# Cross-dedup: stay silent in list-violated-files mode — the stdout
-		# contract is "file paths ONLY" and the verify path already emits the
-		# operator-visible warnings.
 		must_contain, must_not_contain, _shared_keys, _substring_drops, _exact_conflict_drops = _dedup_issue_patterns(
 			issue_key,
 			entry,
 			cross_issue_exact_drops,
 		)
-		must_not_exist = entry.get("must_not_exist", []) or []
+		fingerprint_groups = (
+			("must_contain", must_contain),
+			("must_not_contain", must_not_contain),
+			("must_not_exist", entry.get("must_not_exist", []) or []),
+		)
+		for kind, fingerprints_for_kind in fingerprint_groups:
+			for fingerprint in fingerprints_for_kind:
+				state = _evaluate_fp_state(
+					fingerprint,
+					kind,
+					issue_num=issue_num,
+					pr_num=pr_num,
+					file_cache=file_cache,
+					exists_cache=exists_cache,
+					ref=ref,
+					captured_at=entry.get("captured_at"),
+				)
+				if state is None or state["check_error"] is not None or state["satisfied"]:
+					continue
+				violated_regex = state.get("regex") if kind != "must_not_exist" else None
+				row = {"kind": kind, "path": state["path"], "regex": violated_regex}
+				violated[(kind, state["path"], violated_regex)] = row
+	return sorted(violated.values(), key=lambda row: (row["path"], row["kind"], row.get("regex") or ""))
 
-		for fp in must_contain:
-			state = _evaluate_fp_state(fp, "must_contain", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref, captured_at=entry.get("captured_at"))
-			if state is None:
-				continue
-			if state["check_error"] is not None:
-				continue
-			if not state["satisfied"]:
-				violated.add(state["path"])
 
-		for fp in must_not_contain:
-			state = _evaluate_fp_state(fp, "must_not_contain", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref, captured_at=entry.get("captured_at"))
-			if state is None:
-				continue
-			if state["check_error"] is not None:
-				continue
-			if not state["satisfied"]:
-				violated.add(state["path"])
+def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) -> list[str]:
+	"""Return sorted file paths that fail a fingerprint check.
 
-		for fp in must_not_exist:
-			state = _evaluate_fp_state(fp, "must_not_exist", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref)
-			if state is None:
-				continue
-			if state["check_error"] is not None:
-				continue
-			if not state["satisfied"]:
-				# Path the sub-issue deleted is back on the
-				# verification target — surface to the resolver's
-				# working set so it can be re-removed.
-				violated.add(state["path"])
-
-	return sorted(violated)
+	Mirrors the matching logic in :func:`verify` but records only the
+	offending file paths (for expanding the resolver's working set
+	pre-codex) — does not emit ::error:: annotations and never fails
+	hard on a violation.
+	"""
+	return sorted({row["path"] for row in list_violated_fingerprints(fingerprints, ref=ref)})
 
 
 def verify(fingerprints: dict[str, Any], branch: str, ref: str | None = None) -> int:
@@ -2293,13 +2287,15 @@ def compare_against_baseline(
 def main(argv: list[str] | None = None) -> int:
 	args = list(sys.argv[1:] if argv is None else argv)
 
-	# Optional --list-violated-files <fingerprints.json> and
+	# Optional list-output mode, --list-violated-files or
+	# --list-violations-json, plus
 	# --ref <git_ref> flags plus additive baseline-capture/compare
 	# flags.  Keep the parsing deliberately minimal
 	# (no argparse) so this stays a single-file utility safe to
 	# bootstrap on older script refs.  Both flags may appear in any
 	# order before the positional fingerprints path.
 	list_mode = False
+	violations_json_mode = False
 	ref: str | None = None
 	baseline_out_path: str | None = None
 	compare_baseline_path: str | None = None
@@ -2308,6 +2304,10 @@ def main(argv: list[str] | None = None) -> int:
 	while args:
 		if args[0] == "--list-violated-files":
 			list_mode = True
+			args = args[1:]
+			continue
+		if args[0] == "--list-violations-json":
+			violations_json_mode = True
 			args = args[1:]
 			continue
 		if args[0] == "--ref":
@@ -2405,6 +2405,13 @@ def main(argv: list[str] | None = None) -> int:
 			file=sys.stderr,
 		)
 		return 2
+	if list_mode and violations_json_mode:
+		print(
+			"::error::verify_integration_fingerprints: list output modes are mutually exclusive",
+			flush=True,
+			file=sys.stderr,
+		)
+		return 2
 
 	if args and args[0].startswith("--"):
 		print(
@@ -2460,6 +2467,9 @@ def main(argv: list[str] | None = None) -> int:
 		# simply prints nothing.
 		for path in list_violated_files(data, ref=ref):
 			print(path, flush=True)
+		return 0
+	if violations_json_mode:
+		print(json.dumps(list_violated_fingerprints(data, ref=ref), ensure_ascii=True, sort_keys=True), flush=True)
 		return 0
 
 	if not data:

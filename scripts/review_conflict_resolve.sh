@@ -288,6 +288,8 @@ fi
 # functions of RUNTIME_DIR.
 PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
 CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
+CONFLICT_SPANS_FILE="${CONFLICT_SPANS_FILE:-${RUNTIME_DIR}/resolver_conflict_spans.json}"
+CLEAN_MERGE_MANIFEST_FILE="${CLEAN_MERGE_MANIFEST_FILE:-${RUNTIME_DIR}/resolver_clean_manifest.tsv}"
 RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
 CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"
 RESOLVER_SERENA_TOOL_HINTS="$({
@@ -2281,8 +2283,7 @@ if [ -n "$(git status --porcelain)" ]; then
   git config user.name "codex-bot"
   git config user.email "codex@users.noreply.github.com"
   git rm -r --cached node_modules 2>/dev/null || true
-  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-    # On the workflow source repo, identify the files Codex actually
+  # Identify the files Codex actually
     # wrote during conflict resolution so we can surface them in
     # the job log and (below) stage them on top of the live merge
     # index.  Auto-merged files the editor did NOT touch stay in
@@ -2405,8 +2406,10 @@ if [ -n "$(git status --porcelain)" ]; then
     # On failure: skip the merge-resolve commit and exit 1 so
     # the run goes to ai:review-blocked instead of pushing a
     # broken commit that breaks every subsequent autofix run.
-    if [ ! -f "${CONFLICTED_PATHS_FILE:-/nonexistent}" ]; then
-      echo "::error::Conflicted-paths snapshot missing; refusing to create [ai-merge-resolve] commit without resolver validation."
+    if [ ! -f "${CONFLICTED_PATHS_FILE:-/nonexistent}" ] \
+      || [ ! -f "${CONFLICT_SPANS_FILE:-/nonexistent}" ] \
+      || [ ! -f "${CLEAN_MERGE_MANIFEST_FILE:-/nonexistent}" ]; then
+      echo "::error::Resolver boundary manifest missing; refusing to create [ai-merge-resolve] commit without span and clean-tree validation."
       echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
       rm -f "${RESOLVER_TOUCHED_FILE}"
       exit 1
@@ -2422,6 +2425,9 @@ if [ -n "$(git status --porcelain)" ]; then
     if ! "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
         --conflicted-set "${CONFLICTED_PATHS_FILE}" \
         --touched-set    "${RESOLVER_TOUCHED_FILE}" \
+        --conflict-spans "${CONFLICT_SPANS_FILE}" \
+        --clean-manifest "${CLEAN_MERGE_MANIFEST_FILE}" \
+        --strict-manifests \
         --repo-root      "${PWD}"; then
       echo "::error::Conflict resolver output failed validation; skipping [ai-merge-resolve] commit."
       echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
@@ -2475,20 +2481,6 @@ if [ -n "$(git status --porcelain)" ]; then
       fi
     done < "${RESOLVER_TOUCHED_FILE}"
     rm -f "${RESOLVER_TOUCHED_FILE}"
-  else
-    # Build per-file exclusions from scripts/.gitignore when present.
-    # If it is absent, keep exclusions empty so consumer-owned scripts/
-    # changes are still staged.
-    _rs_script_excludes=()
-    if [ -f scripts/.gitignore ]; then
-      while IFS= read -r _ign_entry; do
-        [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
-        _rs_script_excludes+=(":!scripts/${_ign_entry}")
-      done < scripts/.gitignore
-    fi
-    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
-  fi
   echo "Staged files before commit:"
   STAGED_FILES="$(git diff --cached --name-only || true)"
   printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true

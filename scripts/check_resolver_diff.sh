@@ -41,6 +41,7 @@ CONFLICTED_SET=""
 TOUCHED_SET=""
 CONFLICT_SPANS=""
 CLEAN_MANIFEST=""
+STRICT_MANIFESTS=false
 REPO_ROOT="${PWD}"
 
 while [ "$#" -gt 0 ]; do
@@ -53,6 +54,8 @@ while [ "$#" -gt 0 ]; do
 			CONFLICT_SPANS="$2"; shift 2 ;;
 		--clean-manifest)
 			CLEAN_MANIFEST="$2"; shift 2 ;;
+		--strict-manifests)
+			STRICT_MANIFESTS=true; shift ;;
 		--repo-root)
 			REPO_ROOT="$2"; shift 2 ;;
 		-h|--help)
@@ -101,6 +104,10 @@ if [ -n "${CONFLICT_SPANS}" ] && [ ! -f "${CONFLICT_SPANS}" ]; then
 fi
 if [ -n "${CLEAN_MANIFEST}" ] && [ ! -f "${CLEAN_MANIFEST}" ]; then
 	echo "::error::check_resolver_diff.sh: clean-manifest file not found: ${CLEAN_MANIFEST}" >&2
+	exit 2
+fi
+if [ "${STRICT_MANIFESTS}" = true ] && { [ -z "${CONFLICT_SPANS}" ] || [ -z "${CLEAN_MANIFEST}" ]; }; then
+	echo "::error::check_resolver_diff.sh: strict mode requires --conflict-spans and --clean-manifest" >&2
 	exit 2
 fi
 
@@ -175,16 +182,24 @@ if spans_path is not None:
 	for path_name, row in spans.items():
 		if not isinstance(row, dict) or not isinstance(row.get("anchors"), list):
 			fail(f"conflict-spans entry is invalid for {path_name}")
+		allow_delete = row.get("allow_delete", False)
+		if not isinstance(allow_delete, bool):
+			fail(f"conflict-spans deletion authorization is invalid for {path_name}")
 		expected_mode = row.get("mode")
-		if expected_mode not in {"100644", "100755"}:
+		allowed_modes = {"100644", "100755", "120000", "160000"} if allow_delete else {"100644", "100755"}
+		if expected_mode not in allowed_modes:
 			fail(f"conflict-spans mode is invalid for {path_name}")
+		resolved_path = safe_path(path_name)
+		if allow_delete:
+			if row["anchors"] or resolved_path.exists() or resolved_path.is_symlink():
+				fail(f"fingerprint-authorized deletion was not preserved for {path_name}")
+			continue
 		try:
 			anchors = [base64.b64decode(item, validate=True) for item in row["anchors"]]
 		except (TypeError, ValueError):
 			fail(f"conflict-spans anchors are invalid for {path_name}")
 		if len(anchors) < 2:
 			fail(f"conflict-spans entry has no bounded conflict for {path_name}")
-		resolved_path = safe_path(path_name)
 		if not resolved_path.is_file() or resolved_path.is_symlink():
 			fail(f"conflicted path is not a regular resolved file: {path_name}")
 		actual_mode = "100755" if os.lstat(resolved_path).st_mode & stat.S_IXUSR else "100644"
