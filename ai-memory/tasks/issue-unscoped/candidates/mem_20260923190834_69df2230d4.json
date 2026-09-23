@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Recent changes cover cancellation on PR close, conflict-safe close behavior, release-gate references, editor waits, and blocked review budgets. Lifecycle changes should account for in-flight workflow cleanup and ensure release or merge decisions remain blocked when review state is unresolved.",
+  "fingerprint": "82f0b56b496f4d0fb03249c024dd97bfafefbd80656a3f0c429f97bada67d6be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35906272893",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35906272893",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4300",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4311",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4325",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4326",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4329",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4301",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4312",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4328",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4330",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4335"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260923190834_69df2230d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "PR and workflow lifecycle handling includes explicit cancellation and release-gate paths.",
+  "timestamps": {
+    "created_at": "2026-09-23T19:08:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
