@@ -482,10 +482,10 @@ def test_phase_end_paths_call_shared_force_tick_helper() -> None:
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/orchestrate_force_tick.sh"' in implement_text
 	assert "orchestrate_force_tick.sh" in review_text
 	assert review_text.count("orchestrate_force_tick.sh") >= 4
-	assert "bash scripts/orchestrate_force_tick.sh" in validate_text
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh"' in validate_text
 	assert "orchestrate_force_tick.sh" in resolver_text
 	assert 'gh workflow run "${_poll_workflow}"' not in resolver_text
-	assert "Immediate orchestrator-poll dispatch helper failed" in resolver_text
+	assert 'ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"' in resolver_text
 
 
 def main() -> int:

@@ -12,6 +12,12 @@ fi
 SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/review-synthesise-smoke-${RANDOM}}"
 mkdir -p "${RUNTIME_DIR}"
+OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
+OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
+	printf 'BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=missing_opencode_helpers round=0 path=.ai/review_runtime/pr-unknown/round-unknown/synth_manifest.json\n'
+	exit 0
+fi
 # Preserve the step's original stdout so workflow-command annotations can be
 # emitted without being swallowed by command substitutions.
 exec 3>&1
@@ -81,7 +87,7 @@ count_remaining_issues()
 	local expected_round="$2"
 	local expected_head_sha="$3"
 
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${judge_artifact}" "${expected_round}" "${expected_head_sha}" <<'PY'
+	_opencode_run_isolated_python - "${judge_artifact}" "${expected_round}" "${expected_head_sha}" <<'PY'
 import json
 import re
 import sys
@@ -146,7 +152,7 @@ extract_and_write_synth_bundle()
 	local expected_head_sha="$6"
 	local language_hint="$7"
 
-	PYTHONDONTWRITEBYTECODE=1 python3 - \
+	_opencode_run_isolated_python - \
 		"${src}" \
 		"${judge_artifact}" \
 		"${synth_dir}" \
@@ -718,8 +724,6 @@ if [ "${CURRENT_ISSUES_COUNT}" = "0" ]; then
 	exit 0
 fi
 
-OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
-OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
 if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
 	behavioural_smoke_log_fail "missing_opencode_helpers" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
 	exit 0
@@ -749,6 +753,7 @@ if ! opencode_require_bootstrap review_synthesise_smoke reviewer "${BEHAVIOURAL_
 fi
 
 behavioural_smoke_opencode_cmd=(
+	env "OPENROUTER_API_KEY=${OPENCODE_HELPERS_PROVIDER_API_KEY}"
 	bash -c
 	# shellcheck disable=SC2016
 	'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'

@@ -1936,7 +1936,13 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/editor_isolation_preflight.sh"
-          MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${MODEL_EDITOR_FALLBACK:+,${MODEL_EDITOR_FALLBACK}}" model_provider_broker_start
+          implement_provider_api_key="${OPENROUTER_API_KEY}"
+          implement_github_token="${GH_TOKEN}"
+          unset OPENROUTER_API_KEY GH_TOKEN
+          OPENROUTER_API_KEY="${implement_provider_api_key}" \
+            MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${MODEL_EDITOR_FALLBACK:+,${MODEL_EDITOR_FALLBACK}}" \
+            model_provider_broker_start
+          unset implement_provider_api_key
           cleanup_implement_isolated_writer() {
             local implement_original_rc=$? implement_cleanup_rc=0
             trap - EXIT
@@ -2129,7 +2135,7 @@ jobs:
           TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
           : > "${TARGETED_FILES_CONTEXT_FILE}"
           if [ -s "${PLAN_FILE}" ]; then
-            python3 "${SUPPORT_SCRIPTS_DIR}/targeted_file_context.py" \
+            _gh_helpers_run_isolated_python -- "${SUPPORT_SCRIPTS_DIR}/targeted_file_context.py" \
               --plan-file "${PLAN_FILE}" \
               --repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}" \
               --semble-bin "$(command -v semble 2>/dev/null || true)" \
@@ -3064,7 +3070,7 @@ jobs:
 
             if [ -s "${diag_file}" ] && [ -n "${ISSUE_NUMBER:-}" ] && \
                 [ -n "${GH_TOKEN:-}" ]; then
-              if gh issue comment "${ISSUE_NUMBER}" \
+              if GH_TOKEN="${implement_github_token}" gh issue comment "${ISSUE_NUMBER}" \
                   --repo "${GITHUB_REPOSITORY}" \
                   --body-file "${diag_file}" >/dev/null 2>&1; then
                 echo "Posted Codex implement failure diagnostics to issue #${ISSUE_NUMBER}."
@@ -3553,7 +3559,10 @@ jobs:
               REPAIR_REASONING="xhigh"
               ;;
           esac
-          model_provider_broker_start
+          repair_provider_api_key="${OPENROUTER_API_KEY}"
+          unset OPENROUTER_API_KEY
+          OPENROUTER_API_KEY="${repair_provider_api_key}" model_provider_broker_start
+          unset repair_provider_api_key
           cleanup_repair_isolated_writer() {
             local repair_original_rc=$? repair_cleanup_rc=0
             trap - EXIT
@@ -4980,7 +4989,10 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
           _summary_combined_prompt="${RUNTIME_DIR}/issue_summary_combined_prompt.txt"
-          model_provider_broker_start
+          summary_provider_api_key="${OPENROUTER_API_KEY}"
+          unset OPENROUTER_API_KEY
+          OPENROUTER_API_KEY="${summary_provider_api_key}" model_provider_broker_start
+          unset summary_provider_api_key
           trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2; rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt" "${_summary_combined_prompt}"' EXIT
           model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
 

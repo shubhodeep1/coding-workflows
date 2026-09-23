@@ -12,6 +12,12 @@ fi
 SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/review-judge-interim-${RANDOM}}"
 mkdir -p "${RUNTIME_DIR}"
+OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
+OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
+	printf 'JUDGE_INTERIM_PASS_FAIL reason=missing_opencode_helpers round=0 path=.ai/review_runtime/pr-unknown/round-unknown/judge_interim.json\n'
+	exit 0
+fi
 
 judge_interim_log_ok()
 {
@@ -32,7 +38,7 @@ extract_and_validate_judge_interim_json()
 	local expected_round="$3"
 	local expected_head_sha="$4"
 
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${src}" "${dst}" "${expected_round}" "${expected_head_sha}" <<'PY'
+	_opencode_run_isolated_python - "${src}" "${dst}" "${expected_round}" "${expected_head_sha}" <<'PY'
 import json
 import re
 import sys
@@ -267,8 +273,6 @@ LATEST_COMMIT_DIFF="$(git show --find-renames --stat --patch --format=medium "${
 	printf '%s\n' "${LATEST_COMMIT_DIFF}"
 } > "${PROMPT_FILE}"
 
-OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
-OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
 if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
 	judge_interim_log_fail "missing_opencode_helpers" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
 	exit 0
@@ -298,6 +302,7 @@ if ! opencode_require_bootstrap review_run_judge_interim reviewer "${MODEL_EDITO
 fi
 
 judge_interim_opencode_cmd=(
+	env "OPENROUTER_API_KEY=${OPENCODE_HELPERS_PROVIDER_API_KEY}"
 	bash -c
 	# shellcheck disable=SC2016
 	'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'

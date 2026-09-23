@@ -284,6 +284,7 @@ fi
 
 # shellcheck disable=SC2016
 summariser_opencode_cmd=(
+	env "OPENROUTER_API_KEY=${OPENCODE_HELPERS_PROVIDER_API_KEY}"
 	bash -c
 	'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
 	opencode-summariser

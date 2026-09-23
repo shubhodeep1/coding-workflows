@@ -77,6 +77,44 @@ _gh_helpers_run_isolated_python()
 	"${isolated_python_environment[@]}" python3 -I -B "$@"
 }
 
+_gh_helpers_run_isolated_python_with_paths()
+{
+	local support_root="${1:?support root required}"
+	local support_scripts="${2:?support scripts directory required}"
+	local target=""
+	shift 2
+	[ "${1:-}" = "--" ] || return 2
+	shift
+	target="${1:?python target required}"
+	shift
+
+	_gh_helpers_run_isolated_python \
+		"GH_HELPERS_PYTHON_SUPPORT_ROOT=${support_root}" \
+		"GH_HELPERS_PYTHON_SUPPORT_SCRIPTS=${support_scripts}" \
+		-- -c '
+import os
+import runpy
+import sys
+
+target = sys.argv[1]
+target_args = sys.argv[2:]
+for candidate in (os.environ["GH_HELPERS_PYTHON_SUPPORT_SCRIPTS"], os.environ["GH_HELPERS_PYTHON_SUPPORT_ROOT"]):
+	if candidate and candidate not in sys.path:
+		sys.path.insert(0, candidate)
+if target == "-":
+	sys.argv = ["-", *target_args]
+	exec(compile(sys.stdin.buffer.read(), "<stdin>", "exec"), {"__name__": "__main__"})
+elif target == "-c":
+	if not target_args:
+		raise SystemExit(2)
+	sys.argv = ["-c", *target_args[1:]]
+	exec(compile(target_args[0], "<string>", "exec"), {"__name__": "__main__"})
+else:
+	sys.argv = [target, *target_args]
+	runpy.run_path(target, run_name="__main__")
+' "${target}" "$@"
+}
+
 # ---------------------------------------------------------------
 # _is_gh_rate_limit — detect rate-limit text in stderr / body.
 # Returns 0 (true) if the text indicates a rate limit.

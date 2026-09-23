@@ -72,6 +72,12 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+
+review_apply_run_isolated_python()
+{
+  _gh_helpers_run_isolated_python_with_paths \
+    "${SUPPORT_ROOT_DIR:-.}" "${SUPPORT_SCRIPTS_DIR:-scripts}" -- "$@"
+}
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
 CODEX_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_helpers.sh"
@@ -159,7 +165,11 @@ setup_editor_isolation() {
   : "${WORKSPACE_PATH:?WORKSPACE_PATH must be set for editor isolation}"
   : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE must be set for editor isolation}"
   : "${GITHUB_ENV:?GITHUB_ENV must be set for editor isolation}"
-  : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY must be set for editor isolation}"
+  # opencode_helpers.sh (sourced above) moves the provider key into
+  # OPENCODE_HELPERS_PROVIDER_API_KEY and unsets OPENROUTER_API_KEY so
+  # model-facing processes never inherit it; accept either name so an
+  # older helper copy that leaves the variable in place still passes.
+  : "${OPENCODE_HELPERS_PROVIDER_API_KEY:-${OPENROUTER_API_KEY:?OPENROUTER_API_KEY must be set for editor isolation}}"
   command -v sudo >/dev/null 2>&1 || {
     echo "::error::sudo is required for unprivileged editor isolation." >&2
     return 1
@@ -576,7 +586,7 @@ emit_context_budget_warn_for_prompt() {
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+    review_apply_run_isolated_python - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -636,7 +646,7 @@ emit_lessons_learned_for_out_of_plan_fix() {
   telemetry_json="$(printf '%s\n' "${current_diff_paths}" | {
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
+    review_apply_run_isolated_python - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
 import json
 import os
 import sys
@@ -858,7 +868,14 @@ prepare_judge_interim_priors()
 		return 0
 	fi
 
-	merged_count="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${prior_json}" "${JUDGE_INTERIM_PRIORS_FILE}" <<'PY'
+	merged_count="$(env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE=1 \
+		python3 -I -B - "${prior_json}" "${JUDGE_INTERIM_PRIORS_FILE}" <<'PY'
 import json
 import re
 import sys
@@ -1203,7 +1220,7 @@ consolidate_script=""
 if autofix_resume_can_reuse_stage "consolidator" "${CONSOLIDATOR_RAW_FILE}"; then
 	echo "Resume: reusing cached consolidator_raw.txt from same-head partial state."
 elif consolidate_script="$(resolve_support_script review_consolidate.sh)"; then
-  if ! bash "${consolidate_script}"; then
+  if ! OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY}" bash "${consolidate_script}"; then
     echo "::warning::review_consolidate.sh failed; continuing"
   fi
 else
@@ -1328,7 +1345,7 @@ append_semble_query_section() {
 
 if [ -n "${_targeted_paths_source}" ]; then
   targeted_file_context_args=(
-    python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"
+    review_apply_run_isolated_python "${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"
     --paths-file "${_targeted_paths_source}"
     --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
     --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
@@ -2194,7 +2211,7 @@ JOB_TIMEOUT_SECS=$(( REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED * 60 ))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 _hb_tmpdir=""
 _hb_fifo=""
-MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${MODEL_EDITOR_FALLBACK:+,${MODEL_EDITOR_FALLBACK}}" model_provider_broker_start
+MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${MODEL_EDITOR_FALLBACK:+,${MODEL_EDITOR_FALLBACK}}" opencode_model_provider_broker_start
 trap 'editor_isolation_exit_trap $?' EXIT
 if ! setup_editor_isolation; then
   echo "::error::Editor isolation prerequisites could not be established; refusing ambient-privilege fallback." >&2

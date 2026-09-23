@@ -284,7 +284,7 @@ def test_editor_launch_uses_unprivileged_empty_environment_and_protected_sentine
 	launch_block = editor_text[launch_start:launch_end]
 	assert 'sudo -n -u "${EDITOR_ISOLATION_USER}" --' in launch_block
 	assert "env -i" in launch_block
-	assert '"OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"' in launch_block
+	assert '"OPENROUTER_API_KEY=${MODEL_PROVIDER_BROKER_TOKEN}"' in launch_block
 	for forbidden_name in ("GITHUB_ENV", "GITHUB_OUTPUT", "BASH_ENV", "GIT_DIR", "GH_TOKEN", "GH_PAT", "TG_BOT_SECRET"):
 		assert forbidden_name not in launch_block
 	assert "setup_editor_isolation" in editor_text

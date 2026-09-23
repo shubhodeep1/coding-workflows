@@ -126,6 +126,34 @@ def _helper_env(tmp_path: Path, *, support_resume: bool = True) -> dict[str, str
 	return env
 
 
+def test_helper_python_ignores_checkout_sitecustomize_and_secrets(tmp_path: Path) -> None:
+	marker = tmp_path / "sitecustomize-ran"
+	checkout = tmp_path / "checkout"
+	checkout.mkdir()
+	(checkout / "sitecustomize.py").write_text(
+		"import os\nfrom pathlib import Path\n"
+		"Path(os.environ['SITE_MARKER']).write_text(os.environ.get('OPENROUTER_API_KEY', ''), encoding='utf-8')\n",
+		encoding="utf-8",
+	)
+	env = _base_env()
+	env.update({
+		"PYTHONPATH": str(checkout),
+		"SITE_MARKER": str(marker),
+		"OPENROUTER_API_KEY": "must-not-leak",
+		"CODEX_THREAD_REUSE_RUNTIME_DIR": str(tmp_path / "runtime"),
+	})
+	result = subprocess.run(
+		["bash", "-c", f"source {HELPER}; codex_thread_reuse_seed_run_token; codex_thread_reuse_helper_path"],
+		cwd=checkout,
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	assert not marker.exists()
+
+
 def _read_fake_codex_log(env: dict[str, str]) -> list[dict[str, object]]:
 	log_path = Path(env["FAKE_CODEX_LOG"])
 	if not log_path.exists():

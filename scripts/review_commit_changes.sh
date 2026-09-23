@@ -67,6 +67,8 @@ set -euo pipefail
 
 _review_commit_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
+source "${_review_commit_script_dir}/gh_helpers.sh"
+# shellcheck source=/dev/null
 source "${_review_commit_script_dir}/write_guard.sh"
 
 if [ -z "${COMMITTED_FILES_FILE:-}" ]; then
@@ -490,7 +492,7 @@ else
   OVERLAP_REPORT_FILE="$(mktemp)"
   OVERLAP_VALIDATION_STDERR_FILE="$(mktemp)"
   set +e
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
+  _gh_helpers_run_isolated_python -- - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
 import re
 import subprocess
 import sys
