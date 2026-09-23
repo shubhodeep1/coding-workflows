@@ -159,7 +159,10 @@ changelog.d/4254-state-snapshot-artifact-upload-non-fatal.md
 changelog.d/4258-conflict-safe-pr-close.md
 changelog.d/4258-smoke-pr-unconflict-before-close.md
 changelog.d/4263-heal-reporter-main-snapshot-backfill.md
+changelog.d/4303-heal-dispatch-envelope.md
+changelog.d/4305-release-gate-reference-and-editor-wait.md
 changelog.d/binance-blessings-249-parked-projects-resume-without-humans.md
+changelog.d/binance-blessings-249-repo-checks-install-requirements.md
 changelog.d/release-gate-retry-budget.md
 codex.md
 docs/INVENTORY.md
@@ -189,9 +192,12 @@ docs/gsd-future-improvements.md
 docs/hardenaireviewprompt.md
 docs/how-it-works.md
 docs/implement-plan/README.md
+docs/implement-plan/e2e-dummy-implement-plan-claude.md
+docs/implement-plan/heal-deterministic-autofix-failures.md
 docs/plans/apply-ai-tools-learnings-plan.md
 docs/plans/claude-code-tooling-learnings-plan.md
 docs/plans/complete-squad-improvements-plan.md
+docs/plans/e2e-dummy-implement-plan-claude-plan.md
 docs/plans/gsd-inspired-improvements-plan.md
 docs/plans/gstack-learnings-plan.md
 docs/plans/heal-deterministic-autofix-failures-plan.md
