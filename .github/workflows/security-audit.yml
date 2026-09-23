@@ -108,10 +108,15 @@ jobs:
       - name: Create Codex config
         run: |
           set -euo pipefail
+          # The catalog path MUST be absolute: codex resolves a relative
+          # model_catalog_json against CODEX_HOME (~/.codex) and exits with
+          # "No such file or directory (os error 2)". In the source repo
+          # SECURITY_AUDIT_SUPPORT_DIR is unset, so fall back to the
+          # workspace root rather than ".".
           bash "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/write_codex_config.sh" \
             --model "openai/gpt-5.6-sol" \
             --reasoning xhigh \
-            --catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/codex_model_catalog.json"
+            --catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-${GITHUB_WORKSPACE}}/scripts/codex_model_catalog.json"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Run security audit
