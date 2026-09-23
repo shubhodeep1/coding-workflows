@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Implementation and review automation use dedicated commit helpers, staged-support handling, workspace safety checks, and touched-file scope validation. Any plan that allows agents to modify or commit repository files should preserve the separation between untrusted edits and trusted Git operations.",
+  "fingerprint": "a32749492b00bbc06de43e77bc3b472de6809c1cb93df0815de8d5cbe55deb6d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35906272893",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35906272893",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4300",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4311",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4325",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4326",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4329",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4301",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4312",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4328",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4330",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4335"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260923190649_afcd44d29e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Trusted Git writes and workspace safety checks are required around automated commits.",
+  "timestamps": {
+    "created_at": "2026-09-23T19:06:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
