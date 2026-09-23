@@ -365,3 +365,148 @@ ShellCheck found no actionable SC2086, SC2046, SC2006, or SC2015 violations afte
 | Code modularization | 8 existing + 3 new | Medium |
 | Expression size reduction | 1 workflow + 2 helpers | Large |
 | Medium/Low fixes | 3 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-23)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` permits direct implementation; `NEEDS_VERIFICATION` requires specified validation first; `RISKY_SKIP` identifies opportunities that must not be automated because they involve pagination, races, retries, or poller recovery paths.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — RISKY_SKIP
+
+- **ID:** `MERGE-001`
+- **Safety tag:** `RISKY_SKIP`
+- **Files/calls:** `scripts/gh_helpers.sh:1238-1244`, `scripts/gh_helpers.sh:1358-1364`; callers at `.github/workflows/review_autofix.yml:7398-7417`.
+- **Current call count:** 2 on the editor-changes-lost no-peer path.
+- **Proposed call count:** 1 after a successful first snapshot; retain 2 when the first probe fails.
+- **Endpoint:** `GET /repos/{repo}/actions/runs?branch={head_branch}&per_page=30`.
+- **Evidence:**
+  ```bash
+  response=$(gh_retry gh api -X GET \
+    "/repos/${GITHUB_REPOSITORY}/actions/runs" \
+    -f "branch=${head_branch}" -f "per_page=30")
+  ```
+  Both helpers issue this identical request back-to-back: first to find an in-flight peer, then to count completed runs on the reviewed head.
+- **Proposed fix:** Let `autofix_retrigger_has_inflight_peer` optionally persist its validated response to a snapshot file. Extend `autofix_changes_lost_head_retry_consumed` to consume that file, falling back to its existing live request when the file is missing or invalid. Preserve `AUTOFIX_PEER_*` and `AUTOFIX_CHANGES_LOST_BUDGET_*` log keys.
+- **Safety rationale:** This explicitly defends against concurrent workflow-run races; reusing stale run state could incorrectly dispatch or suppress recovery.
+- **Downstream signal:** Do not auto-implement; manually test peer appearance/disappearance between probes and the case where the first request fails but the second succeeds.
+
+#### MERGE-002 — RISKY_SKIP
+
+- **ID:** `MERGE-002`
+- **Safety tag:** `RISKY_SKIP`
+- **Files/calls:** `.github/workflows/clarify.yml:479-484`.
+- **Current call count:** 2 logical calls when semantic caching is enabled.
+- **Proposed call count:** 1 logical paginated call.
+- **Endpoint:** `GET /repos/{repo}/issues/{issue}/comments`, ordered ascending.
+- **Evidence:**
+  ```bash
+  gh_retry gh api ".../comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+  gh_retry gh api --paginate --slurp \
+    ".../comments?sort=created&direction=asc&per_page=100"
+  ```
+- **Proposed fix:** Fetch one flattened full-comments snapshot, derive `ISSUE_COMMENTS_FILE` from its first 50 entries, and render `THREAD_HISTORY_FILE` from the complete array.
+- **Safety rationale:** The second call paginates and currently fails open only for semantic caching, whereas the first call is required prompt context; consolidation could alter partial-page failure behavior.
+- **Downstream signal:** Do not auto-implement; validate issues with more than 100 comments, an injected later-page failure, and both enabled and disabled semantic-cache modes.
+
+#### MERGE-003 — RISKY_SKIP
+
+- **ID:** `MERGE-003`
+- **Safety tag:** `RISKY_SKIP`
+- **Files/calls:** `scripts/orchestrate_poll_process.sh:13727-13733`.
+- **Current call count:** 2.
+- **Proposed call count:** 1.
+- **Endpoint:** `GET /repos/{repo}/issues/{issue}`.
+- **Evidence:**
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.title // ""' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+- **Proposed fix:** In `execute_stall_recovery_action`, fetch `{title, body}` once and derive both variables locally.
+- **Safety rationale:** The calls are inside `orchestrate_poll_process.sh`’s stall-recovery close-and-reissue path, which is an explicit `RISKY_SKIP` trigger.
+- **Downstream signal:** Do not auto-implement; manually verify independent fail-open behavior and freshness after `close_linked_pr`.
+
+#### MERGE-004 — RISKY_SKIP
+
+- **ID:** `MERGE-004`
+- **Safety tag:** `RISKY_SKIP`
+- **Files/calls:** `scripts/orchestrate_poll_process.sh:14483-14605`, `15527-15528`, `16413-16421`, `19222-19228`, `21397-21399`.
+- **Current call count:** 4 incremental REST reads beyond the two existing GraphQL batch fetches.
+- **Proposed call count:** 0 incremental REST reads on successful prefetch; one REST fallback per cache miss.
+- **Endpoints:** GraphQL `repository.issue` aliases; REST `GET /repos/{repo}/issues/{issue}`.
+- **Evidence:**
+  ```bash
+  _candidate_details_json="$(_fetch_candidate_issue_details_graphql ...)"
+  orig_title="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.title' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+  The same pattern follows `_current_wave_details_json` before `IF_TITLE` and `IF_BODY` are re-fetched.
+- **Proposed fix:** Add issue-level `title` and `body` fields to `_fetch_candidate_issue_details_graphql` and its transformed cache. Update `run_standalone_stall_recovery` and the implementation-failed sweep to read them cache-first, with one combined REST fallback returning both fields.
+- **Safety rationale:** This changes a documented cycle-local cache inside the poller and may alter freshness and fail-open behavior.
+- **Downstream signal:** Do not auto-implement; manually test GraphQL batch failure, missing issue nodes, batches over 25 issues, and an issue edited during the poll tick.
+
+#### MERGE-005 — RISKY_SKIP
+
+- **ID:** `MERGE-005`
+- **Safety tag:** `RISKY_SKIP`
+- **Files/calls:** `scripts/review_merge_train.sh:257-261`, `275-287`, with the shared caller at `354-381`.
+- **Current call count:** 2 reads when a marker comment exists.
+- **Proposed call count:** 1 read.
+- **Endpoints:** `GET /repos/{repo}/issues/{pr}/comments` and `GET /repos/{repo}/issues/comments/{comment_id}`.
+- **Evidence:**
+  ```bash
+  _mt_find_marker_comment_id   # paginated collection lookup
+  existing_body="$(gh_retry gh api ".../issues/comments/${existing_id}" --jq '.body')"
+  ```
+  The paginated collection already contains both comment IDs and bodies.
+- **Proposed fix:** Replace `_mt_find_marker_comment_id` with `_mt_find_marker_comment` returning a compact `{id, body}` snapshot, and pass that snapshot into `_mt_upsert_comment`.
+- **Safety rationale:** The collection call paginates and participates in merge-train claim/bypass race handling.
+- **Downstream signal:** Do not auto-implement; manually verify multi-page ordering, API-failure versus not-found distinction, and concurrent queue-marker replacement.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — RISKY_SKIP
+
+- **ID:** `REUSE-001`
+- **Safety tag:** `RISKY_SKIP`
+- **Files/calls:** `scripts/orchestrate_poll_process.sh:2523-2525`, `4134-4140`, `11687-11702`, `17466-17481`, `17640-17641`, `17931-17932`, `17974-17975`, `18018-18020`, `18418-18419`, `18488-18489`, `18561-18563`, `22040-22041`, `22358-22360`, `22981-22982`.
+- **Current call count:** 14 static repository-metadata read sites; execution is path-dependent, but several can run in one tick.
+- **Proposed call count:** 1 successful run-local fetch, with legacy retries on cache miss.
+- **Endpoint:** `GET /repos/{repo}` for `.default_branch`.
+- **Evidence:**
+  ```bash
+  CWS_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
+  DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  ```
+- **Proposed fix:** Add `_repo_default_branch_cached <fallback>` that caches only a validated non-empty successful response. Preserve each caller’s current `""` versus `"main"` fallback and do not cache failures, allowing later callers to retry.
+- **Safety rationale:** Consolidation crosses many poller functions and completion/recovery branches with different fail-open and fail-closed contracts.
+- **Downstream signal:** Do not auto-implement; manually exercise validation dispatch, security-pass reset, judge, final merge, revalidate, and standalone conflict-sweep paths under both successful and failed metadata reads.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — It is inside `orchestrate_poll_process.sh`; independent fail-open results must be reviewed manually.
+- BATCH-001: NEEDS_VERIFICATION — Validate GraphQL query complexity and large blob behavior against fixtures before replacing REST reads.
+- BATCH-002: RISKY_SKIP — The ancestry walk is in the poller and includes paginated comment reads.
+- BATCH-003: RISKY_SKIP — Pagination and the required pre-mutation revalidation batch protect against upstream races.
+
+### Summary Counts
+
+Counts include new findings and reviewed Deep Audit cross-references.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | BATCH-001 |
+| RISKY_SKIP | 9 | MERGE-001, MERGE-002, MERGE-003, MERGE-004, MERGE-005, REUSE-001, API-001, BATCH-002, BATCH-003 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
