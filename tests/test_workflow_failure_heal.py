@@ -110,6 +110,11 @@ def test_human_needed_label_parity_across_workflows() -> None:
 	assert "importlib.util" not in report_script
 
 
+def test_reporters_share_dispatch_envelope_failure_reason() -> None:
+	assert "reason=dispatch_envelope_failed" in REPORT_SCRIPT.read_text(encoding="utf-8")
+	assert "reason=dispatch_envelope_failed" in AUTOFIX_REPORT_SCRIPT.read_text(encoding="utf-8")
+
+
 def test_consumer_template_is_pinned_and_in_full_profile() -> None:
 	text = CONSUMER_TEMPLATE.read_text(encoding="utf-8")
 	assert "uses: shubhodeep1/coding-workflows/.github/workflows/workflow_failure_heal.yml@stable" in text

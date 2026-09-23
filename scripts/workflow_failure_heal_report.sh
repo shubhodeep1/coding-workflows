@@ -187,7 +187,7 @@ RUN_REF_COUNT="$(jq -r '.run_refs | length' "${PAYLOAD_FILE}")"
 # client_payload with more than 10 top-level properties (HTTP 422).
 DISPATCH_FILE="${RUNTIME_DIR}/dispatch.json"
 if ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${PAYLOAD_FILE}" > "${DISPATCH_FILE}" 2> "${RUNTIME_DIR}/build_error.txt"; then
-	log "error dispatch_build_failed issue=${ISSUE_NUMBER} detail=$(head -c 200 "${RUNTIME_DIR}/build_error.txt" | tr '\n' ' ')"
+	log "error dispatch_build_failed issue=${ISSUE_NUMBER} detail=$(head -c 200 "${RUNTIME_DIR}/build_error.txt" | tr '\n' ' ') reason=dispatch_envelope_failed"
 	exit 1
 fi
 
