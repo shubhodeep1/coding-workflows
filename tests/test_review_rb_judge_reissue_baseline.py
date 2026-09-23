@@ -561,6 +561,80 @@ def test_resolver_rejects_empty_files_touched_metadata_without_github_lookup() -
 	assert "files_touched metadata is missing or empty" in result.stdout
 
 
+def _stall_recovery_trailer(parent_issue: str = "4227") -> str:
+	"""Body suffix appended verbatim by close_and_reissue in scripts/orchestrate_poll_process.sh."""
+	return (
+		"\n\n---\n\n"
+		f"**\u26a0\ufe0f Re-issued from #{parent_issue}** \u2014 the previous issue stalled in the `ai:implementing` "
+		"phase for 127 minutes despite 3 recovery attempt(s).\n\n"
+		"**Guidance for AI agents:**\n"
+		"- This issue has been re-created by the orchestrator stall recovery system.\n"
+		"- Previous attempt stalled at phase: `ai:implementing`\n"
+		"- Proceed through the full pipeline (clarify \u2192 plan \u2192 implement \u2192 review).\n"
+		"- If the task encounters the same blocker, explain the specific failure in a comment.\n"
+	)
+
+
+def test_resolver_accepts_stall_recovery_trailer_after_metadata_footer() -> None:
+	"""Regression: #4242 (re-issued from #4227 by stall recovery) lost its baseline.
+
+	close_and_reissue copies the closed issue body and appends a "---" rule plus
+	a "Re-issued from #N" trailer after the review-blocked footer. Implement
+	runs 35656715219 / 35668070395 then parsed the trailer as part of the
+	footer, reported "review-blocked reissue metadata footer is incomplete" and
+	checked out the planning ref instead of the preserved PR head.
+	"""
+	for trailer in (
+		_stall_recovery_trailer(),
+		# Standalone stall recovery wording.
+		"\n\n---\n\n**\u26a0\ufe0f Re-issued from #4227** \u2014 previous issue stalled in `ai:implementing` "
+		"for 127 minutes despite 3 recovery attempt(s).\n\n**Guidance for AI agents:**\n"
+		"- This issue was re-created by standalone stall recovery.\n"
+		"- Previous attempt stalled at phase: `ai:implementing`.\n"
+		"- Proceed through clarify \u2192 plan \u2192 implement \u2192 review.\n",
+		# Two consecutive re-issues stack two trailers.
+		_stall_recovery_trailer("4227") + _stall_recovery_trailer("4242"),
+	):
+		issue_body = _valid_issue_body().rstrip("\n") + trailer
+		result, outputs, state = _run_baseline_resolver(issue_body, feature_enabled="true")
+
+		assert result.returncode == 0, result.stderr
+		assert outputs == {"branch": VALID_BRANCH, "sha": VALID_HEAD_OID, "status": "accepted"}
+		assert state["calls"] == [
+			["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+			["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+		]
+		assert f"Baseline override accepted: {VALID_BRANCH}" in result.stdout
+
+
+def test_resolver_ignores_metadata_lines_inside_stall_recovery_trailer() -> None:
+	"""Lines after the trailing rule never extend files_touched or override the branch."""
+	issue_body = (
+		_valid_issue_body().rstrip("\n")
+		+ _stall_recovery_trailer()
+		+ "- prior_pr_baseline_branch: ai/reissue-baseline/pr-99-badc0ffee123-1-1\n"
+		+ "- files_touched:\n  - scripts/not_in_allowlist.sh\n"
+	)
+	result, outputs, state = _run_baseline_resolver(issue_body, feature_enabled="true")
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": VALID_BRANCH, "sha": VALID_HEAD_OID, "status": "accepted"}
+	assert state["calls"] == [
+		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+	]
+
+
+def test_resolver_still_rejects_trailing_prose_without_rule_after_metadata_footer() -> None:
+	issue_body = _valid_issue_body() + "\nRe-issued from #4227 without a separating rule.\n"
+	result, outputs, state = _run_baseline_resolver(issue_body, feature_enabled="true")
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": "", "status": "metadata-missing"}
+	assert state["calls"] == []
+	assert "review-blocked reissue metadata footer is incomplete" in result.stdout
+
+
 def test_resolver_rejects_missing_reissue_metadata_header_without_github_lookup() -> None:
 	issue_body = _valid_issue_body().replace(
 		"\n---\n**Review-blocked reissue metadata**\n",

@@ -34,11 +34,11 @@ jobs:
       MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5' }}
       REVIEWER_MODELS: |
         minimax/minimax-m3
-        moonshotai/kimi-k3
+        z-ai/glm-5.2
         deepseek/deepseek-v4-pro
-        mistralai/mistral-small-2603
+        google/gemini-3.1-flash-lite
         qwen/qwen3.7-plus
-        x-ai/grok-4.6
+        x-ai/grok-4.20
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_ADMIN_CHAT_ID: ${{ secrets.TG_ADMIN_CHAT_ID }}
