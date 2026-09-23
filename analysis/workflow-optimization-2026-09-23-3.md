@@ -215,3 +215,153 @@ Deep-dive Semble targets: `reviewer-context` 11 calls/169,377 bytes; `overflow` 
 - No Serena probe telemetry despite `SERENA_AVAILABLE:false` in sampled CI summaries.
 - Deep-dive archives are concentrated in review/autofix; conclusions for other families rely partly on sampled `log_summary` evidence.
 - Top-level raw `summary.json` contained 15 telemetry runs, while the assembled widened context contained 109; report both coverage tiers separately in future collector output.
+
+## Deep Audit — Workflows & Scripts (2026-09-23)
+
+### Section 1: Bug & Correctness Sweep
+
+All scoped YAML, Bash, and Python files parsed successfully. No direct secret logging or unsafe issue/PR-body interpolation was found.
+
+#### BUG-001
+
+- **File:** `scripts/orchestrate_poll_process.sh:18911-18918,19545-19616,20423-20438,20484-20493,20775-20784,23295-23450`
+- **Severity:** High
+- **Category:** `bug`
+- **Description:** Six merge paths validate a specific PR head through variables such as `_pw_head_sha`, `_rtm_head_sha`, `_rb_merge_sha`, and `N_HEAD_SHA`, but subsequently invoke `gh pr merge` without `--match-head-commit`. A concurrent push between validation and merging can therefore land an unevaluated head. Other repository merge paths explicitly guard this race.
+- **Recommended fix:** Add `--match-head-commit "$validated_sha"` to both auto and synchronous merge attempts. Fail closed when the SHA is missing. Extract a shared `merge_pr_at_head <pr> <sha> <mode> [--auto]` helper and add poller contract tests mirroring `review_rb_judge.sh`.
+
+#### BUG-002
+
+- **File:** `scripts/audit_consumer_drift.py:202-219,482-509,576-594` (contract: `agents.md:614-619`)
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** The drift auditor loads every `ai-*.yml` template for every consumer, ignoring the documented `core`, `standard`, and `full` profiles. Legitimate core/standard omissions can be reported as drift. Conversely, `review_rb_judge_dispatch.yml` belongs to the standard/full manifests but is excluded by the `ai-*.yml` glob and is never audited. The latter omission is certain; whether current registered consumers receive false positives depends on their configured profiles. **[NEEDS VERIFICATION]**
+- **Recommended fix:** Resolve each consumer’s `WORKFLOW_PROFILE`, load the corresponding `workflow-templates/profiles/<profile>.txt`, and audit exactly that manifest. Use `full` only when the profile is unavailable, matching the documented default. Add tests for all three profiles and the non-`ai-*` judge wrapper.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+The prior report already covers repeated PR metadata, comments, linked-issue, and file reads in `review_autofix.yml`; those findings are not duplicated here.
+
+#### API-001
+
+- **File:** `scripts/orchestrate_poll_process.sh:10230-10242`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** When `final_pr_json_snapshot` does not match, the same `pulls/{final_pr}` endpoint is fetched twice consecutively—once for state and once for merged status. **Current:** 2 calls. **Proposed:** 1 call.
+- **Recommended fix:** Fetch once through `_fetch_pr_json`, then derive both fields with `_jq_field`. Extend the existing cycle-local PR JSON reuse pattern.
+
+#### BATCH-001
+
+- **File:** `scripts/audit_consumer_drift.py:408-480,482-539`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** For 13 registered consumers and 16 currently selected templates, the auditor performs one directory listing plus one REST content fetch per present wrapper. **Current worst case:** `13 × (1 + 16) = 221` calls. **Proposed:** 13 GraphQL calls—one aliased blob query per repository. **[NEEDS VERIFICATION]** GraphQL query complexity and large-blob behavior require fixture validation.
+- **Recommended fix:** Extend the alias-building pattern from `_fetch_candidate_issue_details_graphql`; return a filename-keyed cache containing existence and text for all profile-selected wrappers.
+
+#### BATCH-002
+
+- **File:** `scripts/orchestrate_poll_process.sh:12866-12894`
+- **Severity:** Low
+- **Category:** `api-batching`
+- **Description:** `count_noop_ancestors` fetches one issue body and one comments collection per ancestry hop. **Current:** up to 6 calls at default depth 3. **Proposed:** 3 calls with a cached seed body, or 4 on cache miss.
+- **Recommended fix:** Accept the current issue body from `_candidate_details_json`, then fetch each parent’s body and comments together through one GraphQL query. Extend `_fetch_candidate_issue_details_graphql`.
+
+#### BATCH-003
+
+- **File:** `scripts/orchestrate_poll_process.sh:15321-15417`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** The staged-support latch sweep issues comments, label-event, live-label, and repeated label-event reads per candidate. **Current:** `1 + 4N` reads for `N` candidates. **Proposed:** `1 + 2×ceil(N/50)` reads using one initial and one pre-mutation revalidation batch. **[NEEDS VERIFICATION]** Pagination must preserve the current fail-closed behavior.
+- **Recommended fix:** Extend `_fetch_candidate_issue_details_graphql` with labels, trusted comments, and labeled/unlabeled timeline events. Preserve the second live batch immediately before mutation.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+
+- **File:** `scripts/assemble_prompt.sh:12-93`; `scripts/render_prompt.sh:12-41,95-159`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** `resolve_prompt_file`, `resolve_render_prompt_py`, and `resolve_assembly_source_path` are duplicated across both prompt entrypoints. Drift in fallback ordering would make assembly and rendering resolve different assets.
+- **Recommended fix:** Create `scripts/prompt_path_helpers.sh` owning:
+  - `resolve_prompt_file <path>`
+  - `resolve_render_prompt_py`
+  - `resolve_assembly_source_path <path>`
+  
+  Source it from both callers.
+
+#### DUP-002
+
+- **File:** `scripts/apply_analysis_on_main.sh:126-150`; `scripts/auto_release_stable.sh:76-99`; `scripts/promote_main_cycle.sh:113-144`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** Identical GitHub-output emission and truthy parsing functions appear in three release-cycle scripts.
+- **Recommended fix:** Create `scripts/release_cycle_helpers.sh` with `emit_github_output <key> <value>` and `is_truthy <value>`, then source it from all three scripts.
+
+#### DUP-003
+
+- **File:** `scripts/build_semble_wrapper.sh:31-42`; `scripts/install_semble.sh:15-26`; `scripts/setup_serena.sh:81-92`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** The same fail-soft `GITHUB_ENV` writer is independently maintained in three bootstrap scripts.
+- **Recommended fix:** Create `scripts/github_env_helpers.sh` with `write_github_env <key> <value> <log-prefix>` and update all three callers.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+
+- **File:** `.github/workflows/implement.yml:981-1337`
+- **Severity:** High
+- **Category:** `expression-limit`
+- **Description:** The interpolated `Stage workflow support files` block is approximately **20,326 characters**, leaving only **674 characters** before GitHub’s 21,000-character limit.
+- **Recommended fix:** Move the block into `scripts/stage_workflow_support.sh`, adding an implement-specific mode for the staged-support ledger and immutable runtime-copy behavior.
+
+#### EXPR-002
+
+- **File:** `.github/workflows/implement.yml:3218-3524`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The interpolated `Preflight destructive-commit guard` block is approximately **17,313 characters**, leaving **3,687 characters** of headroom.
+- **Recommended fix:** Extract it to `scripts/implement_preflight_commit_guard.sh`, or add a `preflight` mode to `implement_commit_changes.sh` so preflight and commit-time guard logic share one implementation.
+
+No workflow exceeds the 800 KB warning threshold. The largest, `review_autofix.yml`, is approximately 541 KB.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001
+
+- **File:** `scripts/resolve_integration_ref.sh:51-69,72-104`
+- **Severity:** Medium
+- **Category:** `consistency`
+- **Description:** Issue-body and branch-existence reads use raw `gh api` with no bounded retry or shared rate-limit handling. Five phase workflows depend on this resolver, so a transient API error fails checkout-ref resolution while surrounding GitHub reads use `gh_retry`.
+- **Recommended fix:** Stage and source `gh_helpers.sh` with the resolver, then use `gh_retry _safe_gh_jq`. Preserve the current fail-closed response for non-404 branch lookup failures.
+
+#### DEAD-001
+
+- **File:** `scripts/orchestrate_poll_process.sh:9179-9264,9361-9376`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `_check_branch_rebuild_threshold` assigns multiple `BRANCH_REBUILD_SKIP_REASON` values and `BRANCH_REBUILD_LAST_REBUILD_AT`, but neither variable is read. Disabled, cooldown, threshold, and audit-unavailable outcomes therefore lose their structured reason.
+- **Recommended fix:** Emit `BRANCH_REBUILD_SKIPPED reason=… last_rebuild_at=…` before returning and include the fields in the rebuild audit record; otherwise remove the unused assignments.
+
+ShellCheck found no actionable SC2086, SC2046, SC2006, or SC2015 violations after GitHub expressions were neutralized. No active TODO/FIXME/HACK markers were found in scoped files.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, EXPR-001 |
+| Medium | 6 | BUG-002, BATCH-001, BATCH-003, DUP-001, EXPR-002, CONSIST-001 |
+| Low | 5 | API-001, BATCH-002, DUP-002, DUP-003, DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 1 | Medium |
+| API call optimization | 2 | Medium |
+| Code modularization | 8 existing + 3 new | Medium |
+| Expression size reduction | 1 workflow + 2 helpers | Large |
+| Medium/Low fixes | 3 | Medium |
