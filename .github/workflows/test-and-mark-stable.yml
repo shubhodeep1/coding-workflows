@@ -1673,7 +1673,7 @@ jobs:
                   exit 0
                 fi
 
-                # Check live logs for reviewer progress (majority-pass shortcut)
+                # Check live logs for reviewer progress
                 # and for the editor-noop fallback marker (early-exit shortcut).
                 # Both are gated behind ELAPSED >= 600 so we only pay the live-
                 # log API cost after the editor step is plausibly running —
@@ -1814,10 +1814,7 @@ jobs:
                     [[ "$FAILED_R" =~ ^[0-9]+$ ]] || FAILED_R=0
                     TOTAL_DONE=$((SUCCEEDED + FAILED_R))
                     if [ "$SUCCEEDED" -ge 3 ] && [ $((SUCCEEDED * 2)) -gt "$TOTAL_DONE" ]; then
-                      echo "  ✓ Review run still in_progress but ${SUCCEEDED}/${TOTAL_DONE} reviewers succeeded (>50%) — treating as pass"
-                      echo "status=success" >> "$GITHUB_OUTPUT"
-                      echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-                      exit 0
+                      echo "  ... ${SUCCEEDED}/${TOTAL_DONE} reviewers succeeded (>50%); waiting for authoritative review completion and editor verification..."
                     elif [ "$TOTAL_DONE" -gt 0 ]; then
                       echo "  ... ${SUCCEEDED}/${TOTAL_DONE} reviewers succeeded so far, waiting for more..."
                     fi
@@ -4145,34 +4142,7 @@ jobs:
       - name: Script-workflow cross-reference
         run: |
           set -euo pipefail
-          echo "Verifying all scripts referenced by workflows exist..."
-          # Scripts intentionally absent on main: optional backends that shim
-          # branches stage at runtime (see #3057). They appear as literal
-          # scripts/<name> tokens in workflow YAML (e.g. validate.yml stages
-          # render_prompt.py conditionally; review_autofix.yml's leaked-path
-          # guard lists it), but main ships a self-contained alternative
-          # (render_prompt.sh), so their absence here is expected and must not
-          # fail the cross-reference gate. Keep this list in sync with the
-          # optional-bootstrap handling in the consumer-facing workflows.
-          OPTIONAL_SCRIPTS=("scripts/render_prompt.py")
-          MISSING=0
-          for ref in $(grep -rhoE 'scripts/[a-zA-Z0-9_.-]+\.(sh|py|json)' .github/workflows/ | sort -u); do
-            if [ ! -f "$ref" ]; then
-              if printf '%s\n' "${OPTIONAL_SCRIPTS[@]}" | grep -qxF "$ref"; then
-                echo "OPTIONAL (absent on main, staged by shim branches): $ref"
-                continue
-              fi
-              echo "FAIL: $ref referenced in workflows but does not exist"
-              MISSING=$((MISSING + 1))
-            else
-              echo "OK: $ref"
-            fi
-          done
-          if [ "$MISSING" -gt 0 ]; then
-            echo "::error::${MISSING} script(s) referenced by workflows are missing"
-            exit 1
-          fi
-          echo "All referenced scripts exist."
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
 
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
