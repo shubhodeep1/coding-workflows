@@ -417,3 +417,146 @@ No `TODO`, `FIXME`, `HACK`, or `XXX` markers were found. Shellcheck found no SC2
 | Code modularization | 7–10 | Large |
 | Expression size reduction | 2–3 | Medium |
 | Medium/Low fixes | 15–50 | Large |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-23)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is directly implementable; `NEEDS_VERIFICATION` requires the stated checks; `RISKY_SKIP` must not be automated because it touches pagination, polling, retry, race-defense, or orchestrator recovery semantics.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Consolidate review-blocked PR metadata into the existing GraphQL query
+
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `scripts/review_rb_judge.sh:908-925`; `scripts/review_rb_judge.sh:933-966`
+- **Current call count:** 2.
+- **Proposed call count:** 1 on the normal path; retain one REST fallback only when GraphQL fails or is malformed.
+- **Endpoints:** `GET /repos/{repo}/pulls/{pr}`; `POST /graphql` querying `repository.pullRequest`.
+- **Evidence:**
+  ```bash
+  _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" ...)"
+  ...
+  RB_LINKED_ISSUES_GRAPHQL_JSON="$(gh_retry gh api graphql \
+    ... pullRequest(number:$number) { baseRefName closingIssuesReferences(...) ... } ...)"
+  ```
+  The REST payload supplies state, merged status, title, body, and base ref; the immediately following GraphQL query reads the same PR for base ref and linked issues.
+- **Proposed fix:** Extend the query assigned to `RB_LINKED_ISSUES_GRAPHQL_JSON` with `state`, `merged`, `mergedAt`, `title`, and `body`; derive the early guard, `PR_BASE_REF`, and fallback `PR_DATA` from that response. Keep the existing REST lookup as a fail-open fallback for absent or malformed GraphQL fields.
+- **Safety rationale:** `NEEDS_VERIFICATION` because this replaces a REST read with GraphQL fields whose state vocabulary and failure handling differ, so identical error semantics are not statically proven.
+- **Downstream signal:** Verify REST-to-GraphQL state/merged mapping, malformed-response fallback, the 50-linked-issue boundary, and behavior when repository-label creation between the current calls fails.
+
+#### MERGE-002 — Post one clear-to-proceed auto-answer comment instead of two
+
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `.github/workflows/clarify.yml:1214-1218`
+- **Current call count:** 2 POSTs.
+- **Proposed call count:** 1 POST.
+- **Endpoint:** `POST /repos/{repo}/issues/{issue}/comments`.
+- **Evidence:**
+  ```bash
+  gh_retry gh api ".../comments" \
+    -f body=$'The task appears clear...'
+
+  gh_retry gh api ".../comments" \
+    -f body=$'/answer [auto-answered-by-clarify]...'
+  ```
+- **Proposed fix:** Replace both calls with one body beginning `/answer [auto-answered-by-clarify]`, followed by the existing clear-to-proceed explanation.
+- **Safety rationale:** `NEEDS_VERIFICATION` because consolidating two non-idempotent writes changes observable comment count and partial-failure behavior even though endpoint, auth, retry wrapper, and workflow step are identical.
+- **Downstream signal:** Verify plan wrapper predicates still trigger, no comment scanner expects two separate comments, and simulated POST failure preserves the intended workflow failure behavior.
+
+#### MERGE-003 — Fetch final-PR state and merged status together
+
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:10230-10242` in `finalize_integration_merge_if_needed`
+- **Current call count:** 2 on snapshot miss.
+- **Proposed call count:** 1.
+- **Endpoint:** `GET /repos/{repo}/pulls/{pr}`.
+- **Evidence:**
+  ```bash
+  existing_pr_state="$(gh_retry _safe_gh_jq ".../pulls/${final_pr}" --jq '.state' ...)"
+  existing_pr_merged="$(gh_retry _safe_gh_jq ".../pulls/${final_pr}" --jq '.merged_at != null' ...)"
+  ```
+- **Proposed fix:** Capture one PR JSON object and locally derive both fields.
+- **Safety rationale:** `RISKY_SKIP` because the calls are inside `orchestrate_poll_process.sh` and protect a race-sensitive final-merge path; combining them also changes partial-read failure behavior.
+- **Downstream signal:** Do not auto-implement; manually test snapshot mismatch, first-read-only failure, second-read-only failure, concurrent merge, and integration-branch drift behavior.
+
+#### MERGE-004 — Fetch issue title and body together in reissue paths
+
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:13731-13733` in `execute_stall_recovery_action`; `scripts/orchestrate_poll_process.sh:16413-16421` in `run_standalone_stall_recovery`; `scripts/orchestrate_poll_process.sh:21397-21399` in the implementation-failed sweep
+- **Current call count:** 2 per reissue path; 6 if all three paths execute once.
+- **Proposed call count:** 1 per path; 3 total.
+- **Endpoint:** `GET /repos/{repo}/issues/{issue}`.
+- **Evidence:**
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.title ...')"
+  orig_body="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.body ...')"
+  ```
+- **Proposed fix:** At each site, fetch `{title, body}` once and parse both values locally.
+- **Safety rationale:** `RISKY_SKIP` because every site is an orchestrator stall/recovery path explicitly covered by the race-defense exclusion.
+- **Downstream signal:** Do not auto-implement; manually verify fail-open behavior when only one field is missing, concurrent issue edits, and every managed, standalone, and implementation-failed reissue branch.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Reuse cached issue payloads during integration-ref resolution
+
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `scripts/resolve_integration_ref.sh:51-53,72-92`; `.github/workflows/implement.yml:127-130,169-174,498-502`; `.github/workflows/orchestrate_clarify_respond.yml:69-78,92-97,173-177`
+- **Current call count:** Child resolution is 2 issue GETs instead of 1; tracking fallback can be 4 GETs instead of 2 when both payloads were already fetched.
+- **Proposed call count:** 1 child GET and, when needed, 1 tracking GET.
+- **Endpoint:** `GET /repos/{repo}/issues/{issue}`.
+- **Evidence:**
+  ```bash
+  ISSUE_PAYLOAD="$(gh api ".../issues/${ISSUE_NUMBER}")"
+  ```
+  is cached before:
+  ```bash
+  child_body="$(get_issue_body "${ISSUE}")"
+  tracking_body="$(get_issue_body "${tracking_issue}")"
+  ```
+- **Proposed fix:** Extend `resolve_integration_ref.sh` to accept optional `ISSUE_PAYLOAD_FILE` and `TRACKING_PAYLOAD_FILE`, validate each payload’s `.number`, and fall back to `get_issue_body` on absent, stale, or malformed input. Pass the existing files from `orchestrate_clarify_respond.yml`; persist and pass the precheck payloads from `implement.yml`.
+- **Safety rationale:** `NEEDS_VERIFICATION` because reuse crosses workflow steps and could replace resolver-time live metadata with an earlier snapshot.
+- **Downstream signal:** Define the accepted freshness point, then test matching caches, number mismatch, malformed files, missing files, tracking fallback, and preservation of the live branch-existence probe.
+
+#### REUSE-002 — Reuse marker-comment bodies from the paginated merge-train scan
+
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/review_merge_train.sh:255-283`; `scripts/review_merge_train.sh:354-381`; `scripts/review_merge_train.sh:464-486`
+- **Current call count:** General existing-marker upsert uses 2 reads; the blocked gate path can use 3 reads.
+- **Proposed call count:** 1 paginated read.
+- **Endpoints:** `GET /repos/{repo}/issues/{pr}/comments?per_page=100`; `GET /repos/{repo}/issues/comments/{comment_id}`.
+- **Evidence:**
+  ```bash
+  ... --paginate ".../issues/${pr}/comments?per_page=100" \
+    --jq '... | .id'
+  ...
+  existing_body="$(gh_retry gh api ".../issues/comments/${existing_id}" --jq '.body' ...)"
+  ```
+  The blocked path also scans once before invoking `_mt_upsert_comment`, which scans again.
+- **Proposed fix:** Replace `_mt_find_marker_comment_id` with a snapshot helper returning the latest `{id, body}`; let `_mt_upsert_comment` accept that snapshot and update the blocked-path caller to pass it through.
+- **Safety rationale:** `RISKY_SKIP` because the source read is paginated and participates in concurrency-sensitive merge-train marker and label-claim logic.
+- **Downstream signal:** Do not auto-implement; manually validate multi-page ordering, latest-marker selection, human label-removal bypasses, and concurrent gate/release invocations.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — modifies retry, permanent-failure, backoff, and rate-limit-sensitive wrapper semantics.
+- API-002: `RISKY_SKIP` — the proposed source snapshot is paginated, requiring manual page-boundary and bounded-context review.
+- BATCH-001: `NEEDS_VERIFICATION` — batching is sound, but label pagination completeness and REST fallback behavior require verification.
+- API-003: `RISKY_SKIP` — includes pagination and an orchestrator recovery path that explicitly defends against races.
+- API-004: `RISKY_SKIP` — directly changes retry behavior for non-idempotent writes and ambiguous accepted-response failures.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| `SAFE_TO_MERGE` | 0 | — |
+| `NEEDS_VERIFICATION` | 3 | MERGE-001, MERGE-002, REUSE-001 |
+| `RISKY_SKIP` | 3 | MERGE-003, MERGE-004, REUSE-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
