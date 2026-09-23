@@ -71,7 +71,8 @@ jobs:
       - name: Create runtime workspace
         run: |
           set -euo pipefail
-          RUNTIME_DIR="/tmp/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [ -n "${RUNNER_TEMP:-}" ] || { echo "::error::RUNNER_TEMP is required for the isolated poller runtime"; exit 1; }
+          RUNTIME_DIR="${RUNNER_TEMP%/}/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${RUNTIME_DIR}"
           {
             echo "RUNTIME_DIR=${RUNTIME_DIR}"

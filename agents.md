@@ -728,6 +728,10 @@ when the bounded fix-cycle budget is exhausted.
   complete changed-path manifest. Post-agent Python validators run through the
   provider-free `validator` sandbox role as `/usr/bin/python3 -I -S`, from an
   external working directory with no credentials or network access.
+  Workspace-guard runtimes live below `RUNNER_TEMP`, never `/tmp`: `PrivateTmp`
+  would mask a host `/tmp` bind before the child starts. The sandbox canonicalizes,
+  validates, and ancestor-deduplicates writable paths before constructing the
+  systemd namespace, and initialization failures stop the editor before launch.
 - `scripts/model_provider_proxy.py` derives a non-empty model allowlist from
 	trusted configuration and defaults to 64 requests, one concurrent request,
 	65,536 output tokens, and USD 25 cumulative spend. It reserves worst-case
@@ -840,6 +844,7 @@ and shipped:
 - `AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED`
 - `AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE`
 - `AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED`
+- `AUTOFIX_EDITOR_SANDBOX_INITIALIZATION_FAILURE`
 - `AI_PHASE_FAILURE_V1`
 - `AI_PHASE_GATE_V1`
 - `WORKFLOW_SCENARIO_TRACE_WRITTEN`
@@ -1006,6 +1011,7 @@ LOG_PREFIX.name=AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD
 LOG_PREFIX.name=AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED
 LOG_PREFIX.name=AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE
 LOG_PREFIX.name=AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED
+LOG_PREFIX.name=AUTOFIX_EDITOR_SANDBOX_INITIALIZATION_FAILURE
 LOG_PREFIX.name=AI_PHASE_FAILURE_V1
 LOG_PREFIX.name=AI_PHASE_GATE_V1
 LOG_PREFIX.name=WORKFLOW_SCENARIO_TRACE_WRITTEN

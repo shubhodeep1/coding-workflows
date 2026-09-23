@@ -117,7 +117,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          RUNTIME_DIR="/tmp/codex-implement-${GITHUB_RUN_ID}"
+          [ -n "${RUNNER_TEMP:-}" ] || { echo "::error::RUNNER_TEMP is required for the isolated implementation runtime"; exit 1; }
+          RUNTIME_DIR="${RUNNER_TEMP%/}/codex-implement-${GITHUB_RUN_ID}"
           mkdir -p "${RUNTIME_DIR}"
           ISSUE_META_FILE="${RUNTIME_DIR}/issue_meta.json"
           ISSUE_BODY_FILE="${RUNTIME_DIR}/issue_body.txt"
@@ -170,7 +171,8 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          RUNTIME_DIR="/tmp/codex-implement-${GITHUB_RUN_ID}"
+          [ -n "${RUNNER_TEMP:-}" ] || { echo "::error::RUNNER_TEMP is required for the isolated implementation runtime"; exit 1; }
+          RUNTIME_DIR="${RUNNER_TEMP%/}/codex-implement-${GITHUB_RUN_ID}"
           mkdir -p "${RUNTIME_DIR}"
 
           {
@@ -5423,7 +5425,7 @@ jobs:
           #      either races the cleanup or sees an empty path.
           #   2. The upload-artifact step's `path:` glob is more
           #      predictable when rooted at a single dir we control,
-          #      versus a fan-out of /tmp/codex-implement-${RUN_ID}/...
+          #      versus a fan-out of ${RUNNER_TEMP}/codex-implement-${RUN_ID}/...
           #      and ~/.codex/log/... that future cleanups might touch.
           # Files captured: per-attempt stderr (codex_log_attempt_*.txt
           # — where the OpenRouter response / finish_reason / tool-router
@@ -5516,7 +5518,11 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf "${GITHUB_WORKSPACE}/.codex-workflow-src-main"
-          if [[ "${RUNTIME_DIR:-}" =~ ^/tmp/codex-implement-[0-9]+$ ]]; then
+          runtime_parent="${RUNNER_TEMP:-}"
+          runtime_name="$(basename -- "${RUNTIME_DIR:-/}")"
+          if [ -n "${runtime_parent}" ] && \
+             [ "$(dirname -- "${RUNTIME_DIR:-/}")" = "${runtime_parent%/}" ] && \
+             [[ "${runtime_name}" =~ ^codex-implement-[0-9]+$ ]]; then
             rm -rf "${RUNTIME_DIR}"
           else
             echo "RUNTIME_DIR not set or unsafe; skipping cleanup"

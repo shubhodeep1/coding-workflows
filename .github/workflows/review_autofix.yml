@@ -2004,7 +2004,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          RUNTIME_DIR="/tmp/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
+          [ -n "${RUNNER_TEMP:-}" ] || { echo "::error::RUNNER_TEMP is required for the isolated review runtime"; exit 1; }
+          RUNTIME_DIR="${RUNNER_TEMP%/}/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
           PREVIOUS_REVIEWS_DIR="${RUNTIME_DIR}/previous_reviews"
           RUNTIME_CONTEXT_DIR="${RUNTIME_DIR}/runtime_context"
           job_start_epoch="$(date +%s)"
@@ -4990,7 +4991,7 @@ jobs:
         # recoverable editor failures when too little hard-timeout headroom
         # remains for the full validation/publish tail. Soft-deadline and
         # reviewer-phase partial finalizes retain the existing skip behavior.
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true' || (env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))) && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true' || (env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'sandbox_initialization_failure'))) && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         run: |
           set -euo pipefail
 
@@ -5013,6 +5014,9 @@ jobs:
           # claimed no changes needed" wording, which is wrong for this
           # case: the editor never produced output at all.
           EDITOR_NOOP_RECOVERABLE_FAILURE="false"
+          # Additive fail-closed signal for a workspace-guard namespace or
+          # preflight failure. The editor never starts on this path.
+          EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE="false"
 
           if [ ! -s "${EDITOR_SUMMARY_FILE:-}" ]; then
             echo "::warning::Editor summary file is missing or empty — editor never produced output."
@@ -5074,6 +5078,13 @@ jobs:
               EDITOR_NOOP_RECOVERABLE_FAILURE="true"
             fi
 
+            # ── Check 1d: Detect workspace sandbox initialization failure ──
+            if grep -qiE 'sandbox initialization failure prevented editor launch' "${EDITOR_SUMMARY_FILE}"; then
+              echo "::notice::Editor workspace sandbox failed to initialize — the editor was not launched and isolation stayed fail-closed."
+              EDITOR_NOOP_SUSPICIOUS="true"
+              EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE="true"
+            fi
+
             # ── Check 2: Reviewer audit sanity ──
             # When reviewer execution succeeded (REVIEWERS_SUCCESSFUL > 0)
             # but the editor claims no changes, verify the audit section has
@@ -5102,6 +5113,7 @@ jobs:
           echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
           echo "EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL}" >> "$GITHUB_ENV"
           echo "EDITOR_NOOP_RECOVERABLE_FAILURE=${EDITOR_NOOP_RECOVERABLE_FAILURE}" >> "$GITHUB_ENV"
+          echo "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE=${EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
         # The pre-review gate above only short-circuits deterministic stale/
@@ -7204,6 +7216,24 @@ jobs:
             BODY+=$'\n'
             BODY+="Auto-merge has been **blocked**."
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+          elif [ "${EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE:-false}" = "true" ]; then
+            MSG="⚠️ Editor sandbox initialization failed: #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="The workspace guard could not initialize, so the editor was not launched and no unsandboxed fallback was attempted."
+            MSG+=$'\n'
+            MSG+="Auto-merge blocked. Inspect the archived editor attempt stderr and runner namespace support."
+            MSG+=$'\n'
+            MSG+="PR: ${PR_URL}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+
+            BODY="⚠️ **Editor no-op suspicious** — workspace sandbox initialization failed, so the editor was not launched and no fix was applied this pass."
+            BODY+=$'\n\n'
+            BODY+="Isolation failed closed; no unsandboxed fallback was attempted. Inspect the archived editor attempt stderr for the namespace diagnostic."
+            BODY+=$'\n'
+            BODY+="Auto-merge has been **blocked**."
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
           elif [ "${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}" = "true" ]; then
             # Every editor attempt failed and review_apply_fixes.sh wrote
             # the recoverable_failure partial-finalize summary (validator
@@ -8307,6 +8337,8 @@ jobs:
               # and "unexpected_noop" stays the fallback value unchanged.
               if bool_env("EDITOR_NOOP_REFUSAL"):
                   editor_noop_failure_class = "refusal"
+              elif bool_env("EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE"):
+                  editor_noop_failure_class = "sandbox_initialization_failure"
               elif bool_env("EDITOR_NOOP_RECOVERABLE_FAILURE"):
                   editor_noop_failure_class = "recoverable_failure"
               else:
@@ -8453,6 +8485,8 @@ jobs:
                   return "stale_base_skip"
               if resume_state in {"no_progress", "round_budget_exhausted"} and not resume_should_continue:
                   return resume_state
+              if bool_env("EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE"):
+                  return "editor_sandbox_initialization_failure"
               if partial_finalize:
                   return "partial_finalize"
               if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):

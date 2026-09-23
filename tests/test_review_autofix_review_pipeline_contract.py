@@ -5447,6 +5447,11 @@ def test_review_pipeline_summary_classifies_editor_noop_recoverable_failure() ->
 			"recoverable_failure",
 			"editor_noop_recoverable_failure",
 		),
+		"sandbox_initialization_failure": (
+			{"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE": "true"},
+			"sandbox_initialization_failure",
+			"editor_sandbox_initialization_failure",
+		),
 		"refusal_precedence": (
 			{"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
 			"refusal",
@@ -5502,6 +5507,23 @@ def test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reas
 	assert summary["finalize_reason"] == "partial_finalize"
 	assert summary["slot_results"]["editor"]["failure_class"] == "recoverable_failure"
 	assert summary["slot_results"]["editor"]["status"] == "failed"
+
+
+def test_review_pipeline_summary_sandbox_failure_keeps_specific_finalize_reason() -> None:
+	summary = _run_review_pipeline_summary_step_harness(
+		extra_env={
+			"EDITOR_NOOP_SUSPICIOUS": "true",
+			"EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REASON": "sandbox_initialization_failure",
+			"AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor",
+			"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+		},
+	)["summary"]
+	assert summary["partial_finalize"] is True
+	assert summary["partial_finalize_reason"] == "sandbox_initialization_failure"
+	assert summary["finalize_reason"] == "editor_sandbox_initialization_failure"
+	assert summary["slot_results"]["editor"]["failure_class"] == "sandbox_initialization_failure"
 
 
 def test_review_partial_finalize_publish_safety_gate_is_wired() -> None:
@@ -6903,6 +6925,7 @@ def main() -> int:
 	test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety()
 	test_review_pipeline_summary_classifies_editor_noop_recoverable_failure()
 	test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reason_precedence()
+	test_review_pipeline_summary_sandbox_failure_keeps_specific_finalize_reason()
 	test_review_partial_finalize_publish_safety_gate_is_wired()
 	test_review_partial_finalize_timeout_extractor_handles_structured_yaml_layout()
 	test_review_partial_finalize_publish_safety_gate_keeps_validated_path_when_budget_remains()

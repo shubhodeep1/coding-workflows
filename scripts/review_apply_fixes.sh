@@ -1881,6 +1881,27 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   tmp_output="$(mktemp)"
   tmp_err="$(mktemp)"
 
+  editor_workspace_manifest="${RUNTIME_DIR}/post-agent-editor-${attempt}.manifest.json"
+  editor_workspace_paths="${RUNTIME_DIR}/post-agent-editor-${attempt}.paths.txt"
+  editor_workspace_report="${RUNTIME_DIR}/post-agent-editor-${attempt}.report.json"
+  editor_workspace_quarantine="${RUNTIME_DIR}/post-agent-editor-${attempt}.quarantine"
+  editor_workspace_snapshot_rc=0
+  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
+    --workspace "${PWD}" --manifest "${editor_workspace_manifest}" \
+    >> "${tmp_err}" 2>&1 || editor_workspace_snapshot_rc=$?
+  if [ "${editor_workspace_snapshot_rc}" -ne 0 ]; then
+    echo "AUTOFIX_EDITOR_SANDBOX_INITIALIZATION_FAILURE attempt=${attempt} status=${editor_workspace_snapshot_rc}" \
+      | tee -a "${tmp_err}" >&2
+    cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" 2>/dev/null || true
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+    emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
+    editor_partial_finalize_reason="sandbox_initialization_failure"
+    rm -f "${tmp_output}" "${tmp_err}"
+    break
+  fi
+
   # ── Heartbeat file for progress tracking ──
   hb_file="$(mktemp /tmp/heartbeat_editor.XXXXXX)"
   printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
@@ -2010,14 +2031,6 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     fi
   fi
   emit_editor_substate "BuildingPrompt" "${attempt}"
-  editor_workspace_manifest="${RUNTIME_DIR}/post-agent-editor-${attempt}.manifest.json"
-  editor_workspace_paths="${RUNTIME_DIR}/post-agent-editor-${attempt}.paths.txt"
-  editor_workspace_report="${RUNTIME_DIR}/post-agent-editor-${attempt}.report.json"
-  editor_workspace_quarantine="${RUNTIME_DIR}/post-agent-editor-${attempt}.quarantine"
-  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
-    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
-    --workspace "${PWD}" --manifest "${editor_workspace_manifest}"
   # Run OpenCode: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   emit_editor_substate "LaunchingAgentProcess" "${attempt}"
   emit_editor_substate "InitializingSession" "${attempt}"
@@ -2520,6 +2533,33 @@ Runtime failure path:
 - partial finalize requested at the soft deadline before another editor attempt
 __EDITOR_SUMMARY__
     echo "Editor stopped for budget headroom; continuing with partial-finalize summary."
+  elif [ "${editor_partial_finalize_reason}" = "sandbox_initialization_failure" ]; then
+    cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
+Changes made:
+- none (the workspace sandbox could not initialize, so the editor was not launched)
+
+Change status:
+- not-edited
+
+Already satisfied (suggested but already present):
+- none (the editor was not launched)
+
+Ignored suggestions (with short reason):
+- partial finalize requested after workspace sandbox initialization failed closed
+
+Reviewer files processed:
+- none (the editor was not launched)
+
+Review file issue audit:
+- none (the editor was not launched)
+
+Regression fingerprint:
+- unavailable (workspace sandbox initialization failure)
+
+Runtime failure path:
+- sandbox initialization failure prevented editor launch
+__EDITOR_SUMMARY__
+    echo "Editor workspace sandbox failed to initialize; continuing with fail-closed partial-finalize summary."
   elif [ "${editor_partial_finalize_reason}" = "refusal" ]; then
     cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
 Changes made:

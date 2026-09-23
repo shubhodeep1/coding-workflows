@@ -1,2 +1,3 @@
 <!-- changelog: fixed -->
 - **Post-agent validation now rejects ignored Python startup payloads before privileged workflow steps.** Implement, review editor, conflict resolver, review-blocked, and poller writer paths compare complete pre/post worktree manifests, quarantine hidden or ignored changes, and run Python validation with isolated no-site startup in a credentialless, network-denied sandbox.
+- **Workspace-guard startup now fails closed with accurate diagnostics.** Review, implementation, and poller runtimes use `RUNNER_TEMP` so systemd `PrivateTmp` cannot mask their namespace paths, while editor telemetry reports sandbox initialization failures instead of empty output.

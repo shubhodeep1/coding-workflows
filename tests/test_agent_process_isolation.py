@@ -8,6 +8,7 @@ import http.client
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import socket
 import tempfile
@@ -15,6 +16,8 @@ import threading
 import time
 from decimal import Decimal
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +27,93 @@ PACKAGE_PROXY = REPO_ROOT / "scripts" / "package_download_proxy.py"
 TRUSTED_GIT_WRITE = REPO_ROOT / "scripts" / "trusted_git_write.sh"
 CAUSALITY = REPO_ROOT / "scripts" / "security_audit_causality.py"
 WORKSPACE_GUARD = REPO_ROOT / "scripts" / "post_agent_workspace_guard.py"
+REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+POLLER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
+
+
+def _production_sandbox_environment() -> tuple[Path, dict[str, str]]:
+	runner_temp_value = os.environ.get("RUNNER_TEMP", "")
+	if os.environ.get("CI", "").lower() != "true":
+		pytest.skip("production systemd sandbox coverage runs on the ubuntu-latest CI runner")
+	assert runner_temp_value, "CI must provide RUNNER_TEMP for production sandbox coverage"
+	runner_temp = Path(runner_temp_value).resolve(strict=True)
+	assert runner_temp != Path("/tmp") and not runner_temp.is_relative_to(Path("/tmp"))
+	assert shutil.which("systemd-run"), "CI runner must provide systemd-run"
+	assert Path("/run/systemd/system").is_dir(), "CI runner must boot systemd"
+	environment = os.environ.copy()
+	environment.pop("UNTRUSTED_PROCESS_SANDBOX_TEST_MODE", None)
+	return runner_temp, environment
+
+
+def test_workspace_guard_runs_snapshot_and_reconcile_in_production_systemd_sandbox() -> None:
+	runner_temp, environment = _production_sandbox_environment()
+	with tempfile.TemporaryDirectory(dir=runner_temp, prefix="workspace-guard-systemd-") as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		manifest = runtime / "manifest.json"
+		base_command = [
+			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(workspace),
+			"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD),
+		]
+		snapshot = subprocess.run(
+			[*base_command, "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert snapshot.returncode == 0, snapshot.stderr
+		(workspace / "new-source.txt").write_text("safe\n", encoding="utf-8")
+		changed = runtime / "changed.txt"
+		report = runtime / "report.json"
+		reconcile = subprocess.run(
+			[
+				*base_command, "reconcile", "--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"), "--changed-paths-out", str(changed),
+				"--report", str(report),
+			],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert reconcile.returncode == 0, reconcile.stderr
+		assert changed.read_text(encoding="utf-8").splitlines() == ["new-source.txt"]
+		assert json.loads(report.read_text(encoding="utf-8"))["restored"] == ["new-source.txt"]
+
+
+def test_workspace_guard_rejects_private_tmp_masked_runtime_before_systemd_start() -> None:
+	runner_temp, environment = _production_sandbox_environment()
+	with tempfile.TemporaryDirectory(dir=runner_temp, prefix="workspace-guard-workspace-") as workspace_directory:
+		workspace = Path(workspace_directory)
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		with tempfile.TemporaryDirectory(dir="/tmp", prefix="workspace-guard-masked-") as runtime_directory:
+			runtime = Path(runtime_directory)
+			result = subprocess.run(
+				[
+					"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(workspace),
+					"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD),
+					"snapshot", "--workspace", str(workspace), "--manifest", str(runtime / "manifest.json"),
+				],
+				env=environment, capture_output=True, text=True, check=False,
+			)
+			assert result.returncode != 0
+			assert "PrivateTmp masks workspace-guard runtime path" in result.stderr
+			assert not (runtime / "manifest.json").exists()
+
+
+def test_workspace_guard_workflow_runtimes_are_rooted_below_runner_temp() -> None:
+	workflow_contracts = {
+		REVIEW_WORKFLOW: "${RUNNER_TEMP%/}/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}",
+		IMPLEMENT_WORKFLOW: "${RUNNER_TEMP%/}/codex-implement-${GITHUB_RUN_ID}",
+		POLLER_WORKFLOW: "${RUNNER_TEMP%/}/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}",
+	}
+	for workflow_path, expected_runtime in workflow_contracts.items():
+		workflow_text = workflow_path.read_text(encoding="utf-8")
+		assert expected_runtime in workflow_text, workflow_path
+		assert f'/tmp/{expected_runtime.split("/", 1)[1]}' not in workflow_text, workflow_path
+	implement_text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	assert '[[ "${runtime_name}" =~ ^codex-implement-[0-9]+$ ]]' in implement_text
+	assert '[ "$(dirname -- "${RUNTIME_DIR:-/}")" = "${runtime_parent%/}" ]' in implement_text
 
 
 def test_workspace_guard_quarantines_ignored_python_startup_payload() -> None:

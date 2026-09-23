@@ -628,6 +628,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_opencode_helpers.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_opencode_live_smoke_workflow.py
 
+      - name: Agent process isolation tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_agent_process_isolation.py
+
       - name: Codex/watchdog helper shell tests
         run: |
           set -euo pipefail

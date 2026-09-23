@@ -26,7 +26,73 @@ case "${role}" in
 	validator|workspace-guard) ;;
 	*) echo "untrusted_process_sandbox: invalid role" >&2; exit 2 ;;
 esac
-workspace="$(cd "${workspace}" && pwd -P)"
+
+canonicalize_sandbox_directory()
+{
+	local path_label="$1"
+	local candidate_path="$2"
+	local canonical_path=""
+	[ -n "${candidate_path}" ] \
+		|| { echo "untrusted_process_sandbox: ${path_label} path is empty" >&2; exit 1; }
+	case "${candidate_path}" in
+		/*) ;;
+		*) echo "untrusted_process_sandbox: ${path_label} path must be absolute" >&2; exit 1 ;;
+	esac
+	case "${candidate_path}" in
+		*[[:space:]]*|*[[:cntrl:]]*)
+			echo "untrusted_process_sandbox: ${path_label} path cannot be represented safely" >&2
+			exit 1
+			;;
+	esac
+	[ -d "${candidate_path}" ] \
+		|| { echo "untrusted_process_sandbox: ${path_label} directory is unavailable" >&2; exit 1; }
+	canonical_path="$(cd -- "${candidate_path}" && pwd -P)"
+	case "${canonical_path}" in
+		*[[:space:]]*|*[[:cntrl:]]*)
+			echo "untrusted_process_sandbox: canonical ${path_label} path cannot be represented safely" >&2
+			exit 1
+			;;
+	esac
+	printf '%s\n' "${canonical_path}"
+}
+
+canonicalize_sandbox_output_file()
+{
+	local path_label="$1"
+	local candidate_path="$2"
+	local parent_path=""
+	local file_name=""
+	case "${candidate_path}" in
+		/*) ;;
+		*) echo "untrusted_process_sandbox: ${path_label} path must be absolute" >&2; exit 1 ;;
+	esac
+	case "${candidate_path}" in
+		*[[:space:]]*|*[[:cntrl:]]*)
+			echo "untrusted_process_sandbox: ${path_label} path cannot be represented safely" >&2
+			exit 1
+			;;
+	esac
+	[ ! -L "${candidate_path}" ] \
+		|| { echo "untrusted_process_sandbox: ${path_label} path must not be a symlink" >&2; exit 1; }
+	parent_path="$(canonicalize_sandbox_directory "${path_label} parent" "$(dirname -- "${candidate_path}")")"
+	file_name="$(basename -- "${candidate_path}")"
+	if [ "${file_name}" = . ] || [ "${file_name}" = .. ]; then
+		echo "untrusted_process_sandbox: ${path_label} filename is invalid" >&2
+		exit 1
+	fi
+	printf '%s/%s\n' "${parent_path%/}" "${file_name}"
+}
+
+workspace="$(canonicalize_sandbox_directory workspace "${workspace}")"
+runtime_dir="$(canonicalize_sandbox_directory runtime "${runtime_dir}")"
+if [ "${role}" = workspace-guard ]; then
+	case "${runtime_dir}" in
+		/tmp|/tmp/*)
+			echo "untrusted_process_sandbox: sandbox initialization rejected: PrivateTmp masks workspace-guard runtime path ${runtime_dir}" >&2
+			exit 1
+			;;
+	esac
+fi
 provider_required=true
 case "${role}" in
 	validator|workspace-guard)
@@ -284,23 +350,25 @@ if [ "${provider_required}" = true ]; then
 	common_env+=("SANDBOX_PROVIDER_TOKEN=sandbox-proxy")
 fi
 runtime_write_paths=()
-while IFS='=' read -r environment_name environment_value; do
-	case "${environment_name}" in
-		CODEX_THREAD_REUSE_RUNTIME_DIR|RUNTIME_DIR)
-			;;
+if [ "${provider_required}" = true ]; then
+	while IFS='=' read -r environment_name environment_value; do
+		case "${environment_name}" in
+			CODEX_THREAD_REUSE_RUNTIME_DIR|RUNTIME_DIR)
+				;;
 			CODEX_THREAD_REUSE_OUTPUT_FILE|CODEX_THREAD_REUSE_LOG_FILE|CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE|CODEX_THREAD_REUSE_STATUS_FILE)
-			if [ -n "${environment_value}" ]; then
-				mkdir -p "$(dirname "${environment_value}")"
-				touch "${environment_value}"
-				runtime_write_paths+=("${environment_value}")
+				if [ -n "${environment_value}" ]; then
+					environment_value="$(canonicalize_sandbox_output_file "${environment_name}" "${environment_value}")"
+					touch "${environment_value}"
+					runtime_write_paths+=("${environment_value}")
+					common_env+=("${environment_name}=${environment_value}")
+				fi
+				;;
+			CODEX_THREAD_REUSE_*|MODEL_EDITOR|MODEL_VERBOSITY)
 				common_env+=("${environment_name}=${environment_value}")
-			fi
-			;;
-		CODEX_THREAD_REUSE_*|MODEL_EDITOR|MODEL_VERBOSITY)
-			common_env+=("${environment_name}=${environment_value}")
-			;;
-	esac
-done < <(env)
+				;;
+		esac
+	done < <(env)
+fi
 if [ "${config_format}" = opencode ]; then
 	common_env+=("UNTRUSTED_OPENCODE_CONFIG=${sandbox_config}" "OPENCODE_CONFIG=${sandbox_config}")
 elif [ "${config_format}" = codex ]; then
@@ -380,6 +448,40 @@ systemd_run=(systemd-run)
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
 	systemd_run=(sudo -n systemd-run --uid="$(id -u)" --gid="$(id -g)")
 fi
+sandbox_write_paths=()
+append_sandbox_write_path()
+{
+	local candidate_path="$1"
+	local recorded_path=""
+	local retained_paths=()
+	for recorded_path in "${sandbox_write_paths[@]:-}"; do
+		[ -n "${recorded_path}" ] || continue
+		case "${candidate_path}" in
+			"${recorded_path}"|"${recorded_path}"/*) return 0 ;;
+		esac
+	done
+	for recorded_path in "${sandbox_write_paths[@]:-}"; do
+		[ -n "${recorded_path}" ] || continue
+		case "${recorded_path}" in
+			"${candidate_path}"/*) ;;
+			*) retained_paths+=("${recorded_path}") ;;
+		esac
+	done
+	sandbox_write_paths=("${retained_paths[@]}" "${candidate_path}")
+}
+append_sandbox_write_path "${sandbox_dir}"
+for runtime_write_path in "${runtime_write_paths[@]:-}"; do
+	[ -n "${runtime_write_path}" ] && append_sandbox_write_path "${runtime_write_path}"
+done
+case "${role}" in
+	implement|implement-repair|editor|resolver|judge-fix)
+		append_sandbox_write_path "${workspace}"
+		;;
+	workspace-guard)
+		append_sandbox_write_path "${workspace}"
+		append_sandbox_write_path "${runtime_dir}"
+		;;
+esac
 systemd_properties=(
 	--property=NoNewPrivileges=yes
 	--property=PrivateTmp=yes
@@ -401,19 +503,11 @@ systemd_properties=(
 	--property=IPAddressDeny=any
 	--property="InaccessiblePaths=${credential_file:+${credential_file} }-/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh"
 	--property=ReadOnlyPaths=/
-	--property="ReadWritePaths=${sandbox_dir}${runtime_write_paths[*]:+ ${runtime_write_paths[*]}}"
+	--property="ReadWritePaths=${sandbox_write_paths[*]}"
 )
 if [ "${provider_required}" = true ]; then
 	systemd_properties+=(--property="IPAddressAllow=${proxy_host}/32")
 fi
-case "${role}" in
-	implement|implement-repair|editor|resolver|judge-fix)
-		systemd_properties+=(--property="ReadWritePaths=${workspace}")
-		;;
-	workspace-guard)
-		systemd_properties+=(--property="ReadWritePaths=${workspace} ${runtime_dir}")
-		;;
-esac
 for protected_git_path in "${git_metadata_paths[@]:-}"; do
 	[ -n "${protected_git_path}" ] || continue
 	if [ "${provider_required}" = true ]; then
@@ -422,7 +516,12 @@ for protected_git_path in "${git_metadata_paths[@]:-}"; do
 		systemd_properties+=(--property="ReadOnlyPaths=${protected_git_path}")
 	fi
 done
-"${systemd_run[@]}" --quiet --wait --pipe --collect --service-type=exec \
+sandbox_command_rc=0
+"${systemd_run[@]}" --wait --pipe --collect --service-type=exec \
 	"${systemd_properties[@]}" \
 	--working-directory="$([ "${provider_required}" = true ] && printf '%s' "${workspace}" || printf '%s' "${sandbox_runtime}")" \
-	env -i "${common_env[@]}" "$@"
+	env -i "${common_env[@]}" "$@" || sandbox_command_rc=$?
+if [ "${sandbox_command_rc}" -ne 0 ]; then
+	echo "untrusted_process_sandbox: sandbox process failed role=${role} status=${sandbox_command_rc}" >&2
+fi
+exit "${sandbox_command_rc}"
