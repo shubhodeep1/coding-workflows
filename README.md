@@ -1007,6 +1007,22 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reflowed). If upstream's `@stable` ref predates the script, both steps log
 > and no-op.
 
+> **Interactive session hooks delivered by the `.claude/` sync:** the same
+> `Sync .claude/ assets from upstream` step ships three `PreToolUse` /
+> `PostToolUse` hooks with their `settings.json` wiring, each documented in
+> the root `CLAUDE.md` that syncs alongside them: the merged-PR commit guard
+> (`hooks/pr_merge_status_guard.py`, §21), the PR-watch guard
+> (`hooks/pr_watch_guard.py`, §25), and the post-push PR status check-in
+> reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
+> interactive session start a small Haiku checker session for every pull
+> request it pushes; the checker runs `.claude/scripts/check_in_status.py` every
+> 3 hours (re-armed with `send_later`), and once the PR merges or closes it
+> reports the next steps (or that the pushing session can be closed) without
+> waking the pushing session. It never subscribes to PR activity and never
+> acts on CI or review comments. The same sync ships the `settings.json`
+> permission allowlist for the tools these commands call. Nothing to
+> configure in the consumer.
+
 > **Audit identity and regeneration:**
 > `scripts/security/check-npm-audit.js` matches findings on
 > `severity|package|advisoryId` (`advisoryId` prefers GHSA, then CVE).

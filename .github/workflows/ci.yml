@@ -411,6 +411,16 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
 
+      - name: PR status check-in reminder hook tests (CLAUDE.md §26)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_check_in_reminder.py
+
+      - name: Check-in status helper tests (/implement-plan-claude, CLAUDE.md §26)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status.py
+
       - name: Orchestrate lib unit tests
         run: |
           set -euo pipefail
