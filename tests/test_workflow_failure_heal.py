@@ -1425,11 +1425,12 @@ def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapsh
 		(work / ".codex-workflow-src-main" / "scripts" / "workflow_failure_heal_autofix_report.sh").write_text("main-reporter\n", encoding="utf-8")
 		# Branch copy of an unrelated already-staged file must not be touched.
 		(support / "workflow_failure_heal.py").write_text("branch-heal\n", encoding="utf-8")
+		reporter_backfill_env = {key: value for key, value in os.environ.items() if key not in {"BASH_ENV", "ENV"}}
 		result = subprocess.run(
 			["bash", "-euo", "pipefail", "-c", loop],
 			cwd=work,
 			env={
-				**os.environ,
+				**reporter_backfill_env,
 				"REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS": workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"],
 				"SUPPORT_SCRIPTS_DIR": str(support),
 				"SCRIPT_REF": SHA_A,
@@ -1453,7 +1454,7 @@ def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapsh
 			["bash", "-euo", "pipefail", "-c", loop],
 			cwd=work,
 			env={
-				**os.environ,
+				**reporter_backfill_env,
 				"REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS": workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"],
 				"SUPPORT_SCRIPTS_DIR": str(support),
 				"SCRIPT_REF": SHA_A,
