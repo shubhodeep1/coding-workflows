@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "Merged changes commonly modify workflow YAML and supporting scripts together with targeted tests under tests/. Future workflow changes should add or update contract tests for permissions, job dependencies, script references, failure handling, labels, and review-gate behavior rather than relying only on runtime execution.",
+  "fingerprint": "3ad3e023e250202d0a978b9df94bd7b6d4d939e6dd98b9ec0961643545306d5e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35830638126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35830638126",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4255",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4279",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4290",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4300",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4305",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4259",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4280",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4291",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4301",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4306"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260923071741_a04d188801",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is protected by contract-focused tests alongside shell and Python helper changes.",
+  "timestamps": {
+    "created_at": "2026-09-23T07:17:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
