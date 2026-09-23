@@ -29,7 +29,10 @@
 #        workflow-defect, inconclusive -> issue in coding-workflows
 #          (label ai:workflow-heal, `Target branch: stable` so the fix is a
 #          hotfix on the stable line; a failed release run targets the branch it
-#          failed on)
+#          failed on; a failed review/autofix run on a pull request in this
+#          repo targets that pull request's head branch, because the run
+#          executed the PR's own workflow code — falling back to stable when
+#          the branch no longer exists)
 #        consumer-app-defect           -> issue in the source repository
 #        consumer-config               -> Telegram ERROR + comment, no issue
 #        transient                     -> Telegram DEBUG + comment, no issue
@@ -567,17 +570,42 @@ NEW_ISSUE_URL=""
 case "${CLASSIFICATION}" in
 	workflow-defect|inconclusive)
 		TARGET_BRANCH="${TARGET_BRANCH_DEFAULT}"
+		TARGET_BRANCH_SOURCE="default"
 		if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAD_BRANCH}" ]; then
 			TARGET_BRANCH="${HEAD_BRANCH}"
+			TARGET_BRANCH_SOURCE="failed_run_branch"
+		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ] && [ -n "${HEAD_BRANCH}" ]; then
+			# A review/autofix run in this repo executes the pull request's own
+			# workflow code (review_autofix.yml resolves SCRIPT_REF to
+			# github.sha here), so the defect it hit lives on that PR's branch
+			# and may not exist on the stable line at all. A fix aimed at
+			# stable cannot unblock the PR and would drag the PR's unreleased
+			# changes into stable, so the fix targets the PR's head branch.
+			TARGET_BRANCH="${HEAD_BRANCH}"
+			TARGET_BRANCH_SOURCE="source_pr_head"
 		fi
 		if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
-			log "warn target_branch_missing branch=${TARGET_BRANCH}; issue will target the default branch"
-			TARGET_BRANCH=""
+			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
+				log "warn source_pr_branch_missing branch=${TARGET_BRANCH}; falling back to ${TARGET_BRANCH_DEFAULT}"
+				TARGET_BRANCH="${TARGET_BRANCH_DEFAULT}"
+				TARGET_BRANCH_SOURCE="default"
+				if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
+					log "warn target_branch_missing branch=${TARGET_BRANCH}; issue will target the default branch"
+					TARGET_BRANCH=""
+				fi
+			else
+				log "warn target_branch_missing branch=${TARGET_BRANCH}; issue will target the default branch"
+				TARGET_BRANCH=""
+			fi
 		fi
 		_open_issue "${SELF_REPO}" "${TARGET_BRANCH}" || exit 1
-		log "created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} target_branch=${TARGET_BRANCH:-default} fp=${FP} gen=${GEN} root=${ROOT} source=${SOURCE_LABEL}"
+		log "created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} target_branch=${TARGET_BRANCH:-default} fp=${FP} gen=${GEN} root=${ROOT} source=${SOURCE_LABEL} target_branch_source=${TARGET_BRANCH_SOURCE}"
 		HOTFIX_NOTE=""
-		[ -z "${TARGET_BRANCH}" ] || HOTFIX_NOTE=" as a hotfix on \`${TARGET_BRANCH}\`"
+		if [ -n "${TARGET_BRANCH}" ] && [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
+			HOTFIX_NOTE=" on this pull request's own branch \`${TARGET_BRANCH}\`"
+		elif [ -n "${TARGET_BRANCH}" ]; then
+			HOTFIX_NOTE=" as a hotfix on \`${TARGET_BRANCH}\`"
+		fi
 		{
 			echo "<!-- workflow-failure-heal:outcome -->"
 			echo "Workflow failure heal opened ${NEW_ISSUE_URL} in \`${SELF_REPO}\` (classification \`${CLASSIFICATION}\`, generation ${GEN}/${MAX_DEPTH}). The fix will ship through the normal pipeline${HOTFIX_NOTE}."

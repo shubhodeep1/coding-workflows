@@ -42,6 +42,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
    recovery treat the label as an intentional wait), and the merge-topology gate hands a
    content conflict to the resolver tail *before* the reviewer/editor spend
    (`PRE_REVIEW_CONFLICT_RESOLVE_ENABLED`, sets `AUTOFIX_PRE_REVIEW_RESOLVE`).
+   The `gate` job also runs an identical-failure fingerprint cap: every
+   failure comment ends with a `review-autofix-failure:v1` marker (head,
+   reason, fingerprint of the failing stage's stderr), and once
+   `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` (default 3) trailing markers on
+   the current head share one fingerprint the gate skips the run
+   (`skip_reason=fingerprint_cap`) and the `fingerprint-cap-block` job labels
+   the linked issues (or the PR) `ai:review-blocked`, posts one
+   `review-autofix-failure-cap:v1` comment and sends an
+   `identical_failure_cap` heal report (`REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED`;
+   force_rb_judge dispatches bypass it).
 8. **conflict resolver** (`prompts/conflict-resolver.txt`,
    `integration-sync-conflict-resolver.txt`) — merge-conflict resolution
    inside autofix. In consumer repos the resolver, the review-blocked judge
@@ -83,7 +93,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
     the intake fetches the failed job logs, diagnoses against the source at
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
-    `Target branch: stable`; `consumer-app-defect` → issue in the consumer;
+    `Target branch: stable`, or the PR's head branch when a review/autofix
+    failure comes from a PR in this repo, since that run executed the PR's
+    own workflow code; `consumer-app-defect` → issue in the consumer;
     `consumer-config` / `transient` → Telegram + comment only), de-dupes by
     fingerprint (label `ai:workflow-heal`), caps the lineage at
     `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
@@ -1136,6 +1148,10 @@ and shipped:
 - `WORKFLOW_HEAL_REPORT`
 - `WORKFLOW_HEAL_AUTOFIX_REPORT`
 - `WORKFLOW_HEAL`
+- `AUTOFIX_FINGERPRINT`
+- `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
+- `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
+- `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
 - `WORKTREE_REGISTER`
 - `WORKTREE_DEREGISTER`
 - `WORKTREE_GC`
@@ -1308,6 +1324,10 @@ LOG_PREFIX.name=CHECK_TRIAGE
 LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL
+LOG_PREFIX.name=AUTOFIX_FINGERPRINT
+LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
+LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
+LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
 LOG_PREFIX.name=WORKTREE_REGISTER
 LOG_PREFIX.name=WORKTREE_DEREGISTER
 LOG_PREFIX.name=WORKTREE_GC

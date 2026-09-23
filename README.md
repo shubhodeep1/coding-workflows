@@ -669,6 +669,7 @@ Each `review_autofix.yml` iteration builds a small local review-artifact chain b
 - `floor_tags.txt` is produced by `scripts/review_floor_rules.sh`. With `REVIEW_FLOOR_RULES_ENABLED=1` (default), floor matches are treated as non-skippable signals. Invalid or missing `REVIEW_FLOOR_KEYWORDS_FILE` overrides fail open to the built-in keyword catalog.
 - `consolidator_raw.txt` and `review_issues.txt` are advisory only. The consolidator is enabled by default, but empty output, parser failures, or uncovered anchors never gate the run — the editor still works from `reviewer_bundle.txt`.
 - `ledger_status.txt` plus `REVIEW_LEDGER_PATH` (default `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt`) persist per-PR issue history across autofix iterations via `actions/cache`. Statuses move through `NEW`, `PERSISTING`, `FIXED`, `RESURGENT`, and `accepted-residual`; after `REVIEW_LEDGER_PERSIST_LIMIT=2`, still-open issues are collapsed to `accepted-residual` stubs in `review_issues.txt` while the ledger keeps the durable history.
+- The editor summary must name every `review_*.txt` file under both `Reviewer files processed:` and `Review file issue audit:` (with the four audit counts); a missing entry fails the editor attempt. The sha256 each entry carries is checked but no longer gates: a missing or miscopied hash logs `::warning::EDITOR_REVIEWER_CHECKSUM_UNVERIFIED attempt=<n> file=<path> expected_sha=<sha> path_entries=<n> checksum_matches=<n>` and the attempt proceeds, because the model garbles 64-character hashes often enough to discard correct edits (release gate run 35802596362).
 - `REVIEW_REVIEWER_CHECKLIST_ENABLED=1` appends the checklist prompt when the support prompt is present.
 - `REVIEW_REVIEWER_ITERATION_SCOPING=1` lets later reviewer passes focus on last-run changed files plus actionable ledger rows; the first pass remains full-diff. The current workflow summary on this branch still reports `Reviewer scope = full-diff`, so use the runtime artifacts when debugging exact scope.
 
@@ -1267,7 +1268,16 @@ through `clarify → plan → implement → review`.
   implement work against the stable line and the PR is a hotfix on `stable`;
   `auto-release-stable.yml` releases it within its 6-hourly schedule and
   `forward-merge-stable-to-main.yml` carries it to `main`. A failed release run
-  targets the branch it failed on. `consumer-app-defect` opens the issue **in
+  targets the branch it failed on. A failed review/autofix run on a pull
+  request **in coding-workflows itself** targets that pull request's head
+  branch instead: `review_autofix.yml` resolves `SCRIPT_REF` to `github.sha`
+  here, so the run executed the PR's own workflow code, and the defect may not
+  exist on `stable` at all. A `stable` hotfix could not unblock the PR, and
+  merging it would carry the PR's unreleased changes into `stable`. When the
+  PR branch no longer exists, the issue falls back to `stable` and the intake
+  logs `warn source_pr_branch_missing`. The `created` log line records the
+  choice as `target_branch_source=default|failed_run_branch|source_pr_head`.
+  `consumer-app-defect` opens the issue **in
   the consumer repository** for its own pipeline. `consumer-config` (missing
   secret, variable, permission) sends a Telegram ERROR with the diagnosis and
   opens nothing; `transient` sends a DEBUG note and opens nothing. Every
@@ -1529,8 +1539,10 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` | `3` | coding-workflows only. Max heal generations for one failure fingerprint before the chain is escalated (`ai:workflow-heal-escalated` + Telegram CRITICAL) instead of opening another issue. |
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
-| `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead. |
+| `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets that PR's head branch (falling back to this value when the branch is gone). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
+| `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED` | `true` | Identical-failure fingerprint cap in the `gate` job of `review_autofix.yml`. Every review/autofix failure comment ends with a `<!-- review-autofix-failure:v1 head=… reason=… fp=… degraded=… run=… -->` marker, where `fp` fingerprints the failure reason plus the normalised stderr of the editor and Collect PR metadata stages. When the trailing markers for the current head (authored by the `GH_PAT` account) share one fingerprint `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` times, the gate logs `AUTOFIX_FINGERPRINT_CAP_TRIPPED`, skips the run (`skip_reason=fingerprint_cap`, no reviewer or editor call), and the `fingerprint-cap-block` job labels the linked issues `ai:review-blocked` (the PR itself when it has none), posts one `review-autofix-failure-cap:v1` comment, sends an `identical_failure_cap` heal report and a Telegram WARNING. Later dispatches on the same head log `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`; a push resets the count; `force_rb_judge` dispatches bypass it; lookup failures log `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED` and run normally. Set to `false` to stop evaluating the cap (the markers keep being written). |
+| `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` | `3` | Identical failures on one head that trip the fingerprint cap above. Non-numeric or `0` falls back to `3`. |
 | `WORKFLOW_HEAL_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-5.6-sol`) | coding-workflows only. Diagnosis model for the workflow failure heal intake. |
 | `THINKING_LEVEL_WORKFLOW_HEAL` | `xhigh` | coding-workflows only. Reasoning effort for the heal diagnosis call. |
 | `VERBOSITY_WORKFLOW_HEAL` | `low` | coding-workflows only. Codex verbosity for the heal diagnosis call. |
@@ -1861,6 +1873,7 @@ The retrigger guard reads `headRefName` and `baseRefName` from `${PR_META_FILE}`
 - **Intermediate PR judge picks `close_and_reissue`**: the sub-issue PR closes and a new issue is created with refined guidance. The orchestrator's existing closed-PR / failed-sub-issue handling resumes from there. On a small sub-issue diff this is generally safe and is preferable to merging a fundamentally flawed approach into the integration branch where it would surface (much more expensively) on the final-merge judge cycle.
 - **Intermediate PR with persistent CI failure**: autofix attempts CI fixes across its `MAX_AUTOFIX_ITERATIONS` runs; if CI stays red, `_pr_checks_completed` returns false and the orchestrator does not merge. Existing stall-recovery contracts (`STALL_THRESHOLD_DONE_MINUTES`, `STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES`) recover the issue.
 - **Final PR with bad judge verdict loop**: with the cap bypassed, the loop continues indefinitely as long as judge keeps producing `[judge-fix]` commits. Operator intervention path: set `ORCH_PR_AUTOFIX_FLOW_ENABLED=false` to restore the `MAX_JUDGE_CYCLES` cap, then take action against the PR.
+- **Same failure on every run of one head**: a deterministic failure (a broken editor precondition, a missing staged file) fails each review run the same way, and the sweep and stall poller would keep re-dispatching it. After `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` (default 3) failure comments on the head carry the same `review-autofix-failure:v1` fingerprint, the gate stops the next run before any model call and the `fingerprint-cap-block` job labels the linked issues `ai:review-blocked`, which hands the PR to the review-blocked judge through the normal stall recovery, and reports the failure to workflow failure heal. Pushing a fix resets the count. Operator lever: `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false`.
 - **Branch naming mismatch**: if your orchestrator pushes to a branch that does not match `^orchestrator/project-`, the classifier falls through to `other` and the final-PR auto-merge suppressor also treats the PR like a non-orchestrator branch. Operationally you lose both the `orch_final` cap bypass and the integration-PR auto-merge exclusion until you override `ORCH_INTEGRATION_BRANCH_PATTERN` to match your naming.
 
 **Operational steps**:

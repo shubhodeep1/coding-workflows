@@ -2494,7 +2494,7 @@ jobs:
           done
 
           if [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
-            echo "::error::Retry review run did not complete within 25 minutes"
+            echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
             echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
             exit 1
           fi
@@ -4143,6 +4143,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rereview_and_approval_rubric.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_surface_prompt_hardening.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py

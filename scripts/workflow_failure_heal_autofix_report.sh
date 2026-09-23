@@ -46,6 +46,11 @@
 #   REPORT_SUMMARY_LINE_FILE               file holding the REVIEW_AUTOFIX_RUN_SUMMARY_V1 line
 #   AUTOFIX_EDITOR_EMPTY_NOOP, EDITOR_CHANGES_LOST, EDITOR_NOOP_REFUSAL,
 #   EDITOR_NOOP_SUSPICIOUS, RESOLVER_ESCALATED   run flags (true/false)
+#   AUTOFIX_FAILURE_REASON                 failure_reason chosen by the caller (the
+#                                          identical-failure cap passes identical_failure_cap);
+#                                          wins over the flags when it is a valid reason token
+#   AUTOFIX_FAILURE_FP                     fingerprint of the run's review-autofix-failure:v1
+#                                          marker, sent as failure_fingerprint when 64 hex
 
 set -uo pipefail
 
@@ -114,7 +119,9 @@ FINALIZE_REASON=""
 if [ -s "${SUMMARY_LINE_FILE}" ]; then
 	FINALIZE_REASON="$(sed -n 's/^REVIEW_AUTOFIX_RUN_SUMMARY_V1 //p' "${SUMMARY_LINE_FILE}" | head -1 | jq -r '.finalize_reason // ""' 2>/dev/null || echo "")"
 fi
-if [ "${AUTOFIX_EDITOR_EMPTY_NOOP:-false}" = "true" ]; then
+if [ -n "${AUTOFIX_FAILURE_REASON:-}" ] && [[ "${AUTOFIX_FAILURE_REASON}" =~ ^[a-z][a-z0-9_:-]{0,79}$ ]]; then
+	FAILURE_REASON="${AUTOFIX_FAILURE_REASON}"
+elif [ "${AUTOFIX_EDITOR_EMPTY_NOOP:-false}" = "true" ]; then
 	FAILURE_REASON="editor_empty_noop"
 elif [ "${EDITOR_CHANGES_LOST:-false}" = "true" ]; then
 	FAILURE_REASON="editor_changes_lost"
@@ -185,6 +192,9 @@ BUILD_ARGS=(--repo "${REPO}" --pr-json "${PR_JSON_FILE}" --workflow-name "${WORK
 	--wrapper-sha "${WRAPPER_SHA}" --reporter-run-url "${RUN_URL}")
 if [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
 	BUILD_ARGS+=(--comments-json "${COMMENTS_FILE}")
+fi
+if [[ "${AUTOFIX_FAILURE_FP:-}" =~ ^[0-9a-f]{64}$ ]]; then
+	BUILD_ARGS+=(--failure-fingerprint "${AUTOFIX_FAILURE_FP}")
 fi
 if ! python3 "${HEAL_PY}" build-autofix-payload "${BUILD_ARGS[@]}" > "${PAYLOAD_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
 	log "skip reason=payload_build_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"
