@@ -6618,6 +6618,115 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			]
 
 
+def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
+	gate = _step_block("Evaluate review gate")
+	assert "REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}" in gate
+	assert "REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}" in gate
+	assert '[ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ]' in gate
+	assert "''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;" in gate
+	# One comments call serves the terminal same-head skip and the cap (§15);
+	# its filter keeps both marker families.
+	assert gate.count('gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"') == 1
+	assert gate.count("gh api user --jq") == 1
+	assert 'contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")' in gate
+	assert 'contains("review-autofix-failure")' in gate
+	assert gate.count("gate_fetch_marker_comments\n") >= 2
+	assert "autofix-identical-failure-count" in gate
+	assert '--author-login "${gate_marker_author_login}"' in gate
+	# The cap runs after the terminal skip and before the deterministic skip,
+	# and never swallows a force_rb_judge dispatch.
+	terminal = gate.index('SKIP_REASON="terminal_same_head"')
+	cap = gate.index('SKIP_REASON="fingerprint_cap"')
+	deterministic = gate.index("# Deterministic pre-review skip (last gate check):")
+	assert terminal < cap < deterministic
+	assert 'if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then' in gate
+	for output in ("fingerprint_cap", "fingerprint_cap_fp", "fingerprint_cap_reason", "fingerprint_cap_count", "fingerprint_cap_max", "fingerprint_cap_already_applied", "fingerprint_cap_marker_author_login"):
+		assert f'echo "{output}=${{' in gate, output
+		assert f"{output}: ${{{{ steps.evaluate.outputs.{output} }}}}" in _job_block("gate"), output
+	gate_job = _job_block("gate")
+	for name in ("Checkout fingerprint cap helper", "Checkout fingerprint cap helper main snapshot"):
+		block = _step_block(name)
+		assert "continue-on-error: true" in block
+		assert "sparse-checkout: scripts/workflow_failure_heal.py" in block
+		assert "if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}" in block
+		assert gate_job.index(f"- name: {name}\n") < gate_job.index("- name: Evaluate review gate")
+
+
+def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
+	job = _job_block("fingerprint-cap-block")
+	assert "needs: gate" in job
+	assert "group: fingerprint-cap-${{ github.repository }}-${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.run_id }}" in job
+	assert "cancel-in-progress: false" in job
+	assert "if: ${{ needs.gate.outputs.fingerprint_cap == 'true' && needs.gate.outputs.fingerprint_cap_already_applied != 'true' }}" in job
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in job
+	assert "PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in job
+	assert "FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}" in job
+	assert "FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}" in job
+	assert 'fresh_cap_comments_file="${work_dir}/fresh_comments.json"' in job
+	assert "reason=fresh_cap_marker_lookup_failed" in job
+	# Idempotent: a cap marker already on the head ends the job before any write.
+	already = job.index("AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=")
+	assert already < job.index('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"')
+	assert already < job.index('ensure_label_exists "ai:review-blocked"')
+	# One PR read; linked issues via the strict title/body fallback, else the PR.
+	assert job.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+	assert "extract_repo_scoped_issue_refs_from_text" in job
+	assert 'set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"' in job
+	assert '"repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked"' in job
+	assert "**AI review/autofix stopped: identical failure repeated**" in job
+	assert "<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP}" in job
+	assert 'AUTOFIX_FAILURE_REASON="identical_failure_cap"' in job
+	assert 'WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK="1"' in job
+	assert 'tg_send_msg "${MSG}" "WARNING"' in job
+	assert "head_moved" in job
+
+
+def test_identical_failure_fingerprint_marker_on_every_failure_comment() -> None:
+	# The no-output, changes-lost and no-op-suspicious comments post before
+	# "Assemble failure evidence" and compute the marker inline.
+	inline_steps = {
+		"Post editor summary comment": 1,
+		"Telegram editor-changes-lost warning": 1,
+		"Telegram editor-noop-suspicious warning": 3,
+	}
+	for name, posts in inline_steps.items():
+		block = _step_block(name)
+		assert "autofix-failure-fingerprint" in block, name
+		assert '--head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}"' in block, name
+		assert block.count('BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"') == posts, name
+	assert '--failure-reason "editor_empty_noop"' in _step_block("Post editor summary comment")
+	failure_comment = _step_block("Post review-blocked comment on PR (workflow failure)")
+	assert 'BODY+=$\'\\n\\n\'"${AUTOFIX_FAILURE_MARKER}"' in failure_comment
+	# Every call site fingerprints the same evidence files, so one run's
+	# comments carry one fingerprint.
+	evidence = _step_block("Assemble failure evidence")
+	files = (
+		'--evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt"',
+	)
+	for name in (*inline_steps, "Assemble failure evidence"):
+		block = _step_block(name)
+		for line in files:
+			assert line in block, (name, line)
+	assert "if: always() && (failure() || env.EDITOR_NOOP_SUSPICIOUS == 'true' || env.EDITOR_CHANGES_LOST == 'true')" in evidence
+	for exported in ("AUTOFIX_FAILURE_FP=", "AUTOFIX_FAILURE_REASON=", "AUTOFIX_FAILURE_MARKER="):
+		assert exported in evidence
+	assert "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_missing" in evidence
+	text = _workflow_text()
+	assert text.index("- name: Assemble failure evidence") < text.index("- name: Mark linked issues review-blocked (workflow failure)")
+	assert text.index("- name: Assemble failure evidence") < text.index("- name: Post review-blocked comment on PR (workflow failure)")
+	assert "AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in _job_block("codex-agent")
+	assert 'echo "AUTOFIX_FAILURE_HEAL_PY=${AUTOFIX_FAILURE_HEAL_PY}" >> "$GITHUB_ENV"' in text
+
+
+def test_identical_failure_fingerprint_stage_stderr_is_captured() -> None:
+	editor = _step_block("Apply fixes with editor model")
+	tee = '2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)'
+	assert editor.count('bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" ' + tee) == 2
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh" 2> >(tee -a "${RUNTIME_DIR}/collect_metadata_stderr.txt" >&2)' in _step_block("Collect PR metadata")
+
+
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
@@ -6716,6 +6825,10 @@ def main() -> int:
 	test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha()
 	test_review_blocked_judge_merges_are_bound_to_judged_head_sha()
 	test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha()
+	test_identical_failure_fingerprint_cap_gate_wiring()
+	test_identical_failure_fingerprint_cap_block_job_wiring()
+	test_identical_failure_fingerprint_marker_on_every_failure_comment()
+	test_identical_failure_fingerprint_stage_stderr_is_captured()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 

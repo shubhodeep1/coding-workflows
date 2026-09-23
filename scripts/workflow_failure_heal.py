@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -100,6 +101,16 @@ AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
 	"Editor no-op suspicious",
 )
 
+# Identical-failure fingerprint cap (review_autofix.yml gate). Every failure
+# comment the review workflow posts ends with a failure marker; the gate counts
+# the trailing markers for the current head that share the newest fingerprint
+# and stops the run once REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL is reached.
+FAILURE_MARKER_TAG = "review-autofix-failure:v1"
+FAILURE_CAP_MARKER_TAG = "review-autofix-failure-cap:v1"
+FAILURE_FINGERPRINT_WORKFLOW = "review_autofix"
+FAILURE_EVIDENCE_TAIL_BYTES = 65_536
+DEFAULT_FAILURE_FINGERPRINT_MAX_IDENTICAL = 3
+
 ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
 MAX_RUN_REFS = 3
@@ -130,6 +141,11 @@ _CLASSIFICATION_RE = re.compile(r"^##\s*Classification\s*$", re.IGNORECASE | re.
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s?")
+_FAILURE_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
+_FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
+_MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
+_FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+_UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
 
 # Highest-signal first: the first bucket with any matching line wins.
 _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -449,15 +465,20 @@ def build_autofix_failure_payload(
 	wrapper_sha: str | None,
 	reporter_run_url: str | None,
 	now: datetime | None = None,
+	failure_fingerprint: str | None = None,
 ) -> dict[str, Any]:
-	"""Build the dispatch payload for a failed review/autofix run on a PR."""
+	"""Build the dispatch payload for a failed review/autofix run on a PR.
+
+	``failure_fingerprint`` is the optional ``fp`` of the run's
+	``review-autofix-failure:v1`` marker; it is sent only when it is 64 hex.
+	"""
 	now = now or _utc_now()
 	body = sanitize_text(pr.get("body"))
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
 	run_number = _positive_int(run_id)
 	head_sha = str(pr.get("head", {}).get("sha") or "").lower() if isinstance(pr.get("head"), dict) else ""
 	head_branch = str(pr.get("head", {}).get("ref") or "") if isinstance(pr.get("head"), dict) else ""
-	return {
+	payload: dict[str, Any] = {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
 		"source_kind": "autofix_failure",
@@ -482,6 +503,10 @@ def build_autofix_failure_payload(
 		"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
 		"reported_at": _iso(now),
 	}
+	fp = str(failure_fingerprint or "").strip().lower()
+	if _FP_HEX_RE.match(fp):
+		payload["failure_fingerprint"] = fp
+	return payload
 
 
 def validate_payload(payload: Any) -> dict[str, Any]:
@@ -514,6 +539,8 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	failure_reason = payload.get("failure_reason")
 	failure_reason = failure_reason if isinstance(failure_reason, str) and _FAILURE_REASON_RE.match(failure_reason) else None
 	failure_streak = _positive_int(payload.get("failure_streak")) if payload.get("failure_streak") is not None else None
+	failure_fingerprint = str(payload.get("failure_fingerprint") or "").strip().lower()
+	failure_fingerprint = failure_fingerprint if _FP_HEX_RE.match(failure_fingerprint) else None
 	if kind == "autofix_failure":
 		if issue_number is None:
 			raise ValueError("issue_number (the pull request number) is required for autofix_failure reports")
@@ -523,6 +550,7 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	else:
 		failure_reason = None
 		failure_streak = None
+		failure_fingerprint = None
 
 	run_refs: list[dict[str, str]] = []
 	for ref in payload.get("run_refs") or []:
@@ -575,6 +603,7 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"failure_reason": failure_reason,
 		"failure_evidence": sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT) if kind == "autofix_failure" else "",
 		"failure_streak": failure_streak,
+		"failure_fingerprint": failure_fingerprint,
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
@@ -687,6 +716,204 @@ def fingerprint(workflow_name: str, failing_step: str, signature: str) -> str:
 		]
 	)
 	return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Identical-failure fingerprint cap (review_autofix.yml)
+# ---------------------------------------------------------------------------
+
+
+def safe_token(value: Any, limit: int = 80) -> str:
+	"""Reduce a value to ``[A-Za-z0-9_.-]`` so it is safe in a log line or marker."""
+	return _UNSAFE_TOKEN_RE.sub("", str(value or ""))[:limit]
+
+
+def read_failure_evidence(paths: Iterable[str]) -> str:
+	"""Join the bounded tails of the stage stderr files that exist.
+
+	Every call site of the review workflow passes the same file list, so the
+	fingerprint of one run's failure is identical in every comment it posts.
+	Missing or empty files are skipped.
+	"""
+	chunks: list[str] = []
+	for path in paths:
+		if not path:
+			continue
+		try:
+			data = Path(path).read_bytes()
+		except OSError:
+			continue
+		if not data:
+			continue
+		chunks.append(data[-FAILURE_EVIDENCE_TAIL_BYTES:].decode("utf-8", errors="replace"))
+	return "\n".join(chunks)
+
+
+def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = "") -> str:
+	"""Name a review/autofix failure from the run flags.
+
+	Same precedence as ``workflow_failure_heal_autofix_report.sh`` (tests pin
+	the parity): an explicit ``AUTOFIX_FAILURE_REASON``, then the editor flags,
+	then the run summary's ``finalize_reason``, then ``workflow_failure``.
+	"""
+	explicit = str(flags.get("AUTOFIX_FAILURE_REASON") or "")
+	if _FAILURE_REASON_RE.match(explicit):
+		return explicit
+	if flags.get("AUTOFIX_EDITOR_EMPTY_NOOP") == "true":
+		return "editor_empty_noop"
+	if flags.get("EDITOR_CHANGES_LOST") == "true":
+		return "editor_changes_lost"
+	if flags.get("EDITOR_NOOP_REFUSAL") == "true":
+		return "editor_refusal"
+	if _FAILURE_REASON_RE.match(finalize_reason or ""):
+		return finalize_reason
+	return "workflow_failure"
+
+
+def _finalize_reason_from_summary_line(path: str) -> str:
+	try:
+		text = Path(path).read_text(encoding="utf-8", errors="replace")
+	except OSError:
+		return ""
+	for line in text.splitlines():
+		if line.startswith("REVIEW_AUTOFIX_RUN_SUMMARY_V1 "):
+			try:
+				summary = json.loads(line[len("REVIEW_AUTOFIX_RUN_SUMMARY_V1 "):])
+			except json.JSONDecodeError:
+				return ""
+			return str(summary.get("finalize_reason") or "") if isinstance(summary, dict) else ""
+	return ""
+
+
+def autofix_failure_fingerprint(*, failure_reason: str, evidence_text: str) -> dict[str, Any]:
+	"""Fingerprint one review/autofix failure from its reason and evidence.
+
+	Empty evidence is ``degraded``: the signature collapses to the constant
+	``error_signature("")`` value, so the fingerprint compares head + reason only.
+	"""
+	return {
+		"fp": fingerprint(FAILURE_FINGERPRINT_WORKFLOW, failure_reason, error_signature(evidence_text)),
+		"degraded": evidence_text.strip() == "",
+	}
+
+
+def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded: bool, run_id: str | None = None) -> str:
+	"""Render the ``review-autofix-failure:v1`` marker appended to a failure comment.
+
+	``run`` lets the counter treat two failure comments of one run as a single
+	failure. Returns an empty string when the head or fingerprint is malformed.
+	"""
+	head = str(head_sha or "").strip().lower()
+	if not is_valid_sha(head) or not _FP_HEX_RE.match(str(fp or "")):
+		return ""
+	fields = [f"head={head}", f"reason={safe_token(failure_reason) or 'unknown'}", f"fp={fp}", f"degraded={1 if degraded else 0}"]
+	run = safe_token(run_id, 20)
+	if run.isdigit():
+		fields.append(f"run={run}")
+	return f"<!-- {FAILURE_MARKER_TAG} " + " ".join(fields) + " -->"
+
+
+def _marker_fields(match: re.Match[str] | None) -> dict[str, str]:
+	fields: dict[str, str] = {}
+	if match is None:
+		return fields
+	for field in _MARKER_FIELD_RE.finditer(match.group("fields")):
+		fields.setdefault(field.group("key"), safe_token(field.group("value"), 100))
+	return fields
+
+
+def _comment_author(comment: dict[str, Any]) -> str:
+	login = comment.get("author_login")
+	if not login and isinstance(comment.get("user"), dict):
+		login = comment["user"].get("login")
+	return str(login or "").strip().lower()
+
+
+def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> list[dict[str, Any]]:
+	"""Return the trusted failure markers for ``head_sha``, oldest first.
+
+	A marker is trusted only when its comment was written by ``author_login``
+	(the identity the workflow posts as); markers from anyone else are ignored.
+	"""
+	head = str(head_sha or "").strip().lower()
+	author = str(author_login or "").strip().lower()
+	markers: list[dict[str, Any]] = []
+	if not head or not author:
+		return markers
+	for comment in comments:
+		if not isinstance(comment, dict) or _comment_author(comment) != author:
+			continue
+		fields = _marker_fields(_FAILURE_MARKER_RE.search(sanitize_text(comment.get("body"))))
+		if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+			continue
+		markers.append(
+			{
+				"fp": fields["fp"],
+				"reason": fields.get("reason") or "unknown",
+				"degraded": fields.get("degraded") == "1",
+				"run": fields.get("run", ""),
+				"comment_id": safe_token(comment.get("id"), 20),
+			}
+		)
+	return markers
+
+
+def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> dict[str, Any]:
+	"""Count the trailing identical failures on ``head_sha``.
+
+	``comments`` is the PR's issue-comment list, oldest first. Scanning from the
+	newest comment, every trusted marker for the head whose ``fp`` equals the
+	newest marker's ``fp`` adds one (several comments of one run count once).
+	A trusted marker with a different ``fp``, a failure comment without a
+	marker, or an editor summary ends the scan; the summary a post-editor
+	failure of the same run posted first does not (same pairing rule as
+	``count_autofix_failure_streak``). Markers for another head or from another
+	author are skipped. ``cap_applied`` reports whether a trusted
+	``review-autofix-failure-cap:v1`` marker already exists for the head.
+	"""
+	head = str(head_sha or "").strip().lower()
+	author = str(author_login or "").strip().lower()
+	ordered = [comment for comment in comments if isinstance(comment, dict)]
+	result: dict[str, Any] = {"count": 0, "fp": "", "reason": "", "cap_applied": False}
+	if not head or not author:
+		return result
+	for comment in ordered:
+		if _comment_author(comment) != author:
+			continue
+		cap_fields = _marker_fields(_FAILURE_CAP_MARKER_RE.search(sanitize_text(comment.get("body"))))
+		if cap_fields.get("head", "").lower() == head:
+			result["cap_applied"] = True
+			break
+	seen_runs: set[str] = set()
+	skip_paired_summary = False
+	for comment in reversed(ordered):
+		body = sanitize_text(comment.get("body"))
+		match = _FAILURE_MARKER_RE.search(body)
+		if match is not None:
+			fields = _marker_fields(match)
+			if _comment_author(comment) != author or fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+				continue
+			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
+			run = fields.get("run", "")
+			if run and run in seen_runs:
+				continue
+			if not result["fp"]:
+				result["fp"] = fields["fp"]
+				result["reason"] = fields.get("reason") or "unknown"
+			elif fields["fp"] != result["fp"]:
+				break
+			result["count"] += 1
+			if run:
+				seen_runs.add(run)
+			continue
+		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
+			break
+		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+			if skip_paired_summary:
+				skip_paired_summary = False
+				continue
+			break
+	return result
 
 
 # ---------------------------------------------------------------------------
@@ -1009,6 +1236,7 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		run_url=args.run_url or None,
 		wrapper_sha=args.wrapper_sha or None,
 		reporter_run_url=args.reporter_run_url or None,
+		failure_fingerprint=args.failure_fingerprint or None,
 	)
 	validate_payload(payload)
 	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -1025,6 +1253,36 @@ def _cmd_autofix_failure_streak(args: argparse.Namespace) -> int:
 	except (OSError, json.JSONDecodeError):
 		comments = []
 	sys.stdout.write(str(count_autofix_failure_streak(comments if isinstance(comments, list) else [])) + "\n")
+	return 0
+
+
+def _cmd_autofix_failure_fingerprint(args: argparse.Namespace) -> int:
+	evidence = read_failure_evidence(args.evidence_file or [])
+	if args.evidence_out:
+		Path(args.evidence_out).write_text(sanitize_text(evidence), encoding="utf-8")
+	if args.failure_reason:
+		reason = args.failure_reason if _FAILURE_REASON_RE.match(args.failure_reason) else "workflow_failure"
+	else:
+		finalize = _finalize_reason_from_summary_line(args.summary_line_file) if args.summary_line_file else ""
+		reason = derive_autofix_failure_reason(dict(os.environ), finalize)
+	result = autofix_failure_fingerprint(failure_reason=reason, evidence_text=evidence)
+	sys.stdout.write(f"fp={result['fp']}\n")
+	sys.stdout.write(f"degraded={1 if result['degraded'] else 0}\n")
+	sys.stdout.write(f"reason={safe_token(reason)}\n")
+	if args.head_sha:
+		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None) + "\n")
+	return 0
+
+
+def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
+	comments = _load_json_file(args.comments_json)
+	if not isinstance(comments, list):
+		raise ValueError("comments JSON must be a list")
+	result = count_identical_failures(comments, head_sha=args.head_sha, author_login=args.author_login)
+	sys.stdout.write(f"count={int(result['count'])}\n")
+	sys.stdout.write(f"fp={safe_token(result['fp'], 64)}\n")
+	sys.stdout.write(f"reason={safe_token(result['reason'])}\n")
+	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	return 0
 
 
@@ -1173,11 +1431,27 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--run-url", default="")
 	p.add_argument("--wrapper-sha", default="")
 	p.add_argument("--reporter-run-url", default="")
+	p.add_argument("--failure-fingerprint", default="")
 	p.set_defaults(func=_cmd_build_autofix_payload)
 
 	p = sub.add_parser("autofix-failure-streak", help="Count trailing review/autofix failure comments on a PR")
 	p.add_argument("--comments-json", required=True)
 	p.set_defaults(func=_cmd_autofix_failure_streak)
+
+	p = sub.add_parser("autofix-failure-fingerprint", help="Print fp= / degraded= / reason= (and marker= with --head-sha) for a review/autofix failure")
+	p.add_argument("--failure-reason", default="", help="omit to derive it from the run flags in the environment (reporter precedence)")
+	p.add_argument("--summary-line-file", default="", help="REVIEW_AUTOFIX_RUN_SUMMARY_V1 line file for the finalize_reason fallback")
+	p.add_argument("--evidence-file", action="append", default=[], help="stage stderr file; repeatable, missing files are skipped")
+	p.add_argument("--evidence-out", default="", help="also write the joined evidence tail to this file")
+	p.add_argument("--head-sha", default="")
+	p.add_argument("--run-id", default="")
+	p.set_defaults(func=_cmd_autofix_failure_fingerprint)
+
+	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= for the trailing identical failures on a head")
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--head-sha", required=True)
+	p.add_argument("--author-login", required=True)
+	p.set_defaults(func=_cmd_autofix_identical_failure_count)
 
 	p = sub.add_parser("build-run-payload", help="Build the payload for a failed workflow_run event")
 	p.add_argument("--repo", required=True)
