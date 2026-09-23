@@ -201,7 +201,7 @@ fi
 # client_payload with more than 10 top-level properties (HTTP 422).
 DISPATCH_FILE="${REPORT_DIR}/dispatch.json"
 if ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${PAYLOAD_FILE}" > "${DISPATCH_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
-	log "skip reason=payload_build_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"
+	log "skip reason=dispatch_envelope_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"
 	exit 0
 fi
 DISPATCH_ERROR_FILE="${REPORT_DIR}/dispatch_error.txt"
