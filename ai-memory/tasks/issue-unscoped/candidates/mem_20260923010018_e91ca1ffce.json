@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Many merged workflow and script changes updated .ai/.workspace_source_manifest.txt, README.md, or agents.md alongside implementation files. When adding or changing reusable workflow support, check whether source manifests and agent-facing documentation are part of the repository\u2019s synchronization and review expectations.",
+  "fingerprint": "95d5c66ad5a3413fb7a8be51782e9c229894921e61b96a818084a5ab93861d59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35803983971",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35803983971",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4216",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4258",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4260",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4270",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4279",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4273",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4280"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260923010018_e91ca1ffce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Changes to workflow support files are accompanied by workspace-source manifests and repository documentation updates.",
+  "timestamps": {
+    "created_at": "2026-09-23T01:00:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
