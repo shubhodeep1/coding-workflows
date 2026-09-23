@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4314,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4314\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4323\",\"pr_number\":4323,\"branch\":\"ai/issue-4314\",\"run_id\":\"35828286217\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35828286217\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/implement.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/review_autofix.yml\",\"agents.md\",\"changelog.d/post-agent-python-startup-isolation.md\",\"scripts/check_resolver_diff.sh\",\"scripts/implement_commit_changes.sh\",\"scripts/lint_pr_body_auto_close.py\",\"scripts/orchestrate_poll_process.sh\",\"scripts/post_agent_workspace_guard.py\",\"scripts/review_apply_fixes.sh\",\"scripts/review_commit_changes.sh\",\"scripts/review_conflict_resolve.sh\",\"scripts/review_rb_judge.sh\",\"scripts/stage_workflow_support.sh\",\"scripts/trusted_git_write.sh\",\"scripts/untrusted_process_sandbox.sh\",\"tests/test_agent_process_isolation.py\",\"tests/test_files_touched_scope_guard.py\",\"tests/test_implement_post_codex_recovery.py\",\"tests/test_implement_pr_body_tracking_refs.py\",\"tests/test_lint_pr_body_auto_close.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "71254e4cbc123cd6f33df303bb5490eb036d1d5b2b459772dcc94bc7f1e31967",
+  "lineage": {
+    "issue_number": 4314,
+    "parent_ids": [],
+    "pr_number": 4323,
+    "run_id": "35828286217",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35828286217",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4323"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260923071508_6a548c40b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4314,
+    "level": "run",
+    "pr_number": 4323,
+    "run_id": "35828286217"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4314: https://github.com/shubhodeep1/coding-workflows/pull/4323",
+  "timestamps": {
+    "created_at": "2026-09-23T07:15:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
