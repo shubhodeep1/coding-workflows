@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Several merged changes focus on release-tag refspecs, token recovery, push retries, editor waits, review-blocked budgets, and cancel-on-close behavior. Release automation should use explicit refspecs, bounded retry or recovery paths, and safe cancellation semantics so reruns do not create inconsistent tags or leave stale work active.",
+  "fingerprint": "01f2f7467fa70011aa7c4a8b5e4b1e867b1775eaa03dbecff374d88c21535b70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35830638126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35830638126",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4255",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4279",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4290",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4300",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4305",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4259",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4280",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4291",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4301",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4306"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260923072113_f385647ae4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Release and stability workflows need resilient tag and cancellation handling for transient GitHub or Git failures.",
+  "timestamps": {
+    "created_at": "2026-09-23T07:21:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
