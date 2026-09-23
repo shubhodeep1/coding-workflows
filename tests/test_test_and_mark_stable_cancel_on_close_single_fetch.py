@@ -38,6 +38,22 @@ def _existing_run_wait_loop(branch: str) -> str:
 	)
 
 
+def _open_pr_close_branch(wf: str) -> str:
+	return _slice_between(
+		wf,
+		"# PR is still open — exercise the close path end to end.",
+		"# Per-phase soft-error analysis: cancel-on-pr-close",
+	)
+
+
+def _new_run_wait_loop(branch: str) -> str:
+	return _slice_between(
+		branch,
+		'while [ "$(date +%s)" -lt "${DEADLINE}" ]; do',
+		'if [ -z "${NEW_RUN_ID}" ]; then',
+	)
+
+
 def test_closed_pr_wait_loop_fetches_existing_run_once_per_iteration() -> None:
 	wf = _read_workflow()
 	loop = _existing_run_wait_loop(_closed_pr_existing_run_branch(wf))
@@ -60,6 +76,32 @@ def test_closed_pr_wait_loop_derives_status_and_conclusion_from_shared_payload()
 	assert status_stmt in loop
 	assert conclusion_stmt in loop
 	assert loop.index(fetch_stmt) < loop.index(status_stmt) < loop.index(conclusion_stmt)
+
+
+def test_phase7_records_pre_close_mergeability_diagnostics() -> None:
+	wf = _read_workflow()
+	assert "--jq '{state, head_sha: .head.sha, closed_at, mergeable, mergeable_state}'" in wf
+	assert 'echo "Pre-close PR diagnostics: mergeable=${PR_MERGEABLE}, mergeable_state=${PR_MERGEABLE_STATE}"' in wf
+
+
+def test_phase7_accepts_event_or_scheduled_cleanup_runs() -> None:
+	wf = _read_workflow()
+	closed_branch = _closed_pr_existing_run_branch(wf)
+	open_branch = _open_pr_close_branch(wf)
+	for branch in (closed_branch, open_branch):
+		assert '.event == "pull_request"' in branch
+		assert '.event == "schedule"' in branch
+		assert '.created_at >= $closed_at' in branch
+
+
+def test_open_pr_wait_loop_fetches_workflow_list_once_and_fails_on_api_error() -> None:
+	wf = _read_workflow()
+	loop = _new_run_wait_loop(_open_pr_close_branch(wf))
+	fetch_fragment = '"repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=10"'
+	assert loop.count(fetch_fragment) == 1
+	assert "if ! CANDIDATE_RUNS_JSON=$(gh api" in loop
+	assert "|| echo" not in loop
+	assert 'echo "status=lookup_failed" >> "$GITHUB_OUTPUT"' in loop
 
 
 def main() -> int:

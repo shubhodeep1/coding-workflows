@@ -321,6 +321,7 @@ jobs:
           python3 -m py_compile scripts/workflow_retro.py
           python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
+          python3 -m py_compile scripts/workflow_failure_heal.py
           # Phase 4b smoke-test fixture (only run from
           # test-and-mark-stable.yml). py_compile catches syntax-level
           # breakage (parse errors, indentation) early in CI; it does
@@ -382,6 +383,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_serena_stats_emit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
 
       - name: Memory maintenance extraction contract tests
         run: |
@@ -408,6 +410,16 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
+
+      - name: PR status check-in reminder hook tests (CLAUDE.md §26)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_check_in_reminder.py
+
+      - name: Check-in status helper tests (/implement-plan-claude, CLAUDE.md §26)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status.py
 
       - name: Orchestrate lib unit tests
         run: |
@@ -438,6 +450,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+
+      - name: Workflow failure heal contract and driver tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py
 
       - name: Plan-archival completeness lint unit tests
         # P6 from docs/postmortems/2026-05-18-project-2734-stall.md.
@@ -548,6 +565,16 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
+
+      - name: Promote cycle and blocked-verdict unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+            tests/test_promote_main_cycle.py \
+            tests/test_apply_analysis_on_main.py \
+            tests/test_auto_release_stable.py \
+            tests/test_orchestrate_poll_promote_cycle.py \
+            tests/test_implement_blocked_verdict_terminalizes.py
 
       - name: Implement files_touched scope guard unit tests
         run: |
@@ -818,6 +845,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_plan_polling_guard.py
+
+      - name: Test-and-mark-stable review-blocked budget contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_review_blocked_budget.py
 
       - name: Test-and-mark-stable closed-PR single-fetch regression test
         run: |

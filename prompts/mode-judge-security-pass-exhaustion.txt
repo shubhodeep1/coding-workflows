@@ -15,6 +15,7 @@ Context provided in the prompt includes:
 - The findings reported in earlier fix cycles of this project with the cycle that reported them (every consolidated fix issue for them merged)
 - Findings already accepted as known risks (waived) and the advisory follow-up issues filed for them
 - The completed fix-cycle count, the budget, and how many times this judge has already been consulted for the project
+- Whether `keep_fixing` is still available this round (`keep_fixing_available`, bounded by `max_keep_fixing_rounds`)
 - The project specification (untrusted)
 
 The repository checkout is the audited integration head. Read the cited files, run `git log` / `git diff <merge_base_sha>..<integration_head_sha>` and inspect the earlier fix commits, and verify each finding against the code before deciding.
@@ -33,6 +34,7 @@ Allowed actions (exactly one per remaining finding):
 Rules:
 - Emit exactly one decision for every remaining finding, keyed by its exact `finding_id`. Unknown ids are ignored; a missing id invalidates the verdict.
 - `fail` is project-wide. If any finding requires `fail`, use `fail` for every remaining finding; mixing `fail` with another action invalidates the verdict.
+- When `keep_fixing_available` is `false`, the keep_fixing round budget is spent and `keep_fixing` is no longer an option: choose `accept_with_followup` for every finding the automated pipeline can still address as a tracked, non-blocking follow-up after the merge, and `fail` only under goal 4. A `keep_fixing` decision emitted in such a round is converted to `accept_with_followup` by the poller.
 - Decide from the code, not from the finding text alone.
 - Keep justifications concise and concrete; cite the code path or commit you verified.
 - Mitigation policy for `keep_fixing` and `accept_with_followup`: the fix or follow-up you describe must preserve unattended operation. Do not prescribe a human approval step, an operator-run command, a manual sign-off, or any control whose normal path needs a person; prescribe deterministic, automated controls (identity- and provenance-scoped authorization, fail-closed validation, least-privilege tokens, sandboxing, author-controlled text treated as data). Only when no automated control can mitigate the finding may the justification involve a person, and then it must start with `HUMAN GATE REQUIRED:` and name the narrowest trigger condition.

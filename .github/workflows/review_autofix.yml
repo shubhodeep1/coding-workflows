@@ -106,11 +106,11 @@ env:
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   REVIEWER_MODELS: |
     minimax/minimax-m3
-    moonshotai/kimi-k3
+    z-ai/glm-5.2
     deepseek/deepseek-v4-pro
-    mistralai/mistral-small-2603
+    google/gemini-3.1-flash-lite
     qwen/qwen3.7-plus
-    x-ai/grok-4.6
+    x-ai/grok-4.20
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
   # Capacity-fallback editor (autofix) model. On the final editor attempt
   # scripts/review_apply_fixes.sh switches --model to this slug, which sits in
@@ -139,7 +139,7 @@ env:
   REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
   REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}
   REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6' }}
+  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}
   REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
   REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
   REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -241,6 +241,13 @@ env:
     nag_reminder.sh opencode_helpers.sh write_opencode_config.sh
   REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
     render_prompt.py
+  # The workflow-failure-heal reporter pair the failure-path step "Report
+  # autofix failure to workflow failure heal" runs. Optional (never
+  # preflight-checked): the staging backfill copies them from the main
+  # snapshot when the branch-pinned stage_workflow_support.sh predates them,
+  # so a PR branch forked before #4208 still reports its repeated failures.
+  REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS: >-
+    workflow_failure_heal.py workflow_failure_heal_autofix_report.sh
 
 jobs:
   gate:
@@ -1577,7 +1584,7 @@ jobs:
       REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
       REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}
       REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6' }}
+      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}
       REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
       REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
       REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -1820,6 +1827,30 @@ jobs:
             fi
           done
 
+          # Backfill the workflow-failure-heal reporter pair the same way. The
+          # pair rides the OPTIONAL_BOOTSTRAP_SCRIPTS loop of
+          # stage_workflow_support.sh, but that helper is sourced from the PR
+          # branch (SCRIPT_REF): a branch forked before #4208 added the pair
+          # never iterates those names, and the "Report autofix failure to
+          # workflow failure heal" step then skips with reason=reporter_missing
+          # even though this workflow (@main) and the main snapshot carry the
+          # scripts. Optional: a miss only disables the report for this run.
+          for f in ${REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS}; do
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
+              continue
+            fi
+            backfill_src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              backfill_src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ -f "${backfill_src}" ]; then
+              install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+            else
+              echo "::warning::Workflow-failure-heal reporter script ${f} was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; the Report autofix failure to workflow failure heal step will skip with reason=reporter_missing for this run."
+            fi
+          done
+
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then
             src=".codex-workflow-src/prompts/_nag_reminders.txt"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/_nag_reminders.txt" ]; then
@@ -1997,6 +2028,7 @@ jobs:
             echo "PR_EDITOR_COMMENT_FILE=${RUNTIME_DIR}/pr_editor_comment.txt"
             echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
             echo "LINKED_ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/linked_issue_context.txt"
+            echo "LINKED_ISSUE_METADATA_FILE=${RUNTIME_DIR}/linked_issue_metadata.json"
             echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
             echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"
             echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"
@@ -2582,15 +2614,49 @@ jobs:
           PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
           PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
 
+          # PR_TITLE is retained deliberately. Free-text fixture-tag
+          # matching on the PR title/body was removed (see below), so
+          # nothing in this step reads it any more, but it is an existing
+          # identifier and CLAUDE.md §6 forbids removing one without the
+          # ask flow. PR_BODY is still used by the linked-issue lookup.
+
           IS_SMOKE=false
 
-          # Direct match on PR title/body
-          if echo "${PR_TITLE}" | grep -qi '\[E2E Smoke Test\]' \
-             || echo "${PR_BODY}" | grep -qi '\[E2E Smoke Test\]'; then
+          # Primary signal: the `e2e-smoke-test` label.
+          #
+          # This replaces a free-text scan of the PR title and body for a
+          # `[E2E <variant>]` fixture tag. That scan misclassified any real
+          # PR that merely *discussed* the fixture tags -- documentation
+          # changes, and changes to this detection logic itself. The
+          # consequences were not cosmetic: a misclassified PR had its
+          # reviewer/editor reasoning pinned, its review alerts silenced,
+          # and IS_SMOKE_TEST exported, which makes
+          # scripts/review_apply_fixes.sh append a "must call apply_patch
+          # on tests/e2e_smoke_canary.txt" directive to the editor prompt
+          # -- i.e. it could push the autofix editor to touch the canary
+          # file on an unrelated PR.
+          #
+          # The label is a reliable primary because implement.yml applies
+          # it atomically at `gh pr create` (see its "Atomically apply
+          # force-review + e2e-smoke-test labels at PR creation time"
+          # comment), specifically so it is already in the
+          # `pull_request: opened` payload this gate snapshots -- a label
+          # added post-creation cannot rewind the gate decision. Confirmed
+          # on release run 35672590166: PR #4252 (from the
+          # `[E2E Smoke Test]` canary fixture) and PR #4253 (from the
+          # `[E2E Smoke Test alt-model]` fixture) both carried
+          # `force-review` + `e2e-smoke-test`.
+          if jq -e '[.labels[]?.name] | index("e2e-smoke-test") != null' "${PR_PAYLOAD_FILE}" >/dev/null 2>&1; then
             IS_SMOKE=true
           fi
 
-          # Check linked issue title. Only honour GitHub's closing-keyword
+          # Fallback: the linked issue's title. Kept as a second signal so
+          # a smoke PR whose label somehow did not land is still detected,
+          # and safe to keep because it is anchored and resolves a real
+          # issue rather than scanning prose -- a documentation PR's linked
+          # issue title does not begin with the fixture tag.
+          #
+          # Only honour GitHub's closing-keyword
           # pattern (Closes/Fixes/Resolves + #N or issue URL, case-insensitive)
           # to avoid false-matching loose "issue #N" mentions inside log
           # citations or backticked fragments quoted in the PR body — which
@@ -2605,7 +2671,11 @@ jobs:
             ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' || true)
             if [ -n "${ISSUE_NUM:-}" ]; then
               ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
-              if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+              # Anchored, matching the `^\[E2E ` convention used by
+              # clarify.yml, plan.yml and implement.yml: real AI issue
+              # titles never begin with the fixture tag, so this cannot
+              # fire on a production issue that merely quotes one.
+              if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
                 IS_SMOKE=true
               fi
             fi
@@ -5509,7 +5579,7 @@ jobs:
           # CONFLICT_RESOLVED_ALERT_LEVEL is a step-scoped override for this
           # one ping (same pattern as PR_PROCESSED_ALERT_LEVEL); it falls back
           # to the global ALERT_MSG_LEVEL, then DEBUG.
-          ALERT_MSG_LEVEL: ${{ vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -6791,7 +6861,7 @@ jobs:
           # explicitly opts in via vars.PR_PROCESSED_ALERT_LEVEL. Mirrors the
           # pattern in update_workflows.yml (see CHANGELOG entry from the
           # "update_workflows.yml ALERT_MSG_LEVEL default SILENT" change).
-          ALERT_MSG_LEVEL: ${{ vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -7125,7 +7195,7 @@ jobs:
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -7357,7 +7427,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -8450,6 +8520,40 @@ jobs:
 
           printf '\n### Review Autofix Run Summary\n\n' >> "${GITHUB_STEP_SUMMARY}"
           printf '%s\n' "${structured_summary_line}" | tee -a "${GITHUB_STEP_SUMMARY}"
+          # Keep the structured line for the heal reporter below (RUNTIME_DIR
+          # survives until the cleanup step). Best-effort: never fail the
+          # summary over it.
+          printf '%s\n' "${structured_summary_line}" > "${RUNTIME_DIR}/review_autofix_run_summary_line.txt" 2>/dev/null || true
+
+      - name: Report autofix failure to workflow failure heal
+        # Workflow failure heal (README "Workflow Failure Heal"): after the
+        # failure alerts, hand a repeated review/autofix failure on this PR to
+        # coding-workflows' heal intake so it is diagnosed and fixed through
+        # the normal pipeline. The reporter counts consecutive failed runs from
+        # the PR comments fetched at run start and reports only past
+        # WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK (default 2); a single retryable
+        # failure stays with the stall poller. Resolver escalations are already
+        # reported through the ai:resolver-escalated label path. Fail-open by
+        # construction: the script always exits 0 and the step never blocks
+        # cleanup.
+        if: (failure() || env.EDITOR_CHANGES_LOST == 'true' || env.EDITOR_NOOP_SUSPICIOUS == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPORT_WRAPPER_SHA: ${{ env.SCRIPT_REF }}
+          REPORT_SUMMARY_LINE_FILE: ${{ env.RUNTIME_DIR }}/review_autofix_run_summary_line.txt
+        run: |
+          set -uo pipefail
+          reporter="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal_autofix_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_AUTOFIX_REPORT skip reason=reporter_missing path=${reporter}"
+            exit 0
+          fi
+          WORKFLOW_HEAL_PY="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal.py" bash "${reporter}" || true
 
       - name: Cleanup temporary artifacts
         if: always()

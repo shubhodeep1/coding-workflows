@@ -1095,6 +1095,39 @@ in `.github/ai/consumer_repos.json`, and any repo the user names. When the
 host session exposes a repo-attachment mechanism, prefer attaching the repo
 over reaching around the session's declared scope.
 
+**Web sessions: the PAT never reaches GitHub.** In Claude Code on the web
+(claude.ai/code and the mobile/desktop apps backed by it) every request to
+`api.github.com` — `gh`, `curl`, anything — passes through the session's
+agent proxy, which strips the `Authorization` header and signs the request
+with its own short-lived GitHub App token. `GH_TOKEN` is read by `gh` but
+discarded in transit, so a valid, invalid, or absent token all behave the
+same. Consequences, verified against the proxy (2026-09-20):
+
+- **Identity and reach are the proxy's.** Calls authenticate as the user
+  who connected the GitHub App, and only for repositories attached to the
+  session. A consumer repo that is not attached answers 403 `GitHub access
+  to this repository is not enabled for this session. Use add_repo to
+  request access.` — attach it (with `access: "push"` when writes or the
+  API are needed) rather than treating the 403 as a token problem. Making a
+  repo reachable in *every* session is done in the Claude GitHub App
+  installation and claude.ai's repository access settings, not with any
+  env var.
+- **Some endpoints are refused outright**, whatever the token: GraphQL
+  (§23.D), and Actions paths such as repo variables (`Access to this GitHub
+  Actions path is not permitted through this proxy.`). Run/job logs and
+  runs remain readable.
+- **`gh auth status` is not a token test here.** It verifies over GraphQL,
+  so it reports `The token in GH_TOKEN is invalid` for a good PAT. The
+  SessionStart hook therefore probes over REST (`gh api user`) and, when an
+  unauthenticated `GET /user` also returns 200, reports that the proxy is
+  substituting its credential.
+- **The reads and writes above that need the PAT itself** — other repos
+  without attaching them, GraphQL, repo variables — are available only in
+  a local Claude Code session (CLI, desktop app, IDE extension), where no
+  proxy sits in front of `api.github.com` and `gh` uses `GH_TOKEN`
+  as-is. Do not try to route around the proxy (unsetting `HTTPS_PROXY`,
+  alternate hosts, credential helpers): direct egress is blocked as well.
+
 ### B) Routine Repository Writes — Act, Do Not Ask
 
 These writes are ordinary session work, already implied by the task the user
@@ -1179,11 +1212,14 @@ Two environment facts that make `gh` calls fail in confusing ways:
   Claude Code Web the only git remote points at a local proxy, so bare calls
   fail with `failed to determine base repo` — which is not an auth problem.
   The SessionStart hook prints the resolved slug.
-- **Check auth directly, nounset-safe**, rather than inferring it from the
+- **Check auth over REST, nounset-safe**, rather than inferring it from the
   SessionStart log:
-  `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh auth status`.
-  The hook's secondary probe only tests `actions:read` for one repo and can
-  emit a `NOTE`/`WARNING` while `gh` works fine for everything else.
+  `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh api user --jq .login`.
+  Do not use `gh auth status` for this in a web session: it verifies over
+  GraphQL, which the proxy answers with 403, so it reports the token as
+  invalid whether or not it is (§23.A, "Web sessions"). The hook's secondary
+  probe only tests `actions:read` for one repo and can emit a
+  `NOTE`/`WARNING` while `gh` works fine for everything else.
 
 Useful token scopes: classic PATs need `repo` plus `workflow` (and
 `read:org` for org metadata); fine-grained PATs need contents, pull requests,
@@ -1196,13 +1232,15 @@ still serves every non-Actions read in §23.A.
   expansion (`$GH_TOKEN`).
 - Never write the token into committed files, PR bodies, issue comments, commit
   messages, or diagnostic output. Redact it if a tool response contains it.
-- If the token is missing, `gh auth status` reports it invalid, or the API
+- If the token is missing, the REST identity probe fails, or an API call
   returns 401/403, **say so once**, fall back to the `mcp__github__*` tools for
   whatever they can still reach, and continue with the rest of the task — do
   not retry-loop, and do not ask the user to run the calls manually (§18).
-  A failing `gh auth status` when `GH_TOKEN` is set means the PAT is invalid,
-  expired, or was saved incorrectly in the session environment; report that
-  diagnosis rather than "gh is broken".
+  Diagnose authentication with `gh api user --jq .login`, not the GraphQL-
+  backed `gh auth status`. In a web session, a successful identity probe may
+  be the proxy's identity and a 403 may be a proxy scope restriction (§23.A);
+  only a local session's rejected REST probe supports diagnosing the PAT as
+  invalid, expired, or saved incorrectly.
 - Never commit a workflow, script, or hook that reads `GH_TOKEN` from the
   session environment. This section governs interactive sessions only;
   Actions-side code authenticates via `secrets.GH_PAT` (§23.G).
@@ -1441,8 +1479,11 @@ sentences that CLAUDE.md §25 forbids PR watching in this repository and
 that enabling it requires changing §25 and removing the
 `pr_watch_guard.py` hook from `.claude/settings.json` in a reviewed change
 first. Then continue with the rest of the task. Do not work around the
-rule with another mechanism that amounts to watching (polling the PR in a
-loop, delegating the watch to a subagent or another session).
+rule with another mechanism that amounts to watching (polling the PR for
+CI or review activity in a loop, delegating such a watch to a subagent or
+another session). The §26 status check-in is not a watch: it reads only
+whether the PR is open, merged, or closed, and never acts on CI, reviews,
+or comments.
 
 ### C) What is still allowed
 
@@ -1452,8 +1493,9 @@ loop, delegating the watch to a subagent or another session).
 - Reading a PR's state, CI status, or review comments when the user asks
   about it, and acting on that request under §12 when asked to.
 - Scheduled self check-ins and reminders (`send_later`, Routines) for work
-  the user asked for. This section bans the PR-activity subscription, not
-  the scheduler.
+  the user asked for, including the post-push PR status check-in §26
+  requires. This section bans the PR-activity subscription, not the
+  scheduler.
 
 ### D) Enforcement
 
@@ -1479,6 +1521,147 @@ The unattended pipelines read `unattended_system_instructions.md` and never
 see this file. §25 says nothing about the unattended `review_autofix`
 workflow (`Codex PR Self-Healing Semantic Agent`) or the orchestrator's
 stall recovery — those keep their own policies.
+
+---
+
+## §26. Post-Push PR Status Check-In (MANDATORY)
+
+After an interactive Claude Code session pushes work and a pull request
+exists for it, the session **arms a 3-hourly status check-in for that pull
+request** and keeps it armed until the PR is terminal (merged, or closed
+without merging). The check-in runs in a small Haiku checker session,
+reads the PR's state and nothing else, and when the PR is terminal reports
+the next steps, or says the pushing session can be closed because there
+are none. This section applies in this repo
+and in every consumer repo that receives this file via the `@stable` sync.
+
+The check-in is the scheduled self check-in §25.C allows, not the PR
+watching §25 forbids: it never subscribes to PR activity, never reacts to
+CI or review events, and never touches the PR. §25 and its
+`pr_watch_guard.py` hook stay fully in force.
+
+### A) When to arm
+
+- **Every pull request the session opens**, and **every existing pull
+  request the session pushes new commits to**, including PRs opened by a
+  slash command (`/seed-repo`, `/investigate-issue`, and the rest).
+  `/implement-plan-claude` is the exception: its own Haiku checker is the
+  check-in for every PR it opens, so it arms no second one.
+- **One check-in per PR.** Arm it once the PR exists (right after
+  `create_pull_request`, or right after the first push to an existing PR).
+  If a check-in is already armed for that PR, a later push does not arm
+  another.
+- **Opt-out is per task and explicit.** When the user says for a task
+  that no check-in is wanted ("no check-in", "don't check back on this
+  PR", or an equivalent), skip arming for that task's PRs and say so in
+  the report. The default is on; never ask whether to arm.
+- Arming is a routine write under §23.B: do it without a separate
+  approval round, and do not offer it as an option.
+
+### B) How to arm
+
+Waking the session that pushed costs its whole conversation on every
+check, and a 3-hour gap outlives the prompt cache. The check-in therefore
+runs in its own small **Haiku checker session**, and the pushing session is
+never woken:
+
+1. Call `create_session` (Claude Code Remote MCP server) with
+   `source_url` = the repository, `model: claude-haiku-4-5-20251001`,
+   `permission_mode` = this session's mode, `title` =
+   `PR #<n> status check-in`, and a standalone prompt that names the
+   repository, the PR number and URL, the §26.C steps, and the **next
+   steps for each terminal state**, written now by the pushing session,
+   which still has the context: what remains if the PR merges (follow-up
+   work, a release or consumer sync it waits on, an action the user must
+   take, or "none — the pushing session can be closed"), and what to ask
+   if it is closed without merging.
+2. Report the checker's session id in this session's reply.
+
+A session started by a Routine with `create_new_session_on_fire` has no
+MCP tools and no repository, so it cannot run the check; `create_session`
+gives the checker both, and the checker re-arms itself with `send_later`.
+A checker only runs unattended when this session is in Auto mode (or
+every tool it calls is allowlisted); otherwise it waits on a permission
+prompt.
+
+When `create_session` is not available (a local CLI, desktop, or IDE
+session without the Claude Code Remote MCP server), arm `send_later` into
+this session with `delay_minutes: 180`, `initiation: own_followup`, and a
+message that restates §26.C; on each wake, delegate the check to a Haiku
+subagent (the Agent tool with `model: "haiku"`) and continue with §26.D on
+this session when it reports a terminal state. When `send_later` is
+missing too, use `CronCreate` (recurring, every 3 hours, deleted with
+`CronDelete` once the PR is terminal) and tell the user once that this
+scheduler lives only as long as the session. When no scheduler exists, say
+so once in the report and stop; do not poll in a loop.
+
+### C) What each check-in does
+
+1. Run `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py
+   --repo <owner>/<repo> --pr <n> --terminal-only`. It makes one REST read
+   of the PR (§15) and prints one JSON line: `done`, `state` (`merged` /
+   `closed` / `open`), and `reason`. The script decides; the model does not
+   interpret the PR.
+2. **Not terminal** → call `send_later` with `delay_minutes: 180` and
+   `initiation: own_followup` into the checker session, and end the turn.
+   No message to the user, no PR comment, no CI, review, comment,
+   conflict, or branch work. A red check or an open review thread does not
+   change this: fixing CI or addressing comments happens only when the
+   user asks for it directly, under §12.
+3. **Read failed** (exit 2) → re-arm the same way; after three consecutive
+   failures, report the failure once (§26.D, with the error as the state)
+   and keep re-arming.
+4. **Terminal** → stop re-arming and continue with §26.D.
+
+### D) What to report when the PR is terminal
+
+The checker writes the report in its own session, from the next steps the
+pushing session gave it:
+
+- which terminal state the PR reached (merged, with the merge commit, or
+  closed without merging, with when);
+- the concrete next steps that still exist, if any, or, for a PR closed
+  without merging, the question of whether to rebuild or drop the work;
+- when no next steps exist, say plainly that the pushing session can be
+  closed safely.
+
+Then it renames itself (`set_session_title`, with its own id from
+`session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}` in Bash rather than a
+`get_session` call) to
+`PR #<n> merged — <no action needed | action needed>` or
+`PR #<n> closed — decision needed`, and sends one `PushNotification` (one
+line, under 200 characters) with the terminal state and whether action is
+needed, since the user is unlikely to be watching hours after the push.
+It sends it only on the terminal check-in, never on a non-terminal one,
+and it does not archive itself: its report is what the user opens.
+
+### E) Enforcement
+
+The arming step is reinforced deterministically by
+`.claude/hooks/pr_check_in_reminder.py`, wired as a `PostToolUse` hook in
+`.claude/settings.json` under the matcher
+`^(?:Bash|mcp__.*__create_pull_request|mcp__.*__push_files|mcp__.*__create_or_update_file)$`.
+Prose alone is not enough: the instruction is furthest from the context
+window's live edge exactly when a session has run long enough to push.
+After every `create_pull_request`, `push_files`, or `create_or_update_file`
+MCP call, and after every `Bash` command that runs `git push` (not a
+`--dry-run`) or `gh pr create`, the hook feeds a one-paragraph §26 reminder
+back into the model's context as `additionalContext`. It never blocks,
+issues no API calls (§15), reads no environment variables, stays silent on
+every other tool call, and fails open with a `systemMessage` warning when
+the hook payload cannot be read, is invalid or non-object JSON, or
+evaluation raises an internal exception. Empty or whitespace-only hook
+input is treated as an empty object and allowed silently. The hook and
+the settings entry ship to consumer repos through the same `.claude/`
+sync as the §21 and §25 guards; `tests/test_pr_check_in_reminder.py`
+covers the rule and the wiring.
+
+### F) Interactive Sessions Only
+
+The unattended pipelines read `unattended_system_instructions.md` and
+never see this file. §26 says nothing about the orchestrator's PR
+lifecycle handling (`ai-issue-pr-status.yml`, the stall poller, the
+review pipeline) — those keep their own policies.
 
 ---
 

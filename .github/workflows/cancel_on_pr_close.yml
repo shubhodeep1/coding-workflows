@@ -11,8 +11,12 @@ jobs:
   cancel-active-runs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: cancel-on-pr-close-${{ github.repository }}
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+      EVENT_NAME: ${{ github.event_name }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
       REPOSITORY: ${{ github.repository }}
@@ -104,74 +108,191 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-          echo "Processing PR #${PR_NUMBER}" \
-            "for ${REPOSITORY}" \
-            "(head ref: ${PR_HEAD_REF})"
+          cleanup_tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "${cleanup_tmp_dir}"' EXIT
+          active_runs_file="${cleanup_tmp_dir}/active-runs.json"
+          pr_states_file="${cleanup_tmp_dir}/pr-states.json"
 
-          RUNS_JQ='{workflow_runs:
-            [.[].workflow_runs // []]
-            | flatten}'
-          # Filter at the API level by branch+event so the response is
-          # bounded to this PR's branch only. This avoids fetching every
-          # queued/in-progress run in the repo, which previously produced
-          # JSON blobs large enough to exceed ARG_MAX when passed via
-          # `jq --argjson` (E2BIG -> exit 126). The client-side selects
-          # below are kept as a defensive double-check.
-          queued_runs_json="$(
+          _cpr_fetch_active_runs()
+          {
+            local branch_filter="${1:-}"
+            local queued_file="${cleanup_tmp_dir}/queued-runs.json"
+            local in_progress_file="${cleanup_tmp_dir}/in-progress-runs.json"
+            local -a branch_args=()
+            if [ -n "${branch_filter}" ]; then
+              branch_args=(-f "branch=${branch_filter}")
+            fi
+
+            # Keep the two status-filtered calls: dropping the filters can
+            # paginate through an unbounded completed-run history.
             gh_retry gh api \
               --method GET \
               "repos/${REPOSITORY}/actions/runs" \
               --paginate \
               -f status=queued \
               -f event=pull_request \
-              -f "branch=${PR_HEAD_REF}" \
+              "${branch_args[@]}" \
               -f per_page=100 \
-            | jq -s "${RUNS_JQ}"
-          )"
-          in_progress_runs_json="$(
+              | jq -s '{workflow_runs: [.[].workflow_runs // []] | flatten}' \
+              > "${queued_file}"
             gh_retry gh api \
               --method GET \
               "repos/${REPOSITORY}/actions/runs" \
               --paginate \
               -f status=in_progress \
               -f event=pull_request \
-              -f "branch=${PR_HEAD_REF}" \
+              "${branch_args[@]}" \
               -f per_page=100 \
-            | jq -s "${RUNS_JQ}"
-          )"
+              | jq -s '{workflow_runs: [.[].workflow_runs // []] | flatten}' \
+              > "${in_progress_file}"
+            jq -s '{workflow_runs: ((.[0].workflow_runs // []) + (.[1].workflow_runs // []))}' \
+              "${queued_file}" "${in_progress_file}"
+          }
 
-          COMBINE='{workflow_runs:
-            (($queued.workflow_runs // [])
-            + ($in_progress.workflow_runs
-            // []))}'
-          combined_runs_json="$(jq -n \
-            --argjson queued \
-              "${queued_runs_json}" \
-            --argjson in_progress \
-              "${in_progress_runs_json}" \
-            "${COMBINE}")"
+          # Batching contract: input is a newline-delimited set of numeric PR
+          # numbers; output is one JSON object keyed by PR number with live
+          # state fields. Each group of at most 50 PRs costs one
+          # aliased GraphQL call. A failed or malformed batch is omitted so
+          # callers fail open by preserving every run that depends on it.
+          _cpr_fetch_pr_state_batches()
+          {
+            local numbers_file="$1"
+            local output_file="$2"
+            local owner="${REPOSITORY%%/*}"
+            local repo_name="${REPOSITORY#*/}"
+            local batch_file="${cleanup_tmp_dir}/pr-number-batch.txt"
+            local response_file="${cleanup_tmp_dir}/pr-state-response.json"
+            local parsed_file="${cleanup_tmp_dir}/pr-state-parsed.json"
+            local merged_file="${cleanup_tmp_dir}/pr-state-merged.json"
+            local batch_index=0
+            printf '{}\n' > "${output_file}"
 
-          mapfile -t target_run_ids < <(
-            jq -r \
-              --arg head_ref "${PR_HEAD_REF}" \
-              --arg pr_number "${PR_NUMBER}" \
-              --arg current_run_id "${CURRENT_RUN_ID}" \
-              '.workflow_runs[]
-              | select(.head_branch == $head_ref)
-              | select((.pull_requests // [])
-                | any(.number ==
-                  ($pr_number | tonumber)))
-              | select(.event == "pull_request")
-              | select((.id | tostring) != $current_run_id)
-              | .id' <<<"${combined_runs_json}" \
-            | awk '!seen[$0]++'
-          )
+            split -l 50 -d -a 4 "${numbers_file}" "${batch_file}."
+            for batch_file_part in "${batch_file}."*; do
+              [ -f "${batch_file_part}" ] || continue
+              batch_index=$((batch_index + 1))
+              local query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){'
+              local pr_number
+              while IFS= read -r pr_number; do
+                case "${pr_number}" in
+                  ''|*[!0-9]*) continue ;;
+                esac
+                query+="pr_${pr_number}:pullRequest(number:${pr_number}){number state}"
+              done < "${batch_file_part}"
+              query+='}}'
+
+              if ! gh_retry gh api graphql \
+                -f query="${query}" \
+                -f owner="${owner}" \
+                -f name="${repo_name}" \
+                > "${response_file}"; then
+                echo "::warning::Scheduled close cleanup could not resolve PR-state batch ${batch_index}; preserving affected runs."
+                continue
+              fi
+              if ! jq -e '
+                (.data.repository | type == "object") and
+                ((.errors // []) | type == "array")
+              ' "${response_file}" >/dev/null 2>&1; then
+                echo "::warning::Scheduled close cleanup received malformed PR-state batch ${batch_index}; preserving affected runs."
+                continue
+              fi
+              if jq -e '(.errors // []) | length > 0' "${response_file}" >/dev/null 2>&1; then
+                echo "::warning::Scheduled close cleanup received partial GraphQL errors in PR-state batch ${batch_index}; unresolved PRs will be preserved."
+              fi
+              jq '
+                .data.repository
+                | to_entries
+                | map(.value | select(. != null))
+                | map({
+                    key: (.number | tostring),
+                    value: {
+                      state: .state
+                    }
+                  })
+                | from_entries
+              ' "${response_file}" > "${parsed_file}"
+              jq -s '.[0] * .[1]' "${output_file}" "${parsed_file}" > "${merged_file}"
+              mv "${merged_file}" "${output_file}"
+            done
+          }
+
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            echo "Running scheduled closed-PR cleanup for ${REPOSITORY}."
+            _cpr_fetch_active_runs > "${active_runs_file}"
+            unlinked_active_run_count="$(jq '[.workflow_runs[] | select(((.pull_requests // []) | length) == 0)] | length' "${active_runs_file}")"
+            if [ "${unlinked_active_run_count}" -gt 0 ]; then
+              echo "::warning::Scheduled close cleanup preserved ${unlinked_active_run_count} active run(s) without pull-request linkage."
+            fi
+            jq -r '
+              .workflow_runs[]
+              | (.pull_requests // [])[].number
+              | select(type == "number")
+            ' "${active_runs_file}" | sort -nu > "${cleanup_tmp_dir}/pr-numbers.txt"
+            _cpr_fetch_pr_state_batches \
+              "${cleanup_tmp_dir}/pr-numbers.txt" \
+              "${pr_states_file}"
+            mapfile -t target_run_ids < <(
+              jq -r \
+                --arg current_run_id "${CURRENT_RUN_ID}" \
+                --slurpfile states "${pr_states_file}" \
+                '.workflow_runs[]
+                | select(.event == "pull_request")
+                | select(.status == "queued" or .status == "in_progress")
+                | select((.id | tostring) != $current_run_id)
+                | select(
+                    ((.path // "") | endswith("/internal-cancel-on-pr-close.yml") | not) and
+                    ((.path // "") | endswith("/ai-cancel-on-pr-close.yml") | not)
+                  )
+                | (.pull_requests // []) as $linked_prs
+                | select(($linked_prs | length) > 0)
+                | select(all($linked_prs[];
+                    (.number | tostring) as $number
+                    | ($states[0][$number] // null) as $live_pr
+                    | ($live_pr != null and
+                      ($live_pr.state == "CLOSED" or $live_pr.state == "MERGED"))))
+                | .id' \
+                "${active_runs_file}" \
+              | awk '!seen[$0]++'
+            )
+          else
+            if [ -z "${PR_NUMBER}" ] || [ -z "${PR_HEAD_REF}" ]; then
+              echo "::error::pull_request cleanup is missing PR number or head ref."
+              exit 1
+            fi
+            echo "Processing PR #${PR_NUMBER}" \
+              "for ${REPOSITORY}" \
+              "(head ref: ${PR_HEAD_REF})"
+            _cpr_fetch_active_runs "${PR_HEAD_REF}" > "${active_runs_file}"
+            mapfile -t target_run_ids < <(
+              jq -r \
+                --arg head_ref "${PR_HEAD_REF}" \
+                --arg pr_number "${PR_NUMBER}" \
+                --arg current_run_id "${CURRENT_RUN_ID}" \
+                '.workflow_runs[]
+                | select(.head_branch == $head_ref)
+                | select((.pull_requests // [])
+                  | any(.number == ($pr_number | tonumber)))
+                | select(.event == "pull_request")
+                | select((.id | tostring) != $current_run_id)
+                | select(
+                    ((.path // "") | endswith("/internal-cancel-on-pr-close.yml") | not) and
+                    ((.path // "") | endswith("/ai-cancel-on-pr-close.yml") | not)
+                  )
+                | .id' \
+                "${active_runs_file}" \
+              | awk '!seen[$0]++'
+            )
+          fi
 
           if [ "${#target_run_ids[@]}" -eq 0 ]; then
-            echo "No matching queued/in-progress" \
-              "pull_request workflow runs" \
-              "found for head ref" \
-              "'${PR_HEAD_REF}'."
+            if [ "${EVENT_NAME}" = "schedule" ]; then
+              echo "Scheduled cleanup found no cancellable queued/in-progress pull_request workflow runs."
+            else
+              echo "No matching queued/in-progress" \
+                "pull_request workflow runs" \
+                "found for head ref" \
+                "'${PR_HEAD_REF}'."
+            fi
             exit 0
           fi
 
@@ -214,18 +335,23 @@ jobs:
         shell: bash
         env:
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          EVENT_NAME: ${{ github.event_name }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
           MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          case "${PR_HEAD_REF}" in
-            ai/issue-*) ;;
-            *)
-              echo "Closed PR #${PR_NUMBER} head '${PR_HEAD_REF}' is not an ai/issue-* branch; merge-train release still runs (the base may have changed for queued PRs)."
-              ;;
-          esac
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            echo "Scheduled cleanup is running the global merge-train release scan."
+          else
+            case "${PR_HEAD_REF}" in
+              ai/issue-*) ;;
+              *)
+                echo "Closed PR #${PR_NUMBER} head '${PR_HEAD_REF}' is not an ai/issue-* branch; merge-train release still runs (the base may have changed for queued PRs)."
+                ;;
+            esac
+          fi
           if [ ! -f scripts/review_merge_train.sh ]; then
             echo "merge-train release skipped: scripts/review_merge_train.sh not staged from shubhodeep1/coding-workflows@${SCRIPT_REF}."
             exit 0

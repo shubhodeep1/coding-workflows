@@ -675,7 +675,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}
           UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}
@@ -687,9 +687,19 @@ jobs:
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
           SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
           MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
+          MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
           SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
+          SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE: ${{ vars.SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE || 'true' }}
+          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+          APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
+          COMPREHENSIVE_RELEASE_WORKFLOW_FILE: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_FILE || 'promote-main-to-stable.yml' }}
+          COMPREHENSIVE_RELEASE_WORKFLOW_REF: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_REF || 'main' }}
+          COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS: ${{ vars.COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS || '21600' }}
+          COMPREHENSIVE_CYCLE_BOT_LOGINS: ${{ vars.COMPREHENSIVE_CYCLE_BOT_LOGINS || 'github-actions[bot]' }}
+          COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
+          COMPREHENSIVE_VERIFICATION_RETRY_MAX: ${{ vars.COMPREHENSIVE_VERIFICATION_RETRY_MAX || '24' }}
           MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}
           # Master switch for the orchestrator-aware PR autofix flow.  Read
           # by the final-PR-phase MAX_JUDGE_CYCLES cap bypass in
@@ -791,6 +801,17 @@ jobs:
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
         run: bash scripts/orchestrate_poll_process.sh
 
+      - name: Release staged-support latches without active projects
+        if: steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
+          STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
+        run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
+
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
 
@@ -813,6 +834,19 @@ jobs:
 
       - name: Upload state snapshot artifact
         if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        # Non-fatal on purpose. The artifact is a secondary, best-effort copy;
+        # consumers read state.json from the `state-snapshot` branch when that
+        # branch's independently retried, best-effort publication succeeds.
+        # GitHub's artifact backend can reject FinalizeArtifact with a
+        # non-retryable 403 ("Error from intermediary") for a minute or two at a
+        # time, which @actions/artifact does not retry. On 2026-09-22 ~00:00 UTC
+        # one such window failed the poll job in all four orchestrated repos
+        # (runs 35669827207, 35669899082, 35669889742, 35669957264) even though
+        # the poll cycle and the branch publication had both succeeded — the job
+        # went red and fired a Telegram ERROR alert for a blip that cost nothing.
+        # `if-no-files-found: error` is kept so a genuinely missing snapshot,
+        # which is a real defect, still surfaces as a failed-step annotation.
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: state-snapshot
@@ -878,9 +912,9 @@ jobs:
           if [ -n "$(git -C "${PUBLISH_DIR}" status --porcelain)" ]; then
             git -C "${PUBLISH_DIR}" add -A state.json snapshots
             git -C "${PUBLISH_DIR}" commit --quiet -m "Update state snapshot ${TICK_SLUG}"
-            # The uploaded artifact is authoritative for this tick; keep branch
-            # publication best-effort so a transient push failure does not fail
-            # the full poll run.
+            # Keep the branch push best-effort so a transient publication
+            # failure does not fail an otherwise successful poll cycle. The
+            # run artifact provides an independent best-effort copy.
             publish_ok=false
             for attempt in 1 2 3; do
               if git -C "${PUBLISH_DIR}" push --quiet --force origin "HEAD:${BRANCH_NAME}"; then
@@ -890,7 +924,7 @@ jobs:
               if [ "${attempt}" -lt 3 ]; then sleep 2; fi
             done
             if [ "${publish_ok}" != "true" ]; then
-              echo "::warning::State snapshot branch publish failed after 3 attempts; artifact upload remains authoritative for this tick"
+              echo "::warning::State snapshot branch publish failed after 3 attempts; this tick may be available only from the run artifact"
             fi
           else
             echo "State snapshot branch already up to date."
@@ -946,7 +980,7 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
         shell: bash
         run: |
