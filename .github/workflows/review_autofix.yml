@@ -5374,6 +5374,7 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
         run: |
           set -euo pipefail
+          echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"
           if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
             source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             ensure_label_exists "ai:resolver-escalated" "${{ github.repository }}" || true
@@ -5450,7 +5451,6 @@ jobs:
               fi
             fi
           fi
-          echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"
           bash "${RESOLVER_SCRIPT}"
 
       - name: Cache linked issues references

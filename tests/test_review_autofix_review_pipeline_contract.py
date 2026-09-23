@@ -5715,6 +5715,8 @@ def test_conflict_resolver_exports_actuation_sentinel_before_invocation() -> Non
 	sentinel = 'echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"'
 	invocation = 'bash "${RESOLVER_SCRIPT}"'
 	assert sentinel in block
+	assert block.index(sentinel) < block.index("_probe_resolver() {")
+	assert block.index(sentinel) < block.index("exit 2")
 	assert block.index(sentinel) < block.index(invocation)
 
 
