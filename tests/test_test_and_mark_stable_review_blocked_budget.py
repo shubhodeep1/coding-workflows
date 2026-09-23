@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from runpy import run_path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
+MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "mark-stable.yml"
+extract_refs = run_path(str(REPO_ROOT / "scripts" / "check_workflow_script_refs.py"))["extract_refs"]
 
 
 def _read_workflow() -> str:
@@ -49,6 +52,42 @@ def _workflow_dispatch_integer_default(workflow: str, input_name: str) -> int:
 	)
 	assert match is not None, f"Missing workflow_dispatch integer default: {input_name}"
 	return int(match.group(1))
+
+
+def test_reference_extraction_ignores_only_full_line_comments() -> None:
+	workflow_text = """
+      # scripts/yaml_comment_only.sh
+      run: |
+        # ${SUPPORT_SCRIPTS_DIR}/shell_comment_only.py
+        # COMMENTED_SCRIPTS="commented_assignment.sh"
+        # for f in ${COMMENTED_SCRIPTS}; do
+        #   cp "scripts/${f}" /tmp/
+        # done
+        scripts/active_reference.sh # scripts/inline_comment_reference.sh
+        printf '%s\\n' '# scripts/quoted_hash_reference.sh'
+"""
+	refs = extract_refs(workflow_text)
+	assert "yaml_comment_only.sh" not in refs
+	assert "shell_comment_only.py" not in refs
+	assert "commented_assignment.sh" not in refs
+	assert "active_reference.sh" in refs
+	assert "inline_comment_reference.sh" in refs
+	assert "quoted_hash_reference.sh" in refs
+
+
+def test_release_workflows_use_canonical_reference_checker() -> None:
+	checker_call = "PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py"
+	raw_scanner = "grep -rhoE 'scripts/[a-zA-Z0-9_.-]+\\.(sh|py|json)'"
+	for workflow_path in (WORKFLOW, MARK_STABLE_WORKFLOW):
+		workflow = workflow_path.read_text(encoding="utf-8")
+		check_step = _slice_between(
+			workflow,
+			"      - name: Script-workflow cross-reference\n",
+			"\n      - name:",
+		)
+		assert checker_call in check_step
+		assert raw_scanner not in check_step
+		assert "OPTIONAL_SCRIPTS=" not in check_step
 
 
 def test_default_serial_budget_leaves_required_headroom() -> None:
@@ -184,6 +223,23 @@ def test_phase6_transient_api_errors_remain_bounded() -> None:
 	assert read_block.count('issues/${TRACKING_NUMBER}') == 2
 	assert read_block.count("exit 0") == 2
 	assert "exit 1" not in read_block
+
+
+def test_reviewer_majority_is_progress_only() -> None:
+	job = _e2e_job(_read_workflow())
+	progress_block = _slice_between(
+		job,
+		'if [ "$SUCCEEDED" -ge 3 ] && [ $((SUCCEEDED * 2)) -gt "$TOTAL_DONE" ]; then',
+		'elif [ "$TOTAL_DONE" -gt 0 ]; then',
+	)
+	assert "waiting for authoritative review completion and editor verification" in progress_block
+	assert "status=success" not in progress_block
+	assert "review_run_id=" not in progress_block
+	assert "exit 0" not in progress_block
+	assert 'if [ "$RUN_STATUS" = "completed" ]; then' in job
+	assert 'if [ "$RUN_CONCLUSION" = "success" ]; then' in job
+	assert 'echo "status=success" >> "$GITHUB_OUTPUT"' in job
+	assert 'if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then' in job
 
 
 def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:
