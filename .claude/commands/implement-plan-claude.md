@@ -97,7 +97,7 @@ You are the Haiku check-in session for /implement-plan-claude in <owner>/<repo>,
 4. `"done": true` → pick the next stage: if `state` is merged / completed / resolved use `<next stage on success>`; if `state` is blocked / closed / stuck use `<next stage on block>`. Call create_session with source_url https://github.com/<owner>/<repo><, source_revision <ref> — only for a source-revision run>, model <stage model>, permission_mode <mode>, title "implement-plan <slug> — <next stage>", and prompt:
    /implement-plan-claude <plan path> — resume.
    Stage: <next stage>   Checker observed: <reason>
-   Previous stage session: <stage session id>   Checker session: <your session id from get_session>   Safety-net trigger: <trig_… id>
+   Previous stage session: <stage session id>   Checker session: <your id — Bash: echo "session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}">   Safety-net trigger: <trig_… id>
    Waiting on was: <what you checked>   Stage model: <stage model>
    <— source revision <ref>, only for a source-revision run>
    Then call PushNotification (if available) with "<slug>: <reason> — started <next stage>", and finally archive_session on your own session id. Do nothing after that.

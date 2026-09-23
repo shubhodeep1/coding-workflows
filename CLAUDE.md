@@ -1625,7 +1625,9 @@ pushing session gave it:
 - when no next steps exist, say plainly that the pushing session can be
   closed safely.
 
-Then it renames itself (`set_session_title`) to
+Then it renames itself (`set_session_title`, with its own id from
+`session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}` in Bash rather than a
+`get_session` call) to
 `PR #<n> merged — <no action needed | action needed>` or
 `PR #<n> closed — decision needed`, and sends one `PushNotification` (one
 line, under 200 characters) with the terminal state and whether action is
