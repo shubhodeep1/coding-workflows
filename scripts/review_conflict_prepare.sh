@@ -573,6 +573,8 @@ fi
 # with any plumbing error (exit 2), skip the expansion and let the
 # verifier's downstream hard-fail surface the issue normally.
 FP_VIOLATED_FILES_LIST=""
+FINGERPRINT_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_fingerprint_violations.json"
+printf '[]\n' > "${FINGERPRINT_VIOLATIONS_FILE}"
 if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
    && [ -n "${INTEGRATION_FINGERPRINTS_FILE:-}" ] \
    && [ -f "${INTEGRATION_FINGERPRINTS_FILE}" ] \
@@ -582,17 +584,14 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
   INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
     PYTHONDONTWRITEBYTECODE=1 \
     python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
-      --list-violated-files "${INTEGRATION_FINGERPRINTS_FILE}" \
-      > "${_fp_violated_tmp}" 2>/dev/null || _fp_list_exit=$?
-  # Belt-and-braces: the verifier's --list-violated-files contract
-  # guarantees stdout is file paths only (warnings go to stderr), but
-  # defensively strip any `::warning::` / `::error::` annotation line
-  # and empty lines here so a future regression in the verifier cannot
-  # pollute the resolver allowlist / conflicted-paths set with a
-  # phantom path like `::warning::...` that would then crash
-  # check_resolver_diff.sh's touched-subset guard downstream.
-  if [ -s "${_fp_violated_tmp}" ]; then
-    sed -i '/^::/d; /^[[:space:]]*$/d' "${_fp_violated_tmp}" 2>/dev/null || true
+      --list-violations-json "${INTEGRATION_FINGERPRINTS_FILE}" \
+      > "${FINGERPRINT_VIOLATIONS_FILE}" 2>/dev/null || _fp_list_exit=$?
+  if [ "${_fp_list_exit}" -eq 0 ] \
+    && jq -e 'type == "array" and all(.[]; (.kind | IN("must_contain", "must_not_contain", "must_not_exist")) and (.path | type == "string"))' \
+      "${FINGERPRINT_VIOLATIONS_FILE}" >/dev/null 2>&1; then
+    jq -r '.[].path' "${FINGERPRINT_VIOLATIONS_FILE}" | sed '/^[[:space:]]*$/d' > "${_fp_violated_tmp}"
+  else
+    _fp_list_exit=2
   fi
   if [ "${_fp_list_exit}" -eq 0 ] && [ -s "${_fp_violated_tmp}" ]; then
     sort -u -o "${_fp_violated_tmp}" "${_fp_violated_tmp}"
@@ -628,7 +627,7 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
     fi
     rm -f "${_fp_new_tmp}"
   elif [ "${_fp_list_exit}" -ne 0 ]; then
-    echo "::warning::Fingerprint-violation expansion skipped — verifier exited ${_fp_list_exit} in --list-violated-files mode (plumbing failure). Resolver will still see the git-marked conflicted set; the post-codex verifier will surface any real violations."
+    echo "::warning::Fingerprint-violation expansion skipped — verifier exited ${_fp_list_exit} in --list-violations-json mode (plumbing failure). Resolver will still see the git-marked conflicted set; the post-codex verifier will surface any real violations."
   fi
   rm -f "${_fp_violated_tmp}"
 fi
@@ -862,10 +861,8 @@ PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
   sort -u -o "${CONFLICTED_PATHS_FILE}" "${CONFLICTED_PATHS_FILE}"
   echo "Conflicted paths captured: $(wc -l < "${CONFLICTED_PATHS_FILE}") entries"
 
-  # Bind the resolver to the original conflict-marker spans and to the
-  # deterministic merge result for every clean path. A path without textual
-  # markers (binary/delete conflict or fingerprint-only expansion) cannot be
-  # authorized safely and fails closed here for the existing escalation path.
+  # Bind the resolver to original conflict-marker spans, explicitly violated
+  # fingerprint hunks, and the deterministic merge result for every clean path.
   CONFLICT_SPANS_FILE="${RUNTIME_DIR}/resolver_conflict_spans.json"
   CLEAN_MERGE_MANIFEST_FILE="${RUNTIME_DIR}/resolver_clean_manifest.tsv"
   RESOLVER_MERGE_TREE_FILE="${RUNTIME_DIR}/resolver_merge_tree.txt"
@@ -880,9 +877,12 @@ PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
     exit 1
   fi
   if ! PYTHONDONTWRITEBYTECODE=1 python3 - \
-    "${PWD}" "${CONFLICTED_PATHS_FILE}" "${CONFLICT_SPANS_FILE}" "${RESOLVER_EXPECTED_TREE}" <<'PY'
+    "${PWD}" "${CONFLICTED_PATHS_FILE}" "${CONFLICT_SPANS_FILE}" "${RESOLVER_EXPECTED_TREE}" \
+    "${FINGERPRINT_VIOLATIONS_FILE}" <<'PY'
 import base64
+import difflib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -891,11 +891,63 @@ workspace = Path(sys.argv[1]).resolve()
 paths = [line for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines() if line]
 output = Path(sys.argv[3])
 expected_tree = sys.argv[4]
+fingerprint_rows = json.loads(Path(sys.argv[5]).read_text(encoding="utf-8"))
+if not isinstance(fingerprint_rows, list):
+	raise SystemExit("fingerprint violations are malformed")
+violations_by_path = {}
+for row in fingerprint_rows:
+	if not isinstance(row, dict) or not isinstance(row.get("path"), str):
+		raise SystemExit("fingerprint violation row is malformed")
+	violations_by_path.setdefault(row["path"], []).append(row)
 manifest = {}
+
+
+def anchors_for_intervals(data, intervals):
+	lines = data.splitlines(keepends=True)
+	merged = []
+	for start, end in sorted(intervals):
+		if start < 0 or end < start or end > len(lines):
+			raise SystemExit("fingerprint hunk is outside the current file")
+		if merged and start <= merged[-1][1]:
+			merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+		else:
+			merged.append((start, end))
+	if not merged:
+		raise SystemExit("fingerprint path has no bounded authorized hunk")
+	offsets = [0]
+	for line in lines:
+		offsets.append(offsets[-1] + len(line))
+	anchors = []
+	anchor_start = 0
+	for start, end in merged:
+		anchors.append(data[anchor_start:offsets[start]])
+		anchor_start = offsets[end]
+	anchors.append(data[anchor_start:])
+	return anchors
 for path_name in paths:
 	path = PurePosixPath(path_name)
 	if path.is_absolute() or ".." in path.parts or any(ord(char) < 32 for char in path_name):
 		raise SystemExit("unsafe conflict path")
+	path_violations = violations_by_path.get(path_name, [])
+	ls_tree = subprocess.run(
+		["git", "ls-tree", expected_tree, "--", path_name], cwd=workspace,
+		capture_output=True, text=True, check=False,
+	)
+	if ls_tree.returncode != 0 or not ls_tree.stdout.strip():
+		raise SystemExit("conflicted path has no deterministic merged mode")
+	expected_mode = ls_tree.stdout.split(" ", 1)[0]
+	if any(row.get("kind") == "must_not_exist" for row in path_violations):
+		if any(row.get("kind") != "must_not_exist" for row in path_violations):
+			raise SystemExit("fingerprint path mixes deletion and text authorization")
+		if expected_mode not in {"100644", "100755", "120000", "160000"}:
+			raise SystemExit("fingerprint deletion has unsupported merged mode")
+		manifest[path_name] = {
+			"anchors": [],
+			"authorization": "fingerprint-delete",
+			"allow_delete": True,
+			"mode": expected_mode,
+		}
+		continue
 	file_path = workspace / path
 	if not file_path.is_file() or file_path.is_symlink():
 		raise SystemExit("binary, delete/modify, or non-regular conflict")
@@ -940,19 +992,61 @@ for path_name in paths:
 			raise SystemExit("missing conflict terminator")
 		anchor_start = offset
 	anchors.append(data[anchor_start:])
-	if len(anchors) < 2:
-		raise SystemExit("authorized resolver path has no textual conflict markers")
-	ls_tree = subprocess.run(
-		["git", "ls-tree", expected_tree, "--", path_name], cwd=workspace,
-		capture_output=True, text=True, check=False,
-	)
-	if ls_tree.returncode != 0 or not ls_tree.stdout.strip():
-		raise SystemExit("conflicted path has no deterministic merged mode")
-	expected_mode = ls_tree.stdout.split(" ", 1)[0]
 	if expected_mode not in {"100644", "100755"}:
 		raise SystemExit("conflicted path has unsupported merged mode")
+	authorization = "conflict-markers"
+	if len(anchors) < 2:
+		if not path_violations:
+			raise SystemExit("authorized resolver path has no textual conflict markers")
+		try:
+			current_lines = data.decode("utf-8").splitlines(keepends=True)
+		except UnicodeDecodeError as exc:
+			raise SystemExit("fingerprint conflict is not UTF-8 text") from exc
+		head_result = subprocess.run(
+			["git", "show", f"HEAD:{path_name}"], cwd=workspace,
+			capture_output=True, check=False,
+		)
+		if head_result.returncode != 0:
+			raise SystemExit("fingerprint conflict has no integration-head baseline")
+		try:
+			head_lines = head_result.stdout.decode("utf-8").splitlines(keepends=True)
+		except UnicodeDecodeError as exc:
+			raise SystemExit("fingerprint baseline is not UTF-8 text") from exc
+		opcodes = difflib.SequenceMatcher(None, current_lines, head_lines, autojunk=False).get_opcodes()
+		intervals = []
+		for violation in path_violations:
+			kind = violation.get("kind")
+			regex = violation.get("regex")
+			if kind not in {"must_contain", "must_not_contain"} or not isinstance(regex, str):
+				raise SystemExit("fingerprint text authorization is malformed")
+			try:
+				pattern = re.compile(regex)
+			except re.error as exc:
+				raise SystemExit("fingerprint regex is invalid") from exc
+			if kind == "must_not_contain":
+				matching_lines = [index for index, line in enumerate(current_lines) if pattern.search(line)]
+				if not matching_lines:
+					raise SystemExit("fingerprint violation no longer matches current content")
+				intervals.extend((index, index + 1) for index in matching_lines)
+				continue
+			head_matches = [index for index, line in enumerate(head_lines) if pattern.search(line)]
+			if not head_matches or any(pattern.search(line) for line in current_lines):
+				raise SystemExit("missing fingerprint cannot be grounded in integration HEAD")
+			head_index = head_matches[0]
+			for tag, current_start, current_end, head_start, head_end in opcodes:
+				if head_start <= head_index < head_end:
+					if tag == "equal":
+						raise SystemExit("missing fingerprint maps to unchanged content")
+					intervals.append((current_start, current_end))
+					break
+			else:
+				raise SystemExit("missing fingerprint has no bounded merge hunk")
+		anchors = anchors_for_intervals(data, intervals)
+		authorization = "fingerprint-hunks"
 	manifest[path_name] = {
 		"anchors": [base64.b64encode(anchor).decode("ascii") for anchor in anchors],
+		"authorization": authorization,
+		"allow_delete": False,
 		"mode": expected_mode,
 	}
 output.write_text(json.dumps(manifest, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")

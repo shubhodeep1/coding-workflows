@@ -462,6 +462,7 @@ class BoundedHTTPServer(http.server.HTTPServer):
 			self._executor.submit(self._process_request_worker, request, client_address)
 		except RuntimeError:
 			self._admission.release()
+			print(f"model_provider_proxy: dropped connection during executor shutdown client={client_address}", file=sys.stderr)
 			self.shutdown_request(request)  # type: ignore[arg-type]
 
 	def _process_request_worker(self, request: object, client_address: object) -> None:

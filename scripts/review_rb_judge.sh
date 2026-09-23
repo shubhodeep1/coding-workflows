@@ -1207,6 +1207,17 @@ fi
 if ! printf '%s\n' "${PR_REVIEW_COMMENTS}" | jq '.' > "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}" 2>/dev/null; then
   printf '%s\n' "${PR_REVIEW_COMMENTS}" > "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}"
 fi
+review_fix_source_args=(
+  --review-fix-diff-file "${RB_JUDGE_PR_DIFF_AUTH_FILE:-${RB_JUDGE_PR_DIFF_FILE}}"
+  --review-fix-comments-json-file "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}"
+  --review-fix-comments-json-file "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}"
+)
+if [ -s "${RUNTIME_DIR}/reviewer_bundle.txt" ]; then
+  review_fix_source_args+=(--review-fix-evidence-file "${RUNTIME_DIR}/reviewer_bundle.txt")
+fi
+if [ -s "${RUNTIME_DIR}/floor_tags.txt" ]; then
+  review_fix_source_args+=(--review-fix-floor-tags-file "${RUNTIME_DIR}/floor_tags.txt")
+fi
 review_fix_build_args=(
   --build-review-fix-authorization
   --review-fix-repo "${PWD}"
@@ -1214,17 +1225,9 @@ review_fix_build_args=(
   --review-fix-pr-number "${PR_NUMBER}"
   --review-fix-head-sha "${RB_JUDGED_HEAD_SHA}"
   --review-fix-producer-run "${GITHUB_RUN_ID:-local}"
-  --review-fix-diff-file "${RB_JUDGE_PR_DIFF_AUTH_FILE}"
-  --review-fix-comments-json-file "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}"
-  --review-fix-comments-json-file "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}"
+  "${review_fix_source_args[@]}"
   --review-fix-output "${REVIEW_FIX_AUTHORIZATION_FILE}"
 )
-if [ -s "${RUNTIME_DIR}/reviewer_bundle.txt" ]; then
-  review_fix_build_args+=(--review-fix-evidence-file "${RUNTIME_DIR}/reviewer_bundle.txt")
-fi
-if [ -s "${RUNTIME_DIR}/floor_tags.txt" ]; then
-  review_fix_build_args+=(--review-fix-floor-tags-file "${RUNTIME_DIR}/floor_tags.txt")
-fi
 if PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" "${review_fix_build_args[@]}"; then
   REVIEW_FIX_AUTHORIZATION_AVAILABLE=true
 else
@@ -2131,6 +2134,7 @@ __EDIT_DISCIPLINE__
 	          --review-fix-repository "${REPOSITORY}" \
 	          --review-fix-pr-number "${PR_NUMBER}" \
 	          --review-fix-head-sha "${RB_JUDGED_HEAD_SHA}" \
+	          "${review_fix_source_args[@]}" \
 	          --review-fix-authorization-file "${REVIEW_FIX_AUTHORIZATION_FILE}" \
 	          --review-fix-selected-targets-file "${REVIEW_FIX_SELECTED_TARGETS_FILE}" \
 	          --review-fix-spans-output "${rb_fix_spans_file}" \

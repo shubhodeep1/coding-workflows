@@ -6947,6 +6947,7 @@ def main() -> int:
 	test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha()
 	test_review_python_dependencies_never_enter_host_path()
 	test_review_commits_and_pushes_use_trusted_git_boundary()
+	test_conflict_resolver_authorizes_mixed_marker_and_fingerprint_hunks()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 
@@ -6983,6 +6984,73 @@ def test_review_commits_and_pushes_use_trusted_git_boundary() -> None:
 		assert "trusted_git_write.sh" in script
 
 
+def test_conflict_resolver_authorizes_mixed_marker_and_fingerprint_hunks() -> None:
+	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	python_start = prepare.index("import base64\nimport difflib\nimport json\n")
+	python_body = prepare[python_start:prepare.index("\nPY\n  then", python_start)]
+	with tempfile.TemporaryDirectory(prefix="mixed-resolver-boundary-") as directory:
+		repo = Path(directory) / "repo"
+		repo.mkdir()
+		subprocess.run(["git", "init", "-q", str(repo)], check=True)
+		(repo / "conflict.txt").write_text("prefix\nours\nsuffix\n", encoding="utf-8")
+		(repo / "fingerprint.txt").write_text("keep\nREQUIRED\nend\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "head"],
+			check=True,
+		)
+		(repo / "conflict.txt").write_text(
+			"prefix\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> origin/main\nsuffix\n",
+			encoding="utf-8",
+		)
+		(repo / "fingerprint.txt").write_text("keep\nFORBIDDEN\nend\n", encoding="utf-8")
+		(repo / "resurrected.txt").write_bytes(b"must be deleted\0\n")
+		subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+		expected_tree = subprocess.check_output(["git", "-C", str(repo), "write-tree"], text=True).strip()
+		conflicted = Path(directory) / "conflicted.txt"
+		touched = Path(directory) / "touched.txt"
+		spans = Path(directory) / "spans.json"
+		clean_manifest = Path(directory) / "clean.tsv"
+		violations = Path(directory) / "violations.json"
+		conflicted.write_text("conflict.txt\nfingerprint.txt\nresurrected.txt\n", encoding="utf-8")
+		touched.write_text("conflict.txt\nfingerprint.txt\nresurrected.txt\n", encoding="utf-8")
+		clean_manifest.write_text("", encoding="utf-8")
+		violations.write_text(
+			json.dumps([
+				{"kind": "must_contain", "path": "fingerprint.txt", "regex": "REQUIRED"},
+				{"kind": "must_not_contain", "path": "fingerprint.txt", "regex": "FORBIDDEN"},
+				{"kind": "must_not_exist", "path": "resurrected.txt", "regex": None},
+			]),
+			encoding="utf-8",
+		)
+		generated = subprocess.run(
+			["python3", "-", str(repo), str(conflicted), str(spans), expected_tree, str(violations)],
+			input=python_body,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert generated.returncode == 0, generated.stderr
+		manifest = json.loads(spans.read_text(encoding="utf-8"))
+		assert manifest["conflict.txt"]["authorization"] == "conflict-markers"
+		assert manifest["fingerprint.txt"]["authorization"] == "fingerprint-hunks"
+		assert manifest["resurrected.txt"]["authorization"] == "fingerprint-delete"
+		(repo / "conflict.txt").write_text("prefix\nresolved\nsuffix\n", encoding="utf-8")
+		(repo / "fingerprint.txt").write_text("keep\nREQUIRED\nend\n", encoding="utf-8")
+		(repo / "resurrected.txt").unlink()
+		command = [
+			"bash", str(REPO_ROOT / "scripts" / "check_resolver_diff.sh"),
+			"--repo-root", str(repo), "--conflicted-set", str(conflicted), "--touched-set", str(touched),
+			"--conflict-spans", str(spans), "--clean-manifest", str(clean_manifest), "--strict-manifests",
+		]
+		accepted = subprocess.run(command, capture_output=True, text=True, check=False)
+		assert accepted.returncode == 0, accepted.stderr
+		(repo / "fingerprint.txt").write_text("tampered\nREQUIRED\nend\n", encoding="utf-8")
+		rejected = subprocess.run(command, capture_output=True, text=True, check=False)
+		assert rejected.returncode == 1
+		assert "outside conflict spans" in rejected.stderr
+
+
 def test_conflict_resolver_requires_span_and_clean_tree_manifests() -> None:
 	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
 	resolve = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
@@ -6994,6 +7062,7 @@ def test_conflict_resolver_requires_span_and_clean_tree_manifests() -> None:
 	assert '--clean-manifest "${CLEAN_MERGE_MANIFEST_FILE}"' in resolve
 	assert "--strict-manifests" in resolve
 	assert "strict mode requires --conflict-spans and --clean-manifest" in guard
+	assert "--list-violations-json" in prepare
 
 
 def test_review_blocked_writers_require_head_bound_fix_targets_and_spans() -> None:

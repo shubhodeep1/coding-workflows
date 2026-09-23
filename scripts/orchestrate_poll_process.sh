@@ -20927,6 +20927,9 @@ ${RB_REVIEW_FIX_AUTHORIZATION_MARKER}"
 	                  --review-fix-repository "${GITHUB_REPOSITORY}" \
 	                  --review-fix-pr-number "${RB_PR}" \
 	                  --review-fix-head-sha "${RB_REVIEW_FIX_HEAD_SHA}" \
+	                  --review-fix-diff-file "${RB_REVIEW_FIX_DIFF_FILE}" \
+	                  --review-fix-comments-json-file "${RB_REVIEW_FIX_COMMENTS_FILE}" \
+	                  --review-fix-comments-json-file "${RB_REVIEW_FIX_REVIEW_COMMENTS_FILE}" \
 	                  --review-fix-authorization-file "${RB_REVIEW_FIX_AUTHORIZATION_FILE}" \
 	                  --review-fix-selected-targets-file "${RB_REVIEW_FIX_SELECTED_FILE}" \
 	                  --review-fix-spans-output "${rb_review_fix_spans_file}" \

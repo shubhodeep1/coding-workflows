@@ -639,6 +639,15 @@ def _validate_review_fix_authorization(args: argparse.Namespace) -> int:
 		raise ValueError("review-fix PR binding is stale")
 	if manifest.get("head_sha") != args.review_fix_head_sha:
 		raise ValueError("review-fix head binding is stale")
+	expected_source_digests: dict[str, str] = {"diff": _file_digest(Path(args.review_fix_diff_file))}
+	for index, evidence_name in enumerate(args.review_fix_evidence_file):
+		expected_source_digests[f"evidence_{index}"] = _file_digest(Path(evidence_name))
+	for index, comments_name in enumerate(args.review_fix_comments_json_file):
+		expected_source_digests[f"comments_{index}"] = _file_digest(Path(comments_name))
+	if args.review_fix_floor_tags_file:
+		expected_source_digests["floor_tags"] = _file_digest(Path(args.review_fix_floor_tags_file))
+	if manifest.get("source_digests") != expected_source_digests:
+		raise ValueError("review-fix source digests do not match current evidence")
 	repo = Path(args.review_fix_repo).resolve(strict=True)
 	current_head = subprocess.run(
 		["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=False
@@ -740,6 +749,7 @@ def main(argv: list[str] | None = None) -> int:
 				and args.review_fix_selected_targets_file
 				and args.review_fix_spans_output
 				and args.allowlist_out
+				and args.review_fix_diff_file
 			):
 				raise ValueError("review-fix validation paths are required")
 			return _validate_review_fix_authorization(args)

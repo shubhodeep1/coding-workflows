@@ -208,10 +208,14 @@ def test_review_fix_authorization_rejects_edits_outside_grounded_hunk() -> None:
 			"--validate-review-fix-authorization", "--review-fix-repo", str(repo),
 			"--review-fix-repository", "owner/repo", "--review-fix-pr-number", "7",
 			"--review-fix-head-sha", head_sha, "--review-fix-authorization-file", str(authorization),
+			"--review-fix-diff-file", str(diff_file), "--review-fix-evidence-file", str(evidence),
 			"--review-fix-selected-targets-file", str(selected), "--review-fix-spans-output", str(spans),
 			"--staged-file", str(touched), "--allowlist-out", str(allowed),
 		]
 		assert guard.main(validate_args) == 0
+		evidence.write_text("file: src/app.py\nline: 11\n", encoding="utf-8")
+		assert guard.main(validate_args) == guard.EXIT_INVALID_GENERATED_ADVISORY
+		evidence.write_text("file: src/app.py\nline: 10\n", encoding="utf-8")
 		clean = repo / "clean.tsv"
 		clean.write_text("", encoding="utf-8")
 		target.write_text(target.read_text(encoding="utf-8").replace("VALUE_10 = 100", "VALUE_10 = 101"), encoding="utf-8")

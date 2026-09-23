@@ -736,9 +736,11 @@ when the bounded fix-cycle budget is exhausted.
 - Writer-role systemd units enforce validated task, memory/swap, CPU, I/O,
 	file-descriptor, and wall-time ceilings, with `KillMode=control-group` and
 	`OOMPolicy=kill`; unsupported mandatory properties fail the model run closed.
-- Conflict-resolver publication requires original-marker byte anchors and a
-	deterministic clean-tree manifest. Review-blocked publication requires a
-	current-head `review_fix_authorization.v1` target selection; protected paths
+- Conflict-resolver publication requires original-marker byte anchors or exact
+	violated-fingerprint hunk anchors plus a deterministic clean-tree manifest;
+	`must_not_exist` violations authorize deletion only. Review-blocked
+	publication requires a current-head `review_fix_authorization.v1` target
+	selection; protected paths
 	require multi-reviewer floor provenance, and both writer paths stage only
 	deterministically span-validated files.
 - Review Python dependencies remain in a Docker-managed volume. They are never
