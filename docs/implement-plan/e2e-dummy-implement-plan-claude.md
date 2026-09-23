@@ -5,14 +5,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/2
 - Activation: not started
-- Waiting on: phase 1 PR (number recorded in the stage-session prompt and PR body)
+- Waiting on: PR #4308
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: recorded in the phase 1 stage report (checker session + safety net)
+- Check-in: checker session_01Avb1FbLBMnEzg6ohPqNFUn   safety net trig_01Kp157c3tEw5Mom3gNhU4te
 - Last updated: 2026-09-23
-- Last note: phase 1 implemented (docs/e2e-dummy/README.md added); PR opened, waiting for review_autofix + auto-merge.
+- Last note: phase 1 implemented (docs/e2e-dummy/README.md added); PR #4308 opened, Haiku checker armed, waiting for review_autofix + auto-merge.
 
 ## Phases
-1. [ ] Phase 1 — add the marker file `docs/e2e-dummy/README.md`   — PR open (waiting); interventions: 0
+1. [ ] Phase 1 — add the marker file `docs/e2e-dummy/README.md`   — PR #4308 open (waiting); interventions: 0
 2. [ ] Phase 2 — remove the marker file `docs/e2e-dummy/README.md`
 
 ## Security pass
