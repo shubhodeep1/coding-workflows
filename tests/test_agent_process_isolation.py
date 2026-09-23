@@ -96,6 +96,9 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "class BoundedHTTPServer" in module_text
 	assert "ThreadPoolExecutor" in module_text
 	assert "settimeout(self.server.read_timeout_seconds)" in module_text
+	assert 'sandbox_cgroup_controllers_file="/sys/fs/cgroup/cgroup.controllers"' in sandbox_text
+	assert "for sandbox_required_cgroup_controller in cpu io memory pids; do" in sandbox_text
+	assert "required cgroup controller is unavailable" in sandbox_text
 	for resource_property in (
 		"TasksMax", "MemoryMax", "MemorySwapMax", "CPUQuota", "IOReadBandwidthMax",
 		"IOWriteBandwidthMax", "LimitNOFILE", "RuntimeMaxSec", "KillMode=control-group",

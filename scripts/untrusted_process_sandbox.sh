@@ -296,6 +296,18 @@ if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then
 fi
 command -v systemd-run >/dev/null 2>&1 \
 	|| { echo "untrusted_process_sandbox: systemd-run is required" >&2; exit 1; }
+# systemd-run rejects unknown property assignments. Also require every kernel
+# controller needed to enforce the accepted cgroup-backed properties.
+sandbox_cgroup_controllers_file="/sys/fs/cgroup/cgroup.controllers"
+[ -r "${sandbox_cgroup_controllers_file}" ] \
+	|| { echo "untrusted_process_sandbox: cgroup v2 controllers are required" >&2; exit 1; }
+sandbox_available_cgroup_controllers=" $(tr '\n' ' ' < "${sandbox_cgroup_controllers_file}") "
+for sandbox_required_cgroup_controller in cpu io memory pids; do
+	case "${sandbox_available_cgroup_controllers}" in
+		*" ${sandbox_required_cgroup_controller} "*) ;;
+		*) echo "untrusted_process_sandbox: required cgroup controller is unavailable: ${sandbox_required_cgroup_controller}" >&2; exit 1 ;;
+	esac
+done
 
 validate_positive_integer()
 {
