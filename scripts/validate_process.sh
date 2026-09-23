@@ -4198,6 +4198,10 @@ case "${DIAG_STATUS}" in
     ;;
 
   harness_error)
+    HARNESS_RUN_REFERENCE=""
+    if [ -n "${GITHUB_RUN_ID:-}" ]; then
+      HARNESS_RUN_REFERENCE=$'\n\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+    fi
     if [ "${ESCALATED_FROM_NEEDS_FIXES}" = "true" ]; then
       # Cross-cycle escalation path: the diagnose LLM classified this
       # as needs_fixes, but the same fix-up proposal has failed in
@@ -4213,7 +4217,7 @@ case "${DIAG_STATUS}" in
       fi
       failure_summary="Validation harness error (cross-cycle escalation): ${HARNESS_FIXES}"
 
-      post_tracking_comment "## ❌ Runtime validation harness error (cross-cycle escalation)\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}"
+      post_tracking_comment "## ❌ Runtime validation harness error (cross-cycle escalation)\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}${HARNESS_RUN_REFERENCE}"
       set_tracking_phase_label "ai:validation-failed"
       write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
       tg_notify "Validation cross-cycle escalation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: same fix-up proposal failed $((PRIOR_FINGERPRINT_HITS + 1)) times." "ERROR"
@@ -4221,7 +4225,7 @@ case "${DIAG_STATUS}" in
       HARNESS_FIXES="$(jq -r '.harness_fixes // "Validation harness needs correction."' "${DIAGNOSE_RESULT_FILE}")"
       failure_summary="Validation harness error: ${HARNESS_FIXES}"
 
-      post_tracking_comment "## ❌ Runtime validation harness error\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}"
+      post_tracking_comment "## ❌ Runtime validation harness error\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}${HARNESS_RUN_REFERENCE}"
       set_tracking_phase_label "ai:validation-failed"
       write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
       tg_notify "Validation harness error for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"

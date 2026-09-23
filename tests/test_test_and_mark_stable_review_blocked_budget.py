@@ -320,8 +320,6 @@ def test_phase4b_dispatches_only_when_no_run_is_adopted() -> None:
 	assert '"repos/${TEST_REPO}/actions/runs/${ADOPTED_REVIEW_RUN_ID}"' in phase4b
 	assert "did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes" in phase4b
 	assert "${{" not in phase4b.split("run: |", 1)[1]
-
-
 def main() -> int:
 	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
 	for test in tests:

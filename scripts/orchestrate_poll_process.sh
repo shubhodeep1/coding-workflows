@@ -11562,12 +11562,12 @@ mark_validation_failed() {
     set_tracking_phase_label "ai:validation-failed"
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
     ensure_label_exists "ai:harness-broken" >/dev/null 2>&1 || true
-    gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:harness-broken" >/dev/null 2>&1 || true
     post_tracking_comment "## ❌ Runtime validation harness error
 
 ${reason}
 
 The latest validation run reported \`raw_status=harness_error\`, so the orchestrator is classifying this as a harness/infrastructure defect instead of consuming \`MAX_VALIDATION_RECOVERY_ATTEMPTS\`, \`MAX_VALIDATE_CYCLES\`, or judge repeat-fingerprint budget. Repair the harness, then run \`/revalidate\` to resume runtime validation."
+    gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:harness-broken" >/dev/null 2>&1 || true
     COMPLETION_STATUS_STATE_CHANGED="false"
     update_completion_status_comment "failed" \
       "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"Runtime validation is blocked by a harness/infrastructure defect (\`raw_status=harness_error\`). Recovery counters were left unchanged. Repair the harness, then use \`/revalidate\` to resume validation. See the \"❌ Runtime validation harness error\" comment for the diagnostic detail." \

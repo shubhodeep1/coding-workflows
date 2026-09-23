@@ -260,6 +260,65 @@ def test_build_issue_payload_validates_and_carries_lineage() -> None:
 	assert len(json.dumps(payload).encode("utf-8")) < heal.MAX_PAYLOAD_BYTES
 
 
+def test_build_issue_payload_prioritizes_recent_diagnostics_and_compacts_state() -> None:
+	state_comment = (
+		f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={'a' * 64} -->\n"
+		+ ("state-data" * 1000)
+		+ "\nORCHESTRATOR_STATE_V2 -->"
+	)
+	run_url = f"https://github.com/{CONSUMER_REPO}/actions/runs/7001"
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO,
+		kind="issue",
+		label="ai:harness-broken",
+		issue=_issue(),
+		comments=[
+			{"body": state_comment},
+			{"body": f"Harness diagnosis: template renderer failed.\nRun: {run_url}"},
+		],
+		runs=[],
+		wrapper_sha=None,
+		reporter_run_url=None,
+	)
+
+	assert payload["comments_excerpt"].startswith("Harness diagnosis: template renderer failed.")
+	assert "[ORCHESTRATOR_STATE_V2 state part 1/1 omitted]" in payload["comments_excerpt"]
+	assert "state-datastate-data" not in payload["comments_excerpt"]
+	assert len(payload["comments_excerpt"]) <= heal.COMMENTS_EXCERPT_LIMIT
+	assert payload["run_refs"] == [{"repo": CONSUMER_REPO, "run_id": "7001", "url": run_url}]
+
+
+def test_build_issue_payload_preserves_malformed_state_markers_and_full_body_run_refs() -> None:
+	run_url = f"https://github.com/{CONSUMER_REPO}/actions/runs/7002"
+	oversized_diagnosis = "Newest harness diagnosis\n" + ("x" * 7000) + f"\nRun: {run_url}"
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO,
+		kind="issue",
+		label="ai:harness-broken",
+		issue=_issue(),
+		comments=[
+			{"body": "<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + ("b" * 64) + " -->\nmalformed state"},
+			{"body": oversized_diagnosis},
+		],
+		runs=[],
+		wrapper_sha=None,
+		reporter_run_url=None,
+	)
+
+	assert payload["comments_excerpt"].startswith("Newest harness diagnosis")
+	assert "[... truncated ...]" in payload["comments_excerpt"]
+	assert len(payload["comments_excerpt"]) <= heal.COMMENTS_EXCERPT_LIMIT
+	assert payload["run_refs"] == [{"repo": CONSUMER_REPO, "run_id": "7002", "url": run_url}]
+
+	malformed_excerpt = heal._build_recent_comments_excerpt([
+		"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + ("b" * 64) + " -->\nmalformed state",
+		"newest comment",
+	])
+	assert malformed_excerpt.startswith("newest comment")
+	assert "malformed state" in malformed_excerpt
+	assert "state part 1/1 omitted" not in malformed_excerpt
+
+
 def test_validate_payload_rejects_bad_inputs() -> None:
 	good = heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=None, reporter_run_url=None)
 	heal.validate_payload(good)
@@ -1153,6 +1212,37 @@ def test_autofix_payload_validates_and_fingerprints_by_reason() -> None:
 	assert heal.fingerprint("AI Review", "autofix:editor_empty_noop", sig_a) != heal.fingerprint("AI Review", "autofix:editor_changes_lost", sig_a)
 
 
+def test_autofix_payload_prioritizes_recent_diagnostics_and_compacts_state() -> None:
+	state_comment = (
+		f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={'a' * 64} -->\n"
+		+ ("state-data" * 1000)
+		+ "\nORCHESTRATOR_STATE_V2 -->"
+	)
+	run_url = f"https://github.com/{CONSUMER_REPO}/actions/runs/500"
+	payload = heal.build_autofix_failure_payload(
+		repo=CONSUMER_REPO,
+		pr=_pr(),
+		comments=[
+			{"body": state_comment},
+			{"body": f"Harness diagnosis: template renderer failed.\nRun: {run_url}"},
+		],
+		workflow_name="AI Review",
+		failure_reason="editor_empty_noop",
+		failure_evidence="failure_reason=editor_empty_noop",
+		failure_streak=2,
+		run_id="500",
+		run_url=run_url,
+		wrapper_sha=SHA_A,
+		reporter_run_url=run_url,
+	)
+
+	assert payload["comments_excerpt"].startswith("Harness diagnosis: template renderer failed.")
+	assert "[ORCHESTRATOR_STATE_V2 state part 1/1 omitted]" in payload["comments_excerpt"]
+	assert "state-datastate-data" not in payload["comments_excerpt"]
+	assert len(payload["comments_excerpt"]) <= heal.COMMENTS_EXCERPT_LIMIT
+	assert payload["run_refs"] == [{"repo": CONSUMER_REPO, "run_id": "500", "url": run_url}]
+
+
 def test_compose_autofix_issue_title_and_body() -> None:
 	payload = heal.validate_payload(_autofix_payload())
 	title = heal.compose_issue_title(payload, workflow_name=None)
@@ -1425,7 +1515,7 @@ def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapsh
 		(work / ".codex-workflow-src-main" / "scripts" / "workflow_failure_heal_autofix_report.sh").write_text("main-reporter\n", encoding="utf-8")
 		# Branch copy of an unrelated already-staged file must not be touched.
 		(support / "workflow_failure_heal.py").write_text("branch-heal\n", encoding="utf-8")
-		reporter_backfill_env = {key: value for key, value in os.environ.items() if key not in {"BASH_ENV", "ENV"}}
+		reporter_backfill_env = {key: value for key, value in os.environ.items() if key not in {"BASH_ENV", "ENV", "WORKSPACE_PATH"}}
 		result = subprocess.run(
 			["bash", "-euo", "pipefail", "-c", loop],
 			cwd=work,

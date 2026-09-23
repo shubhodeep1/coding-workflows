@@ -132,6 +132,11 @@ _RUN_URL_RE = re.compile(
 _SMOKE_TITLE_RE = re.compile(r"\[E2E Smoke Test\b", re.IGNORECASE)
 _SMOKE_LABELS = frozenset({"e2e-smoke-test"})
 _MARKER_RE = re.compile(r"<!--\s*" + re.escape(MARKER_PREFIX) + r"(?P<key>[a-z_]+)=(?P<value>[^\s>]+)\s*-->")
+_ORCHESTRATOR_STATE_V2_COMMENT_RE = re.compile(
+	r"<!-- ORCHESTRATOR_STATE_V2 part=(?P<part>[1-9][0-9]*)/(?P<total>[1-9][0-9]*) manifest=[0-9a-f]{64} -->\n"
+	r".*\nORCHESTRATOR_STATE_V2 -->",
+	re.DOTALL,
+)
 _CLASSIFICATION_RE = re.compile(r"^##\s*Classification\s*$", re.IGNORECASE | re.MULTILINE)
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -304,6 +309,40 @@ def _labels_of(issue: dict[str, Any]) -> list[str]:
 	return names
 
 
+def _build_recent_comments_excerpt(comment_texts: list[str], limit: int = COMMENTS_EXCERPT_LIMIT) -> str:
+	"""Return up to eight recent comments, newest first, within ``limit`` chars."""
+	if limit <= 0:
+		return ""
+
+	separator = "\n\n---\n\n"
+	truncation_marker = "\n[... truncated ...]"
+	pieces: list[str] = []
+	used = 0
+	for comment_text in reversed(comment_texts[-8:]):
+		text = sanitize_text(comment_text)
+		state_match = _ORCHESTRATOR_STATE_V2_COMMENT_RE.fullmatch(text.strip())
+		if state_match is not None:
+			part = int(state_match.group("part"))
+			total = int(state_match.group("total"))
+			if part <= total:
+				text = f"[ORCHESTRATOR_STATE_V2 state part {part}/{total} omitted]"
+
+		prefix = separator if pieces else ""
+		available = limit - used - len(prefix)
+		if available <= 0:
+			break
+		if len(text) > available:
+			if available > len(truncation_marker):
+				text = text[: available - len(truncation_marker)].rstrip() + truncation_marker
+			else:
+				text = text[:available]
+			pieces.append(prefix + text)
+			break
+		pieces.append(prefix + text)
+		used += len(prefix) + len(text)
+	return "".join(pieces)
+
+
 def build_issue_payload(
 	*,
 	repo: str,
@@ -331,7 +370,6 @@ def build_issue_payload(
 			known.add(run["run_id"])
 			if len(run_refs) >= MAX_RUN_REFS:
 				break
-	comments_tail = "\n\n---\n\n".join(comment_texts[-8:])
 	return {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -346,7 +384,7 @@ def build_issue_payload(
 		"source_gen": _positive_int(markers.get("gen")),
 		"source_root": markers.get("root") if re.fullmatch(r"[0-9a-f]{64}", markers.get("root") or "") else None,
 		"issue_excerpt": sanitize_text(body, ISSUE_EXCERPT_LIMIT),
-		"comments_excerpt": sanitize_text(comments_tail, COMMENTS_EXCERPT_LIMIT),
+		"comments_excerpt": _build_recent_comments_excerpt(comment_texts),
 		"workflow_name": None,
 		"head_branch": None,
 		"head_sha": None,
@@ -454,7 +492,7 @@ def build_autofix_failure_payload(
 		"source_gen": None,
 		"source_root": None,
 		"issue_excerpt": sanitize_text(body, ISSUE_EXCERPT_LIMIT),
-		"comments_excerpt": sanitize_text("\n\n---\n\n".join(comment_texts[-8:]), COMMENTS_EXCERPT_LIMIT),
+		"comments_excerpt": _build_recent_comments_excerpt(comment_texts),
 		"workflow_name": single_line(workflow_name, 200),
 		"head_branch": head_branch if is_valid_branch(head_branch) else None,
 		"head_sha": head_sha if is_valid_sha(head_sha) else None,
