@@ -11,6 +11,7 @@ Until now a session pushed a branch, opened its pull request, reported the link,
 | New `CLAUDE.md` section | §26 |
 | Hook | `.claude/hooks/pr_check_in_reminder.py` (`PostToolUse`) |
 | Test file now run by `ci.yml` | `tests/test_pr_check_in_reminder.py` |
+| Pull request | #4304 |
 
 What this means for operators: after a session pushes a pull request you can leave it; hours later, once the PR merges or closes, the session tells you what is left to do or that it is safe to close. It still never touches CI or review comments on its own, and asking it in chat remains the only way to have it fix a PR. Nothing to configure; the hook and the §26 text arrive in consumer repos on the next `@stable` sync.
 
