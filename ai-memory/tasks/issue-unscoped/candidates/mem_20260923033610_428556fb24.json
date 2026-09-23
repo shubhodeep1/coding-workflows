@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_report.sh:187-191 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The issue reporter's `wrap-dispatch` failure path does not capture Python stderr or include diagnostic detail in the structured log line, unlike the autofix reporter.\n  WHY: When `wrap-dispatch` fails, operators see only `error dispatch_build_failed` and must inspect raw workflow logs for the underlying error; severity was consistently NIT, represented as low.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal_report.sh\nLine or code reference: 189-191\nProblem: The issue reporter's wrap-dispatch failure path logs \"error dispatch_build_failed\" without capturing Python stderr. The autofix reporter (lines 203-204) captures stderr to build_error.txt and includes detail=... in the structured log line, so a wrap-dispatch failure is self-explanatory.\nWhy it fails at runtime: Not a runtime failure \u2014 the script still exits 1 and the failure is logged. The diagnostic gap only matters operationally: an operator sees the generic log line and must grep the raw job log for the ValueError or JSONDecodeError that caused it, instead of reading the detail right on the line.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_report.sh: lines 187-190\nProblem: The issue reporter's Python `wrap-dispatch` failure path logs `error dispatch_build_failed` without capturing or including the diagnostic stderr.\nWhy it fails at runtime: A corrupted or non-object payload will cause a silent failure on the reporter side, forcing operators to inspect raw workflow logs to diagnose the specific error, causing an observability asymmetry with the autofix reporter which correctly captures stderr.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_report.sh: line 189\nProblem: The issue reporter's `wrap-dispatch` failure path logs only `error dispatch_build_failed issue=${ISSUE_NUMBER}` without capturing the Python stderr.\nWhy it fails at runtime: `_cmd_wrap_dispatch` raises on three reachable conditions \u2014 file missing, file not parseable JSON, or JSON array instead of object (see the `assert refused.returncode == 2 and \"payload must be a JSON object\" in refused.stderr` assertion at tests/test_workflow_failure_heal.py). All three collapse to the same uninformative `error dispatch_build_failed` line, so a real regression in the issue-reporter's payload building step (e.g. an upstream change that emits a list) would log no actionable detail. The autofix reporter proves the pattern works.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n- scripts/workflow_failure_heal_report.sh: line 189 (related to CORRECTNESS finding above)\nProblem: Same shape as above \u2014 the failure branch logs the prefix but loses the underlying exception text. Documented here because it is also a concrete error-path regression: the old `jq -n` line at this site had no error handling at all (would die silently under `set -e`), so the new code is strictly better than before, but the autofix sibling demonstrates the strict-better target.\nWhy it fails at runtime: any non-zero exit from `wrap-dispatch` produces a log line with no diagnostic \u2014 an operator triaging a real production failure cannot distinguish a missing-file failure from a JSON-shape regression from a Python traceback.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_report.sh:189-191\nProblem: The issue reporter's `wrap-dispatch` failure path does not capture Python stderr, unlike the autofix reporter at `scripts/workflow_failure_heal_autofix_report.sh:203-205` which captures stderr to `build_error.txt` and includes `detail=$(head -c 200 ...)` on the structured log line.\nWhy it fails at runtime: When `wrap-dispatch` raises (e.g. a corrupted non-object payload triggers `ValueError: payload must be a JSON object`), the issue reporter logs `error dispatch_build_failed issue=${ISSUE_NUMBER}` without the cause. The traceback IS in the job log (the step exits 1 and fails the job), but it is not on the structured log line operators grep for. The autofix reporter solved this already; the issue reporter did not carry the same pattern forward.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal_report.sh: lines 188-191, the wrap-dispatch failure branch:\n  if ! python3 \"${HEAL_PY}\" wrap-dispatch --payload-json \"${PAYLOAD_FILE}\" > \"${DISPATCH_FILE}\"; then\n      log \"error dispatch_build_failed issue=${ISSUE_NUMBER}\"\n      exit 1\n  fi\nProblem: The issue reporter's wrap-dispatch failure path does not capture Python's stderr to a file nor include it in the structured log line, unlike the autofix reporter (scripts/workflow_failure_heal_autofix_report.sh:200-203) which redirects stderr to build_error.txt and appends detail=$(head -c 200 ... | tr '\\n' ' ') to the log line.\nWhy it fails at runtime: When wrap-dispatch fails on the issue-reporter path, the operator sees only error dispatch_build_failed issue=N on the structured log line and must dig through the raw workflow job log to find the Python traceback. The step does exit 1 so the stderr is visible in the failed step log, but the autofix reporter's approach of inlining detail= is more operator-friendly. This is an observability asymmetry, not a functional bug \u2014 the build-failure path is extremely rare since the payload was already built and written by the same script.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "94d879d07f0bf8aa46581271129a01c207daa0138ad677a226b96a771f905356",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4303,
+    "run_id": "35811080577",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35811080577",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923033610_428556fb24",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4303,
+    "run_id": "35811080577"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-23T03:36:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
