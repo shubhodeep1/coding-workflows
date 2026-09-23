@@ -1393,6 +1393,8 @@ LOG_DIR="validation/logs"
 COMPOSE_LOG="${LOG_DIR}/compose.log"
 ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
 START_TS="$(date +%s)"
+TRUSTED_SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-true}"
 
 	if [ -f "${ENV_FILE}" ]; then
 	  while IFS= read -r env_line || [ -n "${env_line}" ]; do
@@ -1514,7 +1516,15 @@ if ! docker compose -f "${COMPOSE_FILE}" up -d --build >> "${COMPOSE_LOG}" 2>&1;
   exit 1
 fi
 
-mapfile -t test_scripts < <(find "${TEST_DIR}" -maxdepth 1 -type f -name '*.sh' | sort)
+mapfile -t all_test_scripts < <(find "${TEST_DIR}" -maxdepth 1 -type f -name '*.sh' | sort)
+test_scripts=()
+for test_script_candidate in "${all_test_scripts[@]}"; do
+  if [[ "${test_script_candidate##*/}" == synth_round_*.sh ]]; then
+    echo "validation_runtime_driver: excluded legacy executable behavioural smoke artifact: ${test_script_candidate}" >&2
+    continue
+  fi
+  test_scripts+=("${test_script_candidate}")
+done
 if [ "${#test_scripts[@]}" -eq 0 ]; then
   TOTAL_TESTS=$((TOTAL_TESTS + 1))
   FAILED_TESTS=$((FAILED_TESTS + 1))
@@ -1564,6 +1574,39 @@ for test_script in "${test_scripts[@]}"; do
   fi
 done
 
+include_synthesised="true"
+case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED}" | tr '[:upper:]' '[:lower:]')" in
+  0|false|no|off) include_synthesised="false" ;;
+esac
+if [ "${include_synthesised}" = "true" ]; then
+  mapfile -t synth_assertion_bundles < <(find "${TEST_DIR}" -maxdepth 1 -type f -name 'synth_round_*_assertions.json' | sort)
+  for assertion_bundle in "${synth_assertion_bundles[@]}"; do
+    assertion_name="$(basename "${assertion_bundle}")"
+    assertion_log="${LOG_DIR}/${assertion_name}.log"
+    assertion_runner="${TRUSTED_SUPPORT_SCRIPTS_DIR}/run_behavioural_smoke_assertions.sh"
+    set +e
+    if [ ! -x "${assertion_runner}" ]; then
+      printf 'trusted behavioural smoke runner is missing: %s\n' "${assertion_runner}" > "${assertion_log}"
+      assertion_rc=2
+    else
+      bash "${assertion_runner}" "${assertion_bundle}" "$(pwd -P)" > "${assertion_log}" 2>&1
+      assertion_rc=$?
+    fi
+    set -e
+    cat "${assertion_log}" || true
+    assertion_ok_count="$(grep -E -c '^ok[[:space:]]+[0-9]+' "${assertion_log}" || true)"
+    assertion_not_ok_count="$(grep -E -c '^not ok[[:space:]]+[0-9]+' "${assertion_log}" || true)"
+    TOTAL_TESTS=$((TOTAL_TESTS + assertion_ok_count + assertion_not_ok_count))
+    PASSED_TESTS=$((PASSED_TESTS + assertion_ok_count))
+    FAILED_TESTS=$((FAILED_TESTS + assertion_not_ok_count))
+    if [ "${assertion_rc}" -ne 0 ]; then
+      TOTAL_TESTS=$((TOTAL_TESTS + 1))
+      FAILED_TESTS=$((FAILED_TESTS + 1))
+      append_failure "${assertion_name}:isolation_error" "declarative behavioural smoke isolation failed (exit=${assertion_rc})" "${assertion_log}"
+    fi
+  done
+fi
+
 if [ "${FAILED_TESTS}" -eq 0 ]; then
   emit_result pass
   exit 0
@@ -1580,6 +1623,9 @@ materialize_synthesised_behavioural_smoke_tests()
 {
   local include_synthesised="true"
   local materialize_output=""
+  local source_pr="${BEHAVIOURAL_SMOKE_SOURCE_PR:-}"
+  local source_head_sha="${BEHAVIOURAL_SMOKE_SOURCE_HEAD_SHA:-}"
+  local provenance_helper="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_state_v2.py"
 
   case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-true}" | tr '[:upper:]' '[:lower:]')" in
     0|false|no|off)
@@ -1591,8 +1637,18 @@ materialize_synthesised_behavioural_smoke_tests()
     echo "validate_process: skipping synthesised behavioural smoke materialization (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED:-true})." >&2
     return 0
   fi
-
+  rm -f validation/tests/synth_round_*_assertions.json 2>/dev/null || true
   if [ ! -d .ai/review_runtime ]; then
+    return 0
+  fi
+  if ! [[ "${source_pr}" =~ ^[0-9]+$ ]] || [ "${source_pr}" -le 0 ] \
+    || ! [[ "${source_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
+    || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+    echo "::warning::Authenticated behavioural smoke context is incomplete; ignoring restored review-runtime artifacts." >&2
+    return 0
+  fi
+  if [ -z "${ORCHESTRATOR_STATE_AUTH_KEYRING:-}" ] || [ ! -f "${provenance_helper}" ] || [ -L "${provenance_helper}" ]; then
+    echo "::warning::Behavioural smoke verification support or keyring is unavailable; ignoring restored review-runtime artifacts." >&2
     return 0
   fi
 
@@ -1603,107 +1659,107 @@ materialize_synthesised_behavioural_smoke_tests()
     LANG="C.UTF-8" \
     LC_ALL="C.UTF-8" \
     PYTHONDONTWRITEBYTECODE=1 \
-    python3 -I -B - <<'PY'
+    ORCHESTRATOR_STATE_AUTH_KEYRING="${ORCHESTRATOR_STATE_AUTH_KEYRING}" \
+    python3 -I -B - "${source_pr}" "${source_head_sha}" "${GITHUB_REPOSITORY}" "${provenance_helper}" <<'PY'
 import json
+import os
 import re
 import shutil
+import stat
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-
+source_pr = int(sys.argv[1])
+source_head_sha = sys.argv[2]
+repository = sys.argv[3]
+provenance_helper = Path(sys.argv[4]).resolve(strict=True)
 repo_root = Path('.').resolve()
-runtime_root = (repo_root / '.ai' / 'review_runtime').resolve()
-target_root = (repo_root / 'validation' / 'tests').resolve()
+runtime_root = repo_root / '.ai' / 'review_runtime'
+source_root = runtime_root / f'pr-{source_pr}'
+target_root = repo_root / 'validation' / 'tests'
 
 
-def _manifest_key(path: Path):
-    round_match = re.search(r'/round-(\d+)/', path.as_posix())
-    pr_match = re.search(r'/pr-(\d+)/', path.as_posix())
-    round_value = int(round_match.group(1)) if round_match else -1
-    pr_value = int(pr_match.group(1)) if pr_match else -1
-    return (round_value, pr_value, path.as_posix())
+def regular_nonsymlink(path: Path, max_bytes: int) -> bool:
+	try:
+		cursor = path
+		while cursor != repo_root:
+			metadata = os.lstat(cursor)
+			if stat.S_ISLNK(metadata.st_mode):
+				return False
+			cursor = cursor.parent
+		metadata = path.stat()
+	except OSError:
+		return False
+	return stat.S_ISREG(metadata.st_mode) and metadata.st_size <= max_bytes
 
 
-def _safe_target(relpath: object, expected_root: Path):
-    if not isinstance(relpath, str) or not relpath.strip():
-        return None
-    candidate = (repo_root / relpath).resolve()
-    try:
-        candidate.relative_to(expected_root)
-    except ValueError:
-        return None
-    if candidate.parent != expected_root:
-        return None
-    return candidate
-
-
-manifest_paths = sorted(runtime_root.glob('pr-*/round-*/synth/synth_round_*_manifest.json'))
-if not manifest_paths:
-    sys.exit(0)
-
-manifest_path = max(manifest_paths, key=_manifest_key)
-with open(manifest_path, 'r', encoding='utf-8') as handle:
-    payload = json.load(handle)
-
-if not isinstance(payload, dict):
-    raise ValueError(f'invalid manifest payload at {manifest_path}')
-
-rows = payload.get('files')
-if not isinstance(rows, list):
-    raise ValueError(f'invalid manifest files list at {manifest_path}')
-
-target_manifest_relpath = payload.get('target_manifest_relpath')
-target_manifest_path = _safe_target(target_manifest_relpath, target_root)
-if target_manifest_path is None:
-    print('validate_process: skipping synthesised smoke materialization because target_manifest_relpath is invalid.', file=sys.stderr)
-    sys.exit(0)
-
+if not source_root.is_dir() or source_root.is_symlink():
+	raise SystemExit(0)
+bundles = []
+for candidate in source_root.glob('round-*/synth/synth_round_*_assertions.json'):
+	match = re.fullmatch(r'round-(\d+)', candidate.parent.parent.name)
+	if match is not None:
+		bundles.append((int(match.group(1)), candidate))
+if not bundles:
+	raise SystemExit(0)
+round_value, bundle_path = max(bundles, key=lambda row: (row[0], row[1].as_posix()))
+envelope_path = bundle_path.with_name(bundle_path.stem + '.envelope.json')
+if not regular_nonsymlink(bundle_path, 1_048_576) or not regular_nonsymlink(envelope_path, 65_536):
+	raise ValueError('behavioural smoke bundle or envelope is missing, unsafe, or oversized')
+try:
+	bundle = json.loads(bundle_path.read_text(encoding='utf-8'))
+except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+	raise ValueError('behavioural smoke bundle is unreadable') from exc
+if (
+	not isinstance(bundle, dict)
+	or bundle.get('schema_version') != 'behavioural_smoke_assertions.v1'
+	or bundle.get('round') != round_value
+	or bundle.get('head_sha') != source_head_sha
+	or not isinstance(bundle.get('assertions'), list)
+	or len(bundle['assertions']) > 100
+):
+	raise ValueError('behavioural smoke bundle context is invalid')
 target_root.mkdir(parents=True, exist_ok=True)
-
-copied = 0
-for row in rows:
-    if not isinstance(row, dict):
-        continue
-    source_relpath = row.get('cache_relpath')
-    target_relpath = row.get('target_relpath')
-    if not isinstance(source_relpath, str) or not isinstance(target_relpath, str):
-        continue
-
-    source_path = (repo_root / source_relpath).resolve()
-    try:
-        source_path.relative_to(runtime_root)
-    except ValueError:
-        print(f'validate_process: skipping synthesised smoke source outside review-runtime root: {source_relpath}', file=sys.stderr)
-        continue
-    if not source_path.is_file():
-        print(f'validate_process: missing synthesised smoke source: {source_relpath}', file=sys.stderr)
-        continue
-
-    target_path = _safe_target(target_relpath, target_root)
-    if target_path is None:
-        print(f'validate_process: skipping synthesised smoke target outside validation/tests: {target_relpath}', file=sys.stderr)
-        continue
-
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_path, target_path)
-    copied += 1
-
-target_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-shutil.copy2(manifest_path, target_manifest_path)
-
-if copied == 0 and rows:
-    print(
-        'validate_process: warning: manifest at {} listed {} file(s) but none were materialized into validation/tests.'.format(
-            manifest_path.relative_to(repo_root).as_posix(),
-            len(rows),
-        ),
-        file=sys.stderr,
-    )
-else:
-    print(f'Materialized synthesised behavioural smoke tests from {manifest_path.relative_to(repo_root).as_posix()} into validation/tests (files={copied}).')
+target_path = target_root / f'synth_round_{round_value}_assertions.json'
+with tempfile.NamedTemporaryFile(mode='wb', dir=target_root, delete=False) as handle:
+	temporary_path = Path(handle.name)
+verification = subprocess.run(
+	[
+		sys.executable, '-I', '-B', str(provenance_helper), 'verify-behavioural-smoke',
+		'--bundle-file', str(bundle_path), '--envelope-file', str(envelope_path),
+		'--repository', repository, '--pr-number', str(source_pr),
+		'--head-sha', source_head_sha, '--round', str(round_value),
+		'--out-file', str(temporary_path),
+	],
+	env={
+		'HOME': os.environ.get('HOME', ''),
+		'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+		'TMPDIR': os.environ.get('TMPDIR', '/tmp'),
+		'LANG': 'C.UTF-8',
+		'LC_ALL': 'C.UTF-8',
+		'PYTHONDONTWRITEBYTECODE': '1',
+		'ORCHESTRATOR_STATE_AUTH_KEYRING': os.environ['ORCHESTRATOR_STATE_AUTH_KEYRING'],
+	},
+	capture_output=True,
+	text=True,
+	check=False,
+)
+if verification.returncode != 0:
+	temporary_path.unlink(missing_ok=True)
+	raise ValueError('behavioural smoke provenance verification failed')
+os.chmod(temporary_path, 0o444)
+os.replace(temporary_path, target_path)
+print(
+	f'Materialized authenticated behavioural smoke assertions from '
+	f'{bundle_path.relative_to(repo_root).as_posix()} into {target_path.relative_to(repo_root).as_posix()} '
+	f'(assertions={len(bundle["assertions"])}).'
+)
 PY
-)"; then
-    echo "::warning::Failed to materialize synthesised behavioural smoke tests from .ai/review_runtime; continuing without them." >&2
+  )"; then
+    echo "::warning::Failed to verify/materialize behavioural smoke assertions; continuing without executing restored artifacts." >&2
+    rm -f validation/tests/synth_round_*_assertions.json 2>/dev/null || true
     return 0
   fi
 
@@ -1711,7 +1767,6 @@ PY
     echo "${materialize_output}"
   fi
 }
-
 write_status_file()
 {
   local status="$1"

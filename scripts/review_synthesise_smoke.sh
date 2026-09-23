@@ -147,7 +147,7 @@ extract_and_write_synth_bundle()
 	local src="$1"
 	local judge_artifact="$2"
 	local synth_dir="$3"
-	local manifest_path="$4"
+	local bundle_path="$4"
 	local expected_round="$5"
 	local expected_head_sha="$6"
 	local language_hint="$7"
@@ -156,20 +156,25 @@ extract_and_write_synth_bundle()
 		"${src}" \
 		"${judge_artifact}" \
 		"${synth_dir}" \
-		"${manifest_path}" \
+		"${bundle_path}" \
 		"${expected_round}" \
 		"${expected_head_sha}" \
 		"${language_hint}" <<'PY'
 import json
-import os
 import re
-import shlex
+import stat
 import sys
 from json import JSONDecoder, JSONDecodeError
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-src, judge_artifact, synth_dir, manifest_path, expected_round_raw, expected_head_sha, language_hint = sys.argv[1:8]
+src, judge_artifact, synth_dir, bundle_path, expected_round_raw, expected_head_sha, language_hint = sys.argv[1:8]
 expected_round = int(expected_round_raw)
+max_assertions = 100
+max_literal_length = 4096
+max_reason_length = 512
+max_source_bytes = 1_048_576
+disallowed_roots = {'.git', '.ai', 'validation'}
+repo_root = Path.cwd().resolve()
 
 
 def squish(value, limit=None):
@@ -179,14 +184,14 @@ def squish(value, limit=None):
 	return text
 
 
-def load_raw(path: str) -> str:
+def load_raw(path):
 	try:
 		return Path(path).read_text(encoding='utf-8', errors='replace')
 	except OSError:
 		return ''
 
 
-def load_candidates(text: str):
+def load_candidates(text):
 	candidates = []
 	stripped = text.strip()
 	if stripped:
@@ -210,336 +215,131 @@ def load_candidates(text: str):
 	return candidates
 
 
-def strip_outer_code_fence(text: str) -> str:
-	stripped = text.strip()
-	lines = stripped.splitlines()
-	if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
-		return "\n".join(lines[1:-1]).strip("\n")
-	return text
-
-
-def normalize_content(text: str) -> str:
-	text = text.replace("\r\n", "\n").replace("\r", "\n")
-	text = strip_outer_code_fence(text)
-	lines = text.splitlines()
-	while lines and not lines[0].strip():
-		lines.pop(0)
-	if lines and lines[0].startswith("#!"):
-		lines = lines[1:]
-	text = "\n".join(lines).strip()
-	if not text:
-		raise ValueError("empty_content")
-	# Validate backslash-continued shell lines as one logical command so
-	# dangerous dispatchers cannot hide behind line continuations.
-	validation_text = re.sub(r'\\\n[ \t]*', ' ', text)
-	for raw_line in validation_text.splitlines():
-		stripped = raw_line.strip()
-		if "`" in stripped or "$(" in stripped or "<(" in stripped or ">(" in stripped:
-			raise ValueError("body_unsafe_shell_construct")
-		lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|(){}><")
-		lexer.whitespace_split = True
-		# Keep '#' literal so shlex does not hide trailing separators/commands
-		# that bash would still execute when '#' appears mid-word.
-		lexer.commenters = ""
-		tokens = list(lexer)
-		expect_command = True
-		passthrough_command = ""
-		passthrough_option_value = False
-		pending_redirection_target = False
-		separator_tokens = {";", "&", "&&", "||", "|", "|&", "(", ")", "{", "}", "if", "then", "do", "else", "elif", "while", "until", "!"}
-		redirection_tokens = {">", ">>", "<", "<<", "<<<", "<>", "<&", ">&", ">|", "&>", "&>>"}
-		passthrough_tokens = {"command", "builtin", "env", "nohup", "nice", "timeout", "setsid", "time"}
-		passthrough_value_tokens = {
-			"env": {"-u", "-C", "--unset", "--chdir"},
-			"nice": {"-n", "--adjustment"},
-			"time": {"-f", "--format", "-o", "--output"},
-			"timeout": {"-s", "--signal", "-k", "--kill-after"},
-		}
-		dangerous_command_tokens = {
-			"coproc",
-			".",
-			"bash",
-			"csh",
-			"dash",
-			"eval",
-			"exec",
-			"ksh",
-			"perl",
-			"php",
-			"ruby",
-			"sh",
-			"source",
-			"sudo",
-			"tcsh",
-			"xargs",
-			"zsh",
-		}
-		for index, token in enumerate(tokens):
-			next_token = tokens[index + 1] if index + 1 < len(tokens) else ""
-			token_basename = os.path.basename(token)
-			if pending_redirection_target:
-				pending_redirection_target = False
-				continue
-			if token in separator_tokens:
-				expect_command = True
-				passthrough_command = ""
-				passthrough_option_value = False
-				continue
-			if token in redirection_tokens:
-				pending_redirection_target = True
-				continue
-			if token.isdigit() and next_token in redirection_tokens:
-				continue
-			if expect_command and passthrough_option_value:
-				passthrough_option_value = False
-				continue
-			if expect_command and re.match(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
-				continue
-			if expect_command and token_basename in passthrough_tokens:
-				passthrough_command = token_basename
-				continue
-			if expect_command and passthrough_command:
-				if passthrough_command == "env" and (
-					token == "-S"
-					or token.startswith("-S")
-					or token == "--split-string"
-					or token.startswith("--split-string=")
-				):
-					raise ValueError("body_unsafe_shell_construct")
-				if token.startswith("-"):
-					if token in passthrough_value_tokens.get(passthrough_command, set()):
-						passthrough_option_value = True
-					continue
-				if passthrough_command == "nice" and re.match(r"-?\d+$", token):
-					continue
-				if passthrough_command == "timeout" and re.match(r"\d+(?:\.\d+)?[smhd]?$", token):
-					continue
-				if token_basename in passthrough_tokens:
-					passthrough_command = token_basename
-					continue
-			if expect_command and token.startswith("$"):
-				raise ValueError("body_unsafe_shell_construct")
-			if expect_command and token_basename in dangerous_command_tokens:
-				raise ValueError("body_unsafe_shell_construct")
-			expect_command = False
-			passthrough_command = ""
-			passthrough_option_value = False
-	return text + "\n"
-
-
 def normalize_issue(issue):
 	if not isinstance(issue, dict):
 		return None
-	required = {
-		'id',
-		'file',
-		'line_start',
-		'line_end',
-		'symptom',
-		'evidence_quote',
-		'severity',
-	}
-	if not required.issubset(issue.keys()):
+	required = {'id', 'file', 'line_start', 'line_end', 'symptom', 'evidence_quote', 'severity'}
+	if not required.issubset(issue):
 		return None
 	line_start = issue.get('line_start')
 	line_end = issue.get('line_end')
-	if type(line_start) is not int or type(line_end) is not int:
+	if type(line_start) is not int or type(line_end) is not int or line_start < 1 or line_end < line_start:
 		return None
-	if line_start < 1 or line_end < line_start:
+	if issue.get('severity') not in {'must-fix', 'nice-to-have'}:
 		return None
-	severity = issue.get('severity')
-	if severity not in {'must-fix', 'nice-to-have'}:
-		return None
-	issue_id = issue.get('id')
-	issue_file = issue.get('file')
-	symptom = issue.get('symptom')
-	evidence_quote = issue.get('evidence_quote')
-	if not all(isinstance(value, str) for value in (issue_id, issue_file, symptom, evidence_quote)):
-		return None
-	issue_id = squish(issue_id)
-	issue_file = squish(issue_file)
-	symptom = squish(symptom, 200)
-	evidence_quote = squish(evidence_quote, 200)
-	if not issue_id or not issue_file or not symptom or not evidence_quote:
+	values = [issue.get(key) for key in ('id', 'file', 'symptom', 'evidence_quote')]
+	if not all(isinstance(value, str) and squish(value) for value in values):
 		return None
 	return {
-		'id': issue_id,
-		'file': issue_file,
+		'id': squish(values[0]),
+		'file': squish(values[1]),
 		'line_start': line_start,
 		'line_end': line_end,
-		'symptom': symptom,
-		'evidence_quote': evidence_quote,
-		'severity': severity,
+		'symptom': squish(values[2], 200),
+		'evidence_quote': squish(values[3], 200),
+		'severity': issue['severity'],
 	}
 
 
-def load_judge_payload(path: str):
+def load_judge_payload(path):
 	with open(path, 'r', encoding='utf-8') as handle:
 		payload = json.load(handle)
-	if not isinstance(payload, dict):
-		return None
-	if payload.get('round') != expected_round:
-		return None
-	if payload.get('head_sha') != expected_head_sha:
+	if not isinstance(payload, dict) or payload.get('round') != expected_round or payload.get('head_sha') != expected_head_sha:
 		return None
 	remaining = payload.get('remaining_issues')
-	if not isinstance(remaining, list):
+	if not isinstance(remaining, list) or len(remaining) > max_assertions:
 		return None
-	normalized = []
-	for issue in remaining:
-		normalized_issue = normalize_issue(issue)
-		if normalized_issue is None:
-			return None
-		normalized.append(normalized_issue)
-	return {
-		'round': expected_round,
-		'head_sha': expected_head_sha,
-		'remaining_issues': normalized,
-	}
+	normalized = [normalize_issue(issue) for issue in remaining]
+	if any(issue is None for issue in normalized):
+		return None
+	return {'round': expected_round, 'head_sha': expected_head_sha, 'remaining_issues': normalized}
 
 
-def normalize_generated_items(candidate, issue_count: int):
+def normalize_repo_path(value):
+	if not isinstance(value, str) or not value or len(value) > 512 or '\\' in value:
+		return None
+	path_value = PurePosixPath(value)
+	if path_value.is_absolute() or value != path_value.as_posix() or any(part in ('', '.', '..') for part in path_value.parts):
+		return None
+	if not path_value.parts or path_value.parts[0] in disallowed_roots:
+		return None
+	candidate = repo_root.joinpath(*path_value.parts)
+	try:
+		candidate.relative_to(repo_root)
+		cursor = candidate
+		while cursor != repo_root:
+			if cursor.is_symlink():
+				return None
+			cursor = cursor.parent
+		metadata = candidate.stat()
+	except (OSError, ValueError):
+		return None
+	if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > max_source_bytes:
+		return None
+	return path_value.as_posix()
+
+
+def normalize_generated_items(candidate, issue_count):
 	if isinstance(candidate, str):
 		candidate = json.loads(candidate)
 	if isinstance(candidate, dict):
-		for key in ('files', 'tests', 'items'):
+		for key in ('assertions', 'items'):
 			if key in candidate:
 				candidate = candidate[key]
 				break
 		else:
 			return None
-	if not isinstance(candidate, list):
-		return None
-	if len(candidate) != issue_count:
+	if not isinstance(candidate, list) or len(candidate) != issue_count or len(candidate) > max_assertions:
 		return None
 	normalized = []
 	for item in candidate:
-		if not isinstance(item, dict):
+		if not isinstance(item, dict) or type(item.get('expected_to_fail_until_fixed')) is not bool:
 			return None
-		path_value = item.get('path')
-		content = item.get('content')
-		expected_to_fail_until_fixed = item.get('expected_to_fail_until_fixed')
-		if not isinstance(path_value, str) or not squish(path_value, 200):
+		assertion_type = item.get('type')
+		if assertion_type == 'inconclusive':
+			if set(item) != {'type', 'reason', 'expected_to_fail_until_fixed'}:
+				return None
+			reason = item.get('reason')
+			if not isinstance(reason, str) or not reason.strip() or len(reason) > max_reason_length:
+				return None
+			normalized.append({
+				'type': assertion_type,
+				'reason': squish(reason, max_reason_length),
+				'expected_to_fail_until_fixed': item['expected_to_fail_until_fixed'],
+			})
+			continue
+		if assertion_type not in {'text_present', 'text_absent', 'literal_count'}:
 			return None
-		if not isinstance(content, str):
+		expected_keys = {'type', 'path', 'literal', 'expected_to_fail_until_fixed'}
+		if assertion_type == 'literal_count':
+			expected_keys.update({'min_count', 'max_count'})
+		if set(item) != expected_keys:
 			return None
-		try:
-			content = normalize_content(content)
-		except Exception:
+		path_value = normalize_repo_path(item.get('path'))
+		literal = item.get('literal')
+		if path_value is None or not isinstance(literal, str) or not literal or len(literal) > max_literal_length:
 			return None
-		if type(expected_to_fail_until_fixed) is not bool:
-			return None
-		normalized.append(
-			{
-				'path': squish(path_value, 200),
-				'content': content,
-				'expected_to_fail_until_fixed': expected_to_fail_until_fixed,
-			}
-		)
+		normalized_item = {
+			'type': assertion_type,
+			'path': path_value,
+			'literal': literal,
+			'expected_to_fail_until_fixed': item['expected_to_fail_until_fixed'],
+		}
+		if assertion_type == 'literal_count':
+			minimum = item.get('min_count')
+			maximum = item.get('max_count')
+			if type(minimum) is not int or type(maximum) is not int or minimum < 0 or maximum < minimum or maximum > 1_000_000:
+				return None
+			normalized_item.update({'min_count': minimum, 'max_count': maximum})
+		normalized.append(normalized_item)
 	return normalized
-
-
-def slugify(value: str) -> str:
-	text = re.sub(r'[^A-Za-z0-9]+', '_', value).strip('_').lower()
-	text = re.sub(r'_+', '_', text)
-	if not text:
-		text = 'issue'
-	text = text[:64].rstrip('_')
-	return text or 'issue'
-
-
-def unique_filename(round_value: int, issue_id: str, seen: set[str]) -> tuple[str, str]:
-	base_slug = slugify(issue_id)
-	slug = base_slug
-	index = 2
-	filename = f'synth_round_{round_value}_{slug}.sh'
-	while filename in seen:
-		slug = f'{base_slug}_{index}'
-		slug = slug[:64].rstrip('_') or f'issue_{index}'
-		filename = f'synth_round_{round_value}_{slug}.sh'
-		index += 1
-	seen.add(filename)
-	return slug, filename
-
-
-def delimiter_for(content: str, slug: str) -> str:
-	base = re.sub(r'[^A-Za-z0-9_]+', '_', slug.upper()) or 'ISSUE'
-	delimiter = f'__BEHAVIOURAL_SMOKE_{base}__'
-	index = 2
-	while delimiter in content:
-		delimiter = f'__BEHAVIOURAL_SMOKE_{base}_{index}__'
-		index += 1
-	return delimiter
-
-
-def build_wrapper(issue, generated_item, round_value: int, slug: str) -> str:
-	delimiter = delimiter_for(generated_item['content'], slug)
-	issue_id = shlex.quote(issue['id'])
-	round_shell = shlex.quote(str(round_value))
-	tap_label = shlex.quote(squish(f"behavioural smoke {issue['id']}", 180))
-	expected_flag = shlex.quote('true' if generated_item['expected_to_fail_until_fixed'] else 'false')
-	lines = [
-		'#!/usr/bin/env bash',
-		'set -euo pipefail',
-		'',
-		f'ISSUE_ID={issue_id}',
-		f'ROUND={round_shell}',
-		f'TAP_LABEL={tap_label}',
-		f'EXPECTED_TO_FAIL_UNTIL_FIXED={expected_flag}',
-		'',
-		'echo "1..1"',
-		'',
-		'_synth_output_file=""',
-		'if ! _synth_output_file="$(mktemp "${TMPDIR:-/tmp}/behavioural_smoke.XXXXXX" 2>/dev/null)"; then',
-		'	echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE issue=${ISSUE_ID} round=${ROUND} reason=mktemp_failed"',
-		'	echo "ok 1 - ${TAP_LABEL}"',
-		'	exit 0',
-		'fi',
-		'cleanup_behavioural_smoke()',
-		'{',
-		'	rm -f "${_synth_output_file}" >/dev/null 2>&1 || true',
-		'}',
-		'trap cleanup_behavioural_smoke EXIT INT TERM',
-		'',
-		'set +e',
-		f"bash >\"${{_synth_output_file}}\" 2>&1 <<'{delimiter}'",
-		generated_item['content'].rstrip('\n'),
-		delimiter,
-		'_synth_rc=$?',
-		'set -e',
-		'',
-		'if [ -f "${_synth_output_file}" ]; then',
-		'	while IFS= read -r _synth_line || [ -n "${_synth_line}" ]; do',
-		'		echo "# ${_synth_line}"',
-		'	done < "${_synth_output_file}"',
-		'fi',
-		'',
-		'case "${_synth_rc}" in',
-		'	0)',
-		'		echo "# BEHAVIOURAL_SMOKE_PRESENT_PASSED issue=${ISSUE_ID} round=${ROUND}"',
-		'		;;',
-		'	1)',
-		'		echo "# BEHAVIOURAL_SMOKE_PRESENT_FAILED issue=${ISSUE_ID} round=${ROUND}"',
-		'		;;',
-		'	*)',
-		'		echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE issue=${ISSUE_ID} round=${ROUND} exit=${_synth_rc}"',
-		'		;;',
-		'esac',
-		'echo "# expected_to_fail_until_fixed=${EXPECTED_TO_FAIL_UNTIL_FIXED}"',
-		'echo "ok 1 - ${TAP_LABEL}"',
-		'exit 0',
-		'',
-	]
-	return '\n'.join(lines)
 
 
 judge_payload = load_judge_payload(judge_artifact)
 if judge_payload is None:
 	sys.exit(1)
-
 issues = judge_payload['remaining_issues']
 raw = load_raw(src)
-
 validated_items = None
 for candidate in load_candidates(raw):
 	try:
@@ -548,55 +348,37 @@ for candidate in load_candidates(raw):
 		validated_items = None
 	if validated_items is not None:
 		break
-
 if validated_items is None:
 	print('Behavioural smoke synthesis skipped: could not validate synthesis output', file=sys.stderr)
 	sys.exit(1)
 
-synth_dir_path = Path(synth_dir)
-manifest_path_obj = Path(manifest_path)
-synth_dir_path.mkdir(parents=True, exist_ok=True)
-manifest_path_obj.parent.mkdir(parents=True, exist_ok=True)
-
-seen_filenames: set[str] = set()
-manifest_rows = []
+bundle_rows = []
 for issue, generated_item in zip(issues, validated_items):
-	slug, filename = unique_filename(expected_round, issue['id'], seen_filenames)
-	wrapper_path = synth_dir_path / filename
-	wrapper_path.write_text(build_wrapper(issue, generated_item, expected_round, slug), encoding='utf-8')
-	os.chmod(wrapper_path, 0o755)
-	manifest_rows.append(
-		{
-			'issue_id': issue['id'],
-			'file': issue['file'],
-			'line_start': issue['line_start'],
-			'line_end': issue['line_end'],
-			'severity': issue['severity'],
-			'slug': slug,
-			'cache_relpath': wrapper_path.as_posix(),
-			'target_relpath': f'validation/tests/{filename}',
-			'suggested_path': generated_item['path'],
-			'expected_to_fail_until_fixed': generated_item['expected_to_fail_until_fixed'],
-		}
-	)
-
-manifest = {
+	bundle_rows.append({
+		'issue_id': issue['id'],
+		'file': issue['file'],
+		'line_start': issue['line_start'],
+		'line_end': issue['line_end'],
+		'severity': issue['severity'],
+		'assertion': generated_item,
+	})
+bundle = {
+	'schema_version': 'behavioural_smoke_assertions.v1',
 	'round': judge_payload['round'],
 	'head_sha': judge_payload['head_sha'],
 	'language': language_hint,
-	'source_artifact': Path(judge_artifact).as_posix(),
-	'target_manifest_relpath': f'validation/tests/synth_round_{expected_round}_manifest.json',
-	'files': manifest_rows,
+	'assertions': bundle_rows,
 }
-
-with open(manifest_path_obj, 'w', encoding='utf-8') as handle:
-	json.dump(manifest, handle, ensure_ascii=True, indent=2)
-	handle.write('\n')
-
-print(str(len(manifest_rows)))
+Path(synth_dir).mkdir(parents=True, exist_ok=True)
+bundle_path_obj = Path(bundle_path)
+bundle_path_obj.parent.mkdir(parents=True, exist_ok=True)
+bundle_path_obj.write_text(
+	json.dumps(bundle, ensure_ascii=True, sort_keys=True, separators=(',', ':')) + '\n',
+	encoding='utf-8',
+)
+print(str(len(bundle_rows)))
 PY
 }
-
 PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
 PR_NUMBER="${PR_NUMBER:-}"
 CURRENT_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
@@ -626,7 +408,7 @@ fi
 ARTIFACT_DIR=".ai/review_runtime/pr-${PR_NUMBER}/round-${CURRENT_ROUND}"
 JUDGE_ARTIFACT="${ARTIFACT_DIR}/judge_interim.json"
 SYNTH_DIR="${ARTIFACT_DIR}/synth"
-MANIFEST_PATH="${SYNTH_DIR}/synth_round_${CURRENT_ROUND}_manifest.json"
+MANIFEST_PATH="${SYNTH_DIR}/synth_round_${CURRENT_ROUND}_assertions.json"
 
 if [ -z "${CURRENT_HEAD_SHA}" ]; then
 	behavioural_smoke_log_fail "missing_head_sha" "${CURRENT_ROUND}" "${MANIFEST_PATH}"

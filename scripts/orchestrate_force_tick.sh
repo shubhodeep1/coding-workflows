@@ -51,6 +51,28 @@ print(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00
 PY
 }
 
+_force_tick_make_claim_id()
+{
+	_force_tick_run_isolated_python - "${SCRIPT_DIR}" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+support_scripts_path = Path(sys.argv[1]).resolve(strict=True)
+module_path = support_scripts_path / "ai_memory_lib.py"
+if str(support_scripts_path) not in sys.path:
+	sys.path.insert(0, str(support_scripts_path))
+module_spec = importlib.util.spec_from_file_location("force_tick_ai_memory_lib", module_path)
+if module_spec is None or module_spec.loader is None:
+	raise SystemExit("unable to load canonical ai_memory_lib.py")
+module = importlib.util.module_from_spec(module_spec)
+sys.modules[module_spec.name] = module
+module_spec.loader.exec_module(module)
+
+print(module.make_record_id("force_tick_claim"))
+PY
+}
+
 _force_tick_tracking_issue_from_ref()
 {
 	local ref="${1:-}"
@@ -182,8 +204,9 @@ _force_tick_render_record_file()
 	local payload_json="${5:?payload json required}"
 	local dispatch_status="${6:?dispatch status required}"
 	local update_dispatch="${7:-false}"
+	local claim_id="${8:-}"
 
-	_force_tick_run_isolated_python - "${output_file}" "${wrapper_json}" "${tracking_issue}" "${attempt_timestamp}" "${payload_json}" "${dispatch_status}" "${update_dispatch}" <<'PY'
+	_force_tick_run_isolated_python - "${output_file}" "${wrapper_json}" "${tracking_issue}" "${attempt_timestamp}" "${payload_json}" "${dispatch_status}" "${update_dispatch}" "${claim_id}" <<'PY'
 import json
 import pathlib
 import sys
@@ -201,6 +224,7 @@ except json.JSONDecodeError:
 	payload = {}
 dispatch_status = sys.argv[6]
 update_dispatch = sys.argv[7].lower() == "true"
+claim_id = sys.argv[8]
 
 previous = wrapper.get("record") or {}
 record = {
@@ -209,6 +233,7 @@ record = {
 	"last_attempted_timestamp": attempt_timestamp,
 	"last_attempt_payload": payload,
 	"dispatch_status": dispatch_status,
+	"claim_id": claim_id,
 	"last_dispatch_timestamp": previous.get("last_dispatch_timestamp"),
 	"last_dispatch_payload": previous.get("last_dispatch_payload"),
 }
@@ -368,6 +393,7 @@ if [ "${within_cooldown}" = "true" ]; then
 fi
 
 attempt_timestamp="$(_force_tick_now_utc)"
+claim_id="$(_force_tick_make_claim_id)"
 pending_record_file=""
 final_record_file=""
 
@@ -385,8 +411,9 @@ if ! _force_tick_truthy "${FORCE_TICK_ENABLED:-true}"; then
 		"${TRACKING_ISSUE}" \
 		"${attempt_timestamp}" \
 		"${payload_json}" \
-		"disabled" \
-		"false"
+			"disabled" \
+			"false" \
+			"${claim_id}"
 	if declare -F memory_force_tick_put >/dev/null 2>&1; then
 		GH_TOKEN="${FORCE_TICK_GH_TOKEN}" memory_force_tick_put \
 			--repo-root "${REPO_ROOT}" \
@@ -405,18 +432,22 @@ _force_tick_render_record_file \
 	"${TRACKING_ISSUE}" \
 	"${attempt_timestamp}" \
 	"${payload_json}" \
-	"pending" \
-	"false"
+		"pending" \
+		"false" \
+		"${claim_id}"
 
 claim_stored="false"
-if declare -F memory_force_tick_put >/dev/null 2>&1; then
+if ! declare -F memory_force_tick_put >/dev/null 2>&1; then
+	echo "::warning::force-tick memory claim support is unavailable; skipping dispatch to preserve cooldown idempotency."
+	exit 0
+else
 	claim_result='{"ok": true, "enabled": true, "stored": false, "record": null}'
 	if ! claim_result="$(GH_TOKEN="${FORCE_TICK_GH_TOKEN}" memory_force_tick_put \
 		--repo-root "${REPO_ROOT}" \
 		--repo "${REPOSITORY}" \
 		--tracking-issue "${TRACKING_ISSUE}" \
 		--record-file "${pending_record_file}")"; then
-		echo "::warning::force-tick memory claim failed unexpectedly; dispatching without persisted cooldown claim."
+		echo "::warning::force-tick memory claim failed unexpectedly; verifying authoritative cooldown state."
 	fi
 	claim_stored="$(_force_tick_json_bool "${claim_result}" stored)"
 	if [ "${claim_stored}" != "true" ]; then
@@ -425,14 +456,16 @@ if declare -F memory_force_tick_put >/dev/null 2>&1; then
 			--repo-root "${REPO_ROOT}" \
 			--repo "${REPOSITORY}" \
 			--tracking-issue "${TRACKING_ISSUE}")"; then
-			echo "::warning::force-tick memory re-read failed; continuing without peer cooldown confirmation."
+			echo "::warning::force-tick memory re-read failed; skipping dispatch because claim ownership is unconfirmed."
+			exit 0
 		fi
 		IFS=$'\t' read -r peer_within _peer_timestamp _peer_age < <(_force_tick_latest_gate_tsv "${peer_wrapper}" "${cooldown_seconds}")
 		if [ "${peer_within}" = "true" ]; then
 			echo "Skipping force-tick dispatch for tracking issue #${TRACKING_ISSUE}: another run already claimed the cooldown window."
 			exit 0
 		fi
-		echo "::warning::force-tick memory claim failed; dispatching without persisted cooldown claim."
+		echo "::warning::force-tick memory claim was not persisted; skipping dispatch because claim ownership is unconfirmed."
+		exit 0
 	fi
 fi
 
@@ -457,8 +490,9 @@ if declare -F memory_force_tick_put >/dev/null 2>&1; then
 		"${TRACKING_ISSUE}" \
 		"${attempt_timestamp}" \
 		"${payload_json}" \
-		"${dispatch_status}" \
-		"$( [ "${dispatch_status}" = "sent" ] && printf 'true' || printf 'false' )"
+			"${dispatch_status}" \
+			"$( [ "${dispatch_status}" = "sent" ] && printf 'true' || printf 'false' )" \
+			"${claim_id}"
 	GH_TOKEN="${FORCE_TICK_GH_TOKEN}" memory_force_tick_put \
 		--repo-root "${REPO_ROOT}" \
 		--repo "${REPOSITORY}" \

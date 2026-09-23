@@ -79,7 +79,7 @@ import json
 import os
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 # GitHub's hard cap on issue/PR comment body bytes.
@@ -144,6 +144,14 @@ COMPREHENSIVE_MARKER_SIGNED_FIELDS = {
 	"smoke_workflow_path", "smoke_event", "smoke_display_title", "smoke_inputs",
 	"smoke_conclusion", "smoke_head_sha", "cycle_baseline_sha", "promote_sha",
 	"proving_merge_sha", "signature",
+}
+BEHAVIOURAL_SMOKE_SCHEMA_VERSION = "behavioural_smoke_bundle.v1"
+BEHAVIOURAL_SMOKE_DOMAIN = b"coding-workflows/behavioural-smoke-bundle/v1"
+BEHAVIOURAL_SMOKE_MAX_BYTES = 1_048_576
+BEHAVIOURAL_SMOKE_SIGNED_FIELDS = {
+	"schema_version", "algorithm", "key_id", "repository", "pr_number",
+	"head_sha", "round", "producer_run_id", "producer_run_attempt",
+	"bundle_sha256", "signature",
 }
 
 V2_OPENER_RE = re.compile(
@@ -729,6 +737,218 @@ def _signature_for_comprehensive_marker(document: dict[str, Any], auth_key: byte
 	unsigned_document.pop("signature", None)
 	message = b"\n".join((COMPREHENSIVE_MARKER_DOMAIN, _canonical_json_bytes(unsigned_document)))
 	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def _validated_behavioural_smoke_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	repository = args.repository.strip()
+	if (
+		len(repository) > 256
+		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+		or any(segment in (".", "..") for segment in repository.split("/"))
+	):
+		return None, "repository must be an owner/repo slug"
+	if args.pr_number < 1 or args.round < 1:
+		return None, "PR number and round must be positive integers"
+	if re.fullmatch(r"[0-9a-f]{40}", args.head_sha) is None:
+		return None, "head SHA must be 40 lowercase hexadecimal characters"
+	return {
+		"schema_version": BEHAVIOURAL_SMOKE_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"repository": repository,
+		"pr_number": args.pr_number,
+		"head_sha": args.head_sha,
+		"round": args.round,
+	}, None
+
+
+def _behavioural_smoke_bundle_digest(bundle_path: Path) -> tuple[str | None, bytes | None, str | None]:
+	bundle = _load_bounded_json_object(bundle_path, BEHAVIOURAL_SMOKE_MAX_BYTES)
+	if bundle is None:
+		return None, None, "bundle is invalid or oversized"
+	if (
+		set(bundle) != {"schema_version", "round", "head_sha", "language", "assertions"}
+		or bundle.get("schema_version") != "behavioural_smoke_assertions.v1"
+		or not isinstance(bundle.get("round"), int)
+		or isinstance(bundle.get("round"), bool)
+		or bundle["round"] < 1
+		or re.fullmatch(r"[0-9a-f]{40}", str(bundle.get("head_sha", ""))) is None
+		or bundle.get("language") not in {"shell", "python", "javascript"}
+		or not isinstance(bundle.get("assertions"), list)
+		or len(bundle["assertions"]) > 100
+	):
+		return None, None, "bundle schema is invalid"
+	for row in bundle["assertions"]:
+		if not isinstance(row, dict) or set(row) != {
+			"issue_id", "file", "line_start", "line_end", "severity", "assertion",
+		}:
+			return None, None, "bundle assertion row is invalid"
+		if (
+			not isinstance(row.get("issue_id"), str)
+			or not row["issue_id"]
+			or len(row["issue_id"]) > 512
+			or not isinstance(row.get("file"), str)
+			or not row["file"]
+			or type(row.get("line_start")) is not int
+			or type(row.get("line_end")) is not int
+			or row["line_start"] < 1
+			or row["line_end"] < row["line_start"]
+			or row.get("severity") not in {"must-fix", "nice-to-have"}
+		):
+			return None, None, "bundle assertion metadata is invalid"
+		assertion = row.get("assertion")
+		if not isinstance(assertion, dict) or type(assertion.get("expected_to_fail_until_fixed")) is not bool:
+			return None, None, "bundle assertion object is invalid"
+		assertion_type = assertion.get("type")
+		if assertion_type == "inconclusive":
+			if set(assertion) != {"type", "reason", "expected_to_fail_until_fixed"}:
+				return None, None, "bundle inconclusive assertion is invalid"
+			reason = assertion.get("reason")
+			if not isinstance(reason, str) or not reason or len(reason) > 512:
+				return None, None, "bundle inconclusive reason is invalid"
+			continue
+		if assertion_type not in {"text_present", "text_absent", "literal_count"}:
+			return None, None, "bundle assertion type is invalid"
+		expected_keys = {"type", "path", "literal", "expected_to_fail_until_fixed"}
+		if assertion_type == "literal_count":
+			expected_keys.update({"min_count", "max_count"})
+		if set(assertion) != expected_keys:
+			return None, None, "bundle assertion keys are invalid"
+		path_value = assertion.get("path")
+		if not isinstance(path_value, str) or not path_value or len(path_value) > 512 or "\\" in path_value:
+			return None, None, "bundle assertion path is invalid"
+		path = PurePosixPath(path_value)
+		if (
+			path.is_absolute()
+			or path_value != path.as_posix()
+			or any(part in ("", ".", "..") for part in path.parts)
+			or not path.parts
+			or path.parts[0] in {".git", ".ai", "validation"}
+		):
+			return None, None, "bundle assertion path is invalid"
+		literal = assertion.get("literal")
+		if not isinstance(literal, str) or not literal or len(literal) > 4096:
+			return None, None, "bundle assertion literal is invalid"
+		if assertion_type == "literal_count":
+			minimum = assertion.get("min_count")
+			maximum = assertion.get("max_count")
+			if (
+				type(minimum) is not int
+				or type(maximum) is not int
+				or minimum < 0
+				or maximum < minimum
+				or maximum > 1_000_000
+			):
+				return None, None, "bundle literal-count bounds are invalid"
+	canonical_bundle = _canonical_json_bytes(bundle)
+	return hashlib.sha256(canonical_bundle).hexdigest(), canonical_bundle, None
+
+
+def _signature_for_behavioural_smoke(document: dict[str, Any], auth_key: bytes) -> str:
+	unsigned_document = dict(document)
+	unsigned_document.pop("signature", None)
+	message = b"\n".join((BEHAVIOURAL_SMOKE_DOMAIN, _canonical_json_bytes(unsigned_document)))
+	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def _valid_behavioural_smoke_envelope(document: dict[str, Any]) -> bool:
+	if set(document) != BEHAVIOURAL_SMOKE_SIGNED_FIELDS:
+		return False
+	for integer_field in ("pr_number", "round", "producer_run_id", "producer_run_attempt"):
+		value = document.get(integer_field)
+		if not isinstance(value, int) or isinstance(value, bool) or value < 1 or value > STATE_AUTH_MAX_GENERATION:
+			return False
+	if document.get("schema_version") != BEHAVIOURAL_SMOKE_SCHEMA_VERSION:
+		return False
+	if document.get("algorithm") != STATE_AUTH_ALGORITHM:
+		return False
+	if re.fullmatch(r"[0-9a-f]{40}", str(document.get("head_sha", ""))) is None:
+		return False
+	for digest_field in ("bundle_sha256", "signature"):
+		if re.fullmatch(r"[0-9a-f]{64}", str(document.get(digest_field, ""))) is None:
+			return False
+	key_id = document.get("key_id")
+	return isinstance(key_id, str) and STATE_AUTH_KEY_ID_RE.fullmatch(key_id) is not None
+
+
+def cmd_sign_behavioural_smoke(args: argparse.Namespace) -> int:
+	context, context_error = _validated_behavioural_smoke_context(args)
+	if context_error is not None:
+		print(f"behavioural smoke signing failed: {context_error}", file=sys.stderr)
+		return 2
+	if args.producer_run_id < 1 or args.producer_run_attempt < 1:
+		print("behavioural smoke signing failed: producer run identity is invalid", file=sys.stderr)
+		return 2
+	bundle_digest, canonical_bundle, bundle_error = _behavioural_smoke_bundle_digest(Path(args.bundle_file))
+	if bundle_error is not None:
+		print(f"behavioural smoke signing failed: {bundle_error}", file=sys.stderr)
+		return 2
+	assert canonical_bundle is not None
+	bundle_document = json.loads(canonical_bundle)
+	if bundle_document.get("round") != args.round or bundle_document.get("head_sha") != args.head_sha:
+		print("behavioural smoke signing failed: bundle context does not match signing context", file=sys.stderr)
+		return 2
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"behavioural smoke signing failed: {key_error}", file=sys.stderr)
+		return 2
+	assert context is not None and bundle_digest is not None
+	assert active_key_id is not None and auth_keys is not None
+	document = {
+		**context,
+		"key_id": active_key_id,
+		"producer_run_id": args.producer_run_id,
+		"producer_run_attempt": args.producer_run_attempt,
+		"bundle_sha256": bundle_digest,
+		"signature": "0" * 64,
+	}
+	document["signature"] = _signature_for_behavioural_smoke(document, auth_keys[active_key_id])
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("behavioural smoke signing failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def cmd_verify_behavioural_smoke(args: argparse.Namespace) -> int:
+	context, context_error = _validated_behavioural_smoke_context(args)
+	if context_error is not None:
+		print(f"behavioural smoke verification failed: {context_error}", file=sys.stderr)
+		return 2
+	document = _load_bounded_json_object(Path(args.envelope_file), 65_536)
+	if document is None or not _valid_behavioural_smoke_envelope(document):
+		return 1
+	bundle_digest, canonical_bundle, bundle_error = _behavioural_smoke_bundle_digest(Path(args.bundle_file))
+	if bundle_error is not None:
+		return 1
+	assert context is not None and bundle_digest is not None and canonical_bundle is not None
+	bundle_document = json.loads(canonical_bundle)
+	if bundle_document.get("round") != args.round or bundle_document.get("head_sha") != args.head_sha:
+		return 1
+	if any(document.get(field) != expected for field, expected in context.items()):
+		return 1
+	if document.get("bundle_sha256") != bundle_digest:
+		return 1
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"behavioural smoke verification failed: {key_error}", file=sys.stderr)
+		return 2
+	assert auth_keys is not None
+	key_id = document.get("key_id")
+	if not isinstance(key_id, str) or key_id not in auth_keys:
+		return 1
+	expected_signature = _signature_for_behavioural_smoke(document, auth_keys[key_id])
+	if not hmac.compare_digest(str(document["signature"]), expected_signature):
+		return 1
+	if args.out_file:
+		try:
+			Path(args.out_file).write_bytes(canonical_bundle + b"\n")
+			os.chmod(args.out_file, 0o600)
+		except OSError:
+			print("behavioural smoke verification failed: output file is not writable", file=sys.stderr)
+			return 2
+	return 0
 
 
 def _comprehensive_marker_is_verified(
@@ -1392,6 +1612,24 @@ def main() -> int:
 	p_select_comprehensive_marker.add_argument("--tracking-issue", required=True, type=int)
 	p_select_comprehensive_marker.add_argument("--out-file", required=True)
 	p_select_comprehensive_marker.set_defaults(func=cmd_select_comprehensive_marker)
+	for command_name, command_help, command_func in (
+		("sign-behavioural-smoke", "Sign a behavioural-smoke assertion bundle", cmd_sign_behavioural_smoke),
+		("verify-behavioural-smoke", "Verify a behavioural-smoke assertion bundle", cmd_verify_behavioural_smoke),
+	):
+		command_parser = sub.add_parser(command_name, help=command_help)
+		command_parser.add_argument("--bundle-file", required=True)
+		command_parser.add_argument("--repository", required=True)
+		command_parser.add_argument("--pr-number", required=True, type=int)
+		command_parser.add_argument("--head-sha", required=True)
+		command_parser.add_argument("--round", required=True, type=int)
+		if command_name == "sign-behavioural-smoke":
+			command_parser.add_argument("--producer-run-id", required=True, type=int)
+			command_parser.add_argument("--producer-run-attempt", required=True, type=int)
+			command_parser.add_argument("--out-file", required=True)
+		else:
+			command_parser.add_argument("--envelope-file", required=True)
+			command_parser.add_argument("--out-file")
+		command_parser.set_defaults(func=command_func)
 	for command_name, command_help, command_func in (
 		("sign-refusal", "Sign a context-bound review-blocked refusal envelope", cmd_sign_refusal),
 		("verify-refusal", "Verify a context-bound review-blocked refusal envelope", cmd_verify_refusal),
