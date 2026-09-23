@@ -5920,6 +5920,7 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
         run: |
           set -euo pipefail
+          echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"
           if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
             source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             ensure_label_exists "ai:resolver-escalated" "${{ github.repository }}" || true
@@ -8930,6 +8931,8 @@ jobs:
                   return resume_state
               if partial_finalize:
                   return "partial_finalize"
+              if bool_env("RESOLVER_ACTUATION_REQUIRED") and not bool_env("CONFLICT_RESOLVED"):
+                  return "conflict_resolver_failed"
               if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
                   return "editor_empty_noop"
               if bool_env("EDITOR_CHANGES_LOST"):

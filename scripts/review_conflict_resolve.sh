@@ -41,6 +41,45 @@
 
 set -euo pipefail
 
+stage_resolver_touched_path_or_fail() {
+  local resolver_staging_path="$1"
+  local resolver_staging_exit_code=0
+
+  if [ -e "${resolver_staging_path}" ] || [ -L "${resolver_staging_path}" ]; then
+    if git add -- "${resolver_staging_path}"; then
+      return 0
+    else
+      resolver_staging_exit_code=$?
+    fi
+  elif git rm -q -- "${resolver_staging_path}"; then
+    return 0
+  else
+    resolver_staging_exit_code=$?
+  fi
+
+  echo "::error::Failed to stage conflict resolver path: ${resolver_staging_path} (git exit=${resolver_staging_exit_code})"
+  echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+  return 1
+}
+
+verify_resolver_index_complete_or_fail() {
+  local resolver_unmerged_remaining_file="${RUNTIME_DIR}/resolver_unmerged_remaining.txt"
+
+  if ! git diff --name-only --diff-filter=U -- > "${resolver_unmerged_remaining_file}"; then
+    echo "::error::Unable to inspect the Git index for unresolved merge entries; refusing to create [ai-merge-resolve] commit."
+    echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+    return 1
+  fi
+  if [ ! -s "${resolver_unmerged_remaining_file}" ]; then
+    return 0
+  fi
+
+  echo "::error::Conflict resolver left unmerged Git index entries; refusing to create [ai-merge-resolve] commit."
+  sed 's/^/ - /' "${resolver_unmerged_remaining_file}" || true
+  echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+  return 1
+}
+
 # Deterministic-resolution short-circuit: review_conflict_prepare.sh
 # commits the [ai-merge-resolve] merge itself when every unmerged path
 # was deterministically resolvable (currently: the
@@ -55,6 +94,16 @@ set -euo pipefail
 if [ "${CONFLICT_RESOLVED:-false}" = "true" ]; then
   echo "CONFLICT_RESOLVED=true was already set by review_conflict_prepare.sh (deterministic resolution committed, push deferred); skipping OpenCode resolver."
   exit 0
+fi
+
+RESOLVER_INITIAL_UNMERGED_PATHS_FILE="${RUNTIME_DIR}/resolver_initial_unmerged_paths.txt"
+RESOLVER_FINGERPRINT_ONLY_PATHS_FILE="${RUNTIME_DIR}/resolver_fingerprint_only_paths.txt"
+if [ -f "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}" ] && [ -f "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}" ]; then
+  _resolver_initial_unmerged_count="$(wc -l < "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}" | tr -d '[:space:]')"
+  _resolver_fingerprint_only_count="$(wc -l < "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}" | tr -d '[:space:]')"
+  echo "Resolver path classification: initial_unmerged=${_resolver_initial_unmerged_count} fingerprint_only=${_resolver_fingerprint_only_count}"
+else
+  echo "::warning::Resolver path classification snapshots are unavailable; continuing with the combined resolver allowlist."
 fi
 
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
@@ -2467,10 +2516,9 @@ if [ -n "$(git status --porcelain)" ]; then
       case "${touched_path}" in
         node_modules|node_modules/*|*/node_modules|*/node_modules/*) continue ;;
       esac
-      if [ -e "${touched_path}" ]; then
-        git add -- "${touched_path}" 2>/dev/null || true
-      else
-        git rm -q -- "${touched_path}" 2>/dev/null || true
+      if ! stage_resolver_touched_path_or_fail "${touched_path}"; then
+        rm -f "${RESOLVER_TOUCHED_FILE}"
+        exit 1
       fi
     done < "${RESOLVER_TOUCHED_FILE}"
     rm -f "${RESOLVER_TOUCHED_FILE}"
@@ -2512,11 +2560,9 @@ if [ -n "$(git status --porcelain)" ]; then
     STAGED_FILES="$(git diff --cached --name-only || true)"
     echo "Staged files after protected-path reset:"
     printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
-    if git diff --cached --quiet; then
-      echo "No repository changes remain after protected-path reset; skipping merge-resolve commit."
-      echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
-      exit 0
-    fi
+  fi
+  if ! verify_resolver_index_complete_or_fail; then
+    exit 1
   fi
   if git diff --cached --quiet; then
     echo "No staged merge resolution changes remain; skipping merge-resolve commit."
