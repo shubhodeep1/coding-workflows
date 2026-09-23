@@ -722,10 +722,13 @@ when the bounded fix-cycle budget is exhausted.
 - `scripts/post_agent_workspace_guard.py` snapshots every worktree object
   independently of Git ignore rules before a writer model starts. Immediately
   after the complete model process group exits, its credentialless
-  `workspace-guard` pass quarantines ignored, hidden, symlink, special, or
-  otherwise unauthorized changes before output parsing or privileged
-  validation; authorized new regular files are preserved and emitted in the
-  complete changed-path manifest. Post-agent Python validators run through the
+  `workspace-guard` pass quarantines ignored, hidden, symlink, special, Python
+  startup module/package, or otherwise unauthorized changes before output
+  parsing or privileged validation; authorized new regular files are preserved
+  and emitted in the complete changed-path manifest. Any snapshot or reconcile
+  failure terminates that writer flow and latches workflow failure tails closed.
+  Shared output normalization also runs credentiallessly with isolated no-site
+  Python from `/tmp`. Post-agent Python validators run through the
   provider-free `validator` sandbox role as `/usr/bin/python3 -I -S`, from an
   external working directory with no credentials or network access.
 - `scripts/model_provider_proxy.py` derives a non-empty model allowlist from

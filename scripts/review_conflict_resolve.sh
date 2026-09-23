@@ -1950,7 +1950,8 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     --workspace "${PWD}" --manifest "${resolver_workspace_manifest}" \
     --quarantine-dir "${resolver_workspace_quarantine}" \
     --changed-paths-out "${resolver_workspace_paths}" --report "${resolver_workspace_report}"; then
-    _codex_exit=78
+    echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation; aborting before output parsing."
+    exit 78
   fi
   resolver_clean_output="${tmp_output}.ansi-clean"
   if opencode_strip_ansi < "${tmp_output}" > "${resolver_clean_output}"; then
@@ -1969,11 +1970,6 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${_stall_state}" = "observed" ]; then
     echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
     emit_conflict_resolver_substate "codex_stall_observed" "${attempt}"
-  fi
-  if [ "${_codex_exit}" -eq 78 ]; then
-    echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation."
-    emit_conflict_resolver_substate "Failed" "${attempt}"
-    exit 78
   fi
   # Graceful-SIGTERM-at-timer-boundary diagnostic. If OpenCode installs
   # a SIGTERM handler that completes cleanup and exits 0 within the
