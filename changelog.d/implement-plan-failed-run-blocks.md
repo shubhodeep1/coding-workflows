@@ -5,7 +5,7 @@ A failed `security-audit.yml` run posts no section to the `AI Security Audit Tra
 
 | The numbers that matter | Value |
 | --- | --- |
-| Conclusions treated as success | `success`, `skipped`, `neutral` |
+| Conclusions treated as success | `success` |
 | Run that exposed the bug | 35821734999 (`security-audit.yml`, `failure`) |
 
 What this means for operators: a broken audit or validation workflow now shows up as a blocked `/implement-plan-claude` session with the failing step named, rather than a project that reaches `docs/completed/` without a real security pass.

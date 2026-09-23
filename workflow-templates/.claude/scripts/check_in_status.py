@@ -32,8 +32,8 @@ failed (the JSON then carries `error` and `done` is false).
     branch is queued or in progress. With --terminal-only (the §26 status
     check-in) only merged / closed count.
   * Run: `status` is `completed` (any conclusion). `state` is `completed`
-    for a `success` / `skipped` / `neutral` conclusion and `failed` for any
-    other, so a checker routes a failed run to its block stage.
+    only for a `success` conclusion and `failed` for any other, so a checker
+    routes a failed run to its block stage.
   * Issues: every issue is closed or labelled ai:merged.
 
 API budget (CLAUDE.md §15): REST only, never GraphQL. PR mode issues 1 call
@@ -56,7 +56,7 @@ import sys
 BLOCKING_LABELS = ("ai:review-blocked", "ai:review-autofix-failed", "ai:needs-human")
 FAILED_CHECK_CONCLUSIONS = ("failure", "timed_out", "action_required", "startup_failure")
 MERGED_ISSUE_LABEL = "ai:merged"
-SUCCESSFUL_RUN_CONCLUSIONS = ("success", "skipped", "neutral")
+SUCCESSFUL_RUN_CONCLUSIONS = ("success",)
 DEFAULT_STUCK_HOURS = 6.0
 MAX_PAGINATED_API_PAGES = 10
 
