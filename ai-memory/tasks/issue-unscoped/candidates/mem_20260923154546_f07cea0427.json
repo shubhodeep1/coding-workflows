@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: The PR description states this PR changes \"scripts/workflow_failure_heal_intake.sh: a workflow-defect/inconclusive classification on an autofix_failure report from this repo now targets the PR's head branch.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh\n  Evidence of absence: Implemented at lines 570-611. The elif branch activates for SOURCE_KIND=autofix_failure AND SOURCE_REPO=SELF_REPO AND non-empty HEAD_BRANCH, setting TARGET_BRANCH to HEAD_BRANCH and TARGET_BRANCH_SOURCE to source_pr_head.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: The PR description states \"If that branch is gone, the issue falls back to WORKFLOW_HEAL_TARGET_BRANCH and the intake logs warn source_pr_branch_missing.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh\n  Evidence of absence: Implemented at lines 589-597. When _branch_exists fails for TARGET_BRANCH_SOURCE=source_pr_head, the code logs \"warn source_pr_branch_missing\", resets TARGET_BRANCH to TARGET_BRANCH_DEFAULT, and re-checks.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: The PR description states \"The created log line gains target_branch_source=default|failed_run_branch|source_pr_head.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh\n  Evidence of absence: Implemented at line 604. The log line appends target_branch_source=${TARGET_BRANCH_SOURCE}.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: The PR description states \"tests/test_workflow_failure_heal.py: two intake tests cover a self-repo PR whose branch exists and one whose branch is gone.\"\n  Expected change site: tests/test_workflow_failure_heal.py\n  Evidence of absence: Implemented. test_intake_self_repo_autofix_failure_targets_source_pr_branch covers the happy path; test_intake_self_repo_autofix_failure_falls_back_to_stable_when_pr_branch_is_gone covers the fallback.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4340fdaf81deab563a6f3834c2fabae4d2cc5771631d79d152f0069b7a05f21c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4335,
+    "run_id": "35876601173",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35876601173",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923154546_f07cea0427",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4335,
+    "run_id": "35876601173"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-23T15:45:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
