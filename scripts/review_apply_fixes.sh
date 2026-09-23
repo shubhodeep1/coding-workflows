@@ -165,7 +165,11 @@ setup_editor_isolation() {
   : "${WORKSPACE_PATH:?WORKSPACE_PATH must be set for editor isolation}"
   : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE must be set for editor isolation}"
   : "${GITHUB_ENV:?GITHUB_ENV must be set for editor isolation}"
-  : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY must be set for editor isolation}"
+  # opencode_helpers.sh (sourced above) moves the provider key into
+  # OPENCODE_HELPERS_PROVIDER_API_KEY and unsets OPENROUTER_API_KEY so
+  # model-facing processes never inherit it; accept either name so an
+  # older helper copy that leaves the variable in place still passes.
+  : "${OPENCODE_HELPERS_PROVIDER_API_KEY:-${OPENROUTER_API_KEY:?OPENROUTER_API_KEY must be set for editor isolation}}"
   command -v sudo >/dev/null 2>&1 || {
     echo "::error::sudo is required for unprivileged editor isolation." >&2
     return 1
