@@ -5,7 +5,7 @@
 - Status: IN_PROGRESS
 - Stage: phase 2/4
 - Waiting on: PR #4327
-- Routines: none
+- Routines: poke trig_01PYNNqBUeEdTNtNSrQLZQ9i   checker trig_018dZziPdrKU8eumzW9u3jzK (3-hourly at :30, Sonnet)
 - Last updated: 2026-09-23
 - Last note: Phase 1 merged (PR #4303, 2026-09-23). Phase 2 implemented and verified locally (heal + review-pipeline contract tests pass, gate and cap-block scripts executed against mock gh; ruff, yamllint, actionlint, shellcheck clean); phase PR opened.
 
