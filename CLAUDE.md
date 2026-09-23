@@ -1479,8 +1479,11 @@ sentences that CLAUDE.md §25 forbids PR watching in this repository and
 that enabling it requires changing §25 and removing the
 `pr_watch_guard.py` hook from `.claude/settings.json` in a reviewed change
 first. Then continue with the rest of the task. Do not work around the
-rule with another mechanism that amounts to watching (polling the PR in a
-loop, delegating the watch to a subagent or another session).
+rule with another mechanism that amounts to watching (polling the PR for
+CI or review activity in a loop, delegating such a watch to a subagent or
+another session). The §26 status check-in is not a watch: it reads only
+whether the PR is open, merged, or closed, and never acts on CI, reviews,
+or comments.
 
 ### C) What is still allowed
 
@@ -1490,8 +1493,9 @@ loop, delegating the watch to a subagent or another session).
 - Reading a PR's state, CI status, or review comments when the user asks
   about it, and acting on that request under §12 when asked to.
 - Scheduled self check-ins and reminders (`send_later`, Routines) for work
-  the user asked for. This section bans the PR-activity subscription, not
-  the scheduler.
+  the user asked for, including the post-push PR status check-in §26
+  requires. This section bans the PR-activity subscription, not the
+  scheduler.
 
 ### D) Enforcement
 
@@ -1517,6 +1521,128 @@ The unattended pipelines read `unattended_system_instructions.md` and never
 see this file. §25 says nothing about the unattended `review_autofix`
 workflow (`Codex PR Self-Healing Semantic Agent`) or the orchestrator's
 stall recovery — those keep their own policies.
+
+---
+
+## §26. Post-Push PR Status Check-In (MANDATORY)
+
+After an interactive Claude Code session pushes work and a pull request
+exists for it, the session **arms a 3-hourly status check-in for that pull
+request** and keeps it armed until the PR is terminal (merged, or closed
+without merging). The check-in reads the PR's state and nothing else. When
+the PR is terminal, the session reports the next steps, or says the session
+can be closed because there are none. This section applies in this repo
+and in every consumer repo that receives this file via the `@stable` sync.
+
+The check-in is the scheduled self check-in §25.C allows, not the PR
+watching §25 forbids: it never subscribes to PR activity, never reacts to
+CI or review events, and never touches the PR. §25 and its
+`pr_watch_guard.py` hook stay fully in force.
+
+### A) When to arm
+
+- **Every pull request the session opens**, and **every existing pull
+  request the session pushes new commits to**, including PRs opened by a
+  slash command (`/seed-repo`, `/implement-plan-claude`,
+  `/investigate-issue`, and the rest).
+- **One check-in chain per PR.** Arm it once the PR exists (right after
+  `create_pull_request`, or right after the first push to an existing PR).
+  If a chain is already armed for that PR in this session, a later push
+  does not arm another.
+- **Opt-out is per task and explicit.** When the user says for a task
+  that no check-in is wanted ("no check-in", "don't check back on this
+  PR", or an equivalent), skip arming for that task's PRs and say so in
+  the report. The default is on; never ask whether to arm.
+- Arming is a routine write under §23.B: do it without a separate
+  approval round, and do not offer it as an option.
+
+### B) How to arm
+
+Use `send_later` (Claude Code Remote MCP server) with `delay_minutes: 180`,
+`initiation: own_followup`, and a message that names the repository, the
+PR number and URL, and restates the §26.C steps, so the fired turn can act
+without scrolling back. `send_later` binds the reminder to this session
+and survives container restarts, so the check-in outlives the turn that
+armed it. Re-arm the same way after every non-terminal check.
+
+When `send_later` is not available (a local CLI, desktop, or IDE session
+without the Claude Code Remote MCP server), use the harness's in-session
+scheduler instead (`CronCreate`, recurring, every 3 hours, deleted with
+`CronDelete` once the PR is terminal) and tell the user once that this
+scheduler lives only as long as the session. When neither scheduler
+exists, say so once in the report and stop; do not poll in a loop and do
+not delegate the wait to a subagent or another session.
+
+### C) What each check-in does
+
+The fired turn runs on the session's model, but the model cannot switch
+itself, so the work is kept off it:
+
+1. **Delegate the status read to a Sonnet subagent** — the Agent tool with
+   `model: "sonnet"` — before doing anything else in the turn. The
+   subagent performs **one read** of the PR (`pull_request_read` with
+   `method: get`, or `gh api repos/<owner>/<repo>/pulls/<n>` per §23.D)
+   and returns only: the state (`open` / `closed`), whether it merged,
+   the merge commit SHA when merged, and the closed-at time when closed.
+   It reads nothing else and writes nothing.
+2. **Not terminal** → re-arm per §26.B and end the turn. No message to
+   the user, no PR comment, no CI, review, comment, conflict, or branch
+   work. A red check or an open review thread does not change this:
+   fixing CI or addressing comments happens only when the user asks for
+   it directly, under §12.
+3. **Terminal** → stop re-arming (delete the cron job when §26.B used
+   one) and continue with §26.D on the session's own model.
+
+The check-in turn issues exactly one GitHub API call (§15). If the read
+fails (network, 403, rate limit), re-arm and try again on the next
+check-in; after three consecutive failed reads, report the failure to the
+user once and keep re-arming.
+
+### D) What to report when the PR is terminal
+
+Reply in the session, on the session's default model, with:
+
+- which terminal state the PR reached (merged, with the merge commit, or
+  closed without merging, with when);
+- the concrete next steps that still exist, if any — follow-up work the
+  user asked for, a consumer sync or release the change waits on, an
+  action the user must take, or, for a PR closed without merging, whether
+  to rebuild or drop the work;
+- when no next steps exist, say plainly that the session can be closed
+  safely.
+
+Then send one `PushNotification` (one line, under 200 characters) with
+the terminal state and whether action is needed, since the user is
+unlikely to be watching the session hours after the push. Send it only on
+the terminal check-in, never on a non-terminal one.
+
+### E) Enforcement
+
+The arming step is reinforced deterministically by
+`.claude/hooks/pr_check_in_reminder.py`, wired as a `PostToolUse` hook in
+`.claude/settings.json` under the matcher
+`^(?:Bash|mcp__.*__create_pull_request|mcp__.*__push_files|mcp__.*__create_or_update_file)$`.
+Prose alone is not enough: the instruction is furthest from the context
+window's live edge exactly when a session has run long enough to push.
+After every `create_pull_request`, `push_files`, or `create_or_update_file`
+MCP call, and after every `Bash` command that runs `git push` (not a
+`--dry-run`) or `gh pr create`, the hook feeds a one-paragraph §26 reminder
+back into the model's context as `additionalContext`. It never blocks,
+issues no API calls (§15), reads no environment variables, stays silent on
+every other tool call, and fails open with a `systemMessage` warning when
+the hook payload cannot be read, is invalid or non-object JSON, or
+evaluation raises an internal exception. Empty or whitespace-only hook
+input is treated as an empty object and allowed silently. The hook and
+the settings entry ship to consumer repos through the same `.claude/`
+sync as the §21 and §25 guards; `tests/test_pr_check_in_reminder.py`
+covers the rule and the wiring.
+
+### F) Interactive Sessions Only
+
+The unattended pipelines read `unattended_system_instructions.md` and
+never see this file. §26 says nothing about the orchestrator's PR
+lifecycle handling (`ai-issue-pr-status.yml`, the stall poller, the
+review pipeline) — those keep their own policies.
 
 ---
 

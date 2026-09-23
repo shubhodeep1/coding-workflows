@@ -506,6 +506,34 @@ carried frontmatter.
 
 ---
 
+## Interactive post-push PR status check-in
+
+**Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
+pushes a branch and a pull request exists for it, the session arms a
+`send_later` self check-in 180 minutes out and re-arms it after every
+non-terminal check; the fired turn delegates one PR status read to a Sonnet
+subagent (Agent tool, `model: "sonnet"`) and does nothing else until the PR
+is merged or closed, when the session model reports the next steps or that
+the session can be closed, plus one `PushNotification`. It never handles
+CI, reviews, comments, or conflicts; that stays a direct §12 request.
+
+- Hook: `.claude/hooks/pr_check_in_reminder.py`, a `PostToolUse` hook wired
+  in `.claude/settings.json` under the anchored matcher
+  `^(?:Bash|mcp__.*__create_pull_request|mcp__.*__push_files|mcp__.*__create_or_update_file)$`.
+  It emits the §26 reminder as `additionalContext` after `git push`
+  (not `--dry-run`), `gh pr create`, and the MCP PR-creation / remote-write
+  tools; it never blocks, issues no API calls, and reads no environment
+  variables. `workflow-templates/.claude/hooks/pr_check_in_reminder.py` must
+  stay byte-identical to the root copy.
+- Tests: `tests/test_pr_check_in_reminder.py` (own `ci.yml` step).
+- Relationship to §25: the check-in is the scheduled self check-in §25.C
+  allows; `pr_watch_guard.py` keeps blocking `subscribe_pr_activity`.
+- Consumers receive the hook, the settings entry, and the §26 prose through
+  the existing `.claude/` and root `CLAUDE.md` syncs and the `/seed-repo`
+  asset set.
+
+---
+
 ## Repo-specific batching helpers
 
 The following helpers are the canonical batched GraphQL paths for the
