@@ -276,3 +276,151 @@
 | Semantic agent `35814503883`, `35820358995` | Cached early linked-issue fetch; one fallback GraphQL for non-default base | Low call volume; diagnostics gap |
 | Review `35827869438` | Previous dispatch HTTP 422 from >10 payload properties | Contract regression risk |
 | Rate limits | No events observed; collector counts unavailable | Data gap |
+
+## Deep Audit — Workflows & Scripts (2026-09-23)
+
+### Section 1: Bug & Correctness Sweep
+
+Audit baseline: all 50 workflows parse as YAML, all 85 shell scripts pass `bash -n`, all 57 Python scripts parse via `ast`, and all workflow script references currently resolve. The prior missing `scripts/helper.sh` issue is therefore not duplicated here.
+
+#### BUG-001
+- **File path and line range:** `scripts/label_helpers.sh:179-229`
+- **Severity:** High
+- **Category tag:** `bug`
+- **Description:** `set_issue_phase_label_resilient` reads the complete label set, computes a replacement, then sends `PUT /labels`. Inference: any non-phase label added between the GET and PUT can be silently removed by the stale replacement payload. This includes state-bearing labels such as `ai:orchestrator-managed` or `force-review`.
+- **Recommended fix:** Never replace the complete label set. Delete only known obsolete phase labels individually, POST the target label, then re-fetch and reconcile multiple phase labels. Add a test simulating a concurrent non-phase label addition.
+
+#### BUG-002
+- **File path and line range:** `scripts/resolve_integration_ref.sh:51-104`, `scripts/orchestrate_lib.py:2800-2886`, `.github/workflows/clarify.yml:61-129`
+- **Severity:** High
+- **Category tag:** `bug`
+- **Description:** Both integration-ref implementations use raw, single-attempt `gh api` calls. The workflow wrapper treats any resolver failure as an empty ref and falls back to the default branch. A transient API failure can therefore make clarify/plan/implement operate against the wrong branch, contrary to the documented contract that default fallback occurs only when integration metadata is absent.
+- **Recommended fix:** Use bounded transient retries matching `scripts/gh_helpers.sh`. Preserve 404 as “branch missing,” but make exhausted API failures fatal. Workflow callers should distinguish successful empty output from a non-zero resolver exit and fail closed on the latter.
+
+#### SEC-001
+- **File path and line range:** `.github/workflows/mark-stable.yml:44-55`, `.github/workflows/test-and-mark-stable.yml:162-184`, `.github/workflows/workflow-log-analysis.yml:1155-1169,1296-1325`
+- **Severity:** Medium
+- **Category tag:** `security`
+- **Description:** `${{ github.ref_name }}` is interpolated directly into Bash source. Actions substitutes it before Bash parses the script, so shell metacharacters in a dispatch ref are treated as code rather than data. Current triggers limit practical exposure to trusted dispatchers, but the write-capable workflows retain an avoidable injection primitive. `tests/test_workflow_untrusted_input_contract.py:26-27` checks dispatch inputs only and misses this context.
+- **Recommended fix:** Bind the value through step `env`, such as `DISPATCH_REF_NAME: ${{ github.ref_name }}`, and reference `"${DISPATCH_REF_NAME}"`. Build report URLs from environment variables and extend the untrusted-input contract test to cover ref-name interpolation.
+
+No malformed YAML blocks, missing shell declarations affecting runner selection, secret-value logging, or actionable SC2086/SC2046/SC2006 defects were found.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:14390-14438,15504-15510`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** Standalone recovery executes seven separate `gh issue list` queries, one for each pipeline label. **Current:** 7 logical API invocations per poll, potentially more with pagination. **Proposed:** 1 aliased GraphQL search in the normal case.
+- **Recommended fix:** Extend `_fetch_standalone_marker_issues_graphql` with seven label-search aliases and return the union with its existing marker searches. Preserve per-alias paginated REST fallback when `hasNextPage` is true.
+
+#### BATCH-002
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:5964-6028,14440-14613`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** Advisory follow-ups are processed with one issue GET per row plus one comments GET for each blocked issue. For `N` rows and `B` blocked rows, **current:** `N+B` reads, up to `2N`. **Proposed:** `ceil(N/25)` GraphQL calls plus overflow fallbacks. [NEEDS VERIFICATION]
+- **Recommended fix:** Reuse `_fetch_candidate_issue_details_graphql`, which already returns issue state, labels, and comments. Add comment pagination metadata and fall back to the existing per-issue comments request whenever the marker may fall outside the 100-comment window.
+
+#### BATCH-003
+- **File path and line range:** `scripts/promote_main_cycle.sh:237-265`
+- **Severity:** Low
+- **Category tag:** `api-batching`
+- **Description:** `last_cycle_baseline_sha` performs one search followed by one comments request for each of up to ten candidate issues. **Current:** up to 11 calls. **Proposed:** 1 GraphQL search returning the ten issues and their first 100 comments.
+- **Recommended fix:** Add a batched search helper following `_fetch_candidate_issue_details_graphql`’s alias-and-transform pattern. Return issue number, comment body, author login, and author association in one response.
+
+#### BATCH-004
+- **File path and line range:** `scripts/lint_pr_body_auto_close.py:128-163,218-267`, `scripts/lint_plan_archival_completeness.py:85-107,153-219`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** Both linters perform one `gh issue view` per distinct referenced issue. The auto-close linter caches repeated references, but still makes `U` calls for `U` unique repository/issue pairs; the archival linter makes `N` calls for `N` unique issues. **Proposed:** `ceil(U/50)` or `ceil(N/50)` aliased GraphQL calls.
+- **Recommended fix:** Add a shared Python issue-metadata batch helper modeled on `_fetch_candidate_issue_details_graphql`, returning labels and optionally body. Group cross-repository references into aliased `repository` fields and preserve per-item unknown results on partial failures.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path and line range:** `.github/workflows/clarify.yml:61-131`, `.github/workflows/implement.yml:440-510`, `.github/workflows/orchestrate_clarify_respond.yml:115-185`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** The three workflows contain byte-identical 2,963-character “Resolve integration ref” shell blocks, including authentication, checkout, cleanup, fallback, and output handling. This multiplies the chance that the BUG-002 fix drifts between phases.
+- **Recommended fix:** Move the block into `scripts/resolve_integration_ref_bootstrap.sh` with signature `resolve_integration_ref_bootstrap <repository> <issue-number> <resolver-ref>`. Leave only a small download/invocation shim in each pre-checkout workflow.
+
+#### DUP-002
+- **File path and line range:** `.github/workflows/mark-stable.yml:451-487,655-867`, `.github/workflows/test-and-mark-stable.yml:5344-5380,5547-5759`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** Three safety-critical release steps are byte-identical across both workflows: existing-tag validation (1,603 characters), tag publication (6,305), and release creation (2,344). `tests/test_mark_stable_release_tag_refspec_contract.py:626-638` explicitly pins this duplication instead of a single implementation.
+- **Recommended fix:** Extend `scripts/mark-stable.sh` with backward-compatible `validate-tag`, `publish-tags`, and `create-release` subcommands. Both workflows should invoke those subcommands, while tests validate the shared helper once.
+
+#### DUP-003
+- **File path and line range:** `scripts/review_apply_fixes.sh:164-202`, `scripts/review_rb_judge.sh:256-294`, `scripts/review_run_reviewers.sh:69-107`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** `emit_context_budget_warn_for_prompt` is identical in all three scripts.
+- **Recommended fix:** Move it to `scripts/review_prompt_helpers.sh` with signature `emit_context_budget_warn_for_prompt <phase> <prompt-path> <model>` and source that helper from all three callers.
+
+#### DUP-004
+- **File path and line range:** `scripts/review_conflict_resolve.sh:255-269`, `scripts/review_rb_judge.sh:168-182`, `scripts/review_run_reviewers.sh:324-338`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** `read_codex_stall_guard_state` is duplicated verbatim across three long-running model paths.
+- **Recommended fix:** Add `read_codex_stall_guard_state <status-file>` to `scripts/watchdog_helpers.sh` and remove the local copies.
+
+No workflow pair exceeded the requested greater-than-70% similarity threshold; the highest measured pair was exactly 70.0%.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **File path and line range:** `.github/workflows/implement.yml:981-1338`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Description:** The interpolated `Stage workflow support files` block is approximately **16,985 characters**, or 80.9% of the 21,000-character limit. Remaining headroom is approximately **4,015 characters**. It contains three `${{ }}` interpolations and has already accumulated extensive support-manifest and staged-ledger logic.
+- **Recommended fix:** Extend `scripts/stage_workflow_support.sh` with an implement-specific mode that owns manifest staging, fallback handling, and ledger exports. Keep only environment binding and one script invocation in the workflow step.
+
+No interpolated run block exceeds 18,000 characters. No workflow exceeds 800 KB; the largest is `.github/workflows/review_autofix.yml` at 505,283 characters, leaving 543,293 characters before the 1 MB limit.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:11348-11356,12958-12977,13087-13097`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `get_last_validation_run_conclusion`, `read_standalone_state_json`, and `stall_recovery_action_is_terminal` each occur exactly once in the repository—their definitions—and are never called.
+- **Recommended fix:** Remove the three functions and any comments describing obsolete callers. Retain the live lower-level helpers such as `get_last_validation_run_info`.
+
+#### DEAD-002
+- **File path and line range:** `scripts/review_apply_fixes.sh:680-710`, `scripts/review_conflict_resolve.sh:150-207`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** Five thread-reuse helpers occur only at their definitions: `resolve_review_thread_reuse_asset`, `review_thread_reuse_enabled`, `resolve_conflict_thread_reuse_asset`, `conflict_thread_reuse_enabled`, and `render_conflict_thread_reuse_continuation`.
+- **Recommended fix:** Remove these stale helpers if thread reuse is intentionally handled elsewhere. If conflict-resolver reuse was intended, wire the existing functions into its attempt loop and add contract coverage instead of leaving dormant feature scaffolding.
+
+#### CONSIST-001
+- **File path and line range:** `scripts/comprehensive_test_and_release_gh_api.sh:3-47`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** `gh_api_safe` retries only errors containing “rate limit”; 5xx responses, timeouts, and connection failures fail immediately. The canonical `scripts/gh_helpers.sh:13-20` retries other transient failures with exponential backoff. This legacy helper is widely used by release polling, and `tests/test_workflow_gh_retry_fallback_contract.py:336-356` explicitly pins the single-attempt behavior.
+- **Recommended fix:** Implement `gh_api_safe` as a compatibility adapter over `gh_retry`, preserving `GH_API_SAFE_OUTPUT` and quiet-mode behavior. Update tests to distinguish retryable 5xx/network failures from deterministic 4xx failures.
+
+No TODO/FIXME/HACK markers were found. ShellCheck reported no SC2086, SC2046, or SC2006 findings. The observed SC2015 cases use deliberate boolean assignment or best-effort cleanup semantics and do not warrant separate findings.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, BUG-002 |
+| Medium | 8 | SEC-001, BATCH-001, BATCH-002, BATCH-004, DUP-001, DUP-002, EXPR-001, CONSIST-001 |
+| Low | 5 | BATCH-003, DUP-003, DUP-004, DEAD-001, DEAD-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 7–9 | Large |
+| API call optimization | 6–8 | Medium |
+| Code modularization | 9–12 | Large |
+| Expression size reduction | 2–3 | Medium |
+| Medium/Low fixes | 8–12 | Medium |
