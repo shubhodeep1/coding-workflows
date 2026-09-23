@@ -471,7 +471,7 @@ def build_autofix_failure_payload(
 		"source_gen": None,
 		"source_root": None,
 		"issue_excerpt": sanitize_text(body, ISSUE_EXCERPT_LIMIT),
-		"comments_excerpt": sanitize_text("\n\n---\n\n".join(comment_texts[-8:]), COMMENTS_EXCERPT_LIMIT),
+		"comments_excerpt": _build_recent_comments_excerpt(comment_texts),
 		"workflow_name": single_line(workflow_name, 200),
 		"head_branch": head_branch if is_valid_branch(head_branch) else None,
 		"head_sha": head_sha if is_valid_sha(head_sha) else None,

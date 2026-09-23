@@ -1212,6 +1212,37 @@ def test_autofix_payload_validates_and_fingerprints_by_reason() -> None:
 	assert heal.fingerprint("AI Review", "autofix:editor_empty_noop", sig_a) != heal.fingerprint("AI Review", "autofix:editor_changes_lost", sig_a)
 
 
+def test_autofix_payload_prioritizes_recent_diagnostics_and_compacts_state() -> None:
+	state_comment = (
+		f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={'a' * 64} -->\n"
+		+ ("state-data" * 1000)
+		+ "\nORCHESTRATOR_STATE_V2 -->"
+	)
+	run_url = f"https://github.com/{CONSUMER_REPO}/actions/runs/500"
+	payload = heal.build_autofix_failure_payload(
+		repo=CONSUMER_REPO,
+		pr=_pr(),
+		comments=[
+			{"body": state_comment},
+			{"body": f"Harness diagnosis: template renderer failed.\nRun: {run_url}"},
+		],
+		workflow_name="AI Review",
+		failure_reason="editor_empty_noop",
+		failure_evidence="failure_reason=editor_empty_noop",
+		failure_streak=2,
+		run_id="500",
+		run_url=run_url,
+		wrapper_sha=SHA_A,
+		reporter_run_url=run_url,
+	)
+
+	assert payload["comments_excerpt"].startswith("Harness diagnosis: template renderer failed.")
+	assert "[ORCHESTRATOR_STATE_V2 state part 1/1 omitted]" in payload["comments_excerpt"]
+	assert "state-datastate-data" not in payload["comments_excerpt"]
+	assert len(payload["comments_excerpt"]) <= heal.COMMENTS_EXCERPT_LIMIT
+	assert payload["run_refs"] == [{"repo": CONSUMER_REPO, "run_id": "500", "url": run_url}]
+
+
 def test_compose_autofix_issue_title_and_body() -> None:
 	payload = heal.validate_payload(_autofix_payload())
 	title = heal.compose_issue_title(payload, workflow_name=None)
@@ -1438,7 +1469,7 @@ def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapsh
 			["bash", "-euo", "pipefail", "-c", loop],
 			cwd=work,
 			env={
-				**os.environ,
+				**{key: value for key, value in os.environ.items() if key not in {"BASH_ENV", "ENV", "WORKSPACE_PATH"}},
 				"REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS": workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"],
 				"SUPPORT_SCRIPTS_DIR": str(support),
 				"SCRIPT_REF": SHA_A,
@@ -1462,7 +1493,7 @@ def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapsh
 			["bash", "-euo", "pipefail", "-c", loop],
 			cwd=work,
 			env={
-				**os.environ,
+				**{key: value for key, value in os.environ.items() if key not in {"BASH_ENV", "ENV", "WORKSPACE_PATH"}},
 				"REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS": workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"],
 				"SUPPORT_SCRIPTS_DIR": str(support),
 				"SCRIPT_REF": SHA_A,
