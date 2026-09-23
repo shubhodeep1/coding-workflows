@@ -2347,7 +2347,7 @@ jobs:
           # 35802596362: dispatched 02:23, started 03:04, budget 25m).
           # The oldest active run is the one that gets the slot next.
           ADOPTED_REVIEW_RUN_ID=$(gh_api_with_retry \
-            "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?branch=${BRANCH}&per_page=20" \
+            "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?branch=${BRANCH}&per_page=100" \
             --jq "[.workflow_runs[] | select(.status != \"completed\") | select(.id != ${PRIOR_REVIEW_RUN}) | select(.head_sha == \"${BAIT_SHA}\" or .head_sha == \"${RETRY_DISPATCH_SHA}\")] | sort_by(.created_at) | first | .id // empty") || ADOPTED_REVIEW_RUN_ID=""
           if [[ "${ADOPTED_REVIEW_RUN_ID}" =~ ^[0-9]+$ ]]; then
             echo "✓ Review run #${ADOPTED_REVIEW_RUN_ID} is already queued/running on ${BRANCH} — waiting on it instead of dispatching a retry"

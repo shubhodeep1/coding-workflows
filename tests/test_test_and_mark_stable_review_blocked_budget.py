@@ -314,6 +314,7 @@ def test_phase4b_dispatches_only_when_no_run_is_adopted() -> None:
 	dispatch = phase4b.index('if ! gh workflow run "${REVIEW_WORKFLOW_FILE}"')
 	prior_guard = phase4b.index('if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]]')
 	assert prior_guard < lookup < dispatch
+	assert "runs?branch=${BRANCH}&per_page=100" in phase4b
 	else_branch = phase4b[phase4b.index('if [[ "${ADOPTED_REVIEW_RUN_ID}" =~ ^[0-9]+$ ]]; then'):dispatch]
 	assert "else" in else_branch and 'ADOPTED_REVIEW_RUN_ID=""' in else_branch
 	assert '"repos/${TEST_REPO}/actions/runs/${ADOPTED_REVIEW_RUN_ID}"' in phase4b
