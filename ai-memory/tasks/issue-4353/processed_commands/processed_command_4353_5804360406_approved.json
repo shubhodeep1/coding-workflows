@@ -5,13 +5,33 @@
   "entry_id": "processed_command_4353_5804360406_approved",
   "issue_number": 4353,
   "metadata": {
+    "branch": "ai/issue-4353",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/ci.yml",
+      ".github/workflows/review_autofix.yml",
+      "agents.md",
+      "changelog.d/4353-review-sandbox-namespace.md",
+      "docs/codex-model-reference.md",
+      "scripts/codex_model_catalog.json",
+      "scripts/stage_workflow_support.sh",
+      "scripts/untrusted_process_sandbox.sh",
+      "tests/test_agent_process_isolation.py",
+      "tests/test_review_autofix_editor_noop_cascade_contract.py",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 4353,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4353",
+    "pr_number": 4354,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4354",
+    "run_attempt": "1",
+    "run_id": "35931354231",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/35931354231"
   },
   "run_attempt": 1,
   "run_id": "35931354231",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-23T23:02:27Z",
+  "status": "completed",
+  "timestamp": "2026-09-23T23:22:41Z",
   "workflow": "implement"
 }
