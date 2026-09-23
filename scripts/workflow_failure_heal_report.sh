@@ -183,12 +183,17 @@ RUN_REF_COUNT="$(jq -r '.run_refs | length' "${PAYLOAD_FILE}")"
 
 # --- Dispatch to coding-workflows ------------------------------------------
 
+# The report is enveloped under client_payload.report: GitHub rejects a
+# client_payload with more than 10 top-level properties (HTTP 422).
 DISPATCH_FILE="${RUNTIME_DIR}/dispatch.json"
-jq -n --arg event_type "workflow-failure-heal" --slurpfile payload "${PAYLOAD_FILE}" \
-	'{event_type: $event_type, client_payload: $payload[0]}' > "${DISPATCH_FILE}"
+if ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${PAYLOAD_FILE}" > "${DISPATCH_FILE}"; then
+	log "error dispatch_build_failed issue=${ISSUE_NUMBER}"
+	exit 1
+fi
 
-if ! gh_retry gh api -X POST "repos/${UPSTREAM_REPO}/dispatches" --input "${DISPATCH_FILE}" >/dev/null; then
-	log "error dispatch_failed issue=${ISSUE_NUMBER} label=${LABEL} upstream=${UPSTREAM_REPO}"
+DISPATCH_ERROR_FILE="${RUNTIME_DIR}/dispatch_error.txt"
+if ! gh_retry gh api -X POST "repos/${UPSTREAM_REPO}/dispatches" --input "${DISPATCH_FILE}" >/dev/null 2> "${DISPATCH_ERROR_FILE}"; then
+	log "error dispatch_failed issue=${ISSUE_NUMBER} label=${LABEL} upstream=${UPSTREAM_REPO} detail=$(head -c 300 "${DISPATCH_ERROR_FILE}" | tr '\n' ' ')"
 	tg_send_msg "Workflow failure heal report FAILED to dispatch for ${REPO}#${ISSUE_NUMBER} (label '${LABEL}')."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 	exit 1
 fi

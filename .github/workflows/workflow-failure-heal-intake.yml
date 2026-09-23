@@ -108,7 +108,16 @@ jobs:
           set -euo pipefail
           case "${EVENT_NAME}" in
             repository_dispatch)
-              printf '%s' "${CLIENT_PAYLOAD_JSON}" > "${WORKFLOW_HEAL_PAYLOAD_FILE}"
+              # Reporters envelope the report as {schema_version, report}
+              # (GitHub caps client_payload at 10 top-level properties);
+              # unwrap-dispatch also passes the legacy flat shape through.
+              printf '%s' "${CLIENT_PAYLOAD_JSON}" > "${RUNTIME_DIR}/client_payload.json"
+              if ! python3 scripts/workflow_failure_heal.py unwrap-dispatch \
+                --payload-json "${RUNTIME_DIR}/client_payload.json" \
+                > "${WORKFLOW_HEAL_PAYLOAD_FILE}"; then
+                echo "::error::client_payload is not valid JSON"
+                exit 1
+              fi
               ;;
             workflow_run)
               printf '%s' "${WORKFLOW_RUN_JSON}" > "${RUNTIME_DIR}/workflow_run.json"

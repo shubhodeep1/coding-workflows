@@ -197,11 +197,16 @@ if [ -n "${SKIP_REASON}" ]; then
 	exit 0
 fi
 
+# The report is enveloped under client_payload.report: GitHub rejects a
+# client_payload with more than 10 top-level properties (HTTP 422).
 DISPATCH_FILE="${REPORT_DIR}/dispatch.json"
-jq -n --arg event_type "workflow-failure-heal" --slurpfile payload "${PAYLOAD_FILE}" \
-	'{event_type: $event_type, client_payload: $payload[0]}' > "${DISPATCH_FILE}"
-if ! gh_retry gh api -X POST "repos/${UPSTREAM_REPO}/dispatches" --input "${DISPATCH_FILE}" >/dev/null 2>&1; then
-	log "skip reason=dispatch_denied pr=${PR} failure=${FAILURE_REASON} streak=${STREAK} upstream=${UPSTREAM_REPO}"
+if ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${PAYLOAD_FILE}" > "${DISPATCH_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
+	log "skip reason=payload_build_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"
+	exit 0
+fi
+DISPATCH_ERROR_FILE="${REPORT_DIR}/dispatch_error.txt"
+if ! gh_retry gh api -X POST "repos/${UPSTREAM_REPO}/dispatches" --input "${DISPATCH_FILE}" >/dev/null 2> "${DISPATCH_ERROR_FILE}"; then
+	log "skip reason=dispatch_denied pr=${PR} failure=${FAILURE_REASON} streak=${STREAK} upstream=${UPSTREAM_REPO} detail=$(head -c 300 "${DISPATCH_ERROR_FILE}" | tr '\n' ' ')"
 	exit 0
 fi
 log "dispatched pr=${PR} failure=${FAILURE_REASON} streak=${STREAK} workflow=${WORKFLOW_NAME} wrapper_sha=${WRAPPER_SHA:-none} upstream=${UPSTREAM_REPO}"
