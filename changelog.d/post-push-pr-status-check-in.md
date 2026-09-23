@@ -7,7 +7,7 @@ Until now a session pushed a branch, opened its pull request, and went quiet, an
 | --- | --- |
 | Check-in interval | 180 minutes |
 | Checker model | `claude-haiku-4-5-20251001` |
-| GitHub REST calls per check | 1 (up to 5 when a PR looks stuck) |
+| GitHub REST calls per check | 1 in terminal-only mode; non-terminal checks add 1 per 100 check runs and up to 3 for an old failure |
 | "Stuck" threshold | conflict or failed check, head older than 6 hours, no workflow run active |
 | Safety net | one wake of the last stage session after 1440 minutes, only if the chain stalled |
 | Verify-activation cycles before asking | 3 |

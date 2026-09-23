@@ -35,11 +35,12 @@ failed (the JSON then carries `error` and `done` is false).
   * Issues: every issue is closed or labelled ai:merged.
 
 API budget (CLAUDE.md §15): REST only, never GraphQL. PR mode issues 1 call
-(`pulls/N`) and at most 5 when the PR looks stuck (check-runs, head commit,
-queued runs, in-progress runs). Run mode issues 1 call. Issues mode issues
-one call per issue; the checker lists at most the few follow-ups one
-security cycle opens. Every call goes through `gh api`, which in Claude Code
-on the web is authenticated by the session's agent proxy.
+(`pulls/N`), one call per 100 check runs when the PR is not conflicted, and
+at most 3 further calls when a failure is old (head commit, queued runs,
+in-progress runs). Run mode issues 1 call. Issues mode issues one call per
+issue; the checker lists at most the few follow-ups one security cycle opens.
+Every call goes through `gh api`, which in Claude Code on the web is
+authenticated by the session's agent proxy.
 """
 
 from __future__ import annotations
@@ -70,9 +71,38 @@ def gh_api(path: str) -> object:
 		detail = (proc.stderr or proc.stdout).strip().splitlines()
 		raise ReadError(f"gh api {path} failed: {detail[-1] if detail else f'exit {proc.returncode}'}")
 	try:
-		return json.loads(proc.stdout)
+		payload = json.loads(proc.stdout)
 	except ValueError as exc:
 		raise ReadError(f"gh api {path} returned invalid JSON") from exc
+	if not isinstance(payload, dict):
+		raise ReadError(f"gh api {path} returned non-object JSON")
+	return payload
+
+
+def _gh_api_paginated_object(path: str, list_key: str) -> dict:
+	"""Fetch every 100-item REST page and merge `list_key` into one object.
+
+	Input is an unpaginated REST path plus its top-level array key; output
+	preserves the first page's object fields with that array concatenated.
+	This issues one API call per page and raises `ReadError` on any read or
+	shape failure so `main` emits the structured exit-2 verdict and re-arms.
+	"""
+	paginated_result: dict = {}
+	page_number = 1
+	while True:
+		separator = "&" if "?" in path else "?"
+		page_payload = gh_api(f"{path}{separator}per_page=100&page={page_number}")
+		page_items = page_payload.get(list_key)
+		if not isinstance(page_items, list) or any(not isinstance(page_item, dict) for page_item in page_items):
+			raise ReadError(f"gh api {path} returned invalid {list_key!r} array")
+		if not paginated_result:
+			paginated_result = dict(page_payload)
+			paginated_result[list_key] = []
+		paginated_result[list_key].extend(page_items)
+		total_count = page_payload.get("total_count")
+		if len(page_items) < 100 or (isinstance(total_count, int) and len(paginated_result[list_key]) >= total_count):
+			return paginated_result
+		page_number += 1
 
 
 def _label_names(obj: dict) -> list[str]:
@@ -80,6 +110,8 @@ def _label_names(obj: dict) -> list[str]:
 
 
 def _parse_time(value: str) -> dt.datetime:
+	if not isinstance(value, str):
+		raise ValueError(f"timestamp must be a string, got {type(value).__name__}")
 	return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
@@ -102,7 +134,7 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 	conflicted = pr.get("mergeable_state") == "dirty"
 	failed_checks: list[str] = []
 	if not conflicted:
-		runs = gh_api(f"repos/{repo}/commits/{head_sha}/check-runs?per_page=100")
+		runs = _gh_api_paginated_object(f"repos/{repo}/commits/{head_sha}/check-runs", "check_runs")
 		failed_checks = sorted(
 			run.get("name", "?")
 			for run in runs.get("check_runs") or []

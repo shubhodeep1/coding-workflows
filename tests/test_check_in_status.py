@@ -62,7 +62,7 @@ def _run(argv, capsys):
 def _stuck_responses(pr, committed_at, queued=0, in_progress=0, check_runs=None):
 	return {
 		"repos/o/r/pulls/7": pr,
-		"repos/o/r/commits/abc/check-runs?per_page=100": {"check_runs": check_runs or []},
+		"repos/o/r/commits/abc/check-runs?per_page=100&page=1": {"check_runs": check_runs or []},
 		"repos/o/r/commits/abc": {"commit": {"committer": {"date": committed_at}}},
 		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1": {"total_count": queued},
 		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1": {"total_count": in_progress},
@@ -100,7 +100,7 @@ def test_terminal_only_ignores_blocking_labels_and_red_checks(monkeypatch, capsy
 def test_healthy_open_pr_is_not_done(monkeypatch, capsys):
 	calls = _stub(monkeypatch, {
 		"repos/o/r/pulls/7": _pr(),
-		"repos/o/r/commits/abc/check-runs?per_page=100": {"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]},
+		"repos/o/r/commits/abc/check-runs?per_page=100&page=1": {"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]},
 	})
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is False
@@ -139,6 +139,29 @@ def test_failed_check_on_old_head_without_active_run_is_stuck(monkeypatch, capsy
 	assert len(calls) <= 5
 
 
+def test_failed_check_on_second_page_is_detected(monkeypatch, capsys):
+	first_page_runs = [
+		{"name": f"ok-{index}", "status": "completed", "conclusion": "success"}
+		for index in range(100)
+	]
+	responses = _stuck_responses(_pr(mergeable_state="unstable"), OLD, check_runs=first_page_runs)
+	responses["repos/o/r/commits/abc/check-runs?per_page=100&page=1"]["total_count"] = 101
+	responses["repos/o/r/commits/abc/check-runs?per_page=100&page=2"] = {
+		"total_count": 101,
+		"check_runs": [{"name": "late-failure", "status": "completed", "conclusion": "failure"}],
+	}
+	calls = _stub(monkeypatch, responses)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and "late-failure" in out["reason"]
+	assert "repos/o/r/commits/abc/check-runs?per_page=100&page=2" in calls
+
+
+def test_null_commit_time_exits_2_with_error(monkeypatch, capsys):
+	_stub(monkeypatch, _stuck_responses(_pr(mergeable_state="dirty"), None))
+	code, out = _run(["--pr", "7"], capsys)
+	assert code == 2 and out["done"] is False and "timestamp must be a string" in out["error"]
+
+
 def test_run_completed_and_pending(monkeypatch, capsys):
 	_stub(monkeypatch, {"repos/o/r/actions/runs/9": {"status": "completed", "conclusion": "failure"}})
 	_, out = _run(["--run", "9"], capsys)
@@ -164,6 +187,16 @@ def test_read_failure_exits_2_with_error(monkeypatch, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/7": checker.ReadError("HTTP 403")})
 	code, out = _run(["--pr", "7"], capsys)
 	assert code == 2 and out["done"] is False and "403" in out["error"]
+
+
+def test_non_object_api_payload_raises_read_error(monkeypatch):
+	monkeypatch.setattr(
+		checker.subprocess,
+		"run",
+		lambda command, **kwargs: checker.subprocess.CompletedProcess(command, 0, stdout="[]", stderr=""),
+	)
+	with pytest.raises(checker.ReadError, match="non-object JSON"):
+		checker.gh_api("repos/o/r/pulls/7")
 
 
 def test_bad_repo_exits_2(capsys):
