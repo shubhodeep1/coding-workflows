@@ -712,12 +712,18 @@ when the bounded fix-cycle budget is exhausted.
 ### Credentialless model and trusted Git boundary
 
 - `scripts/untrusted_process_sandbox.sh` is the mandatory boundary for planner,
-  reviewer/editor, resolver, poller judge, and security-audit model processes.
+  implementation diagnosis, reviewer/editor, resolver, poller judge, and
+  security-audit model processes.
   Read-only roles cannot write the checkout; writer roles can edit ordinary
   worktree files but cannot access the main repository, linked-worktree, or
   nested `.git` metadata. The sandbox exposes only the loopback provider proxy
   and never passes GitHub tokens, runner command files, authenticated remotes,
   provider credentials, or host Codex auth caches.
+- `scripts/model_provider_proxy.py` derives a non-empty model allowlist from
+  trusted configuration and defaults to 64 requests, one concurrent request,
+  65,536 output tokens, and USD 25 cumulative spend. It reserves worst-case
+  Decimal cost before forwarding and blocks further calls when terminal usage
+  accounting is absent or malformed.
 - `scripts/trusted_git_write.sh` is the only commit/push boundary for model-
   produced changes. Commits disable hooks and signing under fixed trusted
   identity. Pushes require exact local/remote heads and a validated branch,
@@ -731,10 +737,11 @@ when the bounded fix-cycle budget is exhausted.
   source and Git metadata, and unconditional volume cleanup.
 - `scripts/security_audit_causality.py` emits
   `security_audit_causal_scope.v1` metadata for Python findings. A waiver is
-  authoritative only when its complete causal fingerprint still matches.
-  Unsupported, ambiguous, oversized, or unparsable graphs fail closed, and
-  changed/deleted reverse callers or guards keep access-control findings
-  blocking.
+  authoritative only when the shared audit/poller validator confirms its
+  complete causal fingerprint still matches. Module-level route tables,
+  assignments, imports, decorators, and callable references participate in the
+  graph. Unsupported languages and changed routing/configuration fail closed;
+  changed/deleted reverse callers or guards keep findings blocking.
 
 The same change also adds a defensive preflight inside
 `dispatch_validation_if_needed`: when the current wave's PRs are not all

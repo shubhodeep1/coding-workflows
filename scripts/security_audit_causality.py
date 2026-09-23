@@ -33,6 +33,8 @@ class Symbol:
 	semantic_dump: str
 	calls: frozenset[str]
 	wildcard_import: bool
+	indeterminate: bool
+	references: frozenset[str] = frozenset()
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -74,7 +76,9 @@ def _module_import_dump(source: str, file_name: str) -> str:
 class _CallCollector(ast.NodeVisitor):
 	def __init__(self) -> None:
 		self.calls: set[str] = set()
+		self.references: set[str] = set()
 		self.wildcard_import = False
+		self.indeterminate = False
 
 	def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
 		return
@@ -88,13 +92,30 @@ class _CallCollector(ast.NodeVisitor):
 	def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
 		if any(alias.name == "*" for alias in node.names):
 			self.wildcard_import = True
+		self.references.update(alias.name for alias in node.names if alias.asname)
 		self.generic_visit(node)
+
+	def visit_Name(self, node: ast.Name) -> None:
+		if isinstance(node.ctx, ast.Load):
+			self.references.add(node.id)
 
 	def visit_Call(self, node: ast.Call) -> None:
 		if isinstance(node.func, ast.Name):
 			self.calls.add(node.func.id)
+			self.references.add(node.func.id)
+			if node.func.id in {"eval", "exec", "__import__"}:
+				self.indeterminate = True
 		elif isinstance(node.func, ast.Attribute):
 			self.calls.add(node.func.attr)
+			self.references.add(node.func.attr)
+			if node.func.attr in {"import_module", "getattr", "setattr"}:
+				self.indeterminate = True
+		self.generic_visit(node)
+
+	def visit_Subscript(self, node: ast.Subscript) -> None:
+		if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+			if node.value.func.id in {"globals", "locals", "vars"}:
+				self.indeterminate = True
 		self.generic_visit(node)
 
 
@@ -102,6 +123,36 @@ def _symbols_for_source(file_name: str, source: str) -> list[Symbol]:
 	tree = ast.parse(source, filename=file_name)
 	module_name = file_name[:-3].replace("/", ".")
 	symbols: list[Symbol] = []
+	module_collector = _CallCollector()
+	module_body: list[ast.stmt] = []
+	module_indeterminate = False
+	for top_level_node in tree.body:
+		if isinstance(top_level_node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+			for decorator in getattr(top_level_node, "decorator_list", []):
+				module_body.append(ast.Expr(value=decorator))
+				module_collector.visit(decorator)
+			continue
+		module_body.append(top_level_node)
+		module_collector.visit(top_level_node)
+		if not isinstance(
+			top_level_node,
+			(ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Expr, ast.Pass),
+		):
+			module_indeterminate = True
+	symbols.append(
+		Symbol(
+			qualified_name=f"{module_name}.__module__",
+			leaf_name="__module__",
+			file=file_name,
+			start=1,
+			end=max((int(getattr(node, "end_lineno", 1)) for node in tree.body), default=1),
+			semantic_dump=_semantic_dump(ast.Module(body=module_body, type_ignores=[])),
+			calls=frozenset(module_collector.calls),
+			references=frozenset(module_collector.references),
+			wildcard_import=module_collector.wildcard_import,
+			indeterminate=module_indeterminate or module_collector.indeterminate,
+		)
+	)
 
 	def visit_body(body: list[ast.stmt], parents: tuple[str, ...]) -> None:
 		for node in body:
@@ -132,7 +183,9 @@ def _symbols_for_source(file_name: str, source: str) -> list[Symbol]:
 					end=int(getattr(node, "end_lineno", getattr(node, "lineno", 1))),
 					semantic_dump=_semantic_dump(semantic_node),
 					calls=frozenset(collector.calls),
+					references=frozenset(collector.references),
 					wildcard_import=collector.wildcard_import,
+					indeterminate=collector.indeterminate,
 				)
 			)
 			visit_body(node.body, (*parents, node.name))
@@ -190,7 +243,14 @@ def _target_symbol(symbols: list[Symbol], file_name: str, line: int) -> Symbol |
 	]
 	if not candidates:
 		return None
-	return min(candidates, key=lambda symbol: (symbol.end - symbol.start, -symbol.start))
+	return min(
+		candidates,
+		key=lambda symbol: (
+			symbol.leaf_name == "__module__",
+			symbol.end - symbol.start,
+			-symbol.start,
+		),
+	)
 
 
 def _scope_for_target(
@@ -208,7 +268,7 @@ def _scope_for_target(
 			ambiguous = True
 		callers = [
 			symbol for symbol in symbols
-			if symbol.qualified_name not in selected and symbol.calls.intersection(target_names)
+			if symbol.qualified_name not in selected and symbol.references.intersection(target_names)
 		]
 		if not callers:
 			break
@@ -276,7 +336,9 @@ def analyze(repo: Path, file_name: str, line: int, base: str, head: str) -> dict
 		)
 	fingerprint_payload = json.dumps(fingerprint_rows, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 	status = "complete"
-	if head_ambiguous or base_ambiguous or any(symbol.wildcard_import for symbol in [*base_scope, *head_scope]):
+	if head_ambiguous or base_ambiguous or any(
+		symbol.wildcard_import or symbol.indeterminate for symbol in [*base_scope, *head_scope]
+	):
 		status = "indeterminate"
 	return {
 		"causal_scope_schema": SCHEMA,
@@ -285,10 +347,134 @@ def analyze(repo: Path, file_name: str, line: int, base: str, head: str) -> dict
 		"causal_scope_files": causal_files,
 		"causal_scope_symbol": target.qualified_name[:300],
 		"causal_scope_changed_files": changed_files,
+		"_head_symbols": head_symbols,
+		"_head_scope": head_scope,
 	}
 
 
+def _load_object(path: Path, label: str) -> dict[str, object]:
+	try:
+		payload = json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+		raise ValueError(f"{label} JSON is unavailable or malformed") from exc
+	if not isinstance(payload, dict):
+		raise ValueError(f"{label} must be a JSON object")
+	return payload
+
+
+def _revalidate_waiver(
+	repo: Path,
+	audited_head: str,
+	current_head: str,
+	finding: dict[str, object],
+	waiver: dict[str, object],
+) -> dict[str, object]:
+	key_pattern = re.compile(r"sha256:[0-9a-f]{64}")
+	sha_pattern = re.compile(r"[0-9a-fA-F]{40,64}")
+	finding_key = str(finding.get("waiver_match_key") or "")
+	waiver_key = str(waiver.get("waiver_match_key") or "")
+	if key_pattern.fullmatch(finding_key) is None or finding_key != waiver_key:
+		return {"valid": False, "reason": "waiver key mismatch"}
+	if sha_pattern.fullmatch(audited_head) is None or sha_pattern.fullmatch(current_head) is None:
+		return {"valid": False, "reason": "immutable audit heads are required"}
+	if str(waiver.get("audited_head_sha") or "") != audited_head:
+		return {"valid": False, "reason": "waiver audited head mismatch"}
+	for row in (finding, waiver):
+		if (
+			row.get("causal_scope_schema") != SCHEMA
+			or row.get("causal_scope_status") != "complete"
+			or key_pattern.fullmatch(str(row.get("causal_scope_fingerprint") or "")) is None
+			or not isinstance(row.get("causal_scope_files"), list)
+		):
+			return {"valid": False, "reason": "causal scope is incomplete"}
+	if (
+		finding.get("causal_scope_fingerprint") != waiver.get("causal_scope_fingerprint")
+		or finding.get("causal_scope_files") != waiver.get("causal_scope_files")
+	):
+		return {"valid": False, "reason": "persisted causal scope mismatch"}
+	ancestor = _git(repo, "merge-base", "--is-ancestor", audited_head, current_head)
+	if ancestor.returncode != 0:
+		return {"valid": False, "reason": "audited head is not an ancestor"}
+	file_name = _safe_relative_path(str(finding.get("file") or ""))
+	line = finding.get("line")
+	if isinstance(line, bool) or not isinstance(line, int) or line < 1:
+		return {"valid": False, "reason": "finding line is invalid"}
+	try:
+		current_scope = analyze(repo, file_name, line, audited_head, current_head)
+		current_symbols = current_scope.pop("_head_symbols")
+		current_causal_symbols = current_scope.pop("_head_scope")
+	except (KeyError, OSError, SyntaxError, UnicodeError, ValueError, tarfile.TarError):
+		return {"valid": False, "reason": "current causal scope is unavailable"}
+	if current_scope.get("causal_scope_status") != "complete":
+		return {"valid": False, "reason": "current causal scope is indeterminate"}
+	if (
+		current_scope.get("causal_scope_fingerprint") != finding.get("causal_scope_fingerprint")
+		or current_scope.get("causal_scope_files") != finding.get("causal_scope_files")
+	):
+		return {"valid": False, "reason": "current causal scope changed"}
+	changed_result = subprocess.run(
+		["git", "diff", "--name-only", "-z", f"{audited_head}..{current_head}"],
+		cwd=repo,
+		capture_output=True,
+		check=False,
+	)
+	if changed_result.returncode != 0:
+		return {"valid": False, "reason": "changed path set is unavailable"}
+	try:
+		changed_paths = [
+			_safe_relative_path(raw.decode("utf-8"))
+			for raw in changed_result.stdout.split(b"\0")
+			if raw
+		]
+	except (UnicodeError, ValueError):
+		return {"valid": False, "reason": "changed path set is invalid"}
+	causal_files = set(str(path) for path in current_scope["causal_scope_files"])
+	causal_reference_names = {
+		symbol.leaf_name for symbol in current_causal_symbols if symbol.leaf_name != "__module__"
+	}
+	for changed_path in changed_paths:
+		if changed_path in causal_files:
+			return {"valid": False, "reason": "causal file changed"}
+		path_suffix = PurePosixPath(changed_path).suffix.lower()
+		if path_suffix == ".py":
+			# The complete repository-wide Python graph above proves this module
+			# does not reference the sink or any selected reverse caller.
+			changed_symbols = [symbol for symbol in current_symbols if symbol.file == changed_path]
+			if not changed_symbols or any(
+				symbol.indeterminate or symbol.wildcard_import for symbol in changed_symbols
+			):
+				return {"valid": False, "reason": "changed Python module is indeterminate"}
+			if any(symbol.references.intersection(causal_reference_names) for symbol in changed_symbols):
+				return {"valid": False, "reason": "changed Python module references causal scope"}
+			continue
+		if path_suffix in {".md", ".rst", ".txt"}:
+			continue
+		return {"valid": False, "reason": "changed non-Python trust-boundary input"}
+	return {"valid": True, "reason": "causal scope unchanged"}
+
+
+def _revalidation_main(arguments: list[str]) -> int:
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--repo", required=True)
+	parser.add_argument("--audited-head", required=True)
+	parser.add_argument("--current-head", required=True)
+	parser.add_argument("--finding-json", required=True)
+	parser.add_argument("--waiver-json", required=True)
+	args = parser.parse_args(arguments)
+	try:
+		repo = Path(args.repo).resolve(strict=True)
+		finding = _load_object(Path(args.finding_json), "finding")
+		waiver = _load_object(Path(args.waiver_json), "waiver")
+		result = _revalidate_waiver(repo, args.audited_head, args.current_head, finding, waiver)
+	except (OSError, UnicodeError, ValueError) as exc:
+		result = {"valid": False, "reason": str(exc)[:300]}
+	print(json.dumps(result, ensure_ascii=True, sort_keys=True))
+	return 0
+
+
 def main() -> int:
+	if len(__import__("sys").argv) > 1 and __import__("sys").argv[1] == "revalidate-waiver":
+		return _revalidation_main(__import__("sys").argv[2:])
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--repo", required=True)
 	parser.add_argument("--file", required=True)
@@ -317,6 +503,8 @@ def main() -> int:
 			"causal_scope_changed_files": [],
 			"reason": str(exc)[:300],
 		}
+	result.pop("_head_symbols", None)
+	result.pop("_head_scope", None)
 	print(json.dumps(result, ensure_ascii=True, sort_keys=True))
 	return 0
 

@@ -28,6 +28,8 @@
 #   check_resolver_diff.sh \
 #     --conflicted-set <path> \
 #     --touched-set    <path> \
+#     [--conflict-spans <json>] \
+#     [--clean-manifest <tsv>] \
 #     [--repo-root     <path>]
 #
 # All paths are interpreted as relative to --repo-root (default: $PWD).
@@ -37,6 +39,8 @@ set -euo pipefail
 
 CONFLICTED_SET=""
 TOUCHED_SET=""
+CONFLICT_SPANS=""
+CLEAN_MANIFEST=""
 REPO_ROOT="${PWD}"
 
 while [ "$#" -gt 0 ]; do
@@ -45,6 +49,10 @@ while [ "$#" -gt 0 ]; do
 			CONFLICTED_SET="$2"; shift 2 ;;
 		--touched-set)
 			TOUCHED_SET="$2"; shift 2 ;;
+		--conflict-spans)
+			CONFLICT_SPANS="$2"; shift 2 ;;
+		--clean-manifest)
+			CLEAN_MANIFEST="$2"; shift 2 ;;
 		--repo-root)
 			REPO_ROOT="$2"; shift 2 ;;
 		-h|--help)
@@ -76,6 +84,8 @@ resolve_path() {
 
 CONFLICTED_SET="$(resolve_path "${CONFLICTED_SET}")"
 TOUCHED_SET="$(resolve_path "${TOUCHED_SET}")"
+[ -z "${CONFLICT_SPANS}" ] || CONFLICT_SPANS="$(resolve_path "${CONFLICT_SPANS}")"
+[ -z "${CLEAN_MANIFEST}" ] || CLEAN_MANIFEST="$(resolve_path "${CLEAN_MANIFEST}")"
 
 if [ ! -f "${CONFLICTED_SET}" ]; then
 	echo "::error::check_resolver_diff.sh: conflicted-set file not found: ${CONFLICTED_SET}" >&2
@@ -83,6 +93,14 @@ if [ ! -f "${CONFLICTED_SET}" ]; then
 fi
 if [ ! -f "${TOUCHED_SET}" ]; then
 	echo "::error::check_resolver_diff.sh: touched-set file not found: ${TOUCHED_SET}" >&2
+	exit 2
+fi
+if [ -n "${CONFLICT_SPANS}" ] && [ ! -f "${CONFLICT_SPANS}" ]; then
+	echo "::error::check_resolver_diff.sh: conflict-spans file not found: ${CONFLICT_SPANS}" >&2
+	exit 2
+fi
+if [ -n "${CLEAN_MANIFEST}" ] && [ ! -f "${CLEAN_MANIFEST}" ]; then
+	echo "::error::check_resolver_diff.sh: clean-manifest file not found: ${CLEAN_MANIFEST}" >&2
 	exit 2
 fi
 
@@ -112,7 +130,110 @@ if [ -n "${out_of_conflict}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# (2) Per-file syntax sanity
+# (2) Conflict anchors and deterministically merged clean paths
+# ---------------------------------------------------------------------------
+# The optional manifests are produced before the resolver runs. Conflict
+# anchors preserve every byte outside the original marker spans; clean paths
+# are compared by mode and Git blob ID against an independent merge-tree.
+if [ -n "${CONFLICT_SPANS}" ] || [ -n "${CLEAN_MANIFEST}" ]; then
+	PYTHONDONTWRITEBYTECODE=1 python3 - \
+		"${REPO_ROOT}" "${CONFLICTED_SET}" "${CONFLICT_SPANS}" "${CLEAN_MANIFEST}" <<'PY'
+import base64
+import json
+import os
+import stat
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+
+repo = Path(sys.argv[1]).resolve()
+conflicted_path = Path(sys.argv[2])
+spans_path = Path(sys.argv[3]) if sys.argv[3] else None
+clean_manifest_path = Path(sys.argv[4]) if sys.argv[4] else None
+
+
+def fail(message: str) -> None:
+	print(f"::error::check_resolver_diff.sh: {message}", file=sys.stderr)
+	raise SystemExit(1)
+
+
+def safe_path(value: str) -> Path:
+	path = PurePosixPath(value)
+	if path.is_absolute() or ".." in path.parts or not value or any(ord(char) < 32 for char in value):
+		fail("manifest contains an unsafe path")
+	return repo / path
+
+
+conflicted = {line for line in conflicted_path.read_text(encoding="utf-8").splitlines() if line}
+if spans_path is not None:
+	try:
+		spans = json.loads(spans_path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeError, json.JSONDecodeError):
+		fail("conflict-spans JSON is invalid")
+	if not isinstance(spans, dict) or set(spans) != conflicted:
+		fail("conflict-spans paths do not exactly match the conflicted set")
+	for path_name, row in spans.items():
+		if not isinstance(row, dict) or not isinstance(row.get("anchors"), list):
+			fail(f"conflict-spans entry is invalid for {path_name}")
+		expected_mode = row.get("mode")
+		if expected_mode not in {"100644", "100755"}:
+			fail(f"conflict-spans mode is invalid for {path_name}")
+		try:
+			anchors = [base64.b64decode(item, validate=True) for item in row["anchors"]]
+		except (TypeError, ValueError):
+			fail(f"conflict-spans anchors are invalid for {path_name}")
+		if len(anchors) < 2:
+			fail(f"conflict-spans entry has no bounded conflict for {path_name}")
+		resolved_path = safe_path(path_name)
+		if not resolved_path.is_file() or resolved_path.is_symlink():
+			fail(f"conflicted path is not a regular resolved file: {path_name}")
+		actual_mode = "100755" if os.lstat(resolved_path).st_mode & stat.S_IXUSR else "100644"
+		if actual_mode != expected_mode:
+			fail(f"resolver changed conflicted path mode: {path_name}")
+		resolved = resolved_path.read_bytes()
+		if not resolved.startswith(anchors[0]) or not resolved.endswith(anchors[-1]):
+			fail(f"resolver changed content outside conflict spans in {path_name}")
+		cursor = len(anchors[0])
+		for anchor in anchors[1:-1]:
+			anchor_offset = resolved.find(anchor, cursor)
+			if anchor_offset < 0:
+				fail(f"resolver changed content outside conflict spans in {path_name}")
+			cursor = anchor_offset + len(anchor)
+
+if clean_manifest_path is not None:
+	for line_number, line in enumerate(clean_manifest_path.read_text(encoding="utf-8").splitlines(), 1):
+		if not line:
+			continue
+		parts = line.split("\t", 2)
+		if len(parts) != 3:
+			fail(f"clean manifest row {line_number} is malformed")
+		expected_mode, expected_blob, path_name = parts
+		clean_path = safe_path(path_name)
+		if expected_mode == "000000" and expected_blob == "-":
+			if clean_path.exists() or clean_path.is_symlink():
+				fail(f"resolver recreated deterministically deleted content: {path_name}")
+			continue
+		if not clean_path.exists() and not clean_path.is_symlink():
+			fail(f"deterministically merged path is missing: {path_name}")
+		path_stat = os.lstat(clean_path)
+		if stat.S_ISLNK(path_stat.st_mode):
+			actual_mode = "120000"
+		elif stat.S_ISREG(path_stat.st_mode):
+			actual_mode = "100755" if path_stat.st_mode & stat.S_IXUSR else "100644"
+		else:
+			fail(f"deterministically merged path has unsupported type: {path_name}")
+		blob_result = subprocess.run(
+			["git", "hash-object", "--", path_name], cwd=repo,
+			capture_output=True, text=True, check=False,
+		)
+		actual_blob = blob_result.stdout.strip()
+		if blob_result.returncode != 0 or actual_mode != expected_mode or actual_blob != expected_blob:
+			fail(f"resolver changed deterministically merged content: {path_name}")
+PY
+fi
+
+# ---------------------------------------------------------------------------
+# (3) Per-file syntax sanity
 # ---------------------------------------------------------------------------
 # Read touched paths line-by-line (preserves whitespace) and run language-
 # appropriate syntax checks.  Skip files the resolver deleted.
@@ -148,7 +269,7 @@ if [ "${syntax_failed}" -gt 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# (3) Workflow → script reference integrity
+# (4) Workflow → script reference integrity
 # ---------------------------------------------------------------------------
 # For every modified .github/workflows/*.yml, verify the script paths it
 # references all exist.  Uses the canonical checker so CI and the inline

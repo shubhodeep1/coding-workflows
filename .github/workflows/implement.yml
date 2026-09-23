@@ -13,6 +13,10 @@ name: AI Implement
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MODEL_PROVIDER_PROXY_MAX_REQUESTS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_REQUESTS || '64' }}
+  MODEL_PROVIDER_PROXY_MAX_CONCURRENCY: ${{ vars.MODEL_PROVIDER_PROXY_MAX_CONCURRENCY || '1' }}
+  MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS || '65536' }}
+  MODEL_PROVIDER_PROXY_MAX_SPEND_USD: ${{ vars.MODEL_PROVIDER_PROXY_MAX_SPEND_USD || '25' }}
   UNATTENDED_PHASE: implement
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
@@ -1220,6 +1224,61 @@ jobs:
             install -m 0644 .codex-workflow-src/agents.md "${RUNTIME_DIR}/agents_canonical.md"
           fi
 
+          # Every repository uses one immutable, out-of-worktree support copy
+          # for all post-agent operations. The model sandbox cannot write this
+          # runtime directory; authenticated steps additionally verify the
+          # complete digest manifest before sourcing or executing a helper.
+          IMPLEMENT_STAGED_SUPPORT_ROOT="${RUNTIME_DIR}/staged_support_run"
+          IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${IMPLEMENT_STAGED_SUPPORT_ROOT}/scripts"
+          IMPLEMENT_STAGED_SUPPORT_MANIFEST="${RUNTIME_DIR}/staged_support_run.sha256"
+          IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER="${RUNTIME_DIR}/verify_staged_support.sh"
+          rm -rf -- "${IMPLEMENT_STAGED_SUPPORT_ROOT}"
+          mkdir -p -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}" "${IMPLEMENT_STAGED_SUPPORT_ROOT}/prompts"
+          for _staged_support_runtime_script in "${_fetched_scripts[@]}"; do
+            install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"
+          done
+          if [ -f scripts/codex_model_catalog.json ]; then
+            install -m 0644 scripts/codex_model_catalog.json "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_model_catalog.json"
+          fi
+          for _staged_support_prompt in mode-implement-diagnose.txt mode-implement-diagnose-continuation.txt; do
+            if [ -f "prompts/${_staged_support_prompt}" ]; then
+              install -m 0644 "prompts/${_staged_support_prompt}" "${IMPLEMENT_STAGED_SUPPORT_ROOT}/prompts/${_staged_support_prompt}"
+            fi
+          done
+          (
+            cd "${IMPLEMENT_STAGED_SUPPORT_ROOT}"
+            find . -type f -print | LC_ALL=C sort | while IFS= read -r _staged_support_file; do
+              sha256sum -- "${_staged_support_file}"
+            done
+          ) > "${IMPLEMENT_STAGED_SUPPORT_MANIFEST}"
+          cat > "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}" <<'VERIFY_STAGED_SUPPORT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "${IMPLEMENT_STAGED_SUPPORT_ROOT:?IMPLEMENT_STAGED_SUPPORT_ROOT is required}"
+          : "${IMPLEMENT_STAGED_SUPPORT_MANIFEST:?IMPLEMENT_STAGED_SUPPORT_MANIFEST is required}"
+          [ -d "${IMPLEMENT_STAGED_SUPPORT_ROOT}" ] && [ -s "${IMPLEMENT_STAGED_SUPPORT_MANIFEST}" ] || {
+            echo "::error::Immutable implement support is unavailable" >&2
+            exit 1
+          }
+          (
+            cd "${IMPLEMENT_STAGED_SUPPORT_ROOT}"
+            sha256sum --check --strict "${IMPLEMENT_STAGED_SUPPORT_MANIFEST}" >/dev/null
+            expected_paths="$(awk '{sub(/^\*/, "", $2); print $2}' "${IMPLEMENT_STAGED_SUPPORT_MANIFEST}" | LC_ALL=C sort)"
+            actual_paths="$(find . -type f -print | LC_ALL=C sort)"
+            [ "${expected_paths}" = "${actual_paths}" ] || {
+              echo "::error::Immutable implement support path set changed" >&2
+              exit 1
+            }
+          )
+          VERIFY_STAGED_SUPPORT
+          chmod 0755 "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          {
+            echo "IMPLEMENT_STAGED_SUPPORT_ROOT=${IMPLEMENT_STAGED_SUPPORT_ROOT}"
+            echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
+            echo "IMPLEMENT_STAGED_SUPPORT_MANIFEST=${IMPLEMENT_STAGED_SUPPORT_MANIFEST}"
+            echo "IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER=${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          } >> "$GITHUB_ENV"
+
           # Self-repo staged-support ledger (see the install inventory above).
           # Every installed path whose resulting content or mode differs from
           # HEAD, including a path recreated over a branch-side deletion, is listed in
@@ -1245,15 +1304,6 @@ jobs:
               printf '%s\n' "${_staged_support_path}" >> "${STAGED_SUPPORT_LEDGER}"
               _staged_support_count=$((_staged_support_count + 1))
             done
-            IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"
-            rm -rf -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
-            mkdir -p -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
-            for _staged_support_runtime_script in "${_fetched_scripts[@]}"; do
-              install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"
-            done
-            if [ -f scripts/codex_model_catalog.json ]; then
-              install -m 0644 scripts/codex_model_catalog.json "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_model_catalog.json"
-            fi
             echo "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=${_staged_support_count} ledger=${STAGED_SUPPORT_LEDGER}"
             if [ "${_staged_support_count}" -gt 0 ]; then
               sed 's/^/  staged over: /' "${STAGED_SUPPORT_LEDGER}"
@@ -1262,7 +1312,6 @@ jobs:
               echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"
               echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"
               echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"
-              echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
             } >> "$GITHUB_ENV"
           fi
 
@@ -1527,8 +1576,8 @@ jobs:
           scope_guard_sha256=""
           commit_changes_sha256=""
           if [ "${generated_security_advisory}" = "true" ]; then
-            scope_guard_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"
-            commit_changes_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
+            scope_guard_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/files_touched_scope_guard.py"
+            commit_changes_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_commit_changes.sh"
             issue_body_sha256="$(sha256sum "${ISSUE_BODY_FILE}" 2>/dev/null | awk '{print $1}')"
             scope_guard_sha256="$(sha256sum "${scope_guard_path}" 2>/dev/null | awk '{print $1}')"
             commit_changes_sha256="$(sha256sum "${commit_changes_path}" 2>/dev/null | awk '{print $1}')"
@@ -1880,7 +1929,9 @@ jobs:
           # seed, and the elevated approval/sandbox combo at one place
           # so the 9 codex-config sites can't drift. See that script's
           # header comment for the full upstream-bug context.
-          codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low" --web-search disabled
+          codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low" \
+            --web-search disabled \
+            --catalog-path "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_model_catalog.json"
 
           # MCP server configuration is managed in ~/.codex/config.toml.
 
@@ -1973,6 +2024,7 @@ jobs:
           IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS: ${{ vars.IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS || '1048576' }}
         run: |
           set -euo pipefail
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
 
           # A model must never be able to rewrite a shell preload that later
           # token-bearing steps source. Future steps start from a fresh shell.
@@ -2001,7 +2053,7 @@ jobs:
           # shellcheck source=/dev/null
           source "${WATCHDOG_HELPERS}"
 
-          CODEX_STALL_GUARD_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_stall_guard.sh"
+          CODEX_STALL_GUARD_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_stall_guard.sh"
           if [ ! -x "${CODEX_STALL_GUARD_HELPER}" ]; then
             echo "::error::Missing required support script ${CODEX_STALL_GUARD_HELPER}"
             exit 1
@@ -2142,7 +2194,7 @@ jobs:
           # file context is inlined and before the pre-Codex baseline, so the
           # prompt, the baseline and the disk agree; the untouched copies are
           # reinstalled right after the attempt loop.
-          STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"
+          STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_staged_support_workspace.sh"
           if [ -f "${STAGED_SUPPORT_WORKSPACE_HELPER}" ]; then
             bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" restore
           else
@@ -2635,13 +2687,13 @@ jobs:
               CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
               CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
-              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh" \
+              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
                 --role implement \
                 --workspace "${WORKSPACE_PATH}" \
                 --config-format codex \
                 --config "${CODEX_HOME:-${HOME}/.codex}" \
                 --runtime-dir "${RUNTIME_DIR}" \
-                -- bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || cmd_rc=$?
+                -- bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_thread_reuse.sh" direct-run || cmd_rc=$?
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3439,7 +3491,7 @@ jobs:
               printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
               scope_violations=""
               scope_rc=0
-              scope_guard_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"
+              scope_guard_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/files_touched_scope_guard.py"
               if [ "${generated_security_advisory}" = "true" ]; then
                 issue_body_actual_sha256="$(sha256sum "${ISSUE_BODY_FILE:-}" 2>/dev/null | awk '{print $1}')"
                 scope_guard_actual_sha256="$(sha256sum "${scope_guard_path}" 2>/dev/null | awk '{print $1}')"
@@ -3545,6 +3597,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
           echo "repaired=false" >> "$GITHUB_OUTPUT"
 
           # Source sanitize_codex_prompt_file (best-effort) so the
@@ -3846,7 +3899,7 @@ jobs:
 
           # Same editor view as the implementation step: the repair agent
           # edits the branch's own helper copies, never SCRIPT_REF's.
-          STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"
+          STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_staged_support_workspace.sh"
           if [ -f "${STAGED_SUPPORT_WORKSPACE_HELPER}" ]; then
             bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" restore
           fi
@@ -3926,7 +3979,7 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${REPAIR_PROMPT_FILE}"
             fi
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/workspace_safety_check.sh"
             emit_implement_substate "implement_repair" "implement_repair" "LaunchingAgentProcess" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
@@ -3940,13 +3993,13 @@ jobs:
               CODEX_THREAD_REUSE_CONTINUATION_FILE="${repair_thread_reuse_continuation_file}" \
               CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
               CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
-              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh" \
+              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
                 --role implement-repair \
                 --workspace "${WORKSPACE_PATH}" \
                 --config-format codex \
                 --config "${CODEX_HOME:-${HOME}/.codex}" \
                 --runtime-dir "${RUNTIME_DIR}" \
-                -- bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run; then
+                -- bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_thread_reuse.sh" direct-run; then
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
@@ -4136,7 +4189,8 @@ jobs:
           COMMIT_CHANGES_EXPECTED_SHA256: ${{ steps.fetch_issue_metadata.outputs.commit_changes_sha256 }}
         run: |
           set -euo pipefail
-          commit_changes_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          commit_changes_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_commit_changes.sh"
           if [ "${GENERATED_SECURITY_ADVISORY:-false}" = "true" ]; then
             commit_changes_actual_sha256="$(sha256sum "${commit_changes_path}" 2>/dev/null | awk '{print $1}')"
             if ! [[ "${COMMIT_CHANGES_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
@@ -4150,7 +4204,7 @@ jobs:
               exit 1
             fi
           fi
-          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_commit_changes.sh"
 
       - name: Destructive-commit guard — label + alert on rejection
         # Runs only when the early preflight or commit step exits non-zero and
@@ -4190,6 +4244,7 @@ jobs:
           SSB_FILES: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict_files || steps.commit_changes.outputs.staged_support_rebase_conflict_files }}
         run: |
           set -euo pipefail
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
           bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"
 
       - name: Handle no-op implementation
@@ -4202,7 +4257,8 @@ jobs:
           IMPL_NOOP_ANCESTRY_THRESHOLD: ${{ vars.IMPL_NOOP_ANCESTRY_THRESHOLD || '2' }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -4416,8 +4472,8 @@ jobs:
           # Remove ai:done (if present) and add failure label.
           # The commit step may already have removed fetched helper artifacts
           # in caller repos, so only source label_helpers when available.
-          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh" ]; then
-            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh"
+          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/label_helpers.sh" ]; then
+            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/label_helpers.sh"
             ensure_label_exists "ai:implementation-failed" "${{ github.repository }}"
           else
             gh_retry gh label create "ai:implementation-failed" --repo "${{ github.repository }}" \
@@ -4435,48 +4491,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
-          support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
-          support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
-
-          # Stage git_ref_health_check.sh from the already-checked-out support
-          # source into a path OUTSIDE the working tree.  H1 (issue #1059)
-          # removed the previous Contents-API re-fetch in favour of staging
-          # from .codex-workflow-src.  Using a mktemp path (rather than
-          # scripts/git_ref_health_check.sh) is required because in the
-          # canonical coding-workflows repo the file is tracked source, so
-          # installing into scripts/ would clobber the tracked copy and the
-          # subsequent `rm -f` would leave an unstaged deletion of a tracked
-          # file, which then blocks the rebase reconciliation path below
-          # ("error: cannot rebase: You have unstaged changes").  The temp
-          # path keeps the working tree clean in both canonical and consumer
-          # repos.
-          if [ ! -d "${support_checkout_root}" ]; then
-            echo "::error::Support source checkout missing; cannot stage git_ref_health_check.sh"
-            exit 1
-          fi
-          src="${support_checkout_root}/scripts/git_ref_health_check.sh"
-          if [ ! -f "${src}" ] && [ -f "${support_checkout_main_root}/scripts/git_ref_health_check.sh" ]; then
-            src="${support_checkout_main_root}/scripts/git_ref_health_check.sh"
-          fi
-          if [ ! -f "${src}" ]; then
-            echo "::error::Missing required support script git_ref_health_check.sh in staged support source"
-            exit 1
-          fi
-          if ! health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"; then
-            echo "::error::failed to create temporary file for git_ref_health_check.sh"
-            exit 1
-          fi
-          # Ensure the temp file is always cleaned up even if `install`,
-          # `chmod`, or the script itself fails under `set -euo pipefail`.
-          trap 'rm -f "${health_script}"' EXIT
-          install -m 0755 "${src}" "${health_script}"
-
-          bash "${health_script}" repair
-          rm -f "${health_script}"
-          trap - EXIT
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/git_ref_health_check.sh" repair
 
           local_head_sha="$(git rev-parse HEAD)"
           expected_remote_head="absent"
@@ -4494,7 +4513,7 @@ jobs:
               exit 1
             fi
           fi
-          GH_TOKEN="${GH_TOKEN}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/trusted_git_write.sh" push \
+          GH_TOKEN="${GH_TOKEN}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/trusted_git_write.sh" push \
             --repo . \
             --branch "${TARGET_BRANCH}" \
             --expected-local-head "${local_head_sha}" \
@@ -4519,7 +4538,8 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           # Both `force-review` and `e2e-smoke-test` are now in the
@@ -4538,12 +4558,12 @@ jobs:
           # rather surface "label_helpers missing" than have a
           # parallel inline catalog drift over time (Copilot review
           # comment #4 on this PR).
-          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh" ]; then
+          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/label_helpers.sh" ]; then
             echo "::error::scripts/label_helpers.sh not present in checkout; cannot ensure smoke-test labels via the catalog. Aborting smoke-test PR creation."
             exit 1
           fi
           # shellcheck disable=SC1091
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/label_helpers.sh"
           if ! type ensure_label_exists >/dev/null 2>&1; then
             echo "::error::scripts/label_helpers.sh did not export ensure_label_exists; aborting smoke-test PR creation (catalog drift risk)."
             exit 1
@@ -4574,6 +4594,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
           mkdir -p "${RUNTIME_DIR}/pr-body-lint"
           PR_TITLE_FILE="${RUNTIME_DIR}/pr-body-lint/title.txt"
           PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"
@@ -4633,7 +4654,7 @@ jobs:
           fi
           printf '%s\n\n' "${PR_TITLE}" > "${PR_LINT_FILE}"
           cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"
-          PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/lint_pr_body_auto_close.py" \
+          PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/lint_pr_body_auto_close.py" \
             --pr-body-file "${PR_LINT_FILE}" \
             --repo "${GITHUB_REPOSITORY}"
 
@@ -4644,7 +4665,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           PR_TITLE_FILE="${RUNTIME_DIR}/pr-body-lint/title.txt"
           PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"
@@ -4786,7 +4808,8 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           PR_NUMBER="$(printf '%s\n' "${PR_URL}" | sed -E 's#.*/pull/([0-9]+).*#\1#')"
@@ -4804,9 +4827,9 @@ jobs:
           # happy path; the `Ensure E2E smoke-test labels exist on
           # repo` step has already aborted the run if the catalog
           # source itself is missing.
-          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh" ]; then
+          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/label_helpers.sh" ]; then
             # shellcheck disable=SC1091
-            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh"
+            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/label_helpers.sh"
           fi
           if type ensure_label_exists >/dev/null 2>&1; then
             ensure_label_exists "force-review" "${REPOSITORY}" >/dev/null 2>&1 || true
@@ -4823,33 +4846,6 @@ jobs:
             echo "✓ Backstop applied force-review + e2e-smoke-test labels to PR #${PR_NUMBER}"
           fi
 
-      - name: Refetch memory helpers after commit cleanup
-        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-
-          support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
-          support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
-
-          if [ ! -d "${support_checkout_root}" ]; then
-            echo "::warning::Support source checkout missing; skipping helper restage"
-            exit 0
-          fi
-          mkdir -p "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}"
-          for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py orchestrate_force_tick.sh; do
-            src="${support_checkout_root}/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f "${support_checkout_main_root}/scripts/${f}" ]; then
-              src="${support_checkout_main_root}/scripts/${f}"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::warning::Support source missing ${f}; keeping existing local copy if present"
-              continue
-            fi
-            install -m 0755 "${src}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/${f}"
-          done
-
       - name: Collect PR metadata and changed files
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         id: pr_metadata
@@ -4857,6 +4853,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
 
           PR_URL="${{ steps.create_pr.outputs.pr_url }}"
           PR_NUMBER="$(printf '%s\n' "${PR_URL}" | sed -E 's#.*/pull/([0-9]+).*#\1#')"
@@ -4908,7 +4905,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/memory_helpers.sh"
 
           PR_URL="$(jq -r '.pr_url // ""' "${PR_METADATA_FILE}")"
           SUMMARY="Implementation PR created for issue #${ISSUE_NUMBER}: ${PR_URL}"
@@ -4931,7 +4929,8 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/memory_helpers.sh"
 
           memory_processed_command_complete \
             --issue-number "${ISSUE_NUMBER}" \
@@ -4944,7 +4943,8 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/memory_helpers.sh"
 
           PR_NUMBER_STR="$(jq -r 'if .pr_number == null then "" else (.pr_number|tostring) end' "${PR_METADATA_FILE}")"
           FINALIZE_ARGS=(
@@ -4968,11 +4968,12 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
 
           # Source sanitize_codex_prompt_file (best-effort) so the
           # concatenated prompt is UTF-8-clean before piping to codex.
           # shellcheck source=/dev/null
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
 
           cat > "${ISSUE_SUMMARY_PROMPT_FILE}" <<EOF
           Generate a concise issue summary for a pull request comment.
@@ -5007,8 +5008,8 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${_summary_combined_prompt}"
             fi
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh" \
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/workspace_safety_check.sh"
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
               --role summary \
               --workspace "${WORKSPACE_PATH}" \
               --config-format codex \
@@ -5034,7 +5035,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           if [ ! -s "${ISSUE_SUMMARY_FILE}" ]; then
@@ -5060,7 +5062,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           gh_retry gh label create "ai:done" --repo "${{ github.repository }}" \
             --color "0e8a16" --description "Implementation PR created" \
@@ -5075,7 +5078,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/orchestrate_force_tick.sh" \
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/orchestrate_force_tick.sh" \
             --repo "${{ github.repository }}" \
             --issue "${ISSUE_NUMBER}" \
             --reason "implement-pr-created" \
@@ -5086,7 +5090,8 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/memory_helpers.sh"
 
           PR_NUMBER_STR="$(jq -r 'if .pr_number == null then "" else (.pr_number|tostring) end' "${PR_METADATA_FILE}")"
           EVENT_ARGS=(
@@ -5110,7 +5115,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           gh_retry gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
             --color "fbca04" --description "Awaiting human approval to implement" \
@@ -5125,7 +5131,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
             local _tmpf
@@ -5214,49 +5221,39 @@ jobs:
             rm -f "${CAPTURE_FILE}"
           fi
 
-      - name: Diagnose post-Codex failure and create fix-up issues
+      - name: Diagnose post-Codex failure without GitHub authorization
         if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
-        id: diagnose_post_codex_failure
+        id: generate_post_codex_diagnosis
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           JOB_STATUS: ${{ job.status }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          # Diagnose is research/synthesis (parse stderr+diff, emit JSON)
-          # rather than coding. Editor and diagnose now share the gpt-5.6-sol
-          # default; the separate MODEL_DIAGNOSE override is preserved so
-          # operators can route diagnose to a different model (e.g. a
-          # cheaper mini variant) without affecting the editor. The script
-          # reads MODEL_DIAGNOSE first and falls back to MODEL_EDITOR for
-          # backward compatibility.
           MODEL_DIAGNOSE: ${{ env.MODEL_DIAGNOSE }}
           MODEL_DIAGNOSE_REASONING_EFFORT: ${{ env.MODEL_DIAGNOSE_REASONING_EFFORT }}
+          IMPLEMENT_DIAGNOSE_MODE: diagnose
+          IMPLEMENT_DIAGNOSE_FAILED_STEP_NAME: ${{ steps.capture_post_codex_validation_errors.outputs.failed_step_name }}
+          IMPLEMENT_DIAGNOSE_SANDBOX_HELPER: ${{ env.IMPLEMENT_STAGED_SUPPORT_RUN_DIR }}/untrusted_process_sandbox.sh
+          IMPLEMENT_DIAGNOSE_TRUSTED_PROMPT_FILE: ${{ env.IMPLEMENT_STAGED_SUPPORT_ROOT }}/prompts/mode-implement-diagnose.txt
         run: |
           set -euo pipefail
-          diagnose_path="${PATH}"
-          if [ "${CODEX_THREAD_REUSE_AVAILABLE:-false}" = 'true' ] && [ -x "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" ]; then
-            # shellcheck source=/dev/null
-            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh"
-            diagnose_continuation_source="$(codex_thread_reuse_resolve_asset 'prompts/mode-implement-diagnose-continuation.txt' 2>/dev/null || true)"
-            if [ -n "${diagnose_continuation_source}" ]; then
-              diagnose_continuation_rendered="${RUNTIME_DIR}/mode-implement-diagnose-continuation.rendered.txt"
-              if SERENA_TOOL_HINTS='' bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${diagnose_continuation_source}" > "${diagnose_continuation_rendered}"; then
-                if diagnose_wrapper_dir="$(codex_thread_reuse_install_wrapper \
-                  'implement-diagnose' \
-                  "${diagnose_continuation_rendered}" \
-                  'replace-between' \
-                  '=== IMPLEMENT FAILURE DIAGNOSIS TASK ===' \
-                  '=== SOURCE ISSUE BODY ===')"; then
-                  diagnose_path="${diagnose_wrapper_dir}:${PATH}"
-                else
-                  echo "::warning::Failed to install implement-diagnose thread-reuse wrapper; diagnose will use the full prompt path."
-                fi
-              else
-                echo "::warning::Failed to render implement-diagnose continuation prompt; diagnose will use the full prompt path."
-              fi
-            fi
-          fi
-          PATH="${diagnose_path}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_diagnose_post_codex_failure.sh"
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN \
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_diagnose_post_codex_failure.sh"
+
+      - name: Publish normalized post-Codex diagnosis
+        if: (failure() || cancelled()) && steps.generate_post_codex_diagnosis.outcome == 'success' && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
+        id: diagnose_post_codex_failure
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          JOB_STATUS: ${{ job.status }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          IMPLEMENT_DIAGNOSE_MODE: publish
+          IMPLEMENT_DIAGNOSE_FAILED_STEP_NAME: ${{ steps.capture_post_codex_validation_errors.outputs.failed_step_name }}
+        run: |
+          set -euo pipefail
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          env -u OPENROUTER_API_KEY \
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_diagnose_post_codex_failure.sh"
 
       - name: Comment on issue failure
         if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
@@ -5264,7 +5261,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           # Reuse the cached issue snapshot when available — see the
           # "Fetch issue metadata" step.  Falls back to a fresh API
@@ -5334,11 +5332,12 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
-          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/tg_helpers.sh" ]; then
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/tg_helpers.sh" ]; then
             echo "tg_helpers.sh not available; skipping Telegram notification."
             exit 0
           fi
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/tg_helpers.sh"
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
@@ -5362,29 +5361,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
-          support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
-          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh" ]; then
-            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
-          else
-            if [ ! -d "${support_checkout_root}" ]; then
-              exit 0
-            fi
-            mkdir -p "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}"
-            for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py; do
-              src="${support_checkout_root}/scripts/${f}"
-              if [ ! -f "${src}" ] && [ -f "${support_checkout_main_root}/scripts/${f}" ]; then
-                src="${support_checkout_main_root}/scripts/${f}"
-              fi
-              if [ ! -f "${src}" ]; then
-                continue
-              fi
-              install -m 0755 "${src}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/${f}"
-            done
-            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
-          fi
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/memory_helpers.sh" ] || exit 0
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/memory_helpers.sh"
 
-          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh" ]; then
+          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/memory_helpers.sh" ]; then
             if [ "${{ job.status }}" = "cancelled" ]; then
               phase_message="Implementation phase cancelled"
             else
@@ -5466,7 +5447,8 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/serena_stats_emit.py" ]; then
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/serena_stats_emit.py" ]; then
             echo "::notice::serena_stats_emit.py is unavailable; skipping Serena stats emission."
             exit 0
           fi
@@ -5490,13 +5472,14 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/serena_stats_emit.py" "${serena_stat_args[@]}"
+          PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/serena_stats_emit.py" "${serena_stat_args[@]}"
 
       - name: Run workspace before_remove hook
         if: always() && env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh" implement before_remove
+          bash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/run_workspace_hook.sh" implement before_remove
 
       - name: Cleanup temporary artifacts
         if: always()

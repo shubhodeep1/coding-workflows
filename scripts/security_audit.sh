@@ -812,6 +812,7 @@ import hashlib
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 
 repo_root = Path(sys.argv[1]).resolve()
@@ -1264,6 +1265,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 
 repo_root = Path(sys.argv[1]).resolve()
@@ -1638,93 +1640,47 @@ waiver_revalidation_cache: dict[tuple[str, str, str, tuple[str, ...]], bool] = {
 def waiver_causality_unchanged(
 	waiver: dict[str, object], finding: dict[str, object]
 ) -> bool:
-	"""Fail closed unless the waived trust boundary is unchanged."""
+	"""Delegate to the shared fail-closed causal validator."""
 	audited_head_sha = str(waiver.get("audited_head_sha") or "")
 	file_name = str(finding.get("file") or "")
-	finding_causal_status = str(finding.get("causal_scope_status") or "")
 	finding_causal_fingerprint = str(finding.get("causal_scope_fingerprint") or "")
-	waiver_causal_status = str(waiver.get("causal_scope_status") or "")
-	waiver_causal_fingerprint = str(waiver.get("causal_scope_fingerprint") or "")
 	finding_causal_files = finding.get("causal_scope_files")
-	waiver_causal_files = waiver.get("causal_scope_files")
 	causal_file_key = tuple(finding_causal_files) if isinstance(finding_causal_files, list) else ()
 	cache_key = (audited_head_sha, file_name, finding_causal_fingerprint, causal_file_key)
 	if cache_key in waiver_revalidation_cache:
 		return waiver_revalidation_cache[cache_key]
-	if (
-		finding_causal_status != "complete"
-		or waiver_causal_status != "complete"
-		or re.fullmatch(r"sha256:[0-9a-f]{64}", finding_causal_fingerprint) is None
-		or waiver_causal_fingerprint != finding_causal_fingerprint
-		or not causal_file_key
-		or waiver_causal_files != finding_causal_files
-	):
-		waiver_revalidation_cache[cache_key] = False
-		return False
-	if not re.fullmatch(r"[0-9a-fA-F]{40,64}", audited_head_sha):
-		waiver_revalidation_cache[cache_key] = False
-		return False
 	try:
-		ancestor_result = subprocess.run(
-			["git", "merge-base", "--is-ancestor", audited_head_sha, audit_scope_head_sha],
-			cwd=repo_root,
-			capture_output=True,
-			check=False,
-		)
-		if ancestor_result.returncode != 0:
-			waiver_revalidation_cache[cache_key] = False
-			return False
-		if audited_head_sha == audit_scope_head_sha:
-			waiver_revalidation_cache[cache_key] = True
-			return True
-		file_diff_result = subprocess.run(
-			["git", "diff", "--no-color", "--no-ext-diff", f"{audited_head_sha}..{audit_scope_head_sha}", "--", file_name],
-			cwd=repo_root,
-			capture_output=True,
-			text=True,
-			encoding="utf-8",
-			errors="replace",
-			check=False,
-		)
-		project_diff_result = subprocess.run(
-			["git", "diff", "--no-color", "--no-ext-diff", "--unified=0", f"{audited_head_sha}..{audit_scope_head_sha}"],
-			cwd=repo_root,
-			capture_output=True,
-			text=True,
-			encoding="utf-8",
-			errors="replace",
-			check=False,
-		)
-		changed_paths_result = subprocess.run(
-			["git", "diff", "--name-only", f"{audited_head_sha}..{audit_scope_head_sha}"],
-			cwd=repo_root,
-			capture_output=True,
-			text=True,
-			encoding="utf-8",
-			errors="replace",
-			check=False,
-		)
-	except (OSError, ValueError):
-		waiver_revalidation_cache[cache_key] = False
-		return False
-	cross_file_boundary_changed = any(
-		diff_line[:1] in {"+", "-"}
-		and not diff_line.startswith(("+++", "---"))
-		and cross_file_guard_deletion_pattern.search(diff_line[1:]) is not None
-		for diff_line in project_diff_result.stdout.splitlines()
-	)
-	outside_causal_python_changed = any(
-		changed_path.endswith(".py") and changed_path not in set(causal_file_key)
-		for changed_path in changed_paths_result.stdout.splitlines()
-	)
-	unchanged = (
-		file_diff_result.returncode == 0
-		and project_diff_result.returncode == 0
-		and changed_paths_result.returncode == 0
-		and not file_diff_result.stdout
-		and not cross_file_boundary_changed
-		and not outside_causal_python_changed
-	)
+		with tempfile.TemporaryDirectory(prefix="security-waiver-") as temporary_directory:
+			finding_path = Path(temporary_directory) / "finding.json"
+			waiver_path = Path(temporary_directory) / "waiver.json"
+			finding_path.write_text(json.dumps(finding, ensure_ascii=True), encoding="utf-8")
+			waiver_path.write_text(json.dumps(waiver, ensure_ascii=True), encoding="utf-8")
+			validation_result = subprocess.run(
+				[
+					sys.executable,
+					str(causality_helper_path),
+					"revalidate-waiver",
+					"--repo", str(repo_root),
+					"--audited-head", audited_head_sha,
+					"--current-head", audit_scope_head_sha,
+					"--finding-json", str(finding_path),
+					"--waiver-json", str(waiver_path),
+				],
+				cwd=repo_root,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+				errors="replace",
+				check=False,
+			)
+			validation_payload = json.loads(validation_result.stdout)
+			unchanged = (
+				validation_result.returncode == 0
+				and isinstance(validation_payload, dict)
+				and validation_payload.get("valid") is True
+			)
+	except (OSError, TypeError, ValueError, json.JSONDecodeError):
+		unchanged = False
 	waiver_revalidation_cache[cache_key] = unchanged
 	return unchanged
 

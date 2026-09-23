@@ -21552,7 +21552,7 @@ def test_poller_review_blocked_writer_uses_immutable_trusted_git_boundary() -> N
 	workflow = POLLER_WORKFLOW.read_text(encoding="utf-8")
 	assert 'TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"' in script
 	assert 'install -m 0755 scripts/trusted_git_write.sh "${TRUSTED_POLLER_GIT_WRITER}"' not in script
-	assert 'for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh' in workflow
+	assert 'for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh check_resolver_diff.sh' in workflow
 	assert 'install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"' in workflow
 	assert 'bash "${TRUSTED_POLLER_GIT_WRITER}" commit' in script
 	assert '--expected-remote-head "${RB_HEAD_SHA}"' in script
@@ -21567,6 +21567,75 @@ def test_integration_resolver_unresolved_paths_exit_after_specific_warning() -> 
 	assert "Integration-conflict resolver left unresolved paths" in unresolved_branch
 	assert 'git worktree remove --force "${integration_judge_workspace}"' in unresolved_branch
 	assert "return 1" in unresolved_branch
+
+
+def test_integration_resolver_guard_freezes_clean_paths_and_conflict_anchors() -> None:
+	guard = REPO_ROOT / "scripts" / "check_resolver_diff.sh"
+	with tempfile.TemporaryDirectory(prefix="resolver-boundary-") as directory:
+		repo = Path(directory) / "repo"
+		repo.mkdir()
+		subprocess.run(["git", "init", "-q", str(repo)], check=True)
+		conflict_path = repo / "conflict.txt"
+		clean_path = repo / "clean.txt"
+		conflict_path.write_text("prefix\nresolved\nsuffix\n", encoding="utf-8")
+		clean_path.write_text("deterministic\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+			check=True,
+		)
+		conflicted_set = Path(directory) / "conflicted.txt"
+		touched_set = Path(directory) / "touched.txt"
+		spans = Path(directory) / "spans.json"
+		clean_manifest = Path(directory) / "clean.tsv"
+		conflicted_set.write_text("conflict.txt\n", encoding="utf-8")
+		touched_set.write_text("conflict.txt\n", encoding="utf-8")
+		spans.write_text(
+			json.dumps(
+				{
+					"conflict.txt": {
+						"anchors": [
+							base64.b64encode(b"prefix\n").decode("ascii"),
+							base64.b64encode(b"suffix\n").decode("ascii"),
+						],
+						"mode": "100644",
+					}
+				}
+			),
+			encoding="utf-8",
+		)
+		clean_blob = subprocess.check_output(
+			["git", "-C", str(repo), "hash-object", "clean.txt"], text=True
+		).strip()
+		clean_manifest.write_text(f"100644\t{clean_blob}\tclean.txt\n", encoding="utf-8")
+		command = [
+			"bash", str(guard), "--repo-root", str(repo),
+			"--conflicted-set", str(conflicted_set), "--touched-set", str(touched_set),
+			"--conflict-spans", str(spans), "--clean-manifest", str(clean_manifest),
+		]
+		valid = subprocess.run(command, capture_output=True, text=True, check=False)
+		assert valid.returncode == 0, valid.stderr
+
+		clean_path.write_text("tampered\n", encoding="utf-8")
+		clean_tamper = subprocess.run(command, capture_output=True, text=True, check=False)
+		assert clean_tamper.returncode == 1
+		assert "changed deterministically merged content" in clean_tamper.stderr
+		clean_path.write_text("deterministic\n", encoding="utf-8")
+		conflict_path.write_text("changed-prefix\nresolved\nsuffix\n", encoding="utf-8")
+		span_tamper = subprocess.run(command, capture_output=True, text=True, check=False)
+		assert span_tamper.returncode == 1
+		assert "outside conflict spans" in span_tamper.stderr
+
+
+def test_security_pass_poller_delegates_waiver_causality_to_shared_helper() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	waiver_function = script.split("security_pass_apply_waivers_to_findings() {", 1)[1].split(
+		"\n}\n", 1
+	)[0]
+	assert '"revalidate-waiver"' in waiver_function
+	assert 'scripts/security_audit_causality.py' in waiver_function
+	assert "outside_causal_python" not in waiver_function
+	assert "boundary_change_pattern" not in waiver_function
 
 
 if __name__ == "__main__":

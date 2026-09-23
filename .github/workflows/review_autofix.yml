@@ -93,6 +93,10 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MODEL_PROVIDER_PROXY_MAX_REQUESTS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_REQUESTS || '64' }}
+  MODEL_PROVIDER_PROXY_MAX_CONCURRENCY: ${{ vars.MODEL_PROVIDER_PROXY_MAX_CONCURRENCY || '1' }}
+  MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS || '65536' }}
+  MODEL_PROVIDER_PROXY_MAX_SPEND_USD: ${{ vars.MODEL_PROVIDER_PROXY_MAX_SPEND_USD || '25' }}
   UNATTENDED_PHASE: review_autofix
   # Resolve base-branch conflicts BEFORE the reviewer/editor spend when the
   # pre-review merge-topology gate sees a content conflict (default on).
