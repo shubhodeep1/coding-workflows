@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.92,
+  "details": "Merged work consistently adds or updates tests named for specific workflow contracts, including post-agent recovery, polling, review pipelines, release tagging, and security audits. Future workflow changes should include tests for the textual or structural contract expected by CI, not only runtime unit tests.",
+  "fingerprint": "fb58324e392684ca810e2c97bf3073ef00e6814a42a87d06021e4606ad656c24",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35803983971",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35803983971",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4216",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4258",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4260",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4270",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4279",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4273",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4280"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260923005656_47dd8d22dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is enforced through focused contract tests that assert YAML, shell-script, and recovery semantics.",
+  "timestamps": {
+    "created_at": "2026-09-23T00:56:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
