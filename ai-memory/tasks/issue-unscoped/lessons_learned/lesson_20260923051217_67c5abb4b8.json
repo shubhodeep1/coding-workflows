@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-23T05:12:17Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=workflow-templates/validation-harness/python-repo-checks/Dockerfile.app.j2:12-14; cited_path=workflow-templates/validation-harness/python-repo-checks/Dockerfile.app.j2; files_touched=README.md, changelog.d/binance-blessings-249-repo-checks-install-requirements.md, tests/test_render_validation_templates_repo_checks.py, workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2.",
+  "phase": "review_autofix",
+  "pr_number": 4309,
+  "record_id": "lesson_20260923051217_67c5abb4b8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "workflow-templates/validation-harness/python-repo-checks/Dockerfile.app.j2",
+    "README.md",
+    "changelog.d/binance-blessings-249-repo-checks-install-requirements.md",
+    "tests/test_render_validation_templates_repo_checks.py",
+    "workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2"
+  ]
+}
