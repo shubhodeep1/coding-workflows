@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md: Check-in Loop line 83 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The Check-in Loop prose incorrectly states that a non-`success` conclusion reports `state: failed`.\n  WHY: `skipped` and `neutral` are included in `SUCCESSFUL_RUN_CONCLUSIONS` and map to `state: \"completed\"`, so the human-readable contract is inconsistent with the script.\n\n- tests/test_check_in_status.py: test_run_completed_and_pending (lines 187-196) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test covers only `failure` and `success` and does not verify the other conclusion values handled by `SUCCESSFUL_RUN_CONCLUSIONS`.\n  WHY: Missing assertions for `cancelled`, `timed_out`, `startup_failure`, `action_required`, `stale`, `skipped`, and `neutral` would allow regressions in conclusion classification.\n\n- .claude/scripts/check_in_status.py: SUCCESSFUL_RUN_CONCLUSIONS constant (line 59), check_run (lines 168-176) | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The command-file prose omits `stale` and `action_required` while the script routes both conclusions to `state: failed`.\n  WHY: A checker reading the prose may not know that these conclusions are treated as failed runs, although the script currently routes them correctly.\n\n- .claude/scripts/check_in_status.py: line 59, SUCCESSFUL_RUN_CONCLUSIONS = (\"success\", \"skipped\", \"neutral\") | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The script treats `skipped` and `neutral` as successful while the command prose says that any conclusion other than `success` follows the failure path.\n  WHY: This creates a routing contradiction if a workflow run ends with `skipped` or `neutral`, and the tests do not cover those conclusions.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/implement-plan-claude.md\n  Line or code reference: Check-in Loop line 83: \"a non-`success` conclusion reports `state: failed`\"\n  Problem: The Check-in Loop prose describes the script's behavior as \"a non-`success` conclusion reports `state: failed`\", but `.claude/scripts/check_in_status.py:59` defines `SUCCESSFUL_RUN_CONCLUSIONS = (\"success\", \"skipped\", \"neutral\")`, and `check_run:172` maps all three to `state: \"completed\"`, not `state: \"failed\"`. The script's own docstring at line 34-36 correctly documents this. Only conclusions outside that tuple (`failure`, `cancelled`, `timed_out`, `action_required`, `startup_failure`, `stale`, `None`) receive `state: \"failed\"`.\n  Why it fails at runtime: The effective behavior is still safe \u2014 `skipped`/`neutral` conclusions route through the success stage where the stage session reads the actual conclusion and invokes the \"Run failed\" path from step 8/9 instructions. But a human reading the Check-in Loop to understand the script's contract would be misled about which conclusions map to which state. This matters because the Check-in Loop is the human-readable contract for the script behavior, and the script docstring (which IS correct) is visible only in source code.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_check_in_status.py\n  Line or code reference: test_run_completed_and_pending (lines 187-196)\n  Problem: The test only exercises two conclusion values (`failure` and `success`) of the new `SUCCESSFUL_RUN_CONCLUSIONS = (\"success\", \"skipped\", \"neutral\")` set; it does not cover `cancelled`, `timed_out`, `startup_failure`, `action_required`, `stale`, `skipped`, or `neutral`. The implementation routes all of those to `state: failed` via the `else` branch of `conclusion in SUCCESSFUL_RUN_CONCLUSIONS`, but only `failure` is asserted. A regression that drops one of those conclusions into the success tuple (or vice versa) would not be caught.\n  Why it fails at runtime: a test gap does not break runtime directly, but the change intentionally widens the `state: failed` set beyond `failure`, so the assertion coverage should match the implementation's branch coverage.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n\n- .claude/scripts/check_in_status.py\n  Line or code reference: SUCCESSFUL_RUN_CONCLUSIONS constant (line 59), check_run (lines 168-176)\n  Problem: GitHub Actions also returns `conclusion: stale` for runs older than 14 days that have not been re-evaluated. The constant treats `stale` as failed (correctly so \u2014 stale runs have no actionable result), but the command-file prose at .claude/commands/implement-plan-claude.md lines 33-34 only enumerates `failure`, `cancelled`, `timed_out`, `startup_failure` for the security/validation \"Conclusion is not success\" branch and omits `stale` and `action_required`. The script will route those to `state: failed` (good), but a Haiku checker reading the prose may not know that and could misjudge a `stale` run.\n  Why it fails at runtime: low risk \u2014 the script is the authoritative source and routes correctly; the prose is human-facing guidance for the stage session. A `stale` run will be reported as failed and the user will be asked to re-dispatch, which is the right outcome.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/check_in_status.py\n  Location: line 59, SUCCESSFUL_RUN_CONCLUSIONS = (\"success\", \"skipped\", \"neutral\")\n  Issue: The script treats \"skipped\" and \"neutral\" as successful, but the command prose in implement-plan-claude.md steps 8\u20139 says \"Conclusion is not `success`\" routes to the failure path. If a workflow run ever ends with conclusion \"skipped\" or \"neutral\", the Haiku checker routes to the success stage (state=completed) while the stage session's prose would treat it as a failure (not \"success\"), creating a routing contradiction. The test file also lacks coverage for these two conclusions.\n  Suggested minimal fix: Either align the command prose to say \"Conclusion is not in (success, skipped, neutral)\" or restrict SUCCESSFUL_RUN_CONCLUSIONS to (\"success\",) to match the prose. Adding test cases for \"skipped\" and \"neutral\" would pin whichever contract is chosen.\n  Estimated lines changed: 2\u20134\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d8e8f93f9c9b5f7ebbdb982bfb4ea2190fbf10970c71b2c38b0c65de0dedfa6d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35874962744",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35874962744",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923150039_2e94cde3fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35874962744"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-23T15:00:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
