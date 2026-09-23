@@ -2294,10 +2294,10 @@ jobs:
           echo "::warning::Phase 4b first attempt failed — adopting or dispatching review_autofix and retrying once"
 
           # ── Retry: adopt active work or redispatch ${REVIEW_WORKFLOW_FILE} ──
-          # Mirrors the Phase 3c fallback dispatch (lines ~1101-1109),
-          # which uses ${REVIEW_WORKFLOW_FILE} as the public entry-point
-          # that gates into review_autofix.yml without an `[ai-autofix]`
-          # self-trigger guard.
+          # Mirrors the fallback dispatch in Phase 3c's
+          # `Inject editor bait commit on PR branch` step, which uses
+          # ${REVIEW_WORKFLOW_FILE} as the public entry-point that gates into
+          # review_autofix.yml without an `[ai-autofix]` self-trigger guard.
           #
           # Capture the branch head SHA before discovery. An active run
           # for either the bait or current head may already be queued by
@@ -2306,9 +2306,11 @@ jobs:
           #
           # `gh workflow run` is dispatched with --ref "${BRANCH}"
           # (its documented contract is branch/tag, not raw SHA);
-          # RETRY_DISPATCH_SHA and BAIT_SHA are used only as data passed
-          # to jq filters. Once selected, one positive run id is polled
-          # directly so a newer peer cannot replace it.
+          # RETRY_DISPATCH_SHA and BAIT_SHA select already-active work before
+          # dispatch. After dispatch, the branch-scoped baseline identifies
+          # the oldest new run even if the branch advanced. Once selected,
+          # one positive run id is polled directly so a newer peer cannot
+          # replace it.
           if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]] || [ "${PRIOR_REVIEW_RUN}" -lt 1 ]; then
             echo "::error::wait-review.outputs.review_run_id is not a positive integer ('${PRIOR_REVIEW_RUN}'); refusing retry discovery with a no-op exclusion filter"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
@@ -2388,7 +2390,7 @@ jobs:
               exit 1
             fi
             RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))
-            echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — registering the oldest matching run after baseline ${RETRY_BASELINE_ID}"
+            echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — registering the oldest new branch run after baseline ${RETRY_BASELINE_ID}"
           fi
 
           # EDITOR_RETRY_BUDGET_MINUTES defaults to 25 (was 10; raised after
@@ -2454,13 +2456,10 @@ jobs:
                 continue
               fi
               RETRY_RUN_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r \
-                --arg bait_sha "${BAIT_SHA}" \
-                --arg retry_sha "${RETRY_DISPATCH_SHA}" \
                 --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
                 --argjson baseline_id "${RETRY_BASELINE_ID}" \
                 '[.workflow_runs[]
-                  | select(.id > $baseline_id and .id != $prior_run_id)
-                  | select(.head_sha == $bait_sha or .head_sha == $retry_sha)]
+                  | select(.id > $baseline_id and .id != $prior_run_id)]
                 | sort_by(.created_at, .id)
                 | .[0].id // empty')
               if [ -z "${RETRY_RUN_ID}" ]; then

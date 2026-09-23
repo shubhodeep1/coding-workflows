@@ -188,6 +188,8 @@ def test_phase4b_adopts_the_oldest_eligible_active_review_run() -> None:
 	discovery = 'if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then'
 	dispatch = 'if ! gh workflow run "${REVIEW_WORKFLOW_FILE}"'
 	assert retry.index(prior_validation) < retry.index(discovery) < retry.index(dispatch)
+	assert "`Inject editor bait commit on PR branch` step" in retry
+	assert "lines ~1101-1109" not in retry
 	assert 'runs?branch=${BRANCH}&per_page=100' in retry
 	assert '(.workflow_runs | type == "array")' in retry
 	assert '(.id | type == "number") and .id > 0 and .id == (.id | floor)' in retry
@@ -215,6 +217,9 @@ def test_phase4b_dispatches_only_without_active_work_and_pins_one_run() -> None:
 	assert 'gh workflow run "${REVIEW_WORKFLOW_FILE}"' in dispatch_branch
 	assert "RETRY_BASELINE_ID=" in retry
 	assert 'select(.id > $baseline_id and .id != $prior_run_id)' in retry
+	registration_selection = retry[retry.index('select(.id > $baseline_id and .id != $prior_run_id)') :]
+	assert ".head_sha == $bait_sha" not in registration_selection
+	assert ".head_sha == $retry_sha" not in registration_selection
 	assert 'RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))' in retry
 	assert '"repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"' in retry
 	assert 'select(.head_sha == "${RETRY_DISPATCH_SHA}")' not in retry
