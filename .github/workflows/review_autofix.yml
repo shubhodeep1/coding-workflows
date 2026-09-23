@@ -97,6 +97,8 @@ env:
   MODEL_PROVIDER_PROXY_MAX_CONCURRENCY: ${{ vars.MODEL_PROVIDER_PROXY_MAX_CONCURRENCY || '1' }}
   MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS || '65536' }}
   MODEL_PROVIDER_PROXY_MAX_SPEND_USD: ${{ vars.MODEL_PROVIDER_PROXY_MAX_SPEND_USD || '25' }}
+  AUTOFIX_EDITOR_ATTEMPTED: false
+  AUTOFIX_REVIEW_PIPELINE_FAILURE: false
   UNATTENDED_PHASE: review_autofix
   # Resolve base-branch conflicts BEFORE the reviewer/editor spend when the
   # pre-review merge-topology gate sees a content conflict (default on).
@@ -3527,7 +3529,7 @@ jobs:
           case "$(printf '%s' "${REVIEWER_CIRCUIT_BREAKER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ;;
           esac
-          check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          check_required_nonempty_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
           check_soft_file "${LAST_RUN_DIFF_FILE}"
@@ -3540,6 +3542,39 @@ jobs:
             printf '  %s\n' "${missing[@]}"
             exit 1
           fi
+
+          mapfile -t preflight_review_models < <(
+            printf '%s\n%s\n' "${REVIEWER_MODELS:-}" "${XPOLL_SUMMARISER_MODEL:-}" \
+              | tr ',' '\n' \
+              | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^[[:space:]]*$/d' \
+              | awk '!seen[$0]++'
+          )
+          if [ "${#preflight_review_models[@]}" -eq 0 ]; then
+            preflight_reviewer_model="unknown"
+            emit_opencode_preflight_alert 1 configured_models_missing
+            echo "::error::No reviewer or summariser models are configured."
+            exit 1
+          fi
+          preflight_config_dir="${RUNTIME_DIR}/opencode-model-preflight"
+          mkdir -p "${preflight_config_dir}"
+          preflight_model_index=0
+          for preflight_model_slug in "${preflight_review_models[@]}"; do
+            preflight_model_index=$((preflight_model_index + 1))
+            preflight_reviewer_model="$(printf '%s' "${preflight_model_slug}" | LC_ALL=C tr -c 'A-Za-z0-9_.:/+-' '_')"
+            preflight_config_path="${preflight_config_dir}/model-${preflight_model_index}.json"
+            if ! OPENCODE_MODEL_CATALOG_PATH="${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json" \
+                bash "${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh" \
+                  --role reviewer \
+                  --model "${preflight_model_slug}" \
+                  --project-path "${GITHUB_WORKSPACE}" \
+                  --config-path "${preflight_config_path}" \
+                  --serena off; then
+              emit_opencode_preflight_alert 1 config_generation_failed
+              echo "::error::OpenCode configuration preflight failed for configured review model ${preflight_model_slug}."
+              exit 1
+            fi
+          done
+          rm -rf -- "${preflight_config_dir}"
           echo "Preflight check PASSED: all required files present."
 
       - name: Show disk usage (pre LLM call)
@@ -4324,6 +4359,7 @@ jobs:
             echo "Pre-editor snapshot captured: $(wc -l < "${PRE_EDITOR_STATE_FILE}") entries"
           fi
 
+          echo "AUTOFIX_EDITOR_ATTEMPTED=true" >> "$GITHUB_ENV"
           bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"
 
           # Bounded in-step retry for first-iteration empty-output failures.
@@ -4624,10 +4660,22 @@ jobs:
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          if [ "${REVIEWERS_STEP_OUTCOME:-skipped}" != "success" ]; then
+            echo "AUTOFIX_REVIEW_PIPELINE_FAILURE=true" >> "$GITHUB_ENV"
+            echo "::error::Reviewer pipeline did not complete successfully (outcome=${REVIEWERS_STEP_OUTCOME:-skipped}); editor no-op handling is not applicable."
+            exit 1
+          fi
+          if [ "${AUTOFIX_EDITOR_ATTEMPTED:-false}" != "true" ]; then
+            echo "AUTOFIX_REVIEW_PIPELINE_FAILURE=true" >> "$GITHUB_ENV"
+            echo "::error::Editor was not invoked after the reviewer pipeline; editor no-op handling is not applicable."
+            exit 1
+          fi
 
           # Empty-editor-output short-circuit.
           #
@@ -4640,7 +4688,10 @@ jobs:
           # specific cause, and fail the step so the stall poller can
           # retry the review later instead of poisoning the linked
           # issue with an unrecoverable label.
-          if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
+          if [ "${REVIEWERS_STEP_OUTCOME}" = "success" ] \
+              && [ "${AUTOFIX_EDITOR_ATTEMPTED}" = "true" ] \
+              && [ ! -s "${EDITOR_SUMMARY_FILE}" ] \
+              && [ ! -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
             echo "::warning::Editor produced no summary and no committed changes — treating as retryable no-op."
             RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             NOOP_BODY="$(cat <<EOF
@@ -4994,7 +5045,7 @@ jobs:
         # recoverable editor failures when too little hard-timeout headroom
         # remains for the full validation/publish tail. Soft-deadline and
         # reviewer-phase partial finalizes retain the existing skip behavior.
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true' || (env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))) && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.AUTOFIX_EDITOR_ATTEMPTED == 'true' && env.AUTOFIX_REVIEW_PIPELINE_FAILURE != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true' || (env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))) && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         run: |
           set -euo pipefail
 
@@ -8296,7 +8347,10 @@ jobs:
           editor_attempt_count = max(editor_attempt_numbers) if editor_attempt_numbers else 0
           editor_summary_exists = file_exists(editor_summary_file)
 
-          if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
+          if bool_env("AUTOFIX_REVIEW_PIPELINE_FAILURE"):
+              editor_phase_state = "skipped"
+              editor_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+          elif bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
               editor_phase_state = "completed"
               editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "failed", "failure_class": "empty_noop"}
           elif bool_env("EDITOR_CHANGES_LOST"):
@@ -8459,6 +8513,8 @@ jobs:
                   return resume_state
               if partial_finalize:
                   return "partial_finalize"
+              if bool_env("AUTOFIX_REVIEW_PIPELINE_FAILURE"):
+                  return "review_pipeline_failure"
               if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
                   return "editor_empty_noop"
               if bool_env("EDITOR_CHANGES_LOST"):

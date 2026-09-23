@@ -95,6 +95,11 @@ for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
     break
   fi
 done
+if [ "${main_primary_bootstrap_root}" = ".codex-workflow-src-main" ] \
+    && [ ! -s "${main_primary_bootstrap_root}/scripts/codex_model_catalog.json" ]; then
+  main_primary_missing_file="codex_model_catalog.json"
+  main_primary_bootstrap_root=".codex-workflow-src"
+fi
 if [ "${main_primary_bootstrap_root}" = ".codex-workflow-src" ]; then
   echo "::notice::Main support snapshot is incomplete at ${main_primary_missing_file}; staging the complete branch snapshot instead of mixing runtime generations."
 fi
@@ -206,15 +211,12 @@ if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/config/retrieval_profiles.v1.json" ] && [ -f
   install -m 0644 "${retrieval_profiles_src}" "${SUPPORT_AI_MEMORY_DIR}/config/retrieval_profiles.v1.json"
 fi
 
-catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
-if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
-  catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
+catalog_src="${main_primary_bootstrap_root}/scripts/codex_model_catalog.json"
+if [ ! -s "${catalog_src}" ]; then
+  echo "::error::Main-primary support snapshot ${main_primary_bootstrap_root} has no non-empty codex_model_catalog.json; refusing to mix runtime generations."
+  exit 1
 fi
-if [ -f "${catalog_src}" ]; then
-  install -m 0644 "${catalog_src}" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
-else
-  echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
-fi
+install -m 0644 "${catalog_src}" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
 
 if [ ! -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ]; then
   failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"

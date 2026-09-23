@@ -202,6 +202,14 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_shared_shell_block_guard.py
 
+      - name: Production sandbox namespace regression
+        env:
+          REQUIRE_PRODUCTION_SANDBOX_SMOKE: "1"
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+            tests/test_agent_process_isolation.py::test_production_sandbox_starts_with_private_tmp_runtime
+
       - name: Derive orchestrate poll test subsets
         run: |
           set -euo pipefail

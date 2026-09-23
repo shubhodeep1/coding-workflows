@@ -30,6 +30,45 @@ case "${role}" in
 esac
 workspace="$(cd "${workspace}" && pwd -P)"
 runtime_dir="$(cd "${runtime_dir}" && pwd -P)"
+resolve_namespace_control_root()
+{
+	local configured_root=""
+	local resolved_root=""
+	if [ -n "${RUNNER_TEMP:-}" ]; then
+		configured_root="${RUNNER_TEMP}"
+	elif [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+		configured_root="${XDG_RUNTIME_DIR}"
+	else
+		configured_root="${host_home}/.cache"
+	fi
+	case "${configured_root}" in
+		/*) ;;
+		*) echo "untrusted_process_sandbox: namespace control root must be absolute" >&2; exit 1 ;;
+	esac
+	case "${configured_root}" in
+		*$'\n'*|*$'\r'*|*$'\t'*|*' '*)
+			echo "untrusted_process_sandbox: namespace control root cannot contain whitespace" >&2
+			exit 1
+			;;
+	esac
+	[ -d "${configured_root}" ] \
+		|| { echo "untrusted_process_sandbox: namespace control root is unavailable" >&2; exit 1; }
+	resolved_root="$(cd "${configured_root}" && pwd -P)"
+	case "${resolved_root}" in
+		/tmp|/tmp/*|/var/tmp|/var/tmp/*)
+			echo "untrusted_process_sandbox: namespace control root cannot be beneath private temporary storage" >&2
+			exit 1
+			;;
+	esac
+	case "${resolved_root}" in
+		*$'\n'*|*$'\r'*|*$'\t'*|*' '*)
+			echo "untrusted_process_sandbox: resolved namespace control root cannot contain whitespace" >&2
+			exit 1
+			;;
+	esac
+	printf '%s\n' "${resolved_root}"
+}
+namespace_control_root="$(resolve_namespace_control_root)"
 provider_required=true
 case "${role}" in
 	validator|workspace-guard)
@@ -54,19 +93,26 @@ if [ -n "${writable_output_dir}" ]; then
 	esac
 fi
 
-credential_file="${MODEL_PROVIDER_CREDENTIAL_FILE:-}"
-credential_file_is_temporary=false
-if [ "${provider_required}" = true ] && [ -z "${credential_file}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
-	credential_file="$(mktemp "${runtime_dir%/}/provider-credential.XXXXXX")"
-	credential_file_is_temporary=true
-	chmod 600 "${credential_file}"
-	printf '%s' "${OPENROUTER_API_KEY}" > "${credential_file}"
+credential_source_file="${MODEL_PROVIDER_CREDENTIAL_FILE:-}"
+if [ "${provider_required}" = true ] && [ -z "${credential_source_file}" ] && [ -z "${OPENROUTER_API_KEY:-}" ]; then
+	echo "untrusted_process_sandbox: provider credential is unavailable" >&2
+	exit 1
 fi
-if [ "${provider_required}" = true ]; then
-	[ -r "${credential_file}" ] || { echo "untrusted_process_sandbox: provider credential is unavailable" >&2; exit 1; }
+if [ "${provider_required}" = true ] && [ -n "${credential_source_file}" ]; then
+	[ -r "${credential_source_file}" ] || { echo "untrusted_process_sandbox: provider credential is unavailable" >&2; exit 1; }
 fi
 
-sandbox_dir="$(mktemp -d "${runtime_dir%/}/agent-sandbox.XXXXXX")"
+sandbox_dir="$(mktemp -d "${namespace_control_root%/}/agent-sandbox.XXXXXX")"
+chmod 700 "${sandbox_dir}"
+credential_file=""
+if [ "${provider_required}" = true ]; then
+	credential_file="${sandbox_dir}/provider-credential"
+	if [ -n "${credential_source_file}" ]; then
+		install -m 0600 "${credential_source_file}" "${credential_file}"
+	else
+		(umask 077; printf '%s' "${OPENROUTER_API_KEY}" > "${credential_file}")
+	fi
+fi
 ready_file="${sandbox_dir}/proxy-ready.json"
 proxy_log="${sandbox_dir}/proxy.log"
 proxy_policy_file="${sandbox_dir}/proxy-policy.json"
@@ -76,9 +122,6 @@ cleanup()
 	if [ -n "${proxy_pid}" ]; then
 		kill "${proxy_pid}" 2>/dev/null || true
 		wait "${proxy_pid}" 2>/dev/null || true
-	fi
-	if [ "${credential_file_is_temporary}" = true ]; then
-		rm -f -- "${credential_file}"
 	fi
 	rm -rf -- "${sandbox_dir}"
 }
@@ -296,17 +339,25 @@ common_env=(
 if [ "${provider_required}" = true ]; then
 	common_env+=("SANDBOX_PROVIDER_TOKEN=sandbox-proxy")
 fi
-runtime_write_paths=()
+runtime_output_names=()
+runtime_output_destinations=()
+runtime_output_mirrors=()
 while IFS='=' read -r environment_name environment_value; do
 	case "${environment_name}" in
 		CODEX_THREAD_REUSE_RUNTIME_DIR|RUNTIME_DIR)
 			;;
-			CODEX_THREAD_REUSE_OUTPUT_FILE|CODEX_THREAD_REUSE_LOG_FILE|CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE|CODEX_THREAD_REUSE_STATUS_FILE)
+		CODEX_THREAD_REUSE_OUTPUT_FILE|CODEX_THREAD_REUSE_LOG_FILE|CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE|CODEX_THREAD_REUSE_STATUS_FILE)
 			if [ -n "${environment_value}" ]; then
 				mkdir -p "$(dirname "${environment_value}")"
 				touch "${environment_value}"
-				runtime_write_paths+=("${environment_value}")
-				common_env+=("${environment_name}=${environment_value}")
+				[ ! -L "${environment_value}" ] \
+					|| { echo "untrusted_process_sandbox: runtime output cannot be a symlink" >&2; exit 1; }
+				runtime_output_mirror="${sandbox_runtime}/forwarded-${environment_name}"
+				cp -- "${environment_value}" "${runtime_output_mirror}"
+				runtime_output_names+=("${environment_name}")
+				runtime_output_destinations+=("${environment_value}")
+				runtime_output_mirrors+=("${runtime_output_mirror}")
+				common_env+=("${environment_name}=${runtime_output_mirror}")
 			fi
 			;;
 		CODEX_THREAD_REUSE_*|MODEL_EDITOR|MODEL_VERBOSITY)
@@ -314,6 +365,25 @@ while IFS='=' read -r environment_name environment_value; do
 			;;
 	esac
 done < <(env)
+sync_runtime_outputs()
+{
+	local runtime_output_index
+	local runtime_output_mirror
+	local runtime_output_destination
+	local runtime_output_sync_rc=0
+	for runtime_output_index in "${!runtime_output_mirrors[@]}"; do
+		runtime_output_mirror="${runtime_output_mirrors[${runtime_output_index}]}"
+		runtime_output_destination="${runtime_output_destinations[${runtime_output_index}]}"
+		if [ ! -f "${runtime_output_mirror}" ] || [ -L "${runtime_output_mirror}" ] || [ -L "${runtime_output_destination}" ]; then
+			echo "untrusted_process_sandbox: runtime output failed regular-file validation: ${runtime_output_names[${runtime_output_index}]}" >&2
+			runtime_output_sync_rc=1
+			continue
+		fi
+		cp -- "${runtime_output_mirror}" "${runtime_output_destination}" \
+			|| { echo "untrusted_process_sandbox: runtime output copy failed: ${runtime_output_names[${runtime_output_index}]}" >&2; runtime_output_sync_rc=1; }
+	done
+	return "${runtime_output_sync_rc}"
+}
 if [ "${config_format}" = opencode ]; then
 	common_env+=("UNTRUSTED_OPENCODE_CONFIG=${sandbox_config}" "OPENCODE_CONFIG=${sandbox_config}")
 elif [ "${config_format}" = codex ]; then
@@ -333,7 +403,43 @@ if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then
 	)
 	test_command_rc=$?
 	set -e
+	if ! sync_runtime_outputs; then
+		test_command_rc=1
+	fi
 	exit "${test_command_rc}"
+fi
+sandbox_command=("$@")
+external_writable_destination=""
+sandbox_external_writable_root=""
+case "${role}" in
+	validator)
+		external_writable_destination="${writable_output_dir}"
+		;;
+	workspace-guard)
+		external_writable_destination="${runtime_dir}"
+		;;
+esac
+if [ -n "${external_writable_destination}" ]; then
+	if find "${external_writable_destination}" -type l -print -quit 2>/dev/null | grep -q .; then
+		echo "untrusted_process_sandbox: external writable tree cannot contain symlinks" >&2
+		exit 1
+	fi
+	sandbox_external_writable_root="${sandbox_runtime}/external-writable"
+	mkdir -p "${sandbox_external_writable_root}"
+	cp -a -- "${external_writable_destination}/." "${sandbox_external_writable_root}/"
+	for sandbox_command_index in "${!sandbox_command[@]}"; do
+		case "${sandbox_command[${sandbox_command_index}]}" in
+			"${external_writable_destination}")
+				sandbox_command[${sandbox_command_index}]="${sandbox_external_writable_root}"
+				;;
+			"${external_writable_destination}/"*)
+				sandbox_command[${sandbox_command_index}]="${sandbox_external_writable_root}/${sandbox_command[${sandbox_command_index}]#"${external_writable_destination}/"}"
+				;;
+		esac
+	done
+	if [ "${role}" = workspace-guard ]; then
+		common_env+=("RUNTIME_DIR=${sandbox_external_writable_root}")
+	fi
 fi
 command -v systemd-run >/dev/null 2>&1 \
 	|| { echo "untrusted_process_sandbox: systemd-run is required" >&2; exit 1; }
@@ -414,7 +520,7 @@ systemd_properties=(
 	--property=IPAddressDeny=any
 	--property="InaccessiblePaths=${credential_file:+${credential_file} }-/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh"
 	--property=ReadOnlyPaths=/
-	--property="ReadWritePaths=${sandbox_dir}${runtime_write_paths[*]:+ ${runtime_write_paths[*]}}"
+	--property="ReadWritePaths=${sandbox_dir}"
 )
 if [ "${provider_required}" = true ]; then
 	systemd_properties+=(--property="IPAddressAllow=${proxy_host}/32")
@@ -424,12 +530,9 @@ case "${role}" in
 		systemd_properties+=(--property="ReadWritePaths=${workspace}")
 		;;
 	workspace-guard)
-		systemd_properties+=(--property="ReadWritePaths=${workspace} ${runtime_dir}")
+		systemd_properties+=(--property="ReadWritePaths=${workspace}")
 		;;
 	validator)
-		if [ -n "${writable_output_dir}" ]; then
-			systemd_properties+=(--property="ReadWritePaths=${writable_output_dir}")
-		fi
 		;;
 esac
 for protected_git_path in "${git_metadata_paths[@]:-}"; do
@@ -440,7 +543,23 @@ for protected_git_path in "${git_metadata_paths[@]:-}"; do
 		systemd_properties+=(--property="ReadOnlyPaths=${protected_git_path}")
 	fi
 done
+set +e
 "${systemd_run[@]}" --quiet --wait --pipe --collect --service-type=exec \
 	"${systemd_properties[@]}" \
 	--working-directory="$([ "${provider_required}" = true ] && printf '%s' "${workspace}" || printf '%s' "${sandbox_runtime}")" \
-	env -i "${common_env[@]}" "$@"
+	env -i "${common_env[@]}" "${sandbox_command[@]}"
+sandbox_command_rc=$?
+set -e
+if ! sync_runtime_outputs; then
+	sandbox_command_rc=1
+fi
+if [ -n "${sandbox_external_writable_root}" ]; then
+	if find "${sandbox_external_writable_root}" -type l -print -quit 2>/dev/null | grep -q .; then
+		echo "untrusted_process_sandbox: sandbox writable tree failed symlink validation" >&2
+		sandbox_command_rc=1
+	else
+		cp -a -- "${sandbox_external_writable_root}/." "${external_writable_destination}/" \
+			|| { echo "untrusted_process_sandbox: sandbox writable tree copy failed" >&2; sandbox_command_rc=1; }
+	fi
+fi
+exit "${sandbox_command_rc}"

@@ -4592,6 +4592,30 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 	assert chains["x-ai/grok-4.6"] == ["x-ai/grok-4.20"]
 
 
+def test_review_runtime_catalog_uses_complete_main_primary_snapshot() -> None:
+	stage_helper = _stage_helper_text()
+	assert '[ ! -s "${main_primary_bootstrap_root}/scripts/codex_model_catalog.json" ]' in stage_helper
+	assert 'main_primary_missing_file="codex_model_catalog.json"' in stage_helper
+	assert 'catalog_src="${main_primary_bootstrap_root}/scripts/codex_model_catalog.json"' in stage_helper
+	assert 'install -m 0644 "${catalog_src}" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"' in stage_helper
+	assert 'catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"' not in stage_helper
+
+
+def test_review_preflight_validates_every_configured_reviewer_and_summariser_model() -> None:
+	preflight = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	assert 'check_required_nonempty_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"' in preflight
+	assert 'printf \'%s\\n%s\\n\' "${REVIEWER_MODELS:-}" "${XPOLL_SUMMARISER_MODEL:-}"' in preflight
+	assert "awk '!seen[$0]++'" in preflight
+	assert 'for preflight_model_slug in "${preflight_review_models[@]}"; do' in preflight
+	assert 'OPENCODE_MODEL_CATALOG_PATH="${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"' in preflight
+	assert '--model "${preflight_model_slug}"' in preflight
+	assert 'emit_opencode_preflight_alert 1 config_generation_failed' in preflight
+
+	catalog_slugs = [row.get("slug") for row in json.loads(MODEL_CATALOG.read_text(encoding="utf-8"))["models"]]
+	for required_slug in ("google/gemini-3.1-flash-lite", "z-ai/glm-5.2"):
+		assert catalog_slugs.count(required_slug) == 1
+
+
 def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models() -> None:
 	result = _run_reviewer_failback_harness()
 	health_state = result["health_state"]
@@ -5486,6 +5510,23 @@ def test_review_pipeline_summary_classifies_editor_noop_recoverable_failure() ->
 	)["summary"]
 	assert flag_only_summary["slot_results"]["editor"]["status"] == "success"
 	assert flag_only_summary["slot_results"]["editor"]["failure_class"] == "none"
+
+
+def test_review_pipeline_failure_precedes_editor_noop_and_keeps_editor_unattempted() -> None:
+	summary = _run_review_pipeline_summary_step_harness(
+		extra_env={
+			"AUTOFIX_REVIEW_PIPELINE_FAILURE": "true",
+			"AUTOFIX_EDITOR_EMPTY_NOOP": "true",
+			"AUTOFIX_EDITOR_ATTEMPTED": "false",
+		},
+	)["summary"]
+	assert summary["finalize_reason"] == "review_pipeline_failure"
+	assert summary["slot_results"]["editor"] == {
+		"attempt_count": 0,
+		"status": "skipped",
+		"failure_class": "not_invoked",
+	}
+	assert "editor" in summary["skipped_phases"]
 
 
 def test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reason_precedence() -> None:
@@ -6885,6 +6926,8 @@ def main() -> int:
 	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()
 	test_agents_md_materiality_classifier_and_workflow_wiring()
 	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
+	test_review_runtime_catalog_uses_complete_main_primary_snapshot()
+	test_review_preflight_validates_every_configured_reviewer_and_summariser_model()
 	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
 	test_stall_guard_retryable_failures_log_deterministic_reviewer_advance()
 	test_silent_retry_exhaustion_logs_terminal_failure_reason()
@@ -6912,6 +6955,7 @@ def main() -> int:
 	test_review_pipeline_summary_reports_partial_finalize_validated_push()
 	test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety()
 	test_review_pipeline_summary_classifies_editor_noop_recoverable_failure()
+	test_review_pipeline_failure_precedes_editor_noop_and_keeps_editor_unattempted()
 	test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reason_precedence()
 	test_review_partial_finalize_publish_safety_gate_is_wired()
 	test_review_partial_finalize_timeout_extractor_handles_structured_yaml_layout()
