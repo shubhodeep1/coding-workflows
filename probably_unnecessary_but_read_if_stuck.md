@@ -610,6 +610,14 @@ Contract:
 - Only the final attempt's single error line is quoted, never the whole stderr, so provider/tool noise (and anything an agent printed) does not reach Telegram or the PR thread.
 - Rollback: removing the `EDITOR_NOOP_SUSPICIOUS="true"` line from Check 1b or Check 1c restores the corresponding zero-reviewer blind spot (no alert, resolver chain runs, editor slot recorded as `success`) while leaving the >0-reviewer result unchanged via Check 2; removing the whole Check 1c block and the `elif` branch restores the generic alert for recoverable failures; reverting the summary-step classification restores `unexpected_noop` / `editor_noop_suspicious` for recoverable failures. The auto-merge gate is unaffected by any of these.
 
+#### 20.10.3 Workspace-guard initialization failure (`EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE`)
+
+The review editor's workspace-guard artifacts live in a mode-0700 helper runtime beneath `RUNNER_TEMP`, not the inherited `RUNTIME_DIR`. This is required for self-review runs where main's workflow YAML may still supply a legacy `/tmp/codex-pr-*` runtime while PR-head helper scripts run inside a systemd unit with `PrivateTmp=yes`. The workflow's normal runtime is also created beneath `RUNNER_TEMP` for current runs.
+
+Snapshot initialization is fail closed. `scripts/review_apply_fixes.sh` captures the guard's stderr, strips ANSI/control bytes, redacts known runner/workspace paths, bounds the diagnostic, archives only that sanitized line as the attempt error, and stops before launching OpenCode. It then requests partial finalize with reason `sandbox_initialization_failure` and writes the sentinel `editor workspace guard sandbox initialization failed before editor launch`. `Validate editor no-op disposition` matches that sentinel even with zero successful reviewers or no validation-tail budget, sets `EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE=true` alongside `EDITOR_NOOP_SUSPICIOUS=true`, and leaves merge, commit, push, and auto-merge paths blocked.
+
+The operator alert retains `⚠️ **Editor no-op suspicious**` for poller compatibility but names the infrastructure failure and quotes only the bounded sanitized attempt error. `REVIEW_AUTOFIX_RUN_SUMMARY_V1.slot_results.editor.failure_class` is `sandbox_initialization_failure`; the actual failure path still reports `finalize_reason=partial_finalize` and `partial_finalize_reason=sandbox_initialization_failure`. The namespace sandbox and `PrivateTmp=yes` remain mandatory, and reconcile-time workspace violations retain their existing exit-78 behavior.
+
 ---
 
 

@@ -194,6 +194,7 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "-/var/run/docker.sock" in sandbox_text
 	assert "_runner_file_commands" in sandbox_text
 	assert "IPAddressDeny=any" in sandbox_text
+	assert "PrivateTmp=yes" in sandbox_text
 	assert "summary|audit" in sandbox_text
 	assert "implement-repair|diagnose|reviewer" in sandbox_text
 	assert 'find "${workspace}" -xdev -name .git -print0' in sandbox_text
@@ -379,6 +380,17 @@ def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
 		"      - name: Commit changes\n", 1
 	)[1].split("\n      - name:", 1)[0]
 	assert "GH_PAT: ${{ secrets.GH_PAT }}" not in commit_step
+
+
+def test_review_editor_workspace_guard_runtime_is_independent_of_legacy_tmp_runtime() -> None:
+	review_apply = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	assert 'runtime_base="${RUNNER_TEMP}"' in review_apply
+	assert 'mktemp -d "${runtime_base_resolved%/}/review-editor-workspace-guard.XXXXXX"' in review_apply
+	assert 'trusted workspace-guard runtime resolved inside the model-writable workspace' in review_apply
+	assert '--runtime-dir "${editor_workspace_guard_runtime}"' in review_apply
+	assert '--runtime-dir "${RUNTIME_DIR}"' not in review_apply
+	assert 'runtime_mode="$(stat -c \'%a\' "${editor_workspace_guard_runtime}"' in review_apply
+	assert 'if [ "${runtime_mode}" != "700" ]; then' in review_apply
 
 
 def test_trusted_git_writer_never_executes_repository_hooks() -> None:
