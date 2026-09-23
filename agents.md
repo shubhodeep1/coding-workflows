@@ -499,6 +499,20 @@ Do not re-add per-command `model:` pins: they were tried (PRs #3967 and
 model, not the command file. A file that starts with `---` would be parsed
 as frontmatter, so the command body must remain the first line.
 
+One deliberate exception that is **not** a command pin: `/implement-plan-claude`
+waits for each phase PR to merge through a 3-hourly check-in built from
+claude-code-remote Routines (its **Check-in Loop** section). The checker
+Routine is created with `create_new_session_on_fire: true` and
+`model: claude-sonnet-5`, so each firing is a fresh, throwaway read-only
+Sonnet session that inspects one PR / run / issue list and fires a
+schedule-less poke Routine bound to the operator's session when the wait is
+over. The operator's session — and every turn of the command that edits code
+— still runs on the model the operator picked; only the idle check runs on
+the cheaper model, because a 3-hour gap outlives the prompt cache and a wake
+of the main session re-sends its whole context at full price. Progress
+between wakes is persisted in `docs/implement-plan/<slug>.md`
+(`docs/implement-plan/README.md`).
+
 No field here changes what any consumer repo receives on the `@stable`
 sync: `.claude/commands/` is not part of the synced surface, and the
 template copies under `workflow-templates/.claude/commands/` have never
