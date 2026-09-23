@@ -96,6 +96,16 @@ if [ "${CONFLICT_RESOLVED:-false}" = "true" ]; then
   exit 0
 fi
 
+RESOLVER_INITIAL_UNMERGED_PATHS_FILE="${RUNTIME_DIR}/resolver_initial_unmerged_paths.txt"
+RESOLVER_FINGERPRINT_ONLY_PATHS_FILE="${RUNTIME_DIR}/resolver_fingerprint_only_paths.txt"
+if [ -f "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}" ] && [ -f "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}" ]; then
+  _resolver_initial_unmerged_count="$(wc -l < "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}" | tr -d '[:space:]')"
+  _resolver_fingerprint_only_count="$(wc -l < "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}" | tr -d '[:space:]')"
+  echo "Resolver path classification: initial_unmerged=${_resolver_initial_unmerged_count} fingerprint_only=${_resolver_fingerprint_only_count}"
+else
+  echo "::warning::Resolver path classification snapshots are unavailable; continuing with the combined resolver allowlist."
+fi
+
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
