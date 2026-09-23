@@ -234,6 +234,7 @@ changelog.d/4127-security-fix-pr-base.md
 changelog.d/4134-auto-apply-analysis-and-stable-release.md
 changelog.d/4175-python-isolation.md
 changelog.d/4216-orchestrator-security-isolation-hardening.md
+changelog.d/4255-python-startup-isolation.md
 changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/433-readme-wrapper-predicate-examples.md

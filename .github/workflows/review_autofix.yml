@@ -2390,13 +2390,18 @@ jobs:
           ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${PR_NUMBER}"
           ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
           ledger_cache_restored_entries=0
-          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
-            if [ -d "${ledger_cache_staging_root}/${ledger_cache_rel}" ]; then
-              mkdir -p "${ledger_cache_workspace_root}/${ledger_cache_rel}"
-              cp -a "${ledger_cache_staging_root}/${ledger_cache_rel}/." "${ledger_cache_workspace_root}/${ledger_cache_rel}/"
-              ledger_cache_restored_entries=$((ledger_cache_restored_entries + 1))
-            fi
-          done
+          ledger_cache_rel=.ai/review_issue_ledger
+          if [ -d "${ledger_cache_staging_root}/${ledger_cache_rel}" ]; then
+            mkdir -p "${ledger_cache_workspace_root}/${ledger_cache_rel}"
+            cp -a "${ledger_cache_staging_root}/${ledger_cache_rel}/." "${ledger_cache_workspace_root}/${ledger_cache_rel}/"
+            ledger_cache_restored_entries=$((ledger_cache_restored_entries + 1))
+          fi
+          review_runtime_rel=".ai/review_runtime/pr-${PR_NUMBER}"
+          if [ -d "${ledger_cache_staging_root}/${review_runtime_rel}" ]; then
+            mkdir -p "${ledger_cache_workspace_root}/${review_runtime_rel}"
+            cp -a "${ledger_cache_staging_root}/${review_runtime_rel}/." "${ledger_cache_workspace_root}/${review_runtime_rel}/"
+            ledger_cache_restored_entries=$((ledger_cache_restored_entries + 1))
+          fi
           if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}" ]; then
             mkdir -p "$(dirname "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}")"
             cp -a "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}" "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}"
@@ -4384,6 +4389,47 @@ jobs:
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_synthesise_smoke.sh"
 
+      - name: Authenticate behavioural smoke bundle
+        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
+        continue-on-error: true
+        env:
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
+        run: |
+          set -euo pipefail
+          round_base="${{ steps.retrigger_guard.outputs.autofix_iteration }}"
+          if ! [[ "${round_base}" =~ ^[0-9]+$ ]]; then
+            round_base=0
+          fi
+          current_round=$((round_base + 1))
+          synth_dir=".ai/review_runtime/pr-${PR_NUMBER}/round-${current_round}/synth"
+          bundle_path="${synth_dir}/synth_round_${current_round}_assertions.json"
+          envelope_path="${synth_dir}/synth_round_${current_round}_assertions.envelope.json"
+          if [ ! -f "${bundle_path}" ]; then
+            exit 0
+          fi
+          reviewed_head_sha="$(git rev-parse HEAD)"
+          if ! env -i \
+            HOME="${HOME:-}" \
+            PATH="${PATH:-/usr/bin:/bin}" \
+            TMPDIR="${TMPDIR:-/tmp}" \
+            LANG="C.UTF-8" \
+            LC_ALL="C.UTF-8" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            ORCHESTRATOR_STATE_AUTH_KEYRING="${ORCHESTRATOR_STATE_AUTH_KEYRING}" \
+            python3 -I -B "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" sign-behavioural-smoke \
+              --bundle-file "${bundle_path}" \
+              --repository "${GITHUB_REPOSITORY}" \
+              --pr-number "${PR_NUMBER}" \
+              --head-sha "${reviewed_head_sha}" \
+              --round "${current_round}" \
+              --producer-run-id "${GITHUB_RUN_ID}" \
+              --producer-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+              --out-file "${envelope_path}"; then
+            rm -rf "${synth_dir}"
+            echo "::error::Behavioural smoke provenance signing failed; unsigned artifacts were removed."
+            exit 1
+          fi
+
       # Save the updated per-PR review runtime state so the next iteration
       # (separate workflow run triggered by pull_request.synchronize after
       # the autofix commit) can restore both the review-issue ledger and
@@ -4409,13 +4455,18 @@ jobs:
           rm -rf "${ledger_cache_staging_root}"
           mkdir -p "${ledger_cache_staging_root}"
           ledger_cache_staged_entries=0
-          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
-            if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
-              mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
-              cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
-              ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
-            fi
-          done
+          ledger_cache_rel=.ai/review_issue_ledger
+          if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
+            mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
+            cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
+          review_runtime_rel=".ai/review_runtime/pr-${PR_NUMBER}"
+          if [ -d "${ledger_cache_workspace_root}/${review_runtime_rel}" ]; then
+            mkdir -p "${ledger_cache_staging_root}/${review_runtime_rel}"
+            cp -a "${ledger_cache_workspace_root}/${review_runtime_rel}/." "${ledger_cache_staging_root}/${review_runtime_rel}/"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
           if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" ]; then
             mkdir -p "$(dirname "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}")"
             cp -a "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}"
@@ -6766,13 +6817,18 @@ jobs:
           rm -rf "${ledger_cache_staging_root}"
           mkdir -p "${ledger_cache_staging_root}"
           ledger_cache_staged_entries=0
-          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
-            if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
-              mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
-              cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
-              ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
-            fi
-          done
+          ledger_cache_rel=.ai/review_issue_ledger
+          if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
+            mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
+            cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
+          review_runtime_rel=".ai/review_runtime/pr-${PR_NUMBER}"
+          if [ -d "${ledger_cache_workspace_root}/${review_runtime_rel}" ]; then
+            mkdir -p "${ledger_cache_staging_root}/${review_runtime_rel}"
+            cp -a "${ledger_cache_workspace_root}/${review_runtime_rel}/." "${ledger_cache_staging_root}/${review_runtime_rel}/"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
           if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" ]; then
             mkdir -p "$(dirname "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}")"
             cp -a "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}"

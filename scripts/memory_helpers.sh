@@ -705,14 +705,33 @@ except ValueError:
 if not current or not incoming:
 	raise SystemExit(0)
 
+if current.get("dispatch_status") == "disabled":
+	raise SystemExit(0)
+
 current_ts = _latest(current)
 incoming_ts = _latest(incoming)
-if not current_ts or not incoming_ts or current_ts == incoming_ts:
+current_claim_id = current.get("claim_id")
+incoming_claim_id = incoming.get("claim_id")
+matching_final_transition = (
+	current.get("dispatch_status") == "pending"
+	and incoming.get("dispatch_status") in {"sent", "failed"}
+	and isinstance(current_claim_id, str)
+	and current_claim_id
+	and incoming_claim_id == current_claim_id
+	and incoming.get("last_attempted_timestamp") == current.get("last_attempted_timestamp")
+	and incoming.get("last_attempt_payload") == current.get("last_attempt_payload")
+)
+if matching_final_transition:
+	raise SystemExit(0)
+
+if not current_ts or not incoming_ts:
+	print(json.dumps({"ok": True, "enabled": True, "stored": False, "record": current}))
 	raise SystemExit(0)
 
 current_dt = _parse(current_ts)
 incoming_dt = _parse(incoming_ts)
 if current_dt is None or incoming_dt is None:
+	print(json.dumps({"ok": True, "enabled": True, "stored": False, "record": current}))
 	raise SystemExit(0)
 
 age_seconds = max(0, int((incoming_dt - current_dt).total_seconds()))
@@ -922,6 +941,28 @@ memory_force_tick_put()
 
 	target_path="${tmp_dir}/${memory_root}/runs/force_tick/${tracking_issue}.json"
 	if [ -f "${target_path}" ]; then
+		if cmp -s "${target_path}" "${record_file}"; then
+			local unchanged_wrapper=""
+			unchanged_wrapper="$(env -i \
+				HOME="${HOME:-}" \
+				PATH="${PATH:-/usr/bin:/bin}" \
+				TMPDIR="${TMPDIR:-/tmp}" \
+				LANG="C.UTF-8" \
+				LC_ALL="C.UTF-8" \
+				PYTHONDONTWRITEBYTECODE=1 \
+				python3 -I -B - "${target_path}" <<'PY'
+import json
+import pathlib
+import sys
+
+record = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(json.dumps({"ok": True, "enabled": True, "stored": False, "record": record}))
+PY
+			)"
+			rm -rf "${tmp_dir}"
+			printf '%s\n' "${unchanged_wrapper}"
+			return 0
+		fi
 		local collision_wrapper=""
 		collision_wrapper="$(_memory_force_tick_collision_wrapper "${target_path}" "${record_file}" "${cooldown_seconds}" || true)"
 		if [ -n "${collision_wrapper}" ]; then

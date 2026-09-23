@@ -31,6 +31,8 @@ name: AI Validate (Reusable)
         required: true
       TG_BOT_SECRET:
         required: false
+      ORCHESTRATOR_STATE_AUTH_KEYRING:
+        required: false
     outputs:
       status:
         description: "Validation status (pass|fail|error)"
@@ -308,6 +310,9 @@ jobs:
               "scripts/codex_helpers.sh",
               "scripts/model_provider_broker.py",
               "scripts/orchestrate_force_tick.sh",
+              "scripts/orchestrate_state_v2.py",
+              "scripts/evaluate_behavioural_smoke.py",
+              "scripts/run_behavioural_smoke_assertions.sh",
               "scripts/watchdog_helpers.sh",
               "scripts/write_guard.sh",
               "scripts/workspace_init.sh",
@@ -632,53 +637,66 @@ jobs:
           set -euo pipefail
 
           echo "pr_number=" >> "$GITHUB_OUTPUT"
+          echo "head_sha=" >> "$GITHUB_OUTPUT"
+
+          pr_number=""
 
           if [[ "${INPUT_PR_NUMBER:-0}" =~ ^[0-9]+$ ]] && [ "${INPUT_PR_NUMBER}" -gt 0 ]; then
-            echo "pr_number=${INPUT_PR_NUMBER}" >> "$GITHUB_OUTPUT"
-            exit 0
+            pr_number="${INPUT_PR_NUMBER}"
+          elif [[ "${PR_EVENT_NUMBER:-}" =~ ^[0-9]+$ ]] && [ "${PR_EVENT_NUMBER}" -gt 0 ]; then
+            pr_number="${PR_EVENT_NUMBER}"
           fi
 
-          if [[ "${PR_EVENT_NUMBER:-}" =~ ^[0-9]+$ ]] && [ "${PR_EVENT_NUMBER}" -gt 0 ]; then
-            echo "pr_number=${PR_EVENT_NUMBER}" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [ -z "${pr_number}" ]; then
+            issue_number="${TRACKING_ISSUE:-}"
+            if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
+              echo "::notice::No tracking issue available to resolve behavioural smoke cache source PR; skipping review-runtime restore."
+              exit 0
+            fi
+
+            source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
+
+            # Audit note: validate.yml's existing GitHub calls resolve the
+            # integration branch and record memory events, but none expose the
+            # latest linked PR number needed to restore the per-PR
+            # .ai/review_runtime cache. Use the shared timeline helper here so
+            # the review-runtime lookup stays GraphQL-first and fail-open.
+            timeline_json="$(gh_issue_timeline_with_cross_refs "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${issue_number}" 2>/dev/null || true)"
+            pr_number="$(printf '%s' "${timeline_json}" | jq -r '
+              if (type == "array") then
+                [.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last // empty
+              else
+                empty
+              end
+            ' 2>/dev/null || true)"
           fi
-
-          issue_number="${TRACKING_ISSUE:-}"
-          if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
-            echo "::notice::No tracking issue available to resolve behavioural smoke cache source PR; skipping review-runtime restore."
-            exit 0
-          fi
-
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
-
-          # Audit note: validate.yml's existing GitHub calls resolve the
-          # integration branch and record memory events, but none expose the
-          # latest linked PR number needed to restore the per-PR
-          # .ai/review_runtime cache. Use the shared timeline helper here so
-          # the review-runtime lookup stays GraphQL-first and fail-open.
-          timeline_json="$(gh_issue_timeline_with_cross_refs "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${issue_number}" 2>/dev/null || true)"
-          pr_number="$(printf '%s' "${timeline_json}" | jq -r '
-            if (type == "array") then
-              [.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last // empty
-            else
-              empty
-            end
-          ' 2>/dev/null || true)"
 
           if [[ "${pr_number}" =~ ^[0-9]+$ ]] && [ "${pr_number}" -gt 0 ]; then
-            echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+            # Audit note: no existing call in this workflow exposes the linked
+            # PR's live head SHA, which is required to reject stale cache data.
+            pr_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" --jq '.head.sha // empty' 2>/dev/null || true)"
+            if [[ "${pr_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+              echo "head_sha=${pr_head_sha}" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::Unable to resolve live head SHA for behavioural smoke source PR #${pr_number}; skipping review-runtime restore."
+            fi
           else
-            echo "::notice::No linked PR found for tracking issue #${issue_number}; skipping behavioural smoke runtime restore."
+            echo "::notice::No linked PR found for behavioural smoke runtime restore."
           fi
 
       - name: Prepare behavioural smoke runtime cache path
-        if: steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''
+        if: steps.behavioural_smoke_gate.outputs.enabled == 'true'
         run: |
           set -euo pipefail
-          mkdir -p "${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/"
+          workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          rm -rf "${workspace_root}/.ai/review_runtime"
+          if [ -n "${{ steps.behavioural_smoke_pr.outputs.pr_number }}" ]; then
+            mkdir -p "${workspace_root}/.ai/review_runtime/pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}"
+          fi
 
       - name: Restore behavioural smoke runtime cache
-        if: steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''
+        if: steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != '' && steps.behavioural_smoke_pr.outputs.head_sha != ''
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
@@ -697,7 +715,7 @@ jobs:
             review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-
 
       - name: Stage restored behavioural smoke runtime cache into workspace
-        if: steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''
+        if: steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != '' && steps.behavioural_smoke_pr.outputs.head_sha != ''
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -712,9 +730,11 @@ jobs:
           fi
           ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}"
           ledger_cache_restored_entries=0
-          if [ -d "${ledger_cache_staging_root}/.ai/review_runtime" ]; then
-            mkdir -p "${ledger_cache_workspace_root}/.ai/review_runtime"
-            cp -a "${ledger_cache_staging_root}/.ai/review_runtime/." "${ledger_cache_workspace_root}/.ai/review_runtime/"
+          review_runtime_rel=".ai/review_runtime/pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}"
+          rm -rf "${ledger_cache_workspace_root}/.ai/review_runtime"
+          if [ -d "${ledger_cache_staging_root}/${review_runtime_rel}" ]; then
+            mkdir -p "${ledger_cache_workspace_root}/${review_runtime_rel}"
+            cp -a "${ledger_cache_staging_root}/${review_runtime_rel}/." "${ledger_cache_workspace_root}/${review_runtime_rel}/"
             ledger_cache_restored_entries=1
           fi
           echo "REVIEW_LEDGER_CACHE_STAGE_IN restored_entries=${ledger_cache_restored_entries} staging_root=${ledger_cache_staging_root} workspace_root=${ledger_cache_workspace_root}"
@@ -917,6 +937,9 @@ jobs:
           MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
           VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
+          BEHAVIOURAL_SMOKE_SOURCE_PR: ${{ steps.behavioural_smoke_pr.outputs.pr_number }}
+          BEHAVIOURAL_SMOKE_SOURCE_HEAD_SHA: ${{ steps.behavioural_smoke_pr.outputs.head_sha }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |

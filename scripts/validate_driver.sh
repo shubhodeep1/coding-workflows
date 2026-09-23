@@ -21,6 +21,8 @@ emit_early_init_failure_result()
 
 trap emit_early_init_failure_result EXIT
 
+TRUSTED_SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+
 # Safe parser for the Docker Compose env_file format used by
 # `validation/validate.env`. We intentionally do NOT `source` this file
 # because the generator prompt (prompts/mode-validate-generate.txt)
@@ -112,7 +114,8 @@ CANARY_REQUIRED="${CANARY_REQUIRED:-1}"
 # not executed as TAP tests. Any basename matching HELPER_PATTERN is excluded
 # from test discovery. Default matches the `_lib_*.sh` / `_*.sh` convention.
 HELPER_PATTERN="${HELPER_PATTERN:-_*.sh}"
-# Synthesised behavioural smoke tests use the stable synth_round_*.sh prefix.
+# Synthesised behavioural smoke assertions use the stable
+# synth_round_*_assertions.json prefix.
 # Keep them opt-out so validation can ignore cached/generated advisory tests
 # without affecting normal top-level TAP discovery.
 VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-true}"
@@ -164,6 +167,7 @@ FAILURES_FILE="$(mktemp "${TMPDIR:-/tmp}/validate_failures.XXXXXX")"
 printf '[]\n' > "${FAILURES_FILE}"
 
 TEST_FILES=()
+SYNTH_ASSERTION_FILES=()
 CANARY_TEST=""
 
 capture_compose_logs()
@@ -708,6 +712,11 @@ discover_tests()
 	fi
 
 	mapfile -t all_candidates < <(find "${TEST_DIR}" -maxdepth 1 -type f -name '*.sh' | sort)
+	mapfile -t SYNTH_ASSERTION_FILES < <(find "${TEST_DIR}" -maxdepth 1 -type f -name 'synth_round_*_assertions.json' | sort)
+	if [ "${include_synthesised}" != "true" ]; then
+		synth_files+=("${SYNTH_ASSERTION_FILES[@]}")
+		SYNTH_ASSERTION_FILES=()
+	fi
 
 	TEST_FILES=()
 	for candidate in "${all_candidates[@]}"; do
@@ -726,7 +735,7 @@ discover_tests()
 			helper_files+=("${candidate}")
 			continue
 		fi
-		if [ "${include_synthesised}" != "true" ] && [[ "${candidate_name}" == synth_round_*.sh ]]; then
+		if [[ "${candidate_name}" == synth_round_*.sh ]]; then
 			synth_files+=("${candidate}")
 			continue
 		fi
@@ -742,7 +751,7 @@ discover_tests()
 
 	if [ "${#synth_files[@]}" -gt 0 ]; then
 		{
-			echo "validate_driver: excluded ${#synth_files[@]} synthesised behavioural smoke script(s) from test discovery (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED}):"
+			echo "validate_driver: excluded ${#synth_files[@]} legacy executable or disabled declarative behavioural smoke artifact(s) from test discovery (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED}):"
 			printf '  - %s\n' "${synth_files[@]}"
 		} >&2
 	fi
@@ -843,6 +852,37 @@ run_tests()
 			continue
 		fi
 		run_single_test "${test_file}" "test" || true
+	done
+
+	for test_file in "${SYNTH_ASSERTION_FILES[@]}"; do
+		local test_name="${test_file##*/}"
+		local test_log="${LOG_DIR}/${test_name}.log"
+		local synth_runner="${TRUSTED_SUPPORT_SCRIPTS_DIR}/run_behavioural_smoke_assertions.sh"
+		local exit_code=0
+		local ok_count=0
+		local not_ok_count=0
+
+		set +e
+		if [ ! -x "${synth_runner}" ]; then
+			printf 'trusted behavioural smoke runner is missing: %s\n' "${synth_runner}" > "${test_log}"
+			exit_code=2
+		else
+			bash "${synth_runner}" "${test_file}" "$(pwd -P)" > "${test_log}" 2>&1
+			exit_code=$?
+		fi
+		set -e
+
+		cat "${test_log}"
+		ok_count="$(grep -E -c '^[[:space:]]*ok([[:space:]]+[0-9]+)?([[:space:]]|$)' "${test_log}" || true)"
+		not_ok_count="$(grep -E -c '^[[:space:]]*not ok([[:space:]]+[0-9]+)?([[:space:]]|$)' "${test_log}" || true)"
+		TOTAL_TESTS=$((TOTAL_TESTS + ok_count + not_ok_count))
+		PASSED_TESTS=$((PASSED_TESTS + ok_count))
+		FAILED_TESTS=$((FAILED_TESTS + not_ok_count))
+		if [ "${exit_code}" -ne 0 ]; then
+			TOTAL_TESTS=$((TOTAL_TESTS + 1))
+			FAILED_TESTS=$((FAILED_TESTS + 1))
+			append_failure "${test_name}:isolation_error" "declarative behavioural smoke isolation failed (exit=${exit_code})" "${test_log}"
+		fi
 	done
 }
 
