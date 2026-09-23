@@ -272,6 +272,7 @@ jobs:
       fingerprint_cap_count: ${{ steps.evaluate.outputs.fingerprint_cap_count }}
       fingerprint_cap_max: ${{ steps.evaluate.outputs.fingerprint_cap_max }}
       fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
+      fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
     steps:
       # The identical-failure fingerprint cap in "Evaluate review gate" runs
       # scripts/workflow_failure_heal.py. Only that file is checked out
@@ -880,6 +881,7 @@ jobs:
                   FINGERPRINT_CAP_REASON="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
                   if [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "cap_applied" { print $2 }' | tail -n 1)" = "true" ]; then
                     FINGERPRINT_CAP_ALREADY_APPLIED="true"
+                    echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
                   fi
                   if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ]; then
                     FINGERPRINT_CAP="true"
@@ -1274,6 +1276,7 @@ jobs:
           echo "fingerprint_cap_count=${FINGERPRINT_CAP_COUNT}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_max=${FINGERPRINT_CAP_MAX}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -1692,12 +1695,16 @@ jobs:
     # review-blocked judge) or, with no linked issue, the PR itself; post one
     # cap comment; and report the failure to workflow failure heal. Later
     # dispatches on the same head see the cap marker in the gate's comment
-    # scan and exit here with AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED.
-    # API cost (CLAUDE.md §15): one GET /pulls/{n} (linked issues and the
-    # reporter's PR payload), then the label and comment writes.
+    # scan, log AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED, and skip this job.
+    # API cost (CLAUDE.md §15): one fresh paginated comments GET after the
+    # concurrency lock, one GET /pulls/{n} (linked issues and the reporter's
+    # PR payload), then the label and comment writes.
     needs: gate
     runs-on: ubuntu-latest
-    if: ${{ needs.gate.outputs.fingerprint_cap == 'true' }}
+    concurrency:
+      group: fingerprint-cap-${{ github.repository }}-${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    if: ${{ needs.gate.outputs.fingerprint_cap == 'true' && needs.gate.outputs.fingerprint_cap_already_applied != 'true' }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       REPOSITORY: ${{ github.repository }}
@@ -1708,6 +1715,7 @@ jobs:
       FINGERPRINT_CAP_COUNT: ${{ needs.gate.outputs.fingerprint_cap_count }}
       FINGERPRINT_CAP_MAX: ${{ needs.gate.outputs.fingerprint_cap_max }}
       FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
+      FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
       WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
@@ -1800,6 +1808,24 @@ jobs:
 
           work_dir="${RUNNER_TEMP:-/tmp}/fingerprint_cap"
           mkdir -p "${work_dir}"
+          # The gate snapshot can predate another queued cap job. The
+          # per-PR concurrency lock above serializes writers; re-read comments
+          # after acquiring it so only the first job applies side effects.
+          # The PR read below cannot provide comments or their author (§15).
+          fresh_cap_comments_file="${work_dir}/fresh_comments.json"
+          if [ -z "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" ] \
+            || ! gh_retry gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
+              --jq '[.[] | {author_login: (.user.login // ""), body: (.body // "")}]' \
+              | jq -c -s 'add // []' > "${fresh_cap_comments_file}"; then
+            echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=fresh_cap_marker_lookup_failed"
+            exit 0
+          fi
+          if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" \
+            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")))' \
+            "${fresh_cap_comments_file}" >/dev/null; then
+            echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
+            exit 0
+          fi
           pr_json="${work_dir}/pr_payload.json"
           if ! gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "${pr_json}" 2>/dev/null; then
             echo "::warning::Could not fetch PR #${PR_NUMBER}; labeling the PR itself ai:review-blocked without linked-issue resolution."

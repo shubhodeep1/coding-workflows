@@ -1748,6 +1748,7 @@ def test_gate_cap_already_applied_threshold_bypass_and_fail_open() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-applied-") as tmp_name:
 		result, outputs, _state = _run_gate(Path(tmp_name), comments=[*three, cap], event_name="pull_request")
 		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_already_applied"] == "true", result.stdout
+		assert f"AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=4259 head={SHA_A} fp={fp} count=3" in result.stdout
 	# Two identical failures stay below the default threshold of 3.
 	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-below-") as tmp_name:
 		result, outputs, _state = _run_gate(Path(tmp_name), comments=three[:2])
@@ -1817,6 +1818,8 @@ path = next((a for a in args[1:] if a.startswith("repos/")), "")
 if path.endswith("/dispatches"):
 	body = json.loads(Path(args[args.index("--input") + 1]).read_text())
 	data.setdefault("dispatches", []).append(body)
+elif path.endswith("/comments") and method == "GET":
+	print(json.dumps(data.get("comments", [])))
 elif path.endswith("/comments") and method == "POST":
 	data.setdefault("comments_posted", []).append(field("body"))
 elif path.endswith("/labels") and method == "GET":
@@ -1843,7 +1846,7 @@ def _cap_job_script() -> str:
 	return next(step for step in job["steps"] if step.get("name") == "Apply identical-failure cap outcome")["run"]
 
 
-def _run_cap_job(tmp: Path, *, pr_body: str, already_applied: str = "false", head: str = SHA_A) -> tuple[subprocess.CompletedProcess[str], dict]:
+def _run_cap_job(tmp: Path, *, pr_body: str, already_applied: str = "false", head: str = SHA_A, fresh_cap_marker: bool = False) -> tuple[subprocess.CompletedProcess[str], dict]:
 	work = tmp / "work"
 	scripts = work / ".codex-workflow-src" / "scripts"
 	scripts.mkdir(parents=True)
@@ -1855,7 +1858,8 @@ def _run_cap_job(tmp: Path, *, pr_body: str, already_applied: str = "false", hea
 	(bin_dir / "gh").chmod(0o755)
 	state_file = tmp / "cap_state.json"
 	pr = {"number": 4259, "state": "open", "title": "AI implementation for issue #4255", "body": pr_body, "html_url": f"https://github.com/{SELF_REPO}/pull/4259", "labels": [], "head": {"ref": "ai/issue-4255", "sha": head}}
-	state_file.write_text(json.dumps({"pr": pr}), encoding="utf-8")
+	comments = [{"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 -->"}] if fresh_cap_marker else []
+	state_file.write_text(json.dumps({"pr": pr, "comments": comments}), encoding="utf-8")
 	(tmp / "runner_temp").mkdir()
 	summary = tmp / "summary.md"
 	env = {
@@ -1877,6 +1881,7 @@ def _run_cap_job(tmp: Path, *, pr_body: str, already_applied: str = "false", hea
 		"FINGERPRINT_CAP_COUNT": "3",
 		"FINGERPRINT_CAP_MAX": "3",
 		"FINGERPRINT_CAP_ALREADY_APPLIED": already_applied,
+		"FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN": CAP_AUTHOR,
 		"WORKFLOW_SUPPORT_REF": SHA_B,
 		"WORKFLOW_HEAL_ENABLED": "true",
 		"REPORT_WORKFLOW_NAME": "Internal Review",
@@ -1922,6 +1927,11 @@ def test_fingerprint_cap_block_pr_label_idempotency_and_head_moved() -> None:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", already_applied="true")
 		assert f"AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=4259 head={SHA_A} fp={FP_HEX} count=3" in result.stdout
 		assert state.get("calls", []) == []
+	# A queued cap job re-checks after acquiring the per-PR lock and writes nothing.
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-fresh-marker-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", fresh_cap_marker=True)
+		assert f"AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=4259 head={SHA_A} fp={FP_HEX} count=3" in result.stdout
+		assert "labels_set" not in state and "comments_posted" not in state and "dispatches" not in state
 	# A push after the gate: the new head gets its own run.
 	with tempfile.TemporaryDirectory(prefix="heal-cap-job-moved-") as tmp_name:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", head=SHA_B)

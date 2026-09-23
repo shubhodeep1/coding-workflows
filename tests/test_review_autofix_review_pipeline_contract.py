@@ -6618,7 +6618,7 @@ def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
 	deterministic = gate.index("# Deterministic pre-review skip (last gate check):")
 	assert terminal < cap < deterministic
 	assert 'if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then' in gate
-	for output in ("fingerprint_cap", "fingerprint_cap_fp", "fingerprint_cap_reason", "fingerprint_cap_count", "fingerprint_cap_max", "fingerprint_cap_already_applied"):
+	for output in ("fingerprint_cap", "fingerprint_cap_fp", "fingerprint_cap_reason", "fingerprint_cap_count", "fingerprint_cap_max", "fingerprint_cap_already_applied", "fingerprint_cap_marker_author_login"):
 		assert f'echo "{output}=${{' in gate, output
 		assert f"{output}: ${{{{ steps.evaluate.outputs.{output} }}}}" in _job_block("gate"), output
 	gate_job = _job_block("gate")
@@ -6633,10 +6633,15 @@ def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
 def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	job = _job_block("fingerprint-cap-block")
 	assert "needs: gate" in job
-	assert "if: ${{ needs.gate.outputs.fingerprint_cap == 'true' }}" in job
+	assert "group: fingerprint-cap-${{ github.repository }}-${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.run_id }}" in job
+	assert "cancel-in-progress: false" in job
+	assert "if: ${{ needs.gate.outputs.fingerprint_cap == 'true' && needs.gate.outputs.fingerprint_cap_already_applied != 'true' }}" in job
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in job
 	assert "PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in job
 	assert "FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}" in job
+	assert "FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}" in job
+	assert 'fresh_cap_comments_file="${work_dir}/fresh_comments.json"' in job
+	assert "reason=fresh_cap_marker_lookup_failed" in job
 	# Idempotent: a cap marker already on the head ends the job before any write.
 	already = job.index("AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=")
 	assert already < job.index('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"')
