@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4343` at `241d891077e1d4c9d87629e7271c35e0a254f5d1`\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary_b.txt`\n\nScope-mode justification: This is a complete, isolated two-line fixture update. No broader changes improve correctness, so scope remains limited to the declared file.\n\n## Automation impact\n\n- Extends existing code only; no new script.\n- Scheduler/PR-push entry point: unchanged; existing smoke automation consumes the fixture.\n- Long-running supervisor: not required.\n- Database work or gate: none.\n- Future-removal registry entry: not required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary_b.txt`\n  - Preserve line 1 as `status: ok`.\n  - Replace line 2 with `decompose-run: 35903885958`.\n  - Ensure there are exactly two lines and no additional content.\n\n## Functions or modules to implement\n\nNone. This is a data-fixture-only edit.\n\n## Data structures affected\n\nThe plain-text canary record remains a two-key, two-line structure:\n\n```text\nstatus: ok\ndecompose-run: 35903885958\n```\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Apply an exact fixture replacement\n\n- **Chosen:** Update only the existing `decompose-run` value and verify the complete file exactly.\n- **Alternatives considered:** Append the new run, add explanatory metadata, or update related canaries.\n- **Why:** The issue explicitly requires exactly two lines and independence from the primary canary.\n\n## Security considerations\n\n- **Trust boundary:** Treat the issue-supplied run identifier as fixed fixture data, not executable input.\n- **Authorization:** No endpoint, workflow permission, or authorization surface changes.\n- **Validation:** Verify exact content, line count, and absence of extra whitespace or lines.\n- **Abuse cases:** Prevent injected additional fields or accidental coupling to another canary by changing only the declared file.\n- No secrets, money handling, external calls, or sensitive logging are involved.\n\n## Risks and edge cases\n\n- An extra blank line or comment would violate the exact-content requirement.\n- Editing another canary would violate independence and the declared file scope.\n- No codebase conflict found: the file exists and currently contains the expected two-line format, with only the old run identifier differing.\n\n## Testing considerations\n\n- Compare the file against the exact expected two-line payload.\n- Assert the file has exactly two lines.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary_b.txt`.\n- No broader test suite is necessary for this fixture-only change.\n\n## Pre-execution self-check\n\n- Clarification answer is sufficient.\n- Checkout and integration branch both resolve to `orchestrator/project-4343`.\n- The target file exists and the requested change is unambiguous.\n- Plan stays within the declared file scope.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "06017cd30f2d7e847a43823cee80518cf314bfe8a26f056190bc304121ec2753",
+  "lineage": {
+    "issue_number": 4345,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35904529358",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35904529358",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4345"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260923184821_41fa21d55e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4345,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35904529358"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4345",
+  "timestamps": {
+    "created_at": "2026-09-23T18:48:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
