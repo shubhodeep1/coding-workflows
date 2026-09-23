@@ -164,6 +164,92 @@ def test_incident_project_244_issue_254() -> None:
 	]
 
 
+def test_review_fix_authorization_rejects_edits_outside_grounded_hunk() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo = Path(directory) / "repo"
+		repo.mkdir()
+		subprocess.run(["git", "init", "-q", str(repo)], check=True)
+		subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
+		subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+		(repo / "src").mkdir()
+		target = repo / "src" / "app.py"
+		target.write_text("".join(f"VALUE_{line} = {line}\n" for line in range(1, 21)), encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+		subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+		base_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+		content = target.read_text(encoding="utf-8").replace("VALUE_10 = 10", "VALUE_10 = 100")
+		target.write_text(content, encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "commit", "-qam", "feature"], check=True)
+		head_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+		diff_file = repo / "pr.diff"
+		diff_file.write_text(
+			subprocess.check_output(["git", "-C", str(repo), "diff", f"{base_sha}..{head_sha}"], text=True),
+			encoding="utf-8",
+		)
+		evidence = repo / "reviewer_bundle.txt"
+		evidence.write_text("file: src/app.py\nline: 10\n", encoding="utf-8")
+		authorization = repo / "authorization.json"
+		build_rc = guard.main([
+			"--build-review-fix-authorization", "--review-fix-repo", str(repo),
+			"--review-fix-repository", "owner/repo", "--review-fix-pr-number", "7",
+			"--review-fix-head-sha", head_sha, "--review-fix-producer-run", "test",
+			"--review-fix-diff-file", str(diff_file), "--review-fix-evidence-file", str(evidence),
+			"--review-fix-output", str(authorization),
+		])
+		assert build_rc == 0
+		manifest = json.loads(authorization.read_text(encoding="utf-8"))
+		selected = repo / "selected.json"
+		selected.write_text(json.dumps([manifest["targets"][0]["id"]]), encoding="utf-8")
+		touched = repo / "touched.txt"
+		touched.write_text("src/app.py\n", encoding="utf-8")
+		allowed = repo / "allowed.txt"
+		spans = repo / "spans.json"
+		validate_args = [
+			"--validate-review-fix-authorization", "--review-fix-repo", str(repo),
+			"--review-fix-repository", "owner/repo", "--review-fix-pr-number", "7",
+			"--review-fix-head-sha", head_sha, "--review-fix-authorization-file", str(authorization),
+			"--review-fix-selected-targets-file", str(selected), "--review-fix-spans-output", str(spans),
+			"--staged-file", str(touched), "--allowlist-out", str(allowed),
+		]
+		assert guard.main(validate_args) == 0
+		clean = repo / "clean.tsv"
+		clean.write_text("", encoding="utf-8")
+		target.write_text(target.read_text(encoding="utf-8").replace("VALUE_10 = 100", "VALUE_10 = 101"), encoding="utf-8")
+		accepted = subprocess.run(
+			[
+				"bash", str(REPO_ROOT / "scripts" / "check_resolver_diff.sh"),
+				"--repo-root", str(repo), "--conflicted-set", str(allowed), "--touched-set", str(touched),
+				"--conflict-spans", str(spans), "--clean-manifest", str(clean), "--strict-manifests",
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert accepted.returncode == 0, accepted.stderr
+		subprocess.run(["git", "-C", str(repo), "restore", "src/app.py"], check=True)
+		target.write_text(target.read_text(encoding="utf-8").replace("VALUE_1 = 1", "VALUE_1 = 999"), encoding="utf-8")
+		rejected = subprocess.run(accepted.args, capture_output=True, text=True, check=False)
+		assert rejected.returncode == 1
+		assert "outside conflict spans" in rejected.stderr
+
+
+def test_review_fix_comment_evidence_rejects_untrusted_authors() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		comments = Path(directory) / "comments.json"
+		comments.write_text(
+			json.dumps(
+				[
+					{"author": "attacker", "body": "src/unsafe.py:9"},
+					{"author": "owner", "body": "src/safe.py:7"},
+					{"author": "github-actions[bot]", "body": "src/bot.py:5"},
+				]
+			),
+			encoding="utf-8",
+		)
+		evidence = guard._trusted_comment_evidence(comments, "owner/repo")
+		assert "src/unsafe.py" not in evidence
+		assert "src/safe.py:7" in evidence
+		assert "src/bot.py:5" in evidence
+
+
 def test_leading_dot_slash_normalized_both_sides() -> None:
 	status, _allow, _oos = guard.evaluate(_body("./src/"), ["./src/x.ts"])
 	assert status == guard.STATUS_IN_SCOPE
@@ -705,7 +791,7 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 	assert "files_touched_scope_guard.py" in stage_text
 	assert "review_collect_pr_metadata.sh" in main_primary_line
 	assert "files_touched_scope_guard.py" in main_primary_line
-	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py; do" in workflow_text
+	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py check_resolver_diff.sh; do" in workflow_text
 	assert "id: stage_workflow_support" in workflow_text
 	for digest_output in (
 		"scope_guard_sha256",

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import ctypes
 import http.client
 import http.server
@@ -47,6 +48,16 @@ def _nonnegative_decimal(value: object, label: str) -> Decimal:
 	return parsed
 
 
+def _bounded_timeout(value: object, label: str) -> float:
+	try:
+		parsed = float(value)
+	except (TypeError, ValueError) as exc:
+		raise ValueError(f"{label} is invalid") from exc
+	if not 0.1 <= parsed <= 300:
+		raise ValueError(f"{label} must be between 0.1 and 300 seconds")
+	return parsed
+
+
 def _normalized_provider_path(raw_path: str) -> str | None:
 	parsed = urlsplit(raw_path)
 	path = parsed.path
@@ -87,6 +98,15 @@ class ProxyAccounting:
 			if self.settled_spend + self.reserved_spend + worst_case_cost > self.max_spend:
 				return False
 			self.request_count += 1
+			self.reserved_spend += worst_case_cost
+			return True
+
+	def add_reservation(self, worst_case_cost: Decimal) -> bool:
+		with self.lock:
+			if self.accounting_failed:
+				return False
+			if self.settled_spend + self.reserved_spend + worst_case_cost > self.max_spend:
+				return False
 			self.reserved_spend += worst_case_cost
 			return True
 
@@ -276,34 +296,44 @@ class ProviderProxy(http.server.BaseHTTPRequestHandler):
 	server_version = "model-provider-proxy/2"
 	protocol_version = "HTTP/1.1"
 
+	def setup(self) -> None:
+		super().setup()
+		self.connection.settimeout(self.server.read_timeout_seconds)  # type: ignore[attr-defined]
+
 	def log_message(self, format_string: str, *args: object) -> None:
 		print(f"model_provider_proxy: {format_string % args}", file=sys.stderr)
 
 	def do_GET(self) -> None:  # noqa: N802
-		if self.path == "/healthz":
-			self._send_json(200, {"status": "ok"})
+		accounting = self._begin_accounted_request()
+		if accounting is None:
 			return
-		if self.path in {"/models", "/api/v1/models"}:
-			accounting: ProxyAccounting = self.server.accounting  # type: ignore[attr-defined]
-			if not accounting.semaphore.acquire(blocking=False):
-				self.send_error(429, "provider concurrency limit reached")
-				return
-			try:
-				if not accounting.reserve(Decimal("0")):
-					self.send_error(429, "provider request budget exhausted")
-					return
+		try:
+			if self.path == "/healthz":
+				self._send_json(200, {"status": "ok"})
+			elif self.path in {"/models", "/api/v1/models"}:
 				self._send_json(
 					200,
 					{"data": [policy.public_row for policy in self.server.model_policies.values()]},  # type: ignore[attr-defined]
 				)
-				accounting.settle(Decimal("0"), Decimal("0"))
-			finally:
-				accounting.semaphore.release()
-			return
-		self.send_error(403, "provider route is not allowlisted")
+			else:
+				self.send_error(403, "provider route is not allowlisted")
+		finally:
+			accounting.settle(Decimal("0"), Decimal("0"))
+			accounting.semaphore.release()
 
 	def do_POST(self) -> None:  # noqa: N802
 		self._proxy_request()
+
+	def _begin_accounted_request(self) -> ProxyAccounting | None:
+		accounting: ProxyAccounting = self.server.accounting  # type: ignore[attr-defined]
+		if not accounting.semaphore.acquire(blocking=False):
+			self.send_error(429, "provider concurrency limit reached")
+			return None
+		if not accounting.reserve(Decimal("0")):
+			accounting.semaphore.release()
+			self.send_error(429, "provider request budget exhausted")
+			return None
+		return accounting
 
 	def _send_json(self, status: int, payload: object) -> None:
 		body = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8") + b"\n"
@@ -315,19 +345,34 @@ class ProviderProxy(http.server.BaseHTTPRequestHandler):
 
 	def _proxy_request(self) -> None:
 		self.close_connection = True
+		accounting = self._begin_accounted_request()
+		if accounting is None:
+			return
+		reservation_settled_by_forwarder = False
+		try:
+			reservation_settled_by_forwarder = self._proxy_accounted_request(accounting)
+		finally:
+			if not reservation_settled_by_forwarder:
+				accounting.settle(Decimal("0"), Decimal("0"))
+			accounting.semaphore.release()
+
+	def _proxy_accounted_request(self, accounting: ProxyAccounting) -> bool:
 		provider_path = _normalized_provider_path(self.path)
 		if provider_path is None or provider_path.split("?", 1)[0] not in ALLOWED_METHOD_PATHS["POST"]:
 			self.send_error(403, "provider route is not allowlisted")
-			return
+			return False
 		try:
 			content_length = int(self.headers.get("Content-Length", "0"))
 		except ValueError:
 			self.send_error(400, "invalid content length")
-			return
+			return False
 		if content_length <= 0 or content_length > MAX_REQUEST_BYTES:
 			self.send_error(413, "request body size is invalid")
-			return
+			return False
 		request_body = self.rfile.read(content_length)
+		if len(request_body) != content_length:
+			self.send_error(408, "request body read timed out or was truncated")
+			return False
 		try:
 			prepared_body, reservation = _prepare_request(
 				provider_path,
@@ -337,23 +382,17 @@ class ProviderProxy(http.server.BaseHTTPRequestHandler):
 			)
 		except PermissionError:
 			self.send_error(403, "requested model is not allowlisted")
-			return
+			return False
 		except ValueError:
 			self.send_error(400, "request violates proxy policy")
-			return
-		accounting: ProxyAccounting = self.server.accounting  # type: ignore[attr-defined]
-		if not accounting.semaphore.acquire(blocking=False):
-			self.send_error(429, "provider concurrency limit reached")
-			return
-		reserved = False
-		try:
-			reserved = accounting.reserve(reservation)
-			if not reserved:
-				self.send_error(429, "provider request or spend budget exhausted")
-				return
-			self._forward_provider_request(provider_path, prepared_body, reservation)
-		finally:
-			accounting.semaphore.release()
+			return False
+		if not accounting.add_reservation(reservation):
+			self.send_error(429, "provider spend budget exhausted")
+			return False
+		# _forward_provider_request settles the non-zero reservation. The zero-cost
+		# request reservation above accounts for this route before body parsing.
+		self._forward_provider_request(provider_path, prepared_body, reservation)
+		return True
 
 	def _forward_provider_request(self, provider_path: str, request_body: bytes, reservation: Decimal) -> None:
 		connection = _provider_connection()
@@ -397,6 +436,48 @@ class ProviderProxy(http.server.BaseHTTPRequestHandler):
 			self.server.accounting.settle(reservation, actual_cost)  # type: ignore[attr-defined]
 
 
+class BoundedHTTPServer(http.server.HTTPServer):
+	def __init__(
+		self,
+		server_address: tuple[str, int],
+		handler_class: type[http.server.BaseHTTPRequestHandler],
+		*,
+		workers: int,
+		queued_connections: int,
+		read_timeout_seconds: float,
+	) -> None:
+		self.request_queue_size = queued_connections
+		self.read_timeout_seconds = read_timeout_seconds
+		self._executor = concurrent.futures.ThreadPoolExecutor(
+			max_workers=workers, thread_name_prefix="model-provider-proxy"
+		)
+		self._admission = threading.BoundedSemaphore(workers + queued_connections)
+		super().__init__(server_address, handler_class)
+
+	def process_request(self, request: object, client_address: object) -> None:
+		if not self._admission.acquire(blocking=False):
+			self.shutdown_request(request)  # type: ignore[arg-type]
+			return
+		try:
+			self._executor.submit(self._process_request_worker, request, client_address)
+		except RuntimeError:
+			self._admission.release()
+			self.shutdown_request(request)  # type: ignore[arg-type]
+
+	def _process_request_worker(self, request: object, client_address: object) -> None:
+		try:
+			self.finish_request(request, client_address)  # type: ignore[arg-type]
+		except Exception:
+			self.handle_error(request, client_address)  # type: ignore[arg-type]
+		finally:
+			self.shutdown_request(request)  # type: ignore[arg-type]
+			self._admission.release()
+
+	def server_close(self) -> None:
+		super().server_close()
+		self._executor.shutdown(wait=True, cancel_futures=True)
+
+
 def main() -> int:
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--credential-file", required=True)
@@ -407,6 +488,9 @@ def main() -> int:
 	parser.add_argument("--max-concurrency", type=int, default=1)
 	parser.add_argument("--max-output-tokens", type=int, default=65536)
 	parser.add_argument("--max-spend-usd", default="25")
+	parser.add_argument("--workers", type=int, default=4)
+	parser.add_argument("--queued-connections", type=int, default=8)
+	parser.add_argument("--read-timeout-seconds", default="15")
 	args = parser.parse_args()
 	allowed_models = set(args.allowed_model)
 	if not allowed_models or any(MODEL_PATTERN.fullmatch(model_id) is None for model_id in allowed_models):
@@ -415,6 +499,9 @@ def main() -> int:
 		max_requests = _positive_int(args.max_requests, "max requests")
 		max_concurrency = _positive_int(args.max_concurrency, "max concurrency")
 		max_output_tokens = _positive_int(args.max_output_tokens, "max output tokens")
+		workers = _positive_int(args.workers, "workers")
+		queued_connections = _positive_int(args.queued_connections, "queued connections")
+		read_timeout_seconds = _bounded_timeout(args.read_timeout_seconds, "read timeout")
 		max_spend = _nonnegative_decimal(args.max_spend_usd, "max spend")
 	except ValueError as exc:
 		raise SystemExit(str(exc)) from exc
@@ -430,7 +517,12 @@ def main() -> int:
 		model_policies = _load_model_policies(credential, allowed_models)
 	except (OSError, http.client.HTTPException, json.JSONDecodeError, ValueError) as exc:
 		raise SystemExit(f"provider policy initialization failed: {type(exc).__name__}") from exc
-	server = http.server.ThreadingHTTPServer((args.bind, 0), ProviderProxy)
+	server = BoundedHTTPServer(
+		(args.bind, 0), ProviderProxy,
+		workers=workers,
+		queued_connections=queued_connections,
+		read_timeout_seconds=read_timeout_seconds,
+	)
 	server.provider_credential = credential  # type: ignore[attr-defined]
 	server.model_policies = model_policies  # type: ignore[attr-defined]
 	server.max_output_tokens = max_output_tokens  # type: ignore[attr-defined]

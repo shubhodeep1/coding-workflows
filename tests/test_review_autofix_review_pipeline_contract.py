@@ -6983,5 +6983,33 @@ def test_review_commits_and_pushes_use_trusted_git_boundary() -> None:
 		assert "trusted_git_write.sh" in script
 
 
+def test_conflict_resolver_requires_span_and_clean_tree_manifests() -> None:
+	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	resolve = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	guard = (REPO_ROOT / "scripts" / "check_resolver_diff.sh").read_text(encoding="utf-8")
+	assert 'CONFLICT_SPANS_FILE="${RUNTIME_DIR}/resolver_conflict_spans.json"' in prepare
+	assert 'CLEAN_MERGE_MANIFEST_FILE="${RUNTIME_DIR}/resolver_clean_manifest.tsv"' in prepare
+	assert "git merge-tree --write-tree HEAD" in prepare
+	assert '--conflict-spans "${CONFLICT_SPANS_FILE}"' in resolve
+	assert '--clean-manifest "${CLEAN_MERGE_MANIFEST_FILE}"' in resolve
+	assert "--strict-manifests" in resolve
+	assert "strict mode requires --conflict-spans and --clean-manifest" in guard
+
+
+def test_review_blocked_writers_require_head_bound_fix_targets_and_spans() -> None:
+	standalone = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	prompt = (REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt").read_text(encoding="utf-8")
+	for writer in (standalone, poller):
+		assert "--build-review-fix-authorization" in writer
+		assert "--validate-review-fix-authorization" in writer
+		assert "fix_targets" in writer
+		assert "--conflict-spans" in writer
+		assert "--strict-manifests" in writer
+	assert 'git add -A -- .' not in poller[poller.index('fix)'):poller.index('merge_with_followup)', poller.index('fix)'))]
+	assert '"fix_targets"' in prompt
+	assert "trusted targets exist, do not choose `fix`." in prompt
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

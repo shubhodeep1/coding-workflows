@@ -396,7 +396,7 @@ jobs:
           # Freeze the privilege-boundary helpers before any model process can
           # write the checkout. The poller refuses to source these from the
           # model-writable worktree at runtime.
-          for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh check_resolver_diff.sh; do
+          for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh check_resolver_diff.sh files_touched_scope_guard.py; do
             install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"
           done
 

@@ -113,6 +113,9 @@ else
 		--max-concurrency "${MODEL_PROVIDER_PROXY_MAX_CONCURRENCY:-1}" \
 		--max-output-tokens "${MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS:-65536}" \
 		--max-spend-usd "${MODEL_PROVIDER_PROXY_MAX_SPEND_USD:-25}" \
+		--workers "${MODEL_PROVIDER_PROXY_WORKERS:-4}" \
+		--queued-connections "${MODEL_PROVIDER_PROXY_QUEUED_CONNECTIONS:-8}" \
+		--read-timeout-seconds "${MODEL_PROVIDER_PROXY_READ_TIMEOUT_SECONDS:-15}" \
 		"${proxy_args[@]}" >"${proxy_log}" 2>&1 &
 	proxy_pid=$!
 	for _proxy_wait in $(seq 1 100); do
@@ -293,6 +296,46 @@ if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then
 fi
 command -v systemd-run >/dev/null 2>&1 \
 	|| { echo "untrusted_process_sandbox: systemd-run is required" >&2; exit 1; }
+
+validate_positive_integer()
+{
+	local value="$1"
+	local label="$2"
+	[[ "${value}" =~ ^[1-9][0-9]*$ ]] \
+		|| { echo "untrusted_process_sandbox: ${label} must be a positive integer" >&2; exit 1; }
+}
+
+validate_resource_size()
+{
+	local value="$1"
+	local label="$2"
+	local allow_zero="${3:-false}"
+	if [ "${allow_zero}" = true ] && [ "${value}" = 0 ]; then
+		return 0
+	fi
+	[[ "${value}" =~ ^[1-9][0-9]*([KMGT])?$ ]] \
+		|| { echo "untrusted_process_sandbox: ${label} must be a positive systemd size" >&2; exit 1; }
+}
+
+sandbox_tasks_max="${UNTRUSTED_SANDBOX_TASKS_MAX:-128}"
+sandbox_memory_max="${UNTRUSTED_SANDBOX_MEMORY_MAX:-8G}"
+sandbox_memory_swap_max="${UNTRUSTED_SANDBOX_MEMORY_SWAP_MAX:-0}"
+sandbox_cpu_quota="${UNTRUSTED_SANDBOX_CPU_QUOTA:-200%}"
+sandbox_io_read_max="${UNTRUSTED_SANDBOX_IO_READ_BANDWIDTH_MAX:-100M}"
+sandbox_io_write_max="${UNTRUSTED_SANDBOX_IO_WRITE_BANDWIDTH_MAX:-50M}"
+sandbox_limit_nofile="${UNTRUSTED_SANDBOX_LIMIT_NOFILE:-4096}"
+sandbox_runtime_max_sec="${UNTRUSTED_SANDBOX_RUNTIME_MAX_SEC:-7200}"
+sandbox_stop_timeout_sec="${UNTRUSTED_SANDBOX_STOP_TIMEOUT_SEC:-30}"
+validate_positive_integer "${sandbox_tasks_max}" "TasksMax"
+validate_resource_size "${sandbox_memory_max}" "MemoryMax"
+validate_resource_size "${sandbox_memory_swap_max}" "MemorySwapMax" true
+[[ "${sandbox_cpu_quota}" =~ ^[1-9][0-9]{0,3}%$ ]] \
+	|| { echo "untrusted_process_sandbox: CPUQuota must be a percentage from 1% to 9999%" >&2; exit 1; }
+validate_resource_size "${sandbox_io_read_max}" "IOReadBandwidthMax"
+validate_resource_size "${sandbox_io_write_max}" "IOWriteBandwidthMax"
+validate_positive_integer "${sandbox_limit_nofile}" "LimitNOFILE"
+validate_positive_integer "${sandbox_runtime_max_sec}" "RuntimeMaxSec"
+validate_positive_integer "${sandbox_stop_timeout_sec}" "TimeoutStopSec"
 systemd_run=(systemd-run)
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
 	systemd_run=(sudo -n systemd-run --uid="$(id -u)" --gid="$(id -g)")
@@ -304,6 +347,17 @@ systemd_properties=(
 	--property=ProcSubset=pid
 	--property=RestrictSUIDSGID=yes
 	--property=LockPersonality=yes
+	--property="TasksMax=${sandbox_tasks_max}"
+	--property="MemoryMax=${sandbox_memory_max}"
+	--property="MemorySwapMax=${sandbox_memory_swap_max}"
+	--property="CPUQuota=${sandbox_cpu_quota}"
+	--property="IOReadBandwidthMax=/ ${sandbox_io_read_max}"
+	--property="IOWriteBandwidthMax=/ ${sandbox_io_write_max}"
+	--property="LimitNOFILE=${sandbox_limit_nofile}"
+	--property="RuntimeMaxSec=${sandbox_runtime_max_sec}"
+	--property=KillMode=control-group
+	--property=OOMPolicy=kill
+	--property="TimeoutStopSec=${sandbox_stop_timeout_sec}"
 	--property=IPAddressDeny=any
 	--property="IPAddressAllow=${proxy_host}/32"
 	--property="InaccessiblePaths=${credential_file} -/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh"

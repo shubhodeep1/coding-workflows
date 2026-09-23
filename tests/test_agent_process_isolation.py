@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import importlib.util
+import http.client
 import json
 import os
 import runpy
 import subprocess
+import socket
 import tempfile
+import threading
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -88,6 +92,19 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert 'find "${workspace}" -xdev -name .git -print0' in sandbox_text
 	assert 'InaccessiblePaths=${protected_git_path}' in sandbox_text
 	assert "GIT_DIR|GIT_WORK_TREE" not in sandbox_text
+	assert "ThreadingHTTPServer" not in module_text
+	assert "class BoundedHTTPServer" in module_text
+	assert "ThreadPoolExecutor" in module_text
+	assert "settimeout(self.server.read_timeout_seconds)" in module_text
+	for resource_property in (
+		"TasksMax", "MemoryMax", "MemorySwapMax", "CPUQuota", "IOReadBandwidthMax",
+		"IOWriteBandwidthMax", "LimitNOFILE", "RuntimeMaxSec", "KillMode=control-group",
+		"OOMPolicy=kill", "TimeoutStopSec",
+	):
+		assert resource_property in sandbox_text
+	assert '--workers "${MODEL_PROVIDER_PROXY_WORKERS:-4}"' in sandbox_text
+	assert '--queued-connections "${MODEL_PROVIDER_PROXY_QUEUED_CONNECTIONS:-8}"' in sandbox_text
+	assert '--read-timeout-seconds "${MODEL_PROVIDER_PROXY_READ_TIMEOUT_SECONDS:-15}"' in sandbox_text
 
 
 def test_provider_proxy_enforces_model_tokens_usage_and_accounting() -> None:
@@ -158,6 +175,41 @@ def test_provider_proxy_enforces_model_tokens_usage_and_accounting() -> None:
 	assert accounting.reserve(Decimal("1.5")) is True
 	accounting.settle(Decimal("1.5"), None)
 	assert accounting.reserve(Decimal("0.01")) is False
+
+
+def test_provider_proxy_recovers_after_bounded_partial_connections() -> None:
+	proxy_namespace = runpy.run_path(str(PROXY))
+	server = proxy_namespace["BoundedHTTPServer"](
+		("127.0.0.1", 0),
+		proxy_namespace["ProviderProxy"],
+		workers=1,
+		queued_connections=1,
+		read_timeout_seconds=0.1,
+	)
+	server.provider_credential = "synthetic"
+	server.model_policies = {}
+	server.max_output_tokens = 1
+	server.accounting = proxy_namespace["ProxyAccounting"](20, 1, Decimal("1"))
+	server_thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+	server_thread.start()
+	partial_clients: list[socket.socket] = []
+	try:
+		for _index in range(8):
+			client = socket.create_connection(server.server_address, timeout=1)
+			partial_clients.append(client)
+		time.sleep(0.35)
+		connection = http.client.HTTPConnection(*server.server_address, timeout=1)
+		connection.request("GET", "/healthz")
+		response = connection.getresponse()
+		assert response.status == 200
+		assert json.loads(response.read()) == {"status": "ok"}
+		connection.close()
+	finally:
+		for client in partial_clients:
+			client.close()
+		server.shutdown()
+		server.server_close()
+		server_thread.join(timeout=2)
 
 
 def test_package_download_proxy_allows_only_pypi_tls_tunnels() -> None:
@@ -265,6 +317,41 @@ def test_causal_scope_includes_new_reverse_route_caller() -> None:
 		causality_text = CAUSALITY.read_text(encoding="utf-8")
 		assert '["git", "archive", "--format=tar", ref, "--", *files]' in causality_text
 		assert 'if not files:\n\t\treturn symbols, sources' in causality_text
+
+
+def test_causal_scope_is_indeterminate_when_reverse_callers_exceed_depth_bound() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo = Path(directory) / "repo"
+		repo.mkdir()
+		subprocess.run(["git", "init", "-q", str(repo)], check=True)
+		(repo / "app.py").write_text(
+			"def privileged_sink(user):\n\treturn user.secret\n\n"
+			"def caller_1(user):\n\treturn privileged_sink(user)\n\n"
+			"def caller_2(user):\n\treturn caller_1(user)\n\n"
+			"def caller_3(user):\n\treturn caller_2(user)\n\n"
+			"def caller_4(user):\n\treturn caller_3(user)\n\n"
+			"def caller_5(user):\n\treturn caller_4(user)\n",
+			encoding="utf-8",
+		)
+		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+			check=True,
+		)
+		base_sha = subprocess.check_output(
+			["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+		).strip()
+		result = subprocess.run(
+			[
+				"python3", str(CAUSALITY), "--repo", str(repo), "--file", "app.py",
+				"--line", "1", "--base", base_sha, "--head", base_sha,
+			],
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		payload = json.loads(result.stdout)
+		assert payload["causal_scope_status"] == "indeterminate"
 
 
 def test_causal_scope_tracks_module_level_route_guard_deletion() -> None:
@@ -394,7 +481,7 @@ def test_shared_waiver_revalidation_rejects_routing_config_changes() -> None:
 			capture_output=True, text=True, check=True,
 		)
 		assert json.loads(caller_result.stdout) == {
-			"reason": "changed Python module references causal scope", "valid": False,
+			"reason": "current causal scope is indeterminate", "valid": False,
 		}
 
 		(repo / "unrelated.py").write_text("VALUE = 1\n", encoding="utf-8")

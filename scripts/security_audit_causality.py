@@ -255,13 +255,14 @@ def _target_symbol(symbols: list[Symbol], file_name: str, line: int) -> Symbol |
 
 def _scope_for_target(
 	symbols: list[Symbol], target: Symbol,
-) -> tuple[list[Symbol], bool]:
+) -> tuple[list[Symbol], bool, bool]:
 	by_leaf: dict[str, list[Symbol]] = {}
 	for symbol in symbols:
 		by_leaf.setdefault(symbol.leaf_name, []).append(symbol)
 	selected = {target.qualified_name: target}
 	frontier = [target]
 	ambiguous = False
+	truncated = False
 	for _depth in range(MAX_REVERSE_DEPTH):
 		target_names = {symbol.leaf_name for symbol in frontier}
 		if any(len(by_leaf.get(name, [])) > 1 for name in target_names):
@@ -277,7 +278,14 @@ def _scope_for_target(
 		if len(selected) > MAX_CAUSAL_SYMBOLS:
 			raise ValueError("reverse-call graph exceeds analysis bound")
 		frontier = callers
-	return sorted(selected.values(), key=lambda item: item.qualified_name), ambiguous
+	if frontier:
+		frontier_names = {symbol.leaf_name for symbol in frontier}
+		truncated = any(
+			symbol.qualified_name not in selected
+			and symbol.references.intersection(frontier_names)
+			for symbol in symbols
+		)
+	return sorted(selected.values(), key=lambda item: item.qualified_name), ambiguous, truncated
 
 
 def analyze(repo: Path, file_name: str, line: int, base: str, head: str) -> dict[str, object]:
@@ -285,7 +293,7 @@ def analyze(repo: Path, file_name: str, line: int, base: str, head: str) -> dict
 	target = _target_symbol(head_symbols, file_name, line)
 	if target is None:
 		raise ValueError("cited line is not inside a Python function or class")
-	head_scope, head_ambiguous = _scope_for_target(head_symbols, target)
+	head_scope, head_ambiguous, head_truncated = _scope_for_target(head_symbols, target)
 
 	base_symbols, base_sources = _snapshot(repo, base)
 	base_target = next(
@@ -293,8 +301,9 @@ def analyze(repo: Path, file_name: str, line: int, base: str, head: str) -> dict
 	)
 	base_scope: list[Symbol] = []
 	base_ambiguous = False
+	base_truncated = False
 	if base_target is not None:
-		base_scope, base_ambiguous = _scope_for_target(base_symbols, base_target)
+		base_scope, base_ambiguous, base_truncated = _scope_for_target(base_symbols, base_target)
 
 	causal_files = sorted({symbol.file for symbol in [*base_scope, *head_scope]} | {file_name})
 	if len(causal_files) > MAX_CAUSAL_SYMBOLS:
@@ -336,7 +345,7 @@ def analyze(repo: Path, file_name: str, line: int, base: str, head: str) -> dict
 		)
 	fingerprint_payload = json.dumps(fingerprint_rows, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 	status = "complete"
-	if head_ambiguous or base_ambiguous or any(
+	if head_ambiguous or base_ambiguous or head_truncated or base_truncated or any(
 		symbol.wildcard_import or symbol.indeterminate for symbol in [*base_scope, *head_scope]
 	):
 		status = "indeterminate"

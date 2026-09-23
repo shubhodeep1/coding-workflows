@@ -167,8 +167,12 @@ fi
 
 TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"
 TRUSTED_POLLER_RESOLVER_GUARD="${RUNTIME_DIR}/check_resolver_diff.sh"
+TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${RUNTIME_DIR}/files_touched_scope_guard.py"
 UNTRUSTED_POLLER_SANDBOX="${RUNTIME_DIR}/untrusted_process_sandbox.sh"
 UNTRUSTED_POLLER_PROVIDER_PROXY="${RUNTIME_DIR}/model_provider_proxy.py"
+if [ ! -f "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" ] && [ -f scripts/files_touched_scope_guard.py ]; then
+	install -m 0755 scripts/files_touched_scope_guard.py "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}"
+fi
 prepare_untrusted_poller_runtime() {
 	[ -x "${TRUSTED_POLLER_GIT_WRITER}" ] || {
 		echo "::error::Pre-staged trusted Git writer is unavailable" >&2
@@ -176,6 +180,10 @@ prepare_untrusted_poller_runtime() {
 	}
 	[ -x "${TRUSTED_POLLER_RESOLVER_GUARD}" ] || {
 		echo "::error::Pre-staged integration resolver guard is unavailable" >&2
+		return 1
+	}
+	[ -x "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" ] || {
+		echo "::error::Pre-staged review scope guard is unavailable" >&2
 		return 1
 	}
 	[ -x "${UNTRUSTED_POLLER_SANDBOX}" ] && [ -x "${UNTRUSTED_POLLER_PROVIDER_PROXY}" ] || {
@@ -20179,10 +20187,12 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       # Collect full PR context for the judge. Apply the same byte cap as the
       # wave judge because minified single-line diffs defeat the line cap used
       # when this prompt is rendered below.
-      _rb_pr_diff_tmp="$(mktemp)"
-      _rb_pr_diff_capped_tmp="$(mktemp)"
-      if gh_retry_to_file "${_rb_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
-        -H 'Accept: application/vnd.github.diff'; then
+	      _rb_pr_diff_tmp="$(mktemp)"
+	      _rb_pr_diff_capped_tmp="$(mktemp)"
+	      RB_REVIEW_FIX_DIFF_FILE="${RUNTIME_DIR}/rb_review_fix_${RB_PR}.diff"
+	      if gh_retry_to_file "${_rb_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
+	        -H 'Accept: application/vnd.github.diff'; then
+	        cp "${_rb_pr_diff_tmp}" "${RB_REVIEW_FIX_DIFF_FILE}"
         head -n 1000 "${_rb_pr_diff_tmp}" > "${_rb_pr_diff_capped_tmp}" 2>/dev/null || printf '%s' '(diff unavailable)' > "${_rb_pr_diff_capped_tmp}"
         _rb_pr_diff_bytes="$(wc -c < "${_rb_pr_diff_capped_tmp}" 2>/dev/null | tr -cd '0-9' || true)"
         [[ "${_rb_pr_diff_bytes}" =~ ^[0-9]+$ ]] || _rb_pr_diff_bytes=0
@@ -20190,7 +20200,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
           if _judge_truncate_pr_diff_file "${_rb_pr_diff_capped_tmp}" "${JUDGE_PR_DIFF_MAX_BYTES}"; then
             PR_DIFF="[NOTE: PR diff is ${_rb_pr_diff_bytes} bytes after the 1000-line cap; truncated to a prefix within ${JUDGE_PR_DIFF_MAX_BYTES} bytes to fit codex stdin (1 MB cap). Read the PR's files directly for the elided tail if needed.]
 $(cat "${_rb_pr_diff_capped_tmp}")"
-          else
+	      else
             echo "::warning::Failed to truncate PR #${RB_PR} diff for review-blocked judge; eliding ${_rb_pr_diff_bytes} bytes instead of embedding an over-budget payload." >&2
             PR_DIFF="[NOTE: PR diff elided because byte truncation failed; ${_rb_pr_diff_bytes} bytes omitted. Read the PR's files directly if this diff matters to the verdict.]"
           fi
@@ -20199,7 +20209,8 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         fi
       else
         echo "::warning::Failed to fetch PR #${RB_PR} diff for review-blocked judge; falling back to '(diff unavailable)'." >&2
-        PR_DIFF="(diff unavailable)"
+	        PR_DIFF="(diff unavailable)"
+	        printf '%s' '(diff unavailable)' > "${RB_REVIEW_FIX_DIFF_FILE}"
       fi
       rm -f "${_rb_pr_diff_tmp}" "${_rb_pr_diff_capped_tmp}"
       unset _rb_pr_diff_tmp _rb_pr_diff_capped_tmp _rb_pr_diff_bytes
@@ -20430,14 +20441,39 @@ ${FOLLOWUP_BLOCK_REASON}"
       # Reset workspace state (tracked files only) after a combined judge
       # call whose decision was NOT fix. Untracked files are left alone so
       # pre-fetched scripts and artifacts are not swept.
-      rb_cleanup_combined_workspace() {
+	      rb_cleanup_combined_workspace() {
         if [ "${RB_COMBINED_MODE}" = "true" ]; then
           git reset --hard HEAD 2>/dev/null || true
           git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
         fi
-      }
+	      }
 
-      # Build the judge prompt for review-blocked evaluation
+	      RB_REVIEW_FIX_AUTHORIZATION_FILE="${RUNTIME_DIR}/rb_review_fix_authorization_${RB_PR}.json"
+	      RB_REVIEW_FIX_COMMENTS_FILE="${RUNTIME_DIR}/rb_review_fix_comments_${RB_PR}.json"
+	      RB_REVIEW_FIX_REVIEW_COMMENTS_FILE="${RUNTIME_DIR}/rb_review_fix_review_comments_${RB_PR}.json"
+	      RB_REVIEW_FIX_AUTHORIZATION_AVAILABLE=false
+	      printf '%s\n' "${PR_COMMENTS}" > "${RB_REVIEW_FIX_COMMENTS_FILE}"
+	      printf '%s\n' "${PR_REVIEW_COMMENTS}" > "${RB_REVIEW_FIX_REVIEW_COMMENTS_FILE}"
+	      RB_REVIEW_FIX_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+	      if [ "${RB_COMBINED_MODE}" = true ] && [ -z "$(git status --porcelain 2>/dev/null)" ] \
+	        && PYTHONDONTWRITEBYTECODE=1 python3 "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" \
+	          --build-review-fix-authorization \
+	          --review-fix-repo "${PWD}" \
+	          --review-fix-repository "${GITHUB_REPOSITORY}" \
+	          --review-fix-pr-number "${RB_PR}" \
+	          --review-fix-head-sha "${RB_REVIEW_FIX_HEAD_SHA}" \
+	          --review-fix-producer-run "${GITHUB_RUN_ID:-poller}" \
+	          --review-fix-diff-file "${RB_REVIEW_FIX_DIFF_FILE}" \
+	          --review-fix-comments-json-file "${RB_REVIEW_FIX_COMMENTS_FILE}" \
+	          --review-fix-comments-json-file "${RB_REVIEW_FIX_REVIEW_COMMENTS_FILE}" \
+	          --review-fix-output "${RB_REVIEW_FIX_AUTHORIZATION_FILE}"; then
+	        RB_REVIEW_FIX_AUTHORIZATION_AVAILABLE=true
+	      else
+	        : > "${RB_REVIEW_FIX_AUTHORIZATION_FILE}"
+	        echo "::warning::No trusted current-head review-fix authorization is available for PR #${RB_PR}; combined action=fix will be rejected."
+	      fi
+
+	      # Build the judge prompt for review-blocked evaluation
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
 
@@ -20472,7 +20508,14 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo
         echo "=== PR #${RB_PR} INLINE REVIEW COMMENTS ==="
         echo
-        echo "${PR_REVIEW_COMMENTS}" | jq '.'
+	        echo "${PR_REVIEW_COMMENTS}" | jq '.'
+	        echo
+	        echo "=== TRUSTED REVIEW-FIX AUTHORIZATION ==="
+	        if [ "${RB_REVIEW_FIX_AUTHORIZATION_AVAILABLE}" = true ]; then
+	          jq '{schema_version,repository,pr_number,head_sha,targets}' "${RB_REVIEW_FIX_AUTHORIZATION_FILE}"
+	        else
+	          echo '{"schema_version":"review_fix_authorization.v1","targets":[]}'
+	        fi
         echo
         echo "=== ORCHESTRATOR CONTEXT ==="
         echo "Review-blocked retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
@@ -20594,8 +20637,25 @@ sys.exit(1)
 
       RB_ACTION="$(echo "${RB_JUDGE_JSON}" | jq -r '.action')"
       RB_JUSTIFICATION="$(echo "${RB_JUDGE_JSON}" | jq -r '.justification // "no justification"')"
-      RB_FIX_DESC="$(echo "${RB_JUDGE_JSON}" | jq -r '.fix_description // ""')"
-      RB_REMAINING="$(echo "${RB_JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')"
+	      RB_FIX_DESC="$(echo "${RB_JUDGE_JSON}" | jq -r '.fix_description // ""')"
+	      RB_REMAINING="$(echo "${RB_JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')"
+	      RB_REVIEW_FIX_SELECTED_FILE="${RUNTIME_DIR}/rb_review_fix_selected_${RB_PR}.json"
+	      if ! printf '%s\n' "${RB_JUDGE_JSON}" | jq -e '.fix_targets // [] | if type == "array" then . else error("fix_targets must be an array") end' \
+	        > "${RB_REVIEW_FIX_SELECTED_FILE}" 2>/dev/null; then
+	        printf '[]\n' > "${RB_REVIEW_FIX_SELECTED_FILE}"
+	      fi
+	      if [ "${RB_ACTION}" = fix ] && { [ "${RB_REVIEW_FIX_AUTHORIZATION_AVAILABLE}" != true ] \
+	        || [ "$(jq 'length' "${RB_REVIEW_FIX_SELECTED_FILE}")" -eq 0 ]; }; then
+	        echo "::error::Judge selected action=fix without trusted current-head fix_targets; refusing publication."
+	        RB_ACTION="skip"
+	        rb_cleanup_combined_workspace
+	      fi
+	      RB_REVIEW_FIX_AUTHORIZATION_MARKER=""
+	      if [ "${RB_REVIEW_FIX_AUTHORIZATION_AVAILABLE}" = true ]; then
+	        rb_review_fix_authorization_sha256="$(sha256sum "${RB_REVIEW_FIX_AUTHORIZATION_FILE}" | awk '{print $1}')"
+	        rb_review_fix_authorization_payload="$(base64 -w0 "${RB_REVIEW_FIX_AUTHORIZATION_FILE}")"
+	        RB_REVIEW_FIX_AUTHORIZATION_MARKER="<!-- REVIEW_FIX_AUTHORIZATION_V1 head=${RB_REVIEW_FIX_HEAD_SHA} sha256=${rb_review_fix_authorization_sha256} payload=${rb_review_fix_authorization_payload} -->"
+	      fi
 
       echo "  Judge decision for #${rb_issue}: ${RB_ACTION}"
       echo "  Justification: ${RB_JUSTIFICATION}"
@@ -20607,7 +20667,9 @@ sys.exit(1)
 **Retry:** $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}
 **Justification:** ${RB_JUSTIFICATION}
 
-**Remaining issues:** ${RB_REMAINING}"
+**Remaining issues:** ${RB_REMAINING}
+
+${RB_REVIEW_FIX_AUTHORIZATION_MARKER}"
 
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
         -f body="${RB_COMMENT}" >/dev/null 2>&1 || true
@@ -20846,28 +20908,59 @@ sys.exit(1)
               esac
               unset _orig_origin_url
 
-              # Check if there are changes to commit
-              if [ -n "$(git status --porcelain)" ]; then
-                git config user.name "codex-bot"
-                git config user.email "codex@users.noreply.github.com"
-                if [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ]; then
-                  # Use a single add call so empty/minimal repos do not fail on
-                  # exclude-only pathspecs.
-                  # NOTE: do not list .gitignored directories (node_modules)
-                  # as `:!` exclude pathspecs here. `git add -A -- . ':!<dir>'`
-                  # treats the exclude path as an explicit name and fails with
-                  # "The following paths are ignored by one of your .gitignore
-                  # files" + exit 1 when that dir exists on disk. .gitignore
-                  # already excludes them; the pathspec exclude is redundant
-                  # and turns into a hard failure once a step creates
-                  # node_modules/.
-                  git add -A -- . ':!.github/prompts' ':!.github/scripts'
-                else
-                  # Keep workflow-edit guard exclusions while avoiding brittle
-                  # tracked/untracked split staging pathspec failures. Same
-                  # gitignore-dir exclusion caveat as above applies.
-                  git add -A -- . ':!scripts' ':!prompts' ':!.github/ai' ':!.github/workflows' ':!.github/prompts' ':!.github/scripts'
-                fi
+	              # Check if there are changes to commit
+	              if [ -n "$(git status --porcelain)" ]; then
+	                git config user.name "codex-bot"
+	                git config user.email "codex@users.noreply.github.com"
+	                rb_review_fix_touched_file="${RUNTIME_DIR}/rb_review_fix_touched_${RB_PR}.txt"
+	                rb_review_fix_allowed_file="${RUNTIME_DIR}/rb_review_fix_allowed_${RB_PR}.txt"
+	                rb_review_fix_spans_file="${RUNTIME_DIR}/rb_review_fix_spans_${RB_PR}.json"
+	                rb_review_fix_clean_file="${RUNTIME_DIR}/rb_review_fix_clean_${RB_PR}.tsv"
+	                {
+	                  git diff --name-only HEAD --
+	                  git ls-files --others --exclude-standard
+	                } | sed '/^$/d' | LC_ALL=C sort -u > "${rb_review_fix_touched_file}"
+	                : > "${rb_review_fix_clean_file}"
+	                if ! PYTHONDONTWRITEBYTECODE=1 python3 "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" \
+	                  --validate-review-fix-authorization \
+	                  --review-fix-repo "${PWD}" \
+	                  --review-fix-repository "${GITHUB_REPOSITORY}" \
+	                  --review-fix-pr-number "${RB_PR}" \
+	                  --review-fix-head-sha "${RB_REVIEW_FIX_HEAD_SHA}" \
+	                  --review-fix-authorization-file "${RB_REVIEW_FIX_AUTHORIZATION_FILE}" \
+	                  --review-fix-selected-targets-file "${RB_REVIEW_FIX_SELECTED_FILE}" \
+	                  --review-fix-spans-output "${rb_review_fix_spans_file}" \
+	                  --staged-file "${rb_review_fix_touched_file}" \
+	                  --allowlist-out "${rb_review_fix_allowed_file}"; then
+	                  echo "::warning::Review-blocked poller fix exceeded trusted authorization; discarding it."
+	                  rb_cleanup_combined_workspace
+	                  REVIEW_BLOCKED_STATE_CHANGED=true
+	                  continue
+	                fi
+	                if [ "${ALLOW_WORKFLOW_EDITS:-true}" != true ] \
+	                  && grep -Eq '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)' "${rb_review_fix_touched_file}"; then
+	                  echo "::warning::Protected review-fix path is disabled by ALLOW_WORKFLOW_EDITS=false; discarding it."
+	                  rb_cleanup_combined_workspace
+	                  REVIEW_BLOCKED_STATE_CHANGED=true
+	                  continue
+	                fi
+	                if ! bash "${TRUSTED_POLLER_RESOLVER_GUARD}" \
+	                  --repo-root "${PWD}" \
+	                  --conflicted-set "${rb_review_fix_allowed_file}" \
+	                  --touched-set "${rb_review_fix_touched_file}" \
+	                  --conflict-spans "${rb_review_fix_spans_file}" \
+	                  --clean-manifest "${rb_review_fix_clean_file}" \
+	                  --strict-manifests; then
+	                  echo "::warning::Review-blocked poller fix changed bytes outside authorized hunks; discarding it."
+	                  rb_cleanup_combined_workspace
+	                  REVIEW_BLOCKED_STATE_CHANGED=true
+	                  continue
+	                fi
+	                git reset -q HEAD -- .
+	                while IFS= read -r rb_review_fix_authorized_path; do
+	                  [ -n "${rb_review_fix_authorized_path}" ] || continue
+	                  git add -- "${rb_review_fix_authorized_path}"
+	                done < "${rb_review_fix_allowed_file}"
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
                 if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then

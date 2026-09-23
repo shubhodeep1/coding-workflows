@@ -41,6 +41,7 @@ CONFLICTED_SET=""
 TOUCHED_SET=""
 CONFLICT_SPANS=""
 CLEAN_MANIFEST=""
+STRICT_MANIFESTS=false
 REPO_ROOT="${PWD}"
 
 while [ "$#" -gt 0 ]; do
@@ -53,6 +54,8 @@ while [ "$#" -gt 0 ]; do
 			CONFLICT_SPANS="$2"; shift 2 ;;
 		--clean-manifest)
 			CLEAN_MANIFEST="$2"; shift 2 ;;
+		--strict-manifests)
+			STRICT_MANIFESTS=true; shift ;;
 		--repo-root)
 			REPO_ROOT="$2"; shift 2 ;;
 		-h|--help)
@@ -101,6 +104,10 @@ if [ -n "${CONFLICT_SPANS}" ] && [ ! -f "${CONFLICT_SPANS}" ]; then
 fi
 if [ -n "${CLEAN_MANIFEST}" ] && [ ! -f "${CLEAN_MANIFEST}" ]; then
 	echo "::error::check_resolver_diff.sh: clean-manifest file not found: ${CLEAN_MANIFEST}" >&2
+	exit 2
+fi
+if [ "${STRICT_MANIFESTS}" = true ] && { [ -z "${CONFLICT_SPANS}" ] || [ -z "${CLEAN_MANIFEST}" ]; }; then
+	echo "::error::check_resolver_diff.sh: strict mode requires --conflict-spans and --clean-manifest" >&2
 	exit 2
 fi
 

@@ -720,17 +720,27 @@ when the bounded fix-cycle budget is exhausted.
   and never passes GitHub tokens, runner command files, authenticated remotes,
   provider credentials, or host Codex auth caches.
 - `scripts/model_provider_proxy.py` derives a non-empty model allowlist from
-  trusted configuration and defaults to 64 requests, one concurrent request,
-  65,536 output tokens, and USD 25 cumulative spend. It reserves worst-case
-  Decimal cost before forwarding and blocks further calls when terminal usage
-  accounting is absent or malformed.
+	trusted configuration and defaults to 64 requests, one concurrent request,
+	65,536 output tokens, and USD 25 cumulative spend. It reserves worst-case
+	Decimal cost before forwarding and blocks further calls when terminal usage
+	accounting is absent or malformed. A fixed four-worker server admits at most
+	eight queued connections and applies a 15-second client read deadline before
+	request handlers can consume unbounded host threads.
 - `scripts/trusted_git_write.sh` is the only commit/push boundary for model-
   produced changes. Commits disable hooks and signing under fixed trusted
   identity. Pushes require exact local/remote heads and a validated branch,
   use an unauthenticated HTTPS URL plus an ephemeral askpass credential, and
   reject concurrent branch movement instead of rebasing or overwriting it. The
   poller pre-stages this writer, the sandbox, and the provider proxy outside the
-  model-writable checkout before any model call and refuses a checkout fallback.
+	model-writable checkout before any model call and refuses a checkout fallback.
+- Writer-role systemd units enforce validated task, memory/swap, CPU, I/O,
+	file-descriptor, and wall-time ceilings, with `KillMode=control-group` and
+	`OOMPolicy=kill`; unsupported mandatory properties fail the model run closed.
+- Conflict-resolver publication requires original-marker byte anchors and a
+	deterministic clean-tree manifest. Review-blocked publication requires a
+	current-head `review_fix_authorization.v1` target selection; protected paths
+	require multi-reviewer floor provenance, and both writer paths stage only
+	deterministically span-validated files.
 - Review Python dependencies remain in a Docker-managed volume. They are never
   appended to host `PATH`, `PYTHONPATH`, or `VIRTUAL_ENV`; post-editor pytest
   runs only editor-changed Python test targets, with no network, read-only
@@ -740,8 +750,10 @@ when the bounded fix-cycle budget is exhausted.
   authoritative only when the shared audit/poller validator confirms its
   complete causal fingerprint still matches. Module-level route tables,
   assignments, imports, decorators, and callable references participate in the
-  graph. Unsupported languages and changed routing/configuration fail closed;
-  changed/deleted reverse callers or guards keep findings blocking.
+	graph. Unsupported languages and changed routing/configuration fail closed;
+	changed/deleted reverse callers or guards keep findings blocking. A nonempty
+	reverse-caller frontier at `MAX_REVERSE_DEPTH` is indeterminate rather than a
+	complete causal scope, so deep public routes cannot reuse an old waiver.
 
 The same change also adds a defensive preflight inside
 `dispatch_validation_if_needed`: when the current wave's PRs are not all

@@ -810,15 +810,14 @@ __SMOKE_CONFLICT_OVERRIDE__
   rm -f "${_smoke_override_tmp}"
 fi
 
-# On the workflow source repo, snapshot the post-merge working-tree
-# state before Codex resolves conflicts.  The commit logic below
+# Snapshot the post-merge working-tree state before Codex resolves conflicts.
+# The commit logic below
 # uses it to stage ONLY files Codex actually wrote during resolution,
 # including executable-bit-only updates,
 # discarding files that git merge auto-staged but Codex never
 # touched.  The auto-merged hunks will replay naturally when the PR
 # is eventually merged into BASE, so skipping them here is safe.
-if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-  PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
+PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
   : > "${PRE_RESOLVER_STATE_FILE}"
   # `sort -zu` dedupes: after `git merge --no-commit`, conflicted
   # paths appear once per index stage (1/2/3) in `git ls-files -z`.
@@ -862,4 +861,121 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
   fi
   sort -u -o "${CONFLICTED_PATHS_FILE}" "${CONFLICTED_PATHS_FILE}"
   echo "Conflicted paths captured: $(wc -l < "${CONFLICTED_PATHS_FILE}") entries"
-fi
+
+  # Bind the resolver to the original conflict-marker spans and to the
+  # deterministic merge result for every clean path. A path without textual
+  # markers (binary/delete conflict or fingerprint-only expansion) cannot be
+  # authorized safely and fails closed here for the existing escalation path.
+  CONFLICT_SPANS_FILE="${RUNTIME_DIR}/resolver_conflict_spans.json"
+  CLEAN_MERGE_MANIFEST_FILE="${RUNTIME_DIR}/resolver_clean_manifest.tsv"
+  RESOLVER_MERGE_TREE_FILE="${RUNTIME_DIR}/resolver_merge_tree.txt"
+  resolver_merge_tree_rc=0
+  git merge-tree --write-tree HEAD "origin/${BASE_BRANCH}" > "${RESOLVER_MERGE_TREE_FILE}" 2>/dev/null \
+    || resolver_merge_tree_rc=$?
+  RESOLVER_EXPECTED_TREE="$(head -n1 "${RESOLVER_MERGE_TREE_FILE}" | tr -d '\r')"
+  if ! [[ "${RESOLVER_EXPECTED_TREE}" =~ ^[0-9a-f]{40,64}$ ]] \
+    || ! git cat-file -e "${RESOLVER_EXPECTED_TREE}^{tree}" 2>/dev/null \
+    || { [ "${resolver_merge_tree_rc}" -ne 0 ] && [ "${resolver_merge_tree_rc}" -ne 1 ]; }; then
+    echo "::error::Could not deterministically recompute the resolver merge tree; refusing an unbounded resolver run."
+    exit 1
+  fi
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 - \
+    "${PWD}" "${CONFLICTED_PATHS_FILE}" "${CONFLICT_SPANS_FILE}" "${RESOLVER_EXPECTED_TREE}" <<'PY'
+import base64
+import json
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+
+workspace = Path(sys.argv[1]).resolve()
+paths = [line for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines() if line]
+output = Path(sys.argv[3])
+expected_tree = sys.argv[4]
+manifest = {}
+for path_name in paths:
+	path = PurePosixPath(path_name)
+	if path.is_absolute() or ".." in path.parts or any(ord(char) < 32 for char in path_name):
+		raise SystemExit("unsafe conflict path")
+	file_path = workspace / path
+	if not file_path.is_file() or file_path.is_symlink():
+		raise SystemExit("binary, delete/modify, or non-regular conflict")
+	data = file_path.read_bytes()
+	if b"\0" in data:
+		raise SystemExit("binary conflict")
+	lines = data.splitlines(keepends=True)
+	anchors = []
+	anchor_start = 0
+	offset = 0
+	index = 0
+	while index < len(lines):
+		line = lines[index]
+		if not line.startswith(b"<<<<<<< "):
+			offset += len(line)
+			index += 1
+			continue
+		anchors.append(data[anchor_start:offset])
+		index += 1
+		offset += len(line)
+		separator_seen = False
+		while index < len(lines):
+			line = lines[index]
+			offset += len(line)
+			index += 1
+			if line.startswith(b"<<<<<<< "):
+				raise SystemExit("nested conflict marker")
+			if line.startswith(b"======="):
+				separator_seen = True
+				break
+		if not separator_seen:
+			raise SystemExit("missing conflict separator")
+		end_seen = False
+		while index < len(lines):
+			line = lines[index]
+			offset += len(line)
+			index += 1
+			if line.startswith(b">>>>>>> "):
+				end_seen = True
+				break
+		if not end_seen:
+			raise SystemExit("missing conflict terminator")
+		anchor_start = offset
+	anchors.append(data[anchor_start:])
+	if len(anchors) < 2:
+		raise SystemExit("authorized resolver path has no textual conflict markers")
+	ls_tree = subprocess.run(
+		["git", "ls-tree", expected_tree, "--", path_name], cwd=workspace,
+		capture_output=True, text=True, check=False,
+	)
+	if ls_tree.returncode != 0 or not ls_tree.stdout.strip():
+		raise SystemExit("conflicted path has no deterministic merged mode")
+	expected_mode = ls_tree.stdout.split(" ", 1)[0]
+	if expected_mode not in {"100644", "100755"}:
+		raise SystemExit("conflicted path has unsupported merged mode")
+	manifest[path_name] = {
+		"anchors": [base64.b64encode(anchor).decode("ascii") for anchor in anchors],
+		"mode": expected_mode,
+	}
+output.write_text(json.dumps(manifest, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  then
+    echo "::error::Resolver conflicts cannot be represented as bounded textual spans; refusing the model run."
+    exit 1
+  fi
+
+  : > "${CLEAN_MERGE_MANIFEST_FILE}"
+  while IFS= read -r resolver_merge_path; do
+    [ -n "${resolver_merge_path}" ] || continue
+    grep -Fxq -- "${resolver_merge_path}" "${CONFLICTED_PATHS_FILE}" && continue
+    resolver_tree_row="$(git ls-tree "${RESOLVER_EXPECTED_TREE}" -- "${resolver_merge_path}" 2>/dev/null || true)"
+    if [ -z "${resolver_tree_row}" ]; then
+      printf '000000\t-\t%s\n' "${resolver_merge_path}" >> "${CLEAN_MERGE_MANIFEST_FILE}"
+      continue
+    fi
+    resolver_tree_mode="${resolver_tree_row%% *}"
+    resolver_tree_rest="${resolver_tree_row#* }"
+    resolver_tree_blob="${resolver_tree_rest#* }"
+    resolver_tree_blob="${resolver_tree_blob%%$'\t'*}"
+    printf '%s\t%s\t%s\n' "${resolver_tree_mode}" "${resolver_tree_blob}" "${resolver_merge_path}" >> "${CLEAN_MERGE_MANIFEST_FILE}"
+  done < <(git diff-tree --no-commit-id --name-only -r HEAD "${RESOLVER_EXPECTED_TREE}" | LC_ALL=C sort -u)
+  echo "CONFLICT_SPANS_FILE=${CONFLICT_SPANS_FILE}" >> "$GITHUB_ENV"
+  echo "CLEAN_MERGE_MANIFEST_FILE=${CLEAN_MERGE_MANIFEST_FILE}" >> "$GITHUB_ENV"
