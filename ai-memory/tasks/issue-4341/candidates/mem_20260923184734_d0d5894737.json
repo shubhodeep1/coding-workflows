@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`\n\nScope-mode justification: The request is fully specified and requires a single-file fixture update. No expansion, new dependency, or interface is warranted.\n\nPlanning ref: `main` at `241d891077e1d4c9d87629e7271c35e0a254f5d1`\n\n## Automation impact\n\n- Extends existing code only; no new script.\n- Scheduler/PR-push entry point: unchanged.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Removal registry entry: not applicable.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 overwrite with exactly:\n  1. `status: ok`\n  2. `run_id: 35903885958`\n  3. `updated-by: ai-pipeline`\n- Preserve a trailing newline after the final line.\n- Modify no other files.\n\n## Functions or modules to implement\n\nNone.\n\n## Data structures affected\n\nThe existing three-line smoke-canary text record; only `run_id` changes from `26151428977` to `35903885958`.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Perform an exact whole-file replacement\n\n- **Chosen:** Replace the complete existing file content with the three requested lines and final newline.\n- **Alternatives considered:** Edit only the `run_id` line.\n- **Why:** Whole-file replacement directly enforces the exact-content requirement while retaining the smallest possible scope.\n\n## Security considerations\n\n- No trust boundaries, authorization surfaces, endpoints, external inputs, secrets, or money-handling paths are affected.\n- Abuse risk is limited to unintended repository changes; constrain the implementation and verification to the single requested path.\n\n## Risks and edge cases\n\n- Extra whitespace, blank lines, comments, or a missing final newline would violate the exact-byte contract.\n- The file exists as stated; its current structure already matches except for the old run ID.\n- No integration branch was supplied, but the checked-out ref is explicitly `main`; no branch conflict is established.\n\n## Testing considerations\n\n- Compare the file bytes against `status: ok\\nrun_id: 35903885958\\nupdated-by: ai-pipeline\\n`.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n- Confirm the diff changes only the `run_id` value.\n\n## Pre-execution self-check\n\n- Clarification answer mapped: the auto-answer confirms no clarification was required.\n- Target file exists and current contents were inspected.\n- Requested value and exact formatting are unambiguous.\n- Plan introduces no unrelated work.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "425ae37f293526a8f8be8e81306bbc06a8c595685706a32de8ab082763a73a37",
+  "lineage": {
+    "issue_number": 4341,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35904419395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35904419395",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4341"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260923184734_d0d5894737",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4341,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35904419395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4341",
+  "timestamps": {
+    "created_at": "2026-09-23T18:47:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
