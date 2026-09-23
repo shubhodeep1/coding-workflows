@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary_b.txt`  \nScope-mode justification: This is a surgical fixture update with an explicit one-file allowlist. No expansion is necessary.\n\n## Automation and wiring\n\n- **Change type:** Modify existing data file only; no new script.\n- **Scheduler / PR-push entry point:** None required; existing CI consumes the canary.\n- **Long-running supervisor:** Not required.\n- **Database gate:** Not applicable.\n- **Removal registry:** Not applicable.\n\n## Planning ref\n\n- Branch: `orchestrator/project-4318`\n- HEAD: `2352420a3b71bd0a591d6e5faa3b464973c132b4`\n- Integration metadata matches the checked-out branch.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary_b.txt`\n  - Preserve line 1 as `status: ok`.\n  - Replace line 2 with `decompose-run: 35828617303`.\n  - Ensure the file contains exactly those two lines.\n\n## Functions or modules\n\nNone. This is a plain-text fixture update.\n\n## Data structures affected\n\nThe two-line canary payload only; no schemas or runtime state change.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Limit the change to the declared canary\n\n- **Chosen:** Update only `tests/e2e_smoke_canary_b.txt`.\n- **Alternatives considered:** Updating related canaries, tests, documentation, or workflow logic.\n- **Why:** The issue explicitly requires independence from other canaries and forbids unrelated changes.\n\n## Security considerations\n\n- No new trust boundary, endpoint, authorization surface, external input, secret, or money-handling behavior.\n- Avoid deriving the marker from another canary or untrusted runtime output; use the exact issue-provided value.\n- Verify no other files are modified.\n\n## Risks and edge cases\n\n- Current line 2 contains the stale marker `25567947079`; it must be replaced, not appended as a third line.\n- Preserve exact spelling, spacing, ordering, and two-line file shape.\n- Do not read or depend on the other canary\u2019s output.\n\n## Testing considerations\n\n- Assert exact content:\n  ```text\n  status: ok\n  decompose-run: 35828617303\n  ```\n- Confirm the file has exactly two lines.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary_b.txt`.\n\n## Pre-execution self-check\n\n- Requirements are explicit and internally consistent.\n- Target file exists and its current contents confirm only line 2 needs replacement.\n- Declared integration branch matches the planning checkout.\n- No external inputs or additional files are required.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "cdc90b92fe6ebbefd6ed0245d123f4d3dc36fda4a1b8d52a5a591cff48785050",
+  "lineage": {
+    "issue_number": 4320,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35829083553",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35829083553",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4320"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260923070038_a96750565f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4320,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35829083553"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4320",
+  "timestamps": {
+    "created_at": "2026-09-23T07:00:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
