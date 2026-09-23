@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4300,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4300\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4301\",\"pr_number\":4301,\"branch\":\"ai/issue-4300\",\"run_id\":\"35806960058\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35806960058\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/review_autofix.yml\",\"README.md\",\"agents.md\",\"changelog.d/4139-security-pass-hardening.md\",\"prompts/mode-judge-review-blocked.txt\",\"scripts/check_resolver_diff.sh\",\"scripts/files_touched_scope_guard.py\",\"scripts/model_provider_proxy.py\",\"scripts/orchestrate_poll_process.sh\",\"scripts/review_conflict_prepare.sh\",\"scripts/review_conflict_resolve.sh\",\"scripts/review_rb_judge.sh\",\"scripts/security_audit_causality.py\",\"scripts/stage_workflow_support.sh\",\"scripts/untrusted_process_sandbox.sh\",\"tests/test_agent_process_isolation.py\",\"tests/test_files_touched_scope_guard.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "ca1ef4dbf2f41e74c7d229d26e6ee96cd7e77b9389fed652232015344aeb7da2",
+  "lineage": {
+    "issue_number": 4300,
+    "parent_ids": [],
+    "pr_number": 4301,
+    "run_id": "35806960058",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35806960058",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4301"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260923020323_78143f3a64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4300,
+    "level": "run",
+    "pr_number": 4301,
+    "run_id": "35806960058"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4300: https://github.com/shubhodeep1/coding-workflows/pull/4301",
+  "timestamps": {
+    "created_at": "2026-09-23T02:03:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
