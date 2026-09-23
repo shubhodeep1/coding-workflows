@@ -631,6 +631,18 @@ Project #3928 on tele-funtoken-msg-scoring stopped advancing because `AI Orchest
 
 What this means for operators: a wave whose PRs commit large generated artifacts now reaches a judge verdict instead of a CRITICAL alert, with no operator action. The poll log prints byte and character counts before the first attempt and raises a workflow warning above 950,000 characters, so a future overshoot is diagnosable from the run log. A prompt above 1,048,576 characters fails immediately through the existing judge-failure path rather than repeating the same rejected request. Raise the two repo variables on repos whose judge needs more diff context; the API-call count is unchanged (one diff fetch per linked PR).
 
+- **The `python-mongo-repo-checks` validation image now installs the consumer's `requirements.txt`.** Repo checks that import the consumer's own modules no longer fail with `ModuleNotFoundError`.
+
+Until now `workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2` installed only the harness tools (`pyyaml`, `jsonschema`, `jinja2`, `pytest`). Any consumer whose `custom_tests` ran unit tests against modules importing third-party packages failed runtime validation, and the failure was reported as `raw_status=harness_error`. The template now runs `pip install -r` on the consumer's requirements file after `COPY . /workspace`, the same way `python-mongo-flask` already does. The file defaults to `requirements.txt`, can be overridden with `slots.requirements_file` in `.ai/validate.yml`, and is skipped when absent.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Reported by | shubhodeep1/binance-blessings#249, validation run 35727922881 |
+| Symptom | `Ran 61 tests`, `errors=9`, all `No module named 'requests'` |
+| After the fix, same consumer head, `python:3.12-slim` | `Ran 677 tests`, `OK`, repo-check exit 0 |
+
+What this means for consumer repos on `python-mongo-repo-checks`: validation now exercises your real dependency set. Consumers without a `requirements.txt` see no change. A requirements file that cannot install on `python:3.12-slim` (no compiler in the image) now fails the image build instead of failing later on imports.
+
 ### For contributors
 
 The truncation helper `_judge_truncate_pr_diff_file` mirrors `RB_JUDGE_PR_DIFF_MAX_BYTES` in `scripts/review_rb_judge.sh` (UTF-8-safe cut via python3, `head -c` fallback). The static prefix of the judge prompt (system instructions, README, agents.md, semble prefetch) is not capped by this change; on the failing run it was about 250 KB, which is why the default shared budget leaves roughly half the cap free.
