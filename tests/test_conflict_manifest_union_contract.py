@@ -67,6 +67,12 @@ def _union_block(text: str) -> str:
 	return text[start:end]
 
 
+def _shell_function(text: str, name: str) -> str:
+	start = text.index(f"{name}() {{")
+	end = text.index("\n}\n", start) + len("\n}")
+	return text[start:end]
+
+
 def test_prepare_names_the_manifest_and_kill_switch() -> None:
 	text = _prepare_text()
 	assert f'MANIFEST_UNION_PATH="{MANIFEST_PATH}"' in text, (
@@ -86,6 +92,16 @@ def test_prepare_names_the_manifest_and_kill_switch() -> None:
 		"review_autofix.yml must forward the documented kill switch with a true default"
 	)
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"' in prepare_step
+
+
+def test_prepare_preserves_separate_resolver_path_classes() -> None:
+	text = _prepare_text()
+	initial_snapshot = 'RESOLVER_INITIAL_UNMERGED_PATHS_FILE="${RUNTIME_DIR}/resolver_initial_unmerged_paths.txt"'
+	fingerprint_snapshot = 'RESOLVER_FINGERPRINT_ONLY_PATHS_FILE="${RUNTIME_DIR}/resolver_fingerprint_only_paths.txt"'
+	assert initial_snapshot in text
+	assert fingerprint_snapshot in text
+	assert text.index(initial_snapshot) < text.index("# Deterministic union-merge")
+	assert 'cp "${_fp_new_tmp}" "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}"' in text
 
 
 def test_workflows_register_manifest_union_contract_test() -> None:
@@ -176,6 +192,108 @@ def test_resolve_short_circuits_before_model_invocation() -> None:
 		"the CONFLICT_RESOLVED short-circuit must precede every model-invocation "
 		"code path in review_conflict_resolve.sh"
 	)
+
+
+def test_resolver_index_guard_precedes_no_change_and_commit_paths() -> None:
+	text = RESOLVE.read_text(encoding="utf-8")
+	guard_call = text.index("if ! verify_resolver_index_complete_or_fail; then")
+	assert guard_call < text.index('echo "No staged merge resolution changes remain', guard_call)
+	assert guard_call < text.index(f'git commit -m "{MERGE_RESOLVE_COMMIT_MESSAGE}"', guard_call)
+
+
+def test_resolver_staging_failure_is_path_specific_and_fatal() -> None:
+	text = RESOLVE.read_text(encoding="utf-8")
+	function_text = _shell_function(text, "stage_resolver_touched_path_or_fail")
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = Path(tmp) / "repo"
+		repo.mkdir()
+		github_env = Path(tmp) / "github.env"
+		scratch_git_env = {
+			env_name: env_value
+			for env_name, env_value in os.environ.items()
+			if not env_name.startswith("GIT_") and env_name != "BASH_ENV"
+		}
+		subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, env=scratch_git_env, check=True)
+		(repo / "tracked.txt").write_text("content\n", encoding="utf-8")
+		script = f"""set -euo pipefail
+GITHUB_ENV={github_env!s}
+{function_text}
+git() {{
+	if [ "$1" = "add" ]; then
+		return 42
+	fi
+	command git "$@"
+}}
+if stage_resolver_touched_path_or_fail tracked.txt; then
+	exit 91
+fi
+"""
+		result = subprocess.run(
+			["bash", "-c", script], cwd=repo, env=scratch_git_env,
+			text=True, capture_output=True,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "Failed to stage conflict resolver path: tracked.txt" in result.stdout
+		assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=false\n"
+
+
+def test_marker_free_unmerged_index_entry_blocks_commit() -> None:
+	text = RESOLVE.read_text(encoding="utf-8")
+	function_text = _shell_function(text, "verify_resolver_index_complete_or_fail")
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = Path(tmp) / "repo"
+		repo.mkdir()
+		runtime_dir = Path(tmp) / "runtime"
+		runtime_dir.mkdir()
+		github_env = Path(tmp) / "github.env"
+		scratch_git_env = {
+			env_name: env_value
+			for env_name, env_value in os.environ.items()
+			if not env_name.startswith("GIT_") and env_name != "BASH_ENV"
+		}
+
+		def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				["git", *args], cwd=repo, env=scratch_git_env, check=check,
+				text=True, capture_output=True,
+			)
+
+		git("init", "-q", "-b", "main")
+		git("config", "user.name", "t")
+		git("config", "user.email", "t@t")
+		conflicted = repo / "marker-free.txt"
+		conflicted.write_text("base\n", encoding="utf-8")
+		git("add", "--", "marker-free.txt")
+		git("commit", "-qm", "base")
+		git("checkout", "-q", "-b", "modified")
+		conflicted.write_text("modified without conflict markers\n", encoding="utf-8")
+		git("commit", "-am", "modify", "-q")
+		git("checkout", "-q", "main")
+		git("rm", "-q", "--", "marker-free.txt")
+		git("commit", "-qm", "delete")
+		before_head = git("rev-parse", "HEAD").stdout.strip()
+		merge = git("merge", "--no-commit", "--no-ff", "modified", check=False)
+		assert merge.returncode != 0
+		assert "<<<<<<<" not in conflicted.read_text(encoding="utf-8")
+
+		script = f"""set -euo pipefail
+RUNTIME_DIR={runtime_dir!s}
+GITHUB_ENV={github_env!s}
+{function_text}
+if verify_resolver_index_complete_or_fail; then
+	exit 91
+fi
+"""
+		result = subprocess.run(
+			["bash", "-c", script], cwd=repo, env=scratch_git_env,
+			text=True, capture_output=True,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "Conflict resolver left unmerged Git index entries" in result.stdout
+		assert "marker-free.txt" in result.stdout
+		assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=false\n"
+		assert git("rev-parse", "HEAD").stdout.strip() == before_head
+		assert git("diff", "--name-only", "--diff-filter=U", "--").stdout.strip() == "marker-free.txt"
 
 
 def test_union_merge_pipeline_functional() -> None:

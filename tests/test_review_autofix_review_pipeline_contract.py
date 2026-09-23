@@ -5710,6 +5710,26 @@ def test_review_pipeline_summary_finalize_reason_distinguishes_push_not_allowed(
 	), "Summary finalize_reason contract must distinguish push-disabled runs before push_failed"
 
 
+def test_conflict_resolver_exports_actuation_sentinel_before_invocation() -> None:
+	block = _step_block("Run Codex resolver, validate, stage, commit")
+	sentinel = 'echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"'
+	invocation = 'bash "${RESOLVER_SCRIPT}"'
+	assert sentinel in block
+	assert block.index(sentinel) < block.index(invocation)
+
+
+def test_review_pipeline_summary_classifies_unresolved_resolver_actuation() -> None:
+	block = _step_block("Append review pipeline iteration summary")
+	resolver_failure = 'if bool_env("RESOLVER_ACTUATION_REQUIRED") and not bool_env("CONFLICT_RESOLVED"):'
+	assert resolver_failure in block
+	resolver_index = block.index(resolver_failure)
+	assert 'return "conflict_resolver_failed"' in block[resolver_index:]
+	assert resolver_index < block.index('return "push_failed"', resolver_index)
+	assert resolver_index < block.index('return "clean_review_no_commit"', resolver_index)
+	assert 'return "conflict_resolved_pushed"' in block
+	assert 'return "autofix_pushed"' in block
+
+
 def test_auto_merge_guard_honours_configured_orchestrator_branch_pattern() -> None:
 	block = _step_block("Enable auto-merge on PR")
 	helper_text = _auto_merge_helper_text()

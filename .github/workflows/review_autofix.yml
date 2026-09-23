@@ -5450,6 +5450,7 @@ jobs:
               fi
             fi
           fi
+          echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"
           bash "${RESOLVER_SCRIPT}"
 
       - name: Cache linked issues references
@@ -8295,6 +8296,8 @@ jobs:
                   return resume_state
               if partial_finalize:
                   return "partial_finalize"
+              if bool_env("RESOLVER_ACTUATION_REQUIRED") and not bool_env("CONFLICT_RESOLVED"):
+                  return "conflict_resolver_failed"
               if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
                   return "editor_empty_noop"
               if bool_env("EDITOR_CHANGES_LOST"):
