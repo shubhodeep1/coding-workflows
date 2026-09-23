@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "Recent merged changes repeatedly updated security-audit workflows, orchestration, staging, sandboxing, and agent-process helpers together with corresponding contract or isolation tests. When modifying execution isolation, prompt handling, or audit behavior, inspect the full workflow-to-script path rather than changing a single entry point.",
+  "fingerprint": "7bd38dd163a84d610861c02924f85ef316e4c63b9cf5b0b39f586280a4e56335",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35803983971",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35803983971",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4216",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4258",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4260",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4270",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4279",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4273",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4280"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260923005515_63b0e81f20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Security-sensitive workflow changes are implemented across both workflow definitions and shared shell/Python helpers, with contract tests protecting the integration.",
+  "timestamps": {
+    "created_at": "2026-09-23T00:55:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
