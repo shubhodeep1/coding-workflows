@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Cancellation and conflict handling must be designed to be safe under repeated or concurrent lifecycle events.",
   "timestamps": {
     "created_at": "2026-09-23T01:01:58Z",
