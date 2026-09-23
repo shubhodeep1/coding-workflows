@@ -1228,7 +1228,13 @@ through `clarify → plan → implement → review`.
   wrappers are pinned to, and sends one `repository_dispatch` (event type
   `workflow-failure-heal`) to coding-workflows. It skips closed issues and the
   `[E2E Smoke Test` fixtures the release gate creates. Stable log lines are
-  prefixed `WORKFLOW_HEAL_REPORT`.
+  prefixed `WORKFLOW_HEAL_REPORT`. Both reporters send the report enveloped
+  as `client_payload: {schema_version, report}` (`workflow_failure_heal.py
+  wrap-dispatch`), because GitHub rejects a `client_payload` with more than
+  10 top-level properties; the intake unwraps it (`unwrap-dispatch`) and still
+  accepts the older flat shape. A rejected dispatch logs the first 300
+  characters of the API error as `detail=…` on the `error dispatch_failed` /
+  `skip reason=dispatch_denied` line.
 - **Intake (coding-workflows):** `scripts/workflow_failure_heal_intake.sh`
   re-validates the payload (`scripts/workflow_failure_heal.py validate-payload`),
   accepts reports only from this repo and the repos listed in
