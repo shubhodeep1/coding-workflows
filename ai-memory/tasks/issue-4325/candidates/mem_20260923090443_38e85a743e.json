@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch/scope should receive the fix?\nChoices:\nA. Retarget to `main` and patch all cited components there. (RECOMMENDED)\nB. Keep `stable` and port the missing failure-heal subsystem before patching it.\nC. Keep `stable`, fix only the validation comment/race, and defer reporter truncation separately.",
+  "fingerprint": "a7c35615f062fba26ca170c39b97c1055ed8a720387009cfdfea7e2424c5f8ad",
+  "lineage": {
+    "issue_number": 4325,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35840334075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35840334075",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260923090443_38e85a743e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4325,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35840334075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4325 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-23T09:04:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
