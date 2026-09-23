@@ -180,3 +180,15 @@ def test_only_rest_reads_through_gh_api():
 
 def test_template_parity():
 	assert TEMPLATE_SCRIPT_PATH.read_text(encoding="utf-8") == SCRIPT_PATH.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("path", [ROOT / ".claude" / "settings.json", ROOT / "workflow-templates" / ".claude" / "settings.json"])
+def test_settings_preapprove_the_checker_tools(path):
+	allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]
+	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py *)" in allow
+	for tool in ("create_session", "archive_session", "send_later", "get_session", "set_session_title"):
+		assert f"mcp__Claude_Code_Remote__{tool}" in allow
+	# Generated server name that create_session children see in this account's environment.
+	assert "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a" in allow
+	# Allow rules cannot glob the server segment; an unanchored MCP glob would be skipped.
+	assert not any(rule.startswith("mcp__*") for rule in allow)

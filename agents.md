@@ -559,7 +559,14 @@ It never handles CI, reviews, comments, or conflicts; that stays a direct
   `claude/*` pushes, `gh` REST and run reads, the security-audit / validate
   dispatches, GitHub MCP and claude-code-remote tools, the helper), and
   `permissions.ask` keeps `gh api` writes (`-X`, `--method`, `-f`/`-F`,
-  `--field`, `--raw-field`, `--input`) behind a prompt.
+  `--field`, `--raw-field`, `--input`) behind a prompt. Sessions started by
+  `create_session` see the claude-code-remote tools under a generated server
+  name; the one observed in this account's cloud environment,
+  `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a`, is allowlisted as a whole
+  server (allow rules cannot wildcard the server segment), so unattended
+  checkers and stage sessions do not stall on a prompt the Auto-mode
+  classifier sometimes raises. In an environment with a different name the
+  rule is inert.
 - Tests: `tests/test_pr_check_in_reminder.py` and
   `tests/test_check_in_status.py` (own `ci.yml` steps).
 - Relationship to §25: the check-in is the scheduled self check-in §25.C

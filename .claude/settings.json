@@ -70,6 +70,7 @@
       "mcp__Claude_Code_Remote__create_session",
       "mcp__Claude_Code_Remote__set_session_title",
       "mcp__Claude_Code_Remote__archive_session",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a",
       "CronCreate",
       "CronDelete",
       "CronList",
