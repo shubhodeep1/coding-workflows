@@ -260,6 +260,65 @@ def test_build_issue_payload_validates_and_carries_lineage() -> None:
 	assert len(json.dumps(payload).encode("utf-8")) < heal.MAX_PAYLOAD_BYTES
 
 
+def test_build_issue_payload_prioritizes_recent_diagnostics_and_compacts_state() -> None:
+	state_comment = (
+		f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={'a' * 64} -->\n"
+		+ ("state-data" * 1000)
+		+ "\nORCHESTRATOR_STATE_V2 -->"
+	)
+	run_url = f"https://github.com/{CONSUMER_REPO}/actions/runs/7001"
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO,
+		kind="issue",
+		label="ai:harness-broken",
+		issue=_issue(),
+		comments=[
+			{"body": state_comment},
+			{"body": f"Harness diagnosis: template renderer failed.\nRun: {run_url}"},
+		],
+		runs=[],
+		wrapper_sha=None,
+		reporter_run_url=None,
+	)
+
+	assert payload["comments_excerpt"].startswith("Harness diagnosis: template renderer failed.")
+	assert "[ORCHESTRATOR_STATE_V2 state part 1/1 omitted]" in payload["comments_excerpt"]
+	assert "state-datastate-data" not in payload["comments_excerpt"]
+	assert len(payload["comments_excerpt"]) <= heal.COMMENTS_EXCERPT_LIMIT
+	assert payload["run_refs"] == [{"repo": CONSUMER_REPO, "run_id": "7001", "url": run_url}]
+
+
+def test_build_issue_payload_preserves_malformed_state_markers_and_full_body_run_refs() -> None:
+	run_url = f"https://github.com/{CONSUMER_REPO}/actions/runs/7002"
+	oversized_diagnosis = "Newest harness diagnosis\n" + ("x" * 7000) + f"\nRun: {run_url}"
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO,
+		kind="issue",
+		label="ai:harness-broken",
+		issue=_issue(),
+		comments=[
+			{"body": "<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + ("b" * 64) + " -->\nmalformed state"},
+			{"body": oversized_diagnosis},
+		],
+		runs=[],
+		wrapper_sha=None,
+		reporter_run_url=None,
+	)
+
+	assert payload["comments_excerpt"].startswith("Newest harness diagnosis")
+	assert "[... truncated ...]" in payload["comments_excerpt"]
+	assert len(payload["comments_excerpt"]) <= heal.COMMENTS_EXCERPT_LIMIT
+	assert payload["run_refs"] == [{"repo": CONSUMER_REPO, "run_id": "7002", "url": run_url}]
+
+	malformed_excerpt = heal._build_recent_comments_excerpt([
+		"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + ("b" * 64) + " -->\nmalformed state",
+		"newest comment",
+	])
+	assert malformed_excerpt.startswith("newest comment")
+	assert "malformed state" in malformed_excerpt
+	assert "state part 1/1 omitted" not in malformed_excerpt
+
+
 def test_validate_payload_rejects_bad_inputs() -> None:
 	good = heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=None, reporter_run_url=None)
 	heal.validate_payload(good)

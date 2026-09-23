@@ -1702,6 +1702,7 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'edit':
 			label = args[i + 1]
 			if label not in issue['labels']:
 				issue['labels'].append(label)
+			store.setdefault('side_effect_order', []).append({'kind': 'label_add', 'issue': int(num), 'label': label})
 			i += 2
 			continue
 		if args[i] == '--remove-label' and i + 1 < len(args):
@@ -2070,6 +2071,7 @@ if args[0] == 'api':
 			'user': {'login': 'github-actions[bot]'},
 			'html_url': f'https://github.com/owner/repo/issues/{m.group(1)}#issuecomment-{cid}',
 		})
+		store.setdefault('side_effect_order', []).append({'kind': 'comment_post', 'issue': int(m.group(1)), 'body': body})
 		if int(m.group(1)) in set(store.get('fail_issue_comment_post_after_write_for', [])):
 			save()
 			print('forced lost comment response after write', file=sys.stderr)
@@ -13090,6 +13092,18 @@ def test_validation_harness_error_raw_status_preserves_budget_and_sets_additive_
 	assert "ai:validation-failed" in result["tracking_labels"]
 	assert "ai:harness-broken" in result["tracking_labels"]
 	assert "HARNESS_ERROR_DETECTED" in (result["stdout"] + result["stderr"])
+	diagnostic_comment_index = next(
+		index
+		for index, operation in enumerate(result["side_effect_order"])
+		if operation["kind"] == "comment_post"
+		and "## ❌ Runtime validation harness error" in operation["body"]
+	)
+	harness_label_index = next(
+		index
+		for index, operation in enumerate(result["side_effect_order"])
+		if operation == {"kind": "label_add", "issue": 192, "label": "ai:harness-broken"}
+	)
+	assert diagnostic_comment_index < harness_label_index
 
 
 
