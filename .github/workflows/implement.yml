@@ -2713,7 +2713,8 @@ jobs:
               --workspace "${WORKSPACE_PATH}" --manifest "${attempt_workspace_manifest}" \
               --quarantine-dir "${attempt_workspace_quarantine}" \
               --changed-paths-out "${attempt_workspace_paths}" --report "${attempt_workspace_report}"; then
-              cmd_rc=78
+              echo "::error::Post-agent workspace guard rejected implement attempt ${attempt}; refusing retry or partial-work salvage."
+              exit 78
             fi
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
@@ -3492,6 +3493,9 @@ jobs:
             done < "${STAGED_SUPPORT_LEDGER}"
           fi
 
+          IMPLEMENT_VALIDATOR_OUTPUT_DIR="${RUNTIME_DIR}/validator-output-implement-preflight"
+          mkdir -p "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}"
+
           # >>> files_touched scope-enforcement guard (preflight) >>>
           # Mirror of the destructive-commit guard above, for scope drift:
           # reject when the staged change set includes paths the issue's
@@ -3507,8 +3511,8 @@ jobs:
           else
             scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
             if [ -n "${scope_staged}" ]; then
-              scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
-              scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+              scope_staged_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-staged.XXXXXX")"
+              scope_allowlist_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-allowlist.XXXXXX")"
               printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
               scope_violations=""
               scope_rc=0
@@ -3532,6 +3536,7 @@ jobs:
                   scope_validator_cmd=(
                     bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh"
                     --role validator --workspace "${WORKSPACE_PATH:-${PWD}}" --runtime-dir "${RUNTIME_DIR}"
+                    --writable-output-dir "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}"
                     -- /usr/bin/python3 -I -S
                   )
                 fi

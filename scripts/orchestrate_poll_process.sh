@@ -171,6 +171,8 @@ TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${RUNTIME_DIR}/files_touched_scope_guard.py"
 TRUSTED_POLLER_WORKSPACE_GUARD="${RUNTIME_DIR}/post_agent_workspace_guard.py"
 UNTRUSTED_POLLER_SANDBOX="${RUNTIME_DIR}/untrusted_process_sandbox.sh"
 UNTRUSTED_POLLER_PROVIDER_PROXY="${RUNTIME_DIR}/model_provider_proxy.py"
+POLLER_VALIDATOR_OUTPUT_DIR="${RUNTIME_DIR}/validator-output-poller"
+mkdir -p "${POLLER_VALIDATOR_OUTPUT_DIR}"
 TRUSTED_POLLER_WORKSPACE_GUARD_SHA256="$(sha256sum "${TRUSTED_POLLER_WORKSPACE_GUARD}" 2>/dev/null | awk '{print $1}')"
 if [ ! -f "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" ] && [ -f scripts/files_touched_scope_guard.py ]; then
 	install -m 0755 scripts/files_touched_scope_guard.py "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}"
@@ -217,6 +219,7 @@ run_poller_isolated_python() {
 	prepare_untrusted_poller_runtime || return 1
 	bash "${UNTRUSTED_POLLER_SANDBOX}" \
 		--role validator --workspace "${validator_workspace}" --runtime-dir "${RUNTIME_DIR}" \
+		--writable-output-dir "${POLLER_VALIDATOR_OUTPUT_DIR}" \
 		-- /usr/bin/python3 -I -S "$@"
 }
 
@@ -8930,7 +8933,9 @@ PY
 		--manifest "${integration_workspace_manifest}" \
 		--quarantine-dir "${integration_workspace_quarantine}" \
 		--changed-paths-out "${integration_actual_paths_file}" --report "${integration_workspace_report}"; then
-		integration_model_rc=78
+		echo "::warning::Integration-conflict workspace guard rejected PR #${final_pr}; discarding the isolated worktree."
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		return 1
 	fi
 	if [ "${integration_model_rc}" -eq 0 ]; then
 		if ! POST_AGENT_VALIDATION_SANDBOX="${UNTRUSTED_POLLER_SANDBOX}" \
@@ -8977,6 +8982,7 @@ PY
 					INTEGRATION_BRANCH_NAME="${integration_branch}" \
 						run_poller_isolated_python "${integration_judge_workspace}" \
 						"${poller_repo_root}/scripts/verify_integration_fingerprints.py" \
+						--repo-root "${integration_judge_workspace}" \
 						"${integration_fingerprints_file}" || integration_fingerprint_rc=$?
 					if [ "${integration_fingerprint_rc}" -eq 0 ]; then
 						git -C "${integration_judge_workspace}" add -A --
@@ -20615,7 +20621,8 @@ ${FOLLOWUP_BLOCK_REASON}"
           if ! run_poller_workspace_guard reconcile "${PWD}" \
             --manifest "${rb_workspace_manifest}" --quarantine-dir "${rb_workspace_quarantine}" \
             --changed-paths-out "${rb_workspace_paths}" --report "${rb_workspace_report}"; then
-            rb_model_rc=78
+			echo "::warning::Review-blocked workspace guard rejected PR #${RB_PR}; aborting this judge cycle."
+			break
           fi
           if [ "${rb_model_rc}" -eq 0 ] && grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
@@ -20961,8 +20968,8 @@ ${RB_REVIEW_FIX_AUTHORIZATION_MARKER}"
 	                git config user.name "codex-bot"
 	                git config user.email "codex@users.noreply.github.com"
 	                rb_review_fix_touched_file="${RUNTIME_DIR}/rb_review_fix_touched_${RB_PR}.txt"
-	                rb_review_fix_allowed_file="${RUNTIME_DIR}/rb_review_fix_allowed_${RB_PR}.txt"
-	                rb_review_fix_spans_file="${RUNTIME_DIR}/rb_review_fix_spans_${RB_PR}.json"
+	                rb_review_fix_allowed_file="${POLLER_VALIDATOR_OUTPUT_DIR}/rb_review_fix_allowed_${RB_PR}.txt"
+	                rb_review_fix_spans_file="${POLLER_VALIDATOR_OUTPUT_DIR}/rb_review_fix_spans_${RB_PR}.json"
 	                rb_review_fix_clean_file="${RUNTIME_DIR}/rb_review_fix_clean_${RB_PR}.tsv"
 	                if [ -s "${rb_workspace_paths:-/nonexistent}" ]; then
 	                  cp "${rb_workspace_paths}" "${rb_review_fix_touched_file}"

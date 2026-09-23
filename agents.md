@@ -724,7 +724,7 @@ when the bounded fix-cycle budget is exhausted.
   after the complete model process group exits, its credentialless
   `workspace-guard` pass quarantines ignored, hidden, symlink, special, or
   otherwise unauthorized changes before output parsing or privileged
-  validation; authorized new regular files are restored and emitted in the
+  validation; authorized new regular files are preserved and emitted in the
   complete changed-path manifest. Post-agent Python validators run through the
   provider-free `validator` sandbox role as `/usr/bin/python3 -I -S`, from an
   external working directory with no credentials or network access.

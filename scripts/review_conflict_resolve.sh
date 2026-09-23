@@ -953,6 +953,7 @@ _verify_fingerprints_soft() {
   fi
   INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
     run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      --repo-root "${PWD}" \
       "${_verifier_args[@]}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" \
       > "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" 2>&1 || RESOLVER_FP_EXIT=$?
@@ -2240,6 +2241,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       fi
       INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
         run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+          --repo-root "${PWD}" \
           "${_final_verifier_args[@]}" \
           "${INTEGRATION_FINGERPRINTS_FILE}" || _final_fp_exit=$?
       if [ "${_final_fp_exit}" -eq 1 ]; then

@@ -44,9 +44,20 @@ def _safe_relative(value: str) -> PurePosixPath:
 
 def _digest(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
+    original_mode: int | None = None
+    try:
+        try:
+            handle = path.open("rb")
+        except PermissionError:
+            original_mode = stat.S_IMODE(path.lstat().st_mode)
+            os.chmod(path, original_mode | stat.S_IRUSR, follow_symlinks=False)
+            handle = path.open("rb")
+        with handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    finally:
+        if original_mode is not None:
+            os.chmod(path, original_mode, follow_symlinks=False)
     return digest.hexdigest()
 
 
@@ -87,24 +98,34 @@ def _inventory(workspace: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
     def walk(directory: Path) -> None:
+        original_mode: int | None = None
         try:
-            children = sorted(os.scandir(directory), key=lambda item: os.fsencode(item.name))
+            try:
+                children = list(os.scandir(directory))
+            except PermissionError:
+                original_mode = stat.S_IMODE(directory.lstat().st_mode)
+                os.chmod(directory, original_mode | stat.S_IRUSR | stat.S_IXUSR, follow_symlinks=False)
+                children = list(os.scandir(directory))
+            children.sort(key=lambda item: os.fsencode(item.name))
+            for child in children:
+                child_path = Path(child.path)
+                lexical_child = Path(os.path.abspath(child.path))
+                if not child.is_symlink() and lexical_child in metadata_paths:
+                    continue
+                relative = child_path.relative_to(workspace).as_posix()
+                _safe_relative(relative)
+                try:
+                    row = _entry(child_path, relative)
+                except OSError as error:
+                    raise GuardError(f"cannot inspect workspace object: {relative}") from error
+                rows.append(row)
+                if row["type"] == "directory":
+                    walk(child_path)
         except OSError as error:
             raise GuardError(f"cannot scan workspace: {error.strerror or error}") from error
-        for child in children:
-            child_path = Path(child.path)
-            resolved_child = child_path.resolve(strict=False)
-            if resolved_child in metadata_paths:
-                continue
-            relative = child_path.relative_to(workspace).as_posix()
-            _safe_relative(relative)
-            try:
-                row = _entry(child_path, relative)
-            except OSError as error:
-                raise GuardError(f"cannot inspect workspace object: {relative}") from error
-            rows.append(row)
-            if row["type"] == "directory":
-                walk(child_path)
+        finally:
+            if original_mode is not None:
+                os.chmod(directory, original_mode, follow_symlinks=False)
 
     walk(workspace)
     return rows
@@ -211,14 +232,31 @@ def _top_level_created_paths(changes: list[dict[str, str]]) -> list[str]:
 
 
 def _move_to_quarantine(workspace: Path, quarantine: Path, relative: str) -> None:
-    source = workspace / _safe_relative(relative)
-    if not source.exists() and not source.is_symlink():
-        return
-    destination = quarantine / relative
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists() or destination.is_symlink():
-        raise GuardError("quarantine destination already exists")
-    shutil.move(str(source), str(destination))
+    relative_path = _safe_relative(relative)
+    source = workspace / relative_path
+    restored_ancestors: list[tuple[Path, int]] = []
+    ancestor = workspace
+    try:
+        for part in relative_path.parts[:-1]:
+            ancestor /= part
+            metadata = ancestor.lstat()
+            if not stat.S_ISDIR(metadata.st_mode):
+                break
+            original_mode = stat.S_IMODE(metadata.st_mode)
+            required_mode = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+            if original_mode & required_mode != required_mode:
+                os.chmod(ancestor, original_mode | required_mode, follow_symlinks=False)
+                restored_ancestors.append((ancestor, original_mode))
+        if not source.exists() and not source.is_symlink():
+            return
+        destination = quarantine / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() or destination.is_symlink():
+            raise GuardError("quarantine destination already exists")
+        shutil.move(str(source), str(destination))
+    finally:
+        for restored_ancestor, original_mode in reversed(restored_ancestors):
+            os.chmod(restored_ancestor, original_mode, follow_symlinks=False)
 
 
 def _remove_empty_directories(root: Path) -> None:
@@ -253,46 +291,77 @@ def reconcile(args: argparse.Namespace) -> int:
         path_parts = _safe_relative(relative).parts
         if path_parts[-1] in {"sitecustomize.py", "usercustomize.py"} or path_parts[-1].endswith(".pth"):
             reason = "python-startup-path"
-        elif any(part.startswith(".") for part in path_parts if part not in {".github"}):
+        elif any(
+            part.startswith(".") and not (index == 0 and part == ".github")
+            for index, part in enumerate(path_parts)
+        ):
             reason = "hidden-path"
         elif _is_ignored(workspace, relative):
             reason = "ignored-path"
-        elif (current or previous or {}).get("type") in {"symlink", "special"}:
+        elif (
+            row["change"] == "created"
+            and current is not None
+            and current.get("type") == "directory"
+            and current["mode"] & (stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+            != (stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        ):
+            os.chmod(
+                workspace / _safe_relative(relative),
+                current["mode"] | stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR,
+                follow_symlinks=False,
+            )
+            reason = "directory-mode-changed"
+        elif (
+            row["change"] == "mode-changed"
+            and current is not None
+            and previous is not None
+            and current.get("type") == previous.get("type") == "directory"
+        ):
+            os.chmod(workspace / _safe_relative(relative), previous["mode"], follow_symlinks=False)
+            reason = "directory-mode-changed"
+        elif any(
+            entry is not None and entry.get("type") in {"symlink", "special"}
+            for entry in (current, previous)
+        ):
             reason = "unsupported-object"
         if reason:
             rejected.append({**row, "reason": reason})
 
     created_roots = _top_level_created_paths(changes)
-    restored: list[str] = []
+    rejected_created_roots = _top_level_created_paths(
+        [row for row in rejected if row["reason"] != "directory-mode-changed"]
+    )
+    restored = [
+        relative
+        for relative in created_roots
+        if not any(relative == root or relative.startswith(f"{root}/") for root in rejected_created_roots)
+    ]
     quarantined: list[str] = []
-    for relative in created_roots:
+    for relative in rejected_created_roots:
         _move_to_quarantine(workspace, quarantine, relative)
         quarantined.append(relative)
-    if not rejected:
-        for relative in created_roots:
-            source = quarantine / relative
-            if source.exists() or source.is_symlink():
-                destination = workspace / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(source), str(destination))
-                restored.append(relative)
-        _remove_empty_directories(quarantine)
-    else:
-        created_set = set(created_roots)
-        for row in rejected:
-            relative = row["path"]
-            if row["change"] == "created" and any(
-                relative == root or relative.startswith(f"{root}/") for root in created_set
-            ):
-                continue
-            _move_to_quarantine(workspace, quarantine, relative)
-            quarantined.append(relative)
+    rejected_created_set = set(rejected_created_roots)
+    for row in rejected:
+        relative = row["path"]
+        if row["reason"] == "directory-mode-changed":
+            continue
+        if row["change"] == "created" and any(
+            relative == root or relative.startswith(f"{root}/") for root in rejected_created_set
+        ):
+            continue
+        _move_to_quarantine(workspace, quarantine, relative)
+        quarantined.append(relative)
+    _remove_empty_directories(quarantine)
 
     changed_paths = sorted(
         {
             row["path"]
             for row in changes
-            if (after.get(row["path"]) or before.get(row["path"], {})).get("type") != "directory"
+            if row["change"] == "type-changed"
+            or (
+                before.get(row["path"], {}).get("type") != "directory"
+                and after.get(row["path"], {}).get("type") != "directory"
+            )
         },
         key=os.fsencode,
     )
