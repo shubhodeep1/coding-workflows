@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: The request explicitly permits one file and three exact lines. No broader implementation, automation wiring, changelog, or tests are needed.\n\nPlanning ref: `main` at `2352420a3b71bd0a591d6e5faa3b464973c132b4`\n\n## Automation impact\n- Extends existing code: no.\n- Modifies existing fixture only: yes.\n- Scheduler/PR-push entry point: none required.\n- Long-running supervisor: none.\n- Database gate: not applicable.\n- Removal registry entry: not applicable.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` \u2014 replace line 2 while preserving the specified three-line content exactly.\n\n## Functions or modules to implement\n- None.\n\n## Data structures affected\n- Plain-text smoke-canary record:\n  - `status: ok`\n  - `run_id: alt-35828617303`\n  - `updated-by: ai-pipeline`\n\n## API/interface changes\n- None.\n\n## Decisions\n\n### D1 \u2014 Apply an exact fixture-only update\n- **Chosen:** Replace the existing `run_id` and verify the complete file exactly matches the requested three lines.\n- **Alternatives considered:** Add parsing logic, tests, documentation, or changelog updates.\n- **Why:** Those additions would violate the explicit one-file scope and provide no correctness benefit.\n\n## Security considerations\n- No trust boundary, authorization surface, external input, secret, money-handling, or executable behavior is affected.\n- Abuse case: accidental extra content or path changes; prevent this through exact-content and changed-path verification.\n\n## Risks and edge cases\n- Preserve line order, spelling, punctuation, and a conventional trailing newline.\n- Ensure no other file is modified.\n- No repository conflict found: the file exists, and only its current `run_id` differs.\n\n## Testing considerations\n- Compare the file byte-for-byte with the requested three-line payload.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n- No broader test suite is necessary for this static fixture update.\n\n## Pre-execution self-check\n- Requirements are complete and internally consistent.\n- The checkout matches the supplied planning ref.\n- Integration branch metadata is absent, so no mismatch is established.\n- The plan respects the single-file constraint.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ff168e914a1abcf0174eb30a149c681b7b9c72831ff2bb490ef8b73798cd56fc",
+  "lineage": {
+    "issue_number": 4316,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35828942605",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35828942605",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4316"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260923065838_f65b1baf1e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4316,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35828942605"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4316",
+  "timestamps": {
+    "created_at": "2026-09-23T06:58:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
