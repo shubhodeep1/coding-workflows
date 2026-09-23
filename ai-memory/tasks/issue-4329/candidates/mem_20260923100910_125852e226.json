@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which baseline should receive the fix?\nChoices:\nA. Retarget to `orchestrator/project-4139`, where the sandbox code exists (RECOMMENDED)\nB. Port the complete sandbox feature to `stable`, then fix it\nC. Defer this heal until the sandbox feature lands on `stable`",
+  "fingerprint": "17e7a2d6cf62300705a50a5bae0d7f6a66a7edf166026644060a69aa61455a9d",
+  "lineage": {
+    "issue_number": 4329,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35846661234",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35846661234",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260923100910_125852e226",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4329,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35846661234"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4329 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-23T10:09:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
