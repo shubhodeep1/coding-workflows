@@ -14,7 +14,13 @@ container, or just a later day — continues from the phase, security-pass
 cycle, or validation cycle where the previous session stopped instead of
 re-implementing phases that already merged. The log rides in each phase PR,
 each validation-fix PR, and the completion PR, so the copy on the default
-branch can lag the live session by one step.
+branch can lag the live session by one step; each stage session's
+`— resume.` prompt carries the current stage in the meantime.
+
+Each stage (a phase, a blocked-PR fix, a security or validation read, the
+completion PR, a `/verify-activation` cycle) runs in its own session titled
+`implement-plan <slug> — <stage>`, started by a Haiku checker session once
+the previous stage's wait is over.
 
 See the **Progress Log** section of `.claude/commands/implement-plan-claude.md`
 for the full file format and the read/update/persist contract.
