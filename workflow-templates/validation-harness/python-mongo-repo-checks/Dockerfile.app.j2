@@ -17,8 +17,8 @@ RUN apt-get update \
 
 COPY . /workspace
 
-RUN if [ -f "{{ requirements_file }}" ]; then \
-		python3 -m pip install --no-cache-dir --disable-pip-version-check -r "{{ requirements_file }}"; \
+RUN if [ -f '{{ requirements_file | replace("'", "'\"'\"'") }}' ]; then \
+		python3 -m pip install --no-cache-dir --disable-pip-version-check -r '{{ requirements_file | replace("'", "'\"'\"'") }}'; \
 	fi
 
 CMD ["sh", "-c", "while :; do sleep 3600; done"]

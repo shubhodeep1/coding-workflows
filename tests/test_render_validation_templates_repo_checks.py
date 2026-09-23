@@ -116,8 +116,8 @@ def test_repo_checks_family_installs_consumer_requirements() -> None:
 		assert result.returncode == 0, result.stderr
 
 		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
-		install_line = 'python3 -m pip install --no-cache-dir --disable-pip-version-check -r "requirements.txt"'
-		assert 'if [ -f "requirements.txt" ]' in dockerfile_text
+		install_line = "python3 -m pip install --no-cache-dir --disable-pip-version-check -r 'requirements.txt'"
+		assert "if [ -f 'requirements.txt' ]" in dockerfile_text
 		assert install_line in dockerfile_text
 		assert dockerfile_text.index("COPY . /workspace") < dockerfile_text.index(install_line)
 
@@ -128,15 +128,16 @@ def test_repo_checks_family_honours_requirements_file_slot() -> None:
 		manifest_path = temp_root / "validate.yml"
 		output_root = temp_root / "out"
 		payload = _manifest_payload()
-		payload["slots"]["requirements_file"] = "requirements/ci.txt"
+		payload["slots"]["requirements_file"] = "requirements/ci'$(touch pwn).txt"
 		_write_yaml(manifest_path, payload)
 
 		result = _run_renderer(manifest_path, output_root)
 		assert result.returncode == 0, result.stderr
 
 		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
-		assert '-r "requirements/ci.txt"' in dockerfile_text
-		assert '-r "requirements.txt"' not in dockerfile_text
+		assert "[ -f 'requirements/ci'\"'\"'$(touch pwn).txt' ]" in dockerfile_text
+		assert "-r 'requirements/ci'\"'\"'$(touch pwn).txt'" in dockerfile_text
+		assert '-r "requirements/ci\'$(touch pwn).txt"' not in dockerfile_text
 
 
 def main() -> int:
