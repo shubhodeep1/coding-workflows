@@ -55,6 +55,7 @@ BLOCKING_LABELS = ("ai:review-blocked", "ai:review-autofix-failed", "ai:needs-hu
 FAILED_CHECK_CONCLUSIONS = ("failure", "timed_out", "action_required", "startup_failure")
 MERGED_ISSUE_LABEL = "ai:merged"
 DEFAULT_STUCK_HOURS = 6.0
+MAX_PAGINATED_API_PAGES = 10
 
 
 class ReadError(Exception):
@@ -90,6 +91,8 @@ def _gh_api_paginated_object(path: str, list_key: str) -> dict:
 	paginated_result: dict = {}
 	page_number = 1
 	while True:
+		if page_number > MAX_PAGINATED_API_PAGES:
+			raise ReadError(f"gh api {path} pagination exceeded {MAX_PAGINATED_API_PAGES} pages")
 		separator = "&" if "?" in path else "?"
 		page_payload = gh_api(f"{path}{separator}per_page=100&page={page_number}")
 		page_items = page_payload.get(list_key)

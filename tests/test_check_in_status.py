@@ -156,10 +156,32 @@ def test_failed_check_on_second_page_is_detected(monkeypatch, capsys):
 	assert "repos/o/r/commits/abc/check-runs?per_page=100&page=2" in calls
 
 
+def test_pagination_page_limit_exits_2_with_error(monkeypatch, capsys):
+	full_page = [{"name": f"ok-{index}"} for index in range(100)]
+	monkeypatch.setattr(checker, "MAX_PAGINATED_API_PAGES", 2)
+	_stub(monkeypatch, {
+		"repos/o/r/pulls/7": _pr(),
+		"repos/o/r/commits/abc/check-runs?per_page=100&page=1": {"check_runs": full_page},
+		"repos/o/r/commits/abc/check-runs?per_page=100&page=2": {"check_runs": full_page},
+	})
+	code, out = _run(["--pr", "7"], capsys)
+	assert code == 2 and out["done"] is False and "pagination exceeded 2 pages" in out["error"]
+
+
 def test_null_commit_time_exits_2_with_error(monkeypatch, capsys):
 	_stub(monkeypatch, _stuck_responses(_pr(mergeable_state="dirty"), None))
 	code, out = _run(["--pr", "7"], capsys)
 	assert code == 2 and out["done"] is False and "timestamp must be a string" in out["error"]
+
+
+def test_empty_head_sha_exits_2_with_error(monkeypatch, capsys):
+	pr = _pr(mergeable_state="dirty", head={"sha": "", "ref": "claude/x"})
+	_stub(monkeypatch, {
+		"repos/o/r/pulls/7": pr,
+		"repos/o/r/commits/": {"commit": {"committer": {"date": ""}}},
+	})
+	code, out = _run(["--pr", "7"], capsys)
+	assert code == 2 and out["done"] is False and out["error"]
 
 
 def test_run_completed_and_pending(monkeypatch, capsys):
