@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/untrusted_process_sandbox.sh:300-338 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: validate_* only check format and do not verify that the host systemd accepts the configured properties.\n  WHY: Unsupported properties may be silently dropped, allowing resource exhaustion.\n- agents.md:723-728, 739-745, 752-755 | confidence=3\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Continuation lines in the model_provider_proxy.py list item and new bullet items use tab indentation while surrounding list items use 2-space continuation indentation.\n  WHY: Markdown renders both, but mixed indentation breaks visual alignment and conflicts with the file's existing convention.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Bound proxy connections and enforce deterministic sandbox resource limits\"\n  expected_change_site: scripts/untrusted_process_sandbox.sh (full cgroup enforcement)\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: Validators check format only; no systemd support test/fallback.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.md: lines 723-728 (model_provider_proxy.py description continuation lines)\n  PROBLEM: Continuation lines in the model_provider_proxy.py list item use tab indentation while the surrounding list items in the same file use 2-space continuation indent (e.g. lines 720-722 use `  trusted configuration...` with 2-space, but the last-run diff changed them to `\\ttrusted configuration...` with tab). The same inconsistency appears in the new bullet items at lines 739-745 and 752-755.\n  WHY: Documentation-only style inconsistency. Markdown renders both, but the mixed indentation breaks visual alignment with sibling bullets in the same list and conflicts with the file's existing convention.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/untrusted_process_sandbox.sh:300-338 | severity=MAJOR | confidence=4\n  PROBLEM: validate_* only check format; no test that host systemd accepts properties.\n  WHY: Unsupported props silently dropped \u2192 exhaustion possible.\n- TASK_GAP\n  Requirement: \"Bound proxy connections and enforce deterministic sandbox resource limits\"\n  Expected change site: scripts/untrusted_process_sandbox.sh (full cgroup enforcement)\n  Evidence of absence: Validators check format only; no systemd support test/fallback.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c3d26fc01c606ed5f7c8fdcfb9d35582caa24754486fbfa6d923b4b3bd081f32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4301,
+    "run_id": "35814486871",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35814486871",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923044524_a773155b2a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4301,
+    "run_id": "35814486871"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-23T04:45:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
