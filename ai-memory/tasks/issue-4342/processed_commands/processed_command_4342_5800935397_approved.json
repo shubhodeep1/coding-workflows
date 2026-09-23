@@ -5,13 +5,27 @@
   "entry_id": "processed_command_4342_5800935397_approved",
   "issue_number": 4342,
   "metadata": {
+    "branch": "ai/issue-4342",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "changelog.d/4342-review-workspace-guard-direct.md",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_conflict_resolve.sh",
+      "scripts/review_rb_judge.sh",
+      "tests/test_agent_process_isolation.py"
+    ],
+    "issue_number": 4342,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4342",
+    "pr_number": 4349,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4349",
+    "run_attempt": "1",
+    "run_id": "35905474538",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/35905474538"
   },
   "run_attempt": 1,
   "run_id": "35905474538",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-23T18:54:48Z",
+  "status": "completed",
+  "timestamp": "2026-09-23T19:08:04Z",
   "workflow": "implement"
 }
