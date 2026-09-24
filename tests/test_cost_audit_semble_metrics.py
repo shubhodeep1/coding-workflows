@@ -51,7 +51,7 @@ def test_format_openrouter_usage_line_preserves_complete_usage_contract() -> Non
 			"cache_creation_input_tokens": 30,
 			"cache_read_input_tokens": 40,
 		},
-		model="openai/gpt-5.6-luna",
+		model="openai/gpt-6-luna",
 		phase="workflow-log-analysis",
 		call_label="summarize-unselected-run",
 		cache_enabled=True,
@@ -61,7 +61,7 @@ def test_format_openrouter_usage_line_preserves_complete_usage_contract() -> Non
 
 	assert line == (
 		"INFO: openrouter usage phase=workflow-log-analysis "
-		"call=summarize-unselected-run model=openai/gpt-5.6-luna "
+		"call=summarize-unselected-run model=openai/gpt-6-luna "
 		"cache_enabled=true cache_breakpoint_enabled=na "
 		"cache_breakpoint_fallback_retry=na prompt_tokens=100 "
 		"completion_tokens=25 total_tokens=125 "
@@ -87,7 +87,7 @@ def test_format_openrouter_usage_line_normalizes_nested_cache_usage() -> None:
 			"prompt_tokens_details": {"cache_write_tokens": 31},
 			"input_token_details": {"cache_read": 41},
 		},
-		model="openai/gpt-5.6-luna",
+		model="openai/gpt-6-luna",
 		phase="release-gate",
 		call_label="soft-error-analyzer",
 		cache_enabled=False,
@@ -104,7 +104,7 @@ def test_format_openrouter_usage_line_normalizes_nested_cache_usage() -> None:
 def test_format_openrouter_usage_line_uses_na_for_missing_usage() -> None:
 	line = format_openrouter_usage_line(
 		None,
-		model="openai/gpt-5.6-luna",
+		model="openai/gpt-6-luna",
 		phase="release-gate",
 		call_label="soft-error-analyzer",
 		cache_enabled=True,

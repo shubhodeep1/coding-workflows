@@ -30,8 +30,8 @@ jobs:
     timeout-minutes: 90
     env:
       OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
-      MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
-      MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5' }}
+      MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+      MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.6-sol' }}
       REVIEWER_MODELS: |
         minimax/minimax-m3
         z-ai/glm-5.2
@@ -71,7 +71,7 @@ jobs:
           source scripts/opencode_helpers.sh
 
           # The probe prompt must require actual reasoning: adaptive-effort
-          # models (openai/gpt-5.6-sol) treat reasoning effort as a ceiling
+          # models (openai/gpt-6-sol) treat reasoning effort as a ceiling
           # and skip reasoning entirely on trivial prompts, which starves the
           # reasoning-evidence gate below (smoke run 33087059507).
           smoke_prompt='Silently verify that 391 is the product of two two-digit primes, then output exactly OK'

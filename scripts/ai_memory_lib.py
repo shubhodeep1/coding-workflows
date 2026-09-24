@@ -88,11 +88,12 @@ ALLOWED_CATEGORIES = {
 }
 
 ALLOWED_SCOPE_LEVELS = {"global", "task", "run"}
-ALLOWED_LESSONS_LEARNED_PHASES = {"review_autofix", "implement", "judge"}
+ALLOWED_LESSONS_LEARNED_PHASES = {"review_autofix", "implement", "judge", "implement_plan", "orchestrator_completion"}
 ALLOWED_LESSONS_LEARNED_KINDS = {
     "out_of_plan_fix",
     "unexpected_judge_verdict",
     "review_finding_outside_plan_scope",
+    "project_retrospective",
 }
 
 SENSITIVE_CATEGORIES = {"incidents"}
@@ -132,6 +133,7 @@ class RetrievalResult:
     role: str
     keyword_method: str  # "llm", "plain", or "none"
     miss_reason: str | None
+    selected_lesson_ids: tuple[str, ...] = ()
 
 
 def parse_bool(value: Any, default: bool = False) -> bool:
@@ -1783,10 +1785,20 @@ def record_lessons_learned(
     phase: str,
     lessons: list[dict[str, Any]],
     discovered_at: str | None = None,
+    record_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """Validate and write lessons-learned records; return the records written.
+
+    ``record_ids`` is optional. When given it must hold one caller-derived id
+    per lesson; a lesson whose record file already exists is skipped, so a
+    caller that derives ids deterministically can re-run safely. Without it,
+    every lesson gets a fresh random id (the original behaviour).
+    """
     ensure_memory_layout(memory_root)
     if not isinstance(lessons, list) or not lessons:
         raise MemoryValidationError("lessons must be a non-empty array")
+    if record_ids is not None and (not isinstance(record_ids, list) or len(record_ids) != len(lessons)):
+        raise MemoryValidationError("record_ids must be an array with one id per lesson")
 
     normalized_issue_number = _normalize_optional_positive_int(issue_number, "issue_number")
     normalized_pr_number = _normalize_optional_positive_int(pr_number, "pr_number")
@@ -1796,12 +1808,12 @@ def record_lessons_learned(
     )
 
     records: list[dict[str, Any]] = []
-    for lesson in lessons:
+    for index, lesson in enumerate(lessons):
         if not isinstance(lesson, dict):
             raise MemoryValidationError("each lesson must be a JSON object")
 
         record = {
-            "record_id": make_record_id("lesson"),
+            "record_id": record_ids[index] if record_ids is not None else make_record_id("lesson"),
             "schema_version": LESSONS_LEARNED_RECORD_SCHEMA_VERSION,
             "issue_number": normalized_issue_number,
             "pr_number": normalized_pr_number,
@@ -1812,7 +1824,10 @@ def record_lessons_learned(
             "discovered_at": normalized_discovered_at,
         }
         validate_lessons_learned_record(record, memory_root)
-        _atomic_write_json(_lessons_learned_record_path(memory_root, record), record)
+        record_path = _lessons_learned_record_path(memory_root, record)
+        if record_ids is not None and record_path.exists():
+            continue
+        _atomic_write_json(record_path, record)
         records.append(record)
 
     return records
@@ -1826,6 +1841,81 @@ def _load_canonical_records(memory_root: Path) -> list[dict[str, Any]]:
             payload = json.load(handle)
         records.append(payload)
     return records
+
+
+# Prompt roles that see lessons-learned records as soft priors, and how many /
+# how much of the role's token budget they may take (see
+# retrieve_memory_context). Up to LESSONS_RETRIEVAL_BUDGET_FRACTION of the
+# budget is set aside only when matching lessons exist.
+LESSONS_RETRIEVAL_ROLES = {"planning", "implementation", "reviewer"}
+LESSONS_RETRIEVAL_MAX = 5
+LESSONS_RETRIEVAL_BUDGET_FRACTION = 0.25
+LESSONS_RETRIEVAL_TEXT_MAX_CHARS = 600
+
+
+def _load_lessons_learned_records(memory_root: Path) -> list[dict[str, Any]]:
+    """Return every schema-valid lessons-learned record under tasks/*/lessons_learned/.
+
+    Unreadable or invalid files are skipped: lessons are soft priors, so a bad
+    record must never break retrieval.
+    """
+    task_root = memory_root / "tasks"
+    if not task_root.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for path in sorted(task_root.glob("*/lessons_learned/*.json")):
+        try:
+            payload = _load_json(path)
+            if not isinstance(payload, dict):
+                continue
+            validate_lessons_learned_record(payload, memory_root)
+        except Exception:  # noqa: BLE001 - fail open: skip any unreadable / invalid lesson
+            continue
+        records.append(payload)
+    return records
+
+
+def select_lessons_for_context(
+    memory_root: Path,
+    keywords: set[str] | None,
+    *,
+    limit: int = LESSONS_RETRIEVAL_MAX,
+) -> list[dict[str, Any]]:
+    """Return up to ``limit`` newest lessons whose text or tags match a keyword.
+
+    No keywords means no lessons: without an issue title or body there is
+    nothing to match relevance against. Lesson text partly comes from model
+    output (judge fix-up titles, validation diagnoses, audit
+    recommendations), so a lesson that trips the memory prompt-injection
+    patterns is never surfaced (MEMORY_INJECTION_SCAN_ENABLED, default on).
+    """
+    if not keywords or limit < 1:
+        return []
+    matched: list[dict[str, Any]] = []
+    for record in _load_lessons_learned_records(memory_root):
+        tags_text = " ".join(str(tag) for tag in (record.get("tags") or []))
+        lesson_text = str(record.get("lesson_text") or "")
+        if _keyword_overlap_ratio(keywords, f"{lesson_text} {tags_text}") <= 0:
+            continue
+        if scan_candidate_text_for_injection(lesson_text, tags_text):
+            _log.warning("Skipping lessons-learned record %s: prompt-injection pattern matched", record.get("record_id"))
+            continue
+        matched.append(record)
+    matched.sort(key=lambda item: (str(item.get("discovered_at") or ""), str(item.get("record_id") or "")), reverse=True)
+    return matched[:limit]
+
+
+def _lesson_context_line(record: dict[str, Any]) -> str:
+    text = " ".join(str(record.get("lesson_text") or "").split())
+    if len(text) > LESSONS_RETRIEVAL_TEXT_MAX_CHARS:
+        text = text[: LESSONS_RETRIEVAL_TEXT_MAX_CHARS - 3].rstrip() + "..."
+    issue_label = record.get("issue_number") if record.get("issue_number") is not None else "-"
+    pr_label = record.get("pr_number") if record.get("pr_number") is not None else "-"
+    tags = ",".join(str(tag) for tag in (record.get("tags") or []))
+    return (
+        f"- [lesson|{record.get('phase')}|{record.get('lesson_kind')}|id={record.get('record_id')}] "
+        f"issue={issue_label} pr={pr_label} tags={tags or '-'} :: {text}"
+    )
 
 
 def _load_candidate_records(memory_root: Path, issue_number: int | None = None) -> list[tuple[Path, dict[str, Any]]]:
@@ -2030,7 +2120,7 @@ Title: {title}
 Body:
 {body}"""
 
-_KEYWORD_MODEL_DEFAULT = "openai/gpt-5.4-nano"
+_KEYWORD_MODEL_DEFAULT = "openai/gpt-6-luna"
 _KEYWORD_MAX_RETRIES = 3
 
 
@@ -2469,6 +2559,25 @@ def retrieve_memory_context(
     # Extract keywords for content-aware scoring
     keywords, keyword_method = _extract_keywords(issue_title, issue_body, api_key=api_key)
 
+    # Lessons-learned soft priors: for the planning / implementation /
+    # reviewer roles, set aside up to LESSONS_RETRIEVAL_BUDGET_FRACTION of the
+    # budget for the newest keyword-matching lessons, but only when some match;
+    # records keep the rest. LESSONS_LEARNED_ENABLED=false turns this off.
+    lesson_lines: list[str] = []
+    lesson_ids: list[str] = []
+    lesson_tokens = 0
+    if resolved_role in LESSONS_RETRIEVAL_ROLES and parse_bool(os.environ.get("LESSONS_LEARNED_ENABLED"), default=True):
+        lesson_budget = int(token_budget * LESSONS_RETRIEVAL_BUDGET_FRACTION)
+        for lesson in select_lessons_for_context(memory_root, keywords):
+            line = _lesson_context_line(lesson)
+            line_tokens = _estimate_tokens(line)
+            if lesson_tokens + line_tokens > lesson_budget:
+                continue
+            lesson_lines.append(line)
+            lesson_ids.append(str(lesson.get("record_id")))
+            lesson_tokens += line_tokens
+    record_budget = token_budget - lesson_tokens
+
     records: list[dict[str, Any]] = []
     for record in _load_canonical_records(memory_root):
         if record.get("status") == "active":
@@ -2514,9 +2623,9 @@ def retrieve_memory_context(
             f"id={record['record_id']}] {record['summary']}"
         )
         line_tokens = _estimate_tokens(line)
-        if selected and used_tokens + line_tokens > token_budget:
+        if selected and used_tokens + line_tokens > record_budget:
             continue
-        if not selected and line_tokens > token_budget:
+        if not selected and line_tokens > record_budget:
             # Always include at least one record if available, even when oversized.
             selected.append(record)
             used_tokens = line_tokens
@@ -2528,7 +2637,7 @@ def retrieve_memory_context(
         "AI MEMORY CONTEXT",
         f"role: {resolved_role}",
         f"token_budget: {token_budget}",
-        f"estimated_tokens_used: {used_tokens}",
+        f"estimated_tokens_used: {used_tokens + lesson_tokens}",
         f"records_selected: {len(selected)}",
     ]
     for index, record in enumerate(selected):
@@ -2544,16 +2653,22 @@ def retrieve_memory_context(
     if not selected:
         lines.append("- none")
 
+    if lesson_lines:
+        lines.append("LESSONS LEARNED (soft priors from earlier runs; not requirements)")
+        lines.append(f"lessons_selected: {len(lesson_lines)}")
+        lines.extend(lesson_lines)
+
     miss_reason = None if scored else "no_eligible_records"
 
     return RetrievalResult(
         context="\n".join(lines) + "\n",
         selected_record_ids=[str(item.get("record_id")) for item in selected],
-        estimated_tokens=used_tokens,
+        estimated_tokens=used_tokens + lesson_tokens,
         token_budget=token_budget,
         role=resolved_role,
         keyword_method=keyword_method,
         miss_reason=miss_reason,
+        selected_lesson_ids=tuple(lesson_ids),
     )
 
 

@@ -444,6 +444,205 @@ PY
   [ -n "${telemetry_json}" ] && printf 'AI_MEMORY_TELEMETRY: %s\n' "${telemetry_json}" >&2
 }
 
+# record_orchestrator_lesson_event <event_json>
+#
+# Append one cause (judge fix-up, validation fix, security finding, stall
+# recovery) to state.lesson_events via `orchestrate_lib.py
+# append-lesson-event`, which keeps the newest 20 and bounds each entry.
+# emit_orchestrator_completion_lessons turns them into lessons when the
+# project completes. Fail-open: lessons are bookkeeping, so a failure only
+# logs a warning and never blocks the poller. No API calls.
+record_orchestrator_lesson_event() {
+  local event_json="${1:-}"
+  [ -n "${event_json}" ] || return 0
+  if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ]; then
+    return 0
+  fi
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py append-lesson-event \
+    --state-file "${STATE_FILE}" --event-json "${event_json}" >/dev/null; then
+    echo "::warning::tracking #${TRACKING_NUM:-?}: could not record orchestrator lesson event; continuing fail-open" >&2
+  fi
+  return 0
+}
+
+# Lesson-event builders. Each prints one event JSON object for
+# record_orchestrator_lesson_event (or nothing when there is no cause to
+# record) and always exits 0, so a malformed input never breaks the caller.
+
+# lesson_event_json_for_judge_fixup <title> <issue_number> <cycle> <judge_new_issue_json>
+lesson_event_json_for_judge_fixup() {
+  jq -cn \
+    --arg title "${1:-}" \
+    --arg issue "${2:-}" \
+    --arg cycle "${3:-}" \
+    --arg fix_issue "${4:-}" '
+      ($fix_issue | fromjson? // {}) as $def
+      | {
+          kind: "judge_fixup",
+          text: $title,
+          issues: [($issue | tonumber?)] | map(select(. != null)),
+          cycle: ($cycle | tonumber? // null),
+          files: [($def.files_touched // [])[]? | select(type == "string")]
+        }' 2>/dev/null || true
+}
+
+# lesson_event_json_for_validation_comment <fix_comment_body> <fix_issue_numbers_json> <cycle>
+# The cause is the diagnosis between the "## 🧪 Runtime validation found
+# fixable issues" heading and the "Consolidated …" / "Reusing existing open
+# fix-up …" line; literal \n sequences are unescaped first.
+lesson_event_json_for_validation_comment() {
+  local diag_text=""
+  diag_text="$(printf '%s' "${1:-}" | sed 's/\\n/\n/g' | sed '1{/^## /d;}' \
+    | sed -n '/^\(Consolidated \|Reusing existing open fix-up\)/q;p' | tr '\n' ' ' \
+    | sed 's/[[:space:]]\{1,\}/ /g; s/^ //; s/ $//' | cut -c1-400)" || diag_text=""
+  [ -n "${diag_text}" ] || return 0
+  jq -cn \
+    --arg text "${diag_text}" \
+    --arg issues "${2:-[]}" \
+    --arg cycle "${3:-}" '
+      {
+        kind: "validation_fix",
+        text: $text,
+        issues: [($issues | fromjson? // [])[]? | numbers],
+        cycle: ($cycle | tonumber? // null),
+        files: []
+      }' 2>/dev/null || true
+}
+
+# lesson_event_json_for_security_findings <findings_file> <cycle>
+# The cause is the first three blocking findings (category, location,
+# recommendation); files are every file the audit flagged.
+lesson_event_json_for_security_findings() {
+  jq -c --arg cycle "${2:-}" '
+    ((.findings // []) | map(select(type == "object"))) as $rows
+    | select(($rows | length) > 0)
+    | {
+        kind: "security_finding",
+        text: ($rows[:3] | map(
+            "\(.owasp_or_stride_category // "finding") in \(.file // "?")\(if .line then ":\(.line)" else "" end): \((.recommendation // .exploit_scenario // "") | tostring | .[0:120])"
+          ) | join("; ")),
+        issues: [],
+        cycle: ($cycle | tonumber? // null),
+        files: ($rows | map(.file | select(type == "string")) | unique)
+      }' "${1:-/dev/null}" 2>/dev/null || true
+}
+
+# lesson_event_json_for_stall <state_file> <local_id> <phase> <action> <minutes> <issue_number>
+# Files come from the stalled wave entry's files_touched manifest.
+lesson_event_json_for_stall() {
+  jq -c \
+    --arg local_id "${2:-}" \
+    --arg phase "${3:-unknown}" \
+    --arg action "${4:-unknown}" \
+    --arg minutes "${5:-?}" \
+    --arg issue "${6:-}" '
+      ([.waves[]?.issues[]? | select(.id == $local_id)] | first // {}) as $entry
+      | {
+          kind: "stall_recovery",
+          text: "stuck in \($phase) for \($minutes)m; recovery: \($action)",
+          issues: [($issue | tonumber?)] | map(select(. != null)),
+          files: [($entry.files_touched // [])[]? | select(type == "string")]
+        }' "${1:-/dev/null}" 2>/dev/null || true
+}
+
+# emit_orchestrator_completion_lessons
+#
+# Called once the project reaches status=complete. Builds lessons from
+# state.lesson_events plus the recovery / stall / review-blocked /
+# validation / security counters (orchestrate_lib.build_completion_lessons)
+# and writes them to the ai-memory branch as lessons_learned_record.v1
+# (phase orchestrator_completion, kind project_retrospective). Record ids are
+# deterministic, so a repeated completion tick writes nothing new. Honors
+# AI_MEMORY_ENABLED / LESSONS_LEARNED_ENABLED; fail-open; no GitHub API calls.
+emit_orchestrator_completion_lessons() {
+  local telemetry_json=""
+
+  if ! is_truthy "${AI_MEMORY_ENABLED:-true}" || ! is_truthy "${LESSONS_LEARNED_ENABLED:-true}"; then
+    return 0
+  fi
+  if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ] || ! [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  telemetry_json="$(
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "${PWD}" "${STATE_FILE}" "${TRACKING_NUM}" <<'PY' 2>&1
+import json
+import os
+import sys
+from pathlib import Path
+
+from ai_memory_lib import persist_memory_operation, record_lessons_learned, resolve_memory_root_dir
+from orchestrate_lib import build_completion_lessons
+
+repo_root = Path(sys.argv[1]).resolve()
+state = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+tracking_issue = int(sys.argv[3])
+memory_branch = str(os.environ.get("AI_MEMORY_BRANCH", "ai-memory") or "ai-memory").strip() or "ai-memory"
+memory_root_relative = str(os.environ.get("AI_MEMORY_ROOT", "ai-memory") or "ai-memory").strip() or "ai-memory"
+try:
+    push_retries = max(1, int(os.environ.get("AI_MEMORY_PUSH_RETRIES") or 16))
+except ValueError:
+    push_retries = 16
+try:
+    final_pr = int(state.get("final_merge_pr") or 0) or None
+except (TypeError, ValueError):
+    final_pr = None
+
+lessons = build_completion_lessons(state, tracking_issue)
+record_ids = [lesson.pop("record_id") for lesson in lessons]
+telemetry = {
+    "op": "write_lessons_learned",
+    "ok": True,
+    "phase": "orchestrator_completion",
+    "source": "orchestrate_completion",
+    "issue_number": tracking_issue,
+    "pr_number": final_pr,
+    "count": 0,
+    "did_push": False,
+    }
+
+if lessons:
+    def operation(clone_dir: Path) -> dict[str, object]:
+        memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
+        records = record_lessons_learned(
+            memory_root,
+            issue_number=tracking_issue,
+            pr_number=final_pr,
+            phase="orchestrator_completion",
+            lessons=lessons,
+            record_ids=record_ids,
+        )
+        return {"records": records}
+
+    result = persist_memory_operation(
+        repo_root,
+        memory_branch=memory_branch,
+        memory_root_relative=memory_root_relative,
+        push_retries=push_retries,
+        commit_message=f"ai-memory: record orchestrator completion lessons [#{tracking_issue}]",
+        operation=operation,
+    )
+    records = (result.get("operation_result") or {}).get("records") or []
+    telemetry["count"] = len(records)
+    telemetry["did_push"] = bool(result.get("did_push", False))
+
+print(json.dumps(telemetry, ensure_ascii=True, sort_keys=True))
+PY
+  )" || {
+    echo "::warning::tracking #${TRACKING_NUM}: orchestrator completion lessons write failed; continuing fail-open" >&2
+    printf 'AI_MEMORY_TELEMETRY: {"count":0,"fail_open":true,"ok":false,"op":"write_lessons_learned","phase":"orchestrator_completion","source":"orchestrate_completion"}\n' >&2
+    return 0
+  }
+
+  [ -n "${telemetry_json}" ] && printf 'AI_MEMORY_TELEMETRY: %s\n' "${telemetry_json}" >&2
+  return 0
+}
+
 _state_snapshot_json_object_or_empty() {
 	local payload="${1:-}"
 
@@ -6170,8 +6369,8 @@ security_pass_exhaustion_judge() {
     echo "${diagnostics}"
   } > "${prompt_file}"
 
-  effective_judge_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
-  if ! bash scripts/write_codex_config.sh --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}" >/dev/null 2>"${error_file}"; then
+  effective_judge_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"
+  if ! bash scripts/write_codex_config.sh --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" >/dev/null 2>"${error_file}"; then
     echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=codex_config_failed"
     return 1
   fi
@@ -6715,7 +6914,7 @@ run_security_pass_inline() {
   set_tracking_phase_label "ai:security-pass"
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
 
-  effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
+  effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"
   if ! bash scripts/write_codex_config.sh --model "${effective_security_model}" --reasoning xhigh >/dev/null 2>"${audit_error_file}"; then
     security_pass_fail_closed "engine_unavailable" "The security-pass model configuration could not be prepared." "${prior_security_status}"
     return 1
@@ -6858,6 +7057,7 @@ run_security_pass_inline() {
   fi
 
   echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} findings=${finding_count} cycle=${completed_cycles}"
+  record_orchestrator_lesson_event "$(lesson_event_json_for_security_findings "${findings_file}" "$((completed_cycles + 1))")"
   if [ "${completed_cycles}" -ge "${MAX_SECURITY_PASS_CYCLES}" ]; then
     # Budget spent: let the exhaustion judge decide before terminalizing.  It
     # returns 0 only after fully applying a verdict (every finding accepted ->
@@ -7254,6 +7454,7 @@ create_judge_fixup_issues_from_verdict() {
             jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
               '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+            record_orchestrator_lesson_event "$(lesson_event_json_for_judge_fixup "${FIX_TITLE}" "${FIX_NEW_NUM}" "$((JUDGE_CYCLE + 1))" "${fix_issue}")"
           fi
         done
       fi
@@ -8238,8 +8439,8 @@ invoke_judge_for_integration_conflict() {
   # Centralised in scripts/write_codex_config.sh — see that script's
   # header for the apply_patch / trust / elevation rationale.
   bash scripts/write_codex_config.sh \
-    --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+    --model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
   local prompt_file
   local output_file
@@ -8365,7 +8566,7 @@ invoke_judge_for_integration_conflict() {
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
-  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
+  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
     return 0
@@ -11798,6 +11999,7 @@ Manual intervention required: resolve the blocking condition on the final PR (me
      | .final_merge_ineligible_alert_sent_for_sha = ""' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
+  emit_orchestrator_completion_lessons
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "complete" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validated"
@@ -11962,6 +12164,7 @@ sync_validation_fix_issues_from_comments() {
        .validation_fix_issues_batch_cycles = 0 |
        .validation_seen_fix_issues = ((.validation_seen_fix_issues // []) + $active_fix_issues | unique)' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    record_orchestrator_lesson_event "$(lesson_event_json_for_validation_comment "${fix_comment_body}" "${new_fix_issues_json}" "$(jq -r '.validation_cycle // 1' "${STATE_FILE}" 2>/dev/null || echo 1)")"
   else
     echo "::warning::Validation fix comment ${fix_comment_id} did not include extractable issue numbers; treating as validation failure."
     mark_validation_failed "Validation workflow produced a fixable-issues comment with no extractable issue numbers (comment ${fix_comment_id})."
@@ -14209,7 +14412,7 @@ invoke_stall_judge() {
   # Centralised in scripts/write_codex_config.sh.
   bash scripts/write_codex_config.sh \
     --model "${MODEL_EDITOR}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
   local judge_success="false"
   local attempt
@@ -17949,6 +18152,7 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
           security_pass_unblock_filed_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
           security_pass_file_deferred_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
           post_state_comment || true
+          emit_orchestrator_completion_lessons
           handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
           set_tracking_phase_label "ai:merged"
           post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
@@ -18046,6 +18250,7 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     echo "Project complete!"
     jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
+    emit_orchestrator_completion_lessons
     handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:merged"
     post_tracking_comment "Project completed successfully. Issue kept open for manual review."
@@ -19803,7 +20008,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # Centralised in scripts/write_codex_config.sh.
     bash scripts/write_codex_config.sh \
       --model "${MODEL_EDITOR}" \
-      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
     REVIEW_BLOCKED_STATE_CHANGED=false
@@ -21778,6 +21983,7 @@ increment_stall_recovery(state, '${STALL_LOCAL_ID}', phase if phase else None)
 with open('${STATE_FILE}', 'w') as f:
     json.dump(state, f, indent=2)
 " || true
+            record_orchestrator_lesson_event "$(lesson_event_json_for_stall "${STATE_FILE}" "${STALL_LOCAL_ID}" "${STALL_PHASE:-unknown}" "${STALL_ACTION:-unknown}" "${STALL_DURATION:-?}" "${STALL_ISSUE}")"
           fi
         else
           echo "  [stall-recovery] No action taken for #${STALL_ISSUE} (active workflow or guard)."
@@ -21921,11 +22127,11 @@ Manual intervention required." >/dev/null
   # Setup Codex config for judge
   mkdir -p ~/.codex
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
-  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-high}"
   # Centralised in scripts/write_codex_config.sh.
   bash scripts/write_codex_config.sh \
     --model "${MODEL_EDITOR}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
     continue
@@ -22371,6 +22577,7 @@ PRs to revert: ${REVERT_COUNT}"
         echo "Project complete!"
         jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment || true
+        emit_orchestrator_completion_lessons
         handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
 
         set_tracking_phase_label "ai:merged"
