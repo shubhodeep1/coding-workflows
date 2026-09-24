@@ -711,6 +711,10 @@ def determine_finalize_reason() -> str:
         return "partial_finalize"
     if bool_env("RESOLVER_ACTUATION_REQUIRED") and not bool_env("CONFLICT_RESOLVED"):
         return "conflict_resolver_failed"
+    # Additive outcome (CLAUDE.md §6): the reviewer step failed, so the
+    # editor never ran and its empty output is only the downstream symptom.
+    if bool_env("AUTOFIX_REVIEWERS_FAILED"):
+        return "reviewers_failed"
     if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
         return "editor_empty_noop"
     if bool_env("EDITOR_CHANGES_LOST"):

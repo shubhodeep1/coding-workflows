@@ -6739,6 +6739,10 @@ def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	assert "<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP}" in job
 	assert 'AUTOFIX_FAILURE_REASON="identical_failure_cap"' in job
 	assert 'WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK="1"' in job
+	# The failed runs' markers ride in the comments fetched above, so the heal
+	# intake reads their logs instead of this gate-stopped run's (§15: no new call).
+	assert 'PR_ISSUE_COMMENTS_FILE="${fresh_cap_comments_file}"' in job
+	assert 'AUTOFIX_FAILURE_MARKER_AUTHOR="${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}"' in job
 	assert 'tg_send_msg "${MSG}" "WARNING"' in job
 	assert "head_moved" in job
 
@@ -6756,13 +6760,26 @@ def test_identical_failure_fingerprint_marker_on_every_failure_comment() -> None
 		assert "autofix-failure-fingerprint" in block, name
 		assert '--head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}"' in block, name
 		assert block.count('BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"') == posts, name
-	assert '--failure-reason "editor_empty_noop"' in _step_block("Post editor summary comment")
+	post_summary = _step_block("Post editor summary comment")
+	assert '--failure-reason "${autofix_empty_failure_reason}"' in post_summary
+	# The reviewer step failing (the editor never ran) names the failure
+	# reviewers_failed; otherwise it stays editor_empty_noop.
+	assert 'autofix_empty_failure_reason="editor_empty_noop"' in post_summary
+	assert 'REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}' in post_summary
+	assert 'if [ "${REVIEWERS_STEP_OUTCOME:-}" = "failure" ]; then' in post_summary
+	assert 'autofix_empty_failure_reason="reviewers_failed"' in post_summary
+	assert 'echo "AUTOFIX_REVIEWERS_FAILED=true" >> "$GITHUB_ENV"' in post_summary
+	assert "reviewer-failure-evidence" in post_summary
+	# The retry-friendly no-output flow and its streak heading are unchanged.
+	assert "**AI review/autofix produced no output — will retry**" in post_summary
+	assert 'echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"' in post_summary
 	failure_comment = _step_block("Post review-blocked comment on PR (workflow failure)")
 	assert 'BODY+=$\'\\n\\n\'"${AUTOFIX_FAILURE_MARKER}"' in failure_comment
 	# Every call site fingerprints the same evidence files, so one run's
 	# comments carry one fingerprint.
 	evidence = _step_block("Assemble failure evidence")
 	files = (
+		'--evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt"',
