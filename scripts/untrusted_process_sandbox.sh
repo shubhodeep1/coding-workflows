@@ -27,6 +27,35 @@ case "${role}" in
 	*) echo "untrusted_process_sandbox: invalid role" >&2; exit 2 ;;
 esac
 workspace="$(cd "${workspace}" && pwd -P)"
+guard_git_dir=""
+if [ "${role}" = workspace-guard ]; then
+	if [ -n "${GIT_DIR:-}" ] || [ -n "${GIT_WORK_TREE:-}" ]; then
+		[ -n "${GIT_DIR:-}" ] && [ -n "${GIT_WORK_TREE:-}" ] \
+			|| { echo "untrusted_process_sandbox: workspace-guard requires complete Git linkage" >&2; exit 1; }
+		guard_work_tree="$(cd "${GIT_WORK_TREE}" && pwd -P)" \
+			|| { echo "untrusted_process_sandbox: workspace-guard work tree is unavailable" >&2; exit 1; }
+		[ "${guard_work_tree}" = "${workspace}" ] \
+			|| { echo "untrusted_process_sandbox: workspace-guard work tree mismatch" >&2; exit 1; }
+		[ -d "${GIT_DIR}" ] \
+			|| { echo "untrusted_process_sandbox: workspace-guard Git directory is unavailable" >&2; exit 1; }
+		guard_git_dir="$(cd "${GIT_DIR}" && pwd -P)"
+		if [ "$(git -C "${workspace}" rev-parse --is-bare-repository 2>/dev/null)" != false ] \
+			|| [ "$(git -C "${workspace}" rev-parse --show-toplevel 2>/dev/null)" != "${workspace}" ] \
+			|| [ "$(git -C "${workspace}" rev-parse --absolute-git-dir 2>/dev/null)" != "${guard_git_dir}" ]; then
+			echo "untrusted_process_sandbox: workspace-guard Git linkage is invalid" >&2
+			exit 1
+		fi
+		if [ -e "${workspace}/.git" ]; then
+			workspace_git_dir="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${workspace}" rev-parse --absolute-git-dir 2>/dev/null)" \
+				|| { echo "untrusted_process_sandbox: workspace-guard Git metadata is invalid" >&2; exit 1; }
+			[ "${workspace_git_dir}" = "${guard_git_dir}" ] \
+				|| { echo "untrusted_process_sandbox: workspace-guard Git directory mismatch" >&2; exit 1; }
+		fi
+	else
+		[ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${workspace}" rev-parse --show-toplevel 2>/dev/null)" = "${workspace}" ] \
+			|| { echo "untrusted_process_sandbox: workspace-guard requires Git linkage" >&2; exit 1; }
+	fi
+fi
 provider_required=true
 case "${role}" in
 	validator|workspace-guard)
@@ -258,6 +287,9 @@ while IFS= read -r -d '' nested_git_entry; do
 		fi
 	fi
 done < <(find "${workspace}" -xdev -name .git -print0 2>/dev/null)
+if [ -n "${guard_git_dir}" ]; then
+	append_git_metadata_path "${guard_git_dir}"
+fi
 
 sandbox_path="${PATH}"
 if [ "${provider_required}" != true ]; then
@@ -282,6 +314,9 @@ common_env=(
 )
 if [ "${provider_required}" = true ]; then
 	common_env+=("SANDBOX_PROVIDER_TOKEN=sandbox-proxy")
+fi
+if [ "${role}" = workspace-guard ] && [ -n "${guard_git_dir}" ]; then
+	common_env+=("GIT_DIR=${guard_git_dir}" "GIT_WORK_TREE=${workspace}")
 fi
 runtime_write_paths=()
 while IFS='=' read -r environment_name environment_value; do

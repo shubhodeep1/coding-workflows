@@ -96,6 +96,69 @@ def test_workspace_guard_restores_authorized_new_regular_file() -> None:
 		assert json.loads(report.read_text(encoding="utf-8"))["restored"] == ["new-source.txt"]
 
 
+def test_workspace_guard_uses_validated_git_linkage_without_workspace_metadata() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		repo = root / "repo"
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		repo.mkdir()
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(repo)], check=True)
+		(repo / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+		(workspace / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+		environment = os.environ.copy()
+		environment.update({
+			"GIT_DIR": str(repo / ".git"),
+			"GIT_WORK_TREE": str(workspace),
+			"RUNTIME_DIR": str(runtime),
+			"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		manifest = runtime / "manifest.json"
+		changed = runtime / "changed.txt"
+		report = runtime / "report.json"
+		quarantine = runtime / "quarantine"
+
+		def run_guard(*arguments: str, guard_environment: dict[str, str] = environment) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[
+					"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(workspace),
+					"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S",
+					str(WORKSPACE_GUARD), *arguments,
+				],
+				env=guard_environment, capture_output=True, text=True, check=False,
+			)
+
+		snapshot_args = ("snapshot", "--workspace", str(workspace), "--manifest", str(manifest))
+		reconcile_args = (
+			"reconcile", "--workspace", str(workspace), "--manifest", str(manifest),
+			"--quarantine-dir", str(quarantine), "--changed-paths-out", str(changed),
+			"--report", str(report),
+		)
+		assert run_guard(*snapshot_args).returncode == 0
+		(workspace / "ordinary.txt").write_text("safe\n", encoding="utf-8")
+		ordinary_result = run_guard(*reconcile_args)
+		assert ordinary_result.returncode == 0, ordinary_result.stderr
+		assert (workspace / "ordinary.txt").read_text(encoding="utf-8") == "safe\n"
+		assert run_guard(*snapshot_args).returncode == 0
+		(workspace / "ignored.txt").write_text("untrusted\n", encoding="utf-8")
+		ignored_result = run_guard(*reconcile_args)
+		assert ignored_result.returncode == 20, ignored_result.stderr
+		assert not (workspace / "ignored.txt").exists()
+		assert (quarantine / "ignored.txt").read_text(encoding="utf-8") == "untrusted\n"
+
+		for overrides in (
+			{"GIT_DIR": ""},
+			{"GIT_DIR": "", "GIT_WORK_TREE": ""},
+			{"GIT_WORK_TREE": str(repo)},
+			{"GIT_DIR": str(root / "missing")},
+		):
+			invalid_environment = environment.copy()
+			invalid_environment.update(overrides)
+			assert run_guard(*snapshot_args, guard_environment=invalid_environment).returncode != 0
+
+
 def test_validator_role_uses_isolated_no_site_python_outside_workspace() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		root = Path(directory)
@@ -113,6 +176,8 @@ def test_validator_role_uses_isolated_no_site_python_outside_workspace() -> None
 			{
 				"GH_PAT": "synthetic-secret",
 				"PYTHONPATH": str(workspace),
+				"GIT_DIR": str(root / "other-repo"),
+				"GIT_WORK_TREE": str(workspace),
 				"RUNTIME_DIR": str(runtime),
 				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
 			}
@@ -121,13 +186,13 @@ def test_validator_role_uses_isolated_no_site_python_outside_workspace() -> None
 			[
 				"bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
 				"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S", "-c",
-				"import json,os,sys; print(json.dumps([sys.flags.isolated,sys.flags.no_site,os.getcwd(),os.getenv('GH_PAT')]))",
+				"import json,os,sys; print(json.dumps([sys.flags.isolated,sys.flags.no_site,os.getcwd(),os.getenv('GH_PAT'),os.getenv('GIT_DIR'),os.getenv('GIT_WORK_TREE')]))",
 			],
 			env=environment, capture_output=True, text=True, check=False,
 		)
 		assert result.returncode == 0, result.stderr
-		isolated, no_site, cwd, credential = json.loads(result.stdout)
-		assert (isolated, no_site, credential) == (1, 1, None)
+		isolated, no_site, cwd, credential, git_dir, git_work_tree = json.loads(result.stdout)
+		assert (isolated, no_site, credential, git_dir, git_work_tree) == (1, 1, None, None, None)
 		assert Path(cwd) != workspace
 		assert not sentinel.exists()
 
@@ -154,6 +219,8 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 				"GH_PAT": "synthetic-gh-pat",
 				"GITHUB_ENV": str(root / "github-env"),
 				"GITHUB_OUTPUT": str(root / "github-output"),
+				"GIT_DIR": str(root / "other-repo"),
+				"GIT_WORK_TREE": str(REPO_ROOT),
 				"MODEL_PROVIDER_CREDENTIAL_FILE": str(credential),
 				"RUNTIME_DIR": str(root),
 				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
@@ -177,6 +244,7 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 		for forbidden_name in (
 			"BASH_ENV", "ENV", "GH_TOKEN", "GH_PAT", "GITHUB_TOKEN", "GITHUB_ENV",
 			"GITHUB_OUTPUT", "GITHUB_PATH", "GITHUB_STATE", "SSH_AUTH_SOCK", "OPENROUTER_API_KEY",
+			"GIT_DIR", "GIT_WORK_TREE",
 		):
 			assert forbidden_name not in isolated_environment
 		assert isolated_environment["SANDBOX_PROVIDER_TOKEN"] == "sandbox-proxy"
@@ -199,7 +267,8 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "implement-repair|diagnose|reviewer" in sandbox_text
 	assert 'find "${workspace}" -xdev -name .git -print0' in sandbox_text
 	assert 'InaccessiblePaths=${protected_git_path}' in sandbox_text
-	assert "GIT_DIR|GIT_WORK_TREE" not in sandbox_text
+	assert 'if [ "${role}" = workspace-guard ] && [ -n "${guard_git_dir}" ]; then' in sandbox_text
+	assert 'ReadOnlyPaths=${protected_git_path}' in sandbox_text
 	assert "ThreadingHTTPServer" not in module_text
 	assert "class BoundedHTTPServer" in module_text
 	assert "ThreadPoolExecutor" in module_text
