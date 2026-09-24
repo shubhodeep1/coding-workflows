@@ -52,3 +52,8 @@ def test_only_the_chain_archives_its_sessions(text):
 
 def test_source_revision_reads_plan_and_log_from_default_branch(text):
 	assert "read both from `origin/<default>`" in text
+
+
+def test_checker_rearms_hourly(text):
+	assert "call send_later with delay_minutes 60" in text
+	assert "delay_minutes 180" not in text

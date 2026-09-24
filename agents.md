@@ -516,7 +516,7 @@ model, not the command file. A file that starts with `---` would be parsed
 as frontmatter, so the command body must remain the first line.
 
 One deliberate exception that is **not** a command pin: `/implement-plan-claude`
-waits for each phase PR to merge through a 3-hourly check-in (its **Check-in
+waits for each phase PR to merge through an hourly check-in (its **Check-in
 Loop** section). The checker is a Haiku session started with
 `create_session` (`model: claude-haiku-4-5-20251001`) that runs
 `.claude/scripts/check_in_status.py`, re-arms itself with `send_later`, and,
@@ -526,7 +526,7 @@ validation read, the completion PR, a `/verify-activation` cycle, the
 `/deploy-activate` hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
 unless it is waiting on the user; the command's session is never woken to
-continue, because a 3-hour gap outlives the prompt cache and a wake would
+continue, because an hour-long gap outlives the prompt cache and a wake would
 re-send the whole history at full price. Routines created with
 `create_new_session_on_fire` are not used: their sessions get no MCP tools
 and no repository, so they cannot report. Stage sessions need Auto mode (the
@@ -553,7 +553,7 @@ pushes a branch and a pull request exists for it, the session starts a
 Haiku checker session (`create_session`, titled `PR #<n> status check-in`)
 whose prompt carries the next steps for each terminal state. The checker
 runs `.claude/scripts/check_in_status.py --terminal-only` (one REST read),
-re-arms itself with `send_later` every 180 minutes while the PR is open, and
+re-arms itself with `send_later` every 60 minutes while the PR is open, and
 once it merges or closes writes the report in its own session, renames
 itself `PR #<n> merged — …`, and sends one `PushNotification`. The pushing
 session is never woken. PRs opened by `/implement-plan-claude` are covered

@@ -1017,7 +1017,7 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
 > interactive session start a small Haiku checker session for every pull
 > request it pushes; the checker runs `.claude/scripts/check_in_status.py` every
-> 3 hours (re-armed with `send_later`), and once the PR merges or closes it
+> hour (re-armed with `send_later`), and once the PR merges or closes it
 > reports the next steps (or that the pushing session can be closed) without
 > waking the pushing session. It never subscribes to PR activity and never
 > acts on CI or review comments. The same sync ships the `settings.json`

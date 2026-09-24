@@ -4,7 +4,7 @@
 Implements the enforcement half of CLAUDE.md §26 (post-push PR status
 check-in). After a session pushes a branch, opens a pull request, or writes
 to a remote branch through the GitHub MCP tools, §26 requires it to arm a
-3-hourly status check-in for that pull request. The instruction sits at the
+hourly status check-in for that pull request. The instruction sits at the
 far end of the context window exactly when a session has run long enough to
 push, so this hook feeds the reminder back into the model's context on every
 matching tool call, regardless of what the model remembers.
@@ -64,13 +64,13 @@ SETTINGS_MATCHER = "^(?:Bash|mcp__.*__create_pull_request|mcp__.*__push_files|mc
 REMINDER = (
 	"PR status check-in reminder (CLAUDE.md §26): this call pushed a branch, "
 	"opened a pull request, or wrote to a remote branch. Once the pull request "
-	"for the pushed branch exists, arm the 3-hourly status check-in for it "
+	"for the pushed branch exists, arm the hourly status check-in for it "
 	"unless one is already armed for that PR, /implement-plan-claude opened "
 	"it (its own checker is the check-in), or the user opted out for this "
 	"task: call create_session with a Haiku model and a prompt naming the "
 	"repository, the PR number and URL, the §26 check-in steps (run "
 	".claude/scripts/check_in_status.py --terminal-only; re-arm with "
-	"send_later delay_minutes=180 while the PR is open; on merged or closed, "
+	"send_later delay_minutes=60 while the PR is open; on merged or closed, "
 	"report the next steps, say whether the pushing session can be closed, "
 	"and send one PushNotification), and the next steps for each terminal "
 	"state. Without create_session, use send_later into this session and a "

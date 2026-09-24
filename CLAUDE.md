@@ -1527,7 +1527,7 @@ stall recovery — those keep their own policies.
 ## §26. Post-Push PR Status Check-In (MANDATORY)
 
 After an interactive Claude Code session pushes work and a pull request
-exists for it, the session **arms a 3-hourly status check-in for that pull
+exists for it, the session **arms an hourly status check-in for that pull
 request** and keeps it armed until the PR is terminal (merged, or closed
 without merging). The check-in runs in a small Haiku checker session,
 reads the PR's state and nothing else, and when the PR is terminal reports
@@ -1561,7 +1561,7 @@ CI or review events, and never touches the PR. §25 and its
 ### B) How to arm
 
 Waking the session that pushed costs its whole conversation on every
-check, and a 3-hour gap outlives the prompt cache. The check-in therefore
+check, and an hour-long gap outlives the prompt cache. The check-in therefore
 runs in its own small **Haiku checker session**, and the pushing session is
 never woken:
 
@@ -1586,11 +1586,11 @@ prompt.
 
 When `create_session` is not available (a local CLI, desktop, or IDE
 session without the Claude Code Remote MCP server), arm `send_later` into
-this session with `delay_minutes: 180`, `initiation: own_followup`, and a
+this session with `delay_minutes: 60`, `initiation: own_followup`, and a
 message that restates §26.C; on each wake, delegate the check to a Haiku
 subagent (the Agent tool with `model: "haiku"`) and continue with §26.D on
 this session when it reports a terminal state. When `send_later` is
-missing too, use `CronCreate` (recurring, every 3 hours, deleted with
+missing too, use `CronCreate` (recurring, every hour, deleted with
 `CronDelete` once the PR is terminal) and tell the user once that this
 scheduler lives only as long as the session. When no scheduler exists, say
 so once in the report and stop; do not poll in a loop.
@@ -1602,7 +1602,7 @@ so once in the report and stop; do not poll in a loop.
    of the PR (§15) and prints one JSON line: `done`, `state` (`merged` /
    `closed` / `open`), and `reason`. The script decides; the model does not
    interpret the PR.
-2. **Not terminal** → call `send_later` with `delay_minutes: 180` and
+2. **Not terminal** → call `send_later` with `delay_minutes: 60` and
    `initiation: own_followup` into the checker session, and end the turn.
    No message to the user, no PR comment, no CI, review, comment,
    conflict, or branch work. A red check or an open review thread does not
