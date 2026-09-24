@@ -5,13 +5,30 @@
   "entry_id": "processed_command_4400_5813946406_approved",
   "issue_number": 4400,
   "metadata": {
+    "branch": "ai/issue-4400",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/clarify.yml",
+      "changelog.d/4400-clarify-isolation.md",
+      "docs/INVENTORY.md",
+      "scripts/clarify_isolated_run.sh",
+      "scripts/clarify_openrouter_broker.py",
+      "scripts/clarify_sandbox/Dockerfile",
+      "tests/test_plan_clarify_blocked_output.py",
+      "tests/test_plan_clarify_header_prompt_staging.py"
+    ],
+    "issue_number": 4400,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4400",
+    "pr_number": 4402,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4402",
+    "run_attempt": "1",
+    "run_id": "35998369036",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/35998369036"
   },
   "run_attempt": 1,
   "run_id": "35998369036",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-24T12:22:06Z",
+  "status": "completed",
+  "timestamp": "2026-09-24T12:41:50Z",
   "workflow": "implement"
 }
