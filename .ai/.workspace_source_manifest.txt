@@ -224,6 +224,7 @@ changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/4290-security-boundary-hardening.md
 changelog.d/433-readme-wrapper-predicate-examples.md
+changelog.d/4338-review-editor-sandbox-init.md
 changelog.d/4379-followup-metadata-and-merged-label-race.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
