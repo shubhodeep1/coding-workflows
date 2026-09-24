@@ -1885,12 +1885,12 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # _build_retry_prompt and the retry-log line for every iteration.
   _codex_exit=0
   _attempt_started_at=$(date +%s)
-  resolver_workspace_manifest="${RUNTIME_DIR}/post-agent-resolver-${attempt}.manifest.json"
-  resolver_workspace_paths="${RUNTIME_DIR}/post-agent-resolver-${attempt}.paths.txt"
-  resolver_workspace_report="${RUNTIME_DIR}/post-agent-resolver-${attempt}.report.json"
-  resolver_workspace_quarantine="${RUNTIME_DIR}/post-agent-resolver-${attempt}.quarantine"
+  resolver_workspace_manifest="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-resolver-${attempt}.manifest.json"
+  resolver_workspace_paths="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-resolver-${attempt}.paths.txt"
+  resolver_workspace_report="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-resolver-${attempt}.report.json"
+  resolver_workspace_quarantine="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-resolver-${attempt}.quarantine"
   bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+    --role workspace-guard --workspace "${PWD}" --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}" \
     -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
     --workspace "${PWD}" --manifest "${resolver_workspace_manifest}"
   # Strip any invalid UTF-8 bytes that may have leaked into the
@@ -1945,12 +1945,13 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     fi
   fi
   if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+    --role workspace-guard --workspace "${PWD}" --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}" \
     -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
     --workspace "${PWD}" --manifest "${resolver_workspace_manifest}" \
     --quarantine-dir "${resolver_workspace_quarantine}" \
     --changed-paths-out "${resolver_workspace_paths}" --report "${resolver_workspace_report}"; then
     echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation; aborting before output parsing."
+    emit_conflict_resolver_substate "Failed" "${attempt}"
     exit 78
   fi
   resolver_clean_output="${tmp_output}.ansi-clean"

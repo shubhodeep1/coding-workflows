@@ -29,7 +29,30 @@ case "${role}" in
 	*) echo "untrusted_process_sandbox: invalid role" >&2; exit 2 ;;
 esac
 workspace="$(cd "${workspace}" && pwd -P)"
+requested_runtime_dir="${runtime_dir}"
 runtime_dir="$(cd "${runtime_dir}" && pwd -P)"
+guard_git_dir=""
+if [ "${role}" = workspace-guard ]; then
+	if [ -n "${GIT_DIR:-}" ] || [ -n "${GIT_WORK_TREE:-}" ]; then
+		[ -n "${GIT_DIR:-}" ] && [ -n "${GIT_WORK_TREE:-}" ] \
+			|| { echo "untrusted_process_sandbox: incomplete workspace guard Git context" >&2; exit 1; }
+		[ -d "${GIT_DIR}" ] && [ -d "${GIT_WORK_TREE}" ] \
+			|| { echo "untrusted_process_sandbox: invalid workspace guard Git context" >&2; exit 1; }
+		if ! guard_git_dir="$(cd "${GIT_DIR}" 2>/dev/null && pwd -P)" \
+			|| ! guard_git_work_tree="$(cd "${GIT_WORK_TREE}" 2>/dev/null && pwd -P)"; then
+			echo "untrusted_process_sandbox: invalid workspace guard Git context" >&2
+			exit 1
+		fi
+		[ "${guard_git_work_tree}" = "${workspace}" ] \
+			|| { echo "untrusted_process_sandbox: workspace guard worktree mismatch" >&2; exit 1; }
+		[ "$(GIT_DIR="${guard_git_dir}" GIT_WORK_TREE="${workspace}" git rev-parse --absolute-git-dir 2>/dev/null)" = "${guard_git_dir}" ] \
+			&& [ "$(GIT_DIR="${guard_git_dir}" GIT_WORK_TREE="${workspace}" git rev-parse --show-toplevel 2>/dev/null)" = "${workspace}" ] \
+			|| { echo "untrusted_process_sandbox: invalid workspace guard Git repository" >&2; exit 1; }
+	else
+		[ "$(git -C "${workspace}" rev-parse --show-toplevel 2>/dev/null)" = "${workspace}" ] \
+			|| { echo "untrusted_process_sandbox: workspace guard Git context is unavailable" >&2; exit 1; }
+	fi
+fi
 provider_required=true
 case "${role}" in
 	validator|workspace-guard)
@@ -289,6 +312,9 @@ while IFS= read -r -d '' nested_git_entry; do
 		fi
 	fi
 done < <(find "${workspace}" -xdev -name .git -print0 2>/dev/null)
+if [ -n "${guard_git_dir}" ]; then
+	append_git_metadata_path "${guard_git_dir}"
+fi
 
 sandbox_path="${PATH}"
 if [ "${provider_required}" != true ]; then
@@ -314,6 +340,9 @@ common_env=(
 if [ "${provider_required}" = true ]; then
 	common_env+=("SANDBOX_PROVIDER_TOKEN=sandbox-proxy")
 fi
+if [ -n "${guard_git_dir}" ]; then
+	common_env+=("GIT_DIR=${guard_git_dir}" "GIT_WORK_TREE=${workspace}")
+fi
 runtime_write_paths=()
 while IFS='=' read -r environment_name environment_value; do
 	case "${environment_name}" in
@@ -336,6 +365,42 @@ if [ "${config_format}" = opencode ]; then
 	common_env+=("UNTRUSTED_OPENCODE_CONFIG=${sandbox_config}" "OPENCODE_CONFIG=${sandbox_config}")
 elif [ "${config_format}" = codex ]; then
 	common_env+=("CODEX_HOME=${sandbox_config}")
+fi
+if [ "${role}" = workspace-guard ]; then
+	if [ "${requested_runtime_dir}" != "${runtime_dir}" ]; then
+		echo "untrusted_process_sandbox: workspace guard runtime-dir must be canonical" >&2
+		exit 1
+	fi
+	for sandbox_private_tmp_checked_path in "${runtime_dir}" "$@"; do
+		case "${sandbox_private_tmp_checked_path}" in /*) ;; *) continue ;; esac
+		sandbox_private_tmp_checked_path="$(realpath -m -- "${sandbox_private_tmp_checked_path}")"
+		if sandbox_path_is_private_tmp "${sandbox_private_tmp_checked_path}"; then
+			echo "untrusted_process_sandbox: sandbox_private_tmp_path role=${role} path=${sandbox_private_tmp_checked_path}" >&2
+			exit 1
+		fi
+	done
+	guard_arguments=("$@")
+	for ((guard_argument_index=0; guard_argument_index<${#guard_arguments[@]}; guard_argument_index++)); do
+		case "${guard_arguments[guard_argument_index]}" in
+			--manifest|--report|--changed-paths-out|--quarantine-dir)
+				guard_artifact_path="${guard_arguments[guard_argument_index+1]:-}"
+				[ -n "${guard_artifact_path}" ] || { echo "untrusted_process_sandbox: missing workspace guard artifact path" >&2; exit 1; }
+				guard_artifact_path="$(realpath -m -- "${guard_artifact_path}")"
+				case "${guard_artifact_path}" in
+					"${runtime_dir}/"*) ;;
+					*) echo "untrusted_process_sandbox: workspace guard artifact is outside runtime-dir" >&2; exit 1 ;;
+				esac
+				((guard_argument_index+=1))
+				;;
+		esac
+	done
+	if [ -n "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256:-}" ]; then
+		[[ "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
+			&& [ "$(sha256sum -- "${4:-}" 2>/dev/null | cut -d' ' -f1)" = "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256}" ] || {
+			echo "untrusted_process_sandbox: workspace guard executable integrity check failed" >&2
+			exit 1
+		}
+	fi
 fi
 
 if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then

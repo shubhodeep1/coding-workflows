@@ -727,6 +727,9 @@ when the bounded fix-cycle budget is exhausted.
   parsing or privileged validation; authorized new regular files are preserved
   and emitted in the complete changed-path manifest. Any snapshot or reconcile
   failure terminates that writer flow and latches workflow failure tails closed.
+  A poller review-blocked guard failure skips only the affected PR after its
+  failure alert and workspace cleanup; other issues continue on the same tick.
+  Resolver guard rejection records a terminal `Failed` substate before exiting.
   Shared output normalization also runs credentiallessly with isolated no-site
   Python from `/tmp`. Post-agent Python validators run through the
   provider-free `validator` sandbox role as `/usr/bin/python3 -I -S`, from an

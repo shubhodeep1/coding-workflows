@@ -2010,12 +2010,12 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     fi
   fi
   emit_editor_substate "BuildingPrompt" "${attempt}"
-  editor_workspace_manifest="${RUNTIME_DIR}/post-agent-editor-${attempt}.manifest.json"
-  editor_workspace_paths="${RUNTIME_DIR}/post-agent-editor-${attempt}.paths.txt"
-  editor_workspace_report="${RUNTIME_DIR}/post-agent-editor-${attempt}.report.json"
-  editor_workspace_quarantine="${RUNTIME_DIR}/post-agent-editor-${attempt}.quarantine"
+  editor_workspace_manifest="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-editor-${attempt}.manifest.json"
+  editor_workspace_paths="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-editor-${attempt}.paths.txt"
+  editor_workspace_report="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-editor-${attempt}.report.json"
+  editor_workspace_quarantine="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-editor-${attempt}.quarantine"
   bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+    --role workspace-guard --workspace "${PWD}" --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}" \
     -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
     --workspace "${PWD}" --manifest "${editor_workspace_manifest}"
   # Run OpenCode: stdout → tmp_output, stderr → FIFO (heartbeat reader).
@@ -2077,7 +2077,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
 
   if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+    --role workspace-guard --workspace "${PWD}" --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}" \
     -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
     --workspace "${PWD}" --manifest "${editor_workspace_manifest}" \
     --quarantine-dir "${editor_workspace_quarantine}" \

@@ -73,8 +73,10 @@ jobs:
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${RUNTIME_DIR}"
+          POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR="$(mktemp -d "${RUNNER_TEMP:?}/post-agent-poller-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
           {
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR=${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}"
             echo "STATE_FILE=${RUNTIME_DIR}/state.json"
             echo "JUDGE_PROMPT_FILE=${RUNTIME_DIR}/judge_prompt.txt"
             echo "JUDGE_OUTPUT_FILE=${RUNTIME_DIR}/judge_output.txt"
@@ -399,6 +401,7 @@ jobs:
           for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py check_resolver_diff.sh files_touched_scope_guard.py; do
             install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"
           done
+          install -m 0755 scripts/post_agent_workspace_guard.py "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post_agent_workspace_guard.py"
 
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
@@ -1014,3 +1017,13 @@ jobs:
           msg+=$'\n'"Run: ${run_url}"
 
           tg_send_msg "${msg}" "ERROR" >/dev/null || true
+
+      - name: Cleanup workspace guard artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -n "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-}" ] &&
+             [[ "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" == "${RUNNER_TEMP:?}/post-agent-poller-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}."* ]] &&
+             [ "$(realpath -e "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" 2>/dev/null)" = "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" ]; then
+            rm -rf -- "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}"
+          fi

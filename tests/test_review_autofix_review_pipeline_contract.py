@@ -454,7 +454,10 @@ def _step_block(step_name: str) -> str:
 				if indent == step_indent:
 					end = j
 					break
-		return "\n".join(lines[idx:end])
+		block = "\n".join(lines[idx:end])
+		if step_name == "Append review pipeline iteration summary":
+			return block + "\n" + (REPO_ROOT / "scripts/review_autofix_step_iteration_summary.sh").read_text(encoding="utf-8")
+		return block
 	raise AssertionError(f"Step not found in workflow: {step_name}")
 
 
@@ -477,6 +480,8 @@ def _job_block(job_name: str) -> str:
 
 
 def _step_run_script(step_name: str) -> str:
+	if step_name == "Append review pipeline iteration summary":
+		return (REPO_ROOT / "scripts/review_autofix_step_iteration_summary.sh").read_text(encoding="utf-8")
 	block_lines = _step_block(step_name).splitlines()
 	run_idx = -1
 	run_indent = -1

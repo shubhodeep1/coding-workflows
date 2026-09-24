@@ -172,10 +172,12 @@ jobs:
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-implement-${GITHUB_RUN_ID}"
           mkdir -p "${RUNTIME_DIR}"
+          POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR="$(mktemp -d "${RUNNER_TEMP:?}/post-agent-implement-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
 
           {
             echo "JOB_START_EPOCH=$(date +%s)"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR=${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}"
             echo "CODEX_THREAD_REUSE_RUNTIME_DIR=${RUNTIME_DIR}"
             echo "SEMBLE_AVAILABLE=false"
             echo "SEMBLE_INDEX_AVAILABLE=false"
@@ -1237,6 +1239,8 @@ jobs:
           for _staged_support_runtime_script in "${_fetched_scripts[@]}"; do
             install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"
           done
+          install -m 0755 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post_agent_workspace_guard.py"
+          echo "POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256=$(sha256sum "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           if [ -f scripts/codex_model_catalog.json ]; then
             install -m 0644 scripts/codex_model_catalog.json "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_model_catalog.json"
           fi
@@ -2655,10 +2659,10 @@ jobs:
             attempt_log_file="${RUNTIME_DIR}/codex_log_attempt_${attempt}.txt"
             : > "${attempt_log_file}"
             attempt_stall_status_file="$(mktemp /tmp/codex_stall_status_implement.XXXXXX)"
-            attempt_workspace_manifest="${RUNTIME_DIR}/post-agent-implement-${attempt}.manifest.json"
-            attempt_workspace_paths="${RUNTIME_DIR}/post-agent-implement-${attempt}.paths.txt"
-            attempt_workspace_report="${RUNTIME_DIR}/post-agent-implement-${attempt}.report.json"
-            attempt_workspace_quarantine="${RUNTIME_DIR}/post-agent-implement-${attempt}.quarantine"
+            attempt_workspace_manifest="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:?}/post-agent-implement-${attempt}.manifest.json"
+            attempt_workspace_paths="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post-agent-implement-${attempt}.paths.txt"
+            attempt_workspace_report="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post-agent-implement-${attempt}.report.json"
+            attempt_workspace_quarantine="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post-agent-implement-${attempt}.quarantine"
             stall_state=""
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${PROMPT_FILE_TO_USE}"
@@ -2667,8 +2671,8 @@ jobs:
             if ! bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
               --role workspace-guard \
               --workspace "${WORKSPACE_PATH}" \
-              --runtime-dir "${RUNTIME_DIR}" \
-              -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" snapshot \
+              --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" \
+              -- /usr/bin/python3 -I -S "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post_agent_workspace_guard.py" snapshot \
               --workspace "${WORKSPACE_PATH}" --manifest "${attempt_workspace_manifest}"; then
               echo "POST_AGENT_WORKSPACE_GUARD_FAILED=true" >> "$GITHUB_ENV"
               echo "::error::Post-agent workspace snapshot failed for implement attempt ${attempt}; refusing model execution."
@@ -2712,8 +2716,8 @@ jobs:
             if ! bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
               --role workspace-guard \
               --workspace "${WORKSPACE_PATH}" \
-              --runtime-dir "${RUNTIME_DIR}" \
-              -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" reconcile \
+              --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" \
+              -- /usr/bin/python3 -I -S "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post_agent_workspace_guard.py" reconcile \
               --workspace "${WORKSPACE_PATH}" --manifest "${attempt_workspace_manifest}" \
               --quarantine-dir "${attempt_workspace_quarantine}" \
               --changed-paths-out "${attempt_workspace_paths}" --report "${attempt_workspace_report}"; then
@@ -4022,15 +4026,15 @@ jobs:
               sanitize_codex_prompt_file "${REPAIR_PROMPT_FILE}"
             fi
             bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/workspace_safety_check.sh"
-            repair_workspace_manifest="${RUNTIME_DIR}/post-agent-repair-${attempt}.manifest.json"
-            repair_workspace_paths="${RUNTIME_DIR}/post-agent-repair-${attempt}.paths.txt"
-            repair_workspace_report="${RUNTIME_DIR}/post-agent-repair-${attempt}.report.json"
-            repair_workspace_quarantine="${RUNTIME_DIR}/post-agent-repair-${attempt}.quarantine"
+            repair_workspace_manifest="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:?}/post-agent-repair-${attempt}.manifest.json"
+            repair_workspace_paths="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post-agent-repair-${attempt}.paths.txt"
+            repair_workspace_report="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post-agent-repair-${attempt}.report.json"
+            repair_workspace_quarantine="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post-agent-repair-${attempt}.quarantine"
             if ! bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
               --role workspace-guard \
               --workspace "${WORKSPACE_PATH}" \
-              --runtime-dir "${RUNTIME_DIR}" \
-              -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" snapshot \
+              --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" \
+              -- /usr/bin/python3 -I -S "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post_agent_workspace_guard.py" snapshot \
               --workspace "${WORKSPACE_PATH}" --manifest "${repair_workspace_manifest}"; then
               echo "POST_AGENT_WORKSPACE_GUARD_FAILED=true" >> "$GITHUB_ENV"
               echo "::error::Post-agent workspace snapshot failed for repair attempt ${attempt}; refusing model execution."
@@ -4057,12 +4061,13 @@ jobs:
                 --runtime-dir "${RUNTIME_DIR}" \
                 -- bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_thread_reuse.sh" direct-run; then
               if ! bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
-                --role workspace-guard --workspace "${WORKSPACE_PATH}" --runtime-dir "${RUNTIME_DIR}" \
-                -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" reconcile \
+                --role workspace-guard --workspace "${WORKSPACE_PATH}" --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" \
+                -- /usr/bin/python3 -I -S "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post_agent_workspace_guard.py" reconcile \
                 --workspace "${WORKSPACE_PATH}" --manifest "${repair_workspace_manifest}" \
                 --quarantine-dir "${repair_workspace_quarantine}" \
                 --changed-paths-out "${repair_workspace_paths}" --report "${repair_workspace_report}"; then
                 echo "POST_AGENT_WORKSPACE_GUARD_FAILED=true" >> "$GITHUB_ENV"
+                echo "::error::Post-agent workspace guard rejected repair attempt ${attempt} after model failure; refusing retry or partial-work salvage."
                 exit 78
               fi
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
@@ -4071,12 +4076,13 @@ jobs:
               continue
             fi
             if ! bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
-              --role workspace-guard --workspace "${WORKSPACE_PATH}" --runtime-dir "${RUNTIME_DIR}" \
-              -- /usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" reconcile \
+              --role workspace-guard --workspace "${WORKSPACE_PATH}" --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" \
+              -- /usr/bin/python3 -I -S "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post_agent_workspace_guard.py" reconcile \
               --workspace "${WORKSPACE_PATH}" --manifest "${repair_workspace_manifest}" \
               --quarantine-dir "${repair_workspace_quarantine}" \
               --changed-paths-out "${repair_workspace_paths}" --report "${repair_workspace_report}"; then
               echo "POST_AGENT_WORKSPACE_GUARD_FAILED=true" >> "$GITHUB_ENV"
+              echo "::error::Post-agent workspace guard rejected repair attempt ${attempt}; refusing retry or partial-work salvage."
               exit 78
             fi
             emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
@@ -5540,6 +5546,11 @@ jobs:
             rm -rf "${RUNTIME_DIR}"
           else
             echo "RUNTIME_DIR not set or unsafe; skipping cleanup"
+          fi
+          if [ -n "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-}" ] &&
+             [[ "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" == "${RUNNER_TEMP:?}/post-agent-implement-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}."* ]] &&
+             [ "$(realpath -e "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" 2>/dev/null)" = "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}" ]; then
+            rm -rf -- "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}"
           fi
           # Also clean the failure-log staging dir so successive runs on a
           # warm runner don't see a stale copy.

@@ -1975,6 +1975,9 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
 	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py post_agent_workspace_guard.py; do" in stage_block
+	create_runtime = _step_block_text("Create runtime workspace")
+	assert 'POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR="$(mktemp -d "${RUNNER_TEMP:?}/post-agent-implement-' in create_runtime
+	assert 'echo "POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR=${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}"' in create_runtime
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
 	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_staged_support_workspace.sh"'
