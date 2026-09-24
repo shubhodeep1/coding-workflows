@@ -2205,8 +2205,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
         fi
       done < "${REVIEWER_MANIFEST_FILE}"
       # One line per attempt so a single miscopied hash is easy to tell apart from
-      # a summary whose checksums are all wrong. files_checked stops early when a
-      # missing entry fails the attempt.
+      # a summary whose checksums are all wrong. files_checked includes each manifest
+      # entry reached before validation terminates, including the failing entry.
       if [ "${reviewer_checksum_mismatch_count}" -gt 0 ]; then
         echo "::warning::EDITOR_REVIEWER_CHECKSUM_SUMMARY attempt=${attempt} files_checked=${reviewer_manifest_file_count} checksum_mismatches=${reviewer_checksum_mismatch_count} validation_ok=${reviewer_validation_ok}"
       fi

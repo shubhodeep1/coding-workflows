@@ -128,6 +128,8 @@ def test_truncated_checksum_warns_but_passes() -> None:
 		stdout, _ = _run(tmp, files, processed, [_audit_line(p) for p in files])
 		assert "RESULT reviewer_validation_ok=true" in stdout, stdout
 		assert f"{WARNING_KEY} attempt=2 file={files[0]}" in stdout, stdout
+		assert f"::warning::{SUMMARY_KEY} attempt=2 files_checked=2 checksum_mismatches=1 validation_ok=true" in stdout, stdout
+		assert stdout.count(SUMMARY_KEY) == 1
 
 
 def test_every_checksum_wrong_is_summarised_once() -> None:
