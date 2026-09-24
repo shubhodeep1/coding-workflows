@@ -161,6 +161,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/implement_diagnose_post_codex_failure.sh` — validation failures in implement.yml and file fix-up issues.
 - `scripts/implement_handle_guard_block.sh` — Handle destructive-commit and scope-guard rejections after support cleanup.
 - `scripts/implement_staged_support_workspace.sh` — implement_staged_support_workspace.sh — give the implement editor the branch's own copies of the staged support helpers (self-repo only).
+- `scripts/ingest_implement_plan_lessons.py` — Ingest `/implement-plan-claude` progress-log lessons into AI memory.
 - `scripts/install_semble.sh` — install_semble.sh — fail-soft Semble installer for GitHub Actions jobs.
 - `scripts/issue_attachment_bundle.py` — Python helper for issue attachment bundle.
 - `scripts/label_helpers.sh` — label_helpers.sh — idempotent AI label creation helpers.

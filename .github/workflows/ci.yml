@@ -426,6 +426,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py
 
+      - name: Implement-plan lessons ingestion + conformance-stage contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ingest_implement_plan_lessons.py
+
       - name: Orchestrate lib unit tests
         run: |
           set -euo pipefail
