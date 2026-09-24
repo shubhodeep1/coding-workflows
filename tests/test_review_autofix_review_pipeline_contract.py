@@ -1318,7 +1318,7 @@ def _run_agents_md_materiality_harness(
 				**os.environ,
 				"AGENTS_MD_MATERIALITY_ENABLED": enabled,
 				"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED": "0",
-				"AGENTS_MD_MATERIALITY_MODEL": "openai/gpt-5.6-luna",
+				"AGENTS_MD_MATERIALITY_MODEL": "openai/gpt-6-luna",
 				"AGENTS_MD_MATERIALITY_REASONING": "medium",
 				"AGENTS_MD_MATERIALITY_RESULT_FILE": str(files["result"]),
 				"AGENTS_MD_MATERIALITY_COMMENT_FILE": str(files["comment"]),
@@ -2668,8 +2668,8 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_FLOOR_RULES_ENABLED: ${{ vars.REVIEW_FLOOR_RULES_ENABLED || '1' }}",
 		"REVIEW_FLOOR_KEYWORDS_FILE: ${{ vars.REVIEW_FLOOR_KEYWORDS_FILE || '' }}",
 		"REVIEW_CONSOLIDATOR_ENABLED: ${{ vars.REVIEW_CONSOLIDATOR_ENABLED || '1' }}",
-		"REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-5.6-sol' }}",
-		"REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'xhigh' }}",
+		"REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-6-sol' }}",
+		"REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'high' }}",
 		"REVIEW_CONSOLIDATOR_TIMEOUT_SECS: ${{ vars.REVIEW_CONSOLIDATOR_TIMEOUT_SECS || '300' }}",
 		"REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}",
 		"REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}",
@@ -2716,7 +2716,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}",
 		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
-		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.6-luna' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-6-luna' }}",
 		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
 		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
@@ -2765,7 +2765,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}",
 		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
-		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.6-luna' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-6-luna' }}",
 		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
 		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
@@ -3017,7 +3017,7 @@ def test_summariser_missing_opencode_helpers_emits_classified_error() -> None:
 			"SUPPORT_SCRIPTS_DIR": str(support_dir),
 			"PREVIOUS_REVIEWS_DIR": str(previous_reviews_dir),
 			"RUNTIME_DIR": str(runtime_dir),
-			"XPOLL_SUMMARISER_MODEL": "openai/gpt-5.6-luna",
+			"XPOLL_SUMMARISER_MODEL": "openai/gpt-6-luna",
 			"TG_CAPTURE_FILE": str(telegram_capture),
 		})
 		result = subprocess.run(
@@ -3028,7 +3028,7 @@ def test_summariser_missing_opencode_helpers_emits_classified_error() -> None:
 			check=False,
 		)
 
-		stable_alert = "opencode_agent_failure phase=review_summariser role=reviewer model=openai/gpt-5.6-luna rc=1 failure_class=helpers_missing"
+		stable_alert = "opencode_agent_failure phase=review_summariser role=reviewer model=openai/gpt-6-luna rc=1 failure_class=helpers_missing"
 		assert result.returncode == 1, result
 		assert result.stderr.strip() == stable_alert, result.stderr
 		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
@@ -4992,7 +4992,7 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		"| Reviewer scope | ${reviewer_scope_label} |",
 		"| Raw bundle size (bytes) | ${bundle_bytes} |",
 		"| Floor tags | ${floor_tag_count} |",
-		"| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.6-sol} |",
+		"| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-6-sol} |",
 		"| Consolidator invoked | ${consolidator_invoked} |",
 		"| Consolidator output bytes | ${consolidator_output_bytes} |",
 		"| Parsed issue blocks | ${parsed_blocks} |",

@@ -133,17 +133,17 @@ if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
   TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
 fi
 
-MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.6-sol}"
-# Defaults to xhigh to match the repo-wide gpt-5.6-sol reasoning-level
+MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-6-sol}"
+# Defaults to high to match the repo-wide gpt-6-sol reasoning-level
 # policy and `validate.yml`'s workflow-level `THINKING_LEVEL_VALIDATE ||
-# 'xhigh'`. Earlier revisions defaulted to `medium`/`none`; `none` is
+# 'high'`. Earlier revisions defaulted to `medium`/`none`; `none` is
 # not in `scripts/codex_model_catalog.json`'s `supported_reasoning_levels`
 # for the gpt-5.x family, so the standalone / local invocation default
 # is kept aligned with the workflow env to avoid silent drift.
-MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
+MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-high}"
 # Discover is a low-volume execution-heavy task (read repo metadata,
-# emit `.ai/validate.yml` hints). It now defaults to `xhigh` to match
-# the repo-wide gpt-5.6-sol reasoning-level policy; the per-phase override
+# emit `.ai/validate.yml` hints). It now defaults to `high` to match
+# the repo-wide gpt-6-sol reasoning-level policy; the per-phase override
 # knob is retained so operators can drop discover's level independently
 # of the parent MODEL_REASONING_EFFORT (mirrors the per-phase pattern
 # used in implement.yml — MODEL_REPAIR_REASONING_EFFORT,
@@ -151,7 +151,7 @@ MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
 # patches ~/.codex/config.toml before its codex exec call and restores
 # `MODEL_REASONING_EFFORT` after — see the "Validation hint discovery
 # attempt" loop further down.
-MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-xhigh}"
+MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-high}"
 # `none` is intentionally rejected here: the parent MODEL_REASONING_EFFORT
 # rationale above cites the catalog (`scripts/codex_model_catalog.json`)
 # not advertising `none` for the gpt-5.x family, so accepting it for the
@@ -160,8 +160,8 @@ MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-xhigh}"
 case "${MODEL_REASONING_EFFORT_DISCOVER}" in
   xhigh|high|medium|low) ;;
   *)
-    echo "::warning::Invalid MODEL_REASONING_EFFORT_DISCOVER='${MODEL_REASONING_EFFORT_DISCOVER}'. Falling back to 'xhigh'."
-    MODEL_REASONING_EFFORT_DISCOVER="xhigh"
+    echo "::warning::Invalid MODEL_REASONING_EFFORT_DISCOVER='${MODEL_REASONING_EFFORT_DISCOVER}'. Falling back to 'high'."
+    MODEL_REASONING_EFFORT_DISCOVER="high"
     ;;
 esac
 CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"

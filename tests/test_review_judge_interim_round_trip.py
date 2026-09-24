@@ -717,7 +717,7 @@ def test_review_run_judge_interim_uses_bounded_timeout() -> None:
 		"cannot outlive JUDGE_INTERIM_TIMEOUT_S indefinitely."
 	)
 	assert 'opencode_run_cmd "$@"' in script
-	assert 'reviewer\n\t"${MODEL_EDITOR:-openai/gpt-5.6-sol}"' in script
+	assert 'reviewer\n\t"${MODEL_EDITOR:-openai/gpt-6-sol}"' in script
 	assert 'command -v codex' not in script
 
 
