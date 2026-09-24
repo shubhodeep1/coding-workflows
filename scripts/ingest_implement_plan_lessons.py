@@ -29,7 +29,6 @@ plus an `AI_MEMORY_TELEMETRY` line, and the exit code stays 0.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -108,8 +107,7 @@ def parse_lessons(markdown: str) -> list[dict[str, Any]]:
 
 
 def lesson_record_id(slug: str, source: str, text: str) -> str:
-	digest = hashlib.sha256(f"{slug}\n{source}\n{text}".encode("utf-8")).hexdigest()
-	return f"lesson-implement-plan-{digest[:24]}"
+	return ai_memory_lib.make_deterministic_record_id("lesson-implement-plan", slug, source, text)
 
 
 def lesson_payload(slug: str, lesson: dict[str, Any]) -> dict[str, Any]:

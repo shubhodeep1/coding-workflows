@@ -88,6 +88,9 @@ def test_parse_lessons_without_section_returns_nothing() -> None:
 def test_record_id_is_deterministic_and_schema_safe() -> None:
 	first = ingest.lesson_record_id("sample", "conformance", "Text.")
 	assert first == ingest.lesson_record_id("sample", "conformance", "Text.")
+	assert first == ingest.ai_memory_lib.make_deterministic_record_id(
+		"lesson-implement-plan", "sample", "conformance", "Text."
+	)
 	assert first != ingest.lesson_record_id("other", "conformance", "Text.")
 	assert first != ingest.lesson_record_id("sample", "security", "Text.")
 	assert first.startswith("lesson-implement-plan-") and len(first) <= 128

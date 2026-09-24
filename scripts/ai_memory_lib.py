@@ -566,6 +566,12 @@ def make_record_id(prefix: str = "mem") -> str:
     return f"{sanitize_segment(prefix, 'mem')}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:10]}"
 
 
+def make_deterministic_record_id(prefix: str, *identity_parts: str) -> str:
+    """Return a stable content-derived ID for cross-run deduplication."""
+    digest = hashlib.sha256("\n".join(identity_parts).encode("utf-8")).hexdigest()
+    return f"{sanitize_segment(prefix, 'mem')}-{digest[:24]}"
+
+
 def _build_scope(
     issue_number: int | None,
     pr_number: int | None,

@@ -170,9 +170,10 @@ unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
 
 ## Stable-ID convention
 
-- New AI-pipeline identifiers must be created through the canonical helper
-  `make_record_id(prefix)` in `scripts/ai_memory_lib.py`; do not hand-roll
-  new ID formats alongside it. The Phase 5 plan's
+- New AI-pipeline identifiers must be created through the canonical helpers
+  in `scripts/ai_memory_lib.py`; use `make_record_id(prefix)` unless this
+  section documents a purpose-built alongside format. Do not hand-roll new
+  ID formats in caller modules. The Phase 5 plan's
   `scripts/ai_memory_lib.py:480` pointer is historical; follow the live
   `make_record_id(prefix)` definition in that file.
 - The current format is contractual: `<prefix>_<YYYYMMDDHHMMSS>_<10hex>`.
@@ -191,6 +192,10 @@ unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
   `make_record_id(prefix)` emitting the current format, introduce the new
   format via an alongside helper/alias so old IDs remain valid and existing
   outputs stay stable, and update the contract test in the same change.
+- `make_deterministic_record_id(prefix, *identity_parts)` is the sanctioned
+  alongside helper for records that must deduplicate across runs. It emits
+  `<sanitized-prefix>-<24hex>` from the SHA-256 digest of the newline-joined
+  identity parts; `make_record_id(prefix)` and its format remain unchanged.
 
 ## Override conventions
 
