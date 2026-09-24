@@ -244,8 +244,7 @@ env:
   # The workflow-failure-heal reporter pair the failure-path step "Report
   # autofix failure to workflow failure heal" runs. Optional (never
   # preflight-checked): the staging backfill copies them from the main
-  # snapshot when the branch-pinned stage_workflow_support.sh predates them,
-  # so a PR branch forked before #4208 still reports its repeated failures.
+  # verified workflow checkout when the staging helper does not install them.
   REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS: >-
     workflow_failure_heal.py workflow_failure_heal_autofix_report.sh
 
@@ -253,6 +252,9 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     outputs:
+      review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}
+      review_support_ref: ${{ steps.resolve_support.outputs.review_support_ref }}
+      review_support_repo: ${{ steps.resolve_support.outputs.review_support_repo }}
       should_run: ${{ steps.evaluate.outputs.should_run }}
       post_merge_dispatch: ${{ steps.evaluate.outputs.post_merge_dispatch }}
       skip_reason: ${{ steps.evaluate.outputs.skip_reason }}
@@ -274,36 +276,107 @@ jobs:
       fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
       fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
     steps:
+      - name: Resolve trusted review support commit
+        id: resolve_support
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          support_event_sha="$(jq -r '.workflow_sha // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          trusted_main_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@refs/heads/main$'
+          trusted_stable_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@refs/tags/stable$'
+          source_branch_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@refs/heads/[^[:space:]]+$'
+          trusted_consumer_pin='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@[0-9a-f]{40}$'
+          if [ "${support_workflow_repository}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${support_event_sha}" =~ ^[0-9a-f]{40}$ ]] ||
+             { [[ ! "${support_workflow_ref}" =~ ${trusted_main_ref} ]] &&
+               [[ ! "${support_workflow_ref}" =~ ${trusted_stable_ref} ]] &&
+               { [ "${CALLER_REPOSITORY}" != "shubhodeep1/coding-workflows" ] || [[ ! "${support_workflow_ref}" =~ ${source_branch_ref} ]]; } &&
+               { [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] || [[ ! "${support_workflow_ref}" =~ ${trusted_consumer_pin} ]]; }; }; then
+            echo "::error::Review support identity is unapproved (workflow_ref=${support_workflow_ref:-missing})."
+            exit 1
+          fi
+          if [[ "${support_workflow_ref}" =~ ${trusted_consumer_pin} ]]; then
+            support_sha="${support_workflow_ref##*@}"
+            support_ref="${support_sha}"
+          elif [[ "${support_workflow_ref}" =~ ${trusted_stable_ref} ]]; then
+            # No existing gate lookup resolves the release tag. /commits/stable
+            # selects the branch when both a branch and tag have that name.
+            support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+            support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+            support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
+              support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+              support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            fi
+            if [ "${support_tag_type}" != "commit" ]; then
+              echo "::error::Review support stable tag did not resolve to a commit."
+              exit 1
+            fi
+            support_ref="refs/tags/stable"
+          else
+            # The job workflow SHA follows a same-repo PR head. Read protected main independently.
+            # Gate PR metadata lookups do not include source-repository branch protection or SHA.
+            support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
+            support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
+            if ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
+              echo "::error::Review support main branch is not confirmed protected."
+              exit 1
+            fi
+            support_ref="refs/heads/main"
+          fi
+          if [[ ! "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Review support ref did not resolve to an immutable commit SHA."
+            exit 1
+          fi
+          echo "review_support_sha=${support_sha}" >> "$GITHUB_OUTPUT"
+          echo "review_support_ref=${support_ref}" >> "$GITHUB_OUTPUT"
+          echo "review_support_repo=${support_workflow_repository}" >> "$GITHUB_OUTPUT"
+
       # The identical-failure fingerprint cap in "Evaluate review gate" runs
       # scripts/workflow_failure_heal.py. Only that file is checked out
-      # (sparse, depth 1), from the support ref codex-agent uses and from the
-      # main snapshot; the gate uses the first copy that carries the
-      # autofix-identical-failure-count subcommand and fails open without one.
+      # (sparse, depth 1), from the same protected commit as codex-agent;
+      # the gate fails open without the
+      # autofix-identical-failure-count subcommand.
       - name: Checkout fingerprint cap helper
+        id: checkout_fingerprint_cap
         if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
+          ref: ${{ steps.resolve_support.outputs.review_support_sha }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
           sparse-checkout: scripts/workflow_failure_heal.py
           sparse-checkout-cone-mode: false
 
-      - name: Checkout fingerprint cap helper main snapshot
+      - name: Verify fingerprint cap support identity
         if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src-main
-          fetch-depth: 1
-          sparse-checkout: scripts/workflow_failure_heal.py
-          sparse-checkout-cone-mode: false
+        env:
+          WORKFLOW_REPOSITORY: ${{ steps.resolve_support.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ steps.resolve_support.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.checkout_fingerprint_cap.outcome }}" != "success" ]; then
+            echo "::warning::Optional fingerprint cap helper checkout failed; continuing without it."
+            exit 0
+          fi
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
+            echo "::error::Unverified fingerprint cap support checkout."
+            exit 1
+          fi
+          echo "FINGERPRINT_CAP_SUPPORT_VERIFIED=true" >> "$GITHUB_ENV"
 
       - name: Evaluate review gate
         id: evaluate
@@ -846,9 +919,10 @@ jobs:
           esac
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \
+            && [ "${FINGERPRINT_CAP_SUPPORT_VERIFIED:-false}" = "true" ] \
             && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             fingerprint_cap_helper=""
-            for fingerprint_cap_candidate in .codex-workflow-src/scripts/workflow_failure_heal.py .codex-workflow-src-main/scripts/workflow_failure_heal.py; do
+            for fingerprint_cap_candidate in .codex-workflow-src/scripts/workflow_failure_heal.py; do
               if [ -f "${fingerprint_cap_candidate}" ] && grep -q 'autofix-identical-failure-count' "${fingerprint_cap_candidate}"; then
                 fingerprint_cap_helper="${fingerprint_cap_candidate}"
                 break
@@ -1291,19 +1365,33 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
-      WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
       POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}
       POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}
     steps:
       - name: Checkout workflow support source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ env.WORKFLOW_SUPPORT_REF }}
+          ref: ${{ needs.gate.outputs.review_support_sha }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+
+      - name: Verify workflow support source
+        env:
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
+            echo "::error::Unverified workflow support checkout."
+            exit 1
+          fi
+          echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
       - name: Dispatch standalone validate for orchestrator short-circuit issues
         run: |
@@ -1440,17 +1528,31 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
-      WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
     steps:
       - name: Checkout workflow support source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ env.WORKFLOW_SUPPORT_REF }}
+          ref: ${{ needs.gate.outputs.review_support_sha }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+
+      - name: Verify workflow support source
+        env:
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
+            echo "::error::Unverified workflow support checkout."
+            exit 1
+          fi
+          echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
       - name: Force orchestrate poll after merged PR handling
         env:
@@ -1716,7 +1818,6 @@ jobs:
       FINGERPRINT_CAP_MAX: ${{ needs.gate.outputs.fingerprint_cap_max }}
       FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
       FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
-      WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
       REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1724,11 +1825,10 @@ jobs:
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
     steps:
       - name: Checkout workflow support source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ env.WORKFLOW_SUPPORT_REF }}
+          ref: ${{ needs.gate.outputs.review_support_sha }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
@@ -1740,22 +1840,21 @@ jobs:
             scripts/workflow_failure_heal_autofix_report.sh
           sparse-checkout-cone-mode: false
 
-      - name: Checkout workflow support source main snapshot
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src-main
-          fetch-depth: 1
-          sparse-checkout: |
-            scripts/gh_helpers.sh
-            scripts/label_helpers.sh
-            scripts/tg_helpers.sh
-            scripts/workflow_failure_heal.py
-            scripts/workflow_failure_heal_autofix_report.sh
-          sparse-checkout-cone-mode: false
+      - name: Verify workflow support source
+        env:
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
+            echo "::error::Unverified workflow support checkout."
+            exit 1
+          fi
+          echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
       - name: Apply identical-failure cap outcome
         run: |
@@ -1770,15 +1869,12 @@ jobs:
             exit 0
           fi
 
-          # The branch-pinned support copy wins; the main snapshot fills in
-          # a file the pinned ref predates.
+          # Only the verified workflow checkout may supply executable support.
           support_file()
           {
             local name="$1"
             if [ -f ".codex-workflow-src/scripts/${name}" ]; then
               printf '%s' ".codex-workflow-src/scripts/${name}"
-            elif [ -f ".codex-workflow-src-main/scripts/${name}" ]; then
-              printf '%s' ".codex-workflow-src-main/scripts/${name}"
             fi
           }
           helper="$(support_file gh_helpers.sh)"
@@ -2161,18 +2257,22 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
+        env:
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
         run: |
           set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
-          else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]]; then
+            echo "::error::Untrusted or unavailable review workflow identity."
+            exit 1
           fi
+          echo "SCRIPT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
       - name: Checkout workflow support source
         id: checkout_support_source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -2181,44 +2281,20 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
-      - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-
       - name: Ensure workflow support source checkout
         run: |
           set -euo pipefail
-          if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+          if [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the verified workflow identity."
             exit 1
           fi
-
-      - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src-main
-          fetch-depth: 1
 
       - name: Stage workflow support files
         run: |
           set -euo pipefail
           helper=".codex-workflow-src/scripts/stage_workflow_support.sh"
-          if [ ! -f "${helper}" ] && [ -f ".codex-workflow-src-main/scripts/stage_workflow_support.sh" ]; then
-            helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"
-          fi
           if [ ! -f "${helper}" ]; then
-            echo "::error::stage_workflow_support.sh not found in checked-out support sources (${SCRIPT_REF} and optional main snapshot) in shubhodeep1/coding-workflows."
+            echo "::error::stage_workflow_support.sh not found in verified workflow support commit ${SCRIPT_REF}."
             exit 1
           fi
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
@@ -2233,129 +2309,60 @@ jobs:
 
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
             backfill_src=".codex-workflow-src/scripts/transcript_archive.sh"
-            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/transcript_archive.sh" ]; then
-              backfill_src=".codex-workflow-src-main/scripts/transcript_archive.sh"
-            fi
             if [ -f "${backfill_src}" ]; then
               install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh"
-              echo "::notice::Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+              echo "::notice::Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
             else
-              echo "::warning::Optional transcript archive helper transcript_archive.sh was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; transcript archiving remains disabled for this run."
+              echo "::warning::Optional transcript archive helper transcript_archive.sh was not staged and could not be backfilled from the verified workflow support checkout; transcript archiving remains disabled for this run."
             fi
           fi
 
           # Backfill the preflight-checked SUPPORT_SCRIPTS_DIR subset that the
-          # branch-pinned staging helper did not stage. review_autofix.yml runs
-          # @main, but stage_workflow_support.sh is sourced from the PR branch
-          # checkout (SCRIPT_REF). When the PR branch predates a commit that
-          # introduced a new preflight-checked script (e.g. assemble_prompt.sh,
-          # added in #3501), the stale helper never iterates that name, so it is
-          # never copied — and the helper's own main-snapshot fallback is skipped
-          # for the same reason. The shared REVIEW_PREFLIGHT_*_SUPPORT_SCRIPTS env
+          # verified staging helper did not stage. The workflow-defined
+          # preflight lists are authoritative for this subset. The shared REVIEW_PREFLIGHT_*_SUPPORT_SCRIPTS env
           # vars are the single source of truth for this checked subset.
           for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do
             if [ -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               continue
             fi
             backfill_src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              backfill_src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ -f "${backfill_src}" ]; then
               install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
-              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
             else
-              echo "::warning::Preflight support script ${f} was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; the later preflight step will report whether this is a hard or soft miss."
+              echo "::warning::Preflight support script ${f} was not staged and could not be backfilled from the verified workflow support checkout; the later preflight step will report whether this is a hard or soft miss."
             fi
           done
 
           # Backfill the workflow-failure-heal reporter pair the same way. The
-          # pair rides the OPTIONAL_BOOTSTRAP_SCRIPTS loop of
-          # stage_workflow_support.sh, but that helper is sourced from the PR
-          # branch (SCRIPT_REF): a branch forked before #4208 added the pair
-          # never iterates those names, and the "Report autofix failure to
-          # workflow failure heal" step then skips with reason=reporter_missing
-          # even though this workflow (@main) and the main snapshot carry the
-          # scripts. Optional: a miss only disables the report for this run.
+          # pair rides the OPTIONAL_BOOTSTRAP_SCRIPTS loop; a miss only
+          # disables the report for this run.
           for f in ${REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS}; do
             if [ -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               continue
             fi
             backfill_src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              backfill_src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ -f "${backfill_src}" ]; then
               install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
-              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
             else
-              echo "::warning::Workflow-failure-heal reporter script ${f} was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; the Report autofix failure to workflow failure heal step will skip with reason=reporter_missing for this run."
+              echo "::warning::Workflow-failure-heal reporter script ${f} was not staged and could not be backfilled from the verified workflow support checkout; the Report autofix failure to workflow failure heal step will skip with reason=reporter_missing for this run."
             fi
           done
 
-          # Model catalog backfill. REVIEWER_MODELS and the reviewer failback
-          # chains come from this workflow's ref, but the branch-pinned
-          # stage_workflow_support.sh stages codex_model_catalog.json from the
-          # PR branch first. A branch forked before a roster change lacks the
-          # new slugs, and write_opencode_config.sh then fails those reviewer
-          # slots with "model '<slug>' is missing or duplicated in the model
-          # catalog" (PR #4323, run 35933627432: z-ai/glm-5.2 and
-          # google/gemini-3.1-flash-lite). Append every main-snapshot row whose
-          # slug the staged catalog lacks. Rows already staged win, nothing is
-          # removed, and any read/parse problem only logs a warning.
-          staged_model_catalog="${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
-          main_model_catalog=".codex-workflow-src-main/scripts/codex_model_catalog.json"
-          if [ -f "${staged_model_catalog}" ] && [ -f "${main_model_catalog}" ]; then
-            if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${staged_model_catalog}" "${main_model_catalog}" <<'PY'
-          import json
-          import os
-          import sys
-          import tempfile
-
-          staged_path, main_path = sys.argv[1:3]
-          with open(staged_path, encoding="utf-8") as handle:
-              staged = json.load(handle)
-          with open(main_path, encoding="utf-8") as handle:
-              main = json.load(handle)
-          staged_rows = staged.get("models") if isinstance(staged, dict) else None
-          main_rows = main.get("models") if isinstance(main, dict) else None
-          if not isinstance(staged_rows, list) or not isinstance(main_rows, list):
-              print("::warning::MODEL_CATALOG_BACKFILL skipped reason=models_array_missing")
-              sys.exit(0)
-          staged_slugs = {row.get("slug") for row in staged_rows if isinstance(row, dict)}
-          added_slugs = []
-          for row in main_rows:
-              slug = row.get("slug") if isinstance(row, dict) else None
-              if isinstance(slug, str) and slug and slug not in staged_slugs:
-                  staged_rows.append(row)
-                  staged_slugs.add(slug)
-                  added_slugs.append(slug)
-          if added_slugs:
-              fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(staged_path), prefix=".codex_model_catalog.", suffix=".json")
-              with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                  json.dump(staged, handle, indent=2)
-                  handle.write("\n")
-              os.chmod(tmp_path, 0o644)
-              os.replace(tmp_path, staged_path)
-              print(f"MODEL_CATALOG_BACKFILL added={len(added_slugs)} slugs={','.join(added_slugs)} source=main_snapshot")
-          else:
-              print("MODEL_CATALOG_BACKFILL added=0 source=main_snapshot")
-          PY
-            then
-              echo "::warning::MODEL_CATALOG_BACKFILL failed; reviewer slots whose model is missing from the branch catalog will fail their OpenCode config for this run."
-            fi
-          fi
+          # Catalog and reviewer helpers share the gate-verified support commit; no
+          # cross-ref row merge is required. Preserve the stable log key.
+          echo "MODEL_CATALOG_BACKFILL added=0 source=workflow_commit"
 
           # Identical-failure fingerprint cap: the failure-comment steps and
           # "Assemble failure evidence" stamp each failure comment with a
           # review-autofix-failure:v1 marker computed by
           # workflow_failure_heal.py autofix-failure-fingerprint. A branch
-          # forked before that subcommand stages an older copy, so point
-          # AUTOFIX_FAILURE_HEAL_PY at the first copy that carries it (staged
-          # bundle, then the main snapshot). Empty → those steps post their
+          # from the trusted workflow commit provides the subcommand. Point
+          # AUTOFIX_FAILURE_HEAL_PY at that copy. Empty → those steps post their
           # comments without a marker (fail open).
           AUTOFIX_FAILURE_HEAL_PY=""
-          for failure_heal_py_candidate in "${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal.py" "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/workflow_failure_heal.py"; do
+          for failure_heal_py_candidate in "${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal.py"; do
             if [ -f "${failure_heal_py_candidate}" ] && grep -q 'autofix-failure-fingerprint' "${failure_heal_py_candidate}"; then
               AUTOFIX_FAILURE_HEAL_PY="${failure_heal_py_candidate}"
               break
@@ -2365,23 +2372,17 @@ jobs:
 
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then
             src=".codex-workflow-src/prompts/_nag_reminders.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/_nag_reminders.txt" ]; then
-              src=".codex-workflow-src-main/prompts/_nag_reminders.txt"
-            fi
             if [ -f "${src}" ]; then
               install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
-              echo "::notice::Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+              echo "::notice::Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
             else
-              echo "::warning::_nag_reminders.txt was not staged and could not be backfilled from .codex-workflow-src/prompts or .codex-workflow-src-main/prompts; nag reminders will fail open for this run."
+              echo "::warning::_nag_reminders.txt was not staged and could not be backfilled from the verified workflow support checkout; nag reminders will fail open for this run."
               rm -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
             fi
           fi
 
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
             src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
-              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
-            fi
             if [ -f "${src}" ]; then
               install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
             else
@@ -2694,8 +2695,6 @@ jobs:
           wrapper_script=""
           if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh" ]; then
             wrapper_script="${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"
-          elif [ -f scripts/build_semble_wrapper.sh ]; then
-            wrapper_script="scripts/build_semble_wrapper.sh"
           fi
           if [ -n "${wrapper_script}" ]; then
             # The wrapper is documented "always exit 0" (every failure path
@@ -3756,9 +3755,7 @@ jobs:
 
           slop_scan_script=""
           for candidate in \
-            "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py" \
-            "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/slop_scan_local.py" \
-            "${GITHUB_WORKSPACE}/scripts/slop_scan_local.py"
+            "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py"
           do
             if [ -f "${candidate}" ]; then
               slop_scan_script="${candidate}"
@@ -4137,9 +4134,8 @@ jobs:
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_merge_topology_gate.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_merge_topology_gate.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/review_autofix_step_merge_topology_gate.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::error::review_autofix_step_merge_topology_gate.sh not found in the staged support bundle, .codex-workflow-src/scripts or .codex-workflow-src-main/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Pre-review deterministic merge-topology gate'."
+            echo "::error::review_autofix_step_merge_topology_gate.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Pre-review deterministic merge-topology gate'."
             exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
@@ -4970,9 +4966,8 @@ jobs:
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_editor_uncommitted_changes.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_uncommitted_changes.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/review_autofix_step_editor_uncommitted_changes.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::error::review_autofix_step_editor_uncommitted_changes.sh not found in the staged support bundle, .codex-workflow-src/scripts or .codex-workflow-src-main/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect editor-claimed-but-uncommitted changes'."
+            echo "::error::review_autofix_step_editor_uncommitted_changes.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect editor-claimed-but-uncommitted changes'."
             exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
@@ -5172,9 +5167,8 @@ jobs:
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_detect_merge_conflicts.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_detect_merge_conflicts.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/review_autofix_step_detect_merge_conflicts.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::error::review_autofix_step_detect_merge_conflicts.sh not found in the staged support bundle, .codex-workflow-src/scripts or .codex-workflow-src-main/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect merge conflicts'."
+            echo "::error::review_autofix_step_detect_merge_conflicts.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect merge conflicts'."
             exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
@@ -5343,20 +5337,13 @@ jobs:
           _primary_state="$(_probe_resolver "${RESOLVER_SCRIPT}")"
           if [ "${_primary_state}" != "ok" ]; then
             _fb1="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_conflict_resolve.sh"
-            _fb2="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/review_conflict_resolve.sh"
             _fb1_state="$(_probe_resolver "${_fb1}")"
             if [ "${_fb1_state}" = "ok" ]; then
               echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state} (likely unresolved conflict markers from the merge replay); falling back to ${_fb1} (SCRIPT_REF=${SCRIPT_REF:-unknown})."
               RESOLVER_SCRIPT="${_fb1}"
             else
-              _fb2_state="$(_probe_resolver "${_fb2}")"
-              if [ "${_fb2_state}" = "ok" ]; then
-                echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}; falling back to ${_fb2}."
-                RESOLVER_SCRIPT="${_fb2}"
-              else
-                echo "::error::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}; ${_fb2}=${_fb2_state}. No clean resolver entry-point available."
-                exit 2
-              fi
+              echo "::error::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}. No clean trusted resolver entry-point available."
+              exit 2
             fi
           fi
           bash "${RESOLVER_SCRIPT}"
@@ -5679,10 +5666,6 @@ jobs:
             if [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/label_helpers.sh" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               install -m 0755 "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/label_helpers.sh" "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
-            elif [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/label_helpers.sh" ]; then
-              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              install -m 0755 "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/label_helpers.sh" "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
               source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             else
               type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
@@ -6229,9 +6212,8 @@ jobs:
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_partial_finalize.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_partial_finalize.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/review_autofix_step_partial_finalize.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::warning::review_autofix_step_partial_finalize.sh not found in the staged support bundle, .codex-workflow-src/scripts or .codex-workflow-src-main/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Post partial finalize comment and persist runtime marker' (fail open)."
+            echo "::warning::review_autofix_step_partial_finalize.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Post partial finalize comment and persist runtime marker' (fail open)."
             exit 0
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
@@ -7197,9 +7179,8 @@ jobs:
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_iteration_summary.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_iteration_summary.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/review_autofix_step_iteration_summary.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::warning::review_autofix_step_iteration_summary.sh not found in the staged support bundle, .codex-workflow-src/scripts or .codex-workflow-src-main/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Append review pipeline iteration summary' (fail open)."
+            echo "::warning::review_autofix_step_iteration_summary.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Append review pipeline iteration summary' (fail open)."
             exit 0
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
@@ -7229,12 +7210,16 @@ jobs:
           PR_CHANGED_FILES_FILE: ${{ env.PR_CHANGED_FILES_FILE }}
         run: |
           set -uo pipefail
-          reporter="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal_autofix_report.sh"
+          if [ -z "${SUPPORT_SCRIPTS_DIR:-}" ]; then
+            echo "WORKFLOW_HEAL_AUTOFIX_REPORT skip reason=reporter_missing path=unstaged_support"
+            exit 0
+          fi
+          reporter="${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal_autofix_report.sh"
           if [ ! -f "${reporter}" ]; then
             echo "WORKFLOW_HEAL_AUTOFIX_REPORT skip reason=reporter_missing path=${reporter}"
             exit 0
           fi
-          WORKFLOW_HEAL_PY="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal.py" bash "${reporter}" || true
+          WORKFLOW_HEAL_PY="${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal.py" bash "${reporter}" || true
 
       - name: Cleanup temporary artifacts
         if: always()

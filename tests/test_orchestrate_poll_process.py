@@ -20490,10 +20490,9 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	stage_helper_body = stage_helper_path.read_text(encoding="utf-8")
 	prepare_body = prepare_path.read_text(encoding="utf-8")
 	resolve_body = resolve_path.read_text(encoding="utf-8")
-	# Resolver safety scripts must prefer the main snapshot so wedged
-	# integration branches still pick up the shipped self-heal helpers.
+	# Resolver safety scripts must come from the verified workflow checkout.
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in wf_body
-	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in wf_body
+	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in wf_body
 	assert (
 		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
 		'review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"'
@@ -20511,7 +20510,8 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"'
 	) in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
-	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." in stage_helper_body
+	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
+	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." not in stage_helper_body
 	# The bootstrap still enumerates the script name in review_autofix.yml
 	# even after PR #1495 moved the resolver logic into support scripts.
 	assert "verify_integration_fingerprints.py" in stage_helper_body

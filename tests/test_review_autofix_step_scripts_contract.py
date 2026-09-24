@@ -49,19 +49,18 @@ def test_moved_steps_run_only_the_resolving_wrapper() -> None:
 		expected_lines = [
 			f'REVIEW_AUTOFIX_STEP_SCRIPT="${{SUPPORT_SCRIPTS_DIR:-}}/{script_name}"',
 			f'[ -f "${{REVIEW_AUTOFIX_STEP_SCRIPT}}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${{GITHUB_WORKSPACE}}/.codex-workflow-src/scripts/{script_name}"',
-			f'[ -f "${{REVIEW_AUTOFIX_STEP_SCRIPT}}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${{GITHUB_WORKSPACE}}/.codex-workflow-src-main/scripts/{script_name}"',
 			'if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then',
 		]
 		run_lines = run.rstrip("\n").split("\n")
-		assert run_lines[:4] == expected_lines, f"{step_name}: unexpected resolution order:\n{run}"
+		assert run_lines[:3] == expected_lines, f"{step_name}: unexpected resolution order:\n{run}"
 		assert run_lines[-2:] == ["fi", 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"'], (
 			f"{step_name}: the script must be sourced in the step shell (not run in a child bash) "
 			"so BASH_ENV state, set -e and exit codes behave as they did inline"
 		)
 		if severity == "error":
-			assert run_lines[4].startswith("  echo \"::error::") and run_lines[5] == "  exit 1", step_name
+			assert run_lines[3].startswith("  echo \"::error::") and run_lines[4] == "  exit 1", step_name
 		else:
-			assert run_lines[4].startswith("  echo \"::warning::") and run_lines[5] == "  exit 0", step_name
+			assert run_lines[3].startswith("  echo \"::warning::") and run_lines[4] == "  exit 0", step_name
 		assert "${{" not in run, f"{step_name}: wrapper must not carry GitHub expressions"
 
 

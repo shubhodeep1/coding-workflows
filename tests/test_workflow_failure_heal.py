@@ -1720,12 +1720,30 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	assert optional and {"workflow_failure_heal.py", "workflow_failure_heal_autofix_report.sh"} <= set(optional.group(1).split())
 
 
+def test_autofix_failure_report_never_uses_pr_worktree_support() -> None:
+	workflow = _yaml(REVIEW_AUTOFIX_WORKFLOW)
+	step = next(step for step in workflow["jobs"]["codex-agent"]["steps"] if step.get("name") == "Report autofix failure to workflow failure heal")
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-untrusted-") as tmp_name:
+		work, state_file, env = _stage_autofix_report(Path(tmp_name), comments=[{"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		marker = Path(tmp_name) / "pr_reporter_executed"
+		(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name).write_text(f'touch "{marker}"\n', encoding="utf-8")
+		env.pop("SUPPORT_SCRIPTS_DIR", None)
+		result = subprocess.run(["bash", "-c", step["run"]], cwd=work, env=env, capture_output=True, text=True)
+		assert result.returncode == 0 and "skip reason=reporter_missing path=unstaged_support" in result.stdout
+		assert not marker.exists()
+
+		trusted = Path(tmp_name) / "trusted" / "scripts"
+		trusted.mkdir(parents=True)
+		shutil.copy(AUTOFIX_REPORT_SCRIPT, trusted / AUTOFIX_REPORT_SCRIPT.name)
+		env["SUPPORT_SCRIPTS_DIR"] = str(trusted)
+		result = subprocess.run(["bash", "-c", step["run"]], cwd=work, env=env, capture_output=True, text=True)
+		assert result.returncode == 0 and "skip reason=heal_helper_missing" in result.stdout
+		assert not marker.exists() and "dispatches" not in _state(state_file)
+
+
 def test_review_autofix_workflow_backfills_the_heal_reporter_from_main_snapshot() -> None:
-	# Regression: stage_workflow_support.sh is sourced from the PR branch
-	# (SCRIPT_REF). A PR branch forked before #4208 added the reporter pair to
-	# OPTIONAL_BOOTSTRAP_SCRIPTS never stages them, and the report step skipped
-	# with reason=reporter_missing (run 35685250882 on PR #4259). The staging
-	# step must backfill the pair from the main snapshot like the preflight set.
+	# The optional reporter may be absent from the staged bundle, but it may
+	# only be backfilled from the verified workflow commit, not a PR checkout.
 	workflow = _yaml(REVIEW_AUTOFIX_WORKFLOW)
 	assert workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"].split() == [
 		"workflow_failure_heal.py",
@@ -1736,20 +1754,16 @@ def test_review_autofix_workflow_backfills_the_heal_reporter_from_main_snapshot(
 	stage_run = steps[names.index("Stage workflow support files")]["run"]
 	assert 'for f in ${REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS}; do' in stage_run
 	assert "reason=reporter_missing" in stage_run
-	# Same source order as the preflight backfill: branch copy first, main
-	# snapshot second, warning (never a failure) when both are absent.
+	# Missing optional support warns without taking an untrusted fallback.
 	loop = stage_run.split('for f in ${REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS}; do', 1)[1].split("done", 1)[0]
 	assert 'backfill_src=".codex-workflow-src/scripts/${f}"' in loop
-	assert '[ -f ".codex-workflow-src-main/scripts/${f}" ]' in loop
+	assert '.codex-workflow-src-main' not in loop
 	assert 'install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"' in loop
 	assert "exit 1" not in loop
 
 
 def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapshot() -> None:
-	# Execute the backfill loop against a stale branch checkout that lacks the
-	# pair and a main snapshot that carries it: both land in
-	# SUPPORT_SCRIPTS_DIR, executable, and the loop leaves an already-staged
-	# branch copy alone.
+	# The verified checkout supplies a missing reporter; the staged copy stays.
 	workflow = _yaml(REVIEW_AUTOFIX_WORKFLOW)
 	steps = workflow["jobs"]["codex-agent"]["steps"]
 	names = [step.get("name") for step in steps]
@@ -1760,11 +1774,10 @@ def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapsh
 	with tempfile.TemporaryDirectory() as tmp:
 		work = Path(tmp)
 		(work / ".codex-workflow-src" / "scripts").mkdir(parents=True)
-		(work / ".codex-workflow-src-main" / "scripts").mkdir(parents=True)
 		support = work / "support" / "scripts"
 		support.mkdir(parents=True)
-		(work / ".codex-workflow-src-main" / "scripts" / "workflow_failure_heal.py").write_text("main-heal\n", encoding="utf-8")
-		(work / ".codex-workflow-src-main" / "scripts" / "workflow_failure_heal_autofix_report.sh").write_text("main-reporter\n", encoding="utf-8")
+		(work / ".codex-workflow-src" / "scripts" / "workflow_failure_heal.py").write_text("trusted-heal\n", encoding="utf-8")
+		(work / ".codex-workflow-src" / "scripts" / "workflow_failure_heal_autofix_report.sh").write_text("trusted-reporter\n", encoding="utf-8")
 		# Branch copy of an unrelated already-staged file must not be touched.
 		(support / "workflow_failure_heal.py").write_text("branch-heal\n", encoding="utf-8")
 		reporter_backfill_env = {key: value for key, value in os.environ.items() if key not in {"BASH_ENV", "ENV", "WORKSPACE_PATH"}}
@@ -1783,15 +1796,15 @@ def test_review_autofix_heal_reporter_backfill_loop_stages_pair_from_main_snapsh
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert (support / "workflow_failure_heal.py").read_text(encoding="utf-8") == "branch-heal\n"
 		reporter = support / "workflow_failure_heal_autofix_report.sh"
-		assert reporter.read_text(encoding="utf-8") == "main-reporter\n"
+		assert reporter.read_text(encoding="utf-8") == "trusted-reporter\n"
 		assert os.access(reporter, os.X_OK)
 		assert (
 			"::notice::Backfilled workflow_failure_heal_autofix_report.sh into the runtime support bundle from "
-			".codex-workflow-src-main/scripts/workflow_failure_heal_autofix_report.sh"
+			".codex-workflow-src/scripts/workflow_failure_heal_autofix_report.sh"
 		) in result.stdout
 		# Both absent: warning only, exit 0, nothing staged.
 		reporter.unlink()
-		(work / ".codex-workflow-src-main" / "scripts" / "workflow_failure_heal_autofix_report.sh").unlink()
+		(work / ".codex-workflow-src" / "scripts" / "workflow_failure_heal_autofix_report.sh").unlink()
 		result = subprocess.run(
 			["bash", "-euo", "pipefail", "-c", loop],
 			cwd=work,
@@ -2074,12 +2087,9 @@ def _gate_run_script() -> str:
 
 def _run_gate(tmp: Path, *, comments: list[dict], event_name: str = "workflow_dispatch", extra_env: dict[str, str] | None = None, state_overrides: dict | None = None, with_helper: bool = True) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict]:
 	work = tmp / "work"
-	(work / ".codex-workflow-src-main" / "scripts").mkdir(parents=True)
-	if with_helper:
-		shutil.copy(LIB_PATH, work / ".codex-workflow-src-main" / "scripts" / LIB_PATH.name)
-	# The branch-pinned copy predates the cap: the gate must fall back to main's.
 	(work / ".codex-workflow-src" / "scripts").mkdir(parents=True)
-	(work / ".codex-workflow-src" / "scripts" / LIB_PATH.name).write_text("# old helper without the cap subcommand\n", encoding="utf-8")
+	if with_helper:
+		shutil.copy(LIB_PATH, work / ".codex-workflow-src" / "scripts" / LIB_PATH.name)
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	(bin_dir / "gh").write_text(GATE_MOCK_GH, encoding="utf-8")
@@ -2125,6 +2135,7 @@ def _run_gate(tmp: Path, *, comments: list[dict], event_name: str = "workflow_di
 		"FORCE_CLAUDE_BRANCH_REVIEW": "",
 		"HEAD_REF_OVERRIDE": "",
 		"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "true",
+		"FINGERPRINT_CAP_SUPPORT_VERIFIED": "true",
 		"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL": "3",
 	}
 	env.update(extra_env or {})
@@ -2179,6 +2190,7 @@ def test_gate_cap_already_applied_threshold_bypass_and_fail_open() -> None:
 	# The kill switch, the force_rb_judge dispatch and the fail-open paths keep the run.
 	cases = [
 		("disabled", {"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"}, {}, True, None),
+		("unverified_checkout", {"FINGERPRINT_CAP_SUPPORT_VERIFIED": "false"}, {}, True, None),
 		("force_rb_judge", {"FORCE_RB_JUDGE": "true"}, {}, True, "AUTOFIX_FINGERPRINT cap=bypassed pr=4259"),
 		("helper_missing", {}, {}, False, "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=4259 head=" + SHA_A + " reason=helper_missing"),
 		("comments_fail", {}, {"comments_fail": True}, True, "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=4259 head=" + SHA_A + " reason=api_error"),
@@ -2384,10 +2396,12 @@ def test_extract_crash_file_on_observed_error_lines() -> None:
 
 def test_classify_crash_ownership() -> None:
 	crash = "scripts/review_apply_fixes.sh"
-	assert heal.classify_crash_ownership(crash_file=crash, changed_files=[crash], base_changed_files=[]) == "pr"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=[crash], base_changed_files=[], script_ref=SHA_A, head_sha=SHA_A) == "pr"
 	# In both diffs: the PR's own change owns it.
-	assert heal.classify_crash_ownership(crash_file=crash, changed_files=[crash], base_changed_files=[crash]) == "pr"
-	assert heal.classify_crash_ownership(crash_file=crash, changed_files=["scripts/opencode_helpers.sh"], base_changed_files=[crash]) == "base"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=[crash], base_changed_files=[crash], script_ref=SHA_A, head_sha=SHA_A) == "pr"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=["scripts/opencode_helpers.sh"], base_changed_files=[crash], script_ref=SHA_A, head_sha=SHA_A) == "base"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=[crash], base_changed_files=[crash], script_ref=SHA_B, head_sha=SHA_A) == "none"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=[crash], base_changed_files=[crash], script_ref=None, head_sha=SHA_A) == "none"
 	assert heal.classify_crash_ownership(crash_file=crash, changed_files=["scripts/opencode_helpers.sh"], base_changed_files=[]) == "none"
 	assert heal.classify_crash_ownership(crash_file=None, changed_files=[crash], base_changed_files=[crash]) == "none"
 
@@ -2399,7 +2413,7 @@ def test_parse_classification_accepts_self_inflicted_tokens() -> None:
 	assert not set(heal.SELF_INFLICTED_CLASSIFICATIONS) & set(heal.UPSTREAM_ISSUE_CLASSIFICATIONS)
 
 
-def _self_inflicted_payload(*, changed_files: list[str], crash_line: str = EDITOR_GUARD_CRASH_LINE, base_branch: str = INTEGRATION_BRANCH, source_repo: str = SELF_REPO, script_ref: str = SHA_A) -> dict:
+def _self_inflicted_payload(*, changed_files: list[str], crash_line: str = EDITOR_GUARD_CRASH_LINE, base_branch: str = INTEGRATION_BRANCH, source_repo: str = SELF_REPO, script_ref: str = SHA_B) -> dict:
 	payload = heal.build_autofix_failure_payload(
 		repo=source_repo,
 		pr=_pr(),
@@ -2424,7 +2438,7 @@ def _self_inflicted_payload(*, changed_files: list[str], crash_line: str = EDITO
 def test_autofix_payload_carries_ownership_fields() -> None:
 	payload = heal.validate_payload(_self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh", "scripts/opencode_helpers.sh", "../escape.sh", "x" * 121]))
 	assert payload["base_branch"] == INTEGRATION_BRANCH
-	assert payload["script_ref"] == SHA_A
+	assert payload["script_ref"] == SHA_B
 	assert payload["changed_files"] == ["scripts/opencode_helpers.sh"]
 	assert payload["crash_file"] == "scripts/review_apply_fixes.sh"
 	# The dispatch envelope still has two keys, and the report round-trips.
@@ -2472,9 +2486,12 @@ def test_classify_crash_ownership_cli() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-own-") as tmp_name:
 		tmp = Path(tmp_name)
 		payload_file = tmp / "p.json"
-		payload_file.write_text(json.dumps(_self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"])), encoding="utf-8")
+		payload_file.write_text(json.dumps(_self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"], script_ref=SHA_A)), encoding="utf-8")
 		base_file = tmp / "base.txt"
 		base_file.write_text("README.md\nscripts/review_apply_fixes.sh\n", encoding="utf-8")
+		out = subprocess.run(["python3", str(SCRIPTS_DIR / "workflow_failure_heal.py"), "classify-crash-ownership", "--payload-json", str(payload_file), "--base-changed-files", str(base_file)], capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+		assert out.stdout.strip() == "none"  # Trusted runtime SHA differs from the PR head.
+		payload_file.write_text(json.dumps(_self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"], script_ref=SHA_B)), encoding="utf-8")
 		out = subprocess.run(["python3", str(SCRIPTS_DIR / "workflow_failure_heal.py"), "classify-crash-ownership", "--payload-json", str(payload_file), "--base-changed-files", str(base_file)], capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
 		assert out.stdout.strip() == "base"
 		out = subprocess.run(["python3", str(SCRIPTS_DIR / "workflow_failure_heal.py"), "classify-crash-ownership", "--payload-json", str(payload_file)], capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
@@ -2643,7 +2660,7 @@ def test_intake_pipeline_ownership_routes_fileless_failure_to_pr() -> None:
 
 def test_intake_pipeline_ownership_needs_the_pr_head_scripts() -> None:
 	# The run staged another ref: no ownership, so the token is remapped.
-	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"], crash_line=SANDBOX_226_LINE)
+	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"], crash_line=SANDBOX_226_LINE, script_ref=SHA_A)
 	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "crash_ownership=" not in result.stdout and "- Ownership:" not in prompt

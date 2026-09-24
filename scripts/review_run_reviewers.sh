@@ -82,7 +82,7 @@ emit_context_budget_warn_for_prompt() {
 
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
     python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
@@ -309,8 +309,7 @@ resolve_ledger_substate_helper() {
   local candidate
   for candidate in \
     "${SUPPORT_SCRIPTS_DIR:-scripts}/ledger_emit_substate.sh" \
-    ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
-    "scripts/ledger_emit_substate.sh"; do
+    ".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
     if [ -f "${candidate}" ]; then
       printf '%s\n' "${candidate}"
       return 0

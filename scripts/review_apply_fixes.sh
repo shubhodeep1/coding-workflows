@@ -273,7 +273,7 @@ emit_context_budget_warn_for_prompt() {
 
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
     python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
@@ -333,7 +333,7 @@ emit_lessons_learned_for_out_of_plan_fix() {
 
   telemetry_json="$(printf '%s\n' "${current_diff_paths}" | {
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
     python3 - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
 import json
 import os
@@ -762,9 +762,7 @@ resolve_support_script() {
   local candidate
   for candidate in \
     "${SUPPORT_SCRIPTS_DIR}/${script_name}" \
-    ".codex-workflow-src/scripts/${script_name}" \
-    ".codex-workflow-src-main/scripts/${script_name}" \
-    "scripts/${script_name}"; do
+    ".codex-workflow-src/scripts/${script_name}"; do
     if [ -f "${candidate}" ]; then
       printf '%s' "${candidate}"
       return 0
@@ -775,17 +773,12 @@ resolve_support_script() {
 
 resolve_review_thread_reuse_asset() {
   local repo_path="$1"
-  local candidate=""
+  local candidate=".codex-workflow-src/${repo_path}"
 
-  for candidate in \
-    "${repo_path}" \
-    ".codex-workflow-src/${repo_path}" \
-    ".codex-workflow-src-main/${repo_path}"; do
-    if [ -f "${candidate}" ]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
+  if [ -f "${candidate}" ]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
 
   return 1
 }

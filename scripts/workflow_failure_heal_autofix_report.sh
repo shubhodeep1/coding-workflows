@@ -96,9 +96,6 @@ export PYTHONDONTWRITEBYTECODE=1
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HEAL_PY="${WORKFLOW_HEAL_PY:-${script_dir}/workflow_failure_heal.py}"
-if [ ! -f "${HEAL_PY}" ] && [ -f "scripts/workflow_failure_heal.py" ]; then
-	HEAL_PY="scripts/workflow_failure_heal.py"
-fi
 
 # Optional helpers (staged by the review workflow; absent in tests).
 if [ -f "${script_dir}/gh_helpers.sh" ]; then
