@@ -589,7 +589,13 @@ jobs:
 > resume_state=<state> resume_round=<n> resume_round_limit=<n>
 > marker_comment_id=<id> mergeable=true`. The check only fires for a PR
 > GitHub reports `mergeable=true`, so a conflicted head still reaches the
-> codex-agent resolver path; `[force-review]` in the title or the
+> codex-agent resolver path. There, `Detect merge conflicts`, the resolver
+> steps, and `Push all pending commits` run even when the restored same-head
+> state is terminal (`AUTOFIX_RESUME_TERMINAL=true`); the editor and
+> `Commit changes` still skip, so the only commit such a run pushes is the
+> resolved merge. Before this, the poller's standalone conflict sweep kept
+> re-dispatching a terminal, conflicted PR (#4332) every tick while each run
+> skipped the resolver and exited green. `[force-review]` in the title or the
 > `force-review` label (`AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE`), a
 > `force_rb_judge` dispatch, and every `pull_request` event bypass it, a
 > newer trusted non-terminal marker for the same head reopens it, and markers

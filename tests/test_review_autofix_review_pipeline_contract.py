@@ -5623,6 +5623,61 @@ def test_review_partial_resume_path_does_not_workflow_dispatch_without_new_push(
 	assert "env.AUTOFIX_RESUME_TERMINAL != 'true'" in block
 
 
+def _evaluate_step_if_gate(step_name: str, gate_env: dict[str, str]) -> bool:
+	"""Evaluate a step's ``if:`` over env.* comparisons; unset vars are ''."""
+	if_line = next(
+		line.strip() for line in _step_block(step_name).splitlines() if line.strip().startswith("if:")
+	)
+	expression = if_line[len("if:"):].strip().strip('"')
+	assert "steps." not in expression, f"gate evaluator only models env.* terms: {step_name}"
+
+	def replace_comparison(match: re.Match[str]) -> str:
+		actual_value = gate_env.get(match.group(1), "")
+		result = actual_value == match.group(3) if match.group(2) == "==" else actual_value != match.group(3)
+		return str(result)
+
+	python_expression = re.sub(r"env\.([A-Z0-9_]+)\s*(==|!=)\s*'([^']*)'", replace_comparison, expression)
+	python_expression = python_expression.replace("success()", "True").replace("&&", " and ").replace("||", " or ")
+	assert re.fullmatch(r"[\sA-Za-z()]*", python_expression), python_expression
+	return bool(eval(python_expression))  # noqa: S307 - only True/False/and/or/() remain
+
+
+# A dispatched conflict-recovery run on a PR whose same-head resume state is
+# terminal (PR #4332: round 3/3, no_progress). The editor and commit steps are
+# skipped, so DID_COMMIT is unset.
+_TERMINAL_RESUME_CONFLICT_ENV = {
+	"CAN_PUSH": "true",
+	"AUTOFIX_RESUME_TERMINAL": "true",
+}
+
+
+def test_terminal_resume_still_resolves_merge_conflicts() -> None:
+	assert _evaluate_step_if_gate("Detect merge conflicts", _TERMINAL_RESUME_CONFLICT_ENV)
+	conflict_env = {**_TERMINAL_RESUME_CONFLICT_ENV, "MERGE_CONFLICT": "true"}
+	for step_name in (
+		"Prepare merge-conflict resolver prompt and pre-snapshot",
+		"Run Codex resolver, validate, stage, commit",
+	):
+		assert _evaluate_step_if_gate(step_name, conflict_env), step_name
+	resolved_env = {**conflict_env, "CONFLICT_RESOLVED": "true"}
+	assert _evaluate_step_if_gate("Telegram conflict resolution message", resolved_env)
+
+
+def test_terminal_resume_push_only_carries_resolved_merge() -> None:
+	resolved_env = {**_TERMINAL_RESUME_CONFLICT_ENV, "MERGE_CONFLICT": "true", "CONFLICT_RESOLVED": "true"}
+	assert _evaluate_step_if_gate("Push all pending commits", resolved_env)
+	unresolved_commit_env = {**_TERMINAL_RESUME_CONFLICT_ENV, "DID_COMMIT": "true"}
+	assert not _evaluate_step_if_gate("Push all pending commits", unresolved_commit_env)
+	non_terminal_commit_env = {"CAN_PUSH": "true", "AUTOFIX_RESUME_TERMINAL": "false", "DID_COMMIT": "true"}
+	assert _evaluate_step_if_gate("Push all pending commits", non_terminal_commit_env)
+	# The editor and commit steps must keep skipping terminal resumes, which is
+	# what keeps DID_COMMIT unset on that path.
+	commit_block = _step_block("Commit changes")
+	editor_block = _step_block("Apply fixes with editor model")
+	assert "env.AUTOFIX_RESUME_TERMINAL != 'true'" in commit_block
+	assert "env.AUTOFIX_RESUME_TERMINAL != 'true'" in editor_block
+
+
 def test_review_partial_finalize_marker_sets_no_progress_terminal_state() -> None:
 	with tempfile.TemporaryDirectory(prefix="partial-finalize-no-progress-") as td:
 		context = _build_partial_finalize_step_context(Path(td))
