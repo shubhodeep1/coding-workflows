@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:~20615-~20627 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: A workspace-guard snapshot or reconcile failure for one review-blocked PR exits the poller instead of skipping that PR and continuing with other queued PRs.\n  WHY: Gemini rated this MAJOR and minimax rated it NIT; minimax describes the halt as a deliberate tradeoff, while z-ai_glm-5_2 reports the current code uses `break` after a merge-resolve commit reverted `exit 78`.\n- scripts/untrusted_process_sandbox.sh:297-317 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_2]\n  PROBLEM: Duplicate validation blocks set `guard_git_dir` using different methods, and the second block resets it, discarding the first block's canonicalization result.\n  WHY: Both reviewers characterize this as a maintainability concern rather than a runtime failure; z-ai_glm-5_2 notes the blocks have distinct checks and coverage.\n- scripts/review_conflict_resolve.sh:~1953-1956, ~1971-1980 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The inline workspace-guard failure check exits 78 without emitting the per-attempt `\"Failed\"` substate that the removed late check emitted.\n  WHY: The run ledger loses telemetry tying the guard failure to its attempt number, although the outer workflow still observes the script-level failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:20615-20618 | severity=high | confidence=4\n  PROBLEM: The workspace-guard snapshot failure path changed from `|| break` to an explicit `exit 78`, terminating the entire poller script.\n  WHY: A single PR-specific workspace guard failure will now halt processing for all remaining queued PRs in the poller, rather than skipping the affected PR and continuing to process others.\n- scripts/untrusted_process_sandbox.sh:297-317 | severity=low | confidence=4\n  PROBLEM: Two distinct validation blocks conditionally set the `guard_git_dir` variable with different, overlapping validation methods. The second block\u2019s reset (`guard_git_dir=\"\"`) discards the first block\u2019s canonicalization result.\n  WHY: This duplication makes future modifications error-prone; while not a runtime failure, it creates ambiguity about which validation logic is authoritative.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_resolve.sh:~1953-1956 (inline guard check) and ~1971-1980 (removed `_codex_exit=78` late check) | severity=low | confidence=4\n  PROBLEM: The removed `_codex_exit=78` late check emitted `emit_conflict_resolver_substate \"Failed\" \"${attempt}\"` before exiting. The new inline guard check (`echo \"::error::...aborting before output parsing.\"; exit 78`) drops that substate emission entirely.\n  WHY: When the workspace-guard reconcile fails for the integration-sync resolver, the run ledger (`ai-memory:runs/<run-id>/ledger/events.jsonl`, written by `scripts/ledger_emit_substate.sh`) no longer carries the per-attempt \"Failed\" substate documented in `agents.md` as a common shipped value. The outer workflow still observes `exit 78` as a script-level failure, so correctness is preserved, but the fine-grained run-attempt telemetry that downstream analysis (workflow log analysis, run summary tooling) consumes loses the entry tying the failure to the specific attempt number. The trade-off is intentional (exiting before parsing potentially tainted output from a failed guard), so the emission should be added to the inline block to keep both the safety improvement and the existing telemetry.\n- scripts/orchestrate_poll_process.sh:~20615 (review-blocked snapshot path) and ~20627 (review-blocked reconcile path) | severity=low | confidence=4\n  PROBLEM: The review-blocked workspace-guard snapshot and reconcile paths changed from `|| break` (skip the affected PR and continue with the next) to `exit 78` (terminate the entire poller script).\n  WHY: The poller handles many PRs per 5-minute tick. The previous `|| break` degraded to skipping only the affected PR; the new `exit 78` is consistent with the implement workflow's fail-closed pattern (`POST_AGENT_WORKSPACE_GUARD_FAILED=true` in `.github/workflows/implement.yml`) and the blast radius is bounded by the next cron tick, so this is a deliberate design choice rather than a bug. However, the change is significant, the rationale (skip-affected-PR vs terminate-poller tradeoff) is not documented in `changelog.d/4407-workspace-guard-external-git.md`, and operators running the poller in environments where one PR's workspace is transiently broken (vs a system-wide misconfiguration that justifies halting everything) will see unrelated PRs blocked for a full 5-minute cycle. Consider documenting the rationale or restoring `|| break` for the snapshot path if per-PR isolation is desired.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/untrusted_process_sandbox.sh:298-316 | severity=low | confidence=4\n  PROBLEM: Guard role now validates+passes external GIT_DIR/GIT_WORK_TREE; other roles stay isolated; private-tmp and repo-mismatch checks enforced.\n  WHY: None \u2014 strengthens boundary (fail-closed on invalid context).\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/untrusted_process_sandbox.sh:297-317 | severity=low | confidence=2\n  PROBLEM: The second validation block is redundant with the first (lines 34-55) for the GIT_DIR-set path. It resets guard_git_dir at line 297, discarding the first block's canonicalized value, then re-validates with different mechanics.\n  WHY: The first block lacks the private-tmp and symlink checks; the second block lacks the else-branch. Consolidating into one block prevents a future maintainer from deleting one block and silently losing a check.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ccd936681023d3537fde8faf415de78611d1df92a9514e077d6bbde2307ef5af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4408,
+    "run_id": "36069261084",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36069261084",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924235347_2ddd97d335",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4408,
+    "run_id": "36069261084"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T23:53:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
