@@ -1333,6 +1333,17 @@ through `clarify → plan → implement → review`.
   (the crash file is in the PR's own diff) posts the diagnosis on the PR under
   "**Workflow failure heal: this failure is caused by this pull request's own
   changes**" for the review-blocked judge and opens no issue.
+  When the evidence names no file (for example every reviewer slot, the
+  summariser and the editor exiting with systemd status 226 and no output, as
+  on PR #4376), a second basis applies: if the run staged the PR head's own
+  scripts (`script_ref` equals the head SHA) and the PR changes pipeline files
+  (`scripts/`, `.github/actions/`, `.github/workflows/review_autofix.yml`),
+  ownership is `pr`, the intake logs `WORKFLOW_HEAL crash_ownership=pr
+  crash_file=none basis=pipeline_files files=<n> base=…`, and the
+  `## Ownership facts` block lists those files under `Ownership basis: pipeline
+  files`. The prompt allows `pr-self-inflicted` on that basis only when the
+  whole pipeline fails the same way, and the PR comment names the pipeline
+  files instead of a crash file. Base-side ownership still needs a crash file.
   `base-self-inflicted` (the base branch changed the file relative to `main`
   and the PR did not) opens the `ai:workflow-heal` issue with
   `Target branch:` set to that base branch (`target_branch_source=base_branch`);
@@ -1341,7 +1352,7 @@ through `clarify → plan → implement → review`.
   so the project picks it up as a child. `stable` is never targeted by either:
   a PR based on `main` or `stable` has no base-side ownership. A self-inflicted
   token that the computed ownership does not back (consumer report, no crash
-  file, ownership `none` or the other side), or any self-inflicted token while
+  file and no pipeline-file basis, ownership `none` or the other side), or any self-inflicted token while
   `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, is logged as
   `classification_remapped … to=workflow-defect reason=…` and takes the
   `workflow-defect` route above.

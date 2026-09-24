@@ -499,6 +499,7 @@ _git_fetch_ownership_refs()
 
 CRASH_OWNERSHIP="none"
 OWNERSHIP_FACTS_FILE=""
+PIPELINE_OWNERSHIP_FILES=""
 if [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" != "false" ] \
 	&& [ "${SOURCE_KIND}" = "autofix_failure" ] \
 	&& [ "${SOURCE_REPO}" = "${SELF_REPO}" ] \
@@ -544,6 +545,34 @@ if [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" != "false" ] \
 		echo "- Crash file in the pull request diff: ${CRASH_FILE_IN_PR_DIFF}"
 	} > "${OWNERSHIP_FACTS_FILE}"
 	log "crash_ownership=${CRASH_OWNERSHIP} crash_file=${PAYLOAD_CRASH_FILE} base=${PAYLOAD_BASE_BRANCH:-unknown} source=${SOURCE_LABEL}"
+elif [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" != "false" ] \
+	&& [ "${SOURCE_KIND}" = "autofix_failure" ] \
+	&& [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+	# No crash file: some self-inflicted failures never name one (PR #4376's
+	# sandbox made every model process exit with systemd status 226 before it
+	# wrote anything). Second basis: the run staged the PR head's own scripts
+	# and the PR changes pipeline files. Only `pr` is derived here; base
+	# ownership still needs a crash file. Fail open: helper error -> none.
+	PIPELINE_OWNERSHIP_OUTPUT="$(python3 "${HEAL_PY}" classify-pipeline-ownership --payload-json "${PAYLOAD_FILE}" 2>/dev/null || echo none)"
+	PIPELINE_OWNERSHIP="$(printf '%s\n' "${PIPELINE_OWNERSHIP_OUTPUT}" | head -n 1)"
+	if [ "${PIPELINE_OWNERSHIP}" = "pr" ]; then
+		CRASH_OWNERSHIP="pr"
+		PIPELINE_OWNERSHIP_FILES="$(printf '%s\n' "${PIPELINE_OWNERSHIP_OUTPUT}" | tail -n +2)"
+		OWNERSHIP_FACTS_FILE="${RUNTIME_DIR}/ownership_facts.md"
+		{
+			echo "## Ownership facts"
+			echo
+			echo "- Crash file: none (the evidence names no file)"
+			echo "- Ownership: pr"
+			echo "- Ownership basis: pipeline files (the run staged the pull request head's own scripts, and the pull request changes files the review/autofix pipeline executes)"
+			echo "- Pull request head: ${HEAD_BRANCH:-unknown} @ ${HEAD_SHA:-unknown}"
+			echo "- Pull request base: ${PAYLOAD_BASE_BRANCH:-unknown}"
+			echo "- Script ref the run staged: ${PAYLOAD_SCRIPT_REF:-unknown}"
+			echo "- Pipeline files the pull request changes:"
+			printf '%s\n' "${PIPELINE_OWNERSHIP_FILES}" | sed 's/^/  - /'
+		} > "${OWNERSHIP_FACTS_FILE}"
+		log "crash_ownership=pr crash_file=none basis=pipeline_files files=$(printf '%s\n' "${PIPELINE_OWNERSHIP_FILES}" | wc -l | tr -d ' ') base=${PAYLOAD_BASE_BRANCH:-unknown} source=${SOURCE_LABEL}"
+	fi
 fi
 
 # --- Run the diagnosis model -----------------------------------------------
@@ -698,7 +727,8 @@ if [ "${CLASSIFICATION}" = "already-fixed" ]; then
 fi
 
 # A self-inflicted token is routed as such only when the ownership computed
-# above backs it; otherwise (routing disabled, consumer report, no crash file,
+# above backs it (a crash file in the PR or base diff, or, with no crash file,
+# pipeline files the PR changes); otherwise (routing disabled, consumer report,
 # ownership none or the other side) it takes today's workflow-defect route.
 case "${CLASSIFICATION}" in
 	pr-self-inflicted|base-self-inflicted)
@@ -848,7 +878,11 @@ case "${CLASSIFICATION}" in
 			echo "**Workflow failure heal: this failure is caused by this pull request's own changes**"
 			echo "<!-- workflow-failure-heal:outcome -->"
 			echo
-			echo "The review/autofix run crashed in \`${PAYLOAD_CRASH_FILE}\`, which this pull request changes (classification \`${CLASSIFICATION}\`). Fix it on this branch; no heal issue was opened."
+			if [ -n "${PAYLOAD_CRASH_FILE}" ]; then
+				echo "The review/autofix run crashed in \`${PAYLOAD_CRASH_FILE}\`, which this pull request changes (classification \`${CLASSIFICATION}\`). Fix it on this branch; no heal issue was opened."
+			else
+				echo "The review/autofix run executed this pull request's own scripts and failed without naming a file. This pull request changes pipeline files it runs (classification \`${CLASSIFICATION}\`): $(printf '%s\n' "${PIPELINE_OWNERSHIP_FILES}" | sed 's/.*/`&`/' | paste -sd ',' - | sed 's/,/, /g'). Fix it on this branch; no heal issue was opened."
+			fi
 			echo
 			cat "${DIAG_FILE}"
 			echo
@@ -856,7 +890,7 @@ case "${CLASSIFICATION}" in
 		} > "${RUNTIME_DIR}/source_comment.md"
 		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
 		log "no_issue classification=${CLASSIFICATION} source=${SOURCE_LABEL} fp=${FP} crash_file=${PAYLOAD_CRASH_FILE}"
-		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} fails in ${PAYLOAD_CRASH_FILE}, which the pull request itself changes; diagnosis posted on the PR, no issue opened."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}" "DEBUG" >/dev/null 2>&1 || true
+		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} fails in ${PAYLOAD_CRASH_FILE:-pipeline files}, which the pull request itself changes; diagnosis posted on the PR, no issue opened."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}" "DEBUG" >/dev/null 2>&1 || true
 		;;
 	base-self-inflicted)
 		# The crash is in a file the PR's base branch changed relative to main

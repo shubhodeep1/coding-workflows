@@ -106,7 +106,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     orchestrator lineage lines and `ai:orchestrator-managed` for an
     `orchestrator/project-<N>` base; ownership comes from the report's
     `changed_files` / `crash_file` and the intake's own
-    `git diff origin/main origin/<base>`, and a token it does not back, or
+    `git diff origin/main origin/<base>`; with no crash file, a run that
+    staged the PR head's scripts (`script_ref` = head SHA) of a PR changing
+    `scripts/`, `.github/actions/` or `review_autofix.yml` is still `pr`
+    ownership (`basis=pipeline_files`), and a token it does not back, or
     `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, routes as
     `workflow-defect`). The prompt carries the branch progress since the
     failing SHA (one REST compare call + a branch-tip worktree) and the earlier
