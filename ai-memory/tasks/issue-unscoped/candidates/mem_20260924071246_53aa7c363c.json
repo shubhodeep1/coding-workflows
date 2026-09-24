@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Merged workflow changes repeatedly paired edits under `.github/workflows/` with tests that assert pipeline contracts, such as review, validation, and security-audit behavior. When changing a workflow, inspect and extend its corresponding contract tests rather than relying only on YAML validation.",
+  "fingerprint": "b1201dfb3797b698f96ad2806b739dd61be18faeaf9af4ece45287fee69a3b33",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35968052121",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35968052121",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4311",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4325",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4326",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4329",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4350",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4312",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4328",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4330",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4335",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4351"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260924071246_53aa7c363c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is guarded by focused contract tests alongside changes to GitHub Actions YAML and supporting scripts.",
+  "timestamps": {
+    "created_at": "2026-09-24T07:12:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
