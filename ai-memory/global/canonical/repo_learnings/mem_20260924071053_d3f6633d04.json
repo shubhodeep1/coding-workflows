@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Changes involving model or agent subprocesses commonly require preserving the repository\u2019s untrusted-process isolation and trusted Git-write boundaries.",
   "timestamps": {
     "created_at": "2026-09-24T07:10:53Z",
