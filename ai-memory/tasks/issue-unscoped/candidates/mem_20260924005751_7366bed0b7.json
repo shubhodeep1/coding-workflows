@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_apply_fixes_reviewer_manifest_validation.py: lines 119-130 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The truncated-checksum test does not assert the new `EDITOR_REVIEWER_CHECKSUM_SUMMARY` warning, so it does not fully verify the warn path.\n  WHY: A regression suppressing the summary for a single truncated hash would still pass this test; the reviewer rated the issue NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: tests/test_review_apply_fixes_reviewer_manifest_validation.py\n  Line or code reference: lines 119-130 (test_truncated_checksum_warns_but_passes)\n  Problem: The test setup creates one truncated checksum (`_sha(files[0])[:40]` \u2014 40 chars instead of 64), which the production code path at scripts/review_apply_fixes.sh:2202-2205 will count as a mismatch and increment `reviewer_checksum_mismatch_count`. The companion tests `test_garbled_checksum_warns_but_passes` (lines 99-116) and `test_every_checksum_wrong_is_summarised_once` (lines 133-142) were both updated in this PR to assert the new `EDITOR_REVIEWER_CHECKSUM_SUMMARY` warning, but this truncated test was not, even though it is the only test in the file that exercises a 40-character hash. The test name `test_truncated_checksum_warns_but_passes` also implies it verifies the warn path end-to-end, not just the per-file warning.\n  Why it fails at runtime: A future regression that suppressed the summary emission when only one truncated hash was in play would still pass this test (the per-file `EDITOR_REVIEWER_CHECKSUM_UNVERIFIED` assertion only checks for the substring, not the absence of the summary), leaving the bug invisible until the next release-gate run. The four tests touching the warn path now diverge in coverage shape with no good reason.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- File: scripts/review_apply_fixes.sh\n  Location: lines 2207-2209 (the new comment block above the summary emission)\n  Issue: The comment \"files_checked stops early when a missing entry fails the attempt\" describes behaviour that is technically correct but easy to misread. The counter `reviewer_manifest_file_count` is incremented at the top of each loop iteration (line 2140) BEFORE the audit-validation break (line 2166) or processed-entry break (line 2200) can fire, so `files_checked` reflects \"files iterated up to and including the one that triggered the break\" \u2014 not \"files in the full manifest minus those skipped\". A reader seeing `files_checked=2` cannot tell whether the manifest had 2 entries or 3+ from this comment alone.\n  Suggested minimal fix: tighten the comment to spell out the semantics, e.g. \"files_checked counts every manifest line iterated before the loop exited \u2014 including the one that triggered the break \u2014 so a value smaller than the manifest size means the attempt failed on a missing entry or audit bullet.\"\n  Estimated lines changed: 2-3 lines (comment only).\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "47755d2725054d354339bb035d42211281e3e1d83b9089ecfbafd65872987ca0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35938682469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35938682469",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924005751_7366bed0b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35938682469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T00:57:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
