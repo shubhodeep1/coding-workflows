@@ -6841,6 +6841,8 @@ def test_editor_preflight_mode_reports_each_check_and_fails_fast() -> None:
 		runtime_dir.mkdir()
 		(bin_dir / "opencode").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
 		(bin_dir / "opencode").chmod(0o755)
+		(bin_dir / "date").symlink_to("/usr/bin/date")
+		(bin_dir / "dirname").symlink_to("/usr/bin/dirname")
 		env = os.environ.copy()
 		env.update({
 			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
@@ -6856,9 +6858,10 @@ def test_editor_preflight_mode_reports_each_check_and_fails_fast() -> None:
 		assert list(runtime_dir.iterdir()) == [], "preflight must not write runtime files"
 
 		(bin_dir / "opencode").unlink()
+		env["PATH"] = str(bin_dir)
 		env["RUNTIME_DIR"] = str(tmp / "missing-runtime")
 		env["CODEX_HELPERS_PATH"] = str(tmp / "missing-codex-helpers.sh")
-		bad = subprocess.run(["bash", str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
+		bad = subprocess.run(["/usr/bin/bash", str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
 		assert bad.returncode == 1, bad.stderr
 		assert bad.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=fail checks=5 failed=3"
 		for check in ("codex_helpers", "opencode_binary", "runtime_dir"):
