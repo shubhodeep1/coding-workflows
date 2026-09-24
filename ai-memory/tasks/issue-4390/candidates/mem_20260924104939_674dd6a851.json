@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan \u2014 issue #4390\n\nPlanning ref: `2338d25206d991d71239f62787e183ac4750b612` on `ai/issue-4374`. This matches the issue\u2019s integration-branch metadata. The clarification answer is the auto-posted \u201cno questions needed\u201d; there are no unanswered Q-IDs.\n\nScope-mode: Selective Expansion  \nReuse-audit: extends `scripts/untrusted_process_sandbox.sh::sandbox_path_is_private_tmp` and the existing `RUNNER_TEMP` relocation pattern.  \nScope-mode justification: Fix every existing workspace-guard caller, not just the reported editor call: leaving another caller\u2019s manifest under `/tmp` would preserve the same failure. This is more than a \u226430-LOC/\u226410-minute shortcut, but follows the Core Priorities order in `unattended_system_instructions.md`: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed. Keep the ordinary `RUNTIME_DIR` and existing guard behavior unchanged.\n\n## Automation and lifecycle\n\n- Extend the existing review, implement, and orchestrator-poll workflow entry points; no standalone script, new scheduler, supervisor, or database gate is needed.\n- Give each run a private, run-scoped workspace-guard directory under `RUNNER_TEMP`, outside `/tmp` and `/var/tmp`. Export a new, defaulted `POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR` for the existing callers. Remove only that verified run-scoped directory in each workflow\u2019s existing cleanup path. No future-removal registry entry applies.\n- Preserve `PrivateTmp=yes`, the snapshot-before-model/reconcile-after-model sequence, and fail-closed publication. Upstream systemd documentation confirms that `PrivateTmp=` gives a unit its own temporary-directory view. ([github.com](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml?utm_source=openai))\n\n## Files likely to change\n\n- `scripts/untrusted_process_sandbox.sh`: extend its existing private-tmp preflight to reject a workspace-guard `--runtime-dir` that resolves beneath host `/tmp` or `/var/tmp`, with `sandbox_private_tmp_path` before `systemd-run`. Check guard file arguments that the unit must read or write, rather than letting an unsafe output path fail later.\n- `.github/workflows/review_autofix.yml`; `scripts/review_apply_fixes.sh`, `scripts/review_conflict_resolve.sh`, `scripts/review_rb_judge.sh`: initialize, use, and clean up the shared guard directory for editor, resolver, and review-blocked-fix manifests, reports, changed-path lists, and quarantines.\n- `.github/workflows/implement.yml`: use that directory for both implementation and syntax-repair guards. Stage the trusted `post_agent_workspace_guard.py` copy where the private-tmp unit can read it; retain the existing support integrity checks and guard-failure latch.\n- `.github/workflows/orchestrate_poll.yml`; `scripts/orchestrate_poll_process.sh`: use the directory for both poller guard paths and stage the trusted guard executable there. **Additional path found during planning:** `TRUSTED_POLLER_WORKSPACE_GUARD` currently points into `/tmp` (`orchestrate_poll_process.sh:171`), so moving only its output files would not complete this fix.\n- `tests/test_agent_process_isolation.py`, plus focused workflow-contract assertions in `tests/test_orchestrate_poll_process.py` and `tests/test_implement_post_codex_recovery.py`.\n- `changelog.d/4390-workspace-guard-private-tmp.md`: one security-fix fragment; do not edit `CHANGELOG.md`.\n\n## Functions, data, and interfaces\n\nExtend the existing sandbox preflight and `run_poller_workspace_guard`; retain the current `post_agent_workspace_guard.py` snapshot/reconcile interface and report schemas. The additive directory environment variable has a run-scoped `RUNNER_TEMP` default. No GitHub API call, endpoint, label, or log-prefix change is planned.\n\nData flow: workflow creates the trusted guard directory \u2192 guard snapshots the workspace into it \u2192 the existing model runs \u2192 guard reconciles into the same directory \u2192 existing validation and publication gates consume the result.\n\n## Decisions\n\n### D1 \u2014 Relocate guard artifacts, not the whole runtime workspace\n- **Chosen:** Use a separate, private guard directory under `RUNNER_TEMP`, including a readable trusted guard executable where necessary.\n- **Alternatives considered:** Move every workflow\u2019s `RUNTIME_DIR`; disable `PrivateTmp`; tolerate namespace failures.\n- **Why:** The separate directory addresses the failing mount and file-read paths without changing unrelated runtime artifacts or weakening isolation.\n\n## Security considerations\n\nThe boundary is the untrusted writer workspace versus trusted guard artifacts and commit decisions; no new endpoint or authorization surface is introduced. Validate the canonical guard root and relevant file paths before unit launch. Reject missing, `/tmp`-resident, or symlink-redirected roots rather than falling back to an unguarded run. Keep the trusted executable outside the model-writable workspace and preserve its integrity verification. Abuse cases to test include a redirected output path, a hidden manifest, and a failed reconcile followed by an attempted publication.\n\n## Risks and edge cases\n\nThe issue\u2019s cited failure is consistent with the checked-in `PrivateTmp=yes` and the reported review directory under `/tmp`; the unrelated provider/package errors do not establish this guard failure\u2019s cause. `RUNNER_TEMP` itself might resolve beneath a private-tmp path: fail with the named preflight error. Review and poller runs may contain multiple guard attempts; artifact names must remain distinct within their run directory. An editor snapshot failure must remain a guard failure, not be retried or published as a successful no-op.\n\n## Testing considerations\n\nAdd a regression with host `RUNTIME_DIR` under `/tmp`: a guard invocation with an unsafe runtime path must fail before unit launch, while a safe `RUNNER_TEMP` guard path retains snapshot/reconcile behavior. Assert every listed caller passes the safe directory, its guard files and trusted executable are visible to the unit, and cleanup is scoped to that run. Run focused contract tests, then the repository\u2019s pinned CI lint/tests; exercise a real systemd-backed smoke run where the runner supports it. Do not treat a globally installed validator as authoritative without the repository\u2019s pinned dependencies.\n\nEstimated implementation and focused verification budget: **\u226460 minutes**. Assumption: production `RUNNER_TEMP` resolves outside private `/tmp`; the preflight handles the contrary case by failing closed. No repository files were changed during planning.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a7b768b5091edbeee40832617547984469a5b08a233fff722d81ab001e6b44d1",
+  "lineage": {
+    "issue_number": 4390,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35988648907",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35988648907",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4390"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924104939_674dd6a851",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4390,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35988648907"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4390",
+  "timestamps": {
+    "created_at": "2026-09-24T10:49:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
