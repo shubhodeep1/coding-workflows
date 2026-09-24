@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan \u2014 workspace-guard Git context\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/untrusted_process_sandbox.sh` and `tests/test_agent_process_isolation.py`  \nScope-mode justification: The existing sandbox and guard already provide the required mechanisms; the failure is at their environment boundary. A role-scoped fix and regression coverage are more complete than changing only the editor\u2019s error label, without adding a dependency or external interface. Per `unattended_system_instructions.md` \u00a76, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation integration\n\n- **Change type:** Extend an existing script; add no script or supervisor.\n- **Entry point:** `.github/workflows/internal-review.yml` on `pull_request: synchronize` (among its existing triggers) calls `.github/workflows/review_autofix.yml`, whose editor invokes the existing workspace guard. No scheduler or workflow wiring changes are needed.\n- **Database gate / future-removal registry:** Not applicable.\n\n## Files likely to change\n\n- `scripts/untrusted_process_sandbox.sh` \u2014 give only the `workspace-guard` role a verified Git-directory/worktree pair when the trusted caller supplies one. Preserve read-only Git-metadata protection.\n- `tests/test_agent_process_isolation.py` \u2014 add a sandbox regression using a workspace without `.git`; update the existing assertion that currently forbids any `GIT_DIR`/`GIT_WORK_TREE` handling.\n- `changelog.d/4392-workspace-guard-git-context.md` \u2014 record the observable security/guard fix. Do not edit `CHANGELOG.md`.\n\n## Functions or modules to implement\n\nExtend the sandbox\u2019s existing role-specific environment assembly and Git-metadata discovery, rather than changing `post_agent_workspace_guard.py::_is_ignored` or bypassing its `git check-ignore` result. Validate that a supplied `GIT_WORK_TREE` resolves to `--workspace` and that its paired `GIT_DIR` is a usable, external metadata directory before passing the pair to `workspace-guard`. Retain existing behavior for workspaces whose Git context is discoverable without the pair. Fail closed on an incomplete or mismatched supplied pair.\n\n## Data structures affected\n\nOnly the sandbox\u2019s in-memory environment and protected-Git-path arrays. No persisted state, schema, or labels change.\n\n## API/interface changes\n\nNo new arguments or environment-variable names. The existing `GIT_DIR` and `GIT_WORK_TREE` become available **inside `workspace-guard` only** when validated; model and general validator roles continue to receive neither. Existing log prefixes remain unchanged.\n\n## Decisions\n\n### D1 \u2014 Restore Git context at the sandbox boundary\n- **Chosen:** Pass a validated, workspace-matched Git pair solely to the workspace-guard process and keep its metadata read-only.\n- **Alternatives considered:** Disable ignore classification; put Git context in the common sandbox environment; relabel the resulting no-summary failure.\n- **Why:** The guard must classify ignored paths, while model roles must not gain Git metadata access. Relabeling would leave the failed check unfixed.\n\n## Security considerations\n\nThe trusted workflow environment crosses into a restricted process here. Reject missing, mismatched, or model-writable Git metadata paths rather than accepting arbitrary caller-supplied paths. Keep credentials out of the child environment, preserve `ReadOnlyPaths` for guard-visible metadata and `InaccessiblePaths` for model roles, and do not expose the pair to `validator`. In particular, an attacker-created `.git` file or a forged environment path must not redirect classification to different metadata; an ignored payload must still be quarantined.\n\n## Risks and edge cases\n\nA normal repository with an in-worktree `.git` must keep working without an explicit pair. A materialized workspace without `.git` must use the supplied pair for both snapshot/reconcile as applicable. A guard failure must remain a failure, not become an accepted ordinary edit. The issue\u2019s planning ref matches the integration metadata: `982860f8c7cae31272da64c544a559df0320291f` on `ai/issue-4338`. The reported `editor_empty_noop` masks the guard failure, but changing review outcome classification is outside this fix.\n\n## Testing considerations\n\nExtend the existing isolation tests with a separate-metadata repository and `.git`-less workspace. In sandbox test mode, verify reconcile accepts an ordinary new file, rejects/quarantines an ignored file, and receives the correct Git pair. Verify a model role and `validator` do not receive it; cover incomplete or mismatched pairs and assert metadata remains read-only in the production sandbox configuration. Run the focused test module, then the repository\u2019s applicable lint and broader tests on its pinned toolchain.\n\n## Pre-execution self-check\n\nThe plan uses an existing PR-push path, requires no operator action, and names the affected trust boundary and regression cases. The checkout has unrelated pre-existing modifications; implementation must leave them untouched.\n\nPLAN_SELF_CHECK: WARNING: Unrelated worktree modifications are present; preserve them during implementation.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "585bfc2f78c2e10bd84001340e646c6ac565a83baaec6967f53653f3a5287291",
+  "lineage": {
+    "issue_number": 4392,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35991343838",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35991343838",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4392"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924111501_8235e1db2e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4392,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35991343838"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4392",
+  "timestamps": {
+    "created_at": "2026-09-24T11:15:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
