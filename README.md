@@ -589,7 +589,13 @@ jobs:
 > resume_state=<state> resume_round=<n> resume_round_limit=<n>
 > marker_comment_id=<id> mergeable=true`. The check only fires for a PR
 > GitHub reports `mergeable=true`, so a conflicted head still reaches the
-> codex-agent resolver path; `[force-review]` in the title or the
+> codex-agent resolver path. There, `Detect merge conflicts`, the resolver
+> steps, and `Push all pending commits` run even when the restored same-head
+> state is terminal (`AUTOFIX_RESUME_TERMINAL=true`); the editor and
+> `Commit changes` still skip, so the only commit such a run pushes is the
+> resolved merge. Before this, the poller's standalone conflict sweep kept
+> re-dispatching a terminal, conflicted PR (#4332) every tick while each run
+> skipped the resolver and exited green. `[force-review]` in the title or the
 > `force-review` label (`AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE`), a
 > `force_rb_judge` dispatch, and every `pull_request` event bypass it, a
 > newer trusted non-terminal marker for the same head reopens it, and markers
@@ -1243,7 +1249,15 @@ through `clarify → plan → implement → review`.
   of `review_autofix.yml` also backfills the pair
   (`REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS`) from the main snapshot when the
   branch predates them, so a PR branch forked before the reporter landed
-  still reports instead of logging `skip reason=reporter_missing`.
+  still reports instead of logging `skip reason=reporter_missing`. The same
+  step also appends any `scripts/codex_model_catalog.json` row the staged
+  (branch) catalog lacks from the main snapshot, because `REVIEWER_MODELS`
+  comes from the workflow ref while the catalog comes from the PR branch.
+  Rows the branch already has win and nothing is removed; the step logs
+  `MODEL_CATALOG_BACKFILL added=<n> slugs=<list> source=main_snapshot` and
+  only warns on a read or parse failure. Without it, a branch that predates a
+  roster change fails the new reviewer slots with "model '<slug>' is missing
+  or duplicated in the model catalog" (run 35933627432 on PR #4323).
 - **Trigger (releases):** `workflow_run: completed` with conclusion `failure`
   or `timed_out` on `Test & Mark Stable Release`, `Mark Stable Release`,
   `Promote main to stable`, `Auto release stable`, and
