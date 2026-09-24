@@ -7073,8 +7073,16 @@ def test_conflict_resolver_requires_span_and_clean_tree_manifests() -> None:
 	assert 'CONFLICT_SPANS_FILE="${RUNTIME_DIR}/resolver_conflict_spans.json"' in prepare
 	assert 'CLEAN_MERGE_MANIFEST_FILE="${RUNTIME_DIR}/resolver_clean_manifest.tsv"' in prepare
 	assert "git merge-tree --write-tree HEAD" in prepare
-	assert '--conflict-spans "${CONFLICT_SPANS_FILE}"' in resolve
-	assert '--clean-manifest "${CLEAN_MERGE_MANIFEST_FILE}"' in resolve
+	assert 'install -m 0600 -- "${CONFLICTED_PATHS_FILE}" "${resolver_validation_dir}/conflicted.txt"' in resolve
+	assert 'install -m 0600 -- "${RESOLVER_TOUCHED_FILE}" "${resolver_validation_dir}/touched.txt"' in resolve
+	assert 'install -m 0600 -- "${CONFLICT_SPANS_FILE}" "${resolver_validation_dir}/spans.json"' in resolve
+	assert 'install -m 0600 -- "${CLEAN_MERGE_MANIFEST_FILE}" "${resolver_validation_dir}/clean.tsv"' in resolve
+	assert '--conflicted-set "${resolver_validation_dir}/conflicted.txt"' in resolve
+	assert '--touched-set    "${resolver_validation_dir}/touched.txt"' in resolve
+	assert '--conflict-spans "${resolver_validation_dir}/spans.json"' in resolve
+	assert '--clean-manifest "${resolver_validation_dir}/clean.tsv"' in resolve
+	assert 'POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-}' in resolve
+	assert '/tmp|/tmp/*|/var/tmp|/var/tmp/*)' in resolve
 	assert "--strict-manifests" in resolve
 	assert "strict mode requires --conflict-spans and --clean-manifest" in guard
 	assert "--list-violations-json" in prepare

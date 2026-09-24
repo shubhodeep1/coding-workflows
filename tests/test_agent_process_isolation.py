@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import http.client
 import json
 import os
@@ -472,6 +473,108 @@ def test_resolver_python_syntax_validation_is_read_only() -> None:
 		)
 		assert result.returncode == 0, result.stderr
 		assert not (workspace / "__pycache__").exists()
+
+
+def test_resolver_stages_strict_validation_manifests_outside_private_tmp() -> None:
+	resolver_source = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	validation_block = '    if [ ! -f "${CONFLICTED_PATHS_FILE:-/nonexistent}" ]' + resolver_source.split(
+		'    if [ ! -f "${CONFLICTED_PATHS_FILE:-/nonexistent}" ]', 1
+	)[1].split("    # Stage the editor's conflict resolutions", 1)[0]
+	with tempfile.TemporaryDirectory(dir="/tmp") as original_directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as visible_directory:
+		original = Path(original_directory)
+		visible = Path(visible_directory)
+		repo = visible / "repo"
+		repo.mkdir()
+		subprocess.run(["git", "init", "-q", str(repo)], check=True)
+		conflict = repo / "conflict.txt"
+		clean = repo / "clean.txt"
+		conflict.write_text("prefix\nresolved\nsuffix\n", encoding="utf-8")
+		clean.write_text("untouched\n", encoding="utf-8")
+		clean_blob = subprocess.check_output(["git", "-C", str(repo), "hash-object", str(clean)], text=True).strip()
+		conflicted = original / "conflicted.txt"
+		touched = original / "touched.txt"
+		spans = original / "spans.json"
+		clean_manifest = original / "clean.tsv"
+		conflicted.write_text("conflict.txt\n", encoding="utf-8")
+		spans.write_text(json.dumps({"conflict.txt": {
+			"anchors": [base64.b64encode(anchor).decode("ascii") for anchor in (b"prefix\n", b"suffix\n")],
+			"mode": "100644",
+		}}), encoding="utf-8")
+		clean_manifest.write_text(f"100644\t{clean_blob}\tclean.txt\n", encoding="utf-8")
+		fake_support = visible / "support"
+		fake_support.mkdir()
+		(fake_support / "check_resolver_diff.sh").symlink_to(RESOLVER_GUARD)
+		validator = fake_support / "untrusted_process_sandbox.sh"
+		validator.write_text(
+			"#!/usr/bin/env bash\n"
+			"after_separator=false\n"
+			"for argument in \"$@\"; do\n"
+			"  if [ \"$argument\" = -- ]; then after_separator=true; continue; fi\n"
+			"  if [ \"$after_separator\" = true ]; then\n"
+			"    case \"$argument\" in /tmp/*|/var/tmp/*) echo 'private tmp input' >&2; exit 1;; esac\n"
+			"  fi\n"
+			"done\n"
+			f"exec bash {str(SANDBOX)!r} \"$@\"\n",
+			encoding="utf-8",
+		)
+		validator.chmod(0o755)
+		env_file = visible / "github-env"
+		staging = visible / "post-agent"
+		staging.mkdir()
+		environment = os.environ.copy()
+		for inherited_name in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+			environment.pop(inherited_name, None)
+		environment.update({
+			"CONFLICTED_PATHS_FILE": str(conflicted), "RESOLVER_TOUCHED_FILE": str(touched),
+			"CONFLICT_SPANS_FILE": str(spans), "CLEAN_MERGE_MANIFEST_FILE": str(clean_manifest),
+			"POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR": str(staging),
+			"SUPPORT_SCRIPTS_DIR": str(fake_support), "RUNTIME_DIR": str(original),
+			"GITHUB_ENV": str(env_file), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1", "PWD": str(repo),
+		})
+
+		def validate(runtime: Path = staging) -> subprocess.CompletedProcess[str]:
+			touched.write_text("conflict.txt\n", encoding="utf-8")
+			environment["POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR"] = str(runtime)
+			return subprocess.run(
+				["bash", "-euo", "pipefail", "-c", validation_block],
+				cwd=repo, env=environment, capture_output=True, text=True, check=False,
+			)
+
+		accepted = validate()
+		assert accepted.returncode == 0, accepted.stderr
+		assert "private tmp input" not in accepted.stderr
+		unavailable_originals = subprocess.run(
+			[
+				"bash", str(RESOLVER_GUARD), "--repo-root", str(repo),
+				"--conflicted-set", str(conflicted), "--touched-set", str(touched),
+				"--conflict-spans", str(spans), "--clean-manifest", str(clean_manifest),
+				"--strict-manifests",
+			],
+			cwd=repo, env={**environment, "POST_AGENT_VALIDATION_SANDBOX": str(validator)},
+			capture_output=True, text=True, check=False,
+		)
+		assert unavailable_originals.returncode != 0
+		assert "private tmp input" in unavailable_originals.stderr
+		assert conflicted.read_text(encoding="utf-8") == "conflict.txt\n"
+		assert touched.read_text(encoding="utf-8") == "conflict.txt\n"
+		conflict.write_text("tampered\nresolved\nsuffix\n", encoding="utf-8")
+		span_rejected = validate()
+		assert span_rejected.returncode != 0
+		assert "outside conflict spans" in span_rejected.stderr
+		conflict.write_text("prefix\nresolved\nsuffix\n", encoding="utf-8")
+		clean.write_text("tampered\n", encoding="utf-8")
+		clean_rejected = validate()
+		assert clean_rejected.returncode != 0
+		assert "deterministically merged" in clean_rejected.stderr
+		assert validate(original).returncode != 0
+		assert "hidden by PrivateTmp" in validate(original).stdout
+		assert validate(visible / "missing").returncode != 0
+		spans.unlink()
+		spans.symlink_to(clean_manifest)
+		assert "Resolver boundary manifest missing" not in validate().stdout
+		assert "Could not stage resolver validation manifests" in validate().stdout
+		assert "CONFLICT_RESOLVED=false" in env_file.read_text(encoding="utf-8")
 
 
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
