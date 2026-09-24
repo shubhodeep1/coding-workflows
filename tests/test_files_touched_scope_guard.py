@@ -800,7 +800,17 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 	assert "files_touched_scope_guard.py" in stage_text
 	assert "review_collect_pr_metadata.sh" in main_primary_line
 	assert "files_touched_scope_guard.py" in main_primary_line
-	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py post_agent_workspace_guard.py check_resolver_diff.sh; do" in workflow_text
+	for boundary_file in (
+		"verify_integration_fingerprints.py",
+		"post_agent_workspace_guard.py",
+		"review_apply_fixes.sh",
+		"review_commit_changes.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+		"trusted_git_write.sh",
+		"untrusted_process_sandbox.sh",
+	):
+		assert boundary_file in workflow_text
 	assert "id: stage_workflow_support" in workflow_text
 	for digest_output in (
 		"scope_guard_sha256",

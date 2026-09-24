@@ -7,6 +7,7 @@ workspace=""
 config_format=""
 config_path=""
 runtime_dir="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}"
+writable_output_dir=""
 host_home="${HOME:-/nonexistent}"
 runner_command_files="${RUNNER_TEMP:-/tmp}/_runner_file_commands"
 while [ "$#" -gt 0 ]; do
@@ -16,6 +17,7 @@ while [ "$#" -gt 0 ]; do
 		--config-format) config_format="${2:-}"; shift 2 ;;
 		--config) config_path="${2:-}"; shift 2 ;;
 		--runtime-dir) runtime_dir="${2:-}"; shift 2 ;;
+		--writable-output-dir) writable_output_dir="${2:-}"; shift 2 ;;
 		--) shift; break ;;
 		*) echo "untrusted_process_sandbox: unknown argument: $1" >&2; exit 2 ;;
 	esac
@@ -27,6 +29,7 @@ case "${role}" in
 	*) echo "untrusted_process_sandbox: invalid role" >&2; exit 2 ;;
 esac
 workspace="$(cd "${workspace}" && pwd -P)"
+runtime_dir="$(cd "${runtime_dir}" && pwd -P)"
 guard_git_dir=""
 if [ "${role}" = workspace-guard ]; then
 	if [ -n "${GIT_DIR:-}" ] || [ -n "${GIT_WORK_TREE:-}" ]; then
@@ -74,6 +77,16 @@ case "${role}" in
 		[ -r "${config_path}" ] || { echo "untrusted_process_sandbox: config is unreadable" >&2; exit 2; }
 		;;
 esac
+if [ -n "${writable_output_dir}" ]; then
+	[ "${role}" = validator ] \
+		|| { echo "untrusted_process_sandbox: writable output is limited to validator role" >&2; exit 2; }
+	mkdir -p "${writable_output_dir}"
+	writable_output_dir="$(cd "${writable_output_dir}" && pwd -P)"
+	case "${writable_output_dir}/" in
+		"${runtime_dir}/"*) ;;
+		*) echo "untrusted_process_sandbox: writable output must be inside runtime-dir" >&2; exit 2 ;;
+	esac
+fi
 
 credential_file="${MODEL_PROVIDER_CREDENTIAL_FILE:-}"
 credential_file_is_temporary=false
@@ -452,6 +465,11 @@ case "${role}" in
 		;;
 	workspace-guard)
 		systemd_properties+=(--property="ReadWritePaths=${workspace} ${runtime_dir}")
+		;;
+	validator)
+		if [ -n "${writable_output_dir}" ]; then
+			systemd_properties+=(--property="ReadWritePaths=${writable_output_dir}")
+		fi
 		;;
 esac
 for protected_git_path in "${git_metadata_paths[@]:-}"; do

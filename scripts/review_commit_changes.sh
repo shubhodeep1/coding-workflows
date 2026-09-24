@@ -71,11 +71,15 @@ _review_commit_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${_review_commit_script_dir}/write_guard.sh"
 
+REVIEW_VALIDATOR_OUTPUT_DIR="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/validator-output-review-commit"
+mkdir -p "${REVIEW_VALIDATOR_OUTPUT_DIR}"
+
 run_review_validator_python() {
   local sandbox_helper="${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh"
   if [ -x "${sandbox_helper}" ]; then
     bash "${sandbox_helper}" \
       --role validator --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}" \
+      --writable-output-dir "${REVIEW_VALIDATOR_OUTPUT_DIR}" \
       -- /usr/bin/python3 -I -S "$@"
     return $?
   fi
@@ -589,10 +593,10 @@ if git diff --cached --quiet; then
   echo "No repository changes to commit."
   echo "- none" > "${COMMITTED_FILES_FILE}"
 else
-  OVERLAP_REPORT_FILE="$(mktemp)"
+  OVERLAP_REPORT_FILE="$(mktemp "${REVIEW_VALIDATOR_OUTPUT_DIR}/overlap-report.XXXXXX")"
   OVERLAP_VALIDATION_STDERR_FILE="$(mktemp)"
   set +e
-  run_review_validator_python - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
+  run_review_validator_python - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" "${PWD}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
 import re
 import subprocess
 import sys
@@ -600,10 +604,11 @@ from collections import defaultdict
 
 last_run_diff_path = sys.argv[1]
 overlap_report_path = sys.argv[2]
+repo_root = sys.argv[3]
 
 hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 file_re = re.compile(r"^\+\+\+ b/(.+)$")
-staged_cmd = ["git", "diff", "--cached", "--unified=0", "--no-color"]
+staged_cmd = ["git", "-C", repo_root, "diff", "--cached", "--unified=0", "--no-color"]
 staged_diff = subprocess.run(staged_cmd, check=True, capture_output=True, text=True).stdout.splitlines()
 
 def parse_ranges(lines, use_side):
