@@ -376,6 +376,22 @@ a new value, add it to the appropriate overrides file with a
   "Collect PR metadata" with `required env LINKED_ISSUE_METADATA_FILE is
   unset` while the stall poller kept re-dispatching. `main` now exports the
   variable as well, so the same path is defined on both sides.
+- Main-pinned scripts (`MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` in
+  `scripts/stage_workflow_support.sh`) are the reverse case: the review stages
+  the `main` copy and ignores the branch copy, so a runtime output only the
+  branch copy writes never appears (PR #4273, `orchestrator/project-4139`).
+  Staging logs `::notice::STAGE_MAIN_PINNED_DIVERGENCE script=<name>
+  script_ref=<ref>` for every such branch copy that differs from `main`, and
+  `tests/test_review_autofix_review_pipeline_contract.py`
+  (`test_main_pinned_scripts_add_no_runtime_output_over_main`) fails when the
+  branch copy writes a `${RUNTIME_DIR}/…` or `${…_FILE}` output the `main`
+  copy does not.
+- Editor preconditions are checked before the reviewers: the preflight step
+  runs `scripts/review_apply_fixes.sh --preflight` (`REVIEW_EDITOR_PREFLIGHT`,
+  kill switch `REVIEW_EDITOR_PREFLIGHT_ENABLED`). A new `: "${VAR:?…}"` guard
+  in that script must also be listed in `review_apply_fixes_preflight()`
+  (contract-tested), and the variable must already be set when the preflight
+  step runs.
 
 ## Workflow file size limit
 
@@ -1218,6 +1234,8 @@ and shipped:
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
+- `REVIEW_EDITOR_PREFLIGHT`
+- `STAGE_MAIN_PINNED_DIVERGENCE`
 - `WORKTREE_REGISTER`
 - `WORKTREE_DEREGISTER`
 - `WORKTREE_GC`
@@ -1394,6 +1412,8 @@ LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
+LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
+LOG_PREFIX.name=STAGE_MAIN_PINNED_DIVERGENCE
 LOG_PREFIX.name=WORKTREE_REGISTER
 LOG_PREFIX.name=WORKTREE_DEREGISTER
 LOG_PREFIX.name=WORKTREE_GC
