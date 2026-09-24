@@ -96,7 +96,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `Target branch: stable`, or the PR's head branch when a review/autofix
     failure comes from a PR in this repo, since that run executed the PR's
     own workflow code; `consumer-app-defect` → issue in the consumer;
-    `consumer-config` / `transient` → Telegram + comment only), de-dupes by
+    `consumer-config` / `transient` → Telegram + comment only; for a
+    review/autofix failure from this repo whose crash file the intake can
+    attribute, `pr-self-inflicted` → diagnosis comment on the PR, no issue,
+    and `base-self-inflicted` → issue targeting the PR's base branch with
+    orchestrator lineage lines and `ai:orchestrator-managed` for an
+    `orchestrator/project-<N>` base; ownership comes from the report's
+    `changed_files` / `crash_file` and the intake's own
+    `git diff origin/main origin/<base>`, and a token it does not back, or
+    `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, routes as
+    `workflow-defect`), de-dupes by
     fingerprint (label `ai:workflow-heal`), caps the lineage at
     `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
     `ai:workflow-heal-escalated` + Telegram), and bounds the volume with
@@ -367,6 +376,63 @@ a new value, add it to the appropriate overrides file with a
   "Collect PR metadata" with `required env LINKED_ISSUE_METADATA_FILE is
   unset` while the stall poller kept re-dispatching. `main` now exports the
   variable as well, so the same path is defined on both sides.
+
+## Workflow file size limit
+
+- GitHub does not start runs for a workflow file over **512,000 bytes**
+  (500 KiB). Measured on 2026-09-24 with padded probe workflows: 512,000
+  bytes ran, 512,001 did not. Nothing reports an error. Every push instead
+  creates a zero-job run named after the file path (for example
+  `.github/workflows/review_autofix.yml`) that concludes `failure` with
+  "This run likely failed because of a workflow file issue", and a reusable
+  workflow over the limit cannot be called.
+- Incident: #4327 grew `review_autofix.yml` from 505,283 to 540,537 bytes.
+  The phantom runs matched the `test-and-mark-stable.yml` Phase 4 review-run
+  regex on the pinned head SHA, Phase 4 accepted one as "completed with
+  failure", and Phase 4b failed with `retry_timeout` (stable gate run
+  35903885958). Phase 4 now drops runs whose `name` equals their `path`,
+  which only happens when GitHub cannot load the workflow, since every
+  workflow here and in `workflow-templates/` sets `name:`.
+- Guard: `tests/test_workflow_file_size_limit.py` (CI step "Review autofix
+  step-script contract and workflow file size guard tests") fails when any
+  `.github/workflows/*.yml` reaches **480,000 bytes**, 32,000 bytes before
+  the hard limit.
+- **Split rule, for interactive sessions and the unattended pipelines alike**
+  (also `CLAUDE.md` §27 and `unattended_system_instructions.md` §24):
+  when a change leaves a workflow file at or above 480,000 bytes, move the
+  largest inline `run:` bodies into `scripts/` **in the same PR** until the
+  file is well under the guard (aim for 50,000+ bytes of headroom). Never
+  raise the guard threshold and never split a workflow into a second
+  workflow file to get under it. For `review_autofix.yml`, follow the
+  existing pattern:
+  - Move the body verbatim to a new `review_autofix_step_<slug>.sh` under `scripts/` with
+    the standard comment header (shebang plus a comment naming the step),
+    mode `0755`. The body must contain no `${{ }}` expression: GitHub only
+    substitutes those inside the workflow file, so pass the values through
+    the step's `env:` first.
+  - Keep the step's `name:`, `id:`, `if:`, `env:` and `continue-on-error:`
+    in the workflow (§6). Replace `run:` with the resolving wrapper, which
+    tries `${SUPPORT_SCRIPTS_DIR}`, then
+    `${GITHUB_WORKSPACE}/.codex-workflow-src/scripts`, then
+    `${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts`, and `source`s
+    the script in the step shell. A missing script fails the step with
+    `::error::`; only `always()` steps, which also run after support staging
+    failed, skip with `::warning::` instead.
+  - Add the script to `REQUIRED_BOOTSTRAP_SCRIPTS` in
+    `scripts/stage_workflow_support.sh`, to the `REVIEW_AUTOFIX_STEP_SCRIPTS`
+    registry in `tests/review_autofix_step_scripts.py`, and to
+    `docs/INVENTORY.md`.
+  - Contract tests keep reading the step bodies through
+    `expanded_review_autofix_text()`, which inlines each script again, so
+    their assertions do not change.
+  - For other workflows, move the body to a `scripts/` file that the job
+    already stages or checks out, and invoke it the same way.
+- Why the `.codex-workflow-src-main` fallback matters: a self-repo PR review
+  runs `main`'s workflow YAML against the PR head's scripts (see the
+  previous section), so a PR branch forked before a step moved has no copy
+  of the new script in its own checkout. The main snapshot always carries
+  it. In consumer repos, `SCRIPT_REF=stable` ships the YAML and the scripts
+  together.
 
 ## Test-suite git environment isolation
 

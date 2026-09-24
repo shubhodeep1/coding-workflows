@@ -12,10 +12,15 @@ import re
 import subprocess
 import tempfile
 import textwrap
+import sys
 import time
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -45,7 +50,8 @@ PHASE_H_CONTEXT_BUDGET_FIXTURE = FIXTURES_DIR / "phase-h-context-budget-overflow
 
 
 def _workflow_text() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# Moved step bodies (scripts/review_autofix_step_*.sh) inlined again.
+	return expanded_review_autofix_text()
 
 
 def _stage_helper_text() -> str:

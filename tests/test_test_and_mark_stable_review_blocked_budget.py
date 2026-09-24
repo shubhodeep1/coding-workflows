@@ -38,6 +38,14 @@ def _phase6(workflow: str) -> str:
 	)
 
 
+def _phase4b_retry(workflow: str) -> str:
+	return _slice_between(
+		workflow,
+		'# ── Retry: adopt active work or redispatch ${REVIEW_WORKFLOW_FILE}',
+		'# ── Attempt 2',
+	)
+
+
 def _integer_contract_value(job: str, name: str) -> int:
 	match = re.search(rf"^\s+{re.escape(name)}:\s+(\d+)\s*$", job, re.MULTILINE)
 	assert match is not None, f"Missing integer contract value: {name}"
@@ -174,6 +182,53 @@ def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
 	assert job.count("(PHASE7_WAIT_BUDGET_MINUTES * 60)") == 2
 
 
+def test_phase4b_adopts_the_oldest_eligible_active_review_run() -> None:
+	retry = _phase4b_retry(_read_workflow())
+	prior_validation = 'if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]]'
+	discovery = 'if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then'
+	dispatch = 'if ! gh workflow run "${REVIEW_WORKFLOW_FILE}"'
+	assert retry.index(prior_validation) < retry.index(discovery) < retry.index(dispatch)
+	assert "`Inject editor bait commit on PR branch` step" in retry
+	assert "lines ~1101-1109" not in retry
+	assert 'runs?branch=${BRANCH}&per_page=100' in retry
+	assert '(.workflow_runs | type == "array")' in retry
+	assert '(.id | type == "number") and .id > 0 and .id == (.id | floor)' in retry
+	assert 'select(.id != $prior_run_id)' in retry
+	assert 'select(.status != "completed")' in retry
+	assert 'select(.head_sha == $bait_sha or .head_sha == $retry_sha)' in retry
+	assert 'sort_by(.created_at, .id)' in retry
+	assert 'if [ -n "${RETRY_ACTIVE_RUN}" ]; then' in retry
+	assert 'Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work' in retry
+
+
+def test_phase4b_dispatches_only_without_active_work_and_pins_one_run() -> None:
+	retry = _phase4b_retry(_read_workflow())
+	active_branch = _slice_between(
+		retry,
+		'if [ -n "${RETRY_ACTIVE_RUN}" ]; then',
+		'          else\n',
+	)
+	dispatch_branch = _slice_between(
+		retry,
+		'          else\n',
+		'          fi\n\n          # EDITOR_RETRY_BUDGET_MINUTES',
+	)
+	assert 'gh workflow run "${REVIEW_WORKFLOW_FILE}"' not in active_branch
+	assert 'gh workflow run "${REVIEW_WORKFLOW_FILE}"' in dispatch_branch
+	assert "RETRY_BASELINE_ID=" in retry
+	assert 'select(.id > $baseline_id and .id != $prior_run_id)' in retry
+	registration_selection = retry[retry.index('select(.id > $baseline_id and .id != $prior_run_id)') :]
+	assert ".head_sha == $bait_sha" not in registration_selection
+	assert ".head_sha == $retry_sha" not in registration_selection
+	assert 'RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))' in retry
+	assert '"repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"' in retry
+	assert 'select(.head_sha == "${RETRY_DISPATCH_SHA}")' not in retry
+	assert 'actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch' not in retry
+	assert 'echo "status=retry_timeout" >> "$GITHUB_OUTPUT"' in retry
+	assert 'echo "status=pr_closed_during_retry" >> "$GITHUB_OUTPUT"' in retry
+	assert 'echo "status=pr_state_check_failed" >> "$GITHUB_OUTPUT"' in retry
+
+
 def test_phase6_registers_once_and_polls_only_the_pinned_run() -> None:
 	phase6 = _phase6(_read_workflow())
 	branch_query = "runs?event=workflow_dispatch&branch=${POLLER_DISPATCH_REF}&per_page=10"
@@ -252,74 +307,6 @@ def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:
 	assert 'issues/${TRACKING_NUMBER}' in cleanup
 
 
-def _phase4b(workflow: str) -> str:
-	return _slice_between(
-		workflow,
-		'- name: "Phase 4b: Verify editor restored canary (pytest + retry)"',
-		"# ── Phase 5: Orchestrator script integration test",
-	)
-
-
-def _adopt_jq(phase4b: str, prior: str, bait: str, head: str) -> str:
-	match = re.search(r'ADOPTED_REVIEW_RUN_ID=\$\(gh_api_with_retry \\\n.*?--jq "(.*?)"\) \|\| ADOPTED_REVIEW_RUN_ID=""', phase4b, re.DOTALL)
-	assert match is not None, "Phase 4b must look up an already-active review run before dispatching"
-	return (
-		match.group(1)
-		.replace('\\"', '"')
-		.replace("${PRIOR_REVIEW_RUN}", prior)
-		.replace("${BAIT_SHA}", bait)
-		.replace("${RETRY_DISPATCH_SHA}", head)
-	)
-
-
-def _run_jq(program: str, payload: dict) -> str:
-	import json
-	import subprocess
-
-	proc = subprocess.run(["jq", "-r", program], input=json.dumps(payload), capture_output=True, text=True, check=True)
-	return proc.stdout.strip()
-
-
-BAIT = "c9662b3d92b90b076a447d048ace6c5121d638ba"
-PRE_BAIT = "8527974652020072c0ffc99fcf9887ddb4c6ccf8"
-
-
-def test_phase4b_adopts_oldest_active_review_run_instead_of_dispatching() -> None:
-	"""Run 35802596362: at Phase 4b's retry (02:23) the Phase 3c fallback
-	dispatch and the bait synchronize run were still active on the bait
-	SHA. A fresh dispatch queued behind them until 03:04; the gate must
-	wait on the oldest active one instead."""
-	program = _adopt_jq(_phase4b(_read_workflow()), "35803994060", BAIT, BAIT)
-	payload = {"workflow_runs": [
-		{"id": 35804161376, "status": "in_progress", "head_sha": BAIT, "created_at": "2026-09-23T00:55:49Z"},
-		{"id": 35804156977, "status": "in_progress", "head_sha": BAIT, "created_at": "2026-09-23T00:55:46Z"},
-		{"id": 35803994060, "status": "completed", "head_sha": PRE_BAIT, "created_at": "2026-09-23T00:53:28Z"},
-	]}
-	assert _run_jq(program, payload) == "35804156977"
-
-
-def test_phase4b_ignores_prior_completed_and_foreign_sha_runs() -> None:
-	program = _adopt_jq(_phase4b(_read_workflow()), "35803994060", BAIT, BAIT)
-	payload = {"workflow_runs": [
-		{"id": 35803994060, "status": "in_progress", "head_sha": BAIT, "created_at": "2026-09-23T00:53:28Z"},
-		{"id": 2, "status": "completed", "head_sha": BAIT, "created_at": "2026-09-23T00:55:46Z"},
-		{"id": 3, "status": "queued", "head_sha": PRE_BAIT, "created_at": "2026-09-23T00:50:00Z"},
-	]}
-	assert _run_jq(program, payload) == ""
-
-
-def test_phase4b_dispatches_only_when_no_run_is_adopted() -> None:
-	phase4b = _phase4b(_read_workflow())
-	lookup = phase4b.index("ADOPTED_REVIEW_RUN_ID=$(gh_api_with_retry")
-	dispatch = phase4b.index('if ! gh workflow run "${REVIEW_WORKFLOW_FILE}"')
-	prior_guard = phase4b.index('if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]]')
-	assert prior_guard < lookup < dispatch
-	assert "runs?branch=${BRANCH}&per_page=100" in phase4b
-	else_branch = phase4b[phase4b.index('if [[ "${ADOPTED_REVIEW_RUN_ID}" =~ ^[0-9]+$ ]]; then'):dispatch]
-	assert "else" in else_branch and 'ADOPTED_REVIEW_RUN_ID=""' in else_branch
-	assert '"repos/${TEST_REPO}/actions/runs/${ADOPTED_REVIEW_RUN_ID}"' in phase4b
-	assert "did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes" in phase4b
-	assert "${{" not in phase4b.split("run: |", 1)[1]
 def main() -> int:
 	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
 	for test in tests:
