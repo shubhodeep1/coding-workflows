@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:279-284 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The \"Resolve trusted review support commit\" gate uses `github.token` for cross-repository API calls to `shubhodeep1/coding-workflows`, which may fail for consumer repositories using `@stable`.\n  WHY: If the token cannot read the source repository, the API call fails and blocks downstream review jobs; reviewers disagreed on severity (BLOCKER vs MAJOR), so the higher rating is retained.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run review support only from a verified, trusted workflow commit across all affected jobs and fallback paths\" (and) \"Fail closed when trusted identity or required support is missing; skip only genuinely optional features\" \u2014 these two deliverables require the gate to be reachable for every legitimate call path the workflow accepts, including consumer `@stable` calls and source-repo non-`main` PR branches.\n  expected_change_site: `.github/workflows/review_autofix.yml:284` `env:` block of the \"Resolve trusted review support commit\" step.\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: line 284 sets `GH_TOKEN: ${{ github.token }}` while every other cross-repo API call in the same workflow (`secrets.GH_PAT` at lines 354, 384, 1832) uses `secrets.GH_PAT`. The downstream verify steps correctly use the gate's outputs without re-issuing API calls, so the API auth choice is concentrated at line 284.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:279 | severity=BLOCKER | confidence=5\n  PROBLEM: The \"Resolve trusted review support commit\" gate step uses `GITHUB_TOKEN` for cross-repository API calls to `shubhodeep1/coding-workflows`.\n  WHY: `GITHUB_TOKEN` is scoped only to the current repository. When this reusable workflow is called by a consumer repository, its `GITHUB_TOKEN` will not have read access to the source `coding-workflows` repository, causing the gate step to fail with authentication errors and block all downstream jobs.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:284 | severity=BLOCKER | confidence=5\n  PROBLEM: The \"Resolve trusted review support commit\" gate exposes `github.token` to `gh api` calls against `repos/shubhodeep1/coding-workflows/...`.\n  WHY: Consumer repos calling this workflow with `@stable` (or any source branch) must make a cross-installation read; `github.token` is the workflow-run-scoped automatic token, which only has read access to the consumer's own repository (and a narrow set of org-public resources). When the source repo is private \u2014 or when the consumer installation is separate \u2014 the call returns 403/404 and `set -euo pipefail` aborts the gate, leaving `review_support_sha` unset and breaking every downstream job that consumes `needs.gate.outputs.review_support_sha` (post-merge-validate-dispatch, post-merge-force-poll, fingerprint-cap-block, codex-agent).\n- .github/workflows/review_autofix.yml:284, gate step body lines 309, 313, 325 | severity=BLOCKER | confidence=5\n  PROBLEM: The gate uses `GH_TOKEN: ${{ github.token }}` for three `gh api` calls (resolve `refs/tags/stable` \u2192 SHA, dereference annotated tag, fetch `branches/main` with protection flag) against the source repository.\n  WHY: For a consumer installation where `github.token` cannot read `shubhodeep1/coding-workflows`, every consumer `@stable` run and every source-repo PR run that lands on a non-`main` branch fails the gate with an auth error; the gate never reaches its own \"approved refs\" decision because it dies on the API call before validating `support_sha`. SHA-pinned consumers (`@<40-hex>`) bypass this only because the SHA is extracted from the ref string and no API call is issued \u2014 every other consumer path is broken.\n- .github/workflows/review_autofix.yml:284, gate step body lines 309, 313, 325 | severity=BLOCKER | confidence=5\n  PROBLEM: The security fix's trust boundary assumes the gate can always reach the GitHub API to resolve the trusted commit.\n  WHY: With `github.token`, that assumption is false for cross-installation consumers, so the entire \"fail closed when trusted identity cannot be resolved\" guarantee collapses into \"fail closed because we could not reach the API\", which is not the same thing \u2014 the workflow now hard-fails consumer `@stable` runs even when the source repo is intact and the requested ref is fully trusted.\n- TASK_GAP\n  Requirement: \"Run review support only from a verified, trusted workflow commit across all affected jobs and fallback paths\" (and) \"Fail closed when trusted identity or required support is missing; skip only genuinely optional features\" \u2014 these two deliverables require the gate to be reachable for every legitimate call path the workflow accepts, including consumer `@stable` calls and source-repo non-`main` PR branches.\n  Expected change site: `.github/workflows/review_autofix.yml:284` `env:` block of the \"Resolve trusted review support commit\" step.\n  Evidence of absence: line 284 sets `GH_TOKEN: ${{ github.token }}` while every other cross-repo API call in the same workflow (`secrets.GH_PAT` at lines 354, 384, 1832) uses `secrets.GH_PAT`. The downstream verify steps correctly use the gate's outputs without re-issuing API calls, so the API auth choice is concentrated at line 284.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/review_autofix.yml:284 | severity=MAJOR | confidence=4\n  PROBLEM: The gate step's `GH_TOKEN: ${{ github.token }}` is the only `github.token` usage in the workflow and may not have read access to the source repository for consumer repositories calling the workflow via `@stable`.\n  WHY: The `@stable` resolution path (lines 309-313) makes cross-repository API calls that would fail for consumer repos if the source repo is private, since `github.token` is scoped to the calling (consumer) repo.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f9467c80b42bb15c885c50b953c09e029cc000ea764a4b3ca60ec93d6ddb06c9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4403,
+    "run_id": "36053993272",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36053993272",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924205915_50fb8672a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4403,
+    "run_id": "36053993272"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T20:59:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
