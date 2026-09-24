@@ -1,0 +1,31 @@
+{
+  "discovered_at": "2026-09-24T06:35:28Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=tests/test_assemble_prompt.py:78; cited_path=tests/test_assemble_prompt.py; files_touched=.claude/commands/implement-plan-claude.md, .claude/hooks/pr_check_in_reminder.py, .claude/scripts/check_in_status.py, .claude/settings.json, .github/workflows/ci.yml, CLAUDE.md, README.md, agents.md, changelog.d/implement-plan-e2e-findings.md, changelog.d/post-push-pr-status-check-in.md, docs/implement-plan/README.md, tests/test_check_in_status.py, tests/test_implement_plan_claude_command.py, tests/test_pr_check_in_reminder.py, workflow-templates/.claude/commands/implement-plan-claude.md, workflow-templates/.claude/hooks/pr_check_in_reminder.py, workflow-templates/.claude/scripts/check_in_status.py, workflow-templates/.claude/settings.json.",
+  "phase": "review_autofix",
+  "pr_number": 4366,
+  "record_id": "lesson_20260924063528_9645700a3d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_assemble_prompt.py",
+    ".claude/commands/implement-plan-claude.md",
+    ".claude/hooks/pr_check_in_reminder.py",
+    ".claude/scripts/check_in_status.py",
+    ".claude/settings.json",
+    ".github/workflows/ci.yml",
+    "CLAUDE.md",
+    "README.md",
+    "agents.md",
+    "changelog.d/implement-plan-e2e-findings.md",
+    "changelog.d/post-push-pr-status-check-in.md",
+    "docs/implement-plan/README.md",
+    "tests/test_check_in_status.py",
+    "tests/test_implement_plan_claude_command.py",
+    "tests/test_pr_check_in_reminder.py",
+    "workflow-templates/.claude/commands/implement-plan-claude.md",
+    "workflow-templates/.claude/hooks/pr_check_in_reminder.py",
+    "workflow-templates/.claude/scripts/check_in_status.py",
+    "workflow-templates/.claude/settings.json"
+  ]
+}
