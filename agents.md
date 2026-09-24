@@ -51,7 +51,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
    the linked issues (or the PR) `ai:review-blocked`, posts one
    `review-autofix-failure-cap:v1` comment and sends an
    `identical_failure_cap` heal report (`REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED`;
-   force_rb_judge dispatches bypass it).
+   force_rb_judge dispatches bypass it). The poller's noop-suspicious
+   recovery sweep (`scripts/orchestrate_poll_process.sh`) does not
+   re-dispatch a PR whose current head already has a
+   `review-autofix-failure-cap:v1` comment by the `GH_PAT` account, because
+   the gate would end that run before a new warning could be posted; it logs
+   `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
+   Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
+   token identity keeps the old re-dispatch.
 8. **conflict resolver** (`prompts/conflict-resolver.txt`,
    `integration-sync-conflict-resolver.txt`) — merge-conflict resolution
    inside autofix. In consumer repos the resolver, the review-blocked judge
@@ -1264,6 +1271,7 @@ and shipped:
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
+- `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`
 - `REVIEW_EDITOR_PREFLIGHT`
 - `STAGE_MAIN_PINNED_DIVERGENCE`
 - `WORKTREE_REGISTER`
@@ -1445,6 +1453,7 @@ LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
+LOG_PREFIX.name=NOOP_RECOVERY_SKIP_FINGERPRINT_CAP
 LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
 LOG_PREFIX.name=STAGE_MAIN_PINNED_DIVERGENCE
 LOG_PREFIX.name=WORKTREE_REGISTER
