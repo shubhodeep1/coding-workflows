@@ -52,6 +52,32 @@ trap on_step_exit EXIT
 exec 3>&2
 exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
+IMPLEMENT_VALIDATOR_OUTPUT_DIR="${POST_AGENT_ARTIFACT_DIR:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}}/validator-output-implement"
+mkdir -p "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}"
+
+run_implement_validator_python() {
+  local sandbox_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh"
+  local validator_entry="${1:-}"
+  if [ -n "${validator_entry}" ] && [[ "${validator_entry}" != -* ]]; then
+    if [ -f "${validator_entry}" ]; then
+      shift
+      set -- "$(cd "$(dirname "${validator_entry}")" && pwd -P)/$(basename "${validator_entry}")" "$@"
+    elif [ -f "scripts/$(basename "${validator_entry}")" ]; then
+      shift
+      set -- "${PWD}/scripts/$(basename "${validator_entry}")" "$@"
+    fi
+  fi
+  if [ -x "${sandbox_helper}" ]; then
+    bash "${sandbox_helper}" \
+      --role validator --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+      --writable-output-dir "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}" \
+      -- /usr/bin/python3 -I -S "$@"
+    return $?
+  fi
+  echo "::error::Implement validator sandbox is unavailable." >&2
+  return 1
+}
+
 # Remove workflow-generated/fetched artifacts BEFORE checking for
 # changes so they don't cause false-positive "file changes" detection.
 # Restore pre_assembled_static.txt from HEAD when the consumer tracks it;
@@ -474,8 +500,8 @@ if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${generated_security_adv
 else
   scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
   if [ -n "${scope_staged}" ]; then
-    scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
-    scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+    scope_staged_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-staged.XXXXXX")"
+    scope_allowlist_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-allowlist.XXXXXX")"
     printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
     scope_violations=""
     scope_rc=0
@@ -491,8 +517,14 @@ else
       fi
     fi
     if [ "${scope_rc}" -eq 0 ] && [ -f "${scope_guard_path}" ]; then
+      scope_validator_cmd=(
+        bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh"
+        --role validator --workspace "${WORKSPACE_PATH:-${PWD}}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}"
+        --writable-output-dir "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}"
+        -- /usr/bin/python3 -I -S
+      )
       set +e
-      scope_violations="$(python3 "${scope_guard_path}" \
+      scope_violations="$("${scope_validator_cmd[@]}" "${scope_guard_path}" \
         --issue-body-file "${ISSUE_BODY_FILE:-}" \
         --staged-file "${scope_staged_file}" \
         --allowlist-out "${scope_allowlist_file}" \
@@ -645,16 +677,16 @@ bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/trusted_git_write.sh" \
 if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ] && [ -n "${ISSUE_SCOPE_LOCK_GLOB:-}" ]; then
   scope_committed="$(git diff-tree --no-commit-id --name-only --diff-filter=ACMRD -r --root --no-renames HEAD || true)"
   if [ -n "${scope_committed}" ]; then
-    scope_committed_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-committed.XXXXXX")"
-    scope_glob_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-glob.XXXXXX")"
-    scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+    scope_committed_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-committed.XXXXXX")"
+    scope_glob_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-glob.XXXXXX")"
+    scope_allowlist_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-allowlist.XXXXXX")"
     printf '%s\n' "${scope_committed}" > "${scope_committed_file}"
     printf '%s\n' "${ISSUE_SCOPE_LOCK_GLOB}" > "${scope_glob_file}"
     scope_violations=""
     scope_rc=0
     if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
       set +e
-      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+      scope_violations="$(run_implement_validator_python "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
         --staged-file "${scope_committed_file}" \
         --allowlist-file "${scope_glob_file}" \
         --allowlist-out "${scope_allowlist_file}")"

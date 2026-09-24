@@ -39,7 +39,6 @@
 #   LAST_RUN_DIFF_FILE                Diff from previous autofix iteration.
 #   EDITOR_SUMMARY_FILE               Editor-produced summary (used by overlap validation).
 #   REVIEW_LEDGER_PATH                Path to review-issue ledger (defaults to .ai/review_issue_ledger/pr-${PR_NUMBER}.txt). Gitignored; persisted across autofix iterations via actions/cache in review_autofix.yml.
-#   GH_PAT                            GitHub token used to rewrite the origin remote URL.
 #   GITHUB_REPOSITORY                 owner/repo slug (auto-set by GitHub Actions).
 #
 # Outputs:
@@ -71,6 +70,23 @@ set -euo pipefail
 _review_commit_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${_review_commit_script_dir}/write_guard.sh"
+
+POST_AGENT_ARTIFACT_DIR="${POST_AGENT_ARTIFACT_DIR:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}}"
+REVIEW_VALIDATOR_OUTPUT_DIR="${POST_AGENT_ARTIFACT_DIR}/validator-output-review-commit"
+mkdir -p "${REVIEW_VALIDATOR_OUTPUT_DIR}"
+
+run_review_validator_python() {
+  local sandbox_helper="${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh"
+  if [ -x "${sandbox_helper}" ]; then
+    bash "${sandbox_helper}" \
+      --role validator --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+      --writable-output-dir "${REVIEW_VALIDATOR_OUTPUT_DIR}" \
+      -- /usr/bin/python3 -I -S "$@"
+    return $?
+  fi
+  echo "::error::Review validator sandbox is unavailable." >&2
+  return 1
+}
 
 if [ -z "${COMMITTED_FILES_FILE:-}" ]; then
   if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
@@ -533,8 +549,13 @@ if [ "${review_advisory_count}" -eq 1 ]; then
   review_advisory_author_login="$(jq -r '.[0].author_login // ""' "${review_advisory_rows_file}")"
   review_advisory_scope_rc=30
   if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+  review_scope_validator_cmd=(
+    bash "${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh"
+    --role validator --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}"
+    -- /usr/bin/python3 -I -S
+  )
     set +e
-    review_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py" \
+    review_advisory_violations="$("${review_scope_validator_cmd[@]}" "${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py" \
       --issue-body-file "${review_advisory_body_file}" \
       --staged-file "${review_advisory_staged_file}" \
       --issue-author-association "${review_advisory_author_association}" \
@@ -567,10 +588,10 @@ if git diff --cached --quiet; then
   echo "No repository changes to commit."
   echo "- none" > "${COMMITTED_FILES_FILE}"
 else
-  OVERLAP_REPORT_FILE="$(mktemp)"
+  OVERLAP_REPORT_FILE="$(mktemp "${REVIEW_VALIDATOR_OUTPUT_DIR}/overlap-report.XXXXXX")"
   OVERLAP_VALIDATION_STDERR_FILE="$(mktemp)"
   set +e
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
+  run_review_validator_python - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" "${PWD}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
 import re
 import subprocess
 import sys
@@ -578,10 +599,11 @@ from collections import defaultdict
 
 last_run_diff_path = sys.argv[1]
 overlap_report_path = sys.argv[2]
+repo_root = sys.argv[3]
 
 hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 file_re = re.compile(r"^\+\+\+ b/(.+)$")
-staged_cmd = ["git", "diff", "--cached", "--unified=0", "--no-color"]
+staged_cmd = ["git", "-C", repo_root, "diff", "--cached", "--unified=0", "--no-color"]
 staged_diff = subprocess.run(staged_cmd, check=True, capture_output=True, text=True).stdout.splitlines()
 
 def parse_ranges(lines, use_side):

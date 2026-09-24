@@ -733,6 +733,16 @@ when the bounded fix-cycle budget is exhausted.
     rc=226 unit=<unit>` followed by up to 20 journal lines for that unit, and
     the script exits 226. `systemd-run` runs without `--quiet`, so its unit
     name and exit status also appear on stderr.
+- Post-agent snapshot and reconcile run in separate credentialless
+  `workspace-guard` units; validators run in credentialless `validator` units.
+  Their per-run mode-0700 `POST_AGENT_ARTIFACT_DIR` lives below the resolved
+  `RUNNER_TEMP` outside both the checkout and host `/tmp`/`/var/tmp`.
+  Host-only `RUNTIME_DIR` paths remain under `/tmp`; isolated validator input
+  files from there are copied into the sandbox's private input area. Snapshot
+  manifests, reconciliation reports and changed-path lists remain unit-visible
+  until the host consumes them, then workflow cleanup removes the artifact dir.
+  Rejection or a missing unit-visible root stops publication; never disable
+  `PrivateTmp=yes` or run a validator with host credentials as a fallback.
 - `scripts/model_provider_proxy.py` derives a non-empty model allowlist from
 	trusted configuration and defaults to 64 requests, one concurrent request,
 	65,536 output tokens, and USD 25 cumulative spend. It reserves worst-case

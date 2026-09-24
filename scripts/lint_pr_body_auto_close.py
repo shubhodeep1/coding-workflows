@@ -39,6 +39,7 @@ false-positive. Commit messages remain plain-text scans.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -163,6 +164,25 @@ def _fetch_issue_labels_gh(repo: str, issue_number: int) -> list[str] | None:
 	return [str(label) for label in labels]
 
 
+def _load_issue_label_map(path: Path) -> dict[tuple[str, int], list[str]]:
+	"""Load a complete offline map keyed as ``owner/repo#issue``."""
+	try:
+		payload = json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeError, json.JSONDecodeError) as error:
+		raise ValueError("issue label map is unreadable or malformed") from error
+	if not isinstance(payload, dict):
+		raise ValueError("issue label map must be a JSON object")
+	result: dict[tuple[str, int], list[str]] = {}
+	for raw_key, raw_labels in payload.items():
+		if not isinstance(raw_key, str) or not isinstance(raw_labels, list):
+			raise ValueError("issue label map contains an invalid entry")
+		match = re.fullmatch(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)", raw_key)
+		if match is None or not all(isinstance(label, str) for label in raw_labels):
+			raise ValueError("issue label map contains an invalid entry")
+		result[(match.group(1), int(match.group(2)))] = list(raw_labels)
+	return result
+
+
 def _scan_text(source: str, text: str, *, markdown: bool = False) -> list[tuple[int, str, str, str | None, int]]:
 	"""Return a list of (line_no, line, keyword, referenced_repo, issue_number)
 	tuples for every auto-close keyword match in `text`. line_no is 1-based.
@@ -277,6 +297,8 @@ def main() -> int:
 		help="Optional path to a file containing NUL-separated commit messages.")
 	parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""),
 		help="owner/repo for issue label lookups. Defaults to $GITHUB_REPOSITORY.")
+	parser.add_argument("--issue-label-map", type=Path, default=None,
+		help="Optional complete offline JSON map keyed by owner/repo#issue.")
 	parser.add_argument("--fail-open-on-lookup-error", action="store_true",
 		help="If a gh lookup fails, treat the issue as having no labels rather "
 			"than as a hard error. Use in local dev where gh may not be authenticated.")
@@ -301,11 +323,23 @@ def main() -> int:
 		)
 		return 2
 
+	label_lookup = None
+	if args.issue_label_map is not None:
+		try:
+			issue_label_map = _load_issue_label_map(args.issue_label_map)
+		except ValueError as error:
+			print(f"::error::[lint_pr_body_auto_close] {error}", file=sys.stderr)
+			return 2
+		label_lookup = lambda lookup_repo, issue_number: issue_label_map.get(
+			(lookup_repo, issue_number)
+		)
+
 	violations, lookup_errors = lint(
 		pr_body=pr_body,
 		commit_messages=commit_messages,
 		repo=args.repo,
 		fail_open_on_lookup_error=args.fail_open_on_lookup_error,
+		label_lookup=label_lookup,
 	)
 
 	for err in lookup_errors:

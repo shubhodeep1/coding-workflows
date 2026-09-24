@@ -10,9 +10,9 @@
 #      the guise of "merge resolution" — and the run aborts.
 #
 #   2. Per-file syntax sanity.  For every modified .sh, run `bash -n`.
-#      For every modified .py, run `python3 -m py_compile`.  Catches
-#      truncated heredocs, missing fi/done, etc., before they reach a
-#      consumer repo.
+#      For every modified .py, parse with `ast.parse` without writing
+#      bytecode. Catches truncated heredocs, missing fi/done, etc., before
+#      they reach a consumer repo.
 #
 #   3. Workflow → script reference integrity.  For every modified
 #      .github/workflows/*.yml file, invoke check_workflow_script_refs.py
@@ -113,6 +113,26 @@ fi
 
 cd "${REPO_ROOT}"
 
+run_isolated_validator_python() {
+	local sandbox_helper="${POST_AGENT_VALIDATION_SANDBOX:-}"
+	local validation_runtime_dir="${POST_AGENT_VALIDATION_RUNTIME_DIR:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}}"
+	if [ -n "${sandbox_helper}" ]; then
+		[ -x "${sandbox_helper}" ] || {
+			echo "::error::check_resolver_diff.sh: isolated validator sandbox is unavailable" >&2
+			return 1
+		}
+		bash "${sandbox_helper}" \
+			--role validator --workspace "${REPO_ROOT}" --runtime-dir "${validation_runtime_dir}" \
+			-- /usr/bin/python3 -I -S "$@"
+		return $?
+	fi
+	(
+		cd "${TMPDIR:-/tmp}"
+		env -i HOME="${TMPDIR:-/tmp}" PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+			PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S "$@"
+	)
+}
+
 # Sort+dedupe both sets in place so comm sees consistent ordering.
 sort -u -o "${CONFLICTED_SET}" "${CONFLICTED_SET}"
 sort -u -o "${TOUCHED_SET}"    "${TOUCHED_SET}"
@@ -143,7 +163,7 @@ fi
 # anchors preserve every byte outside the original marker spans; clean paths
 # are compared by mode and Git blob ID against an independent merge-tree.
 if [ -n "${CONFLICT_SPANS}" ] || [ -n "${CLEAN_MANIFEST}" ]; then
-	PYTHONDONTWRITEBYTECODE=1 python3 - \
+	run_isolated_validator_python - \
 		"${REPO_ROOT}" "${CONFLICTED_SET}" "${CONFLICT_SPANS}" "${CLEAN_MANIFEST}" <<'PY'
 import base64
 import json
@@ -264,13 +284,15 @@ while IFS= read -r touched; do
 			fi
 			;;
 		*.py)
-			if ! PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile "${touched}" 2>&1; then
-				echo "::error::py_compile failed for ${touched}" >&2
+			if ! run_isolated_validator_python -c \
+				'import ast,pathlib,sys; source=pathlib.Path(sys.argv[1]); ast.parse(source.read_text(encoding="utf-8"), filename=str(source))' \
+				"${REPO_ROOT}/${touched}" 2>&1; then
+				echo "::error::Python syntax validation failed for ${touched}" >&2
 				syntax_failed=$((syntax_failed + 1))
 			fi
 			;;
 		*.json)
-			if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "${touched}" 2>&1; then
+			if ! run_isolated_validator_python -c "import json,sys; json.load(open(sys.argv[1]))" "${REPO_ROOT}/${touched}" 2>&1; then
 				echo "::error::JSON parse failed for ${touched}" >&2
 				syntax_failed=$((syntax_failed + 1))
 			fi
@@ -305,7 +327,7 @@ if [ "${#workflow_files[@]}" -gt 0 ]; then
 		echo "::error::check_workflow_script_refs.py not found at ${checker}" >&2
 		exit 1
 	fi
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 "${checker}" \
+	if ! run_isolated_validator_python "${checker}" \
 			--repo-root "${REPO_ROOT}" \
 			--files "${workflow_files[@]}"; then
 		echo "::error::Modified workflow file references nonexistent script(s). Aborting." >&2
