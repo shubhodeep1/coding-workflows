@@ -1951,7 +1951,7 @@ run_cache_probe || true
 
 # ── Cross-reviewer consensus summariser ──────────────────────────────────
 # After each review pass (pass-1 and pass-2) completes, all reviewer outputs
-# are fed as a single prompt to OpenCode (openai/gpt-5.6-luna, medium
+# are fed as a single prompt to OpenCode (openai/gpt-6-luna, medium
 # reasoning by default) which emits ONE consolidated findings ledger (CONSENSUS block +
 # per-reviewer sections). The pass-1 ledger feeds pass-2 reviewers; the
 # pass-2 ledger (written to REVIEWER_CONSENSUS_FILE) feeds the editor and
@@ -4889,7 +4889,7 @@ build_cross_pollination_summary() {
     echo "- Discover additional issues that the preliminary pass may have missed"
     echo "- Provide your own independent assessment — do not blindly adopt pass 1 findings"
     echo ""
-    echo "The consolidated ledger below was produced by ${XPOLL_SUMMARISER_MODEL:-openai/gpt-5.6-luna}"
+    echo "The consolidated ledger below was produced by ${XPOLL_SUMMARISER_MODEL:-openai/gpt-6-luna}"
     echo "from all pass-1 reviewer outputs (CONSENSUS FINDINGS + CONSENSUS TASK GAPS blocks + per-reviewer sections)."
     echo "The raw per-reviewer outputs remain on disk at:"
     echo "  ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt"
@@ -4947,7 +4947,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     fi
 
     # ── Consolidate all pass-1 reviewer outputs into one ledger ──
-    # One OpenCode call (gpt-5.6-luna, medium reasoning by default — see
+    # One OpenCode call (gpt-6-luna, medium reasoning by default — see
     # XPOLL_SUMMARISER_REASONING) produces a consensus ledger + per-reviewer
     # sections. Retries 3×; hard-fails the workflow on final failure
     # (triggers job-level Telegram failure alert).
@@ -4969,9 +4969,9 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   # Reasoning effort can be gated on the size of LAST_RUN_DIFF_FILE (the
   # "primary review target" — most recent AI-generated changes).
   #
-  # Both PASS2_REASONING_SMALL and PASS2_REASONING_LARGE now default to
-  # xhigh (repo-wide gpt-5.6-sol reasoning-level policy), so the size gate
-  # is a no-op at default settings. The gate structure is retained so
+  # Both PASS2_REASONING_SMALL and PASS2_REASONING_LARGE fall back to
+  # xhigh here (reviewer slots are non-GPT models, outside the gpt-6-sol
+  # `high` default), so the size gate is a no-op at script-default settings. The gate structure is retained so
   # operators can override REVIEWER_PASS2_REASONING_SMALL and/or
   # REVIEWER_PASS2_REASONING_LARGE per-repo to differentiate small vs
   # large diffs (e.g. drop small-diff effort to medium for cost).

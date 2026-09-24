@@ -410,7 +410,7 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 
 def test_security_audit_uses_workflow_editor_model_with_stable_fallback() -> None:
 	content = SCRIPT_PATH.read_text(encoding="utf-8")
-	assert '--model "${WORKFLOW_EDITOR_MODEL:-openai/gpt-5.6-sol}"' in content
+	assert '--model "${WORKFLOW_EDITOR_MODEL:-openai/gpt-6-sol}"' in content
 	with tempfile.TemporaryDirectory(prefix="security-audit-model-") as td:
 		output_path = Path(td) / "findings.json"
 		proc, final_state = _run_security_audit(

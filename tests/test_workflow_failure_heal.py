@@ -15,11 +15,16 @@ import re
 import shutil
 import subprocess
 import tempfile
+import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -480,6 +485,64 @@ def test_error_signature_ignores_volatile_tokens_and_prefers_error_annotations()
 	assert re.fullmatch(r"[0-9a-f]{64}", fp1)
 
 
+def test_fingerprint_ignores_the_promote_cycle_run_name_suffix() -> None:
+	# Issue #4368 vs #4350: the same Phase 4b failure, once from a promote
+	# cycle (run name `... [cycle:<id>]`) and once from a direct dispatch.
+	step = "Phase 4b: Verify editor restored canary (pytest + retry)"
+	signature = "##[error]retry review run did not complete within <n> minutes"
+	plain = heal.fingerprint("Test & Mark Stable Release", step, signature)
+	assert heal.fingerprint("Test & Mark Stable Release [cycle:35939056453]", step, signature) == plain
+	assert heal.fingerprint("Test & Mark Stable Release [cycle:35802575310]", step, signature) == plain
+	assert heal.fingerprint("Test & Mark Stable Release [CYCLE:1] ", step, signature) == plain
+	# Only a trailing numeric cycle tag is volatile; other names stay distinct.
+	assert heal.fingerprint("Test & Mark Stable Release [cycle:abc]", step, signature) != plain
+	assert heal.fingerprint("Mark Stable Release [cycle:1]", step, signature) != plain
+
+
+# Shape of a raw Actions job log (jobs/<id>/logs): the `run:` step header echoes
+# every script line in ANSI cyan, including `echo "::error::..."` lines that
+# never executed; the runner renders an executed `::error::` as `##[error]`.
+RAW_STEP_LOG = (
+	"2026-09-24T00:57:56.9937438Z ##[group]Run set -euo pipefail\n"
+	"2026-09-24T00:57:56.9938000Z \x1b[36;1mset -euo pipefail\x1b[0m\n"
+	"2026-09-24T00:57:56.9938100Z \x1b[36;1mif [ -z \"${sha}\" ]; then\x1b[0m\n"
+	"2026-09-24T00:57:56.9938200Z \x1b[36;1m  echo \"::error::could not resolve ${branch} head sha before retry dispatch\"\x1b[0m\n"
+	"2026-09-24T00:57:56.9938300Z \x1b[36;1mfi\x1b[0m\n"
+	"2026-09-24T00:57:56.9938400Z shell: /usr/bin/bash -e {0}\n"
+	"2026-09-24T00:57:56.9938500Z env:\n"
+	"2026-09-24T00:57:56.9938600Z   EDITOR_RETRY_BUDGET_MINUTES: 25\n"
+	"2026-09-24T00:57:56.9938700Z ##[endgroup]\n"
+	"2026-09-24T00:58:15.4522834Z   retry run #35940786276: status=pending conclusion=null\n"
+	"2026-09-24T01:23:12.7531832Z ##[error]Retry review run did not complete within 25 minutes\n"
+	"2026-09-24T01:23:12.7534607Z ##[error]Process completed with exit code 1.\n"
+)
+
+
+def test_filter_log_drops_the_echoed_step_script_but_keeps_step_output() -> None:
+	filtered = heal.filter_log(RAW_STEP_LOG)
+	assert "could not resolve ${branch} head sha" not in filtered
+	assert "set -euo pipefail\n" not in filtered.split("##[group]Run set -euo pipefail", 1)[1]
+	# The header line, the env block, and every line the step printed survive.
+	assert "##[group]Run set -euo pipefail" in filtered
+	assert "EDITOR_RETRY_BUDGET_MINUTES: 25" in filtered
+	assert "retry run #35940786276: status=pending" in filtered
+	assert "##[error]Retry review run did not complete within 25 minutes" in filtered
+	# Cyan output printed by the step itself (outside a Run header) is kept.
+	assert "cyan" in heal.filter_log("2026-09-24T00:00:00Z \x1b[36;1mcyan\x1b[0m\n")
+	# Text without a Run header (reporter evidence) is unchanged by the drop.
+	evidence = "::error::PR diff unavailable\nstderr tail\n"
+	assert heal._drop_step_script_lines(evidence) == evidence
+
+
+def test_error_signature_uses_executed_errors_not_the_echoed_script() -> None:
+	signature = heal.error_signature(heal.filter_log(RAW_STEP_LOG))
+	assert signature == "##[error]retry review run did not complete within <n> minutes | ##[error]process completed with exit code <n>."
+	assert "could not resolve" not in signature
+	# A step that fails a different way in the same script gets a different signature.
+	other = RAW_STEP_LOG.replace("Retry review run did not complete within 25 minutes", "Retry review run concluded failure")
+	assert heal.error_signature(heal.filter_log(other)) != signature
+
+
 def _heal_issue(number: int, *, state: str, fp: str, gen: int = 1, root: str | None = None, created: datetime | None = None) -> dict:
 	created = created or datetime(2026, 9, 1, tzinfo=timezone.utc)
 	return {
@@ -596,6 +659,96 @@ def test_filter_log_keeps_signal_lines_and_bounds_size() -> None:
 	assert len(bounded.encode("utf-8")) <= 1_100
 
 
+SHA_C = "c" * 40
+SHA_FIX = "4d2c9dcb5d12d89e462facf2712d27d66162d74d"
+
+
+def _compare(ahead_by: int, commits: list[tuple[str, str]], files: list[str] | None = None, status: str = "ahead") -> dict:
+	return {
+		"status": status,
+		"ahead_by": ahead_by,
+		"behind_by": 0,
+		"total_commits": ahead_by,
+		"commits": [{"sha": sha, "commit": {"message": message}} for sha, message in commits],
+		"files": [{"filename": name, "patch": "@@ -1 +1 @@"} for name in (files or [])],
+	}
+
+
+def test_summarize_branch_progress_validates_and_bounds_the_compare_response() -> None:
+	compare = _compare(2, [(SHA_FIX, "AI implementation for issue #4350 (#4351)\n\nbody"), (SHA_C, "Merge pull request #4352")], [".github/workflows/test-and-mark-stable.yml"])
+	summary = heal.summarize_branch_progress(compare, failed_sha=SHA_A, branch="main")
+	assert summary["available"] is True
+	assert summary["ahead_by"] == 2 and summary["tip_sha"] == SHA_C and summary["status"] == "ahead"
+	assert summary["commits"][0] == {"sha": SHA_FIX, "subject": "AI implementation for issue #4350 (#4351)"}
+	assert summary["files"] == [".github/workflows/test-and-mark-stable.yml"]
+	assert summary["commits_truncated"] is False
+	identical = heal.summarize_branch_progress(_compare(0, [], status="identical"), failed_sha=SHA_A, branch="main")
+	assert identical["available"] and identical["tip_sha"] == SHA_A
+	# Untrusted shapes are rejected, never trusted.
+	assert heal.summarize_branch_progress(None, failed_sha=SHA_A, branch="main")["reason"] == "invalid_compare_response"
+	assert heal.summarize_branch_progress({"status": "ahead", "ahead_by": "2"}, failed_sha=SHA_A, branch="main")["available"] is False
+	assert heal.summarize_branch_progress({"status": "weird", "ahead_by": 1}, failed_sha=SHA_A, branch="main")["available"] is False
+	assert heal.summarize_branch_progress(compare, failed_sha="nope", branch="main")["reason"] == "invalid_reference"
+	assert heal.summarize_branch_progress(compare, failed_sha=SHA_A, branch="bad..branch")["reason"] == "invalid_reference"
+	junk = _compare(3, [(SHA_FIX, "ok")])
+	junk["commits"] += [{"sha": "zz"}, "text", {"sha": SHA_C.upper()}]
+	cleaned = heal.summarize_branch_progress(junk, failed_sha=SHA_A, branch="main")
+	assert [c["sha"] for c in cleaned["commits"]] == [SHA_FIX, SHA_C]
+	assert heal.summarize_branch_progress(_compare(400, [(SHA_FIX, "x")]), failed_sha=SHA_A, branch="main")["commits_truncated"] is True
+
+
+def test_render_branch_progress_states_whether_the_failing_code_is_current() -> None:
+	ahead = heal.summarize_branch_progress(_compare(1, [(SHA_FIX, "Adopt the active review run")], ["scripts/x.sh"]), failed_sha=SHA_A, branch="main")
+	text = heal.render_branch_progress(ahead)
+	assert "`main` has 1 commit(s) after the failing SHA" in text
+	assert f"- {SHA_FIX[:12]} Adopt the active review run" in text
+	assert "- scripts/x.sh" in text and "HEAL_BRANCH_TIP_DIR" in text
+	current = heal.render_branch_progress(heal.summarize_branch_progress(_compare(0, [], status="identical"), failed_sha=SHA_A, branch="main"))
+	assert "still the current code" in current
+	unavailable = heal.render_branch_progress({"available": False, "reason": "compare_fetch_failed"})
+	assert "compare_fetch_failed" in unavailable and "`already-fixed`" in unavailable
+
+
+def test_render_heal_lineage_context_lists_same_fingerprint_and_lineage_issues() -> None:
+	fp = "1" * 64
+	root = "2" * 64
+	body = (
+		f"<!-- {heal.MARKER_PREFIX}fp={fp} -->\n<!-- {heal.MARKER_PREFIX}gen=1 -->\n<!-- {heal.MARKER_PREFIX}root={root} -->\n"
+		"## Root cause\nPhase 4b redispatches behind queued work.\n\n## Suggested fix\nAdopt the oldest active run.\n\n## Affected files\n- x\n"
+	)
+	issues = [
+		{"number": 4350, "state": "closed", "state_reason": "completed", "closed_at": "2026-09-23T22:32:16Z", "title": "Workflow heal: Test & Mark Stable Release failed on stable", "body": body, "created_at": "2026-09-23T19:28:02Z", "html_url": "u4350"},
+		{"number": 4360, "state": "open", "title": "same lineage", "body": f"<!-- {heal.MARKER_PREFIX}fp={'3' * 64} -->\n<!-- {heal.MARKER_PREFIX}root={root} -->", "created_at": "x", "html_url": "u4360"},
+		{"number": 4361, "state": "open", "title": "unrelated", "body": f"<!-- {heal.MARKER_PREFIX}fp={'4' * 64} -->", "created_at": "x", "html_url": "u4361"},
+		{"number": 4362, "state": "open", "title": "a pull request", "body": body, "pull_request": True},
+	]
+	text = heal.render_heal_lineage_context(issues, fp=fp, root=root)
+	assert text.index("#4360") < text.index("#4350")  # newest first
+	assert "[closed (completed), closed 2026-09-23T22:32:16Z]" in text
+	assert "Phase 4b redispatches behind queued work." in text and "Adopt the oldest active run." in text
+	assert "Affected files" not in text
+	assert "#4361" not in text and "#4362" not in text
+	assert "no earlier heal issue" in heal.render_heal_lineage_context([], fp=fp, root=root)
+
+
+def test_check_heal_already_fixed_claim_requires_a_cited_commit_after_the_failing_sha() -> None:
+	summary = heal.summarize_branch_progress(_compare(2, [(SHA_FIX, "fix"), (SHA_C, "merge")]), failed_sha=SHA_A, branch="main")
+	good = f"## Classification\nalready-fixed\n\n## Fixed by\n- `{SHA_FIX[:12]}` adopts the active run (test-and-mark-stable.yml:2341)\n"
+	verdict = heal.check_heal_already_fixed_claim(good, summary)
+	assert verdict == {"ok": True, "reason": "fixed_by_commit_verified", "commits": [SHA_FIX]}
+	assert heal.check_heal_already_fixed_claim(good.replace("## Fixed by", "## Evidence"), summary)["reason"] == "fixed_by_section_missing"
+	assert heal.check_heal_already_fixed_claim(good.replace(SHA_FIX[:12], "deadbeef1234"), summary)["reason"] == "fixed_by_commit_not_after_failing_sha"
+	# A SHA cited outside the Fixed by section does not count.
+	elsewhere = f"## Evidence\n{SHA_FIX[:12]}\n\n## Fixed by\nsomething vague\n"
+	assert heal.check_heal_already_fixed_claim(elsewhere, summary)["ok"] is False
+	# Six hex chars are too short to identify a commit.
+	assert heal.check_heal_already_fixed_claim(good.replace(SHA_FIX[:12], SHA_FIX[:6]), summary)["ok"] is False
+	identical = heal.summarize_branch_progress(_compare(0, [], status="identical"), failed_sha=SHA_A, branch="main")
+	assert heal.check_heal_already_fixed_claim(good, identical)["reason"] == "no_commits_after_failing_sha"
+	assert heal.check_heal_already_fixed_claim(good, {"available": False, "reason": "x"})["reason"] == "branch_progress_unavailable"
+	assert heal.parse_classification("## Classification\n`already-fixed`\n") == "already-fixed"
+
+
 # ---------------------------------------------------------------------------
 # Shell drivers against a mock gh / mock codex
 # ---------------------------------------------------------------------------
@@ -700,6 +853,13 @@ if args[:1] == ["api"]:
 		if text is None:
 			fail("HTTP 404")
 		out(text)
+	if "/compare/" in path:
+		if method != "GET":
+			fail("HTTP method must be GET for compare")
+		compare = state.get("compare")
+		if compare is None:
+			fail("HTTP 404")
+		out(json.dumps(compare))
 	if "/branches/" in path:
 		branch = urllib.parse.unquote(path.split("/branches/")[-1])
 		if branch in state.get("branches", ["stable", "main"]):
@@ -716,6 +876,9 @@ if args[:2] == ["issue", "create"]:
 		key = args[i]
 		if key == "--body-file":
 			record["body"] = Path(args[i + 1]).read_text()
+		elif key == "--label":
+			record.setdefault("label", args[i + 1])
+			record.setdefault("labels", []).append(args[i + 1])
 		elif key.startswith("--"):
 			record[key[2:]] = args[i + 1]
 		i += 2
@@ -913,10 +1076,12 @@ def _intake_state(**overrides) -> dict:
 	return state
 
 
-def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict, str]:
+def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[str, str] | None = None, setup_git=None) -> tuple[subprocess.CompletedProcess[str], dict, str]:
 	with tempfile.TemporaryDirectory(prefix="heal-intake-") as tmp_name:
 		tmp = Path(tmp_name)
 		work, state_file, env = _stage(tmp, with_codex=True)
+		if setup_git is not None:
+			setup_git(tmp, work)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		payload_file = tmp / "payload_raw.json"
 		payload_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -1104,6 +1269,91 @@ def test_intake_workflow_run_preserves_slash_bearing_target_branch() -> None:
 	assert match and (match.group(1) or match.group(2)) == branch_name
 	branch_calls = [call for call in state_after["calls"] if any("/branches/" in part for part in call)]
 	assert branch_calls and "%2F" in next(part for part in branch_calls[0] if "/branches/" in part)
+
+
+def _gate_run_payload() -> dict:
+	return heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Test & Mark Stable Release [cycle:35939056453]", "conclusion": "failure", "head_sha": SHA_A, "head_branch": "main", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Test & Mark Stable Release [cycle:35939056453]"},
+	)
+
+
+def _gate_state(**overrides) -> dict:
+	gate_log = "2026-09-24T01:23:12.7531832Z ##[error]Retry review run did not complete within 25 minutes\n"
+	state = _intake_state(
+		jobs={"500": [{"id": 9001, "name": "e2e-smoke-test", "workflow_name": "Test & Mark Stable Release [cycle:35939056453]", "conclusion": "failure", "steps": [{"name": "Phase 4b: Verify editor restored canary (pytest + retry)", "conclusion": "failure"}]}]},
+		job_logs={"9001": gate_log},
+		compare=_compare(2, [(SHA_FIX, "AI implementation for issue #4350 (#4351)"), (SHA_C, "Merge pull request #4352")], [".github/workflows/test-and-mark-stable.yml"]),
+	)
+	state.update(overrides)
+	return state
+
+
+DIAG_ALREADY_FIXED = (
+	"## Classification\nalready-fixed\n\n## Summary\nPhase 4b redispatched behind queued review work; #4351 adopts the active run.\n\n"
+	f"## Fixed by\n- {SHA_FIX[:12]} adopts the oldest eligible active review run (.github/workflows/test-and-mark-stable.yml:2341)\n"
+)
+
+
+def test_intake_gives_the_model_branch_progress_and_earlier_heals() -> None:
+	signature = heal.error_signature(heal.filter_log(_gate_state()["job_logs"]["9001"]))
+	fp = heal.fingerprint("Test & Mark Stable Release", "Phase 4b: Verify editor restored canary (pytest + retry)", signature)
+	prior = _heal_issue(4350, state="closed", fp=fp)
+	prior.update({"title": "Workflow heal: Test & Mark Stable Release failed on stable", "state_reason": "completed", "closed_at": "2026-09-23T22:32:16Z"})
+	prior["body"] += "\n## Suggested fix\nAdopt the oldest active review run.\n"
+	result, state_after, prompt = _run_intake(_gate_run_payload(), _gate_state(heal_issues=[prior]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL branch_progress available=true branch=main" in result.stdout and "ahead_by=2" in result.stdout
+	compare_calls = [call for call in state_after["calls"] if any("/compare/" in part for part in call)]
+	assert len(compare_calls) == 1
+	assert f"repos/{SELF_REPO}/compare/{SHA_A}...main" in compare_calls[0]
+	assert "=== BRANCH PROGRESS SINCE THE FAILING SHA ===" in prompt
+	assert f"- {SHA_FIX[:12]} AI implementation for issue #4350 (#4351)" in prompt
+	assert "- .github/workflows/test-and-mark-stable.yml" in prompt
+	assert "=== EARLIER HEAL ISSUES FOR THIS FAILURE (UNTRUSTED) ===" in prompt
+	assert "#4350 [closed (completed)" in prompt and "Adopt the oldest active review run." in prompt
+	assert "HEAL_BRANCH_TIP_DIR: unavailable" in prompt  # source checkout is off in tests
+	# The cycle-tagged run joined #4350's lineage instead of starting its own.
+	created = state_after["issues_created"][0]
+	markers = heal.parse_heal_markers(created["body"])
+	assert markers["gen"] == "2" and markers["fp"] == fp
+
+
+def test_intake_already_fixed_with_a_verified_commit_opens_no_issue() -> None:
+	result, state_after, _ = _run_intake(_gate_run_payload(), _gate_state(), diagnosis=DIAG_ALREADY_FIXED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL already_fixed_verified commits={SHA_FIX[:12]} branch=main" in result.stdout
+	assert "WORKFLOW_HEAL no_issue classification=already-fixed" in result.stdout
+	assert "issues_created" not in state_after
+
+
+def test_intake_already_fixed_consumer_report_comments_with_the_sync_hint() -> None:
+	compare = _compare(1, [(SHA_FIX, "AI implementation for issue #4350 (#4351)")])
+	result, state_after, prompt = _run_intake(_consumer_payload(), _intake_state(compare=compare), diagnosis=DIAG_ALREADY_FIXED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "issues_created" not in state_after
+	assert any(f"repos/{SELF_REPO}/compare/{SHA_A}...stable" in part for call in state_after["calls"] for part in call)
+	comment = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments"][0]
+	assert "`already-fixed`" in comment["body"] and SHA_FIX[:12] in comment["body"]
+	assert "next wrapper sync to `stable`" in comment["body"]
+
+
+def test_intake_downgrades_an_unverifiable_already_fixed_claim() -> None:
+	cases = [
+		(_gate_state(), DIAG_ALREADY_FIXED.replace(SHA_FIX[:12], "deadbeef1234"), "fixed_by_commit_not_after_failing_sha"),
+		(_gate_state(), DIAG_ALREADY_FIXED.replace("## Fixed by", "## Evidence"), "fixed_by_section_missing"),
+		(_gate_state(compare=None), DIAG_ALREADY_FIXED, "branch_progress_unavailable"),
+		(_gate_state(compare=_compare(0, [], status="identical")), DIAG_ALREADY_FIXED, "no_commits_after_failing_sha"),
+	]
+	for state, diagnosis, reason in cases:
+		result, state_after, prompt = _run_intake(_gate_run_payload(), state, diagnosis=diagnosis)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL warn already_fixed_unverified reason={reason}" in result.stdout, (reason, result.stdout)
+		created = state_after["issues_created"][0]
+		assert heal.parse_heal_markers(created["body"])["classification"] == "inconclusive"
+		assert "**Heal intake note:**" in created["body"] and f"`{reason}`" in created["body"]
+		if state.get("compare") is None:
+			assert "branch progress unavailable: compare_fetch_failed" in prompt
 
 
 def test_intake_without_linked_runs_still_files_from_label_context() -> None:
@@ -1461,7 +1711,9 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}"
 	assert step["env"]["REPORT_WORKFLOW_NAME"] == "${{ github.workflow }}"
 	assert "workflow_failure_heal_autofix_report.sh" in step["run"]
-	summary_step = steps[names.index("Append review pipeline iteration summary")]
+	# The summary step body lives in scripts/review_autofix_step_iteration_summary.sh.
+	expanded_steps = yaml.safe_load(expanded_review_autofix_text())["jobs"]["codex-agent"]["steps"]
+	summary_step = expanded_steps[names.index("Append review pipeline iteration summary")]
 	assert "review_autofix_run_summary_line.txt" in summary_step["run"]
 	staging = STAGE_SUPPORT_SCRIPT.read_text(encoding="utf-8")
 	optional = re.search(r'^OPTIONAL_BOOTSTRAP_SCRIPTS="([^"]*)"', staging, re.MULTILINE)
@@ -2078,3 +2330,290 @@ def test_fingerprint_cap_block_pr_label_idempotency_and_head_moved() -> None:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", head=SHA_B)
 		assert "reason=head_moved" in result.stdout
 		assert "labels_set" not in state and "comments_posted" not in state and "dispatches" not in state
+
+
+# ---------------------------------------------------------------------------
+# P3: self-inflicted classification and routing
+# ---------------------------------------------------------------------------
+
+EDITOR_GUARD_CRASH_LINE = "/home/runner/work/_temp/codex-support/scripts/review_apply_fixes.sh: line 168: OPENROUTER_API_KEY: OPENROUTER_API_KEY is required"
+DIGEST_ERROR_LINE = "##[error]Could not publish the linked-issue metadata integrity digest."
+INTEGRATION_BRANCH = "orchestrator/project-4139"
+DIAG_PR_SELF_INFLICTED = "## Classification\npr-self-inflicted\n\n## Summary\nThe PR unsets OPENROUTER_API_KEY before the editor guard runs.\n"
+DIAG_BASE_SELF_INFLICTED = "## Classification\nbase-self-inflicted\n\n## Summary\nThe integration branch pins a script to main that lacks the digest output.\n"
+
+
+def test_extract_crash_file_on_observed_error_lines() -> None:
+	assert heal.extract_crash_file(EDITOR_GUARD_CRASH_LINE) == "scripts/review_apply_fixes.sh"
+	assert heal.extract_crash_file(DIGEST_ERROR_LINE) is None
+	assert heal.extract_crash_file("2026-09-22T01:00:00Z ::error::Step failed in .github/workflows/review_autofix.yml.") == ".github/workflows/review_autofix.yml"
+	assert heal.extract_crash_file("::error::bad call in /tmp/x/scripts/review_collect_pr_metadata.sh (exit 1)") == "scripts/review_collect_pr_metadata.sh"
+	# A bare script name, a non-error line, and traversal never name a file.
+	assert heal.extract_crash_file("::error::resolve_integration_ref.sh: Integration branch missing") is None
+	assert heal.extract_crash_file("note: scripts/review_apply_fixes.sh was staged") is None
+	assert heal.extract_crash_file("::error::see scripts/../etc/passwd") is None
+	assert heal.extract_crash_file("") is None and heal.extract_crash_file(None) is None
+	# The shell line wins over an earlier error line naming another path.
+	assert heal.extract_crash_file("::error::from .github/workflows/review_autofix.yml\n" + EDITOR_GUARD_CRASH_LINE) == "scripts/review_apply_fixes.sh"
+
+
+def test_classify_crash_ownership() -> None:
+	crash = "scripts/review_apply_fixes.sh"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=[crash], base_changed_files=[]) == "pr"
+	# In both diffs: the PR's own change owns it.
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=[crash], base_changed_files=[crash]) == "pr"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=["scripts/opencode_helpers.sh"], base_changed_files=[crash]) == "base"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=["scripts/opencode_helpers.sh"], base_changed_files=[]) == "none"
+	assert heal.classify_crash_ownership(crash_file=None, changed_files=[crash], base_changed_files=[crash]) == "none"
+
+
+def test_parse_classification_accepts_self_inflicted_tokens() -> None:
+	assert heal.parse_classification(DIAG_PR_SELF_INFLICTED) == "pr-self-inflicted"
+	assert heal.parse_classification("## Classification\n`base-self-inflicted`\n") == "base-self-inflicted"
+	assert set(heal.SELF_INFLICTED_CLASSIFICATIONS) <= set(heal.CLASSIFICATIONS)
+	assert not set(heal.SELF_INFLICTED_CLASSIFICATIONS) & set(heal.UPSTREAM_ISSUE_CLASSIFICATIONS)
+
+
+def _self_inflicted_payload(*, changed_files: list[str], crash_line: str = EDITOR_GUARD_CRASH_LINE, base_branch: str = INTEGRATION_BRANCH, source_repo: str = SELF_REPO) -> dict:
+	payload = heal.build_autofix_failure_payload(
+		repo=source_repo,
+		pr=_pr(),
+		comments=[{"body": AUTOFIX_NOOP_COMMENT}],
+		workflow_name="AI Review",
+		failure_reason="editor_empty_noop",
+		failure_evidence="failure_reason=editor_empty_noop\n--- failure_evidence_tail.txt (tail) ---\n" + crash_line + "\n",
+		failure_streak=2,
+		run_id="500",
+		run_url=f"https://github.com/{source_repo}/actions/runs/500",
+		wrapper_sha=SHA_A,
+		reporter_run_url=f"https://github.com/{source_repo}/actions/runs/500",
+		base_branch=base_branch,
+		script_ref=SHA_A,
+		changed_files=changed_files,
+	)
+	payload["issue_url"] = f"https://github.com/{source_repo}/pull/4174"
+	payload["run_refs"] = [{"repo": source_repo, "run_id": "500", "url": f"https://github.com/{source_repo}/actions/runs/500"}]
+	return payload
+
+
+def test_autofix_payload_carries_ownership_fields() -> None:
+	payload = heal.validate_payload(_self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh", "scripts/opencode_helpers.sh", "../escape.sh", "x" * 121]))
+	assert payload["base_branch"] == INTEGRATION_BRANCH
+	assert payload["script_ref"] == SHA_A
+	assert payload["changed_files"] == ["scripts/opencode_helpers.sh"]
+	assert payload["crash_file"] == "scripts/review_apply_fixes.sh"
+	# The dispatch envelope still has two keys, and the report round-trips.
+	wrapped = heal.wrap_dispatch(payload)
+	assert len(wrapped["client_payload"]) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+	assert heal.validate_payload(heal.unwrap_dispatch(wrapped["client_payload"]))["crash_file"] == "scripts/review_apply_fixes.sh"
+	# Caps: 200 entries.
+	many = heal.build_autofix_failure_payload(repo=SELF_REPO, pr=_pr(), comments=[], workflow_name="AI Review", failure_reason="workflow_failure", failure_evidence="", failure_streak=1, run_id="1", run_url=None, wrapper_sha=None, reporter_run_url=None, changed_files=[f"scripts/f{i}.sh" for i in range(250)], script_ref="stable")
+	assert len(many["changed_files"]) == heal.CHANGED_FILES_MAX_ENTRIES and many["script_ref"] == "stable"
+	assert "crash_file" not in many and "base_branch" not in many
+	# Invalid values from the wire are dropped, never fatal.
+	raw = _self_inflicted_payload(changed_files=["scripts/a.sh"])
+	raw.update({"base_branch": "bad branch", "script_ref": "main", "crash_file": "/etc/passwd", "changed_files": "not-a-list"})
+	cleaned = heal.validate_payload(raw)
+	assert cleaned["base_branch"] is None and cleaned["script_ref"] is None and cleaned["crash_file"] is None and cleaned["changed_files"] == []
+	# Non-autofix payloads gain no ownership keys.
+	assert "crash_file" not in heal.validate_payload(_consumer_payload(crash_file="scripts/a.sh"))
+
+
+def test_payload_with_all_fields_at_limits_stays_under_dispatch_size() -> None:
+	payload = _self_inflicted_payload(changed_files=[("scripts/" + "d" * 100 + f"{i:03d}.sh")[:120] for i in range(300)])
+	payload["issue_excerpt"] = "x" * heal.ISSUE_EXCERPT_LIMIT
+	payload["comments_excerpt"] = "y" * heal.COMMENTS_EXCERPT_LIMIT
+	payload["failure_evidence"] = "z" * heal.FAILURE_EVIDENCE_LIMIT
+	body = json.dumps(heal.wrap_dispatch(heal.validate_payload(payload)))
+	assert len(body.encode("utf-8")) < heal.MAX_PAYLOAD_BYTES
+
+
+def test_compose_base_self_inflicted_issue_body_carries_lineage() -> None:
+	payload = heal.validate_payload(_self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"]))
+	body = heal.compose_issue_body(payload=payload, diagnosis=DIAG_BASE_SELF_INFLICTED, fp=FP_HEX, gen=1, root=FP_HEX, classification="base-self-inflicted", target_branch=INTEGRATION_BRANCH, max_depth=3, intake_run_url="u", run_summaries=[], integration_branch=INTEGRATION_BRANCH)
+	match = TARGET_BRANCH_RE.search(body)
+	assert match and (match.group(1) or match.group(2)) == INTEGRATION_BRANCH
+	assert re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE).group(1) == "4139"
+	assert re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE).group(1) == INTEGRATION_BRANCH
+	assert "Refs #4139" in body
+	assert not re.search(r"(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#4139", body)
+	assert "**Crash file:** `scripts/review_apply_fixes.sh`" in body
+	# A non-orchestrator base adds no lineage lines.
+	plain = heal.compose_issue_body(payload=payload, diagnosis="x", fp=FP_HEX, gen=1, root=FP_HEX, classification="base-self-inflicted", target_branch="feature/x", max_depth=3, intake_run_url="u", run_summaries=[], integration_branch="feature/x")
+	assert "Tracking issue" not in plain and "Refs #" not in plain
+
+
+def test_classify_crash_ownership_cli() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-own-") as tmp_name:
+		tmp = Path(tmp_name)
+		payload_file = tmp / "p.json"
+		payload_file.write_text(json.dumps(_self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"])), encoding="utf-8")
+		base_file = tmp / "base.txt"
+		base_file.write_text("README.md\nscripts/review_apply_fixes.sh\n", encoding="utf-8")
+		out = subprocess.run(["python3", str(SCRIPTS_DIR / "workflow_failure_heal.py"), "classify-crash-ownership", "--payload-json", str(payload_file), "--base-changed-files", str(base_file)], capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+		assert out.stdout.strip() == "base"
+		out = subprocess.run(["python3", str(SCRIPTS_DIR / "workflow_failure_heal.py"), "classify-crash-ownership", "--payload-json", str(payload_file)], capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+		assert out.stdout.strip() == "none"
+
+
+def _git(cwd: Path, *args: str) -> None:
+	subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "init.defaultBranch=main", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def _ownership_git_origin(tmp: Path, work: Path) -> None:
+	"""A local origin whose integration branch changed review_apply_fixes.sh relative to main."""
+	origin = tmp / "origin.git"
+	_git(tmp, "init", "--bare", str(origin))
+	seed = tmp / "seed"
+	seed.mkdir()
+	_git(seed, "init")
+	(seed / "scripts").mkdir()
+	(seed / "scripts" / "review_apply_fixes.sh").write_text("echo main\n", encoding="utf-8")
+	(seed / "scripts" / "opencode_helpers.sh").write_text("echo helpers\n", encoding="utf-8")
+	_git(seed, "add", ".")
+	_git(seed, "commit", "-m", "main")
+	_git(seed, "push", str(origin), "HEAD:refs/heads/main")
+	(seed / "scripts" / "review_apply_fixes.sh").write_text("echo integration\n", encoding="utf-8")
+	_git(seed, "commit", "-am", "integration change")
+	_git(seed, "push", str(origin), f"HEAD:refs/heads/{INTEGRATION_BRANCH}")
+	_git(work, "init")
+	_git(work, "remote", "add", "origin", str(origin))
+
+
+def _self_inflicted_state() -> dict:
+	return _self_repo_autofix_state(["stable", "main", "ai/issue-4173", INTEGRATION_BRANCH])
+
+
+def test_intake_pr_self_inflicted_comments_on_pr_without_issue() -> None:
+	payload = _self_inflicted_payload(changed_files=["scripts/review_apply_fixes.sh", "scripts/opencode_helpers.sh"], base_branch="main")
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL crash_ownership=pr crash_file=scripts/review_apply_fixes.sh base=main" in result.stdout
+	assert "## Ownership facts" in prompt and "- Ownership: pr" in prompt and "- Crash file in the pull request diff: yes" in prompt
+	assert "issues_created" not in state_after
+	assert "WORKFLOW_HEAL no_issue classification=pr-self-inflicted" in result.stdout
+	comments = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
+	assert len(comments) == 1
+	body = comments[0]["body"]
+	assert body.splitlines()[0] == "**Workflow failure heal: this failure is caused by this pull request's own changes**"
+	assert "The PR unsets OPENROUTER_API_KEY" in body and "`scripts/review_apply_fixes.sh`" in body
+	# Base is main: no git fetch and no branch lookup were needed.
+	assert not [call for call in state_after["calls"] if any("/branches/" in part for part in call)]
+
+
+def test_intake_base_self_inflicted_opens_issue_on_integration_branch() -> None:
+	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"])
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_BASE_SELF_INFLICTED, setup_git=_ownership_git_origin)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL crash_ownership=base crash_file=scripts/review_apply_fixes.sh base={INTEGRATION_BRANCH}" in result.stdout
+	assert "- Ownership: base" in prompt and "- Crash file in the pull request diff: no" in prompt
+	assert f"1 file(s) differ between main and {INTEGRATION_BRANCH}" in prompt
+	created = state_after["issues_created"]
+	assert len(created) == 1 and created[0]["repo"] == SELF_REPO
+	assert created[0]["labels"] == [heal.HEAL_LABEL, "ai:orchestrator-managed"]
+	body = created[0]["body"]
+	match = TARGET_BRANCH_RE.search(body)
+	assert match and (match.group(1) or match.group(2)) == INTEGRATION_BRANCH
+	assert "- **Tracking issue:** #4139" in body and "Refs #4139" in body
+	assert heal.parse_heal_markers(body)["classification"] == "base-self-inflicted"
+	assert f"target_branch={INTEGRATION_BRANCH}" in result.stdout and "target_branch_source=base_branch" in result.stdout
+	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
+	assert outcome and f"on `{INTEGRATION_BRANCH}`" in outcome[0]["body"]
+	assert "stable" not in outcome[0]["body"]
+	# The ownership fetch proved the branch exists: no branch API lookup.
+	assert not [call for call in state_after["calls"] if any("/branches/" in part for part in call)]
+
+
+def test_intake_self_inflicted_token_without_backing_ownership_routes_as_workflow_defect() -> None:
+	# The model claims base-self-inflicted, but the crash file is in the PR diff.
+	payload = _self_inflicted_payload(changed_files=["scripts/review_apply_fixes.sh"], base_branch="main")
+	result, state_after, _prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_BASE_SELF_INFLICTED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "classification_remapped from=base-self-inflicted to=workflow-defect reason=ownership_pr" in result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "ai/issue-4173"
+	assert heal.parse_heal_markers(created["body"])["classification"] == "workflow-defect"
+	# Base diff unavailable (no git checkout in this harness): fail open to none.
+	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"])
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_BASE_SELF_INFLICTED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn crash_ownership_base_diff_failed reason=no_git_checkout" in result.stdout
+	assert "- Ownership: none" in prompt
+	assert "classification_remapped from=base-self-inflicted to=workflow-defect reason=ownership_none" in result.stdout
+
+
+def test_intake_self_inflicted_routing_is_a_noop_for_consumer_reports() -> None:
+	payload = _self_inflicted_payload(changed_files=["scripts/review_apply_fixes.sh"], base_branch="main", source_repo=CONSUMER_REPO)
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "crash_ownership=" not in result.stdout and "- Ownership:" not in prompt
+	assert "classification_remapped from=pr-self-inflicted to=workflow-defect reason=ownership_none" in result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+
+
+def test_intake_self_inflicted_routing_flag_off_restores_workflow_defect_route() -> None:
+	payload = _self_inflicted_payload(changed_files=["scripts/review_apply_fixes.sh"], base_branch="main")
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED, extra_env={"WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "crash_ownership=" not in result.stdout and "- Ownership:" not in prompt
+	assert "classification_remapped from=pr-self-inflicted to=workflow-defect reason=routing_disabled" in result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "ai/issue-4173"
+	assert "target_branch_source=source_pr_head" in result.stdout
+
+
+def test_autofix_report_sends_ownership_facts() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-own-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		runtime = Path(env["RUNTIME_DIR"])
+		(runtime / "failure_evidence_tail.txt").write_text(EDITOR_GUARD_CRASH_LINE + "\n", encoding="utf-8")
+		(runtime / "pr_changed_files.txt").write_text("scripts/opencode_helpers.sh\nREADME.md\n", encoding="utf-8")
+		env["PR_CHANGED_FILES_FILE"] = str(runtime / "pr_changed_files.txt")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL_AUTOFIX_REPORT dispatched" in result.stdout
+		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+		assert payload["base_branch"] == INTEGRATION_BRANCH
+		assert payload["script_ref"] == SHA_A
+		assert payload["changed_files"] == ["scripts/opencode_helpers.sh", "README.md"]
+		assert payload["crash_file"] == "scripts/review_apply_fixes.sh"
+		assert "failure_evidence_tail.txt" in payload["failure_evidence"]
+
+
+def test_autofix_report_omits_ownership_flags_for_an_older_helper() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-old-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, _state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		# A helper that predates the ownership flags: its build-autofix-payload
+		# rejects unknown flags, so the reporter must not send them. Strip the
+		# new flags and their uses from the current helper to get one.
+		helper = work / "scripts" / "workflow_failure_heal.py"
+		text = helper.read_text(encoding="utf-8").replace("classify-crash-ownership", "classify-crash-owner-x")
+		for line in (
+			'\tp.add_argument("--base-branch", default="")\n',
+			'\tp.add_argument("--script-ref", default="")\n',
+			'\tp.add_argument("--changed-files-file", default="")\n',
+			"\t\tbase_branch=args.base_branch or None,\n",
+			"\t\tscript_ref=args.script_ref or None,\n",
+			"\t\tchanged_files=_read_path_list(args.changed_files_file),\n",
+		):
+			assert text.count(line) == 1, line
+			text = text.replace(line, "")
+		helper.write_text(text, encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL_AUTOFIX_REPORT dispatched" in result.stdout
+
+
+def test_heal_workflows_wire_self_inflicted_routing() -> None:
+	intake = _yaml(INTAKE_WORKFLOW)
+	assert intake["jobs"]["intake"]["env"]["WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED"] == "${{ vars.WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED || 'true' }}"
+	review = _yaml(REVIEW_AUTOFIX_WORKFLOW)
+	steps = [step for job in review["jobs"].values() for step in job.get("steps", []) if step.get("name") == "Report autofix failure to workflow failure heal"]
+	assert len(steps) == 1
+	assert steps[0]["env"]["PR_CHANGED_FILES_FILE"] == "${{ env.PR_CHANGED_FILES_FILE }}"

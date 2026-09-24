@@ -322,9 +322,9 @@ def test_judge_reasoning_effort_uses_configured_value_without_downgrade():
 	# `model_reasoning_effort = "..."` in the emitted TOML — see
 	# tests/test_write_codex_config.py for that contract). Pin the
 	# call-site shape so an accidental refactor that drops the
-	# `${MODEL_REASONING_EFFORT_JUDGE:-xhigh}` substitution and silently
+	# `${MODEL_REASONING_EFFORT_JUDGE:-high}` substitution and silently
 	# swaps in another env var is caught here.
-	assert '--reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"' in script
+	assert '--reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"' in script
 
 
 def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths():
