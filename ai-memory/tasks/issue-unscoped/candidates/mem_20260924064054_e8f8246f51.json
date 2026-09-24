@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ingest_implement_plan_lessons.py:49-51 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `LESSON_LINE_RE` regex does not match file paths containing parentheses.\n  WHY: Its `[^()]*` file-path group prevents matching such paths, which could cause misparsing if they appear in progress logs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Trust boundary verification for merge commit ingestion.\n  expected_change_site: .github/workflows/issue_pr_status.yml\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implementation uses `git fetch origin \"${MERGE_COMMIT_SHA}\"` but does not verify the signature or trust of the merge commit. While it uses the `MERGE_COMMIT_SHA` provided by the workflow trigger, it doesn't explicitly verify the commit's lineage to the expected base or ensure it was not tampered with before ingestion.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ingest_implement_plan_lessons.py:49-51 | confidence=3\n  PROBLEM: The regex `LESSON_LINE_RE` is fragile regarding file paths.\n  WHY: The capturing group for files `(?P<files>[^()]*)\\)` uses `[^()]*`, which prevents matching file paths that contain parentheses. While rare, this makes the regex fragile and could lead to misparsing if such paths are ever included in the progress logs.\n- TASK_GAP\n  Requirement: Trust boundary verification for merge commit ingestion.\n  Expected change site: .github/workflows/issue_pr_status.yml\n  Evidence of absence: The implementation uses `git fetch origin \"${MERGE_COMMIT_SHA}\"` but does not verify the signature or trust of the merge commit. While it uses the `MERGE_COMMIT_SHA` provided by the workflow trigger, it doesn't explicitly verify the commit's lineage to the expected base or ensure it was not tampered with before ingestion.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "574e1e960a4cb991fdb01a1d007de9c2adfe323308a0408fa96574fccd9dbf41",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4367,
+    "run_id": "35961512038",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35961512038",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924064054_e8f8246f51",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4367,
+    "run_id": "35961512038"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T06:40:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
