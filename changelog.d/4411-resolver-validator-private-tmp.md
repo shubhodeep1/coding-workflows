@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Conflict resolution validates strict manifests even when the originals live under host `/tmp`.** The resolver copies the conflicted-set, conflict-spans, and clean-path manifests to the runner's shared temporary directory before the isolated validator reads them. An unavailable staging directory or failed copy still blocks the merge-resolution commit, and temporary copies are removed after validation.

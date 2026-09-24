@@ -544,6 +544,48 @@ def test_resolver_strict_manifests_are_visible_to_isolated_validator() -> None:
 		blocked = run_guard()
 		assert blocked.returncode != 0
 		assert "canonical RUNNER_TEMP outside private tmp is required" in blocked.stderr
+		environment["RUNNER_TEMP"] = runner_directory
+		(workspace / "clean.txt").write_text("merged\n", encoding="utf-8")
+		mock_bin = Path(runner_directory) / "mock-bin"
+		mock_bin.mkdir()
+		mock_cp = mock_bin / "cp"
+		mock_cp.write_text("#!/usr/bin/env bash\nexit 44\n", encoding="utf-8")
+		mock_cp.chmod(0o700)
+		environment["PATH"] = f"{mock_bin}:{environment['PATH']}"
+		failed_staging = run_guard()
+		assert failed_staging.returncode != 0
+
+
+def test_review_blocked_judge_parser_reads_tmp_output_via_stdin() -> None:
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	parser = poller.split("      # Parse judge output\n", 1)[1].split(
+		'\n      if [ -z "${RB_JUDGE_JSON}" ]; then', 1,
+	)[0]
+	assert 'raw = sys.stdin.read()' in parser
+	assert '< "${RB_JUDGE_OUTPUT_FILE}"' in parser
+	with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+		output = Path(directory) / "judge.json"
+		output.write_text('```json\n{"action": "merge"}\n```\n', encoding="utf-8")
+		command = (
+			'set -euo pipefail\n'
+			'run_poller_isolated_python() { shift; /usr/bin/python3 -I -S "$@"; }\n'
+			+ parser + '\nprintf "%s" "$RB_JUDGE_JSON"\n'
+		)
+		result = subprocess.run(
+			["bash", "-c", command],
+			env={**os.environ, "RB_JUDGE_OUTPUT_FILE": str(output)},
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert json.loads(result.stdout) == {"action": "merge"}
+		output.write_text("not JSON\n", encoding="utf-8")
+		invalid = subprocess.run(
+			["bash", "-c", command],
+			env={**os.environ, "RB_JUDGE_OUTPUT_FILE": str(output)},
+			capture_output=True, text=True, check=False,
+		)
+		assert invalid.returncode == 0
+		assert invalid.stdout == ""
 
 
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
