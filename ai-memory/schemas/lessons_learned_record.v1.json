@@ -36,7 +36,7 @@
     },
     "phase": {
       "type": "string",
-      "enum": ["review_autofix", "implement", "judge", "implement_plan", "orchestrator_completion"]
+      "enum": ["review_autofix", "implement", "judge", "implement_plan"]
     },
     "lesson_kind": {
       "type": "string",
