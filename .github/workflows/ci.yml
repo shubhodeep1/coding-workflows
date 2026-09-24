@@ -432,6 +432,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
 
+      - name: Orchestrator completion lessons + lesson retrieval tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_completion_lessons.py
+
       - name: Integration-ahead-by gate regression tests
         run: |
           set -euo pipefail

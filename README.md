@@ -29,6 +29,7 @@ Key behaviors:
 - **Candidate records** capture decisions, plans, code summaries, review findings, and validation outcomes.
 - **Processed-command idempotency** (`/answer`, `/approved`) prevents duplicate plan or implement runs caused by rapid re-triggering.
 - **Task lineage** tracks the full issue-to-PR lifecycle (open → in_progress → merged/closed) and is finalized when a PR closes or merges.
+- **Lessons learned** are read back as soft priors: the planning, implementation, and reviewer prompts get up to 5 of the newest lessons whose text or tags match the issue, within a quarter of the role's memory budget. The orchestrator adds a retrospective when a project completes (causes recorded as they happen: judge fix-ups, validation fixes, security findings, stall recoveries). Set `LESSONS_LEARNED_ENABLED=false` in the job environment to turn lessons off.
 - **Kill switch:** set the `AI_MEMORY_ENABLED` repository variable to `false` to disable all memory operations without any other code change.
 
 Memory operations are implemented in `scripts/memory_helpers.sh` (shared helper wrappers) and `scripts/ai_memory.py` (CLI). The `ai-memory` branch is created automatically on the first write.
