@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:6844-6845 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The preflight test hard-codes `/usr/bin/date` and `/usr/bin/dirname` symlink targets, making it fail on runner images where those binaries are located elsewhere or absent.\n  WHY: Google rates this MAJOR while MiniMax rates the same portability defect NIT; the highest severity is retained.\n- tests/test_assemble_prompt.py:78 | severity=critical | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `test_assembled_templates_match_legacy_prompt_bytes` fails because assembled prompt output differs from a checked-in legacy prompt file, blocking the required `lint` check.\n  WHY: MiniMax rates this BLOCKER while z-ai rates it MAJOR; the highest severity is retained. The reviewers attribute the mismatch to pre-existing branch drift in prompt files, templates, or the assembler.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a second contract test compares each `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` entry with its `origin/main` copy and fails when the branch copy writes a `${RUNTIME_DIR}/\u2026` or `${\u2026_FILE}` output the main copy does not.\"\n  expected_change_site: tests/test_review_autofix_review_pipeline_contract.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The last run diff does not contain the implementation for this test; it only contains fixes for the pre-existing environment-dependent test failure.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_review_pipeline_contract.py:6841-6862 | severity=MAJOR | confidence=4\n  PROBLEM: The negative test `test_editor_preflight_mode_reports_each_check_and_fails_fast` relies on `/usr/bin/date` and `/usr/bin/dirname` being available to symlink into the test's `bin` directory.\n  WHY: The hard-coded system binary paths are fragile across test environments, and the modified test lacks proper isolation.\n- Requirement: \"Add a second contract test compares each `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` entry with its `origin/main` copy and fails when the branch copy writes a `${RUNTIME_DIR}/\u2026` or `${\u2026_FILE}` output the main copy does not.\"\n  Expected change site: tests/test_review_autofix_review_pipeline_contract.py\n  Evidence of absence: The last run diff does not contain the implementation for this test; it only contains fixes for the pre-existing environment-dependent test failure.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_assemble_prompt.py:78 (`assert proc.stdout == _normalize_text(legacy_prompt.read_text(encoding=\"utf-8\"))` inside `test_assembled_templates_match_legacy_prompt_bytes`) | severity=BLOCKER | confidence=5\n  PROBLEM: The `lint` CI check fails because the rendered prompt does not byte-equal a checked-in legacy `prompts/mode-*.txt` file.\n  WHY: The PR does not modify the assembler or prompt files; the mismatch is attributed to pre-existing branch drift and blocks the PR's required `lint` check.\n- tests/test_review_autofix_review_pipeline_contract.py:6844\u20136845 (the new `(bin_dir / \"date\").symlink_to(\"/usr/bin/date\")` and `(bin_dir / \"dirname\").symlink_to(\"/usr/bin/dirname\")` symlinks in `test_editor_preflight_mode_reports_each_check_and_fails_fast`) | severity=NIT | confidence=3\n  PROBLEM: The test hard-codes `/usr/bin/date` and `/usr/bin/dirname` as symlink targets.\n  WHY: On runner images without those exact paths, the symlinks are dangling and sourced helpers fail before the preflight runs.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_assemble_prompt.py:78 | PROBLEM: The consensus finding about `tests/test_assemble_prompt.py:78` is pre-existing drift on this branch and unrelated to the phase 4 deliverables.\n  WHY: The PR does not modify prompt files, templates, or the assembler.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_assemble_prompt.py:78 \u2014 `assert proc.stdout == _normalize_text(legacy_prompt.read_text(encoding=\"utf-8\"))` | severity=MAJOR | confidence=4\n  PROBLEM: The required `lint` CI check fails because `test_assembled_templates_match_legacy_prompt_bytes` finds assembled output that does not match a checked-in legacy prompt file.\n  WHY: The PR does not modify prompt files, templates, shared includes, or the assembly script; the mismatch is attributed to pre-existing branch drift.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e9f8ac51442bc1de034329175b6b5d84b3742ea0c4e405aff586abbeff344ffe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4375,
+    "run_id": "35972431996",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35972431996",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924085701_4c189b6b27",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4375,
+    "run_id": "35972431996"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T08:57:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
