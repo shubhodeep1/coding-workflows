@@ -6984,13 +6984,17 @@ def test_review_support_identity_is_bound_across_jobs() -> None:
 	workflow = _workflow_text()
 	gate_job = _job_block("gate")
 	assert "review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}" in gate_job
+	assert "review_support_ref: ${{ steps.resolve_support.outputs.review_support_ref }}" in gate_job
+	assert "review_support_repo: ${{ steps.resolve_support.outputs.review_support_repo }}" in gate_job
 	assert "WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in gate_job
-	assert "gh api repos/shubhodeep1/coding-workflows/branches/main" not in gate_job
+	assert "gh api repos/shubhodeep1/coding-workflows/branches/main" in gate_job
+	assert "gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable" in gate_job
+	assert "gh api repos/shubhodeep1/coding-workflows/commits/stable" not in gate_job
 	for job_name in ("gate", "post-merge-validate-dispatch", "post-merge-force-poll", "fingerprint-cap-block", "codex-agent"):
 		job = _job_block(job_name)
 		assert "job.workflow_" not in job, job_name
-		assert "WORKFLOW_REF: refs/heads/main" in job, job_name
-		assert "WORKFLOW_REPOSITORY: shubhodeep1/coding-workflows" in job, job_name
+		assert "WORKFLOW_REF: ${{ " in job, job_name
+		assert "WORKFLOW_REPOSITORY: ${{ " in job, job_name
 		assert "WORKFLOW_SHA: ${{ " in job, job_name
 		if job_name != "codex-agent":
 			assert 'git -C .codex-workflow-src rev-parse HEAD' in job, job_name
@@ -7012,24 +7016,63 @@ def test_review_support_ref_rejects_untrusted_workflow_identity() -> None:
 		github_env = Path(td) / "github_env"
 		github_output = Path(td) / "github_output"
 		sha = "a" * 40
-		for caller_repo, workflow_repo, workflow_ref, workflow_sha, allowed in (
-			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/heads/main", sha, True),
-			("consumer/repo", "shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/tags/stable", sha, True),
-			("consumer/repo", "shubhodeep1/coding-workflows", f"shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{sha}", sha, True),
-			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", f"shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{sha}", sha, False),
-			("consumer/repo", "other/repo", "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/tags/stable", sha, False),
-			("consumer/repo", "shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/heads/feature", sha, False),
-			("consumer/repo", "shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/tags/stable", "not-a-sha", False),
+		main_sha = "b" * 40
+		stable_sha = "c" * 40
+		pinned_sha = "d" * 40
+		mock_bin = Path(td) / "bin"
+		mock_bin.mkdir()
+		mock_gh = mock_bin / "gh"
+		mock_gh.write_text(
+			'#!/usr/bin/env bash\ncase "$2" in\n'
+			'  repos/shubhodeep1/coding-workflows/branches/main) [ "${MOCK_MAIN_FAIL:-false}" != true ] || exit 1; printf "%s\\n" "$MOCK_MAIN_RESPONSE" ;;\n'
+			'  repos/shubhodeep1/coding-workflows/git/ref/tags/stable) printf "%s\\n" "$MOCK_STABLE_REF" ;;\n'
+			'  repos/shubhodeep1/coding-workflows/git/tags/*) printf "%s\\n" "$MOCK_STABLE_TAG" ;;\n'
+			'  *) exit 1 ;;\nesac\n', encoding="utf-8",
+		)
+		mock_gh.chmod(0o755)
+		gate_base_env = {
+			"PATH": f"{mock_bin}:{os.environ.get('PATH', '')}", "GITHUB_OUTPUT": str(github_output),
+			"GH_TOKEN": "test-token", "MOCK_MAIN_RESPONSE": json.dumps({"protected": True, "commit": {"sha": main_sha}}),
+			"MOCK_STABLE_REF": json.dumps({"object": {"type": "tag", "sha": "e" * 40}}),
+			"MOCK_STABLE_TAG": json.dumps({"object": {"type": "commit", "sha": stable_sha}}),
+		}
+		for caller_repo, workflow_repo, workflow_ref, workflow_sha, expected_sha, expected_ref in (
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", "refs/heads/main", sha, main_sha, "refs/heads/main"),
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", "refs/heads/ai/issue-4399", sha, main_sha, "refs/heads/main"),
+			("consumer/repo", "shubhodeep1/coding-workflows", "refs/tags/stable", sha, stable_sha, "refs/tags/stable"),
+			("consumer/repo", "shubhodeep1/coding-workflows", pinned_sha, sha, pinned_sha, pinned_sha),
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", pinned_sha, sha, None, None),
+			("consumer/repo", "other/repo", "refs/tags/stable", sha, None, None),
+			("consumer/repo", "shubhodeep1/coding-workflows", "refs/heads/feature", sha, None, None),
+			("consumer/repo", "shubhodeep1/coding-workflows", "refs/tags/stable", "not-a-sha", None, None),
 		):
 			github_output.write_text("", encoding="utf-8")
-			job_json = json.dumps({"workflow_repository": workflow_repo, "workflow_ref": workflow_ref, "workflow_sha": workflow_sha})
-			gate_env = {"PATH": os.environ.get("PATH", ""), "GITHUB_OUTPUT": str(github_output), "CALLER_REPOSITORY": caller_repo, "WORKFLOW_JOB_JSON": job_json}
+			job_json = json.dumps({"workflow_repository": workflow_repo, "workflow_ref": f"shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{workflow_ref}", "workflow_sha": workflow_sha})
+			gate_env = {**gate_base_env, "CALLER_REPOSITORY": caller_repo, "WORKFLOW_JOB_JSON": job_json}
 			result = subprocess.run(["bash", "-c", gate_step["run"]], env=gate_env, capture_output=True, text=True)
-			assert (result.returncode == 0) == allowed, (caller_repo, workflow_ref, result.stderr)
-			assert (f"review_support_sha={sha}" in github_output.read_text(encoding="utf-8")) == allowed
+			assert (result.returncode == 0) == (expected_sha is not None), (caller_repo, workflow_ref, result.stderr)
+			if expected_sha is not None:
+				assert f"review_support_sha={expected_sha}\n" in github_output.read_text(encoding="utf-8")
+				assert f"review_support_ref={expected_ref}\n" in github_output.read_text(encoding="utf-8")
+			else:
+				assert github_output.read_text(encoding="utf-8") == ""
+		for main_response, main_fail in (({"protected": False, "commit": {"sha": main_sha}}, "false"), ({"protected": True, "commit": {"sha": "invalid"}}, "false"), ({}, "true")):
+			github_output.write_text("", encoding="utf-8")
+			gate_env = {**gate_base_env, "CALLER_REPOSITORY": "shubhodeep1/coding-workflows", "WORKFLOW_JOB_JSON": json.dumps({"workflow_repository": "shubhodeep1/coding-workflows", "workflow_ref": "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/heads/ai/issue-4399", "workflow_sha": sha}), "MOCK_MAIN_RESPONSE": json.dumps(main_response), "MOCK_MAIN_FAIL": main_fail}
+			result = subprocess.run(["bash", "-c", gate_step["run"]], env=gate_env, capture_output=True, text=True)
+			assert result.returncode != 0 and not github_output.read_text(encoding="utf-8"), result.stderr
+		github_output.write_text("", encoding="utf-8")
+		stable_env = {**gate_base_env, "CALLER_REPOSITORY": "consumer/repo", "WORKFLOW_JOB_JSON": json.dumps({"workflow_repository": "shubhodeep1/coding-workflows", "workflow_ref": "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/tags/stable", "workflow_sha": sha}), "MOCK_STABLE_REF": json.dumps({"object": {"type": "commit", "sha": stable_sha}})}
+		result = subprocess.run(["bash", "-c", gate_step["run"]], env=stable_env, capture_output=True, text=True)
+		assert result.returncode == 0 and f"review_support_sha={stable_sha}\n" in github_output.read_text(encoding="utf-8"), result.stderr
+		github_output.write_text("", encoding="utf-8")
+		stable_env["MOCK_STABLE_REF"] = json.dumps({"object": {"type": "tag", "sha": "invalid"}})
+		result = subprocess.run(["bash", "-c", gate_step["run"]], env=stable_env, capture_output=True, text=True)
+		assert result.returncode != 0 and not github_output.read_text(encoding="utf-8"), result.stderr
 		for ref, repo, workflow_sha, allowed in (
 			("refs/heads/main", "shubhodeep1/coding-workflows", sha, True),
-			("refs/tags/stable", "shubhodeep1/coding-workflows", sha, False),
+			("refs/tags/stable", "shubhodeep1/coding-workflows", sha, True),
+			(sha, "shubhodeep1/coding-workflows", sha, True),
 			("refs/heads/ai/issue-4399", "shubhodeep1/coding-workflows", sha, False),
 			("refs/heads/main", "other/repo", sha, False),
 			("refs/heads/main", "shubhodeep1/coding-workflows", "not-a-sha", False),

@@ -1255,11 +1255,14 @@ through `clarify → plan → implement → review`.
   checkout; a missing optional reporter logs `skip reason=reporter_missing`.
   The model catalog and reviewer helpers come from the same gate-verified
   workflow commit, without merging rows from PR-head or moving snapshots. The
-  gate reads the current job's reusable-workflow identity, rejects unapproved
-  refs, and exports its immutable SHA before any support code runs; a failed
-  check blocks the run, while a failed optional fingerprint-cap helper checkout
-  skips that cap. The identity is passed through `toJSON(job)` because the
-  pinned actionlint version predates GitHub's `job.workflow_*` fields.
+  gate reads the job identity via `toJSON(job)` (the pinned actionlint version
+  predates direct `job.workflow_*` expressions). For source-repository PRs,
+  `workflow_sha` can be the PR head, so the gate instead reads `main`'s commit
+  from the GitHub branches API and requires `protected=true`; an API error,
+  unprotected branch, or invalid SHA blocks the run. Consumer `@stable` calls
+  resolve the release tag to a commit, while immutable consumer SHA pins use
+  their pinned value. Each checkout must match the resolved SHA; a failed
+  optional fingerprint-cap helper checkout only skips that cap.
 - **Reviewer failures name the failing phase:** if the `Run reviewer models`
   step fails, the editor never runs. `Post editor summary comment` names the failure `reviewers_failed` instead
   of `editor_empty_noop` (failure marker, fingerprint, cap reason, heal report

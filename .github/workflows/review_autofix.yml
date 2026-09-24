@@ -253,6 +253,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}
+      review_support_ref: ${{ steps.resolve_support.outputs.review_support_ref }}
+      review_support_repo: ${{ steps.resolve_support.outputs.review_support_repo }}
       should_run: ${{ steps.evaluate.outputs.should_run }}
       post_merge_dispatch: ${{ steps.evaluate.outputs.post_merge_dispatch }}
       skip_reason: ${{ steps.evaluate.outputs.skip_reason }}
@@ -279,21 +281,62 @@ jobs:
         env:
           CALLER_REPOSITORY: ${{ github.repository }}
           WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
           support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
-          support_sha="$(jq -r '.workflow_sha // ""' <<< "${WORKFLOW_JOB_JSON}")"
-          trusted_named_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@(refs/heads/main|refs/tags/stable)$'
+          support_event_sha="$(jq -r '.workflow_sha // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          trusted_main_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@refs/heads/main$'
+          trusted_stable_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@refs/tags/stable$'
+          source_branch_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@refs/heads/[^[:space:]]+$'
           trusted_consumer_pin='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@[0-9a-f]{40}$'
           if [ "${support_workflow_repository}" != "shubhodeep1/coding-workflows" ] ||
-             [[ ! "${support_sha}" =~ ^[0-9a-f]{40}$ ]] ||
-             { [[ ! "${support_workflow_ref}" =~ ${trusted_named_ref} ]] &&
+             [[ ! "${support_event_sha}" =~ ^[0-9a-f]{40}$ ]] ||
+             { [[ ! "${support_workflow_ref}" =~ ${trusted_main_ref} ]] &&
+               [[ ! "${support_workflow_ref}" =~ ${trusted_stable_ref} ]] &&
+               { [ "${CALLER_REPOSITORY}" != "shubhodeep1/coding-workflows" ] || [[ ! "${support_workflow_ref}" =~ ${source_branch_ref} ]]; } &&
                { [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] || [[ ! "${support_workflow_ref}" =~ ${trusted_consumer_pin} ]]; }; }; then
-            echo "::error::Review support must resolve to an approved workflow ref and immutable commit SHA."
+            echo "::error::Review support identity is unapproved (workflow_ref=${support_workflow_ref:-missing})."
+            exit 1
+          fi
+          if [[ "${support_workflow_ref}" =~ ${trusted_consumer_pin} ]]; then
+            support_sha="${support_workflow_ref##*@}"
+            support_ref="${support_sha}"
+          elif [[ "${support_workflow_ref}" =~ ${trusted_stable_ref} ]]; then
+            # No existing gate lookup resolves the release tag. /commits/stable
+            # selects the branch when both a branch and tag have that name.
+            support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+            support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+            support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
+              support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+              support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            fi
+            if [ "${support_tag_type}" != "commit" ]; then
+              echo "::error::Review support stable tag did not resolve to a commit."
+              exit 1
+            fi
+            support_ref="refs/tags/stable"
+          else
+            # The job workflow SHA follows a same-repo PR head. Read protected main independently.
+            # Gate PR metadata lookups do not include source-repository branch protection or SHA.
+            support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
+            support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
+            if ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
+              echo "::error::Review support main branch is not confirmed protected."
+              exit 1
+            fi
+            support_ref="refs/heads/main"
+          fi
+          if [[ ! "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Review support ref did not resolve to an immutable commit SHA."
             exit 1
           fi
           echo "review_support_sha=${support_sha}" >> "$GITHUB_OUTPUT"
+          echo "review_support_ref=${support_ref}" >> "$GITHUB_OUTPUT"
+          echo "review_support_repo=${support_workflow_repository}" >> "$GITHUB_OUTPUT"
 
       # The identical-failure fingerprint cap in "Evaluate review gate" runs
       # scripts/workflow_failure_heal.py. Only that file is checked out
@@ -317,8 +360,8 @@ jobs:
       - name: Verify fingerprint cap support identity
         if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
         env:
-          WORKFLOW_REPOSITORY: shubhodeep1/coding-workflows
-          WORKFLOW_REF: refs/heads/main
+          WORKFLOW_REPOSITORY: ${{ steps.resolve_support.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ steps.resolve_support.outputs.review_support_ref }}
           WORKFLOW_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
         run: |
           set -euo pipefail
@@ -328,7 +371,7 @@ jobs:
           fi
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [ "${WORKFLOW_REF}" != "refs/heads/main" ] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
             echo "::error::Unverified fingerprint cap support checkout."
             exit 1
@@ -1336,14 +1379,14 @@ jobs:
 
       - name: Verify workflow support source
         env:
-          WORKFLOW_REPOSITORY: shubhodeep1/coding-workflows
-          WORKFLOW_REF: refs/heads/main
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
           WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
         run: |
           set -euo pipefail
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [ "${WORKFLOW_REF}" != "refs/heads/main" ] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
             echo "::error::Unverified workflow support checkout."
             exit 1
@@ -1497,14 +1540,14 @@ jobs:
 
       - name: Verify workflow support source
         env:
-          WORKFLOW_REPOSITORY: shubhodeep1/coding-workflows
-          WORKFLOW_REF: refs/heads/main
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
           WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
         run: |
           set -euo pipefail
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [ "${WORKFLOW_REF}" != "refs/heads/main" ] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
             echo "::error::Unverified workflow support checkout."
             exit 1
@@ -1799,14 +1842,14 @@ jobs:
 
       - name: Verify workflow support source
         env:
-          WORKFLOW_REPOSITORY: shubhodeep1/coding-workflows
-          WORKFLOW_REF: refs/heads/main
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
           WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
         run: |
           set -euo pipefail
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [ "${WORKFLOW_REF}" != "refs/heads/main" ] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
             echo "::error::Unverified workflow support checkout."
             exit 1
@@ -2215,14 +2258,14 @@ jobs:
 
       - name: Resolve workflow support ref
         env:
-          WORKFLOW_REPOSITORY: shubhodeep1/coding-workflows
-          WORKFLOW_REF: refs/heads/main
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
           WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
         run: |
           set -euo pipefail
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [ "${WORKFLOW_REF}" != "refs/heads/main" ]; then
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]]; then
             echo "::error::Untrusted or unavailable review workflow identity."
             exit 1
           fi
