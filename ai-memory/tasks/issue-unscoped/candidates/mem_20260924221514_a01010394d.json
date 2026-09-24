@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:731-742 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Crash ownership can be classified as \"none\" when the trusted runtime script is misconfigured or a consumer repository does not correctly propagate the PR head SHA, causing failed autofix attempts to be ignored or misrouted.\n  WHY: The reviewer states that ownership classification relies on `script_ref` matching the PR's `head_sha`.\n- .github/workflows/review_autofix.yml:279-285 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The gate does not explicitly verify that `GH_PAT` has the repository read scope required by its API calls.\n  WHY: If `GH_PAT` lacks that scope, resolution may fail with a generic API error and block the pipeline.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Ensure PR-controlled support scripts are not executed with workflow credentials on same-repository PRs.\n  expected_change_site: .github/workflows/review_autofix.yml and helper scripts\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR has correctly migrated the runtime helper sourcing to rely solely on the gate-verified workflow commit (which is immutable and protected) and eliminated fallbacks to the PR-controlled worktree.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:731-742 | severity=high | confidence=4\n  PROBLEM: While the PR adds ownership logic, the classification of crash ownership relies on the script_ref matching the PR's head_sha.\n  WHY: If the trusted runtime script (from the workflow commit) is misconfigured or if a consumer repository uses a version that does not correctly propagate the PR head SHA, crashes could be incorrectly classified as \"none\" (not owned by PR), resulting in failed autofix attempts being silently ignored or misrouted instead of being triaged as \"pr-self-inflicted\".\n- .github/workflows/review_autofix.yml:279-285 | severity=low | confidence=3\n  PROBLEM: The gate resolves the review support commit using GH_PAT, but the API calls in the resolution logic (`gh api repos/...`) do not explicitly verify the scope of the token.\n  WHY: If GH_PAT lacks the required repository read scope, the resolution will fail, potentially blocking the pipeline incorrectly. While the pipeline fails closed, more explicit diagnostic messaging on scope deficiency would save debugging time compared to a generic API error.\n- TASK_GAP\n  Requirement: Ensure PR-controlled support scripts are not executed with workflow credentials on same-repository PRs.\n  Expected change site: .github/workflows/review_autofix.yml and helper scripts.\n  Evidence of absence: The PR has correctly migrated the runtime helper sourcing to rely solely on the gate-verified workflow commit (which is immutable and protected) and eliminated fallbacks to the PR-controlled worktree.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1dc86de6edf93390ca1b5204744e0770467b70a34948e2cf89a45e1a147e3a53",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4403,
+    "run_id": "36058839944",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36058839944",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924221514_a01010394d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4403,
+    "run_id": "36058839944"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T22:15:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
