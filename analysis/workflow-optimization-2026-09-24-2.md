@@ -130,3 +130,80 @@ Queue delay is unobserved; compute and retry dominate the evidenced long tail. T
 | Semble `reviewer-context` / `overflow` | 0 | 0 | 0 | Query and synthetic-fallback events exist, but no target probe outcome was supplied. |
 | Semble poller availability, target unspecified | 0 | 0 | 0 | Three poller summaries say unavailable; none supplies a probe result or reason. |
 | Serena, target unspecified | 0 | 0 | 0 | No query, per-tool, fallback, or probe evidence. |
+
+## Deep Audit — Workflows & Scripts (2026-09-24)
+
+### Section 1: Bug & Correctness Sweep
+
+The audit covered all 50 `.github/workflows/*.yml` files and all 90 shell and 57 Python files directly under `scripts/`. All workflows parsed as YAML; the scripts passed read-only `bash -n` or Python AST syntax checks. The existing report already identifies the strict-render CI failure and historical zero-reviewer summariser retries; those findings are not repeated here.
+
+- **SEC-001** — **File:** `.github/workflows/test-and-mark-stable.yml:162-184`; also `.github/workflows/mark-stable.yml:44-55` and `.github/workflows/workflow-log-analysis.yml:1160-1168`. **Severity:** High. **Category:** `security`. **Description:** These `run:` bodies insert `${{ github.ref_name }}` directly into double-quoted shell assignments. The value becomes script source *before* the shell parses it, so a ref containing shell substitution syntax could execute that substitution before the subsequent ref check; the release gate explicitly accepts arbitrary refs in `gate_only` mode. Whether repository ref-naming and dispatch permissions make a malicious ref reachable needs confirmation. **[NEEDS VERIFICATION]** **Recommended fix:** Pass the ref through step `env:` and assign from the environment in the script, as `implement.yml:510-516` does for `DEFAULT_CHECKOUT_REF`. Keep the existing `stable` checks.
+
+- **BUG-001** — **File:** `scripts/label_helpers.sh:179-229`. **Severity:** High. **Category:** `bug`. **Description:** `set_issue_phase_label_resilient` reads all labels, computes a replacement, then `PUT`s the entire set at lines 195-220. *Inference:* a concurrent label addition between the read and PUT can be erased, including an escalation label. If the read fails, lines 198-203 instead add the target without removing a conflicting phase label. **Recommended fix:** Extend the targeted phase-label mutation pattern in `scripts/orchestrate_poll_process.sh:2900-2956`: remove only observed conflicting phase labels, add the target, and re-read or retry when concurrent changes matter. Preserve unrelated labels and an explicit cache-miss fallback.
+
+- **BUG-002** — **File:** `scripts/orchestrate_poll_process.sh:3171-3247`, `19436-19450`. **Severity:** Medium. **Category:** `bug`. **Description:** `_fetch_issue_labels_batch_graphql` requests `labels(first: 50)` without `pageInfo`. Its caller treats any returned issue key as complete and skips REST fallback. *Inference:* an issue with more than 50 labels could have a phase or escalation label omitted from reconciliation. **[NEEDS VERIFICATION]** **Recommended fix:** Request `pageInfo.hasNextPage`; omit truncated entries from the batch result and use a paginated REST lookup for those issues, following the pagination-fallback approach in `scripts/gh_helpers.sh:800-807`.
+
+- **BUG-003** — **File:** `scripts/summarize_reviewer_consensus.sh:110-143`. **Severity:** Medium. **Category:** `bug`. **Description:** The comment says to discard files containing *only* a failure marker, but `grep -q '^.*failed after retries'` discards any nonempty reviewer output containing that phrase. If all inputs match, the script writes a “No findings reported” ledger. The occurrence in a genuine review is unverified. **[NEEDS VERIFICATION]** **Recommended fix:** Select inputs using their `status_${PREFIX}_*.txt` success files, or match the complete failure-marker format rather than a phrase anywhere in the review.
+
+- **SEC-002** — **File:** `scripts/gh_helpers.sh:621-633`; callers include `scripts/check_failure_triage.sh:152-199`. **Severity:** Medium. **Category:** `security`. **Description:** When an API command exits successfully but yields invalid JSON, `gh_api_json_to_file` prints the first 50 *raw response* lines to the workflow log. Its callers retrieve PR and issue objects, so a malformed or truncated response could expose their content rather than a bounded diagnostic. An actual disclosure was not observed. **[NEEDS VERIFICATION]** **Recommended fix:** Log endpoint class, byte count, parse status, and a non-content digest; do not print the response body.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below describe the cited execution paths **before retries or pagination**, not measured fleet totals. The previously reported autofix-sweep snapshot failure is already covered in the report’s GH API Call Audit and is not duplicated.
+
+- **API-001** — **File:** `scripts/orchestrate_poll_process.sh:10431-10443`. **Severity:** Medium. **Category:** `api-redundancy`. **Description:** When `final_pr_json_snapshot` does not match `final_pr`, the same `pulls/${final_pr}` endpoint is fetched separately for `.state` and `.merged_at`. **Calls:** 2 reads → 1 read on that branch; the matching-snapshot branch already makes 0. **Recommended fix:** Fetch one JSON payload and derive both fields locally, using the function’s existing snapshot-first pattern. Keep later freshness checks before a merge.
+
+- **API-002** — **File:** `scripts/orchestrate_poll_process.sh:13929-13936`, `16616-16624`. **Severity:** Medium. **Category:** `api-redundancy`. **Description:** Both managed and standalone reissue paths fetch the same issue twice consecutively for its title and body. **Calls:** 2 reads → 1 read per reissued issue on either path. **Recommended fix:** Fetch one issue object through `gh_retry _safe_gh_jq` and extract both fields locally; retain the existing empty-on-failure behavior.
+
+- **BATCH-001** — **File:** `scripts/orchestrate_poll_process.sh:21284-21317`. **Severity:** Medium. **Category:** `api-batching`. **Description:** After review-blocked handling, the poller refreshes labels with one REST call per `ISSUE_NUMS` entry and another for each newly reissued number. The repository already provides `_fetch_issue_labels_batch_graphql` at lines 3171-3247. **Calls:** `N + R` reads → approximately `ceil((N + R)/25)` batch reads, plus targeted REST fallbacks for missing or truncated entries; `R` excludes numbers already read. **Recommended fix:** Batch the union of current and reissued issue numbers, then apply the existing helper’s per-key fallback contract. Do not reuse the pre-mutation label snapshot as a fresh result.
+
+- **BATCH-002** — **File:** `scripts/orchestrate_poll_process.sh:12916-12948`. **Severity:** Medium. **Category:** `api-batching`. **Description:** `close_linked_pr` fetches each candidate PR inside its loop to inspect state, head, base, and body. **Calls:** `N` metadata reads → `ceil(N/25)` aliased GraphQL reads on a fully successful batch; up to `N` targeted reads remain necessary on batch misses. The up-to-`N` PR-close mutations are unchanged. **Recommended fix:** Add a cycle-local aliased PR-metadata helper following `_fetch_linked_pr_status_graphql` at lines 14818-14938, including all fields used by the implementation-PR check. Retain per-candidate fail-open lookup and state checks around mutations. **[NEEDS VERIFICATION]** that the candidate counts justify the added helper.
+
+- **API-003** — **File:** `scripts/gh_helpers.sh:610-663`, `678-726`. **Severity:** Medium. **Category:** `api-redundancy`. **Description:** Unlike `gh_retry` at lines 455-465, `gh_api_json_to_file` and `curl_gh_api` do not stop on permanent failures such as HTTP 404; both can sleep even after their final attempt. **Calls:** up to 5 requests → 1 request for a classified permanent failure, with the default `GH_RETRY_MAX_ATTEMPTS`. **Recommended fix:** Apply the existing `_is_gh_permanent_failure` policy to captured `gh` errors and classify curl HTTP statuses before backoff. Preserve retries for transient and rate-limit responses.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001** — **File:** `scripts/label_helpers.sh:23-177`; duplicates at `scripts/orchestrate_poll_process.sh:2843-2898`, `scripts/validate_process.sh:1158-1192`, and `.github/workflows/review_autofix.yml:1529-1532,5429-5443,5622-5633`. **Severity:** Medium. **Category:** `duplication`. **Description:** Label creation, colors, descriptions, and already-exists handling have several implementations and workflow-local fallbacks. They draw on different copies or defaults for the `.github/ai/label_contract.v1.json` catalog. **Recommended fix:** Make `scripts/label_helpers.sh` own `ensure_label_exists(label_name, repo)` with the contract-file lookup and a self-contained fallback when that file is absent. Update the named script and workflow callers to stage/source it, retaining their current missing-helper fallback behavior and the poller’s cycle-local confirmation cache.
+
+- **DUP-002** — **File:** `scripts/review_enable_auto_merge.sh:39-57`; duplicate at `.github/workflows/review_autofix.yml:1548-1566`. **Severity:** Low. **Category:** `duplication`. **Description:** Both paths independently fetch `.head.sha` and refuse merge-authorization labels if it differs from the reviewed SHA. **Recommended fix:** Put a side-effect-free `reviewed_pr_head_is_current(repo, pr_number, expected_sha)` in a new `scripts/review_head_helpers.sh`; update both callers while preserving their distinct warning text and fail-closed behavior. Do not source the executable auto-merge script merely to reuse its function.
+
+The two small internal plan and implement wrappers share substantial structure (`.github/workflows/internal-plan.yml:11-34`, `internal-implement.yml:12-32`), but their command predicates and permissions differ. A common runtime wrapper would obscure those gates; retain the separate workflows and their existing predicate-parity tests.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Lengths are **static decoded `run:` body character counts**, not unknowable runtime-expanded values. Only blocks containing `${{ }}` were counted: 225 across the 50 workflows. Runtime substitutions can change the final lengths.
+
+- **EXPR-001** — **File:** `.github/workflows/implement.yml:981-1337`. **Severity:** Medium. **Category:** `expression-limit`. **Description:** The interpolated “Stage workflow support files” block is approximately **16,985 characters**, leaving **4,015** against 21,000 and only **1,015** before the 18,000 high-risk threshold. Its three substitutions include `github.repository` and two repository variables. **Recommended fix:** Extract the body into a staged script under `scripts/`, pass expression values through step `env:`, and preserve the step name and existing outputs, as the `review_autofix_step_*.sh` extractions do.
+
+- **EXPR-002** — **File:** `.github/workflows/implement.yml:3218-3524`. **Severity:** Low. **Category:** `expression-limit`. **Description:** The interpolated destructive-commit preflight block is approximately **14,392 characters**: **608** below the 15,000 medium-risk threshold and **6,608** below the hard limit. This is a growth watchpoint, not a current threshold breach; its `<<` strings are output delimiters, not embedded prompt templates. **Recommended fix:** If the step grows, extract it to a staged `scripts/implement_preflight_destructive_guard.sh`, passing its expression value through `env:` and retaining its outputs.
+
+No interpolated block reached 18,000 characters. The longest `if:` value measured 739 characters; no workflow exceeded 800 KB. Separately, the repository documents a stricter **480,000-byte CI guard** than the requested 1 MB assessment: `review_autofix.yml` is 429,177 bytes, leaving 50,823 bytes to that local guard.
+
+### Section 5: Cross-Cutting Concerns
+
+- **SHELL-001** — **File:** `scripts/orchestrate_poll_process.sh:9262-9313`. **Severity:** Low. **Category:** `shellcheck`. **Description:** ShellCheck reports SC2155 at line 9266: `local now_epoch="$(date +%s)"` masks a failed `date` command. The value later enters arithmetic and `jq --argjson` without validation. **Recommended fix:** Declare and assign separately, check the command’s status and numeric result, and skip the staleness update on failure.
+
+- **DEAD-001** — **File:** `scripts/orchestrate_poll_process.sh:19475-19496`. **Severity:** Low. **Category:** `dead-code`. **Description:** `LINKED_PR_NUM` is initialized and assigned during linked-PR reconciliation but has no read in the audited workflow or script sources; the loop uses the candidate JSON to derive state separately. An indirect consumer of this shell variable has not been ruled out. **[NEEDS VERIFICATION]** **Recommended fix:** Confirm no sourced caller depends on it, then remove the two assignments; otherwise document and test its output contract.
+
+No `TODO`, `FIXME`, or `HACK` markers were found in the audited workflow and script paths. ShellCheck also reports warnings on several scripts; only the diagnostic with a traced failure path is raised above.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | SEC-001, BUG-001 |
+| Medium | 10 | BUG-002, BUG-003, SEC-002, API-001, API-002, BATCH-001, BATCH-002, API-003, DUP-001, EXPR-001 |
+| Low | 4 | DUP-002, EXPR-002, SHELL-001, DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 3 release/analysis workflows; `scripts/label_helpers.sh` | Medium |
+| API call optimization | `scripts/orchestrate_poll_process.sh`, `scripts/gh_helpers.sh` | Medium |
+| Code modularization | Label and review helpers, their script callers, and `review_autofix.yml` | Large |
+| Expression size reduction | `implement.yml` and staged script(s) | Medium |
+| Medium/Low fixes | Reviewer summariser, poller, API helper, and associated tests | Medium |
