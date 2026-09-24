@@ -17,7 +17,7 @@ env:
 jobs:
   clarify:
     if: >-
-      (github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) ||
+      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -397,6 +397,7 @@ jobs:
         id: clarify_route
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -426,13 +427,33 @@ jobs:
             IS_CLOSED="true"
           fi
 
+          # The event predicate is an early filter; use the already-fetched
+          # GitHub issue metadata before any automatic /answer is posted.
+          ISSUE_AUTHOR_TRUSTED="false"
+          if [ "${EVENT_NAME}" = "issues" ] && [ "${EVENT_ACTION}" = "opened" ]; then
+            if jq -e '(.user.type == "User" and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))) or (.user.type == "Bot" and .user.login == "github-actions[bot]")' "${ISSUE_META_FILE}" >/dev/null; then
+              ISSUE_AUTHOR_TRUSTED="true"
+            fi
+          fi
+
           SKIP_CODEX="false"
           if [ "${IS_CLOSED}" = "true" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}"
+          elif [ "${EVENT_NAME}" = "issues" ] && [ "${EVENT_ACTION}" = "opened" ] && [ "${ISSUE_AUTHOR_TRUSTED}" != "true" ]; then
+            SKIP_CODEX="true"
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=untrusted_issue_author outcome=skip issue=${ISSUE_NUMBER}"
           elif [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_FORCED_RECLARIFY}" != "true" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}"
+          fi
+
+          # Only a verified orchestrator fast path may post its automatic /answer.
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && \
+            { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
+            echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "orchestrator_fast_path=false" >> "$GITHUB_OUTPUT"
           fi
 
           echo "is_orchestrator_managed=${IS_ORCHESTRATOR_MANAGED}" >> "$GITHUB_OUTPUT"
@@ -499,7 +520,7 @@ jobs:
           fi
 
       - name: Set clarification phase label
-        if: steps.clarify_route.outputs.is_closed != 'true'
+        if: steps.clarify_route.outputs.is_closed != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' || steps.clarify_route.outputs.orchestrator_fast_path == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -519,7 +540,7 @@ jobs:
           fi
 
       - name: Orchestrator-managed fast path
-        if: steps.clarify_route.outputs.skip_codex == 'true' && steps.clarify_route.outputs.is_closed != 'true'
+        if: steps.clarify_route.outputs.orchestrator_fast_path == 'true' && steps.clarify_route.outputs.skip_codex == 'true' && steps.clarify_route.outputs.is_closed != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
