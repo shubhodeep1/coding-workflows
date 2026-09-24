@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_plan_claude_command.py:30-33 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The assertion `assert \"only a \\`success\\` run has audited anything\" in text` is reported as failing because the required literal substring is absent from `.claude/commands/implement-plan-claude.md`.\n  WHY: Severity disagreement: the highest reported severity is BLOCKER; however, deepseek_deepseek-v4-pro verified that the string exists at line 32 in both command files and classified the finding as a false positive, while google_gemini-3_1-flash-lite and minimax_minimax-m3 reported a runtime assertion failure.\n- tests/test_assemble_prompt.py:78 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: The assertion `assert proc.stdout == _normalize_text(legacy_prompt.read_text(encoding=\"utf-8\"))` fails because assembled prompt output does not match the legacy prompt bytes.\n  WHY: Severity disagreement: the highest reported severity is BLOCKER; deepseek_deepseek-v4-pro reported the failure as pre-existing prompt drift unrelated to this PR, while google_gemini-3_1-flash-lite reported it as a CI-blocking correctness defect.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Five problems found... Each is fixed in the command text and pinned by a new contract test.\"\n  expected_change_site: tests/test_implement_plan_claude_command.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test assertion `assert \"only a \\`success\\` run has audited anything\" in text` in tests/test_failed_runs_block_instead_of_passing fails at runtime, indicating the fix for the validation failure problem is not successfully pinned by the new contract test.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_implement_plan_claude_command.py: lines 30-33, test_failed_runs_block_instead_of_passing | severity=NIT | confidence=5\n  PROBLEM: The assertion string `\"only a \\`success\\` run has audited anything\"` is present at line 32 of both `.claude/commands/implement-plan-claude.md` and `workflow-templates/.claude/commands/implement-plan-claude.md`; the reported failure is a false positive.\n  WHY: The fixture normalizes whitespace via `\" \".join(text.split())`, preserving backticks and the substring; the test will pass.\n- .github/workflows/ci.yml: lint job, tests/test_assemble_prompt.py:78 test_assembled_templates_match_legacy_prompt_bytes | severity=NIT | confidence=5\n  PROBLEM: The CI lint job fails because one or more legacy prompt files under prompts/ are out of sync with their corresponding templates under prompts/_templates/.\n  WHY: The failure is pre-existing drift; this PR changes no prompt assembly files, scripts, or prelude fragments.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_plan_claude_command.py:30-33 | severity=BLOCKER | confidence=5\n  PROBLEM: The assertion `assert \"only a \\`success\\` run has audited anything\" in text` fails because the literal string does not exist in `.claude/commands/implement-plan-claude.md`.\n  WHY: The test raises an AssertionError during CI, causing the lint job to fail and blocking the PR.\n- tests/test_assemble_prompt.py:78 | severity=BLOCKER | confidence=4\n  PROBLEM: The assertion `assert proc.stdout == _normalize_text(legacy_prompt.read_text(encoding=\"utf-8\"))` fails at runtime.\n  WHY: Assembled prompt output does not match the legacy byte representation, causing an AssertionError in CI and blocking the build.\n- TASK_GAP\n  Requirement: \"Five problems found... Each is fixed in the command text and pinned by a new contract test.\"\n  Expected change site: tests/test_implement_plan_claude_command.py\n  Evidence of absence: The test assertion `assert \"only a \\`success\\` run has audited anything\" in text` in tests/test_failed_runs_block_instead_of_passing fails at runtime, indicating that the fix for the validation failure problem is not successfully pinned by the new contract test.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_implement_plan_claude_command.py: lines 30-33, function test_failed_runs_block_instead_of_passing, first assertion | severity=BLOCKER | confidence=5\n  PROBLEM: The assertion `assert \"only a \\`success\\` run has audited anything\" in text` is reported as absent from `.claude/commands/implement-plan-claude.md` and its `workflow-templates/.claude/commands/implement-plan-claude.md` twin.\n  WHY: The new CI contract test raises AssertionError before its second assertion; minimax_minimax-m3 reported this as the next PR failure after pre-existing prompt drift is cleared.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5acf5d4ee712ccc74159c000b7da3767f3070be05fd0ad341c1d6e2f90611427",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4366,
+    "run_id": "35949371968",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35949371968",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924063345_367d369450",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4366,
+    "run_id": "35949371968"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T06:33:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
