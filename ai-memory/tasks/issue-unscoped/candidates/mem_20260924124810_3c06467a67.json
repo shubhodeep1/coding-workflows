@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_agent_process_isolation.py:test_every_writer_path_reconciles_complete_workspace_manifest | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The test assertion reportedly hard-codes `$35991272554` and `$1` instead of matching the dynamically generated workflow path pattern.\n  WHY: The reviewers reporting this say it causes an AssertionError in CI; severity disagreement: BLOCKER vs MAJOR. deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, and z-ai_glm-5_2 report this is a false positive; `tests/test_agent_process_isolation.py:834` contains the correctly escaped `${{GITHUB_RUN_ID}}-${{GITHUB_RUN_ATTEMPT}}` pattern.\n- scripts/review_conflict_resolve.sh:1947-1955 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The workspace-guard reconcile failure path exits with code 78 without emitting `emit_conflict_resolver_substate \"Failed\" \"${attempt}\"`.\n  WHY: Guard-triggered aborts therefore lack the `Failed` substate telemetry recorded for other failure paths, reducing observability; severity disagreement: NIT vs MAJOR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:lines 1952-1954 | severity=NIT | confidence=4\n  PROBLEM: Workspace-guard reconcile failure exits with `exit 78` but does not call `emit_conflict_resolver_substate \"Failed\" \"${attempt}\"` before exiting.\n  WHY: Reduced observability into guard-triggered conflict-resolver aborts. The calling workflow sees exit code 78 but the telemetry ledger records no Failed substate, unlike the model-execution failure paths which still emit substates.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_agent_process_isolation.py:test_every_writer_path_reconciles_complete_workspace_manifest | severity=BLOCKER | confidence=5\n  PROBLEM: The test assertion uses hardcoded literals `$35991272554` and `$1` instead of matching the dynamically generated workflow path pattern `${{GITHUB_RUN_ID}}-${{GITHUB_RUN_ATTEMPT}}`.\n  WHY: The test will fail with an AssertionError because the actual workflow files do not contain these literal values, breaking the CI test gate.\n- scripts/review_conflict_resolve.sh:Lines 1950-1955 | severity=MAJOR | confidence=4\n  PROBLEM: When workspace-guard reconcile fails, the script exits immediately with `exit 78` but fails to emit the `Failed` substate for the conflict resolver.\n  WHY: Telemetry for conflict-resolver failures is lost when triggered by workspace-guard rejections, reducing observability into guard-triggered aborts compared to other failure paths that still emit substates.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_conflict_resolve.sh:1947-1954 (reconcile failure block) | severity=NIT | confidence=4\n  PROBLEM: The reconcile failure path exits immediately with `exit 78` but drops the `emit_conflict_resolver_substate \"Failed\" \"${attempt}\"` call that the previous code emitted before terminating.\n  WHY: When the workspace guard rejects a reconcile attempt, the conflict-resolver substate telemetry will not record the `Failed` substate for that attempt. Observability into guard-triggered aborts is reduced compared to other failure paths (e.g. codex exit-code failures) that still emit substates before exiting. The prior code had a deferred exit block that included `emit_conflict_resolver_substate \"Failed\" \"${attempt}\"`; the new inline-exit path omits it.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_agent_process_isolation.py:test_every_writer_path_reconciles_complete_workspace_manifest | severity=MAJOR | confidence=5\n  PROBLEM: Test hard-codes placeholder run ID/attempt values that do not appear in workflows (which use ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}).\n  WHY: AssertionError in CI; test contract breaks.\n- scripts/review_conflict_resolve.sh:~1948 (reconcile failure block after guard call) | severity=NIT | confidence=4\n  PROBLEM: Immediate `exit 78` on reconcile failure bypasses `emit_conflict_resolver_substate \"Failed\" \"${attempt}\"`.\n  WHY: Guard violations lose \"Failed\" substate telemetry (unlike prior _codex_exit path).\n\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_conflict_resolve.sh:lines 1947-1954 (reconcile failure block) | severity=NIT | confidence=4\n  PROBLEM: The LAST RUN DIFF replaced the deferred `_codex_exit=78` + later `emit_conflict_resolver_substate \"Failed\" \"${attempt}\"` + `exit 78` sequence with an immediate `exit 78` that skips the `Failed` substate emission.\n  WHY: Ledger substate telemetry for conflict-resolver workspace-guard rejections no longer records the `Failed` substate. The run ledger in ai-memory will show the resolver process ending without a terminal substate event for this failure class, reducing observability for guard-triggered aborts. The error message is still emitted via `::error::` and the process still exits 78 (fail-closed behavior is preserved), so this is an observability gap, not a correctness regression.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e461fdc66e0ea7d8f05c7c31168583075bd25594316e601739649847900c99a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4394,
+    "run_id": "35991272554",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35991272554",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924124810_3c06467a67",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4394,
+    "run_id": "35991272554"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T12:48:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
