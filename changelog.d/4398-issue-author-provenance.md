@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Automatic issue triage and approval now require verified original-author provenance.** Newly opened issues from outside contributors no longer start the clarification pipeline; an issue started manually by a maintainer still requires explicit `/approved` if its original author is untrusted. Clarification rechecks the author before posting an automatic `/answer`, and planning refreshes state and author in one issue read before posting `/approved`. Missing or unreadable provenance defers approval instead of assuming the issue is open.
