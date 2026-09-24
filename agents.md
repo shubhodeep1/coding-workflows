@@ -388,7 +388,8 @@ a new value, add it to the appropriate overrides file with a
   step-script contract and workflow file size guard tests") fails when any
   `.github/workflows/*.yml` reaches **480,000 bytes**, 32,000 bytes before
   the hard limit.
-- **Split rule, for interactive sessions and the unattended pipelines alike:**
+- **Split rule, for interactive sessions and the unattended pipelines alike**
+  (also `CLAUDE.md` §27 and `unattended_system_instructions.md` §24):
   when a change leaves a workflow file at or above 480,000 bytes, move the
   largest inline `run:` bodies into `scripts/` **in the same PR** until the
   file is well under the guard (aim for 50,000+ bytes of headroom). Never

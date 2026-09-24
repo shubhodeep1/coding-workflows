@@ -10,7 +10,7 @@
 | CI guard in `tests/test_workflow_file_size_limit.py` | fails at 480,000 bytes |
 | Steps moved to `scripts/` | 5 (merge-topology gate, editor-uncommitted check, merge-conflict detection, partial finalize comment, iteration summary) |
 
-What this means for operators and consumer repos: the phantom `review_autofix.yml` runs stop with this change, and the promote-cycle smoke gate on `main` no longer latches onto them. The moved steps keep their names, ids, conditions, env and log lines. Consumer runs pick up the five new scripts through the existing support staging on the next `@stable` sync, with no wrapper change.
+What this means for operators and consumer repos: the phantom `review_autofix.yml` runs stop with this change, and the promote-cycle smoke gate on `main` no longer latches onto them. The moved steps keep their names, ids, conditions, env and log lines. Consumer runs pick up the five new scripts through the existing support staging on the next `@stable` sync, with no wrapper change. The split rule is now `CLAUDE.md` §27, which reaches consumer repos on that sync, and `unattended_system_instructions.md` §24: once a change leaves a workflow file at 480,000 bytes or more, the same PR moves its largest inline `run:` bodies into `scripts/`.
 
 ### For contributors
 
