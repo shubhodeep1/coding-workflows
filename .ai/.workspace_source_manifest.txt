@@ -226,6 +226,7 @@ changelog.d/4290-security-boundary-hardening.md
 changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/4342-sandbox-state-outside-private-tmp.md
 changelog.d/4379-followup-metadata-and-merged-label-race.md
+changelog.d/4390-workspace-guard-private-tmp.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/codex-blocked-verdict-bail.md
@@ -531,6 +532,7 @@ scripts/repo_root.py
 scripts/resolve_integration_ref.sh
 scripts/review_agents_md_materiality.sh
 scripts/review_apply_fixes.sh
+scripts/review_autofix_step_iteration_summary.sh
 scripts/review_collect_pr_metadata.sh
 scripts/review_commit_changes.sh
 scripts/review_conflict_prepare.sh
