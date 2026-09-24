@@ -1720,6 +1720,27 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	assert optional and {"workflow_failure_heal.py", "workflow_failure_heal_autofix_report.sh"} <= set(optional.group(1).split())
 
 
+def test_autofix_failure_report_never_uses_pr_worktree_support() -> None:
+	workflow = _yaml(REVIEW_AUTOFIX_WORKFLOW)
+	step = next(step for step in workflow["jobs"]["codex-agent"]["steps"] if step.get("name") == "Report autofix failure to workflow failure heal")
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-untrusted-") as tmp_name:
+		work, state_file, env = _stage_autofix_report(Path(tmp_name), comments=[{"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		marker = Path(tmp_name) / "pr_reporter_executed"
+		(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name).write_text(f'touch "{marker}"\n', encoding="utf-8")
+		env.pop("SUPPORT_SCRIPTS_DIR", None)
+		result = subprocess.run(["bash", "-c", step["run"]], cwd=work, env=env, capture_output=True, text=True)
+		assert result.returncode == 0 and "skip reason=reporter_missing path=unstaged_support" in result.stdout
+		assert not marker.exists()
+
+		trusted = Path(tmp_name) / "trusted" / "scripts"
+		trusted.mkdir(parents=True)
+		shutil.copy(AUTOFIX_REPORT_SCRIPT, trusted / AUTOFIX_REPORT_SCRIPT.name)
+		env["SUPPORT_SCRIPTS_DIR"] = str(trusted)
+		result = subprocess.run(["bash", "-c", step["run"]], cwd=work, env=env, capture_output=True, text=True)
+		assert result.returncode == 0 and "skip reason=heal_helper_missing" in result.stdout
+		assert not marker.exists() and "dispatches" not in _state(state_file)
+
+
 def test_review_autofix_workflow_backfills_the_heal_reporter_from_main_snapshot() -> None:
 	# The optional reporter may be absent from the staged bundle, but it may
 	# only be backfilled from the verified workflow commit, not a PR checkout.

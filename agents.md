@@ -409,7 +409,10 @@ a new value, add it to the appropriate overrides file with a
   selected immutable SHA and compares HEAD before running support. Self-repo
   PR-head `scripts/*`, `prompts/*`, and `ai-memory/schemas/*` are reviewed as
   data; the executable runtime bundle comes only from the verified workflow
-  commit. Consumer release pins use the same SHA-bound checkout.
+  commit. Consumer release pins use the same SHA-bound checkout. The
+  failure-path reporter skips when support staging did not complete or its
+  optional Python helper is absent; neither case executes `scripts/` from
+  the PR worktree.
 - Consequence for contributors and the unattended editor: a helper on the PR
   branch may not depend on a new workflow export until that export is on
   `main`. New variables a staged helper reads must default inside the helper

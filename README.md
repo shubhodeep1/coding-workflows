@@ -1252,7 +1252,8 @@ through `clarify → plan → implement → review`.
   `scripts/workflow_failure_heal.py` are staged by the workflow-SHA-pinned
   `stage_workflow_support.sh` (`OPTIONAL_BOOTSTRAP_SCRIPTS`). The
   `REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS` backfill uses only that same verified
-  checkout; a missing optional reporter logs `skip reason=reporter_missing`.
+  checkout; if support staging failed or a reporter is missing, the failure
+  step skips instead of running the PR worktree's `scripts/` copies.
   The model catalog and reviewer helpers come from the same gate-verified
   workflow commit, without merging rows from PR-head or moving snapshots. The
   gate reads the job identity via `toJSON(job)` (the pinned actionlint version

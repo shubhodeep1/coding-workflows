@@ -7210,12 +7210,16 @@ jobs:
           PR_CHANGED_FILES_FILE: ${{ env.PR_CHANGED_FILES_FILE }}
         run: |
           set -uo pipefail
-          reporter="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal_autofix_report.sh"
+          if [ -z "${SUPPORT_SCRIPTS_DIR:-}" ]; then
+            echo "WORKFLOW_HEAL_AUTOFIX_REPORT skip reason=reporter_missing path=unstaged_support"
+            exit 0
+          fi
+          reporter="${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal_autofix_report.sh"
           if [ ! -f "${reporter}" ]; then
             echo "WORKFLOW_HEAL_AUTOFIX_REPORT skip reason=reporter_missing path=${reporter}"
             exit 0
           fi
-          WORKFLOW_HEAL_PY="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal.py" bash "${reporter}" || true
+          WORKFLOW_HEAL_PY="${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal.py" bash "${reporter}" || true
 
       - name: Cleanup temporary artifacts
         if: always()
