@@ -7,6 +7,11 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
+import importlib.util
+import http.client
+import http.server
+import threading
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -233,6 +238,117 @@ def test_clarify_workflow_detects_and_escalates_blocked_output() -> None:
 	assert "--remove-label 'ai:planning'" in wf
 	assert "steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'" in wf
 	assert "OUTCOME=\"blocked\"" in wf
+
+
+def test_clarify_agent_runs_only_in_isolated_container() -> None:
+	wf = _read(CLARIFY_WF)
+	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
+	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
+	assert "codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do" in wf
+	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in wf
+	assert "--network none --read-only --cap-drop ALL --security-opt no-new-privileges" in runner
+	assert "--sandbox read-only" in runner
+	assert 'type=bind,src=${run_root}/source,dst=/source,readonly' in runner
+	assert 'type=bind,src=${run_root}/results,dst=/results' in runner
+	assert "--env CLARIFY_PROXY_KEY=isolated-placeholder" in runner
+	assert "--env OPENROUTER_API_KEY" not in runner
+	assert "--mount type=bind,src=${GITHUB_WORKSPACE}" not in runner
+	assert '".git"' in runner and '".env"' in runner and 'os.O_NOFOLLOW' in runner
+	assert 'trap cleanup EXIT' in runner and "trap 'exit 143' TERM" in runner
+	assert 'docker rm -f "${container_name}"' in runner
+	assert "--sandbox danger-full-access" not in wf.split("- name: Run Codex", 1)[1]
+	assert "if cat \"${CODEX_PROMPT_FILE}\" | codex" not in wf
+	assert 'max_attempts=3' in wf
+	assert 'CODEX_OUTPUT_FILE' in wf and 'codex_log.txt' in wf
+
+
+def test_clarify_broker_rejects_other_routes_and_streams_without_leaking_key() -> None:
+	spec = importlib.util.spec_from_file_location("clarify_broker", REPO_ROOT / "scripts" / "clarify_openrouter_broker.py")
+	assert spec and spec.loader
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	seen = []
+
+	class FakeResponse:
+		status = 200
+
+		def __init__(self):
+			self.chunks = iter([b'data: first\n\n', b'data: second\n\n'])
+
+		def getheader(self, name, default):
+			return "text/event-stream" if name == "Content-Type" else default
+
+		def read1(self, _size):
+			return next(self.chunks, b"")
+
+	class FakeUpstream:
+		def __init__(self, host, **_kwargs):
+			assert host == "openrouter.ai"
+
+		def request(self, method, path, body, headers):
+			if body == b'{"model":"openai/gpt-6-sol","fail":true}':
+				raise OSError("private-sentinel")
+			seen.append((method, path, body, headers))
+
+		def getresponse(self):
+			return FakeResponse()
+
+		def close(self):
+			pass
+
+	with tempfile.TemporaryDirectory() as td, mock.patch.object(module.http.client, "HTTPSConnection", FakeUpstream):
+		broker = module.UnixHTTPServer(str(Path(td) / "broker.sock"), module.Relay)
+		broker.mode = "broker"
+		broker.api_key = "private-sentinel"
+		broker.model = "openai/gpt-6-sol"
+		bridge = http.server.HTTPServer(("127.0.0.1", 0), module.Relay)
+		bridge.mode = "bridge"
+		bridge.socket_path = str(Path(td) / "broker.sock")
+		threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (broker, bridge)]
+		for thread in threads:
+			thread.start()
+		try:
+			connection = http.client.HTTPConnection("127.0.0.1", bridge.server_address[1], timeout=5)
+			connection.request("GET", "/api/v1/responses")
+			get_result = connection.getresponse()
+			assert get_result.status == 405
+			get_result.read()
+			connection.request("POST", "http://evil.invalid/api/v1/responses", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder"})
+			bad_path_result = connection.getresponse()
+			assert bad_path_result.status == 400
+			bad_path_result.read()
+			connection.request("POST", "/api/v1/responses", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer wrong"})
+			bad_auth_result = connection.getresponse()
+			assert bad_auth_result.status == 400
+			bad_auth_result.read()
+			connection.request("POST", "/api/v1/responses", b'{"model":"other/model"}', {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder"})
+			bad_model_result = connection.getresponse()
+			assert bad_model_result.status == 400
+			bad_model_result.read()
+			connection.request("POST", "/api/v1/responses", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder", "Content-Length": str(module.MAX_BODY + 1)})
+			oversized_result = connection.getresponse()
+			assert oversized_result.status == 400
+			oversized_result.read()
+			connection.close()
+			connection = http.client.HTTPConnection("127.0.0.1", bridge.server_address[1], timeout=5)
+			connection.request("POST", "/api/v1/responses", b'{"model":"openai/gpt-6-sol"}', {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder"})
+			response = connection.getresponse()
+			assert response.status == 200
+			assert response.read() == b'data: first\n\ndata: second\n\n'
+			assert len(seen) == 1
+			assert seen[0] == ("POST", "/api/v1/responses", b'{"model":"openai/gpt-6-sol"}', {"Content-Type": "application/json", "Authorization": "Bearer private-sentinel"})
+			assert "private-sentinel" not in str(response.headers)
+			connection.request("POST", "/api/v1/responses", b'{"model":"openai/gpt-6-sol","fail":true}', {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder"})
+			failed_response = connection.getresponse()
+			assert failed_response.status == 502
+			assert b"private-sentinel" not in failed_response.read()
+		finally:
+			connection.close()
+			for server in (bridge, broker):
+				server.shutdown()
+				server.server_close()
+			for thread in threads:
+				thread.join(timeout=5)
 
 
 def test_unterminated_fence_does_not_hide_blocked_reason() -> None:

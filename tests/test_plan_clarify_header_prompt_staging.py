@@ -89,6 +89,17 @@ def test_header_prompt_exists() -> None:
 	)
 
 
+def test_clarify_sandbox_support_has_main_snapshot_fallback() -> None:
+	"""The sandbox must be staged from the same support refs as the runner."""
+	clarify = (WORKFLOW_DIR / "clarify.yml").read_text(encoding="utf-8")
+	assert 'src=".codex-workflow-src/scripts/${f}"' in clarify
+	assert '.codex-workflow-src-main/scripts/${f}' in clarify
+	assert 'sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"' in clarify
+	assert '.codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile' in clarify
+	assert 'echo "::error::Missing clarification sandbox Dockerfile"' in clarify
+	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in clarify
+
+
 def test_render_callers_stage_header_prompt() -> None:
 	"""Every workflow rendering prompts/header.txt must stage it first."""
 	callers = _workflows_rendering_header()
