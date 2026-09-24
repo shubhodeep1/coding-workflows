@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should be improved?\nChoices:\nA. A specific workflow or pipeline phase \u2014 name it and describe the problem. (RECOMMENDED)\nB. A specific script, prompt, or document \u2014 name it and describe the problem.\nC. Repository-wide behavior \u2014 describe the problem and the desired outcome.",
+  "fingerprint": "6d9cf128f891f4c45e8ab14ea53621cf2eeb9dfa2f7d17a086937e7c502a178c",
+  "lineage": {
+    "issue_number": 4380,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35966518211",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35966518211",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260924065356_80bf7addf3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4380,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35966518211"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4380 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-24T06:53:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
