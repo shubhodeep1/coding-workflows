@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2327-2336 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The active-backfill case emits `::notice::MODEL_CATALOG_BACKFILL...`, while the no-op case emits bare `MODEL_CATALOG_BACKFILL...`.\n  WHY: The inconsistent stable-log-key format may cause workflow-log-analysis and other grep- or exact-prefix-based tooling to parse active and no-op runs differently.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Every new stable log prefix must have a `LOG_PREFIX.name=MODEL_CATALOG_BACKFILL` registry entry in the agents.md \"Stable log prefixes (contractual)\" section.\n  expected_change_site: agents.md, \"Stable log prefixes (contractual)\" section, after `LOG_PREFIX.name=opencode_agent_failure`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  EVIDENCE: `MODEL_CATALOG_BACKFILL` is referenced narratively in agents.md and documented in README.md and the changelog, but `grep LOG_PREFIX.name=MODEL_CATALOG_BACKFILL agents.md` returns zero matches; the required registry entry is absent.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:2327 and 2333 in the diff hunk | severity=NIT | confidence=3\n  PROBLEM: The success case uses a `::notice::MODEL_CATALOG_BACKFILL...` prefix, while the no-op case emits a bare `MODEL_CATALOG_BACKFILL...` prefix.\n  WHY: Inconsistent prefix formats may prevent workflow-log-analysis and other grep-based tooling from reliably parsing production versus idle workflow runs.\n- TASK_GAP\n  Requirement: The PR adds `MODEL_CATALOG_BACKFILL` as a new stable log key, and every stable prefix must have a `LOG_PREFIX.name=` registry entry.\n  Expected change site: agents.md in the \"Stable log prefixes (contractual)\" section (near line 1388).\n  Evidence of absence: The registry block in agents.md does not contain a `LOG_PREFIX.name=MODEL_CATALOG_BACKFILL` entry.\n  severity=MAJOR | confidence=4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:2334 and 2336 | severity=NIT | confidence=3\n  PROBLEM: The active-backfill case prints `::notice::MODEL_CATALOG_BACKFILL added=<n> slugs=<list> source=main_snapshot`, while the no-op case prints the bare `MODEL_CATALOG_BACKFILL added=0 source=main_snapshot`.\n  WHY: The same stable log key has different shapes depending on whether work happened, which may cause downstream tooling to treat one case as a notice annotation and the other as a regular log line.\n- TASK_GAP\n  Requirement: Every newly introduced stable prefix must have both a narrative mention and a `LOG_PREFIX.name=MODEL_CATALOG_BACKFILL` registry entry in the agents.md \"Stable log prefixes (contractual)\" block.\n  Expected change site: agents.md \"Stable log prefixes (contractual)\" section, appending `LOG_PREFIX.name=MODEL_CATALOG_BACKFILL` after line 1338.\n  Evidence of absence: `grep` for `LOG_PREFIX.name=MODEL_CATALOG_BACKFILL` in agents.md returns zero matches; the narrative mention at agents.md:1508 exists, but the registry entry is absent.\n  severity=MAJOR | confidence=4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The PR introduces `MODEL_CATALOG_BACKFILL` as a new stable log key, and every stable prefix must have a `LOG_PREFIX.name=` entry in the agents.md registry.\n  Expected change site: agents.md, after line 1338 (`LOG_PREFIX.name=opencode_agent_failure`), add `LOG_PREFIX.name=MODEL_CATALOG_BACKFILL`.\n  Evidence of absence: `grep LOG_PREFIX.name=MODEL_CATALOG_BACKFILL agents.md` returns zero matches; the prefix is referenced narratively at line 1508 but has no contractual registry entry.\n  severity=MAJOR | confidence=5\n- .github/workflows/review_autofix.yml:2334 vs 2336 (model catalog backfill heredoc) | severity=NIT | confidence=3\n  PROBLEM: The success case emits `::notice::MODEL_CATALOG_BACKFILL added=...`, while the no-op case emits bare `MODEL_CATALOG_BACKFILL added=0 ...`.\n  WHY: The inconsistency could confuse maintainers and downstream log processing; either both cases should be bare or both should be annotated.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:MODEL_CATALOG_BACKFILL heredoc (~2287-2345) | severity=NIT | confidence=3\n  PROBLEM: The success path emits `::notice::MODEL_CATALOG_BACKFILL...`, while the no-op path emits bare `MODEL_CATALOG_BACKFILL added=0...`.\n  WHY: Log-analysis tooling that keys on exact stable prefixes can misparse one format.\n- TASK_GAP\n  Requirement: Every new stable log prefix must have a `LOG_PREFIX.name=` registry entry in agents.md.\n  Expected change site: agents.md (after `LOG_PREFIX.name=opencode_agent_failure`)\n  Evidence of absence: No `LOG_PREFIX.name=MODEL_CATALOG_BACKFILL` entry exists; the new key is only mentioned narratively.\n  severity=MAJOR | confidence=4\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The PR introduces `MODEL_CATALOG_BACKFILL` as a new stable log key, and the established convention requires both a narrative bullet entry and a `LOG_PREFIX.name=MODEL_CATALOG_BACKFILL` registry entry.\n  Expected change site: agents.md \"Stable log prefixes (contractual)\" section, both the narrative bullet list after line 1162 (`- \\`opencode_agent_failure\\``) and the registry block after line 1338 (`LOG_PREFIX.name=opencode_agent_failure`).\n  Evidence of absence: `grep` for `LOG_CATALOG_BACKFILL` in agents.md returns zero `LOG_PREFIX.name=` entries and zero standalone `- \\`MODEL_CATALOG_BACKFILL\\`` bullet entries; the only reference is an inline mention at line 1508.\n  severity=MAJOR | confidence=4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ef565f59db366279d9835e722c8bf4fbd55a39f6bb87e3a8b291e66f08592a12",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4371,
+    "run_id": "35944780193",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35944780193",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924030412_b42c35897d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4371,
+    "run_id": "35944780193"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T03:04:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
