@@ -6369,8 +6369,8 @@ security_pass_exhaustion_judge() {
     echo "${diagnostics}"
   } > "${prompt_file}"
 
-  effective_judge_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
-  if ! bash scripts/write_codex_config.sh --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}" >/dev/null 2>"${error_file}"; then
+  effective_judge_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"
+  if ! bash scripts/write_codex_config.sh --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" >/dev/null 2>"${error_file}"; then
     echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=codex_config_failed"
     return 1
   fi
@@ -6914,7 +6914,7 @@ run_security_pass_inline() {
   set_tracking_phase_label "ai:security-pass"
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
 
-  effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
+  effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"
   if ! bash scripts/write_codex_config.sh --model "${effective_security_model}" --reasoning xhigh >/dev/null 2>"${audit_error_file}"; then
     security_pass_fail_closed "engine_unavailable" "The security-pass model configuration could not be prepared." "${prior_security_status}"
     return 1
@@ -8439,8 +8439,8 @@ invoke_judge_for_integration_conflict() {
   # Centralised in scripts/write_codex_config.sh — see that script's
   # header for the apply_patch / trust / elevation rationale.
   bash scripts/write_codex_config.sh \
-    --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+    --model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
   local prompt_file
   local output_file
@@ -8566,7 +8566,7 @@ invoke_judge_for_integration_conflict() {
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
-  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
+  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
     return 0
@@ -14412,7 +14412,7 @@ invoke_stall_judge() {
   # Centralised in scripts/write_codex_config.sh.
   bash scripts/write_codex_config.sh \
     --model "${MODEL_EDITOR}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
   local judge_success="false"
   local attempt
@@ -20008,7 +20008,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # Centralised in scripts/write_codex_config.sh.
     bash scripts/write_codex_config.sh \
       --model "${MODEL_EDITOR}" \
-      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
     REVIEW_BLOCKED_STATE_CHANGED=false
@@ -22127,11 +22127,11 @@ Manual intervention required." >/dev/null
   # Setup Codex config for judge
   mkdir -p ~/.codex
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
-  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-high}"
   # Centralised in scripts/write_codex_config.sh.
   bash scripts/write_codex_config.sh \
     --model "${MODEL_EDITOR}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
     continue

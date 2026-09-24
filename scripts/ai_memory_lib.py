@@ -2120,7 +2120,7 @@ Title: {title}
 Body:
 {body}"""
 
-_KEYWORD_MODEL_DEFAULT = "openai/gpt-5.4-nano"
+_KEYWORD_MODEL_DEFAULT = "openai/gpt-6-luna"
 _KEYWORD_MAX_RETRIES = 3
 
 

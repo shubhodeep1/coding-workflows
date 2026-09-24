@@ -823,7 +823,7 @@ fi
   echo "| Reviewer scope | ${reviewer_scope_label} |"
   echo "| Raw bundle size (bytes) | ${bundle_bytes} |"
   echo "| Floor tags | ${floor_tag_count} |"
-  echo "| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.6-sol} |"
+  echo "| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-6-sol} |"
   echo "| Consolidator invoked | ${consolidator_invoked} |"
   echo "| Consolidator output bytes | ${consolidator_output_bytes} |"
   echo "| Parsed issue blocks | ${parsed_blocks} |"

@@ -81,7 +81,7 @@
 #   WORKFLOW_HEAL_SOURCE_CHECKOUT         "false" to skip the release-SHA worktree (tests)
 #   WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED  "false" routes pr-/base-self-inflicted
 #                                         as workflow-defect and adds no ownership facts (default true)
-#   MODEL_EDITOR                          diagnosis model (default openai/gpt-5.6-sol)
+#   MODEL_EDITOR                          diagnosis model (default openai/gpt-6-sol)
 #   MODEL_VERBOSITY                       codex verbosity (default low)
 
 set -euo pipefail
@@ -634,7 +634,7 @@ if command -v codex >/dev/null 2>&1; then
 		-c 'shell_environment_policy.ignore_default_excludes=false' \
 		-c 'shell_environment_policy.filters.OPENROUTER_API_KEY="exclude"' \
 		exec --skip-git-repo-check \
-		--model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
+		--model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
 		--sandbox read-only \
 		< "${PROMPT_FILE}" \
 		> "${DIAG_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
