@@ -906,8 +906,8 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 	- VALIDATION_DISCOVERY_ENABLED            (default: true)
 	- VALIDATION_DISCOVERY_DEDUP_DAYS         (default: 7)
 	- VALIDATION_DISCOVERY_MAX_ATTEMPTS       (default: 3)
-	- VALIDATION_DISCOVERY_MODEL              (default: openai/gpt-5.6-sol)
-	- VALIDATION_DISCOVERY_REASONING_EFFORT   (default: xhigh)
+	- VALIDATION_DISCOVERY_MODEL              (default: openai/gpt-6-sol)
+	- VALIDATION_DISCOVERY_REASONING_EFFORT   (default: high)
 	- VALIDATION_DISCOVERY_PR_BRANCH_PREFIX   (default: automation/validate-discovery)
 	- VALIDATION_DISCOVERY_PR_LABEL           (default: automation:validate-bootstrap)
 	- VALIDATION_DISCOVERY_DRY_RUN            (default: false)
@@ -922,8 +922,8 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 		/ "examples"
 		/ "validation-fixtures"
 		/ "run_validation_repo_checks.sh",
-		codex_model=_env_str("VALIDATION_DISCOVERY_MODEL", "openai/gpt-5.6-sol"),
-		codex_reasoning_effort=_env_str("VALIDATION_DISCOVERY_REASONING_EFFORT", "xhigh"),
+		codex_model=_env_str("VALIDATION_DISCOVERY_MODEL", "openai/gpt-6-sol"),
+		codex_reasoning_effort=_env_str("VALIDATION_DISCOVERY_REASONING_EFFORT", "high"),
 		codex_attempts=_env_int("VALIDATION_DISCOVERY_MAX_ATTEMPTS", 3),
 		pr_branch_prefix=_env_str(
 			"VALIDATION_DISCOVERY_PR_BRANCH_PREFIX", "automation/validate-discovery"

@@ -51,6 +51,13 @@
 #                                          wins over the flags when it is a valid reason token
 #   AUTOFIX_FAILURE_FP                     fingerprint of the run's review-autofix-failure:v1
 #                                          marker, sent as failure_fingerprint when 64 hex
+#   PR_CHANGED_FILES_FILE                  the PR's changed files (one path per line) the run
+#                                          already wrote; sent as changed_files (absent is fine)
+#
+# Ownership facts for the intake's self-inflicted routing ride in the payload:
+# base_branch (the PR JSON's base.ref), script_ref (REPORT_WRAPPER_SHA),
+# changed_files (PR_CHANGED_FILES_FILE) and crash_file (extracted from the
+# evidence, which includes the stage stderr tail the run assembled). No API call.
 
 set -uo pipefail
 
@@ -157,6 +164,12 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 	echo "finalize_reason=${FINALIZE_REASON:-unknown}"
 	echo "consecutive_failed_runs=${STREAK}"
 	echo "flags: AUTOFIX_EDITOR_EMPTY_NOOP=${AUTOFIX_EDITOR_EMPTY_NOOP:-} EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS:-} EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL:-} EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST:-} HAS_PR_DIFF=${HAS_PR_DIFF:-} PR_DIFF_SOURCE=${PR_DIFF_SOURCE:-}"
+	# The bounded stderr tail of the failing stages ("Assemble failure
+	# evidence"): it carries the shell error that names the crash file.
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/failure_evidence_tail.txt" ]; then
+		echo "--- failure_evidence_tail.txt (tail) ---"
+		tail -n 40 "${RUNTIME_DIR}/failure_evidence_tail.txt" 2>/dev/null | cut -c1-400
+	fi
 	if [ -s "${SUMMARY_LINE_FILE}" ]; then
 		head -c 6000 "${SUMMARY_LINE_FILE}"
 		echo
@@ -195,6 +208,16 @@ if [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
 fi
 if [[ "${AUTOFIX_FAILURE_FP:-}" =~ ^[0-9a-f]{64}$ ]]; then
 	BUILD_ARGS+=(--failure-fingerprint "${AUTOFIX_FAILURE_FP}")
+fi
+# Ownership facts: only when the staged helper knows the flags (an older copy
+# would reject them and the report would be lost; the intake then routes the
+# report without ownership, as before).
+if grep -q 'classify-crash-ownership' "${HEAL_PY}" 2>/dev/null; then
+	BASE_BRANCH_REF="$(jq -r '.base.ref // ""' "${PR_JSON_FILE}" 2>/dev/null || echo "")"
+	BUILD_ARGS+=(--base-branch "${BASE_BRANCH_REF}" --script-ref "${REPORT_WRAPPER_SHA:-}")
+	if [ -n "${PR_CHANGED_FILES_FILE:-}" ] && [ -s "${PR_CHANGED_FILES_FILE}" ]; then
+		BUILD_ARGS+=(--changed-files-file "${PR_CHANGED_FILES_FILE}")
+	fi
 fi
 if ! python3 "${HEAL_PY}" build-autofix-payload "${BUILD_ARGS[@]}" > "${PAYLOAD_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
 	log "skip reason=payload_build_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"

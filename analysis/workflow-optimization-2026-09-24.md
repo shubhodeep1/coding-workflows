@@ -420,3 +420,128 @@ No literal `TODO`, `FIXME`, or `HACK` markers were found in scoped workflow or s
 | Code modularization | 11 existing files plus 2 new helpers | Large |
 | Expression size reduction | 1 workflow plus 2 helper scripts | Medium |
 | Medium/Low fixes | 7 existing files | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-24)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is statically proven safe; `NEEDS_VERIFICATION` requires the stated checks; `RISKY_SKIP` must not be auto-implemented because it touches retry, pagination, race-defense, or orchestrator recovery behavior.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Share the editor-changes-lost workflow-run snapshot
+
+- **Safety tag:** `SAFE_TO_MERGE`
+- **Files:** `scripts/gh_helpers.sh:1219-1291`, `scripts/gh_helpers.sh:1338-1402`, `.github/workflows/review_autofix.yml:7398-7422`
+- **Current call count:** 2 on the no-peer path; 1 when an active peer causes early exit.
+- **Proposed call count:** 1 on either path.
+- **Endpoint:** `GET /repos/{owner}/{repo}/actions/runs?branch={head_branch}&per_page=30`
+- **Evidence:** Both helpers execute the identical request back-to-back in the same workflow step:
+  ```bash
+  gh_retry gh api -X GET \
+    "/repos/${GITHUB_REPOSITORY}/actions/runs" \
+    -f "branch=${head_branch}" \
+    -f "per_page=30"
+  ```
+  The only intervening operation is `git rev-parse HEAD`; no GitHub mutation occurs.
+- **Proposed fix:** Extend `autofix_retrigger_has_inflight_peer` and `autofix_changes_lost_head_retry_consumed` to accept an optional shared snapshot file/status. Fetch once after `peer_wait`, then evaluate both predicates from that response. Preserve `AUTOFIX_PEER_QUERY_FAILED`, `AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED`, and their respective fail-open/fail-closed return behavior.
+- **Safety rationale:** The endpoint, branch filter, page size, authentication, retry policy, workflow step, and mutation boundary are identical, and the existing error semantics can be preserved independently from one fetch result.
+- **Downstream signal:** Consolidate the two editor-changes-lost list-runs reads into one step-local snapshot while preserving both helpers’ log keys and return semantics.
+
+#### MERGE-002 — Batch promote-cycle baseline comment reads
+
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File:** `scripts/promote_main_cycle.sh:242-265`
+- **Current call count:** `1 + K`, where the search is followed by comments reads for up to 10 candidate issues.
+- **Proposed call count:** 2: one search plus one batched GraphQL request.
+- **Endpoints:** `GET /search/issues`; `GET /repos/{owner}/{repo}/issues/{number}/comments?per_page=100`; proposed `POST /graphql`.
+- **Evidence:**
+  ```bash
+  numbers="$(gh_retry gh api -X GET search/issues ... -f per_page=10 ...)"
+  while IFS= read -r issue_number; do
+    sha="$(gh_retry gh api \
+      "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" ...)"
+  done <<< "${numbers}"
+  ```
+- **Proposed fix:** Add a local batched helper returning issue-number-keyed `comments(first:100)` nodes containing `body`, `author.login`, and `authorAssociation`. Keep the REST search unchanged and follow `_fetch_candidate_issue_details_graphql`’s aliasing and partial-response validation pattern.
+- **Safety rationale:** This changes endpoint and error-aggregation semantics, so static reading cannot prove equivalence with the current per-issue REST failure behavior.
+- **Downstream signal:** Verify GraphQL `comments(first:100)` ordering, trusted-author mapping, partial-alias handling, and whole-function `return 2` behavior against fixtures before implementation.
+
+#### MERGE-003 — Batch apply-analysis marker comment reads
+
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:** `scripts/apply_analysis_on_main.sh:172-188`, `scripts/apply_analysis_on_main.sh:196-219`
+- **Current call count:** `1 + K` per candidate document, with comments fetched for up to 20 search results.
+- **Proposed call count:** 2 per candidate document.
+- **Endpoints:** `GET /search/issues`; `GET /repos/{owner}/{repo}/issues/{number}/comments?per_page=100`; proposed `POST /graphql`.
+- **Evidence:**
+  ```bash
+  numbers="$(gh_retry gh api -X GET search/issues ... -f per_page=20 ...)"
+  while IFS= read -r issue_number; do
+    trusted_marker_comment_present "${issue_number}" "${marker_line}"
+  done <<< "${numbers}"
+  ```
+  `trusted_marker_comment_present` performs one comments GET for each issue.
+- **Proposed fix:** Add `_fetch_trusted_marker_comments_graphql` to batch the searched issue numbers and update `doc_dispatched_before` to evaluate the existing marker and author-association predicate locally. Follow `_fetch_candidate_issue_details_graphql`’s batching contract.
+- **Safety rationale:** The proposed GraphQL batch couples failures that are currently isolated per issue and therefore does not satisfy the identical error-semantics prerequisite.
+- **Downstream signal:** Verify first-100 comment ordering, trusted association normalization, null/partial aliases, and exact `0/1/2` return codes before implementation.
+
+#### MERGE-004 — Fetch recorded final-PR state once
+
+- **Safety tag:** `RISKY_SKIP`
+- **File:** `scripts/orchestrate_poll_process.sh:10230-10242`
+- **Current call count:** 2 on a `final_pr_json_snapshot` cache miss.
+- **Proposed call count:** 1; cache hits remain 0.
+- **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{final_pr}`
+- **Evidence:**
+  ```bash
+  existing_pr_state="$(gh_retry _safe_gh_jq ... --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq ... --jq '.merged_at != null' || echo "")"
+  ```
+- **Proposed fix:** Fetch `{state, merged: (.merged_at != null)}` once in `finalize_integration_merge_if_needed` and parse both values from the same payload.
+- **Safety rationale:** This is inside `orchestrate_poll_process.sh` and the final-merge race-defense path, which mandates `RISKY_SKIP` despite the adjacent identical endpoint.
+- **Downstream signal:** Do not auto-implement; manually verify final-merge race tests and confirm the atomic snapshot preserves fail-closed behavior.
+
+#### MERGE-005 — Combine issue title/body reads in stall reissue paths
+
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/orchestrate_poll_process.sh:13731-13733`, `scripts/orchestrate_poll_process.sh:16413-16421`
+- **Current call count:** 2 per executed reissue path; 4 across both implementations.
+- **Proposed call count:** 1 per path; 2 across both implementations.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_num}`
+- **Evidence:**
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq ... --jq '.title // ""' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq ... --jq '.body // ""' || echo "")"
+  ```
+- **Proposed fix:** In `execute_stall_recovery_action` and `run_standalone_stall_recovery`, fetch `{title, body}` once and derive both variables locally.
+- **Safety rationale:** Both pairs are inside explicit stall-recovery paths in `orchestrate_poll_process.sh`, and combining them changes partial-failure behavior.
+- **Downstream signal:** Do not auto-implement; manually review whether a single failed payload may safely blank both title and body before replacement-issue creation.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — Valid reuse opportunity, but it crosses orchestrator command and race-defense paths.
+- API-002: `RISKY_SKIP` — Shared retry-loop and rate-limit behavior must be reviewed manually.
+- API-003: `RISKY_SKIP` — Consolidation changes pagination and bounded-first-50 semantics.
+- BATCH-001: `RISKY_SKIP` — It is an orchestrator discovery path with pagination fallback requirements.
+- BATCH-002: `RISKY_SKIP` — It combines orchestrator recovery, paginated comments, and subsequent writes.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| `SAFE_TO_MERGE` | 1 | MERGE-001 |
+| `NEEDS_VERIFICATION` | 2 | MERGE-002, MERGE-003 |
+| `RISKY_SKIP` | 7 | MERGE-004, MERGE-005, API-001, API-002, API-003, BATCH-001, BATCH-002 |
+
+### Implement-Stage Handoff
+
+- MERGE-001

@@ -1326,10 +1326,10 @@ rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 # window on a single attempt before emitting the final JSON.
 # Stepping the effort down each retry frees enough budget for the
 # model to terminate exploration and write the JSON. Starting
-# level is resolved from JUDGE_REASONING_EFFORT (default `xhigh`,
+# level is resolved from JUDGE_REASONING_EFFORT (default `high`,
 # override via the THINKING_LEVEL_REVIEW_BLOCKED_JUDGE repo var).
 # Keep the ladder inside the reasoning levels advertised for the
-# default gpt-5.6-sol judge path; `low` is the floor in this script.
+# default gpt-6-sol judge path; `low` is the floor in this script.
 case "${JUDGE_REASONING_EFFORT}" in
   xhigh)   JUDGE_ATTEMPT_LEVELS=("xhigh" "high" "medium") ;;
   high)    JUDGE_ATTEMPT_LEVELS=("high" "medium" "low") ;;

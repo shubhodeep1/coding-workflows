@@ -1668,6 +1668,38 @@ review pipeline) — those keep their own policies.
 
 ---
 
+## §27. Workflow File Size Limit (MANDATORY)
+
+This section applies in this repo and in every consumer repo that
+receives this file via the `@stable` sync, and it is not superseded by §12.
+
+GitHub does not start runs for a workflow file over **512,000 bytes**
+(500 KiB), and it reports no error: every push instead gets a zero-job
+`failure` run named after the file path ("workflow file issue"), and a
+reusable workflow over the limit cannot be called. Incident: #4327 pushed
+`.github/workflows/review_autofix.yml` to 540,537 bytes and the phantom runs
+broke the stable release gate (run 35903885958).
+
+- **Split at 480,000 bytes.** When a change leaves any
+  `.github/workflows/*.yml` at or above 480,000 bytes, move the largest
+  inline `run:` bodies into `scripts/` **in the same PR** until the file is
+  well under that mark (aim for 50,000+ bytes of headroom). Check with
+  `wc -c` whenever you grow a workflow file.
+- **Never** raise the guard, and never get under it by splitting one
+  workflow into several workflow files or by deleting comments that carry
+  incident context.
+- Moved bodies keep their behaviour: keep the step's `name:`, `id:`, `if:`,
+  `env:` and `continue-on-error:` in the workflow (§6), move the body
+  verbatim, and pass every `${{ }}` value through `env:` first, because
+  GitHub does not substitute expressions inside a script file.
+- In coding-workflows, `tests/test_workflow_file_size_limit.py` enforces the
+  480,000-byte guard in CI, and `agents.md` ("Workflow file size limit")
+  documents the `review_autofix.yml` pattern: `review_autofix_step_<slug>.sh`
+  under `scripts/`, the resolving wrapper that sources it, the
+  `REQUIRED_BOOTSTRAP_SCRIPTS` entry, and the test registry.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**

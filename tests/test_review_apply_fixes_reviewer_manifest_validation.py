@@ -24,8 +24,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 BLOCK_START = "      reviewer_validation_ok=true\n      changes_lost_detected=false\n"
-BLOCK_END = '      done < "${REVIEWER_MANIFEST_FILE}"\n'
+BLOCK_END = 'validation_ok=${reviewer_validation_ok}"\n      fi\n'
 WARNING_KEY = "EDITOR_REVIEWER_CHECKSUM_UNVERIFIED"
+SUMMARY_KEY = "EDITOR_REVIEWER_CHECKSUM_SUMMARY"
 
 
 def _validation_block() -> str:
@@ -92,6 +93,7 @@ def test_exact_checksums_pass_without_warning() -> None:
 		stdout, _ = _run(tmp, files, processed, [_audit_line(p) for p in files])
 		assert "RESULT reviewer_validation_ok=true" in stdout, stdout
 		assert WARNING_KEY not in stdout, stdout
+		assert SUMMARY_KEY not in stdout, stdout
 
 
 def test_garbled_checksum_warns_but_passes() -> None:
@@ -110,6 +112,8 @@ def test_garbled_checksum_warns_but_passes() -> None:
 		assert f"::warning::{WARNING_KEY} attempt=2 file={files[1]}" in stdout, stdout
 		assert f"expected_sha={real}" in stdout
 		assert "path_entries=1 checksum_matches=0" in stdout
+		assert f"::warning::{SUMMARY_KEY} attempt=2 files_checked=2 checksum_mismatches=1 validation_ok=true" in stdout, stdout
+		assert stdout.count(SUMMARY_KEY) == 1
 
 
 def test_truncated_checksum_warns_but_passes() -> None:
@@ -124,6 +128,30 @@ def test_truncated_checksum_warns_but_passes() -> None:
 		stdout, _ = _run(tmp, files, processed, [_audit_line(p) for p in files])
 		assert "RESULT reviewer_validation_ok=true" in stdout, stdout
 		assert f"{WARNING_KEY} attempt=2 file={files[0]}" in stdout, stdout
+		assert f"::warning::{SUMMARY_KEY} attempt=2 files_checked=2 checksum_mismatches=1 validation_ok=true" in stdout, stdout
+		assert stdout.count(SUMMARY_KEY) == 1
+
+
+def test_every_checksum_wrong_is_summarised_once() -> None:
+	"""A summary whose hashes are all wrong should stand out from one typo."""
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		files = _reviewers(tmp)
+		processed = [f"- `{p}` — checksum `{'0' * 64}` — used" for p in files]
+		stdout, _ = _run(tmp, files, processed, [_audit_line(p) for p in files])
+		assert "RESULT reviewer_validation_ok=true" in stdout, stdout
+		assert stdout.count(f"::warning::{WARNING_KEY}") == 2, stdout
+		assert f"::warning::{SUMMARY_KEY} attempt=2 files_checked=2 checksum_mismatches=2 validation_ok=true" in stdout, stdout
+
+
+def test_summary_reports_mismatches_seen_before_a_missing_entry() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		files = _reviewers(tmp)
+		processed = [f"- `{files[0]}` — checksum `{'0' * 64}` — used"]
+		stdout, _ = _run(tmp, files, processed, [_audit_line(p) for p in files])
+		assert "RESULT reviewer_validation_ok=false" in stdout, stdout
+		assert f"::warning::{SUMMARY_KEY} attempt=2 files_checked=2 checksum_mismatches=1 validation_ok=false" in stdout, stdout
 
 
 def test_missing_processed_entry_still_fails() -> None:

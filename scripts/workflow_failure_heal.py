@@ -65,15 +65,30 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
+# `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
+# confirms the diagnosis cites a commit that landed on the branch after the
+# failing SHA; otherwise the intake downgrades it to `inconclusive`.
+ALREADY_FIXED_CLASSIFICATION = "already-fixed"
 CLASSIFICATIONS: tuple[str, ...] = (
 	"workflow-defect",
 	"consumer-app-defect",
 	"consumer-config",
 	"transient",
 	"inconclusive",
+	ALREADY_FIXED_CLASSIFICATION,
+	"pr-self-inflicted",
+	"base-self-inflicted",
 )
 # Classifications that open an issue in coding-workflows.
 UPSTREAM_ISSUE_CLASSIFICATIONS = ("workflow-defect", "inconclusive")
+# Self-inflicted review/autofix failures in this repository (README "Workflow
+# Failure Heal"): the crash is in a file the pull request itself changed
+# (pr-self-inflicted -> diagnosis comment on the PR, no issue) or in a file its
+# base branch changed relative to main (base-self-inflicted -> issue targeting
+# that base branch). The intake only honours them when its own ownership check
+# agrees; otherwise they route as workflow-defect.
+SELF_INFLICTED_CLASSIFICATIONS = ("pr-self-inflicted", "base-self-inflicted")
+CRASH_OWNERSHIP_VALUES = ("pr", "base", "none")
 
 DEFAULT_MAX_LINEAGE_DEPTH = 3
 DEFAULT_MAX_OPEN_ISSUES = 10
@@ -120,7 +135,20 @@ MAX_PAYLOAD_BYTES = 60_000
 # so reporters wrap it in a {schema_version, report} envelope (wrap_dispatch).
 DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 SIGNATURE_LINE_LIMIT = 5
+# Ownership facts carried by an autofix_failure report (self-repo routing).
+CHANGED_FILES_MAX_ENTRIES = 200
+CHANGED_FILE_MAX_CHARS = 120
 SIGNATURE_CHAR_LIMIT = 500
+# Branch progress since the failing SHA (one compare call per intake). The
+# compare API returns at most 250 commits and 300 files; the prompt shows the
+# newest BRANCH_PROGRESS_COMMITS_SHOWN / first BRANCH_PROGRESS_FILES_SHOWN.
+BRANCH_PROGRESS_COMMIT_LIMIT = 250
+BRANCH_PROGRESS_FILE_LIMIT = 300
+BRANCH_PROGRESS_COMMITS_SHOWN = 60
+BRANCH_PROGRESS_FILES_SHOWN = 200
+# Earlier heal issues of the same fingerprint / lineage shown to the model.
+HEAL_LINEAGE_CONTEXT_LIMIT = 5
+HEAL_LINEAGE_EXCERPT_LIMIT = 1500
 
 _REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -138,6 +166,8 @@ _ORCHESTRATOR_STATE_V2_COMMENT_RE = re.compile(
 	re.DOTALL,
 )
 _CLASSIFICATION_RE = re.compile(r"^##\s*Classification\s*$", re.IGNORECASE | re.MULTILINE)
+_HEAL_FIXED_BY_SECTION_RE = re.compile(r"^##\s*Fixed by\s*$", re.IGNORECASE | re.MULTILINE)
+_HEAL_COMMIT_REF_RE = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s?")
@@ -146,14 +176,39 @@ _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TA
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
+_REPO_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
+_ORCHESTRATOR_BRANCH_RE = re.compile(r"^orchestrator/project-([0-9]+)$")
+# `bash: /path/to/scripts/<name>: line N: ...` (a shell guard or syntax error
+# in a staged script) -> scripts/<name>.
+_CRASH_SCRIPT_LINE_RE = re.compile(r"(?:^|[\s/])scripts/(?P<name>[A-Za-z0-9_.-]+): line [0-9]+:")
+# `::error::` / `##[error]` lines that name a repository path.
+_CRASH_ERROR_LINE_RE = re.compile(r"(?:::error::|##\[error\])")
+_CRASH_ERROR_PATH_RE = re.compile(r"(?:^|[^A-Za-z0-9_.-])(?P<path>(?:scripts|\.github/workflows)/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)")
 
-# Highest-signal first: the first bucket with any matching line wins.
+# Highest-signal first: the first bucket with any matching line wins. The
+# runner renders a step's `::error::` workflow command as `##[error]` in the job
+# log, so a literal `::error::` in an Actions log is almost always the step's own
+# script source echoed in its header (see _drop_step_script_lines); both forms
+# stay in the first bucket so reporter evidence text keeps matching too.
 _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
-	re.compile(r"::error::", re.IGNORECASE),
+	re.compile(r"::error::|##\[error\]", re.IGNORECASE),
 	re.compile(r"\b[A-Z][A-Z0-9_]*_FAILED\b"),
 	re.compile(r"\bTraceback \(most recent call last\)|^\s*\w+Error:", re.MULTILINE),
 	re.compile(r"\bfatal:|\berror:|\bERROR\b|\bFAILED\b|\bexit code\b|\bexited with\b", re.IGNORECASE),
 )
+# GitHub opens every `run:` step with a `##[group]Run <first line>` header that
+# echoes the whole script, one ANSI-cyan line per source line, before the
+# `shell:` / `env:` block and the closing `##[endgroup]`. Those lines are the
+# step's source, not its output: a script that can print forty different
+# `::error::` messages echoes all forty on every run, whatever actually failed.
+_STEP_HEADER_OPEN_RE = re.compile(r"^##\[group\]Run ")
+_STEP_HEADER_CLOSE_RE = re.compile(r"^##\[endgroup\]")
+_STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
+# Test & Mark Stable Release runs dispatched by a promote cycle carry the
+# cycle's run id in their run name (`run-name: ... [cycle:<id>]`, which
+# scripts/promote_main_cycle.sh matches on). The id is unique per cycle, so it
+# must not reach the dedup fingerprint.
+_CYCLE_RUN_NAME_SUFFIX_RE = re.compile(r"\s*\[cycle:[0-9]+\]\s*$", re.IGNORECASE)
 _SOFT_LOG_PATTERNS = re.compile(
 	r"::error::|::warning::|\bERROR\b|\bFAIL(?:ED|URE)?\b|\bfatal\b|\bTraceback\b|"
 	r"\b[A-Z][A-Z0-9_]*_(?:FAILED|SKIPPED|ESCALATE|BLOCKED)\b|\bexit code\b|\btimed?[ -]?out\b|\brate.?limit",
@@ -466,11 +521,19 @@ def build_autofix_failure_payload(
 	reporter_run_url: str | None,
 	now: datetime | None = None,
 	failure_fingerprint: str | None = None,
+	base_branch: str | None = None,
+	script_ref: str | None = None,
+	changed_files: Iterable[str] | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a failed review/autofix run on a PR.
 
 	``failure_fingerprint`` is the optional ``fp`` of the run's
 	``review-autofix-failure:v1`` marker; it is sent only when it is 64 hex.
+
+	``base_branch``, ``script_ref`` and ``changed_files`` are the optional
+	ownership facts the intake's self-inflicted routing uses; each is sent only
+	when it validates. ``crash_file`` is extracted from the full (untruncated)
+	evidence before it is bounded.
 	"""
 	now = now or _utc_now()
 	body = sanitize_text(pr.get("body"))
@@ -506,7 +569,111 @@ def build_autofix_failure_payload(
 	fp = str(failure_fingerprint or "").strip().lower()
 	if _FP_HEX_RE.match(fp):
 		payload["failure_fingerprint"] = fp
+	base = str(base_branch or "").strip()
+	if is_valid_branch(base):
+		payload["base_branch"] = base
+	ref = _normalize_script_ref(script_ref)
+	if ref:
+		payload["script_ref"] = ref
+	files = normalize_changed_files(changed_files or [])
+	if files:
+		payload["changed_files"] = files
+	crash = extract_crash_file(failure_evidence)
+	if crash:
+		payload["crash_file"] = crash
 	return payload
+
+
+def _normalize_script_ref(value: Any) -> str | None:
+	"""``script_ref`` is the coding-workflows ref the run staged: a SHA or ``stable``."""
+	ref = str(value or "").strip()
+	if ref == "stable":
+		return ref
+	ref = ref.lower()
+	return ref if is_valid_sha(ref) else None
+
+
+def is_valid_repo_path(value: Any) -> bool:
+	"""A bounded repo-relative path: ``[A-Za-z0-9_./-]``, no ``..`` segment, not absolute."""
+	if not isinstance(value, str) or not _REPO_PATH_RE.match(value):
+		return False
+	if value.startswith("/"):
+		return False
+	return all(part not in ("", ".", "..") for part in value.split("/"))
+
+
+def normalize_changed_files(paths: Iterable[Any]) -> list[str]:
+	"""Keep valid, de-duplicated repo-relative paths, capped at CHANGED_FILES_MAX_ENTRIES.
+
+	Paths longer than CHANGED_FILE_MAX_CHARS or failing ``is_valid_repo_path``
+	are dropped rather than truncated, so a kept path always names a real file.
+	"""
+	kept: list[str] = []
+	seen: set[str] = set()
+	for raw in paths:
+		if not isinstance(raw, str):
+			continue
+		path = raw.strip()
+		if len(path) > CHANGED_FILE_MAX_CHARS or not is_valid_repo_path(path) or path in seen:
+			continue
+		seen.add(path)
+		kept.append(path)
+		if len(kept) >= CHANGED_FILES_MAX_ENTRIES:
+			break
+	return kept
+
+
+def extract_crash_file(evidence_text: Any) -> str | None:
+	"""Name the repository file a review/autofix failure crashed in, if the evidence says.
+
+	Two shapes are recognised, first match wins in this order:
+
+	- a shell error ``…/scripts/<name>: line N: …`` -> ``scripts/<name>``,
+	since the staged support bundle keeps the ``scripts/`` directory name;
+	- a ``::error::`` / ``##[error]`` line naming a ``scripts/…`` or
+	``.github/workflows/…`` path -> that path.
+
+	Anything else (an error line that names no path) returns ``None``.
+	"""
+	text = sanitize_text(evidence_text)
+	if not text:
+		return None
+	for line in text.split("\n"):
+		match = _CRASH_SCRIPT_LINE_RE.search(line)
+		if match:
+			candidate = f"scripts/{match.group('name')}"
+			if is_valid_repo_path(candidate):
+				return candidate
+	for line in text.split("\n"):
+		if not _CRASH_ERROR_LINE_RE.search(line):
+			continue
+		for match in _CRASH_ERROR_PATH_RE.finditer(line):
+			candidate = match.group("path").rstrip(".")
+			if is_valid_repo_path(candidate):
+				return candidate
+	return None
+
+
+def classify_crash_ownership(*, crash_file: str | None, changed_files: Iterable[str], base_changed_files: Iterable[str]) -> str:
+	"""Return ``pr``, ``base`` or ``none`` for the file a review/autofix run crashed in.
+
+	``pr``: the crash file is in the pull request's own diff. ``base``: it is
+	not, but the PR's base branch changed it relative to ``main``. ``none``:
+	no crash file, or neither side changed it.
+	"""
+	if not crash_file:
+		return "none"
+	if crash_file in set(changed_files):
+		return "pr"
+	if crash_file in set(base_changed_files):
+		return "base"
+	return "none"
+
+
+def orchestrator_tracking_issue(branch: Any) -> int | None:
+	"""The tracking issue number of an ``orchestrator/project-<N>`` branch, else None."""
+	match = _ORCHESTRATOR_BRANCH_RE.match(str(branch or ""))
+	return _positive_int(match.group(1)) if match else None
 
 
 def validate_payload(payload: Any) -> dict[str, Any]:
@@ -581,7 +748,16 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		source_root = None
 
 	labels = [single_line(name, 100) for name in payload.get("labels") or [] if isinstance(name, str)][:50]
-	return {
+	# Ownership facts (optional, autofix_failure only): invalid values are
+	# dropped, never fatal, so an older or partial reporter still gets healed.
+	base_branch = payload.get("base_branch") if kind == "autofix_failure" else None
+	base_branch = base_branch if is_valid_branch(base_branch) else None
+	script_ref = _normalize_script_ref(payload.get("script_ref")) if kind == "autofix_failure" else None
+	changed_raw = payload.get("changed_files") if kind == "autofix_failure" else None
+	changed_files = normalize_changed_files(changed_raw) if isinstance(changed_raw, list) else []
+	crash_file = payload.get("crash_file") if kind == "autofix_failure" else None
+	crash_file = crash_file if is_valid_repo_path(crash_file) else None
+	normalized = {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
 		"source_kind": kind,
@@ -607,6 +783,14 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
+	if kind == "autofix_failure":
+		normalized.update({
+			"base_branch": base_branch,
+			"script_ref": script_ref,
+			"changed_files": changed_files,
+			"crash_file": crash_file,
+		})
+	return normalized
 
 
 def wrap_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
@@ -659,9 +843,36 @@ def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], sel
 # ---------------------------------------------------------------------------
 
 
+def _drop_step_script_lines(text: str) -> str:
+	"""Remove the echoed step script from raw Actions job-log text.
+
+	Only ANSI-cyan lines inside a ``##[group]Run`` header block are dropped;
+	the header line itself, the ``shell:`` / ``env:`` block, and every line of
+	real step output are kept. Text without such headers (reporter evidence,
+	already-sanitised logs) is returned unchanged.
+	"""
+	kept: list[str] = []
+	in_header = False
+	for line in text.split("\n"):
+		content = _LOG_TIMESTAMP_RE.sub("", line)
+		if _STEP_HEADER_OPEN_RE.match(content):
+			in_header = True
+		elif in_header and _STEP_HEADER_CLOSE_RE.match(content):
+			in_header = False
+		elif in_header and content.startswith(_STEP_SCRIPT_LINE_PREFIX):
+			continue
+		kept.append(line)
+	return "\n".join(kept)
+
+
 def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> str:
-	"""Keep the high-signal lines plus the tail of a job log, bounded."""
-	lines = sanitize_text(text).split("\n")
+	"""Keep the high-signal lines plus the tail of a job log, bounded.
+
+	The echoed step script is dropped first (it has to be, before ANSI codes
+	are stripped), so the tail and the high-signal matches cover what the
+	steps printed rather than their source.
+	"""
+	lines = sanitize_text(_drop_step_script_lines(text)).split("\n")
 	kept: list[str] = []
 	seen: set[int] = set()
 	tail_start = max(0, len(lines) - max_lines)
@@ -708,9 +919,12 @@ def error_signature(text: str) -> str:
 
 
 def fingerprint(workflow_name: str, failing_step: str, signature: str) -> str:
+	# The per-cycle `[cycle:<id>]` run-name suffix is dropped so every promote
+	# cycle that fails the same way shares one fingerprint (and one lineage).
+	stable_workflow_name = _CYCLE_RUN_NAME_SUFFIX_RE.sub("", single_line(workflow_name, 200))
 	material = "|".join(
 		[
-			single_line(workflow_name, 200).lower(),
+			stable_workflow_name.lower(),
 			single_line(failing_step, 200).lower(),
 			signature[:SIGNATURE_CHAR_LIMIT],
 		]
@@ -1061,6 +1275,10 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 		lines.append(f"- **Head SHA:** `{payload['head_sha']}`")
 	if payload.get("wrapper_sha"):
 		lines.append(f"- **Consumer wrapper pin (coding-workflows release SHA):** `{payload['wrapper_sha']}`")
+	if payload.get("base_branch"):
+		lines.append(f"- **Pull request base branch:** `{payload['base_branch']}`")
+	if payload.get("crash_file"):
+		lines.append(f"- **Crash file:** `{payload['crash_file']}`")
 	for summary in run_summaries:
 		step = summary.get("failing_step") or "unknown step"
 		lines.append(f"- **Failed run:** {summary.get('url')} — workflow `{summary.get('workflow_name') or 'unknown'}`, step `{step}`")
@@ -1094,8 +1312,16 @@ def compose_issue_body(
 	max_depth: int,
 	intake_run_url: str,
 	run_summaries: list[dict[str, Any]],
+	integration_branch: str | None = None,
 ) -> str:
-	"""Compose the heal issue body (upstream or consumer-side)."""
+	"""Compose the heal issue body (upstream or consumer-side).
+
+	``integration_branch`` (optional) adds the orchestrator lineage lines a
+	``base-self-inflicted`` issue on an ``orchestrator/project-<N>`` branch
+	carries so plan and implement resolve that branch: ``Tracking issue: #N``,
+	``Integration branch:`` and ``Refs #N`` (never an auto-close keyword,
+	CLAUDE.md §19). Other branches add nothing.
+	"""
 	parts = [
 		f"<!-- {MARKER_PREFIX}fp={fp} -->",
 		f"<!-- {MARKER_PREFIX}gen={gen} -->",
@@ -1106,10 +1332,26 @@ def compose_issue_body(
 	]
 	if target_branch:
 		parts.append(f"- **Target branch:** `{target_branch}`")
+	tracking_issue = orchestrator_tracking_issue(integration_branch)
+	if tracking_issue:
+		parts.append(f"- **Tracking issue:** #{tracking_issue}")
+		parts.append(f"- **Integration branch:** `{integration_branch}`")
+	if target_branch or tracking_issue:
 		parts.append("")
 	parts.append(f"## Automated workflow failure heal (generation {gen} of max {max_depth})")
 	parts.append("")
-	if classification in UPSTREAM_ISSUE_CLASSIFICATIONS:
+	if classification == "base-self-inflicted":
+		base = payload.get("base_branch") or target_branch or "the base branch"
+		parts.append(
+			"The review/autofix workflow failed repeatedly on one pull request of this repository. The "
+			f"crash is in a file the pull request's base branch `{base}` changed relative to `main`, and "
+			"the pull request itself did not touch it, so this issue was filed automatically for the "
+			f"clarify -> plan -> implement -> review pipeline to fix it on `{base}`."
+		)
+		if tracking_issue:
+			parts.append("")
+			parts.append(f"Refs #{tracking_issue}")
+	elif classification in UPSTREAM_ISSUE_CLASSIFICATIONS:
 		if payload.get("source_kind") == "workflow_run":
 			intro = (
 				"A release / promotion workflow run failed. This issue was filed automatically for the "
@@ -1190,6 +1432,174 @@ def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str) 
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Branch progress + earlier heals: "is this already fixed?" context
+# ---------------------------------------------------------------------------
+
+
+def summarize_branch_progress(compare: Any, *, failed_sha: str, branch: str) -> dict[str, Any]:
+	"""Reduce a GitHub compare response to what the diagnosis model needs.
+
+	``compare`` is the raw ``GET repos/<repo>/compare/<failed_sha>...<branch>``
+	body (untrusted: every field is re-validated). Returns ``{"available":
+	True, branch, failed_sha, status, ahead_by, tip_sha, commits: [{sha,
+	subject}] oldest first, files: [path], commits_truncated, files_truncated}``
+	or ``{"available": False, "reason": ...}`` when the response is unusable.
+	"""
+	if not is_valid_sha(failed_sha) or not is_valid_branch(branch):
+		return {"available": False, "reason": "invalid_reference"}
+	if not isinstance(compare, dict):
+		return {"available": False, "reason": "invalid_compare_response"}
+	ahead_by = compare.get("ahead_by")
+	status = compare.get("status")
+	if not isinstance(ahead_by, int) or isinstance(ahead_by, bool) or ahead_by < 0 or status not in ("identical", "ahead", "behind", "diverged"):
+		return {"available": False, "reason": "invalid_compare_response"}
+	commits: list[dict[str, str]] = []
+	for item in compare.get("commits") or []:
+		if not isinstance(item, dict):
+			continue
+		sha = str(item.get("sha") or "").lower()
+		if not is_valid_sha(sha):
+			continue
+		message = (item.get("commit") or {}).get("message") if isinstance(item.get("commit"), dict) else ""
+		commits.append({"sha": sha, "subject": single_line(str(message or "").split("\n", 1)[0], 160)})
+	commits = commits[-BRANCH_PROGRESS_COMMIT_LIMIT:]
+	files: list[str] = []
+	for item in compare.get("files") or []:
+		if isinstance(item, dict) and isinstance(item.get("filename"), str):
+			files.append(single_line(item["filename"], 300))
+		if len(files) >= BRANCH_PROGRESS_FILE_LIMIT:
+			break
+	tip_sha = commits[-1]["sha"] if commits else failed_sha
+	return {
+		"available": True,
+		"branch": branch,
+		"failed_sha": failed_sha,
+		"status": status,
+		"ahead_by": ahead_by,
+		"tip_sha": tip_sha,
+		"commits": commits,
+		"files": files,
+		"commits_truncated": ahead_by > len(commits),
+		"files_truncated": len(compare.get("files") or []) > len(files),
+	}
+
+
+def render_branch_progress(summary: dict[str, Any]) -> str:
+	"""Render the branch-progress block for the diagnosis prompt."""
+	if not isinstance(summary, dict) or not summary.get("available"):
+		reason = summary.get("reason") if isinstance(summary, dict) else "unavailable"
+		return (
+			f"(branch progress unavailable: {single_line(reason or 'unavailable', 80)}. "
+			"Do not classify as `already-fixed` without it.)\n"
+		)
+	branch = summary["branch"]
+	failed = summary["failed_sha"]
+	ahead = summary["ahead_by"]
+	lines = [f"Failing SHA: {failed}", f"Branch: {branch}  Tip: {summary['tip_sha']}  Compare status: {summary['status']}"]
+	if ahead == 0:
+		lines.append(f"`{branch}` has no commits after the failing SHA: the code that failed is still the current code.")
+		return "\n".join(lines) + "\n"
+	lines.append(
+		f"`{branch}` has {ahead} commit(s) after the failing SHA. HEAL_SOURCE_DIR holds the failing SHA and "
+		f"HEAL_BRANCH_TIP_DIR holds `{branch}` at its tip (paths in FAILURE CONTEXT); diff the two to see what changed."
+	)
+	lines.append("")
+	shown = summary["commits"][-BRANCH_PROGRESS_COMMITS_SHOWN:]
+	hidden = ahead - len(shown)
+	lines.append(f"Commits after the failing SHA (oldest first{f', {hidden} older not shown' if hidden > 0 else ''}):")
+	for commit in shown:
+		lines.append(f"- {commit['sha'][:12]} {commit['subject']}")
+	lines.append("")
+	files = summary["files"][:BRANCH_PROGRESS_FILES_SHOWN]
+	more = "" if len(files) == len(summary["files"]) and not summary.get("files_truncated") else " (list truncated)"
+	lines.append(f"Files changed on `{branch}` since the failing SHA{more}:")
+	lines.extend(f"- {path}" for path in files)
+	return "\n".join(lines) + "\n"
+
+
+def _markdown_section(markdown: str, heading: str, limit: int) -> str:
+	"""Return the body of ``## <heading>`` (up to the next ``## ``), bounded."""
+	match = re.search(r"^##\s*" + re.escape(heading) + r"\s*$", markdown, re.IGNORECASE | re.MULTILINE)
+	if not match:
+		return ""
+	rest = markdown[match.end():]
+	end = re.search(r"^##\s", rest, re.MULTILINE)
+	return sanitize_text((rest[: end.start()] if end else rest).strip(), limit)
+
+
+def render_heal_lineage_context(issues: Iterable[dict[str, Any]], *, fp: str, root: str) -> str:
+	"""Render earlier heal issues that share this fingerprint or lineage root.
+
+	``issues`` is the same ``ai:workflow-heal`` issue list the budget decision
+	reads (no extra API call); each item may carry ``title``, ``closed_at`` and
+	``state_reason``. Newest first, at most HEAL_LINEAGE_CONTEXT_LIMIT, each
+	with its bounded ``Root cause`` and ``Suggested fix`` sections.
+	"""
+	related: list[tuple[int, dict[str, Any]]] = []
+	for issue in issues:
+		if not isinstance(issue, dict) or issue.get("pull_request"):
+			continue
+		number = _positive_int(issue.get("number"))
+		if number is None:
+			continue
+		markers = parse_heal_markers(issue.get("body"))
+		if markers.get("fp") == fp or (root and markers.get("root") == root):
+			related.append((number, issue))
+	if not related:
+		return "(no earlier heal issue shares this failure's fingerprint or lineage)\n"
+	related.sort(key=lambda pair: pair[0], reverse=True)
+	lines: list[str] = []
+	for number, issue in related[:HEAL_LINEAGE_CONTEXT_LIMIT]:
+		body = sanitize_text(issue.get("body"))
+		markers = parse_heal_markers(body)
+		state = single_line(issue.get("state") or "unknown", 20)
+		reason = single_line(issue.get("state_reason") or "", 30)
+		closed = single_line(issue.get("closed_at") or "", 40)
+		status = state + (f" ({reason})" if reason else "") + (f", closed {closed}" if closed else "")
+		repo = issue.get("repository") if is_valid_repo_slug(issue.get("repository")) else ""
+		ref = f"{repo}#{number}" if repo else f"#{number}"
+		lines.append(f"--- {ref} [{status}] gen {markers.get('gen') or '1'}: {single_line(issue.get('title') or '', 200)} ---")
+		lines.append(f"Opened: {single_line(issue.get('created_at') or 'unknown', 40)}  URL: {sanitize_text(issue.get('html_url'), 300)}")
+		for heading in ("Root cause", "Suggested fix"):
+			excerpt = _markdown_section(body, heading, HEAL_LINEAGE_EXCERPT_LIMIT)
+			if excerpt:
+				lines.append(f"{heading}:")
+				lines.append(excerpt)
+		lines.append("")
+	return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def check_heal_already_fixed_claim(diagnosis: str, summary: dict[str, Any]) -> dict[str, Any]:
+	"""Verify an ``already-fixed`` diagnosis against the branch progress.
+
+	The claim stands only when the branch has commits after the failing SHA
+	and the ``## Fixed by`` section cites at least one of them (a 7-40 hex
+	prefix of a commit in ``summary['commits']``). Returns ``{"ok": bool,
+	"reason": str, "commits": [full shas cited and found]}``.
+	"""
+	if not isinstance(summary, dict) or not summary.get("available"):
+		return {"ok": False, "reason": "branch_progress_unavailable", "commits": []}
+	if int(summary.get("ahead_by") or 0) <= 0:
+		return {"ok": False, "reason": "no_commits_after_failing_sha", "commits": []}
+	text = sanitize_text(diagnosis)
+	match = _HEAL_FIXED_BY_SECTION_RE.search(text)
+	if not match:
+		return {"ok": False, "reason": "fixed_by_section_missing", "commits": []}
+	rest = text[match.end():]
+	end = re.search(r"^##\s", rest, re.MULTILINE)
+	section = rest[: end.start()] if end else rest
+	known = [commit["sha"] for commit in summary.get("commits") or [] if isinstance(commit, dict) and is_valid_sha(commit.get("sha"))]
+	cited: list[str] = []
+	for token in _HEAL_COMMIT_REF_RE.findall(section.lower()):
+		for sha in known:
+			if sha.startswith(token) and sha not in cited:
+				cited.append(sha)
+	if not cited:
+		return {"ok": False, "reason": "fixed_by_commit_not_after_failing_sha", "commits": []}
+	return {"ok": True, "reason": "fixed_by_commit_verified", "commits": cited}
+
+
 def _write_json(value: Any) -> None:
 	sys.stdout.write(json.dumps(value, sort_keys=True))
 	sys.stdout.write("\n")
@@ -1237,6 +1647,9 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		wrapper_sha=args.wrapper_sha or None,
 		reporter_run_url=args.reporter_run_url or None,
 		failure_fingerprint=args.failure_fingerprint or None,
+		base_branch=args.base_branch or None,
+		script_ref=args.script_ref or None,
+		changed_files=_read_path_list(args.changed_files_file),
 	)
 	validate_payload(payload)
 	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -1244,6 +1657,30 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		payload["issue_excerpt"] = sanitize_text(payload["issue_excerpt"], 1500)
 		payload["failure_evidence"] = sanitize_text(payload["failure_evidence"], 2000)
 	_write_json(payload)
+	return 0
+
+
+def _read_path_list(path: str | None) -> list[str]:
+	"""One repo-relative path per line; a missing or unreadable file is an empty list."""
+	if not path:
+		return []
+	try:
+		text = Path(path).read_text(encoding="utf-8", errors="replace")
+	except OSError:
+		return []
+	return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _cmd_classify_crash_ownership(args: argparse.Namespace) -> int:
+	payload = validate_payload(_load_json_file(args.payload_json))
+	ownership = classify_crash_ownership(
+		crash_file=payload.get("crash_file"),
+		changed_files=payload.get("changed_files") or [],
+		# The intake's own git diff: not capped like the reported PR list, since a
+		# long-lived integration branch can differ from main in hundreds of files.
+		base_changed_files=[path for path in _read_path_list(args.base_changed_files) if is_valid_repo_path(path)],
+	)
+	sys.stdout.write(ownership + "\n")
 	return 0
 
 
@@ -1392,6 +1829,7 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		max_depth=args.max_depth,
 		intake_run_url=args.intake_run_url,
 		run_summaries=[item for item in run_summaries if isinstance(item, dict)],
+		integration_branch=args.integration_branch or None,
 	)
 	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
 	Path(args.body_out).write_text(body, encoding="utf-8")
@@ -1401,6 +1839,35 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 def _cmd_compose_occurrence(args: argparse.Namespace) -> int:
 	payload = validate_payload(_load_json_file(args.payload_json))
 	sys.stdout.write(compose_occurrence_comment(payload, intake_run_url=args.intake_run_url))
+	return 0
+
+
+def _cmd_branch_progress(args: argparse.Namespace) -> int:
+	try:
+		compare = _load_json_file(args.compare_json)
+	except (OSError, ValueError):
+		compare = None
+	summary = summarize_branch_progress(compare, failed_sha=args.failed_sha.lower(), branch=args.branch)
+	if not summary.get("available") and args.reason:
+		summary = {"available": False, "reason": single_line(args.reason, 80)}
+	_write_json(summary)
+	return 0
+
+
+def _cmd_render_branch_progress(args: argparse.Namespace) -> int:
+	sys.stdout.write(render_branch_progress(_load_json_file(args.summary_json)))
+	return 0
+
+
+def _cmd_lineage_context(args: argparse.Namespace) -> int:
+	issues = _load_json_file(args.issues_json)
+	sys.stdout.write(render_heal_lineage_context(issues if isinstance(issues, list) else [], fp=args.fingerprint, root=args.root))
+	return 0
+
+
+def _cmd_check_already_fixed(args: argparse.Namespace) -> int:
+	diagnosis = Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace")
+	_write_json(check_heal_already_fixed_claim(diagnosis, _load_json_file(args.summary_json)))
 	return 0
 
 
@@ -1432,7 +1899,15 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--wrapper-sha", default="")
 	p.add_argument("--reporter-run-url", default="")
 	p.add_argument("--failure-fingerprint", default="")
+	p.add_argument("--base-branch", default="")
+	p.add_argument("--script-ref", default="")
+	p.add_argument("--changed-files-file", default="")
 	p.set_defaults(func=_cmd_build_autofix_payload)
+
+	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--base-changed-files", default="")
+	p.set_defaults(func=_cmd_classify_crash_ownership)
 
 	p = sub.add_parser("autofix-failure-streak", help="Count trailing review/autofix failure comments on a PR")
 	p.add_argument("--comments-json", required=True)
@@ -1516,6 +1991,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--root", required=True)
 	p.add_argument("--classification", required=True, choices=CLASSIFICATIONS)
 	p.add_argument("--target-branch", default="")
+	p.add_argument("--integration-branch", default="")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--intake-run-url", required=True)
 	p.add_argument("--title-out", required=True)
@@ -1526,6 +2002,28 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--payload-json", required=True)
 	p.add_argument("--intake-run-url", required=True)
 	p.set_defaults(func=_cmd_compose_occurrence)
+
+	p = sub.add_parser("branch-progress", help="Summarise a compare response (failing SHA ... branch) as JSON")
+	p.add_argument("--compare-json", required=True)
+	p.add_argument("--failed-sha", required=True)
+	p.add_argument("--branch", required=True)
+	p.add_argument("--reason", default="", help="Reason to record when the compare response is missing or unusable")
+	p.set_defaults(func=_cmd_branch_progress)
+
+	p = sub.add_parser("render-branch-progress", help="Render the branch-progress prompt block")
+	p.add_argument("--summary-json", required=True)
+	p.set_defaults(func=_cmd_render_branch_progress)
+
+	p = sub.add_parser("lineage-context", help="Render earlier heal issues sharing the fingerprint / lineage root")
+	p.add_argument("--issues-json", required=True)
+	p.add_argument("--fingerprint", required=True)
+	p.add_argument("--root", default="")
+	p.set_defaults(func=_cmd_lineage_context)
+
+	p = sub.add_parser("check-already-fixed", help="Verify an already-fixed diagnosis cites a commit after the failing SHA")
+	p.add_argument("--diagnosis-file", required=True)
+	p.add_argument("--summary-json", required=True)
+	p.set_defaults(func=_cmd_check_already_fixed)
 	return parser
 
 
