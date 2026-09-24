@@ -32,17 +32,35 @@ esac
 workspace="$(cd "${workspace}" && pwd -P)"
 [ -r "${config_path}" ] || { echo "untrusted_process_sandbox: config is unreadable" >&2; exit 2; }
 
+# The unit below runs with PrivateTmp=yes, which gives it fresh, empty /tmp and
+# /var/tmp.  A ReadWritePaths=/InaccessiblePaths= entry under the host's /tmp
+# or /var/tmp therefore does not exist inside the unit, and systemd aborts
+# namespace setup with status 226 before the command starts (every reviewer,
+# the summariser, and the editor on PR #4323).  Every pipeline's RUNTIME_DIR
+# lives under /tmp, so the sandbox's own state is kept under RUNNER_TEMP.
+sandbox_path_is_private_tmp()
+{
+	case "${1%/}/" in
+		/tmp/*|/var/tmp/*) return 0 ;;
+	esac
+	return 1
+}
+sandbox_state_root="$(cd "${runtime_dir}" && pwd -P)"
+if sandbox_path_is_private_tmp "${sandbox_state_root}" && [ -n "${RUNNER_TEMP:-}" ] && [ -d "${RUNNER_TEMP}" ]; then
+	sandbox_state_root="$(cd "${RUNNER_TEMP}" && pwd -P)"
+fi
+
 credential_file="${MODEL_PROVIDER_CREDENTIAL_FILE:-}"
 credential_file_is_temporary=false
 if [ -z "${credential_file}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
-	credential_file="$(mktemp "${runtime_dir%/}/provider-credential.XXXXXX")"
+	credential_file="$(mktemp "${sandbox_state_root%/}/provider-credential.XXXXXX")"
 	credential_file_is_temporary=true
 	chmod 600 "${credential_file}"
 	printf '%s' "${OPENROUTER_API_KEY}" > "${credential_file}"
 fi
 [ -r "${credential_file}" ] || { echo "untrusted_process_sandbox: provider credential is unavailable" >&2; exit 1; }
 
-sandbox_dir="$(mktemp -d "${runtime_dir%/}/agent-sandbox.XXXXXX")"
+sandbox_dir="$(mktemp -d "${sandbox_state_root%/}/agent-sandbox.XXXXXX")"
 ready_file="${sandbox_dir}/proxy-ready.json"
 proxy_log="${sandbox_dir}/proxy.log"
 proxy_policy_file="${sandbox_dir}/proxy-policy.json"
@@ -348,10 +366,28 @@ validate_resource_size "${sandbox_io_write_max}" "IOWriteBandwidthMax"
 validate_positive_integer "${sandbox_limit_nofile}" "LimitNOFILE"
 validate_positive_integer "${sandbox_runtime_max_sec}" "RuntimeMaxSec"
 validate_positive_integer "${sandbox_stop_timeout_sec}" "TimeoutStopSec"
+# Fail with a named cause instead of an opaque status 226 when a path the unit
+# must see sits under the /tmp or /var/tmp that PrivateTmp=yes replaces.
+for sandbox_private_tmp_checked_path in "${sandbox_dir}" "${workspace}" "${runtime_write_paths[@]:-}" "${git_metadata_paths[@]:-}"; do
+	[ -n "${sandbox_private_tmp_checked_path}" ] || continue
+	if sandbox_path_is_private_tmp "${sandbox_private_tmp_checked_path}"; then
+		echo "untrusted_process_sandbox: sandbox_private_tmp_path role=${role} path=${sandbox_private_tmp_checked_path} reason=PrivateTmp=yes hides host /tmp and /var/tmp from the unit; set RUNNER_TEMP or pass --runtime-dir outside them" >&2
+		exit 1
+	fi
+done
+# PrivateTmp=yes already hides a caller-supplied credential under /tmp, and
+# naming it in InaccessiblePaths= would make namespace setup fail instead.
+credential_inaccessible_entry="${credential_file} "
+if sandbox_path_is_private_tmp "${credential_file}"; then
+	credential_inaccessible_entry=""
+fi
 systemd_run=(systemd-run)
+sandbox_journal_cmd=(journalctl)
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
 	systemd_run=(sudo -n systemd-run --uid="$(id -u)" --gid="$(id -g)")
+	sandbox_journal_cmd=(sudo -n journalctl)
 fi
+sandbox_unit_name="untrusted-sandbox-${role}-$$-${RANDOM}.service"
 systemd_properties=(
 	--property=NoNewPrivileges=yes
 	--property=PrivateTmp=yes
@@ -372,7 +408,7 @@ systemd_properties=(
 	--property="TimeoutStopSec=${sandbox_stop_timeout_sec}"
 	--property=IPAddressDeny=any
 	--property="IPAddressAllow=${proxy_host}/32"
-	--property="InaccessiblePaths=${credential_file} -/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh"
+	--property="InaccessiblePaths=${credential_inaccessible_entry}-/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh"
 	--property=ReadOnlyPaths=/
 	--property="ReadWritePaths=${sandbox_dir}${runtime_write_paths[*]:+ ${runtime_write_paths[*]}}"
 )
@@ -385,7 +421,19 @@ for protected_git_path in "${git_metadata_paths[@]:-}"; do
 	[ -n "${protected_git_path}" ] || continue
 	systemd_properties+=(--property="InaccessiblePaths=${protected_git_path}")
 done
-"${systemd_run[@]}" --quiet --wait --pipe --collect --service-type=exec \
+# No --quiet: systemd-run's unit name and "Main processes terminated with"
+# lines are the only in-band trace of a unit that never reached the command.
+sandbox_unit_rc=0
+"${systemd_run[@]}" --wait --pipe --collect --service-type=exec \
+	--unit="${sandbox_unit_name}" \
 	"${systemd_properties[@]}" \
 	--working-directory="${workspace}" \
-	env -i "${common_env[@]}" "$@"
+	env -i "${common_env[@]}" "$@" || sandbox_unit_rc=$?
+if [ "${sandbox_unit_rc}" -eq 226 ]; then
+	# 226 is systemd's EXIT_NAMESPACE: the unit failed while building its mount
+	# namespace, before the command ran.  The reason is only in the journal.
+	echo "untrusted_process_sandbox: sandbox_namespace_setup_failed role=${role} rc=226 unit=${sandbox_unit_name}" >&2
+	timeout --kill-after=2 10 "${sandbox_journal_cmd[@]}" --no-pager -o cat -n 20 -u "${sandbox_unit_name}" 2>/dev/null \
+		| sed 's/^/untrusted_process_sandbox: sandbox_namespace_setup_failed journal: /' >&2 || true
+fi
+exit "${sandbox_unit_rc}"

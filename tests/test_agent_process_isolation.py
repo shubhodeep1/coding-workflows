@@ -76,6 +76,64 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 		assert isolated_environment["GIT_TERMINAL_PROMPT"] == "0"
 
 
+def test_sandbox_state_leaves_private_tmp_runtime_dir_for_runner_temp() -> None:
+	# PrivateTmp=yes hides the host's /tmp from the unit, so ReadWritePaths= on a
+	# scratch dir under a /tmp RUNTIME_DIR aborted every unit with status 226.
+	with tempfile.TemporaryDirectory(dir="/tmp") as runtime_directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory:
+		runtime_root = Path(runtime_directory)
+		runner_temp_root = Path(runner_temp_directory).resolve()
+		assert not str(runner_temp_root).startswith(("/tmp/", "/var/tmp/"))
+		config_dir = runtime_root / "codex"
+		config_dir.mkdir()
+		(config_dir / "config.toml").write_text('model = "openai/gpt-5.6-sol"\n', encoding="utf-8")
+		capture = runtime_root / "environment.json"
+		environment = os.environ.copy()
+		environment.pop("MODEL_PROVIDER_CREDENTIAL_FILE", None)
+		environment.update(
+			{
+				"OPENROUTER_API_KEY": "synthetic-provider-token",
+				"RUNNER_TEMP": str(runner_temp_root),
+				"RUNTIME_DIR": str(runtime_root),
+				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+			}
+		)
+		result = subprocess.run(
+			[
+				"bash", str(SANDBOX), "--role", "reviewer", "--workspace", str(REPO_ROOT),
+				"--config-format", "codex", "--config", str(config_dir), "--runtime-dir", str(runtime_root),
+				"--", "python3", "-c",
+				f"import json,os; json.dump(dict(os.environ), open({str(capture)!r}, 'w'))",
+			],
+			cwd=REPO_ROOT,
+			env=environment,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		isolated_environment = json.loads(capture.read_text(encoding="utf-8"))
+		sandbox_runtime = Path(isolated_environment["RUNTIME_DIR"])
+		assert sandbox_runtime.parent.parent == runner_temp_root
+		assert sandbox_runtime.parent.name.startswith("agent-sandbox.")
+		assert Path(isolated_environment["HOME"]).parent == sandbox_runtime.parent
+		# The scratch dir and the temporary provider credential are both removed.
+		assert list(runner_temp_root.iterdir()) == []
+		assert not any(path.name.startswith(("agent-sandbox.", "provider-credential.")) for path in runtime_root.iterdir())
+
+
+def test_sandbox_systemd_unit_reports_namespace_failures() -> None:
+	sandbox_source = SANDBOX.read_text(encoding="utf-8")
+	systemd_invocation = sandbox_source.split('"${systemd_run[@]}"', 1)[1].split("\n\n", 1)[0]
+	assert "--quiet" not in systemd_invocation
+	assert '--unit="${sandbox_unit_name}"' in systemd_invocation
+	assert "--property=PrivateTmp=yes" in sandbox_source
+	assert 'sandbox_dir="$(mktemp -d "${sandbox_state_root%/}/agent-sandbox.XXXXXX")"' in sandbox_source
+	assert "sandbox_namespace_setup_failed role=${role} rc=226" in sandbox_source
+	assert "sandbox_private_tmp_path role=${role}" in sandbox_source
+	assert 'timeout --kill-after=2 10 "${sandbox_journal_cmd[@]}"' in sandbox_source
+
+
 def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	module_text = PROXY.read_text(encoding="utf-8")
 	assert '"POST": {"/chat/completions", "/responses", "/embeddings"}' in module_text
