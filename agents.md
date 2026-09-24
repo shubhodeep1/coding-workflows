@@ -186,9 +186,10 @@ unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
 
 ## Stable-ID convention
 
-- New AI-pipeline identifiers must be created through the canonical helper
-  `make_record_id(prefix)` in `scripts/ai_memory_lib.py`; do not hand-roll
-  new ID formats alongside it. The Phase 5 plan's
+- New AI-pipeline identifiers must be created through the canonical helpers
+  in `scripts/ai_memory_lib.py`; use `make_record_id(prefix)` unless this
+  section documents a purpose-built alongside format. Do not hand-roll new
+  ID formats in caller modules. The Phase 5 plan's
   `scripts/ai_memory_lib.py:480` pointer is historical; follow the live
   `make_record_id(prefix)` definition in that file.
 - The current format is contractual: `<prefix>_<YYYYMMDDHHMMSS>_<10hex>`.
@@ -207,6 +208,10 @@ unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
   `make_record_id(prefix)` emitting the current format, introduce the new
   format via an alongside helper/alias so old IDs remain valid and existing
   outputs stay stable, and update the contract test in the same change.
+- `make_deterministic_record_id(prefix, *identity_parts)` is the sanctioned
+  alongside helper for records that must deduplicate across runs. It emits
+  `<sanitized-prefix>-<24hex>` from the SHA-256 digest of the newline-joined
+  identity parts; `make_record_id(prefix)` and its format remain unchanged.
 
 ## Override conventions
 
@@ -594,9 +599,12 @@ Loop** section). The checker is a Haiku session started with
 `create_session` (`model: claude-haiku-4-5-20251001`) that runs
 `.claude/scripts/check_in_status.py`, re-arms itself with `send_later`, and,
 when the wait is over, starts the next **stage session** on the model the
-operator picked. Every stage (a phase, a blocked-PR fix, a security or
-validation read, the completion PR, a `/verify-activation` cycle, the
-`/deploy-activate` hand-off) runs in its own fresh session titled
+operator picked. Every stage (a phase, a blocked-PR fix, the conformance
+audit (`/verify-activation — scope conformance`, run after the last phase
+and before the security pass, and again after any Claude-written
+validation fix), a security or validation read, the completion PR, a
+`/verify-activation — scope activation` cycle, the `/deploy-activate`
+hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
 unless it is waiting on the user; the command's session is never woken to
 continue, because a 3-hour gap outlives the prompt cache and a wake would
@@ -606,7 +614,9 @@ and no repository, so they cannot report. Stage sessions need Auto mode (the
 command asks for it in step 0), because allow rules cannot match the
 generated MCP server name of a `create_session` child. Progress between
 stages is persisted in `docs/implement-plan/<slug>.md`
-(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt.
+(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt;
+the log's `## Lessons` section is ingested into AI memory on merge (see the
+Memory subsystem notes).
 
 No field here changes what any consumer repo receives on the `@stable`
 sync: `.claude/commands/` is not part of the synced surface, and the
@@ -1616,6 +1626,7 @@ depend on it.
 - The `ai-memory` branch is the canonical backing store; consumers must fail open when memory reads or writes are unavailable. Pointers: `scripts/memory_helpers.sh`, `scripts/ai_memory.py`.
 - `AI_MEMORY_TELEMETRY` and the per-PR review ledger are continuity surfaces, not hard gates; preserve ledger identity across reruns. Pointers: `scripts/ai_memory.py`, `scripts/review_issue_ledger.sh`.
 - Lessons-learned memory uses the standalone schema `ai-memory/schemas/lessons_learned_record.v1.json`; review-autofix writes issue-scoped records under `ai-memory/tasks/issue-*/lessons_learned/` via `scripts/ai_memory_lib.py::record_lessons_learned`, and plan-mode prompts treat surfaced same-file lessons as soft priors rather than hard requirements.
+- `/implement-plan-claude` lessons reach memory through `.github/workflows/issue_pr_status.yml` (step `Ingest implement-plan lessons into AI memory`): when a PR from a `claude/implement-plan-*` or `claude/verify-activation-*` branch merges, `scripts/ingest_implement_plan_lessons.py` reads every `docs/implement-plan/*.md` at the merge commit (README excluded), parses each `## Lessons` line (`- [source:<conformance|security|validation|intervention|plan-deviation|activation>] <text> (files: …)`), and writes `lessons_learned_record.v1` records under `ai-memory/tasks/issue-unscoped/lessons_learned/` with phase `implement_plan`, kind `project_retrospective`, and tags `source:*`, `plan:<slug>`, `file:<path>`. Record ids hash slug + source + text and `record_lessons_learned(..., record_ids=...)` skips ids already on disk, so every later merge re-reads all logs without duplicating. Fail-open (`continue-on-error`, exit 0, `AI_MEMORY_TELEMETRY` op `ingest_implement_plan_lessons`); gated by `AI_MEMORY_ENABLED` / `LESSONS_LEARNED_ENABLED` (repo vars, default `true`). Two concurrent merges can lose the ai-memory rebase race; the next implement-plan merge re-ingests the missing lessons.
 - Operator-facing memory hygiene lives in `scripts/ai_memory.py`: `review --since <duration>` lists stale task candidates, `prune --record-id <id>` marks task candidates for the existing monthly `compact --prune true` archival path, `search --query <text>` prefers OpenRouter embeddings when `OPENROUTER_API_KEY` is set and otherwise falls back to keyword ranking, and `export --issue <n>` / `--pr <n>` dumps matching memory records as JSON. `prune` is intentionally additive: it writes a `timestamps.prune_marked_at` marker on candidate records instead of introducing a second maintenance channel.
 - Prompt retrieval reads lessons-learned records too: `retrieve_memory_context` (`scripts/ai_memory_lib.py`) appends a `LESSONS LEARNED (soft priors from earlier runs; not requirements)` block for the `planning`, `implementation`, and `reviewer` roles with up to 5 of the newest `tasks/*/lessons_learned/*.json` records whose text or tags match the issue keywords. They use at most a quarter of the role's token budget (`LESSONS_RETRIEVAL_BUDGET_FRACTION`); records keep the rest, and with no matching lesson the context is unchanged. Invalid lesson files are skipped; `LESSONS_LEARNED_ENABLED=false` turns the block off. The retrieve JSON and telemetry gain `lessons_selected` (and `lesson_ids` in the JSON).
 - The orchestrator writes a retrospective when a project completes, including clean-skip completions where the judge never runs. `scripts/orchestrate_poll_process.sh` records causes as they happen in state `lesson_events` (newest 20, via `orchestrate_lib.py append-lesson-event`): judge fix-up issue created (`create_judge_fixup_issues_from_verdict`), validation `needs_fixes` diagnosis (`sync_validation_fix_issues_from_comments`), security findings reported (`run_security_pass_inline`, after `SECURITY_PASS_BLOCKED`), and orchestrator stall recovery. On each of the four `status = "complete"` paths, `emit_orchestrator_completion_lessons` turns the events plus the recovery / judge-stall / review-blocked / validation / security counters into `lessons_learned_record.v1` records (`orchestrate_lib.build_completion_lessons`; phase `orchestrator_completion`, kind `project_retrospective`, tags `source:*`, `project:<tracking>`, `file:*`) under `ai-memory/tasks/issue-<tracking>/lessons_learned/`. Record ids are deterministic and existing ids are skipped, so a repeated completion tick writes nothing; a clean project with no events or counters writes nothing. Fail-open, no GitHub API calls; gated by `AI_MEMORY_ENABLED` / `LESSONS_LEARNED_ENABLED`.
