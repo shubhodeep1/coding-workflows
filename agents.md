@@ -521,9 +521,12 @@ Loop** section). The checker is a Haiku session started with
 `create_session` (`model: claude-haiku-4-5-20251001`) that runs
 `.claude/scripts/check_in_status.py`, re-arms itself with `send_later`, and,
 when the wait is over, starts the next **stage session** on the model the
-operator picked. Every stage (a phase, a blocked-PR fix, a security or
-validation read, the completion PR, a `/verify-activation` cycle, the
-`/deploy-activate` hand-off) runs in its own fresh session titled
+operator picked. Every stage (a phase, a blocked-PR fix, the conformance
+audit (`/verify-activation — scope conformance`, run after the last phase
+and before the security pass, and again after any Claude-written
+validation fix), a security or validation read, the completion PR, a
+`/verify-activation — scope activation` cycle, the `/deploy-activate`
+hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
 unless it is waiting on the user; the command's session is never woken to
 continue, because a 3-hour gap outlives the prompt cache and a wake would
@@ -533,7 +536,9 @@ and no repository, so they cannot report. Stage sessions need Auto mode (the
 command asks for it in step 0), because allow rules cannot match the
 generated MCP server name of a `create_session` child. Progress between
 stages is persisted in `docs/implement-plan/<slug>.md`
-(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt.
+(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt;
+the log's `## Lessons` section is ingested into AI memory on merge (see the
+Memory subsystem notes).
 
 No field here changes what any consumer repo receives on the `@stable`
 sync: `.claude/commands/` is not part of the synced surface, and the
@@ -1537,6 +1542,7 @@ depend on it.
 - The `ai-memory` branch is the canonical backing store; consumers must fail open when memory reads or writes are unavailable. Pointers: `scripts/memory_helpers.sh`, `scripts/ai_memory.py`.
 - `AI_MEMORY_TELEMETRY` and the per-PR review ledger are continuity surfaces, not hard gates; preserve ledger identity across reruns. Pointers: `scripts/ai_memory.py`, `scripts/review_issue_ledger.sh`.
 - Lessons-learned memory uses the standalone schema `ai-memory/schemas/lessons_learned_record.v1.json`; review-autofix writes issue-scoped records under `ai-memory/tasks/issue-*/lessons_learned/` via `scripts/ai_memory_lib.py::record_lessons_learned`, and plan-mode prompts treat surfaced same-file lessons as soft priors rather than hard requirements.
+- `/implement-plan-claude` lessons reach memory through `.github/workflows/issue_pr_status.yml` (step `Ingest implement-plan lessons into AI memory`): when a PR from a `claude/implement-plan-*` or `claude/verify-activation-*` branch merges, `scripts/ingest_implement_plan_lessons.py` reads every `docs/implement-plan/*.md` at the merge commit (README excluded), parses each `## Lessons` line (`- [source:<conformance|security|validation|intervention|plan-deviation|activation>] <text> (files: …)`), and writes `lessons_learned_record.v1` records under `ai-memory/tasks/issue-unscoped/lessons_learned/` with phase `implement_plan`, kind `project_retrospective`, and tags `source:*`, `plan:<slug>`, `file:<path>`. Record ids hash slug + source + text and `record_lessons_learned(..., record_ids=...)` skips ids already on disk, so every later merge re-reads all logs without duplicating. Fail-open (`continue-on-error`, exit 0, `AI_MEMORY_TELEMETRY` op `ingest_implement_plan_lessons`); gated by `AI_MEMORY_ENABLED` / `LESSONS_LEARNED_ENABLED` (repo vars, default `true`). Two concurrent merges can lose the ai-memory rebase race; the next implement-plan merge re-ingests the missing lessons.
 - Operator-facing memory hygiene lives in `scripts/ai_memory.py`: `review --since <duration>` lists stale task candidates, `prune --record-id <id>` marks task candidates for the existing monthly `compact --prune true` archival path, `search --query <text>` prefers OpenRouter embeddings when `OPENROUTER_API_KEY` is set and otherwise falls back to keyword ranking, and `export --issue <n>` / `--pr <n>` dumps matching memory records as JSON. `prune` is intentionally additive: it writes a `timestamps.prune_marked_at` marker on candidate records instead of introducing a second maintenance channel.
 
 **Validation harness Docker lifecycle**

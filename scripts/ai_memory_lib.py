@@ -88,11 +88,12 @@ ALLOWED_CATEGORIES = {
 }
 
 ALLOWED_SCOPE_LEVELS = {"global", "task", "run"}
-ALLOWED_LESSONS_LEARNED_PHASES = {"review_autofix", "implement", "judge"}
+ALLOWED_LESSONS_LEARNED_PHASES = {"review_autofix", "implement", "judge", "implement_plan"}
 ALLOWED_LESSONS_LEARNED_KINDS = {
     "out_of_plan_fix",
     "unexpected_judge_verdict",
     "review_finding_outside_plan_scope",
+    "project_retrospective",
 }
 
 SENSITIVE_CATEGORIES = {"incidents"}
@@ -1783,10 +1784,20 @@ def record_lessons_learned(
     phase: str,
     lessons: list[dict[str, Any]],
     discovered_at: str | None = None,
+    record_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """Validate and write lessons-learned records; return the records written.
+
+    ``record_ids`` is optional. When given it must hold one caller-derived id
+    per lesson; a lesson whose record file already exists is skipped, so a
+    caller that derives ids deterministically can re-run safely. Without it,
+    every lesson gets a fresh random id (the original behaviour).
+    """
     ensure_memory_layout(memory_root)
     if not isinstance(lessons, list) or not lessons:
         raise MemoryValidationError("lessons must be a non-empty array")
+    if record_ids is not None and (not isinstance(record_ids, list) or len(record_ids) != len(lessons)):
+        raise MemoryValidationError("record_ids must be an array with one id per lesson")
 
     normalized_issue_number = _normalize_optional_positive_int(issue_number, "issue_number")
     normalized_pr_number = _normalize_optional_positive_int(pr_number, "pr_number")
@@ -1796,12 +1807,12 @@ def record_lessons_learned(
     )
 
     records: list[dict[str, Any]] = []
-    for lesson in lessons:
+    for index, lesson in enumerate(lessons):
         if not isinstance(lesson, dict):
             raise MemoryValidationError("each lesson must be a JSON object")
 
         record = {
-            "record_id": make_record_id("lesson"),
+            "record_id": record_ids[index] if record_ids is not None else make_record_id("lesson"),
             "schema_version": LESSONS_LEARNED_RECORD_SCHEMA_VERSION,
             "issue_number": normalized_issue_number,
             "pr_number": normalized_pr_number,
@@ -1812,7 +1823,10 @@ def record_lessons_learned(
             "discovered_at": normalized_discovered_at,
         }
         validate_lessons_learned_record(record, memory_root)
-        _atomic_write_json(_lessons_learned_record_path(memory_root, record), record)
+        record_path = _lessons_learned_record_path(memory_root, record)
+        if record_ids is not None and record_path.exists():
+            continue
+        _atomic_write_json(record_path, record)
         records.append(record)
 
     return records

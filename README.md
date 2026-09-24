@@ -30,6 +30,7 @@ Key behaviors:
 - **Processed-command idempotency** (`/answer`, `/approved`) prevents duplicate plan or implement runs caused by rapid re-triggering.
 - **Task lineage** tracks the full issue-to-PR lifecycle (open → in_progress → merged/closed) and is finalized when a PR closes or merges.
 - **Kill switch:** set the `AI_MEMORY_ENABLED` repository variable to `false` to disable all memory operations without any other code change.
+- **Implement-plan lessons:** `/implement-plan-claude` records reusable lessons in its progress log (`docs/implement-plan/<slug>.md`, `## Lessons`). When a PR from a `claude/implement-plan-*` or `claude/verify-activation-*` branch merges, `issue_pr_status.yml` runs `scripts/ingest_implement_plan_lessons.py` against the merge commit and writes each lesson once to the `ai-memory` branch as a `lessons_learned_record.v1` record (phase `implement_plan`, kind `project_retrospective`). The step is fail-open and honours `AI_MEMORY_ENABLED` and `LESSONS_LEARNED_ENABLED`.
 
 Memory operations are implemented in `scripts/memory_helpers.sh` (shared helper wrappers) and `scripts/ai_memory.py` (CLI). The `ai-memory` branch is created automatically on the first write.
 
@@ -1380,6 +1381,7 @@ through `clarify → plan → implement → review`.
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
 | `AI_MEMORY_ENABLED` | `true` | Enable/disable memory operations |
+| `LESSONS_LEARNED_ENABLED` | `true` | Enable/disable lessons-learned memory writes, including the `/implement-plan-claude` lessons ingestion in `issue_pr_status.yml` |
 | `AI_MEMORY_KEYWORD_MODEL` | `openai/gpt-5.4-nano` | Model for semantic keyword extraction during retrieval |
 | `AI_MEMORY_KEYWORD_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL for keyword model |
 | `AI_MEMORY_TOKEN_BUDGET_<ROLE>` | _(from profile)_ | Per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`) |
