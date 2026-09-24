@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Repository automation enforces changed-file scope and integrity before allowing commits or review fixes.",
   "timestamps": {
     "created_at": "2026-09-24T00:58:22Z",
