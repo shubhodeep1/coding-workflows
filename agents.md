@@ -184,6 +184,21 @@ a new value, add it to the appropriate overrides file with a
   shape while deriving the suffix from
   `sha256(salt.encode("utf-8"))`, including the empty-string salt.
 
+## Workflow file size limit
+
+- GitHub does not start a workflow file above 512,000 bytes. Keep every
+  `.github/workflows/*.yml` below the 480,000-byte repository guard.
+- Move large inline `run:` bodies into `scripts/` rather than raising the
+  guard or splitting one workflow into multiple workflows. Keep each step's
+  `name:`, `if:`, `env:`, and `continue-on-error:` in the workflow.
+- Review/autofix step scripts use the `review_autofix_step_<slug>.sh` naming
+  convention and the staged-support, branch-snapshot, then main-snapshot
+  resolution order. Register them in `scripts/stage_workflow_support.sh`,
+  `tests/review_autofix_step_scripts.py`, and `docs/INVENTORY.md`.
+- Contract tests inspect extracted bodies through
+  `expanded_review_autofix_text()` so moving code does not weaken existing
+  workflow assertions.
+
 ## Implement scope-lock label
 
 - When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active

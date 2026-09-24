@@ -13,10 +13,15 @@ import re
 import subprocess
 import tempfile
 import textwrap
+import sys
 import time
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -46,7 +51,8 @@ PHASE_H_CONTEXT_BUDGET_FIXTURE = FIXTURES_DIR / "phase-h-context-budget-overflow
 
 
 def _workflow_text() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# Moved step bodies (scripts/review_autofix_step_*.sh) inlined again.
+	return expanded_review_autofix_text()
 
 
 def _stage_helper_text() -> str:
@@ -5755,7 +5761,7 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 			f"step should stay available only when the partial-finalize validation tail can complete: {step_name}"
 		)
 	validator_block = _step_block("Validate editor no-op disposition")
-	assert "(env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))" in validator_block
+	assert "(env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'sandbox_initialization_failure'))" in validator_block
 
 
 def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
@@ -5768,7 +5774,7 @@ def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
 def test_review_pipeline_summary_finalize_reason_marks_partial_runs() -> None:
 	block = _step_block("Append review pipeline iteration summary")
 	assert re.search(
-		r'if resume_state in \{"no_progress", "round_budget_exhausted"\} and not resume_should_continue:\n\s+return resume_state\n\s+if partial_finalize:\n\s+return "partial_finalize"',
+		r'if resume_state in \{"no_progress", "round_budget_exhausted"\} and not resume_should_continue:\n\s+return resume_state\n\s+if bool_env\("EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE"\):\n\s+return "editor_sandbox_initialization_failure"\n\s+if partial_finalize:\n\s+return "partial_finalize"',
 		block,
 	), "summary finalize_reason contract should classify partial-finalize runs"
 
@@ -7111,6 +7117,46 @@ def test_review_blocked_writers_require_head_bound_fix_targets_and_spans() -> No
 	assert 'git add -A -- .' not in poller[poller.index('fix)'):poller.index('merge_with_followup)', poller.index('fix)'))]
 	assert '"fix_targets"' in prompt
 	assert "trusted targets exist, do not choose `fix`." in prompt
+
+
+def test_identical_failure_cap_is_engine_scoped_and_degraded_evidence_is_archived() -> None:
+	workflow_text = _workflow_text()
+	workflow = yaml.safe_load(workflow_text)
+	gate_outputs = workflow["jobs"]["gate"]["outputs"]
+	assert gate_outputs["fingerprint_cap_engine_sha"] == "${{ steps.evaluate.outputs.fingerprint_cap_engine_sha }}"
+
+	evaluate_step = next(step for step in workflow["jobs"]["gate"]["steps"] if step.get("name") == "Evaluate review gate")
+	evaluate_run = evaluate_step["run"]
+	assert 'FINGERPRINT_CAP_ENGINE_SHA=""' in evaluate_run
+	assert 'git -C "${fingerprint_cap_candidate_root}" rev-parse HEAD' in evaluate_run
+	assert "grep -q -- '--engine-sha'" in evaluate_run
+	assert '--engine-sha "${FINGERPRINT_CAP_ENGINE_SHA}"' in evaluate_run
+	assert 'echo "fingerprint_cap_engine_sha=${FINGERPRINT_CAP_ENGINE_SHA}"' in evaluate_run
+	assert evaluate_run.count('gate_fetch_marker_comments') >= 1
+
+	cap_job = workflow["jobs"]["fingerprint-cap-block"]
+	assert cap_job["env"]["FINGERPRINT_CAP_ENGINE_SHA"] == "${{ needs.gate.outputs.fingerprint_cap_engine_sha }}"
+	cap_run = next(step for step in cap_job["steps"] if step.get("name") == "Apply identical-failure cap outcome")["run"]
+	assert 'selected_cap_engine_sha="$(git -C "${fingerprint_cap_candidate_root}" rev-parse HEAD' in cap_run
+	assert 'selected_cap_engine_sha}" != "${FINGERPRINT_CAP_ENGINE_SHA}' in cap_run
+	assert 'review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} engine=${FINGERPRINT_CAP_ENGINE_SHA}' in cap_run
+	assert '--arg engine "${FINGERPRINT_CAP_ENGINE_SHA}"' in cap_run
+	# The fresh idempotency check still reuses one existing paginated comments
+	# read; engine scoping adds no GitHub request.
+	assert cap_run.count('issues/${PR_NUMBER}/comments') == 2
+
+	assert workflow_text.count("-name 'editor_attempt_*.err' -print0") >= 4
+	assert workflow_text.count('--engine-sha "${AUTOFIX_FAILURE_ENGINE_SHA:-}"') == 4
+	assert '2> >(tee -a "${RUNTIME_DIR}/collect_metadata_stderr.txt" >&2)' in workflow_text
+
+
+def test_identical_failure_helper_and_source_commit_are_selected_together() -> None:
+	workflow_text = _workflow_text()
+	assert 'failure_heal_py_root="$(dirname "$(dirname "${failure_heal_py_candidate}")")"' in workflow_text
+	assert workflow_text.count("grep -q -- '--engine-sha'") == 3
+	assert 'AUTOFIX_FAILURE_ENGINE_SHA=${AUTOFIX_FAILURE_ENGINE_SHA}' in workflow_text
+	assert '.codex-workflow-src-main/scripts/workflow_failure_heal.py .codex-workflow-src/scripts/workflow_failure_heal.py' in workflow_text
+	assert 'fingerprint_cap_candidates=".codex-workflow-src-main/scripts/workflow_failure_heal.py .codex-workflow-src/scripts/workflow_failure_heal.py"' in workflow_text
 
 
 if __name__ == "__main__":

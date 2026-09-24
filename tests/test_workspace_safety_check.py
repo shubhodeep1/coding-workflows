@@ -4,10 +4,15 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -23,7 +28,9 @@ REVIEW_CONFLICT_RESOLVE = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
 
 
 def _workflow_doc(path: Path) -> dict[str, object]:
-	doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+	# review_autofix.yml sources some step bodies from scripts/; inline them.
+	text = expanded_review_autofix_text() if path == REVIEW_WORKFLOW else path.read_text(encoding="utf-8")
+	doc = yaml.safe_load(text)
 	if not isinstance(doc, dict):
 		raise AssertionError(f"Workflow did not parse into a mapping: {path}")
 	return doc
@@ -168,8 +175,8 @@ def test_implement_workflow_stages_and_guards_all_codex_launches() -> None:
 
 	assert "workspace_safety_check.sh" in stage_block
 	assert "bash scripts/workspace_safety_check.sh" in implement_block
-	assert "bash scripts/workspace_safety_check.sh" in repair_block
-	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"' in summary_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/workspace_safety_check.sh"' in repair_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/workspace_safety_check.sh"' in summary_block
 
 
 def test_ci_and_release_gate_run_workspace_safety_check_tests() -> None:
@@ -223,8 +230,9 @@ def test_review_conflict_resolve_guards_resolver_and_aborts_on_exit_78() -> None
 	assert 'WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"' in text
 	assert 'if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then' in text
 	assert 'if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then' in text
-	assert '[ "${_codex_exit}" -eq 78 ]' in text
-	assert 'workspace_safety_violation.' in text
+	assert 'post_agent_workspace_guard.py" reconcile' in text
+	assert 'workspace_safety_violation; aborting before output parsing.' in text
+	assert "exit 78" in text
 
 
 def main() -> int:

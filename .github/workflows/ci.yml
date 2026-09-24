@@ -661,6 +661,12 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
 
+      - name: Review autofix step-script contract and workflow file size guard tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
+
       - name: Review consolidator reject-verifier contract test
         run: |
           set -euo pipefail
