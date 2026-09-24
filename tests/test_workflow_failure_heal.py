@@ -480,6 +480,20 @@ def test_error_signature_ignores_volatile_tokens_and_prefers_error_annotations()
 	assert re.fullmatch(r"[0-9a-f]{64}", fp1)
 
 
+def test_fingerprint_ignores_the_promote_cycle_run_name_suffix() -> None:
+	# Issue #4368 vs #4350: the same Phase 4b failure, once from a promote
+	# cycle (run name `... [cycle:<id>]`) and once from a direct dispatch.
+	step = "Phase 4b: Verify editor restored canary (pytest + retry)"
+	signature = "##[error]retry review run did not complete within <n> minutes"
+	plain = heal.fingerprint("Test & Mark Stable Release", step, signature)
+	assert heal.fingerprint("Test & Mark Stable Release [cycle:35939056453]", step, signature) == plain
+	assert heal.fingerprint("Test & Mark Stable Release [cycle:35802575310]", step, signature) == plain
+	assert heal.fingerprint("Test & Mark Stable Release [CYCLE:1] ", step, signature) == plain
+	# Only a trailing numeric cycle tag is volatile; other names stay distinct.
+	assert heal.fingerprint("Test & Mark Stable Release [cycle:abc]", step, signature) != plain
+	assert heal.fingerprint("Mark Stable Release [cycle:1]", step, signature) != plain
+
+
 def _heal_issue(number: int, *, state: str, fp: str, gen: int = 1, root: str | None = None, created: datetime | None = None) -> dict:
 	created = created or datetime(2026, 9, 1, tzinfo=timezone.utc)
 	return {

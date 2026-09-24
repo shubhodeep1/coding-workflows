@@ -154,6 +154,11 @@ _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 	re.compile(r"\bTraceback \(most recent call last\)|^\s*\w+Error:", re.MULTILINE),
 	re.compile(r"\bfatal:|\berror:|\bERROR\b|\bFAILED\b|\bexit code\b|\bexited with\b", re.IGNORECASE),
 )
+# Test & Mark Stable Release runs dispatched by a promote cycle carry the
+# cycle's run id in their run name (`run-name: ... [cycle:<id>]`, which
+# scripts/promote_main_cycle.sh matches on). The id is unique per cycle, so it
+# must not reach the dedup fingerprint.
+_CYCLE_RUN_NAME_SUFFIX_RE = re.compile(r"\s*\[cycle:[0-9]+\]\s*$", re.IGNORECASE)
 _SOFT_LOG_PATTERNS = re.compile(
 	r"::error::|::warning::|\bERROR\b|\bFAIL(?:ED|URE)?\b|\bfatal\b|\bTraceback\b|"
 	r"\b[A-Z][A-Z0-9_]*_(?:FAILED|SKIPPED|ESCALATE|BLOCKED)\b|\bexit code\b|\btimed?[ -]?out\b|\brate.?limit",
@@ -708,9 +713,12 @@ def error_signature(text: str) -> str:
 
 
 def fingerprint(workflow_name: str, failing_step: str, signature: str) -> str:
+	# The per-cycle `[cycle:<id>]` run-name suffix is dropped so every promote
+	# cycle that fails the same way shares one fingerprint (and one lineage).
+	stable_workflow_name = _CYCLE_RUN_NAME_SUFFIX_RE.sub("", single_line(workflow_name, 200))
 	material = "|".join(
 		[
-			single_line(workflow_name, 200).lower(),
+			stable_workflow_name.lower(),
 			single_line(failing_step, 200).lower(),
 			signature[:SIGNATURE_CHAR_LIMIT],
 		]
