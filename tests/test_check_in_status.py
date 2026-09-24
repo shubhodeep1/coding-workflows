@@ -252,5 +252,10 @@ def test_settings_preapprove_the_checker_tools(path):
 		assert f"mcp__Claude_Code_Remote__{tool}" in allow
 	# Generated server name that create_session children see in this account's environment.
 	assert "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a" in allow
+	# Exact per-tool rules for the tools a woken checker calls, plus the
+	# notification read a Routine wake queues.
+	for tool in ("send_later", "set_session_title", "create_session", "archive_session", "get_session"):
+		assert f"mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__{tool}" in allow
+	assert "ReadNotifications" in allow
 	# Allow rules cannot glob the server segment; an unanchored MCP glob would be skipped.
 	assert not any(rule.startswith("mcp__*") for rule in allow)
