@@ -42,6 +42,7 @@ trust check on.
 from __future__ import annotations
 
 import re
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -193,19 +194,17 @@ def test_review_autofix_write_side_has_no_codex_runtime() -> None:
 
 def test_scanner_matches_backslash_continued_invocations() -> None:
 	"""Backslash-continued codex commands must be part of the contract scan."""
-	matches = [
-		logical_line
-		for path, _, logical_line in _iter_codex_exec_invocations()
-		if path == Path(".github/workflows/orchestrate_clarify_respond.yml")
-	]
-	assert any("critic_prompt.txt" in logical_line for logical_line in matches), (
-		"scanner must detect the self-critique critic codex invocation in "
-		"orchestrate_clarify_respond.yml"
-	)
-	assert any('${CODEX_PROMPT_FILE}.v2' in logical_line for logical_line in matches), (
-		"scanner must detect the self-critique re-run codex invocation in "
-		"orchestrate_clarify_respond.yml"
-	)
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		fixture_path = Path(temporary_directory) / "continued.sh"
+		fixture_path.write_text(
+			"codex exec --skip-git-repo-check \\\n"
+			"  --model openai/gpt-6-sol \\\n"
+			"  --sandbox read-only\n",
+			encoding="utf-8",
+		)
+		logical_lines = _iter_logical_lines(fixture_path)
+	assert len(logical_lines) == 1
+	assert _INVOCATION.search(logical_lines[0][1])
 
 
 def test_scanner_actually_matches_known_invocations() -> None:

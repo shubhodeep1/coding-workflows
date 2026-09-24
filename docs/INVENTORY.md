@@ -117,6 +117,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
+- `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
+- `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
+- `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
 - `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.
