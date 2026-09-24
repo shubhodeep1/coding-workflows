@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/internal-cancel-on-pr-close.yml:lines 19-53 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The wrapper adds checkout and GH_PAT-backed branch-writing capability, with checkout occurring before the workflow-level kill switch.\n  WHY: This expands the trust boundary of a wrapper documented as limited to PR cancellation and cleanup; the reviewers disagreed on severity (BLOCKER vs MAJOR), so the higher severity is used.\n- scripts/workflow_failure_heal_pr_reconcile.sh:lines 146-221 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A rejected push during retargeting is treated as a transient skip, leaving the heal PR alive with its original, superseded head.\n  WHY: The script logs a warning but does not take the terminal action of closing the PR/issue for a non-retryable push error.\n- scripts/workflow_failure_heal.py:lines 666-682 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The _self_named_script fallback regex does not require the error prefix (::error:: or ##[error]) to be present.\n  WHY: Benign debug log lines (e.g., gh_helpers: retry exhausted) can be matched as crash file evidence, misrouting heal report ownership classification and potentially causing an incorrect heal issue or skipped self-inflicted routing.\n- agents.md:Stable log prefixes section | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: WORKFLOW_HEAL_PR_RECONCILE is not registered in the Stable log prefixes (contractual) section.\n  WHY: Workflow log analysis pipelines depend on this registry to recognize and surface log events in optimization reports, so reconcile events will be missed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/internal-cancel-on-pr-close.yml | severity=BLOCKER | confidence=4\n  PROBLEM: The internal-cancel-on-pr-close.yml wrapper contract is violated by adding a job that checks out the repository and uses GH_PAT for git writes.\n  WHY: This wrapper is documented and contracted as being limited to PR cancellation and cleanup. Adding checkout and branch-writing capabilities materializes an unwarranted security and trust-boundary expansion, as this wrapper is enabled by default for all consumers of the workflow templates.\n- scripts/workflow_failure_heal_pr_reconcile.sh | severity=MAJOR | confidence=3\n  PROBLEM: A rejected push during retargeting is treated as a transient skip (log reason=push_rejected), leaving the heal PR alive with its original, superseded head instead of closing it.\n  WHY: The heal PR remains in an inconsistent state on the repository, potentially blocking future CI runs or causing confusion, while the script logs a warning but fails to take the terminal action (closing the PR/issue) that it should for a non-retryable push error.\n- scripts/workflow_failure_heal.py | severity=MAJOR | confidence=4\n  PROBLEM: The _self_named_script fallback regex does not require the error prefix (::error:: or ##[error]) to be present.\n  WHY: Benign debug log lines (e.g., gh_helpers: retry exhausted) will be incorrectly matched as crash file evidence, misrouting the heal report ownership classification and potentially causing the system to file an incorrect heal issue or skip self-inflicted routing.\n- agents.md:Stable log prefixes section | severity=MAJOR | confidence=4\n  PROBLEM: WORKFLOW_HEAL_PR_RECONCILE is not registered in the Stable log prefixes (contractual) section.\n  WHY: Workflow log analysis pipelines depend on this registry to recognize and surface log events in optimization reports. Reconcile events will be missed in those reports.\n- .github/workflows/internal-cancel-on-pr-close.yml | severity=MAJOR | confidence=4\n  PROBLEM: The new job adds checkout and GH_PAT-backed branch-write capability to the cancel-on-pr-close wrapper, while the workflow-level kill switch does not gate the checkout step.\n  WHY: The checkout occurs before the script's skip logic, so the expanded capability remains in scope even when the script no-ops, violating the wrapper's contract.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "06fc6eb0f42d8d017b55e066b9f257f269339db147fd61d19fc00823a05ca6de",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4393,
+    "run_id": "36022504077",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36022504077",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924163838_1564ed1b4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4393,
+    "run_id": "36022504077"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T16:38:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
