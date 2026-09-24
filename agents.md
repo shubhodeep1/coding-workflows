@@ -971,6 +971,8 @@ and shipped:
 - `WORKTREE_REGISTER_INVALID_NAME`
 - `WORKTREE_REGISTER_FAIL`
 - `WORKTREE_DEREGISTER_FAIL`
+- `sandbox_private_tmp_path`
+- `sandbox_namespace_setup_failed`
 - `opencode_agent_failure`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -1134,6 +1136,8 @@ LOG_PREFIX.name=WORKTREE_REGISTRY_REBUILD
 LOG_PREFIX.name=WORKTREE_REGISTER_INVALID_NAME
 LOG_PREFIX.name=WORKTREE_REGISTER_FAIL
 LOG_PREFIX.name=WORKTREE_DEREGISTER_FAIL
+LOG_PREFIX.name=sandbox_private_tmp_path
+LOG_PREFIX.name=sandbox_namespace_setup_failed
 LOG_PREFIX.name=opencode_agent_failure
 
 ---
