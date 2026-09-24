@@ -39,17 +39,22 @@ if [ "${role}" = workspace-guard ]; then
 		[ -d "${GIT_DIR}" ] \
 			|| { echo "untrusted_process_sandbox: workspace-guard Git directory is unavailable" >&2; exit 1; }
 		guard_git_dir="$(cd "${GIT_DIR}" && pwd -P)"
+		guard_runtime_dir="$(cd "${runtime_dir}" && pwd -P)"
+		case "${guard_git_dir}" in
+			"${workspace}"|"${workspace}/"*|"${guard_runtime_dir}"|"${guard_runtime_dir}/"*)
+				echo "untrusted_process_sandbox: workspace-guard Git metadata must be external and read-only" >&2; exit 1 ;;
+		esac
+		case "${workspace}" in
+			"${guard_git_dir}/"*) echo "untrusted_process_sandbox: workspace-guard Git metadata contains the workspace" >&2; exit 1 ;;
+		esac
+		case "${guard_runtime_dir}" in
+			"${guard_git_dir}/"*) echo "untrusted_process_sandbox: workspace-guard Git metadata contains the runtime" >&2; exit 1 ;;
+		esac
 		if [ "$(git -C "${workspace}" rev-parse --is-bare-repository 2>/dev/null)" != false ] \
 			|| [ "$(git -C "${workspace}" rev-parse --show-toplevel 2>/dev/null)" != "${workspace}" ] \
 			|| [ "$(git -C "${workspace}" rev-parse --absolute-git-dir 2>/dev/null)" != "${guard_git_dir}" ]; then
 			echo "untrusted_process_sandbox: workspace-guard Git linkage is invalid" >&2
 			exit 1
-		fi
-		if [ -e "${workspace}/.git" ]; then
-			workspace_git_dir="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${workspace}" rev-parse --absolute-git-dir 2>/dev/null)" \
-				|| { echo "untrusted_process_sandbox: workspace-guard Git metadata is invalid" >&2; exit 1; }
-			[ "${workspace_git_dir}" = "${guard_git_dir}" ] \
-				|| { echo "untrusted_process_sandbox: workspace-guard Git directory mismatch" >&2; exit 1; }
 		fi
 	else
 		[ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${workspace}" rev-parse --show-toplevel 2>/dev/null)" = "${workspace}" ] \
@@ -324,7 +329,7 @@ while IFS='=' read -r environment_name environment_value; do
 		CODEX_THREAD_REUSE_RUNTIME_DIR|RUNTIME_DIR)
 			;;
 			CODEX_THREAD_REUSE_OUTPUT_FILE|CODEX_THREAD_REUSE_LOG_FILE|CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE|CODEX_THREAD_REUSE_STATUS_FILE)
-			if [ -n "${environment_value}" ]; then
+			if [ "${role}" != workspace-guard ] && [ -n "${environment_value}" ]; then
 				mkdir -p "$(dirname "${environment_value}")"
 				touch "${environment_value}"
 				runtime_write_paths+=("${environment_value}")
