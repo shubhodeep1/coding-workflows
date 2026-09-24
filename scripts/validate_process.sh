@@ -138,7 +138,7 @@ MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-6-sol}"
 # policy and `validate.yml`'s workflow-level `THINKING_LEVEL_VALIDATE ||
 # 'high'`. Earlier revisions defaulted to `medium`/`none`; `none` is
 # not in `scripts/codex_model_catalog.json`'s `supported_reasoning_levels`
-# for the gpt-5.x family, so the standalone / local invocation default
+# for the default gpt-6-sol model, so the standalone / local invocation default
 # is kept aligned with the workflow env to avoid silent drift.
 MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-high}"
 # Discover is a low-volume execution-heavy task (read repo metadata,
@@ -154,7 +154,7 @@ MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-high}"
 MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-high}"
 # `none` is intentionally rejected here: the parent MODEL_REASONING_EFFORT
 # rationale above cites the catalog (`scripts/codex_model_catalog.json`)
-# not advertising `none` for the gpt-5.x family, so accepting it for the
+# not advertising `none` for the default gpt-6-sol model, so accepting it for the
 # per-phase override would be inconsistent. To use `none` everywhere,
 # update the catalog first.
 case "${MODEL_REASONING_EFFORT_DISCOVER}" in
