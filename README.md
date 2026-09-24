@@ -669,7 +669,7 @@ Each `review_autofix.yml` iteration builds a small local review-artifact chain b
 - `floor_tags.txt` is produced by `scripts/review_floor_rules.sh`. With `REVIEW_FLOOR_RULES_ENABLED=1` (default), floor matches are treated as non-skippable signals. Invalid or missing `REVIEW_FLOOR_KEYWORDS_FILE` overrides fail open to the built-in keyword catalog.
 - `consolidator_raw.txt` and `review_issues.txt` are advisory only. The consolidator is enabled by default, but empty output, parser failures, or uncovered anchors never gate the run — the editor still works from `reviewer_bundle.txt`.
 - `ledger_status.txt` plus `REVIEW_LEDGER_PATH` (default `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt`) persist per-PR issue history across autofix iterations via `actions/cache`. Statuses move through `NEW`, `PERSISTING`, `FIXED`, `RESURGENT`, and `accepted-residual`; after `REVIEW_LEDGER_PERSIST_LIMIT=2`, still-open issues are collapsed to `accepted-residual` stubs in `review_issues.txt` while the ledger keeps the durable history.
-- The editor summary must name every `review_*.txt` file under both `Reviewer files processed:` and `Review file issue audit:` (with the four audit counts); a missing entry fails the editor attempt. The sha256 each entry carries is checked but no longer gates: a missing or miscopied hash logs `::warning::EDITOR_REVIEWER_CHECKSUM_UNVERIFIED attempt=<n> file=<path> expected_sha=<sha> path_entries=<n> checksum_matches=<n>` and the attempt proceeds, because the model garbles 64-character hashes often enough to discard correct edits (release gate run 35802596362).
+- The editor summary must name every `review_*.txt` file under both `Reviewer files processed:` and `Review file issue audit:` (with the four audit counts); a missing entry fails the editor attempt. The sha256 each entry carries is checked but no longer gates: a missing or miscopied hash logs `::warning::EDITOR_REVIEWER_CHECKSUM_UNVERIFIED attempt=<n> file=<path> expected_sha=<sha> path_entries=<n> checksum_matches=<n>` and the attempt proceeds, and each attempt with at least one mismatch also logs one `::warning::EDITOR_REVIEWER_CHECKSUM_SUMMARY attempt=<n> files_checked=<n> checksum_mismatches=<n> validation_ok=<true|false>` line, so a single typo is easy to tell apart from a summary whose hashes are all wrong, because the model garbles 64-character hashes often enough to discard correct edits (release gate run 35802596362).
 - `REVIEW_REVIEWER_CHECKLIST_ENABLED=1` appends the checklist prompt when the support prompt is present.
 - `REVIEW_REVIEWER_ITERATION_SCOPING=1` lets later reviewer passes focus on last-run changed files plus actionable ledger rows; the first pass remains full-diff. The current workflow summary on this branch still reports `Reviewer scope = full-diff`, so use the runtime artifacts when debugging exact scope.
 
@@ -1138,6 +1138,19 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 
 <!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
 
+### Workflow file size limit
+
+GitHub does not start runs for a workflow file over 512,000 bytes (500 KiB).
+It reports no error: each push instead gets a zero-job `failure` run named
+after the file path ("workflow file issue"), and a reusable workflow over the
+limit cannot be called. `tests/test_workflow_file_size_limit.py` fails CI once
+any `.github/workflows/*.yml` reaches 480,000 bytes. When that happens, move
+the largest inline `run:` bodies into `scripts/` in the same PR instead of
+raising the guard. `review_autofix.yml` already sources five step bodies from
+`review_autofix_step_*.sh` files under `scripts/` this way. The procedure, including the
+script resolution order that keeps consumer repos and older PR branches
+working, is in `agents.md` under "Workflow file size limit".
+
 ### Check Failure Triage Phase
 
 When a check fails on a pull request, the **check-failure triage** workflow
@@ -1291,7 +1304,31 @@ through `clarify → plan → implement → review`.
   merging it would carry the PR's unreleased changes into `stable`. When the
   PR branch no longer exists, the issue falls back to `stable` and the intake
   logs `warn source_pr_branch_missing`. The `created` log line records the
-  choice as `target_branch_source=default|failed_run_branch|source_pr_head`.
+  choice as `target_branch_source=default|failed_run_branch|source_pr_head|base_branch`.
+  Two further tokens cover review/autofix failures **self-inflicted** by a
+  branch of this repository. The autofix reporter sends ownership facts with
+  its report (`base_branch`, `script_ref`, the PR's `changed_files`, and
+  `crash_file`, taken from a `…/scripts/<name>: line N:` shell error or an
+  `::error::` line naming a `scripts/` or `.github/workflows/` path); before the
+  model runs, the intake compares the crash file with the PR's changed files
+  and with `git diff --name-only origin/main origin/<base>` on its own
+  checkout, logs `WORKFLOW_HEAL crash_ownership=<pr|base|none> crash_file=… base=…`,
+  and adds an `## Ownership facts` block to the prompt. `pr-self-inflicted`
+  (the crash file is in the PR's own diff) posts the diagnosis on the PR under
+  "**Workflow failure heal: this failure is caused by this pull request's own
+  changes**" for the review-blocked judge and opens no issue.
+  `base-self-inflicted` (the base branch changed the file relative to `main`
+  and the PR did not) opens the `ai:workflow-heal` issue with
+  `Target branch:` set to that base branch (`target_branch_source=base_branch`);
+  for an `orchestrator/project-<N>` base it also carries `Tracking issue: #N`,
+  `Integration branch:` and `Refs #N` and the label `ai:orchestrator-managed`,
+  so the project picks it up as a child. `stable` is never targeted by either:
+  a PR based on `main` or `stable` has no base-side ownership. A self-inflicted
+  token that the computed ownership does not back (consumer report, no crash
+  file, ownership `none` or the other side), or any self-inflicted token while
+  `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, is logged as
+  `classification_remapped … to=workflow-defect reason=…` and takes the
+  `workflow-defect` route above.
   `consumer-app-defect` opens the issue **in
   the consumer repository** for its own pipeline. `consumer-config` (missing
   secret, variable, permission) sends a Telegram ERROR with the diagnosis and
@@ -1566,6 +1603,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets that PR's head branch (falling back to this value when the branch is gone). |
+| `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
 | `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED` | `true` | Identical-failure fingerprint cap in the `gate` job of `review_autofix.yml`. Every review/autofix failure comment ends with a `<!-- review-autofix-failure:v1 head=… reason=… fp=… degraded=… run=… -->` marker, where `fp` fingerprints the failure reason plus the normalised stderr of the editor and Collect PR metadata stages. When the trailing markers for the current head (authored by the `GH_PAT` account) share one fingerprint `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` times, the gate logs `AUTOFIX_FINGERPRINT_CAP_TRIPPED`, skips the run (`skip_reason=fingerprint_cap`, no reviewer or editor call), and the `fingerprint-cap-block` job labels the linked issues `ai:review-blocked` (the PR itself when it has none), posts one `review-autofix-failure-cap:v1` comment, sends an `identical_failure_cap` heal report and a Telegram WARNING. Later dispatches on the same head log `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`; a push resets the count; `force_rb_judge` dispatches bypass it; lookup failures log `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED` and run normally. Set to `false` to stop evaluating the cap (the markers keep being written). |
 | `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` | `3` | Identical failures on one head that trip the fingerprint cap above. Non-numeric or `0` falls back to `3`. |

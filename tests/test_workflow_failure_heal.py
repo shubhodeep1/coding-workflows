@@ -15,11 +15,16 @@ import re
 import shutil
 import subprocess
 import tempfile
+import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -871,6 +876,9 @@ if args[:2] == ["issue", "create"]:
 		key = args[i]
 		if key == "--body-file":
 			record["body"] = Path(args[i + 1]).read_text()
+		elif key == "--label":
+			record.setdefault("label", args[i + 1])
+			record.setdefault("labels", []).append(args[i + 1])
 		elif key.startswith("--"):
 			record[key[2:]] = args[i + 1]
 		i += 2
@@ -1068,10 +1076,12 @@ def _intake_state(**overrides) -> dict:
 	return state
 
 
-def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict, str]:
+def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[str, str] | None = None, setup_git=None) -> tuple[subprocess.CompletedProcess[str], dict, str]:
 	with tempfile.TemporaryDirectory(prefix="heal-intake-") as tmp_name:
 		tmp = Path(tmp_name)
 		work, state_file, env = _stage(tmp, with_codex=True)
+		if setup_git is not None:
+			setup_git(tmp, work)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		payload_file = tmp / "payload_raw.json"
 		payload_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -1701,7 +1711,9 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}"
 	assert step["env"]["REPORT_WORKFLOW_NAME"] == "${{ github.workflow }}"
 	assert "workflow_failure_heal_autofix_report.sh" in step["run"]
-	summary_step = steps[names.index("Append review pipeline iteration summary")]
+	# The summary step body lives in scripts/review_autofix_step_iteration_summary.sh.
+	expanded_steps = yaml.safe_load(expanded_review_autofix_text())["jobs"]["codex-agent"]["steps"]
+	summary_step = expanded_steps[names.index("Append review pipeline iteration summary")]
 	assert "review_autofix_run_summary_line.txt" in summary_step["run"]
 	staging = STAGE_SUPPORT_SCRIPT.read_text(encoding="utf-8")
 	optional = re.search(r'^OPTIONAL_BOOTSTRAP_SCRIPTS="([^"]*)"', staging, re.MULTILINE)
@@ -2318,3 +2330,290 @@ def test_fingerprint_cap_block_pr_label_idempotency_and_head_moved() -> None:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", head=SHA_B)
 		assert "reason=head_moved" in result.stdout
 		assert "labels_set" not in state and "comments_posted" not in state and "dispatches" not in state
+
+
+# ---------------------------------------------------------------------------
+# P3: self-inflicted classification and routing
+# ---------------------------------------------------------------------------
+
+EDITOR_GUARD_CRASH_LINE = "/home/runner/work/_temp/codex-support/scripts/review_apply_fixes.sh: line 168: OPENROUTER_API_KEY: OPENROUTER_API_KEY is required"
+DIGEST_ERROR_LINE = "##[error]Could not publish the linked-issue metadata integrity digest."
+INTEGRATION_BRANCH = "orchestrator/project-4139"
+DIAG_PR_SELF_INFLICTED = "## Classification\npr-self-inflicted\n\n## Summary\nThe PR unsets OPENROUTER_API_KEY before the editor guard runs.\n"
+DIAG_BASE_SELF_INFLICTED = "## Classification\nbase-self-inflicted\n\n## Summary\nThe integration branch pins a script to main that lacks the digest output.\n"
+
+
+def test_extract_crash_file_on_observed_error_lines() -> None:
+	assert heal.extract_crash_file(EDITOR_GUARD_CRASH_LINE) == "scripts/review_apply_fixes.sh"
+	assert heal.extract_crash_file(DIGEST_ERROR_LINE) is None
+	assert heal.extract_crash_file("2026-09-22T01:00:00Z ::error::Step failed in .github/workflows/review_autofix.yml.") == ".github/workflows/review_autofix.yml"
+	assert heal.extract_crash_file("::error::bad call in /tmp/x/scripts/review_collect_pr_metadata.sh (exit 1)") == "scripts/review_collect_pr_metadata.sh"
+	# A bare script name, a non-error line, and traversal never name a file.
+	assert heal.extract_crash_file("::error::resolve_integration_ref.sh: Integration branch missing") is None
+	assert heal.extract_crash_file("note: scripts/review_apply_fixes.sh was staged") is None
+	assert heal.extract_crash_file("::error::see scripts/../etc/passwd") is None
+	assert heal.extract_crash_file("") is None and heal.extract_crash_file(None) is None
+	# The shell line wins over an earlier error line naming another path.
+	assert heal.extract_crash_file("::error::from .github/workflows/review_autofix.yml\n" + EDITOR_GUARD_CRASH_LINE) == "scripts/review_apply_fixes.sh"
+
+
+def test_classify_crash_ownership() -> None:
+	crash = "scripts/review_apply_fixes.sh"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=[crash], base_changed_files=[]) == "pr"
+	# In both diffs: the PR's own change owns it.
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=[crash], base_changed_files=[crash]) == "pr"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=["scripts/opencode_helpers.sh"], base_changed_files=[crash]) == "base"
+	assert heal.classify_crash_ownership(crash_file=crash, changed_files=["scripts/opencode_helpers.sh"], base_changed_files=[]) == "none"
+	assert heal.classify_crash_ownership(crash_file=None, changed_files=[crash], base_changed_files=[crash]) == "none"
+
+
+def test_parse_classification_accepts_self_inflicted_tokens() -> None:
+	assert heal.parse_classification(DIAG_PR_SELF_INFLICTED) == "pr-self-inflicted"
+	assert heal.parse_classification("## Classification\n`base-self-inflicted`\n") == "base-self-inflicted"
+	assert set(heal.SELF_INFLICTED_CLASSIFICATIONS) <= set(heal.CLASSIFICATIONS)
+	assert not set(heal.SELF_INFLICTED_CLASSIFICATIONS) & set(heal.UPSTREAM_ISSUE_CLASSIFICATIONS)
+
+
+def _self_inflicted_payload(*, changed_files: list[str], crash_line: str = EDITOR_GUARD_CRASH_LINE, base_branch: str = INTEGRATION_BRANCH, source_repo: str = SELF_REPO) -> dict:
+	payload = heal.build_autofix_failure_payload(
+		repo=source_repo,
+		pr=_pr(),
+		comments=[{"body": AUTOFIX_NOOP_COMMENT}],
+		workflow_name="AI Review",
+		failure_reason="editor_empty_noop",
+		failure_evidence="failure_reason=editor_empty_noop\n--- failure_evidence_tail.txt (tail) ---\n" + crash_line + "\n",
+		failure_streak=2,
+		run_id="500",
+		run_url=f"https://github.com/{source_repo}/actions/runs/500",
+		wrapper_sha=SHA_A,
+		reporter_run_url=f"https://github.com/{source_repo}/actions/runs/500",
+		base_branch=base_branch,
+		script_ref=SHA_A,
+		changed_files=changed_files,
+	)
+	payload["issue_url"] = f"https://github.com/{source_repo}/pull/4174"
+	payload["run_refs"] = [{"repo": source_repo, "run_id": "500", "url": f"https://github.com/{source_repo}/actions/runs/500"}]
+	return payload
+
+
+def test_autofix_payload_carries_ownership_fields() -> None:
+	payload = heal.validate_payload(_self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh", "scripts/opencode_helpers.sh", "../escape.sh", "x" * 121]))
+	assert payload["base_branch"] == INTEGRATION_BRANCH
+	assert payload["script_ref"] == SHA_A
+	assert payload["changed_files"] == ["scripts/opencode_helpers.sh"]
+	assert payload["crash_file"] == "scripts/review_apply_fixes.sh"
+	# The dispatch envelope still has two keys, and the report round-trips.
+	wrapped = heal.wrap_dispatch(payload)
+	assert len(wrapped["client_payload"]) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+	assert heal.validate_payload(heal.unwrap_dispatch(wrapped["client_payload"]))["crash_file"] == "scripts/review_apply_fixes.sh"
+	# Caps: 200 entries.
+	many = heal.build_autofix_failure_payload(repo=SELF_REPO, pr=_pr(), comments=[], workflow_name="AI Review", failure_reason="workflow_failure", failure_evidence="", failure_streak=1, run_id="1", run_url=None, wrapper_sha=None, reporter_run_url=None, changed_files=[f"scripts/f{i}.sh" for i in range(250)], script_ref="stable")
+	assert len(many["changed_files"]) == heal.CHANGED_FILES_MAX_ENTRIES and many["script_ref"] == "stable"
+	assert "crash_file" not in many and "base_branch" not in many
+	# Invalid values from the wire are dropped, never fatal.
+	raw = _self_inflicted_payload(changed_files=["scripts/a.sh"])
+	raw.update({"base_branch": "bad branch", "script_ref": "main", "crash_file": "/etc/passwd", "changed_files": "not-a-list"})
+	cleaned = heal.validate_payload(raw)
+	assert cleaned["base_branch"] is None and cleaned["script_ref"] is None and cleaned["crash_file"] is None and cleaned["changed_files"] == []
+	# Non-autofix payloads gain no ownership keys.
+	assert "crash_file" not in heal.validate_payload(_consumer_payload(crash_file="scripts/a.sh"))
+
+
+def test_payload_with_all_fields_at_limits_stays_under_dispatch_size() -> None:
+	payload = _self_inflicted_payload(changed_files=[("scripts/" + "d" * 100 + f"{i:03d}.sh")[:120] for i in range(300)])
+	payload["issue_excerpt"] = "x" * heal.ISSUE_EXCERPT_LIMIT
+	payload["comments_excerpt"] = "y" * heal.COMMENTS_EXCERPT_LIMIT
+	payload["failure_evidence"] = "z" * heal.FAILURE_EVIDENCE_LIMIT
+	body = json.dumps(heal.wrap_dispatch(heal.validate_payload(payload)))
+	assert len(body.encode("utf-8")) < heal.MAX_PAYLOAD_BYTES
+
+
+def test_compose_base_self_inflicted_issue_body_carries_lineage() -> None:
+	payload = heal.validate_payload(_self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"]))
+	body = heal.compose_issue_body(payload=payload, diagnosis=DIAG_BASE_SELF_INFLICTED, fp=FP_HEX, gen=1, root=FP_HEX, classification="base-self-inflicted", target_branch=INTEGRATION_BRANCH, max_depth=3, intake_run_url="u", run_summaries=[], integration_branch=INTEGRATION_BRANCH)
+	match = TARGET_BRANCH_RE.search(body)
+	assert match and (match.group(1) or match.group(2)) == INTEGRATION_BRANCH
+	assert re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE).group(1) == "4139"
+	assert re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE).group(1) == INTEGRATION_BRANCH
+	assert "Refs #4139" in body
+	assert not re.search(r"(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#4139", body)
+	assert "**Crash file:** `scripts/review_apply_fixes.sh`" in body
+	# A non-orchestrator base adds no lineage lines.
+	plain = heal.compose_issue_body(payload=payload, diagnosis="x", fp=FP_HEX, gen=1, root=FP_HEX, classification="base-self-inflicted", target_branch="feature/x", max_depth=3, intake_run_url="u", run_summaries=[], integration_branch="feature/x")
+	assert "Tracking issue" not in plain and "Refs #" not in plain
+
+
+def test_classify_crash_ownership_cli() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-own-") as tmp_name:
+		tmp = Path(tmp_name)
+		payload_file = tmp / "p.json"
+		payload_file.write_text(json.dumps(_self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"])), encoding="utf-8")
+		base_file = tmp / "base.txt"
+		base_file.write_text("README.md\nscripts/review_apply_fixes.sh\n", encoding="utf-8")
+		out = subprocess.run(["python3", str(SCRIPTS_DIR / "workflow_failure_heal.py"), "classify-crash-ownership", "--payload-json", str(payload_file), "--base-changed-files", str(base_file)], capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+		assert out.stdout.strip() == "base"
+		out = subprocess.run(["python3", str(SCRIPTS_DIR / "workflow_failure_heal.py"), "classify-crash-ownership", "--payload-json", str(payload_file)], capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+		assert out.stdout.strip() == "none"
+
+
+def _git(cwd: Path, *args: str) -> None:
+	subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "init.defaultBranch=main", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def _ownership_git_origin(tmp: Path, work: Path) -> None:
+	"""A local origin whose integration branch changed review_apply_fixes.sh relative to main."""
+	origin = tmp / "origin.git"
+	_git(tmp, "init", "--bare", str(origin))
+	seed = tmp / "seed"
+	seed.mkdir()
+	_git(seed, "init")
+	(seed / "scripts").mkdir()
+	(seed / "scripts" / "review_apply_fixes.sh").write_text("echo main\n", encoding="utf-8")
+	(seed / "scripts" / "opencode_helpers.sh").write_text("echo helpers\n", encoding="utf-8")
+	_git(seed, "add", ".")
+	_git(seed, "commit", "-m", "main")
+	_git(seed, "push", str(origin), "HEAD:refs/heads/main")
+	(seed / "scripts" / "review_apply_fixes.sh").write_text("echo integration\n", encoding="utf-8")
+	_git(seed, "commit", "-am", "integration change")
+	_git(seed, "push", str(origin), f"HEAD:refs/heads/{INTEGRATION_BRANCH}")
+	_git(work, "init")
+	_git(work, "remote", "add", "origin", str(origin))
+
+
+def _self_inflicted_state() -> dict:
+	return _self_repo_autofix_state(["stable", "main", "ai/issue-4173", INTEGRATION_BRANCH])
+
+
+def test_intake_pr_self_inflicted_comments_on_pr_without_issue() -> None:
+	payload = _self_inflicted_payload(changed_files=["scripts/review_apply_fixes.sh", "scripts/opencode_helpers.sh"], base_branch="main")
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL crash_ownership=pr crash_file=scripts/review_apply_fixes.sh base=main" in result.stdout
+	assert "## Ownership facts" in prompt and "- Ownership: pr" in prompt and "- Crash file in the pull request diff: yes" in prompt
+	assert "issues_created" not in state_after
+	assert "WORKFLOW_HEAL no_issue classification=pr-self-inflicted" in result.stdout
+	comments = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
+	assert len(comments) == 1
+	body = comments[0]["body"]
+	assert body.splitlines()[0] == "**Workflow failure heal: this failure is caused by this pull request's own changes**"
+	assert "The PR unsets OPENROUTER_API_KEY" in body and "`scripts/review_apply_fixes.sh`" in body
+	# Base is main: no git fetch and no branch lookup were needed.
+	assert not [call for call in state_after["calls"] if any("/branches/" in part for part in call)]
+
+
+def test_intake_base_self_inflicted_opens_issue_on_integration_branch() -> None:
+	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"])
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_BASE_SELF_INFLICTED, setup_git=_ownership_git_origin)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL crash_ownership=base crash_file=scripts/review_apply_fixes.sh base={INTEGRATION_BRANCH}" in result.stdout
+	assert "- Ownership: base" in prompt and "- Crash file in the pull request diff: no" in prompt
+	assert f"1 file(s) differ between main and {INTEGRATION_BRANCH}" in prompt
+	created = state_after["issues_created"]
+	assert len(created) == 1 and created[0]["repo"] == SELF_REPO
+	assert created[0]["labels"] == [heal.HEAL_LABEL, "ai:orchestrator-managed"]
+	body = created[0]["body"]
+	match = TARGET_BRANCH_RE.search(body)
+	assert match and (match.group(1) or match.group(2)) == INTEGRATION_BRANCH
+	assert "- **Tracking issue:** #4139" in body and "Refs #4139" in body
+	assert heal.parse_heal_markers(body)["classification"] == "base-self-inflicted"
+	assert f"target_branch={INTEGRATION_BRANCH}" in result.stdout and "target_branch_source=base_branch" in result.stdout
+	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
+	assert outcome and f"on `{INTEGRATION_BRANCH}`" in outcome[0]["body"]
+	assert "stable" not in outcome[0]["body"]
+	# The ownership fetch proved the branch exists: no branch API lookup.
+	assert not [call for call in state_after["calls"] if any("/branches/" in part for part in call)]
+
+
+def test_intake_self_inflicted_token_without_backing_ownership_routes_as_workflow_defect() -> None:
+	# The model claims base-self-inflicted, but the crash file is in the PR diff.
+	payload = _self_inflicted_payload(changed_files=["scripts/review_apply_fixes.sh"], base_branch="main")
+	result, state_after, _prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_BASE_SELF_INFLICTED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "classification_remapped from=base-self-inflicted to=workflow-defect reason=ownership_pr" in result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "ai/issue-4173"
+	assert heal.parse_heal_markers(created["body"])["classification"] == "workflow-defect"
+	# Base diff unavailable (no git checkout in this harness): fail open to none.
+	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"])
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_BASE_SELF_INFLICTED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn crash_ownership_base_diff_failed reason=no_git_checkout" in result.stdout
+	assert "- Ownership: none" in prompt
+	assert "classification_remapped from=base-self-inflicted to=workflow-defect reason=ownership_none" in result.stdout
+
+
+def test_intake_self_inflicted_routing_is_a_noop_for_consumer_reports() -> None:
+	payload = _self_inflicted_payload(changed_files=["scripts/review_apply_fixes.sh"], base_branch="main", source_repo=CONSUMER_REPO)
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "crash_ownership=" not in result.stdout and "- Ownership:" not in prompt
+	assert "classification_remapped from=pr-self-inflicted to=workflow-defect reason=ownership_none" in result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+
+
+def test_intake_self_inflicted_routing_flag_off_restores_workflow_defect_route() -> None:
+	payload = _self_inflicted_payload(changed_files=["scripts/review_apply_fixes.sh"], base_branch="main")
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED, extra_env={"WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "crash_ownership=" not in result.stdout and "- Ownership:" not in prompt
+	assert "classification_remapped from=pr-self-inflicted to=workflow-defect reason=routing_disabled" in result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "ai/issue-4173"
+	assert "target_branch_source=source_pr_head" in result.stdout
+
+
+def test_autofix_report_sends_ownership_facts() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-own-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		runtime = Path(env["RUNTIME_DIR"])
+		(runtime / "failure_evidence_tail.txt").write_text(EDITOR_GUARD_CRASH_LINE + "\n", encoding="utf-8")
+		(runtime / "pr_changed_files.txt").write_text("scripts/opencode_helpers.sh\nREADME.md\n", encoding="utf-8")
+		env["PR_CHANGED_FILES_FILE"] = str(runtime / "pr_changed_files.txt")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL_AUTOFIX_REPORT dispatched" in result.stdout
+		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+		assert payload["base_branch"] == INTEGRATION_BRANCH
+		assert payload["script_ref"] == SHA_A
+		assert payload["changed_files"] == ["scripts/opencode_helpers.sh", "README.md"]
+		assert payload["crash_file"] == "scripts/review_apply_fixes.sh"
+		assert "failure_evidence_tail.txt" in payload["failure_evidence"]
+
+
+def test_autofix_report_omits_ownership_flags_for_an_older_helper() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-old-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, _state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		# A helper that predates the ownership flags: its build-autofix-payload
+		# rejects unknown flags, so the reporter must not send them. Strip the
+		# new flags and their uses from the current helper to get one.
+		helper = work / "scripts" / "workflow_failure_heal.py"
+		text = helper.read_text(encoding="utf-8").replace("classify-crash-ownership", "classify-crash-owner-x")
+		for line in (
+			'\tp.add_argument("--base-branch", default="")\n',
+			'\tp.add_argument("--script-ref", default="")\n',
+			'\tp.add_argument("--changed-files-file", default="")\n',
+			"\t\tbase_branch=args.base_branch or None,\n",
+			"\t\tscript_ref=args.script_ref or None,\n",
+			"\t\tchanged_files=_read_path_list(args.changed_files_file),\n",
+		):
+			assert text.count(line) == 1, line
+			text = text.replace(line, "")
+		helper.write_text(text, encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL_AUTOFIX_REPORT dispatched" in result.stdout
+
+
+def test_heal_workflows_wire_self_inflicted_routing() -> None:
+	intake = _yaml(INTAKE_WORKFLOW)
+	assert intake["jobs"]["intake"]["env"]["WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED"] == "${{ vars.WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED || 'true' }}"
+	review = _yaml(REVIEW_AUTOFIX_WORKFLOW)
+	steps = [step for job in review["jobs"].values() for step in job.get("steps", []) if step.get("name") == "Report autofix failure to workflow failure heal"]
+	assert len(steps) == 1
+	assert steps[0]["env"]["PR_CHANGED_FILES_FILE"] == "${{ env.PR_CHANGED_FILES_FILE }}"

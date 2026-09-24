@@ -83,6 +83,17 @@ Exactly one token on its own line, chosen from:
   it covers the failing code path. No new work is needed. Never choose this
   when the branch progress block says it is unavailable or that the branch
   has no commits after the failing SHA.
+- `pr-self-inflicted` -- the failing run executed scripts from the pull
+  request head; the crash is in a file the pull request itself changed. The
+  fix belongs in that pull request, not in a separate issue.
+- `base-self-inflicted` -- the failing run executed scripts from the pull
+  request head; the crash is in a file the base branch changed relative to
+  main and the pull request did not. The fix belongs on that base branch.
+Use `pr-self-inflicted` or `base-self-inflicted` ONLY when the failure
+context contains an `## Ownership facts` block and that block reports
+ownership `pr` (for `pr-self-inflicted`) or `base` (for
+`base-self-inflicted`), and the evidence confirms the crash is in that file.
+Without the block, or when it reports `none`, choose among the other tokens.
 
 ## Summary
 One or two sentences: what failed and the single most likely cause.

@@ -76,9 +76,19 @@ CLASSIFICATIONS: tuple[str, ...] = (
 	"transient",
 	"inconclusive",
 	ALREADY_FIXED_CLASSIFICATION,
+	"pr-self-inflicted",
+	"base-self-inflicted",
 )
 # Classifications that open an issue in coding-workflows.
 UPSTREAM_ISSUE_CLASSIFICATIONS = ("workflow-defect", "inconclusive")
+# Self-inflicted review/autofix failures in this repository (README "Workflow
+# Failure Heal"): the crash is in a file the pull request itself changed
+# (pr-self-inflicted -> diagnosis comment on the PR, no issue) or in a file its
+# base branch changed relative to main (base-self-inflicted -> issue targeting
+# that base branch). The intake only honours them when its own ownership check
+# agrees; otherwise they route as workflow-defect.
+SELF_INFLICTED_CLASSIFICATIONS = ("pr-self-inflicted", "base-self-inflicted")
+CRASH_OWNERSHIP_VALUES = ("pr", "base", "none")
 
 DEFAULT_MAX_LINEAGE_DEPTH = 3
 DEFAULT_MAX_OPEN_ISSUES = 10
@@ -125,6 +135,9 @@ MAX_PAYLOAD_BYTES = 60_000
 # so reporters wrap it in a {schema_version, report} envelope (wrap_dispatch).
 DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 SIGNATURE_LINE_LIMIT = 5
+# Ownership facts carried by an autofix_failure report (self-repo routing).
+CHANGED_FILES_MAX_ENTRIES = 200
+CHANGED_FILE_MAX_CHARS = 120
 SIGNATURE_CHAR_LIMIT = 500
 # Branch progress since the failing SHA (one compare call per intake). The
 # compare API returns at most 250 commits and 300 files; the prompt shows the
@@ -163,6 +176,14 @@ _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TA
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
+_REPO_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
+_ORCHESTRATOR_BRANCH_RE = re.compile(r"^orchestrator/project-([0-9]+)$")
+# `bash: /path/to/scripts/<name>: line N: ...` (a shell guard or syntax error
+# in a staged script) -> scripts/<name>.
+_CRASH_SCRIPT_LINE_RE = re.compile(r"(?:^|[\s/])scripts/(?P<name>[A-Za-z0-9_.-]+): line [0-9]+:")
+# `::error::` / `##[error]` lines that name a repository path.
+_CRASH_ERROR_LINE_RE = re.compile(r"(?:::error::|##\[error\])")
+_CRASH_ERROR_PATH_RE = re.compile(r"(?:^|[^A-Za-z0-9_.-])(?P<path>(?:scripts|\.github/workflows)/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)")
 
 # Highest-signal first: the first bucket with any matching line wins. The
 # runner renders a step's `::error::` workflow command as `##[error]` in the job
@@ -500,11 +521,19 @@ def build_autofix_failure_payload(
 	reporter_run_url: str | None,
 	now: datetime | None = None,
 	failure_fingerprint: str | None = None,
+	base_branch: str | None = None,
+	script_ref: str | None = None,
+	changed_files: Iterable[str] | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a failed review/autofix run on a PR.
 
 	``failure_fingerprint`` is the optional ``fp`` of the run's
 	``review-autofix-failure:v1`` marker; it is sent only when it is 64 hex.
+
+	``base_branch``, ``script_ref`` and ``changed_files`` are the optional
+	ownership facts the intake's self-inflicted routing uses; each is sent only
+	when it validates. ``crash_file`` is extracted from the full (untruncated)
+	evidence before it is bounded.
 	"""
 	now = now or _utc_now()
 	body = sanitize_text(pr.get("body"))
@@ -540,7 +569,111 @@ def build_autofix_failure_payload(
 	fp = str(failure_fingerprint or "").strip().lower()
 	if _FP_HEX_RE.match(fp):
 		payload["failure_fingerprint"] = fp
+	base = str(base_branch or "").strip()
+	if is_valid_branch(base):
+		payload["base_branch"] = base
+	ref = _normalize_script_ref(script_ref)
+	if ref:
+		payload["script_ref"] = ref
+	files = normalize_changed_files(changed_files or [])
+	if files:
+		payload["changed_files"] = files
+	crash = extract_crash_file(failure_evidence)
+	if crash:
+		payload["crash_file"] = crash
 	return payload
+
+
+def _normalize_script_ref(value: Any) -> str | None:
+	"""``script_ref`` is the coding-workflows ref the run staged: a SHA or ``stable``."""
+	ref = str(value or "").strip()
+	if ref == "stable":
+		return ref
+	ref = ref.lower()
+	return ref if is_valid_sha(ref) else None
+
+
+def is_valid_repo_path(value: Any) -> bool:
+	"""A bounded repo-relative path: ``[A-Za-z0-9_./-]``, no ``..`` segment, not absolute."""
+	if not isinstance(value, str) or not _REPO_PATH_RE.match(value):
+		return False
+	if value.startswith("/"):
+		return False
+	return all(part not in ("", ".", "..") for part in value.split("/"))
+
+
+def normalize_changed_files(paths: Iterable[Any]) -> list[str]:
+	"""Keep valid, de-duplicated repo-relative paths, capped at CHANGED_FILES_MAX_ENTRIES.
+
+	Paths longer than CHANGED_FILE_MAX_CHARS or failing ``is_valid_repo_path``
+	are dropped rather than truncated, so a kept path always names a real file.
+	"""
+	kept: list[str] = []
+	seen: set[str] = set()
+	for raw in paths:
+		if not isinstance(raw, str):
+			continue
+		path = raw.strip()
+		if len(path) > CHANGED_FILE_MAX_CHARS or not is_valid_repo_path(path) or path in seen:
+			continue
+		seen.add(path)
+		kept.append(path)
+		if len(kept) >= CHANGED_FILES_MAX_ENTRIES:
+			break
+	return kept
+
+
+def extract_crash_file(evidence_text: Any) -> str | None:
+	"""Name the repository file a review/autofix failure crashed in, if the evidence says.
+
+	Two shapes are recognised, first match wins in this order:
+
+	- a shell error ``…/scripts/<name>: line N: …`` -> ``scripts/<name>``,
+	since the staged support bundle keeps the ``scripts/`` directory name;
+	- a ``::error::`` / ``##[error]`` line naming a ``scripts/…`` or
+	``.github/workflows/…`` path -> that path.
+
+	Anything else (an error line that names no path) returns ``None``.
+	"""
+	text = sanitize_text(evidence_text)
+	if not text:
+		return None
+	for line in text.split("\n"):
+		match = _CRASH_SCRIPT_LINE_RE.search(line)
+		if match:
+			candidate = f"scripts/{match.group('name')}"
+			if is_valid_repo_path(candidate):
+				return candidate
+	for line in text.split("\n"):
+		if not _CRASH_ERROR_LINE_RE.search(line):
+			continue
+		for match in _CRASH_ERROR_PATH_RE.finditer(line):
+			candidate = match.group("path").rstrip(".")
+			if is_valid_repo_path(candidate):
+				return candidate
+	return None
+
+
+def classify_crash_ownership(*, crash_file: str | None, changed_files: Iterable[str], base_changed_files: Iterable[str]) -> str:
+	"""Return ``pr``, ``base`` or ``none`` for the file a review/autofix run crashed in.
+
+	``pr``: the crash file is in the pull request's own diff. ``base``: it is
+	not, but the PR's base branch changed it relative to ``main``. ``none``:
+	no crash file, or neither side changed it.
+	"""
+	if not crash_file:
+		return "none"
+	if crash_file in set(changed_files):
+		return "pr"
+	if crash_file in set(base_changed_files):
+		return "base"
+	return "none"
+
+
+def orchestrator_tracking_issue(branch: Any) -> int | None:
+	"""The tracking issue number of an ``orchestrator/project-<N>`` branch, else None."""
+	match = _ORCHESTRATOR_BRANCH_RE.match(str(branch or ""))
+	return _positive_int(match.group(1)) if match else None
 
 
 def validate_payload(payload: Any) -> dict[str, Any]:
@@ -615,7 +748,16 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		source_root = None
 
 	labels = [single_line(name, 100) for name in payload.get("labels") or [] if isinstance(name, str)][:50]
-	return {
+	# Ownership facts (optional, autofix_failure only): invalid values are
+	# dropped, never fatal, so an older or partial reporter still gets healed.
+	base_branch = payload.get("base_branch") if kind == "autofix_failure" else None
+	base_branch = base_branch if is_valid_branch(base_branch) else None
+	script_ref = _normalize_script_ref(payload.get("script_ref")) if kind == "autofix_failure" else None
+	changed_raw = payload.get("changed_files") if kind == "autofix_failure" else None
+	changed_files = normalize_changed_files(changed_raw) if isinstance(changed_raw, list) else []
+	crash_file = payload.get("crash_file") if kind == "autofix_failure" else None
+	crash_file = crash_file if is_valid_repo_path(crash_file) else None
+	normalized = {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
 		"source_kind": kind,
@@ -641,6 +783,14 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
+	if kind == "autofix_failure":
+		normalized.update({
+			"base_branch": base_branch,
+			"script_ref": script_ref,
+			"changed_files": changed_files,
+			"crash_file": crash_file,
+		})
+	return normalized
 
 
 def wrap_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1125,6 +1275,10 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 		lines.append(f"- **Head SHA:** `{payload['head_sha']}`")
 	if payload.get("wrapper_sha"):
 		lines.append(f"- **Consumer wrapper pin (coding-workflows release SHA):** `{payload['wrapper_sha']}`")
+	if payload.get("base_branch"):
+		lines.append(f"- **Pull request base branch:** `{payload['base_branch']}`")
+	if payload.get("crash_file"):
+		lines.append(f"- **Crash file:** `{payload['crash_file']}`")
 	for summary in run_summaries:
 		step = summary.get("failing_step") or "unknown step"
 		lines.append(f"- **Failed run:** {summary.get('url')} — workflow `{summary.get('workflow_name') or 'unknown'}`, step `{step}`")
@@ -1158,8 +1312,16 @@ def compose_issue_body(
 	max_depth: int,
 	intake_run_url: str,
 	run_summaries: list[dict[str, Any]],
+	integration_branch: str | None = None,
 ) -> str:
-	"""Compose the heal issue body (upstream or consumer-side)."""
+	"""Compose the heal issue body (upstream or consumer-side).
+
+	``integration_branch`` (optional) adds the orchestrator lineage lines a
+	``base-self-inflicted`` issue on an ``orchestrator/project-<N>`` branch
+	carries so plan and implement resolve that branch: ``Tracking issue: #N``,
+	``Integration branch:`` and ``Refs #N`` (never an auto-close keyword,
+	CLAUDE.md §19). Other branches add nothing.
+	"""
 	parts = [
 		f"<!-- {MARKER_PREFIX}fp={fp} -->",
 		f"<!-- {MARKER_PREFIX}gen={gen} -->",
@@ -1170,10 +1332,26 @@ def compose_issue_body(
 	]
 	if target_branch:
 		parts.append(f"- **Target branch:** `{target_branch}`")
+	tracking_issue = orchestrator_tracking_issue(integration_branch)
+	if tracking_issue:
+		parts.append(f"- **Tracking issue:** #{tracking_issue}")
+		parts.append(f"- **Integration branch:** `{integration_branch}`")
+	if target_branch or tracking_issue:
 		parts.append("")
 	parts.append(f"## Automated workflow failure heal (generation {gen} of max {max_depth})")
 	parts.append("")
-	if classification in UPSTREAM_ISSUE_CLASSIFICATIONS:
+	if classification == "base-self-inflicted":
+		base = payload.get("base_branch") or target_branch or "the base branch"
+		parts.append(
+			"The review/autofix workflow failed repeatedly on one pull request of this repository. The "
+			f"crash is in a file the pull request's base branch `{base}` changed relative to `main`, and "
+			"the pull request itself did not touch it, so this issue was filed automatically for the "
+			f"clarify -> plan -> implement -> review pipeline to fix it on `{base}`."
+		)
+		if tracking_issue:
+			parts.append("")
+			parts.append(f"Refs #{tracking_issue}")
+	elif classification in UPSTREAM_ISSUE_CLASSIFICATIONS:
 		if payload.get("source_kind") == "workflow_run":
 			intro = (
 				"A release / promotion workflow run failed. This issue was filed automatically for the "
@@ -1469,6 +1647,9 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		wrapper_sha=args.wrapper_sha or None,
 		reporter_run_url=args.reporter_run_url or None,
 		failure_fingerprint=args.failure_fingerprint or None,
+		base_branch=args.base_branch or None,
+		script_ref=args.script_ref or None,
+		changed_files=_read_path_list(args.changed_files_file),
 	)
 	validate_payload(payload)
 	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -1476,6 +1657,30 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		payload["issue_excerpt"] = sanitize_text(payload["issue_excerpt"], 1500)
 		payload["failure_evidence"] = sanitize_text(payload["failure_evidence"], 2000)
 	_write_json(payload)
+	return 0
+
+
+def _read_path_list(path: str | None) -> list[str]:
+	"""One repo-relative path per line; a missing or unreadable file is an empty list."""
+	if not path:
+		return []
+	try:
+		text = Path(path).read_text(encoding="utf-8", errors="replace")
+	except OSError:
+		return []
+	return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _cmd_classify_crash_ownership(args: argparse.Namespace) -> int:
+	payload = validate_payload(_load_json_file(args.payload_json))
+	ownership = classify_crash_ownership(
+		crash_file=payload.get("crash_file"),
+		changed_files=payload.get("changed_files") or [],
+		# The intake's own git diff: not capped like the reported PR list, since a
+		# long-lived integration branch can differ from main in hundreds of files.
+		base_changed_files=[path for path in _read_path_list(args.base_changed_files) if is_valid_repo_path(path)],
+	)
+	sys.stdout.write(ownership + "\n")
 	return 0
 
 
@@ -1624,6 +1829,7 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		max_depth=args.max_depth,
 		intake_run_url=args.intake_run_url,
 		run_summaries=[item for item in run_summaries if isinstance(item, dict)],
+		integration_branch=args.integration_branch or None,
 	)
 	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
 	Path(args.body_out).write_text(body, encoding="utf-8")
@@ -1693,7 +1899,15 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--wrapper-sha", default="")
 	p.add_argument("--reporter-run-url", default="")
 	p.add_argument("--failure-fingerprint", default="")
+	p.add_argument("--base-branch", default="")
+	p.add_argument("--script-ref", default="")
+	p.add_argument("--changed-files-file", default="")
 	p.set_defaults(func=_cmd_build_autofix_payload)
+
+	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--base-changed-files", default="")
+	p.set_defaults(func=_cmd_classify_crash_ownership)
 
 	p = sub.add_parser("autofix-failure-streak", help="Count trailing review/autofix failure comments on a PR")
 	p.add_argument("--comments-json", required=True)
@@ -1777,6 +1991,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--root", required=True)
 	p.add_argument("--classification", required=True, choices=CLASSIFICATIONS)
 	p.add_argument("--target-branch", default="")
+	p.add_argument("--integration-branch", default="")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--intake-run-url", required=True)
 	p.add_argument("--title-out", required=True)
