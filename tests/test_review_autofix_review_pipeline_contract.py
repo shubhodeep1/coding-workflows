@@ -6707,11 +6707,13 @@ def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
 		assert f"{output}: ${{{{ steps.evaluate.outputs.{output} }}}}" in _job_block("gate"), output
 	gate_job = _job_block("gate")
 	block = _step_block("Checkout fingerprint cap helper")
-	assert "continue-on-error: true" not in block
+	assert "continue-on-error: true" in block
 	assert "sparse-checkout: scripts/workflow_failure_heal.py" in block
-	assert "ref: ${{ job.workflow_sha }}" in block
+	assert "ref: ${{ steps.resolve_support.outputs.review_support_sha }}" in block
 	assert "Checkout fingerprint cap helper main snapshot" not in gate_job
+	assert gate_job.index("- name: Resolve trusted review support commit") < gate_job.index("- name: Checkout fingerprint cap helper")
 	assert gate_job.index("- name: Verify fingerprint cap support identity") < gate_job.index("- name: Evaluate review gate")
+	assert 'FINGERPRINT_CAP_SUPPORT_VERIFIED:-false' in gate_job
 
 
 def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
@@ -6980,12 +6982,22 @@ def test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop() -> None
 
 def test_review_support_identity_is_bound_across_jobs() -> None:
 	workflow = _workflow_text()
+	gate_job = _job_block("gate")
+	assert "review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}" in gate_job
+	assert "WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in gate_job
+	assert "gh api repos/shubhodeep1/coding-workflows/branches/main" not in gate_job
 	for job_name in ("gate", "post-merge-validate-dispatch", "post-merge-force-poll", "fingerprint-cap-block", "codex-agent"):
 		job = _job_block(job_name)
-		assert "job.workflow_sha" in job, job_name
-		assert "job.workflow_repository" in job, job_name
-		assert "job.workflow_ref" in job, job_name
-		assert 'git -C .codex-workflow-src rev-parse HEAD' in job, job_name
+		assert "job.workflow_" not in job, job_name
+		assert "WORKFLOW_REF: refs/heads/main" in job, job_name
+		assert "WORKFLOW_REPOSITORY: shubhodeep1/coding-workflows" in job, job_name
+		assert "WORKFLOW_SHA: ${{ " in job, job_name
+		if job_name != "codex-agent":
+			assert 'git -C .codex-workflow-src rev-parse HEAD' in job, job_name
+			assert "ref: ${{ " in job, job_name
+		else:
+			assert 'git -C .codex-workflow-src rev-parse HEAD' in job
+			assert "WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}" in job
 	assert 'ref: ${{ github.repository == \'shubhodeep1/coding-workflows\' && github.sha || \'stable\' }}' not in workflow
 	stage = _stage_helper_text().split('WORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT=', 1)[0]
 	assert '.codex-workflow-src-main/' not in stage
@@ -6994,20 +7006,36 @@ def test_review_support_identity_is_bound_across_jobs() -> None:
 
 def test_review_support_ref_rejects_untrusted_workflow_identity() -> None:
 	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	gate_step = next(step for step in workflow["jobs"]["gate"]["steps"] if step.get("name") == "Resolve trusted review support commit")
 	resolve_step = next(step for step in workflow["jobs"]["codex-agent"]["steps"] if step.get("name") == "Resolve workflow support ref")
 	with tempfile.TemporaryDirectory(prefix="review-workflow-identity-") as td:
 		github_env = Path(td) / "github_env"
+		github_output = Path(td) / "github_output"
 		sha = "a" * 40
+		for caller_repo, workflow_repo, workflow_ref, workflow_sha, allowed in (
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/heads/main", sha, True),
+			("consumer/repo", "shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/tags/stable", sha, True),
+			("consumer/repo", "shubhodeep1/coding-workflows", f"shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{sha}", sha, True),
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", f"shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{sha}", sha, False),
+			("consumer/repo", "other/repo", "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/tags/stable", sha, False),
+			("consumer/repo", "shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/heads/feature", sha, False),
+			("consumer/repo", "shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/tags/stable", "not-a-sha", False),
+		):
+			github_output.write_text("", encoding="utf-8")
+			job_json = json.dumps({"workflow_repository": workflow_repo, "workflow_ref": workflow_ref, "workflow_sha": workflow_sha})
+			gate_env = {"PATH": os.environ.get("PATH", ""), "GITHUB_OUTPUT": str(github_output), "CALLER_REPOSITORY": caller_repo, "WORKFLOW_JOB_JSON": job_json}
+			result = subprocess.run(["bash", "-c", gate_step["run"]], env=gate_env, capture_output=True, text=True)
+			assert (result.returncode == 0) == allowed, (caller_repo, workflow_ref, result.stderr)
+			assert (f"review_support_sha={sha}" in github_output.read_text(encoding="utf-8")) == allowed
 		for ref, repo, workflow_sha, allowed in (
 			("refs/heads/main", "shubhodeep1/coding-workflows", sha, True),
-			("refs/tags/stable", "shubhodeep1/coding-workflows", sha, True),
-			(sha, "shubhodeep1/coding-workflows", sha, True),
+			("refs/tags/stable", "shubhodeep1/coding-workflows", sha, False),
 			("refs/heads/ai/issue-4399", "shubhodeep1/coding-workflows", sha, False),
 			("refs/heads/main", "other/repo", sha, False),
 			("refs/heads/main", "shubhodeep1/coding-workflows", "not-a-sha", False),
 		):
 			github_env.write_text("", encoding="utf-8")
-			env = {"PATH": os.environ.get("PATH", ""), "GITHUB_ENV": str(github_env), "WORKFLOW_REPOSITORY": repo, "WORKFLOW_REF": f"shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{ref}", "WORKFLOW_SHA": workflow_sha}
+			env = {"PATH": os.environ.get("PATH", ""), "GITHUB_ENV": str(github_env), "WORKFLOW_REPOSITORY": repo, "WORKFLOW_REF": ref, "WORKFLOW_SHA": workflow_sha}
 			result = subprocess.run(["bash", "-c", resolve_step["run"]], env=env, capture_output=True, text=True)
 			assert (result.returncode == 0) == allowed, (ref, repo, result.stderr)
 			assert (f"SCRIPT_REF={sha}" in github_env.read_text(encoding="utf-8")) == allowed

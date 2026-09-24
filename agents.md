@@ -399,9 +399,11 @@ a new value, add it to the appropriate overrides file with a
 - `internal-review.yml` calls the reusable
   `shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@main`
   (a `uses:` ref cannot vary per PR), while `review_autofix.yml`'s "Resolve
-  workflow support ref" step checks the reusable workflow's repository,
-  protected `main`/release ref and `job.workflow_sha`, then sets `SCRIPT_REF`
-  to that SHA. The support checkout must match it before staging. Self-repo
+  workflow support ref" step reads the current reusable-workflow identity from
+  `toJSON(job)`, validates its repository/ref/SHA, and exports the SHA once.
+  This avoids direct `job.workflow_*` expressions until the pinned actionlint
+  version recognizes GitHub's newer fields. Every job checks out that immutable
+  SHA and compares HEAD before running support. Self-repo
   PR-head `scripts/*`, `prompts/*`, and `ai-memory/schemas/*` are reviewed as
   data; the executable runtime bundle comes only from the verified workflow
   commit. Consumer release pins use the same SHA-bound checkout.

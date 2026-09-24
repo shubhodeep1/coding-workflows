@@ -2114,6 +2114,7 @@ def _run_gate(tmp: Path, *, comments: list[dict], event_name: str = "workflow_di
 		"FORCE_CLAUDE_BRANCH_REVIEW": "",
 		"HEAD_REF_OVERRIDE": "",
 		"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "true",
+		"FINGERPRINT_CAP_SUPPORT_VERIFIED": "true",
 		"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL": "3",
 	}
 	env.update(extra_env or {})
@@ -2168,6 +2169,7 @@ def test_gate_cap_already_applied_threshold_bypass_and_fail_open() -> None:
 	# The kill switch, the force_rb_judge dispatch and the fail-open paths keep the run.
 	cases = [
 		("disabled", {"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"}, {}, True, None),
+		("unverified_checkout", {"FINGERPRINT_CAP_SUPPORT_VERIFIED": "false"}, {}, True, None),
 		("force_rb_judge", {"FORCE_RB_JUDGE": "true"}, {}, True, "AUTOFIX_FINGERPRINT cap=bypassed pr=4259"),
 		("helper_missing", {}, {}, False, "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=4259 head=" + SHA_A + " reason=helper_missing"),
 		("comments_fail", {}, {"comments_fail": True}, True, "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=4259 head=" + SHA_A + " reason=api_error"),
