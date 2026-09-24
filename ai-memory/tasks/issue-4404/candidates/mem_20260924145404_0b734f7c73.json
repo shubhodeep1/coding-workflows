@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/untrusted_process_sandbox.sh`\n\nScope-mode justification: The existing sandbox already discovers Git metadata and mounts it read-only for non-model roles; the missing piece is role-scoped Git context for the workspace guard. Extending that path is safer than weakening ignore classification or adding another mechanism. This follows \u00a76 Core Priorities: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Execution and wiring\n- **Change type:** Extend an existing script; introduce no new script or supervisor.\n- **Automatic entry point:** `.github/workflows/internal-review.yml` handles `pull_request` events and invokes `.github/workflows/review_autofix.yml`; its editor already calls the sandboxed workspace guard. No trigger change is needed.\n- **Database gate and removal registry:** Not applicable.\n\n## Planning context\n- Checkout: `ai/issue-4390` at `20ce1f4419f9a68ed662e1238a864412420ef763`; matches the issue\u2019s integration-branch metadata.\n- Q&A: No questions were raised; the `/answer` was auto-posted. No unresolved answer affects implementation.\n\n## Files likely to change\n1. `scripts/untrusted_process_sandbox.sh`\n2. `tests/test_agent_process_isolation.py`\n\n## Functions or modules to implement\n- In the sandbox\u2019s `workspace-guard` role path, validate a supplied external `GIT_DIR`/`GIT_WORK_TREE` pair against the canonical `--workspace`: require a real Git directory and a worktree equal to that workspace. Forward only that validated context into the guard\u2019s isolated environment. Retain discovery for workspaces with their own `.git`.\n- Reuse `git_metadata_paths` and its non-model read-only mount for the external directory; reject missing, partial, or mismatched external context rather than allowing an unclassified change.\n- Extend the existing isolation tests with a `.git`-less workspace backed by external metadata.\n\n## Data structures affected\n- The sandbox\u2019s process-environment array and existing Git-metadata path array only. No persisted schema changes.\n\n## API/interface changes\n- No new command-line option or public interface. For `workspace-guard` only, validated caller-provided Git context becomes available to the isolated guard process; model roles must continue to receive neither variable.\n\n## Decisions\n### D1 \u2014 Reuse the sandbox\u2019s Git-metadata boundary\n- **Chosen:** Validate and forward external Git context only for `workspace-guard`, using its existing read-only metadata mount.\n- **Alternatives considered:** Forward Git variables to every role; infer that an unclassifiable path is safe; disable the guard.\n- **Why:** The first exposes privileged metadata to models; the others weaken the fail-closed check that detected the failure.\n\n## Security considerations\n- **Trust boundary:** Workflow-provided Git context enters a credentialless guard process. Canonicalize and check both paths before forwarding; keep metadata read-only and preserve the guard\u2019s `git check-ignore` error rejection.\n- **Authorization:** No endpoint is added. Only the existing `workspace-guard` role may receive the context\u2014not reviewer, editor, resolver, or other model roles.\n- **Abuse cases:** A mismatched worktree could apply the wrong ignore rules; a missing directory could cause Git error 128; broad forwarding could expose repository metadata to a model. Tests must reject the first two and verify role isolation for the third.\n\n## Risks and edge cases\n- Workspaces with local `.git` must keep working without external variables. Partial external configuration and paths hidden by `PrivateTmp=yes` must fail closed.\n- **Codebase conflict to account for:** `tests/test_agent_process_isolation.py` currently asserts that the sandbox source lacks the literal `GIT_DIR|GIT_WORK_TREE` pattern. Preserve its model-isolation intent; if the new role-scoped logic makes that assertion obsolete, replace it with an explicit role-scoping assertion.\n- The worktree already has unrelated modifications in seven files; preserve them.\n\n## Testing considerations\n- Follow the existing workspace-guard tests in `tests/test_agent_process_isolation.py`. In sandbox test mode, create external Git metadata and a copied workspace without `.git`; verify a safe new file reconciles, an ignored file is rejected/quarantined, and missing or mismatched Git context fails.\n- Assert model-role environment scrubbing and the read-only metadata-mount contract. Test mode bypasses systemd, so it cannot alone establish production mount behavior.\n- Run shell syntax checking and the focused pytest module on the repository\u2019s available toolchain; do not treat an unpinned validator as authoritative.\n\n## Pre-execution self-check result\nThe two-file change covers the reported failure without changing workflow triggers, bypassing the guard, or requiring an unavailable scalar input. The reported `editor_empty_noop` is treated as a downstream symptom, not the target behavior.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3e789fe0847fafa4ce9414a14f6e7bd8daf7709c07e6a0fc5cad86f03f190f05",
+  "lineage": {
+    "issue_number": 4404,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36015397193",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36015397193",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4404"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924145404_0b734f7c73",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4404,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36015397193"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4404",
+  "timestamps": {
+    "created_at": "2026-09-24T14:54:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
