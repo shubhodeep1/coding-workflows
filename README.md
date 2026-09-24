@@ -1138,6 +1138,19 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 
 <!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
 
+### Workflow file size limit
+
+GitHub does not start runs for a workflow file over 512,000 bytes (500 KiB).
+It reports no error: each push instead gets a zero-job `failure` run named
+after the file path ("workflow file issue"), and a reusable workflow over the
+limit cannot be called. `tests/test_workflow_file_size_limit.py` fails CI once
+any `.github/workflows/*.yml` reaches 480,000 bytes. When that happens, move
+the largest inline `run:` bodies into `scripts/` in the same PR instead of
+raising the guard. `review_autofix.yml` already sources five step bodies from
+`review_autofix_step_*.sh` files under `scripts/` this way. The procedure, including the
+script resolution order that keeps consumer repos and older PR branches
+working, is in `agents.md` under "Workflow file size limit".
+
 ### Check Failure Triage Phase
 
 When a check fails on a pull request, the **check-failure triage** workflow
