@@ -939,12 +939,18 @@ def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
 	assert (
 		REPO_ROOT / "scripts" / "review_rb_judge.sh"
 	).read_text(encoding="utf-8").count("| run_review_rb_validator_python -c '") >= 2
-	assert "terminating the poller before output parsing" in (
-		REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
-	).read_text(encoding="utf-8")
+	poller_process = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	for guard_failure in ("Review-blocked workspace snapshot failed for PR", "Review-blocked workspace guard rejected PR"):
+		failure_branch = poller_process.split(guard_failure, 1)[1].split("\n          fi", 1)[0]
+		assert "break" in failure_branch and "exit 78" not in failure_branch
+	assert 'if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then' in poller_process
+	assert 'rb_cleanup_combined_workspace\n        continue' in poller_process
 	assert 'RB_JUDGE_JSON="$(run_poller_isolated_python "${PWD}" -c "' in (
 		REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 	).read_text(encoding="utf-8")
+	resolver_process = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	resolver_failure_branch = resolver_process.split("workspace_safety_violation; aborting before output parsing.", 1)[1].split("fi", 1)[0]
+	assert 'emit_conflict_resolver_substate "Failed" "${attempt}"' in resolver_failure_branch
 	for guarded_script_name, guard_rejection_message in (
 		("review_apply_fixes.sh", "aborting before output parsing or retry"),
 		("review_conflict_resolve.sh", "aborting before output parsing"),

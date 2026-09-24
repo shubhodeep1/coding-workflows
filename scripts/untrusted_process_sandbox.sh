@@ -38,8 +38,11 @@ if [ "${role}" = workspace-guard ]; then
 			|| { echo "untrusted_process_sandbox: incomplete workspace guard Git context" >&2; exit 1; }
 		[ -d "${GIT_DIR}" ] && [ -d "${GIT_WORK_TREE}" ] \
 			|| { echo "untrusted_process_sandbox: invalid workspace guard Git context" >&2; exit 1; }
-		guard_git_dir="$(cd "${GIT_DIR}" && pwd -P)"
-		guard_git_work_tree="$(cd "${GIT_WORK_TREE}" && pwd -P)"
+		if ! guard_git_dir="$(cd "${GIT_DIR}" 2>/dev/null && pwd -P)" \
+			|| ! guard_git_work_tree="$(cd "${GIT_WORK_TREE}" 2>/dev/null && pwd -P)"; then
+			echo "untrusted_process_sandbox: invalid workspace guard Git context" >&2
+			exit 1
+		fi
 		[ "${guard_git_work_tree}" = "${workspace}" ] \
 			|| { echo "untrusted_process_sandbox: workspace guard worktree mismatch" >&2; exit 1; }
 		[ "$(GIT_DIR="${guard_git_dir}" GIT_WORK_TREE="${workspace}" git rev-parse --absolute-git-dir 2>/dev/null)" = "${guard_git_dir}" ] \

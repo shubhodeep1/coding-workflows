@@ -20613,9 +20613,9 @@ ${FOLLOWUP_BLOCK_REASON}"
           rb_workspace_paths="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-poller-rb-${RB_PR}-${attempt}.paths.txt"
           rb_workspace_quarantine="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-poller-rb-${RB_PR}-${attempt}.quarantine"
           if ! run_poller_workspace_guard snapshot "${PWD}" --manifest "${rb_workspace_manifest}"; then
-			echo "::error::Review-blocked workspace snapshot failed for PR #${RB_PR}; terminating the poller before model execution."
-			exit 78
-		  fi
+            echo "::error::Review-blocked workspace snapshot failed for PR #${RB_PR}; skipping PR before model execution."
+            break
+          fi
           rb_model_rc=0
           run_untrusted_poller_codex judge-fix "${PWD}" \
             codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
@@ -20624,8 +20624,8 @@ ${FOLLOWUP_BLOCK_REASON}"
           if ! run_poller_workspace_guard reconcile "${PWD}" \
             --manifest "${rb_workspace_manifest}" --quarantine-dir "${rb_workspace_quarantine}" \
             --changed-paths-out "${rb_workspace_paths}" --report "${rb_workspace_report}"; then
-			echo "::error::Review-blocked workspace guard rejected PR #${RB_PR}; terminating the poller before output parsing."
-			exit 78
+            echo "::error::Review-blocked workspace guard rejected PR #${RB_PR}; skipping PR before output parsing."
+            break
           fi
           if [ "${rb_model_rc}" -eq 0 ] && grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
