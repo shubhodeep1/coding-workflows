@@ -29,6 +29,7 @@ case "${role}" in
 	*) echo "untrusted_process_sandbox: invalid role" >&2; exit 2 ;;
 esac
 workspace="$(cd "${workspace}" && pwd -P)"
+requested_runtime_dir="${runtime_dir}"
 runtime_dir="$(cd "${runtime_dir}" && pwd -P)"
 provider_required=true
 case "${role}" in
@@ -336,6 +337,42 @@ if [ "${config_format}" = opencode ]; then
 	common_env+=("UNTRUSTED_OPENCODE_CONFIG=${sandbox_config}" "OPENCODE_CONFIG=${sandbox_config}")
 elif [ "${config_format}" = codex ]; then
 	common_env+=("CODEX_HOME=${sandbox_config}")
+fi
+if [ "${role}" = workspace-guard ]; then
+	if [ "${requested_runtime_dir}" != "${runtime_dir}" ]; then
+		echo "untrusted_process_sandbox: workspace guard runtime-dir must be canonical" >&2
+		exit 1
+	fi
+	for sandbox_private_tmp_checked_path in "${runtime_dir}" "$@"; do
+		case "${sandbox_private_tmp_checked_path}" in /*) ;; *) continue ;; esac
+		sandbox_private_tmp_checked_path="$(realpath -m -- "${sandbox_private_tmp_checked_path}")"
+		if sandbox_path_is_private_tmp "${sandbox_private_tmp_checked_path}"; then
+			echo "untrusted_process_sandbox: sandbox_private_tmp_path role=${role} path=${sandbox_private_tmp_checked_path}" >&2
+			exit 1
+		fi
+	done
+	guard_arguments=("$@")
+	for ((guard_argument_index=0; guard_argument_index<${#guard_arguments[@]}; guard_argument_index++)); do
+		case "${guard_arguments[guard_argument_index]}" in
+			--manifest|--report|--changed-paths-out|--quarantine-dir)
+				guard_artifact_path="${guard_arguments[guard_argument_index+1]:-}"
+				[ -n "${guard_artifact_path}" ] || { echo "untrusted_process_sandbox: missing workspace guard artifact path" >&2; exit 1; }
+				guard_artifact_path="$(realpath -m -- "${guard_artifact_path}")"
+				case "${guard_artifact_path}" in
+					"${runtime_dir}/"*) ;;
+					*) echo "untrusted_process_sandbox: workspace guard artifact is outside runtime-dir" >&2; exit 1 ;;
+				esac
+				((guard_argument_index+=1))
+				;;
+		esac
+	done
+	if [ -n "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256:-}" ]; then
+		[[ "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
+			&& [ "$(sha256sum -- "${4:-}" 2>/dev/null | cut -d' ' -f1)" = "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256}" ] || {
+			echo "untrusted_process_sandbox: workspace guard executable integrity check failed" >&2
+			exit 1
+		}
+	fi
 fi
 
 if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then

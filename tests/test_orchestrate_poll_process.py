@@ -21562,6 +21562,11 @@ def test_poller_review_blocked_writer_uses_immutable_trusted_git_boundary() -> N
 	assert 'install -m 0755 scripts/trusted_git_write.sh "${TRUSTED_POLLER_GIT_WRITER}"' not in script
 	assert 'for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py check_resolver_diff.sh files_touched_scope_guard.py' in workflow
 	assert 'install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"' in workflow
+	assert 'install -m 0755 scripts/post_agent_workspace_guard.py "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post_agent_workspace_guard.py"' in workflow
+	assert 'TRUSTED_POLLER_WORKSPACE_GUARD="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post_agent_workspace_guard.py"' in script
+	assert 'run_poller_workspace_guard()' in script
+	assert '--runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}"' in script
+	assert '      - name: Cleanup workspace guard artifacts\n        if: always()' in workflow
 	assert 'TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${RUNTIME_DIR}/files_touched_scope_guard.py"' in script
 	assert "--build-review-fix-authorization" in script
 	assert "--validate-review-fix-authorization" in script

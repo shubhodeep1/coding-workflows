@@ -2011,12 +2011,12 @@ __EDIT_DISCIPLINE__
       emit_review_rb_substate "review_rb_fix" "judge_fix" "LaunchingAgentProcess" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "InitializingSession" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "StreamingTurn" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
-      rb_fix_workspace_manifest="${RUNTIME_DIR}/post-agent-rb-fix-${rb_fix_attempt}.manifest.json"
-      rb_fix_workspace_paths="${RUNTIME_DIR}/post-agent-rb-fix-${rb_fix_attempt}.paths.txt"
-      rb_fix_workspace_report="${RUNTIME_DIR}/post-agent-rb-fix-${rb_fix_attempt}.report.json"
-      rb_fix_workspace_quarantine="${RUNTIME_DIR}/post-agent-rb-fix-${rb_fix_attempt}.quarantine"
+      rb_fix_workspace_manifest="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-rb-fix-${rb_fix_attempt}.manifest.json"
+      rb_fix_workspace_paths="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-rb-fix-${rb_fix_attempt}.paths.txt"
+      rb_fix_workspace_report="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-rb-fix-${rb_fix_attempt}.report.json"
+      rb_fix_workspace_quarantine="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-rb-fix-${rb_fix_attempt}.quarantine"
       bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-        --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+        --role workspace-guard --workspace "${PWD}" --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}" \
         -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
         --workspace "${PWD}" --manifest "${rb_fix_workspace_manifest}"
       : > "${RB_FIX_OUTPUT}"
@@ -2037,7 +2037,7 @@ __EDIT_DISCIPLINE__
         "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>"${RB_FIX_STDERR}" || rb_fix_rc=$?
       fi
       if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-        --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+        --role workspace-guard --workspace "${PWD}" --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}" \
         -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
         --workspace "${PWD}" --manifest "${rb_fix_workspace_manifest}" \
         --quarantine-dir "${rb_fix_workspace_quarantine}" \

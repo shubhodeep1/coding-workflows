@@ -189,6 +189,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
 - `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
+- `scripts/review_autofix_step_iteration_summary.sh` — Review pipeline iteration-summary step sourced by review_autofix.yml.
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.

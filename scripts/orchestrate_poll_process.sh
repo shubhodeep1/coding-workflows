@@ -168,7 +168,7 @@ fi
 TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"
 TRUSTED_POLLER_RESOLVER_GUARD="${RUNTIME_DIR}/check_resolver_diff.sh"
 TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${RUNTIME_DIR}/files_touched_scope_guard.py"
-TRUSTED_POLLER_WORKSPACE_GUARD="${RUNTIME_DIR}/post_agent_workspace_guard.py"
+TRUSTED_POLLER_WORKSPACE_GUARD="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post_agent_workspace_guard.py"
 UNTRUSTED_POLLER_SANDBOX="${RUNTIME_DIR}/untrusted_process_sandbox.sh"
 UNTRUSTED_POLLER_PROVIDER_PROXY="${RUNTIME_DIR}/model_provider_proxy.py"
 POLLER_VALIDATOR_OUTPUT_DIR="${RUNTIME_DIR}/validator-output-poller"
@@ -208,7 +208,7 @@ run_poller_workspace_guard() {
 	shift 2
 	prepare_untrusted_poller_runtime || return 1
 	bash "${UNTRUSTED_POLLER_SANDBOX}" \
-		--role workspace-guard --workspace "${guard_workspace}" --runtime-dir "${RUNTIME_DIR}" \
+		--role workspace-guard --workspace "${guard_workspace}" --runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}" \
 		-- /usr/bin/python3 -I -S "${TRUSTED_POLLER_WORKSPACE_GUARD}" "${guard_action}" \
 		--workspace "${guard_workspace}" "$@"
 }
@@ -8647,7 +8647,7 @@ invoke_judge_for_integration_conflict() {
 		return 1
 	fi
 	integration_allowed_paths_file="${RUNTIME_DIR}/integration_judge_allowed_${final_pr}.txt"
-	integration_actual_paths_file="${RUNTIME_DIR}/integration_judge_actual_${final_pr}.txt"
+	integration_actual_paths_file="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/integration_judge_actual_${final_pr}.txt"
 	integration_conflict_spans_file="${RUNTIME_DIR}/integration_judge_conflict_spans_${final_pr}.json"
 	integration_clean_manifest_file="${RUNTIME_DIR}/integration_judge_clean_manifest_${final_pr}.tsv"
 	integration_merge_tree_output="${RUNTIME_DIR}/integration_judge_merge_tree_${final_pr}.txt"
@@ -8918,9 +8918,9 @@ PY
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
-	integration_workspace_manifest="${RUNTIME_DIR}/post-agent-integration-${final_pr}.manifest.json"
-	integration_workspace_report="${RUNTIME_DIR}/post-agent-integration-${final_pr}.report.json"
-	integration_workspace_quarantine="${RUNTIME_DIR}/post-agent-integration-${final_pr}.quarantine"
+	integration_workspace_manifest="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-integration-${final_pr}.manifest.json"
+	integration_workspace_report="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-integration-${final_pr}.report.json"
+	integration_workspace_quarantine="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-integration-${final_pr}.quarantine"
 	run_poller_workspace_guard snapshot "${integration_judge_workspace}" \
 		--manifest "${integration_workspace_manifest}" || return 1
 	integration_model_rc=0
@@ -20608,10 +20608,10 @@ ${FOLLOWUP_BLOCK_REASON}"
       else
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
-          rb_workspace_manifest="${RUNTIME_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.manifest.json"
-          rb_workspace_report="${RUNTIME_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.report.json"
-          rb_workspace_paths="${RUNTIME_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.paths.txt"
-          rb_workspace_quarantine="${RUNTIME_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.quarantine"
+          rb_workspace_manifest="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-poller-rb-${RB_PR}-${attempt}.manifest.json"
+          rb_workspace_report="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-poller-rb-${RB_PR}-${attempt}.report.json"
+          rb_workspace_paths="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-poller-rb-${RB_PR}-${attempt}.paths.txt"
+          rb_workspace_quarantine="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-${RUNNER_TEMP:?}}/post-agent-poller-rb-${RB_PR}-${attempt}.quarantine"
           if ! run_poller_workspace_guard snapshot "${PWD}" --manifest "${rb_workspace_manifest}"; then
 			echo "::error::Review-blocked workspace snapshot failed for PR #${RB_PR}; terminating the poller before model execution."
 			exit 78

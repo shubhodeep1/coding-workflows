@@ -583,6 +583,70 @@ def test_sandbox_systemd_unit_reports_namespace_failures() -> None:
 	assert 'timeout --kill-after=2 10 "${sandbox_journal_cmd[@]}"' in sandbox_source
 
 
+def test_workspace_guard_rejects_private_tmp_paths_before_execution() -> None:
+	with tempfile.TemporaryDirectory(dir="/tmp") as runtime_directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory:
+		runner_temp_root = Path(runner_temp_directory).resolve()
+		runtime_root = Path(runtime_directory).resolve()
+		environment = os.environ.copy()
+		environment.pop("POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256", None)
+		environment.update({"RUNNER_TEMP": str(runner_temp_root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1"})
+		command = [
+			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(REPO_ROOT),
+			"--runtime-dir", str(runner_temp_root), "--", "/usr/bin/python3", "-I", "-S",
+			"-c", "print('guard launched')",
+		]
+		unsafe_runtime_command = command.copy()
+		unsafe_runtime_command[unsafe_runtime_command.index("--runtime-dir") + 1] = str(runtime_root)
+		blocked_runtime = subprocess.run(unsafe_runtime_command, env=environment, capture_output=True, text=True)
+		assert blocked_runtime.returncode != 0
+		assert f"sandbox_private_tmp_path role=workspace-guard path={runtime_root}" in blocked_runtime.stderr
+		assert "guard launched" not in blocked_runtime.stdout
+
+		unsafe_manifest_command = command + ["--manifest", str(runtime_root / "manifest.json")]
+		blocked_manifest = subprocess.run(unsafe_manifest_command, env=environment, capture_output=True, text=True)
+		assert blocked_manifest.returncode != 0
+		assert "sandbox_private_tmp_path role=workspace-guard" in blocked_manifest.stderr
+		assert "guard launched" not in blocked_manifest.stdout
+
+		allowed = subprocess.run(command, env=environment, capture_output=True, text=True)
+		assert allowed.returncode == 0, allowed.stderr
+		assert "guard launched" in allowed.stdout
+		assert list(runner_temp_root.iterdir()) == []
+
+
+def test_workspace_guard_rejects_symlinked_output_and_invalid_executable() -> None:
+	with tempfile.TemporaryDirectory(dir="/tmp") as runtime_directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory:
+		runner_temp_root = Path(runner_temp_directory).resolve()
+		redirect = runner_temp_root / "redirect"
+		redirect.symlink_to(runtime_directory, target_is_directory=True)
+		environment = os.environ.copy()
+		environment.update({"RUNNER_TEMP": str(runner_temp_root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1"})
+		command = [
+			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(REPO_ROOT),
+			"--runtime-dir", str(runner_temp_root), "--", "/usr/bin/python3", "-I", "-S",
+			"-c", "print('guard launched')", "--report", str(redirect / "report.json"),
+		]
+		blocked = subprocess.run(command, env=environment, capture_output=True, text=True)
+		assert blocked.returncode != 0
+		assert "sandbox_private_tmp_path role=workspace-guard" in blocked.stderr
+		command[command.index("--runtime-dir") + 1] = str(redirect)
+		redirected_root = subprocess.run(command, env=environment, capture_output=True, text=True)
+		assert redirected_root.returncode != 0
+		assert "workspace guard runtime-dir must be canonical" in redirected_root.stderr
+		command[command.index("--runtime-dir") + 1] = str(runner_temp_root)
+		command[-1] = str(runner_temp_root.parent / "outside-report.json")
+		outside = subprocess.run(command, env=environment, capture_output=True, text=True)
+		assert outside.returncode != 0
+		assert "workspace guard artifact is outside runtime-dir" in outside.stderr
+		environment["POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256"] = "0" * 64
+		command[-1] = str(runner_temp_root / "report.json")
+		mismatched = subprocess.run(command, env=environment, capture_output=True, text=True)
+		assert mismatched.returncode != 0
+		assert "workspace guard executable integrity check failed" in mismatched.stderr
+
+
 def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	module_text = PROXY.read_text(encoding="utf-8")
 	assert '"POST": {"/chat/completions", "/responses", "/embeddings"}' in module_text
@@ -759,10 +823,22 @@ def test_workflows_do_not_give_github_tokens_to_primary_model_steps() -> None:
 
 def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
 	implement = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	review = (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	poller = (REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert len(review.encode("utf-8")) < 480_000
+	assert 'review_autofix_step_iteration_summary.sh' in review
+	assert 'review_autofix_step_iteration_summary.sh' in (REPO_ROOT / "scripts/stage_workflow_support.sh").read_text(encoding="utf-8")
+	for workflow, role_name in ((implement, "implement"), (review, "review"), (poller, "poller")):
+		assert f'POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR="$(mktemp -d "${{RUNNER_TEMP:?}}/post-agent-{role_name}-' in workflow
+		assert 'echo "POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR=${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}"' in workflow
+		assert f'"${{RUNNER_TEMP:?}}/post-agent-{role_name}-${{GITHUB_RUN_ID}}-${{GITHUB_RUN_ATTEMPT}}."*' in workflow
+		assert 'realpath -e "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}"' in workflow
 	for role in ("implement", "repair"):
 		assert f"post-agent-{role}-" in implement
 	assert implement.count("post_agent_workspace_guard.py\" snapshot") >= 2
 	assert implement.count("post_agent_workspace_guard.py\" reconcile") >= 2
+	assert implement.count('--runtime-dir "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}"') >= 4
+	assert 'install -m 0755 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/post_agent_workspace_guard.py" "${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR}/post_agent_workspace_guard.py"' in implement
 
 	for script_name in (
 		"review_apply_fixes.sh",
@@ -774,6 +850,8 @@ def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
 		assert "post_agent_workspace_guard.py" in script or "TRUSTED_POLLER_WORKSPACE_GUARD" in script
 		assert "workspace-guard" in script
 		assert "reconcile" in script
+		assert "POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR" in script
+		assert 'post-agent-' not in script or '"${RUNTIME_DIR}/post-agent-' not in script
 
 	commit_step = (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8").split(
 		"      - name: Commit changes\n", 1
