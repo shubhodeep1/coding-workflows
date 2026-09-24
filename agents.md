@@ -731,6 +731,20 @@ when the bounded fix-cycle budget is exhausted.
   Python from `/tmp`. Post-agent Python validators run through the
   provider-free `validator` sandbox role as `/usr/bin/python3 -I -S`, from an
   external working directory with no credentials or network access.
+- The sandbox's systemd unit runs with `PrivateTmp=yes`, so the host's `/tmp`
+  and `/var/tmp` do not exist inside it. The sandbox keeps its own state (the
+  `agent-sandbox.*` scratch dir and the temporary `provider-credential.*`
+  file) under `RUNNER_TEMP` whenever `--runtime-dir` (every pipeline's
+  `RUNTIME_DIR`) resolves under `/tmp` or `/var/tmp`. Failure modes:
+  - a path the unit must see (scratch dir, workspace,
+    `CODEX_THREAD_REUSE_*_FILE` write paths, Git metadata) still under `/tmp`
+    or `/var/tmp` exits 1 before launch with
+    `untrusted_process_sandbox: sandbox_private_tmp_path role=<role> path=<path>`;
+  - a unit that fails while building its mount namespace (systemd status 226)
+    logs `untrusted_process_sandbox: sandbox_namespace_setup_failed role=<role>
+    rc=226 unit=<unit>` followed by up to 20 journal lines for that unit, and
+    the script exits 226. `systemd-run` runs without `--quiet`, so its unit
+    name and exit status also appear on stderr.
 - `scripts/model_provider_proxy.py` derives a non-empty model allowlist from
 	trusted configuration and defaults to 64 requests, one concurrent request,
 	65,536 output tokens, and USD 25 cumulative spend. It reserves worst-case
@@ -969,6 +983,8 @@ and shipped:
 - `WORKTREE_REGISTER_INVALID_NAME`
 - `WORKTREE_REGISTER_FAIL`
 - `WORKTREE_DEREGISTER_FAIL`
+- `sandbox_private_tmp_path`
+- `sandbox_namespace_setup_failed`
 - `opencode_agent_failure`
 - `POST_AGENT_WORKSPACE_GUARD_OK`
 - `POST_AGENT_WORKSPACE_GUARD_BLOCKED`
@@ -1134,6 +1150,8 @@ LOG_PREFIX.name=WORKTREE_REGISTRY_REBUILD
 LOG_PREFIX.name=WORKTREE_REGISTER_INVALID_NAME
 LOG_PREFIX.name=WORKTREE_REGISTER_FAIL
 LOG_PREFIX.name=WORKTREE_DEREGISTER_FAIL
+LOG_PREFIX.name=sandbox_private_tmp_path
+LOG_PREFIX.name=sandbox_namespace_setup_failed
 LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=POST_AGENT_WORKSPACE_GUARD_OK
 LOG_PREFIX.name=POST_AGENT_WORKSPACE_GUARD_BLOCKED
