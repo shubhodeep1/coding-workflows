@@ -85,6 +85,21 @@ def test_parse_lessons_without_section_returns_nothing() -> None:
 	assert ingest.parse_lessons("# Log\n\n## Notes\n- [source:security] not a lesson\n") == []
 
 
+def test_parse_lessons_preserves_parentheses_in_file_paths() -> None:
+	markdown = (
+		"## Lessons\n"
+		"- [source:validation] Recheck routes. "
+		"(files: src/routes/(login)/handler.py, tests/test_call(foo).py)\n"
+	)
+	assert ingest.parse_lessons(markdown) == [
+		{
+			"source": "validation",
+			"text": "Recheck routes.",
+			"files": ["src/routes/(login)/handler.py", "tests/test_call(foo).py"],
+		}
+	]
+
+
 def test_record_id_is_deterministic_and_schema_safe() -> None:
 	first = ingest.lesson_record_id("sample", "conformance", "Text.")
 	assert first == ingest.lesson_record_id("sample", "conformance", "Text.")

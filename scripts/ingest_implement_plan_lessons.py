@@ -55,7 +55,7 @@ LESSONS_HEADING = "## Lessons"
 LESSON_LINE_RE = re.compile(
 	r"^- \[source:(?P<source>" + "|".join(re.escape(s) for s in LESSON_SOURCES) + r")\]\s+"
 	r"(?P<text>.+?)"
-	r"(?:\s+\(files:\s*(?P<files>[^()]*)\))?\s*$"
+	r"(?:\s+\(files:\s*(?P<files>.*?)\))?\s*$"
 )
 LOG_DIR_DEFAULT = "docs/implement-plan"
 LESSON_PHASE = "implement_plan"
