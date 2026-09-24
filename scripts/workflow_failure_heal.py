@@ -903,12 +903,15 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 	"""Name a review/autofix failure from the run flags.
 
 	Same precedence as ``workflow_failure_heal_autofix_report.sh`` (tests pin
-	the parity): an explicit ``AUTOFIX_FAILURE_REASON``, then the editor flags,
-	then the run summary's ``finalize_reason``, then ``workflow_failure``.
+	the parity): an explicit ``AUTOFIX_FAILURE_REASON``, then a failed editor
+	preflight (the editor never ran), then the editor flags, then the run
+	summary's ``finalize_reason``, then ``workflow_failure``.
 	"""
 	explicit = str(flags.get("AUTOFIX_FAILURE_REASON") or "")
 	if _FAILURE_REASON_RE.match(explicit):
 		return explicit
+	if flags.get("EDITOR_PREFLIGHT_FAILED") == "true":
+		return "editor_preflight_failed"
 	if flags.get("AUTOFIX_EDITOR_EMPTY_NOOP") == "true":
 		return "editor_empty_noop"
 	if flags.get("EDITOR_CHANGES_LOST") == "true":

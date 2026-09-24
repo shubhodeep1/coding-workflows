@@ -94,6 +94,102 @@ if ! command -v maybe_inject_nag >/dev/null 2>&1; then
   maybe_inject_nag() { return 0; }
 fi
 
+# Editor preflight (README "Orchestrator PR autofix flow"). The review
+# workflow's "Preflight: Verify required files before reviewer invocation"
+# step runs `review_apply_fixes.sh --preflight` before the reviewers, so a
+# deterministic editor precondition failure costs seconds instead of a full
+# reviewer pass (PR #4259: a `: "${VAR:?…}"` guard failed after ~75 minutes of
+# reviewers, seven runs in a row). The step probes for the marker below and
+# skips older staged copies that lack it.
+# supports: --preflight
+#
+# The preflight runs after the helper sourcing above, so a helper that unsets
+# or rewrites a variable at source time is seen exactly as the editor sees it.
+# It has no side effects and makes no model or network call. Every line goes
+# to stderr so the step's failure evidence (editor_stage_stderr.txt) carries
+# it into the failure fingerprint.
+review_apply_fixes_preflight()
+{
+	local -a preflight_required_vars=(
+		# One entry per `: "${VAR:?…}"` guard in this script, checked with the
+		# same unset-or-empty rule. This list is the single source:
+		# tests/test_review_autofix_review_pipeline_contract.py fails when a
+		# guard is added without its entry. A guarded variable must already be
+		# set when the preflight step runs (job env, the editor step's explicit
+		# env, or GITHUB_ENV exports from earlier steps).
+		# A function named setup_editor_isolation, where a branch defines one,
+		# adds its prerequisite checks to this function in dry-run form in the
+		# same change.
+	)
+	local preflight_checks=0
+	local preflight_failed=0
+	local preflight_var=""
+	local preflight_opencode_bin=""
+
+	_review_apply_fixes_preflight_result()
+	{
+		local check_name="$1"
+		local check_result="$2"
+		local check_detail="$3"
+		preflight_checks=$((preflight_checks + 1))
+		if [ "${check_result}" != "ok" ]; then
+			preflight_failed=$((preflight_failed + 1))
+		fi
+		printf 'REVIEW_EDITOR_PREFLIGHT check=%s result=%s detail=%s\n' \
+			"${check_name}" "${check_result}" "${check_detail}" >&2
+	}
+
+	for preflight_var in ${preflight_required_vars[@]+"${preflight_required_vars[@]}"}; do
+		if [ -n "${!preflight_var:-}" ]; then
+			_review_apply_fixes_preflight_result "env_${preflight_var}" ok set
+		else
+			_review_apply_fixes_preflight_result "env_${preflight_var}" fail unset_or_empty
+		fi
+	done
+
+	if [ -r "${OPENCODE_HELPERS_PATH}" ]; then
+		_review_apply_fixes_preflight_result opencode_helpers ok "${OPENCODE_HELPERS_PATH}"
+	else
+		_review_apply_fixes_preflight_result opencode_helpers fail "unreadable:${OPENCODE_HELPERS_PATH}"
+	fi
+	if [ -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+		_review_apply_fixes_preflight_result opencode_config_writer ok "${OPENCODE_CONFIG_WRITER_PATH}"
+	else
+		_review_apply_fixes_preflight_result opencode_config_writer fail "unreadable:${OPENCODE_CONFIG_WRITER_PATH}"
+	fi
+	# CODEX_HELPERS_PATH is not used by this script on main; a caller that
+	# sets it gets the readability check, an unset value is not a failure.
+	if [ -n "${CODEX_HELPERS_PATH:-}" ]; then
+		if [ -r "${CODEX_HELPERS_PATH}" ]; then
+			_review_apply_fixes_preflight_result codex_helpers ok "${CODEX_HELPERS_PATH}"
+		else
+			_review_apply_fixes_preflight_result codex_helpers fail "unreadable:${CODEX_HELPERS_PATH}"
+		fi
+	fi
+	if preflight_opencode_bin="$(command -v opencode 2>/dev/null)" && [ -n "${preflight_opencode_bin}" ]; then
+		_review_apply_fixes_preflight_result opencode_binary ok "${preflight_opencode_bin}"
+	else
+		_review_apply_fixes_preflight_result opencode_binary fail not_in_path
+	fi
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
+		_review_apply_fixes_preflight_result runtime_dir ok "${RUNTIME_DIR}"
+	else
+		_review_apply_fixes_preflight_result runtime_dir fail "not_writable:${RUNTIME_DIR:-unset}"
+	fi
+
+	if [ "${preflight_failed}" -gt 0 ]; then
+		printf 'REVIEW_EDITOR_PREFLIGHT result=fail checks=%s failed=%s\n' "${preflight_checks}" "${preflight_failed}" >&2
+		return 1
+	fi
+	printf 'REVIEW_EDITOR_PREFLIGHT result=ok checks=%s failed=0\n' "${preflight_checks}" >&2
+	return 0
+}
+
+if [ "${1:-}" = "--preflight" ]; then
+	review_apply_fixes_preflight
+	exit $?
+fi
+
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 LESSONS_LEARNED_ENABLED="${LESSONS_LEARNED_ENABLED:-true}"

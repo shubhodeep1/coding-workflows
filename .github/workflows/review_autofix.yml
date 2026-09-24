@@ -3834,6 +3834,14 @@ jobs:
 
       - name: "Preflight: Verify required files before reviewer invocation"
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        # The editor preflight below runs review_apply_fixes.sh --preflight
+        # with the editor step's explicit env entries, so it sees what the
+        # editor will see ("Apply fixes with editor model").
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
+          REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
 
@@ -3987,6 +3995,35 @@ jobs:
             exit 1
           fi
           echo "Preflight check PASSED: all required files present."
+
+          # Editor preflight: run the staged editor script's precondition
+          # guards now, so a deterministic editor failure (PR #4259: a
+          # `: "${VAR:?…}"` guard) fails here in seconds instead of after the
+          # reviewers. Skipped when the editor is not scheduled for this run,
+          # and fail-open for a staged copy that predates --preflight. On
+          # failure the run takes the ordinary failure path with
+          # EDITOR_PREFLIGHT_FAILED=true (failure_reason editor_preflight_failed).
+          # Kill switch: REVIEW_EDITOR_PREFLIGHT_ENABLED=false.
+          case "$(printf '%s' "${REVIEW_EDITOR_PREFLIGHT_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+            0|false|no|off)
+              echo "REVIEW_EDITOR_PREFLIGHT skip reason=disabled script_ref=${SCRIPT_REF:-unknown}"
+              ;;
+            *)
+              if [ "${CLAUDE_BRANCH_REVIEW_MODE:-false}" = "true" ] || [ "${AUTOFIX_RESUME_TERMINAL:-false}" = "true" ]; then
+                echo "REVIEW_EDITOR_PREFLIGHT skip reason=editor_not_scheduled script_ref=${SCRIPT_REF:-unknown}"
+              elif ! grep -q '^# supports: --preflight' "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" 2>/dev/null; then
+                echo "REVIEW_EDITOR_PREFLIGHT skip reason=unsupported script_ref=${SCRIPT_REF:-unknown}"
+              else
+                editor_preflight_rc=0
+                bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" --preflight 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2) || editor_preflight_rc=$?
+                if [ "${editor_preflight_rc}" -ne 0 ]; then
+                  echo "EDITOR_PREFLIGHT_FAILED=true" >> "$GITHUB_ENV"
+                  echo "::error::REVIEW_EDITOR_PREFLIGHT result=fail rc=${editor_preflight_rc} script_ref=${SCRIPT_REF:-unknown}"
+                  exit 1
+                fi
+              fi
+              ;;
+          esac
 
       - name: Show disk usage (pre LLM call)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'

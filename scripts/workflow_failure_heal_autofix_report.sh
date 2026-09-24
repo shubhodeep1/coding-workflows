@@ -46,6 +46,9 @@
 #   REPORT_SUMMARY_LINE_FILE               file holding the REVIEW_AUTOFIX_RUN_SUMMARY_V1 line
 #   AUTOFIX_EDITOR_EMPTY_NOOP, EDITOR_CHANGES_LOST, EDITOR_NOOP_REFUSAL,
 #   EDITOR_NOOP_SUSPICIOUS, RESOLVER_ESCALATED   run flags (true/false)
+#   EDITOR_PREFLIGHT_FAILED                the editor preflight failed (true/false); names
+#                                          the failure editor_preflight_failed ahead of the
+#                                          other flags (the editor never ran)
 #   AUTOFIX_FAILURE_REASON                 failure_reason chosen by the caller (the
 #                                          identical-failure cap passes identical_failure_cap);
 #                                          wins over the flags when it is a valid reason token
@@ -128,6 +131,8 @@ if [ -s "${SUMMARY_LINE_FILE}" ]; then
 fi
 if [ -n "${AUTOFIX_FAILURE_REASON:-}" ] && [[ "${AUTOFIX_FAILURE_REASON}" =~ ^[a-z][a-z0-9_:-]{0,79}$ ]]; then
 	FAILURE_REASON="${AUTOFIX_FAILURE_REASON}"
+elif [ "${EDITOR_PREFLIGHT_FAILED:-false}" = "true" ]; then
+	FAILURE_REASON="editor_preflight_failed"
 elif [ "${AUTOFIX_EDITOR_EMPTY_NOOP:-false}" = "true" ]; then
 	FAILURE_REASON="editor_empty_noop"
 elif [ "${EDITOR_CHANGES_LOST:-false}" = "true" ]; then
