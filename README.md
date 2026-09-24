@@ -1347,7 +1347,8 @@ through `clarify → plan → implement → review`.
   `::error::` line naming a `scripts/` or `.github/workflows/` path, or a line a
   support script prefixed with its own name, such as
   `untrusted_process_sandbox: …` or `write_opencode_config.sh: …`, when that
-  script exists in the staged support bundle); before the
+  script exists in the staged support bundle and the line contains a failure
+  signal, not just a status message); before the
   model runs, the intake compares the crash file with the PR's changed files
   and with `git diff --name-only origin/main origin/<base>` on its own
   checkout, logs `WORKFLOW_HEAL crash_ownership=<pr|base|none> crash_file=… base=…`,

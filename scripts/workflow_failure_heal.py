@@ -711,6 +711,8 @@ def _self_named_script(line: str) -> str | None:
 	match = _SELF_NAMED_SCRIPT_LINE_RE.match(stripped)
 	if not match:
 		return None
+	if not _CRASH_ERROR_LINE_RE.match(stripped) and not _SELF_NAMED_SCRIPT_FAILURE_RE.search(match.group("rest")):
+		return None
 	name = match.group("name")
 	scripts_dir = Path(__file__).resolve().parent
 	for file_name in ((name,) if name.endswith((".sh", ".py")) else (f"{name}.sh", f"{name}.py")):
@@ -1062,6 +1064,7 @@ _SUMMARISER_EXIT_RE = re.compile(r"summariser \([^)]*\): (?:attempt [0-9]+ exite
 # A support script that names itself at the start of its error line, e.g.
 # `untrusted_process_sandbox: …` or `write_opencode_config.sh: …`.
 _SELF_NAMED_SCRIPT_LINE_RE = re.compile(r"^(?:::error::|##\[error\])?\s*(?P<name>[a-z][a-z0-9]*_[a-z0-9_]*(?:\.(?:sh|py))?): (?P<rest>\S.*)$")
+_SELF_NAMED_SCRIPT_FAILURE_RE = re.compile(r"\b(?:[a-z0-9_]+_(?:failed|error)|fail(?:ed|ure)?|error|invalid|missing|denied|exhausted|exception|fatal)\b|\brc=[1-9][0-9]*\b", re.IGNORECASE)
 REVIEWER_FAILURE_HELPER_LINES_MAX = 10
 
 
@@ -1093,7 +1096,7 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 				summariser_code = summariser_match.group("rc") or summariser_match.group("last_rc") or summariser_code
 				continue
 			helper_match = _SELF_NAMED_SCRIPT_LINE_RE.match(line)
-			if helper_match and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
+			if helper_match and (_CRASH_ERROR_LINE_RE.match(line) or _SELF_NAMED_SCRIPT_FAILURE_RE.search(helper_match.group("rest"))) and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
 				helper_line = single_line(line, 300)
 				if helper_line not in helper_lines:
 					helper_lines.append(helper_line)

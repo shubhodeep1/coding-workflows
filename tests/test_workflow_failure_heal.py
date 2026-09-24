@@ -2743,7 +2743,7 @@ def test_autofix_report_cap_links_the_failed_runs_and_counts_only_them() -> None
 
 
 def test_reviewer_failure_evidence_names_exit_codes_and_self_named_errors() -> None:
-	evidence = heal.reviewer_failure_evidence([REVIEWER_SLOT_LOG_226, REVIEWER_SLOT_LOG_CONFIG, SUMMARISER_LOG_226])
+	evidence = heal.reviewer_failure_evidence([REVIEWER_SLOT_LOG_226 + "  | write_opencode_config.sh: loaded model X\n", REVIEWER_SLOT_LOG_CONFIG, SUMMARISER_LOG_226])
 	lines = evidence.splitlines()
 	assert lines[:5] == [
 		"reviewers_failed=true",
@@ -2754,6 +2754,7 @@ def test_reviewer_failure_evidence_names_exit_codes_and_self_named_errors() -> N
 	]
 	assert "untrusted_process_sandbox: sandbox_namespace_setup_failed role=reviewer rc=226 unit=untrusted-sandbox-reviewer-1-2.service" in lines
 	assert "##[error]write_opencode_config.sh: model 'z-ai/glm-5.2' is missing or duplicated in the model catalog" in lines
+	assert "write_opencode_config.sh: loaded model X" not in evidence
 	# Stable across attempt counts and budget lines, so it fingerprints the same.
 	again = heal.reviewer_failure_evidence([REVIEWER_SLOT_LOG_226.replace("budget_elapsed_secs=117", "budget_elapsed_secs=9"), REVIEWER_SLOT_LOG_CONFIG, SUMMARISER_LOG_226 + "summariser (pass1): attempt 3 exited rc=226.\n"])
 	assert again == evidence
@@ -2796,6 +2797,10 @@ def test_extract_crash_file_on_self_named_script_errors() -> None:
 	assert heal.extract_crash_file("  | write_opencode_config.sh: model 'x/y' is missing") == "scripts/write_opencode_config.sh"
 	assert heal.extract_crash_file("reviewers_failed=true\ngh_helpers: retry exhausted") == "scripts/gh_helpers.sh"
 	assert heal.extract_crash_file("::error::workflow_failure_heal: bad payload") == "scripts/workflow_failure_heal.py"
+	assert heal.extract_crash_file("gh_helpers: retried") is None
+	assert heal.extract_crash_file("write_opencode_config.sh: loaded model X") is None
+	assert heal.extract_crash_file("write_opencode_config.sh: loaded model X\n  | write_opencode_config.sh: model 'x/y' is missing") == "scripts/write_opencode_config.sh"
+	assert heal.extract_crash_file("write_opencode_config.sh: catalog_load_failed") == "scripts/write_opencode_config.sh"
 	# A name that is not a script next to the helper names nothing.
 	assert heal.extract_crash_file("untrusted_process_sandbox_missing_helper: rc=226") is None
 	assert heal.extract_crash_file("opencode_agent_failure phase=review_run_reviewers rc=226") is None
