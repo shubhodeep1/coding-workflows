@@ -8,8 +8,8 @@ that limit, the largest ``run:`` bodies live in
 ``scripts/review_autofix_step_*.sh``. Each of those steps keeps its
 ``name:``, ``if:``, ``env:`` and ``continue-on-error:`` in the workflow and
 its ``run:`` block is a short wrapper that resolves the script (staged
-support bundle, then ``.codex-workflow-src/scripts``, then
-``.codex-workflow-src-main/scripts``) and ``source``s it in the step shell.
+support bundle, then the verified ``.codex-workflow-src/scripts``) and
+``source``s it in the step shell.
 
 Contract tests that grep or execute those step bodies read the workflow
 through :func:`expanded_review_autofix_text`, which swaps each wrapper back

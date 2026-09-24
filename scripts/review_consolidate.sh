@@ -105,7 +105,7 @@ emit_lessons_learned_records_from_consolidator_output()
 	issue_number="$(first_linked_issue_number || true)"
 	telemetry_json="$({
 		PYTHONDONTWRITEBYTECODE=1 \
-		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
 		python3 - "${PWD}" "${CONSOLIDATOR_RAW_FILE}" "${issue_number}" <<'PY'
 import json
 import os
@@ -282,7 +282,7 @@ emit_context_budget_warn_for_prompt()
 
 	warn_line="$(
 		PYTHONDONTWRITEBYTECODE=1 \
-		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
 		python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 

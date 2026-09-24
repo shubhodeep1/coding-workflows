@@ -2738,7 +2738,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 
 	stage_step_block = _step_block("Stage workflow support files")
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in stage_step_block
-	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in stage_step_block
+	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in stage_step_block
 	assert "REQUIRED_BOOTSTRAP_SCRIPTS=" not in stage_step_block
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}"' not in stage_step_block
 	required_bootstrap_line = next(
@@ -3993,7 +3993,7 @@ def test_review_consolidator_prompt_is_staged_for_review_runtime_support() -> No
 	assert 'PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-consolidator.txt"' in consolidate
 	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/prompts/review-consolidator.txt"' in stage_helper
-	assert 'src=".codex-workflow-src-main/prompts/review-consolidator.txt"' in stage_helper
+	assert 'src=".codex-workflow-src-main/prompts/review-consolidator.txt"' not in stage_helper
 	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"' in stage_helper
 	assert 'review-consolidator.txt not found in checked-out support sources' in stage_helper
 	assert 'REVIEW_CONSOLIDATOR_ENABLED=true' in stage_helper
@@ -4194,7 +4194,7 @@ def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
 	assert "REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"' in stage_helper
-	assert 'src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"' in stage_helper
+	assert 'src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"' not in stage_helper
 	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in stage_helper
 	assert 'review_filter_uninteresting_files.sh not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in preflight_block
@@ -4262,7 +4262,7 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert "REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_helper
-	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' in stage_helper
+	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' not in stage_helper
 	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in stage_helper
 	assert 'review_agents_md_materiality.sh not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in preflight_block
@@ -4293,7 +4293,7 @@ def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewe
 	reviewers = _reviewers_text()
 
 	assert 'failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"' in stage_helper
-	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' in stage_helper
+	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' not in stage_helper
 	assert 'install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in stage_helper
 	assert 'reviewer_failback_chains.json not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in preflight_block
@@ -6706,12 +6706,12 @@ def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
 		assert f'echo "{output}=${{' in gate, output
 		assert f"{output}: ${{{{ steps.evaluate.outputs.{output} }}}}" in _job_block("gate"), output
 	gate_job = _job_block("gate")
-	for name in ("Checkout fingerprint cap helper", "Checkout fingerprint cap helper main snapshot"):
-		block = _step_block(name)
-		assert "continue-on-error: true" in block
-		assert "sparse-checkout: scripts/workflow_failure_heal.py" in block
-		assert "if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}" in block
-		assert gate_job.index(f"- name: {name}\n") < gate_job.index("- name: Evaluate review gate")
+	block = _step_block("Checkout fingerprint cap helper")
+	assert "continue-on-error: true" not in block
+	assert "sparse-checkout: scripts/workflow_failure_heal.py" in block
+	assert "ref: ${{ job.workflow_sha }}" in block
+	assert "Checkout fingerprint cap helper main snapshot" not in gate_job
+	assert gate_job.index("- name: Verify fingerprint cap support identity") < gate_job.index("- name: Evaluate review gate")
 
 
 def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
@@ -6942,45 +6942,58 @@ def _main_pinned_output_violations(branch_text: str, main_text: str) -> set[str]
 
 
 def test_main_pinned_scripts_add_no_runtime_output_over_main() -> None:
-	# The rule itself: a branch copy of a main-primary script that writes a
-	# runtime file the main copy does not (PR #4273's metadata digest) fails.
+	# The comparison utility remains useful for diagnosing older review runs;
+	# runtime code now comes from the workflow SHA, not a moving main snapshot.
 	main_copy = 'printf "%s\\n" "${x}" > "${PR_BODY_FILE}"\n: > "${RUNTIME_DIR}/metadata.txt"\n'
 	branch_copy = main_copy + 'jq -n "{}" > "${RUNTIME_DIR}/linked_issue_digest.json"\necho x | tee -a "${DIGEST_FILE}" >/dev/null\n'
 	assert _main_pinned_output_violations(branch_copy, main_copy) == {"${RUNTIME_DIR}/linked_issue_digest.json", "${DIGEST_FILE}"}
 	assert _main_pinned_output_violations(main_copy, branch_copy) == set()
 	assert _runtime_outputs('# > "${RUNTIME_DIR}/commented.txt"\ncat x > "${RUNTIME_DIR:-/tmp}/y.txt" 2>/dev/null\n') == {"${RUNTIME_DIR}/y.txt"}
 
-	ref = _origin_main_ref()
-	if ref is None:
-		print("WARNING: origin/main unavailable; skipping the main-pinned runtime-output comparison (fail open)")
-		return
-	names = _main_primary_scripts()
-	assert names, "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS is empty"
-	for name in names:
-		branch_path = REPO_ROOT / "scripts" / name
-		if not branch_path.is_file():
-			continue
-		shown = subprocess.run(["git", "show", f"{ref}:scripts/{name}"], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
-		if shown.returncode != 0:
-			continue
-		branch_text = branch_path.read_text(encoding="utf-8")
-		if branch_text == shown.stdout:
-			continue
-		violations = _main_pinned_output_violations(branch_text, shown.stdout)
-		assert not violations, (
-			f"scripts/{name} is in MAIN_PRIMARY_BOOTSTRAP_SCRIPTS, so review runs stage the {ref} copy and ignore this one; "
-			f"these runtime outputs exist only in the branch copy: {sorted(violations)}"
-		)
+	assert 'src=".codex-workflow-src/scripts/${f}"' in _stage_helper_text()
 
 
 def test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop() -> None:
 	text = _stage_helper_text()
 	start = text.index("for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do")
 	loop = text[start:text.index("\ndone\n", start)]
-	assert 'if ! cmp -s ".codex-workflow-src/scripts/${f}" "${src}"; then' in loop
-	assert 'echo "::notice::STAGE_MAIN_PINNED_DIVERGENCE script=${f} script_ref=${SCRIPT_REF:-unknown}"' in loop
-	assert loop.index("Bootstrapped ${f} from main snapshot (branch copy ignored).") < loop.index("STAGE_MAIN_PINNED_DIVERGENCE")
-	assert text.count("STAGE_MAIN_PINNED_DIVERGENCE") == 1
+	assert 'src=".codex-workflow-src/scripts/${f}"' in loop
+	assert '.codex-workflow-src-main' not in loop
+
+
+def test_review_support_identity_is_bound_across_jobs() -> None:
+	workflow = _workflow_text()
+	for job_name in ("gate", "post-merge-validate-dispatch", "post-merge-force-poll", "fingerprint-cap-block", "codex-agent"):
+		job = _job_block(job_name)
+		assert "job.workflow_sha" in job, job_name
+		assert "job.workflow_repository" in job, job_name
+		assert "job.workflow_ref" in job, job_name
+		assert 'git -C .codex-workflow-src rev-parse HEAD' in job, job_name
+	assert 'ref: ${{ github.repository == \'shubhodeep1/coding-workflows\' && github.sha || \'stable\' }}' not in workflow
+	stage = _stage_helper_text().split('WORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT=', 1)[0]
+	assert '.codex-workflow-src-main/' not in stage
+	assert '[[ ! "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]]' in stage
+
+
+def test_review_support_ref_rejects_untrusted_workflow_identity() -> None:
+	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	resolve_step = next(step for step in workflow["jobs"]["codex-agent"]["steps"] if step.get("name") == "Resolve workflow support ref")
+	with tempfile.TemporaryDirectory(prefix="review-workflow-identity-") as td:
+		github_env = Path(td) / "github_env"
+		sha = "a" * 40
+		for ref, repo, workflow_sha, allowed in (
+			("refs/heads/main", "shubhodeep1/coding-workflows", sha, True),
+			("refs/tags/stable", "shubhodeep1/coding-workflows", sha, True),
+			(sha, "shubhodeep1/coding-workflows", sha, True),
+			("refs/heads/ai/issue-4399", "shubhodeep1/coding-workflows", sha, False),
+			("refs/heads/main", "other/repo", sha, False),
+			("refs/heads/main", "shubhodeep1/coding-workflows", "not-a-sha", False),
+		):
+			github_env.write_text("", encoding="utf-8")
+			env = {"PATH": os.environ.get("PATH", ""), "GITHUB_ENV": str(github_env), "WORKFLOW_REPOSITORY": repo, "WORKFLOW_REF": f"shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{ref}", "WORKFLOW_SHA": workflow_sha}
+			result = subprocess.run(["bash", "-c", resolve_step["run"]], env=env, capture_output=True, text=True)
+			assert (result.returncode == 0) == allowed, (ref, repo, result.stderr)
+			assert (f"SCRIPT_REF={sha}" in github_env.read_text(encoding="utf-8")) == allowed
 
 
 def main() -> int:
@@ -7148,48 +7161,13 @@ def _write_reviewer_opencode_config(tmp: Path, catalog_path: Path, model_slug: s
 
 
 def test_stage_step_backfills_missing_model_catalog_rows_from_main() -> None:
-	# Regression: run 35933627432 on PR #4323 staged the PR branch's catalog,
-	# which predates the reviewer roster refresh, so the @main roster's
-	# z-ai/glm-5.2 slot failed write_opencode_config.sh before launch.
-	branch_row = {"slug": "x-ai/grok-4.20", "context_window": 1}
-	main_catalog = {
-		"models": [
-			{"slug": "x-ai/grok-4.20", "context_window": 2},
-			{"slug": "z-ai/glm-5.2", "context_window": 1000000},
-		]
-	}
-	with tempfile.TemporaryDirectory(prefix="model-catalog-backfill-") as td:
-		tmp = Path(td)
-		# Without a main snapshot the block is a no-op and the original failure reproduces.
-		result, staged_path = _run_model_catalog_backfill(tmp, {"models": [branch_row]}, None)
-		assert result.returncode == 0, result.stderr
-		assert json.loads(staged_path.read_text(encoding="utf-8")) == {"models": [branch_row]}
-		before = _write_reviewer_opencode_config(tmp, staged_path, "z-ai/glm-5.2")
-		assert before.returncode != 0
-		assert "model 'z-ai/glm-5.2' is missing or duplicated in the model catalog" in before.stderr
-
-		result, staged_path = _run_model_catalog_backfill(tmp, {"models": [branch_row]}, main_catalog)
-		assert result.returncode == 0, result.stderr
-		assert "MODEL_CATALOG_BACKFILL added=1 slugs=z-ai/glm-5.2 source=main_snapshot" in result.stdout
-		staged = json.loads(staged_path.read_text(encoding="utf-8"))
-		# The branch row wins over main's row for the same slug; only the missing slug is appended.
-		assert staged["models"] == [branch_row, {"slug": "z-ai/glm-5.2", "context_window": 1000000}]
-		after = _write_reviewer_opencode_config(tmp, staged_path, "z-ai/glm-5.2")
-		assert after.returncode == 0, after.stderr
-
-		# A second pass adds nothing.
-		result, _ = _run_model_catalog_backfill(tmp, staged, main_catalog)
-		assert "MODEL_CATALOG_BACKFILL added=0 source=main_snapshot" in result.stdout
+	# The catalog and roster are now pinned to the same workflow SHA.
+	stage = _step_block("Stage workflow support files")
+	assert "main_model_catalog=" not in stage
+	assert 'catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"' in _stage_helper_text()
 
 
 def test_stage_step_model_catalog_backfill_fails_open() -> None:
-	branch_catalog = {"models": [{"slug": "x-ai/grok-4.20"}]}
-	for main_catalog, expected in (
-		("{not json", "::warning::MODEL_CATALOG_BACKFILL failed"),
-		({"no_models": []}, "::warning::MODEL_CATALOG_BACKFILL skipped reason=models_array_missing"),
-	):
-		with tempfile.TemporaryDirectory(prefix="model-catalog-backfill-") as td:
-			result, staged_path = _run_model_catalog_backfill(Path(td), branch_catalog, main_catalog)
-			assert result.returncode == 0, result.stderr
-			assert expected in result.stdout + result.stderr
-			assert json.loads(staged_path.read_text(encoding="utf-8")) == branch_catalog
+	stage = _step_block("Stage workflow support files")
+	assert "MODEL_CATALOG_BACKFILL added=0 source=workflow_commit" in stage
+	assert ".codex-workflow-src-main/scripts/codex_model_catalog.json" not in stage

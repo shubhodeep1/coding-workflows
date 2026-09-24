@@ -379,11 +379,12 @@ a new value, add it to the appropriate overrides file with a
 - `internal-review.yml` calls the reusable
   `shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@main`
   (a `uses:` ref cannot vary per PR), while `review_autofix.yml`'s "Resolve
-  workflow support ref" step sets `SCRIPT_REF=${{ github.sha }}` in this
-  repository. A self-repo PR review therefore executes the PR-head copies of
-  `scripts/*`, `prompts/*`, and `ai-memory/schemas/*` under `main`'s workflow
-  YAML: the step list, the `env:` blocks, and the "Initialize runtime
-  workspace" exports all come from `main`, not from the PR.
+  workflow support ref" step checks the reusable workflow's repository,
+  protected `main`/release ref and `job.workflow_sha`, then sets `SCRIPT_REF`
+  to that SHA. The support checkout must match it before staging. Self-repo
+  PR-head `scripts/*`, `prompts/*`, and `ai-memory/schemas/*` are reviewed as
+  data; the executable runtime bundle comes only from the verified workflow
+  commit. Consumer release pins use the same SHA-bound checkout.
 - Consequence for contributors and the unattended editor: a helper on the PR
   branch may not depend on a new workflow export until that export is on
   `main`. New variables a staged helper reads must default inside the helper
@@ -398,16 +399,12 @@ a new value, add it to the appropriate overrides file with a
   "Collect PR metadata" with `required env LINKED_ISSUE_METADATA_FILE is
   unset` while the stall poller kept re-dispatching. `main` now exports the
   variable as well, so the same path is defined on both sides.
-- Main-pinned scripts (`MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` in
-  `scripts/stage_workflow_support.sh`) are the reverse case: the review stages
-  the `main` copy and ignores the branch copy, so a runtime output only the
-  branch copy writes never appears (PR #4273, `orchestrator/project-4139`).
-  Staging logs `::notice::STAGE_MAIN_PINNED_DIVERGENCE script=<name>
-  script_ref=<ref>` for every such branch copy that differs from `main`, and
-  `tests/test_review_autofix_review_pipeline_contract.py`
-  (`test_main_pinned_scripts_add_no_runtime_output_over_main`) fails when the
-  branch copy writes a `${RUNTIME_DIR}/…` or `${…_FILE}` output the `main`
-  copy does not.
+- `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` remains a registry for compatibility;
+  it is staged from the verified workflow SHA, not a moving `main` checkout.
+  Changes to a PR's support scripts take effect in reviews only after a
+  trusted workflow update. Missing required runtime scripts fail closed.
+  The existing `STAGE_MAIN_PINNED_DIVERGENCE` notice still compares PR data
+  against trusted files but never selects the PR copy for execution.
 - Editor preconditions are checked before the reviewers: the preflight step
   runs `scripts/review_apply_fixes.sh --preflight` (`REVIEW_EDITOR_PREFLIGHT`,
   kill switch `REVIEW_EDITOR_PREFLIGHT_ENABLED`). A new `: "${VAR:?…}"` guard
@@ -465,12 +462,8 @@ a new value, add it to the appropriate overrides file with a
     their assertions do not change.
   - For other workflows, move the body to a `scripts/` file that the job
     already stages or checks out, and invoke it the same way.
-- Why the `.codex-workflow-src-main` fallback matters: a self-repo PR review
-  runs `main`'s workflow YAML against the PR head's scripts (see the
-  previous section), so a PR branch forked before a step moved has no copy
-  of the new script in its own checkout. The main snapshot always carries
-  it. In consumer repos, `SCRIPT_REF=stable` ships the YAML and the scripts
-  together.
+- The `.codex-workflow-src` fallback is the verified workflow-commit checkout;
+  a missing required script never falls back to a PR-head or moving-ref copy.
 
 ## Test-suite git environment isolation
 
@@ -1637,7 +1630,7 @@ depend on it.
 ## Integration-sync verifier + bootstrap contract
 
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
-- `.github/workflows/review_autofix.yml` stages `verify_integration_fingerprints.py`, `review_conflict_prepare.sh`, `review_conflict_resolve.sh`, `render_prompt.py`, `opencode_helpers.sh`, and `write_opencode_config.sh` through `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` (main snapshot first, branch fallback). `render_prompt.py` is main-primary so the newest renderer (and any bundled contract/reference assets) reaches an in-flight PR whose branch predates the fix. The reviewer/editor prompt bodies embed arbitrary PR-diff + comment text that can carry literal `{{...}}` / `{%...%}` tokens, so their post-embed render calls now pass `--skip-syntax-validation` (opt-in via `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` in `render_prompt.sh`) — the strict `validate_supported_template_syntax` gate is skipped for those already-assembled bodies while placeholder substitution still runs. This removes the false-positive class at the source (an embedded diff token no longer hard-fails the whole reviewer/editor step, so a docs/diff carrying template syntax — run 28936678508 — or the earlier lone-`${{` case, PR #3592 / #3593 / run 28888093412, cannot wedge the review). The gate stays strict for every static template render (e.g. the editor continuation prompt `prompts/mode-review-apply-fixes-continuation.txt`), so genuine prompt-authoring errors are still caught. `render_prompt.py` stays fail-open — when the backend is absent from both refs, bootstrap preserves the ref's bundled bash renderer. `OPTIONAL_BOOTSTRAP_SCRIPTS` is reserved for genuinely optional helpers only. `scripts/codex_model_catalog.json` stays branch-first, but the `Stage workflow support files` step then appends every main-snapshot row whose slug the staged catalog lacks (branch rows win, nothing removed, `MODEL_CATALOG_BACKFILL` log key, warn-only on failure), so a `REVIEWER_MODELS` slug added on main after a PR branch forked still has a catalog row.
+- `.github/workflows/review_autofix.yml` stages required and main-primary helpers from the verified reusable-workflow SHA; PR-head copies are review data, not runtime code. `render_prompt.py`, `review_conflict_resolve.sh` and their dependencies ship with that same workflow commit. Embedded PR-diff template syntax is still handled by `render_prompt.sh` with `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` after assembly, while static templates retain strict validation. Optional support missing from that commit skips the feature; required support fails closed. The model catalog comes from the same commit as the reviewer roster, never from a PR branch or a separately resolved main snapshot.
 - `scripts/review_merge_train.sh` is staged through `REQUIRED_BOOTSTRAP_SCRIPTS` for `review_autofix.yml` and copied best-effort (with `label_helpers.sh`) next to `gh_helpers.sh` by `orchestrate_poll.yml` and `cancel_on_pr_close.yml`, which do not run the full support staging. Both callers treat a missing copy as "skip this tick" so an older `SCRIPT_REF` keeps polling; its own API budget is documented in the script header (CLAUDE.md §15).
 - `scripts/review_conflict_resolve.sh` persists one `AUTOFIX_RESOLVER_RETRY_STATE_V1` PR-body block per final PR/head SHA, keyed by normalized fingerprint failure signature. `RESOLVER_ESCAPE_THRESHOLD_N` is the per-tier same-head, same-signature step size: multiples advance `strict` → `ratio` → `count_only` → `warn_only`, emit `FINGERPRINT_TIER_DOWNGRADED_V1`, and after the next multiple the script labels the **final PR issue** `ai:resolver-escalated` and records `escalated_at` for poller-side suppression / branch-rebuild gating.
 - Conflict completion is a trusted-runner Git-index invariant. `scripts/review_conflict_prepare.sh` records initially unmerged paths separately from fingerprint-only resolver expansions; after the isolated model returns, `scripts/review_conflict_resolve.sh` fails on any path-specific staging error and refuses both no-change success and `[ai-merge-resolve]` commit creation while `git diff --name-only --diff-filter=U --` reports entries. `.github/workflows/review_autofix.yml` marks resolver actuation before invocation and summarizes an attempted run without `CONFLICT_RESOLVED=true` as `conflict_resolver_failed`.

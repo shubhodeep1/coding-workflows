@@ -654,7 +654,7 @@ def extract_crash_file(evidence_text: Any) -> str | None:
 	return None
 
 
-def classify_crash_ownership(*, crash_file: str | None, changed_files: Iterable[str], base_changed_files: Iterable[str]) -> str:
+def classify_crash_ownership(*, crash_file: str | None, changed_files: Iterable[str], base_changed_files: Iterable[str], script_ref: str | None = None, head_sha: str | None = None) -> str:
 	"""Return ``pr``, ``base`` or ``none`` for the file a review/autofix run crashed in.
 
 	``pr``: the crash file is in the pull request's own diff. ``base``: it is
@@ -662,6 +662,12 @@ def classify_crash_ownership(*, crash_file: str | None, changed_files: Iterable[
 	no crash file, or neither side changed it.
 	"""
 	if not crash_file:
+		return "none"
+	# Review runtime helpers come from the workflow commit, not the PR/base
+	# checkout. A matching path in a diff is not proof that copy ran.
+	if (crash_file.startswith(REVIEW_PIPELINE_FILE_PREFIXES) or crash_file in REVIEW_PIPELINE_FILES) and (
+		not is_valid_sha(str(script_ref or "")) or str(script_ref).lower() != str(head_sha or "").lower()
+	):
 		return "none"
 	if crash_file in set(changed_files):
 		return "pr"
@@ -1714,6 +1720,8 @@ def _cmd_classify_crash_ownership(args: argparse.Namespace) -> int:
 	ownership = classify_crash_ownership(
 		crash_file=payload.get("crash_file"),
 		changed_files=payload.get("changed_files") or [],
+		script_ref=payload.get("script_ref"),
+		head_sha=payload.get("head_sha"),
 		# The intake's own git diff: not capped like the reported PR list, since a
 		# long-lived integration branch can differ from main in hundreds of files.
 		base_changed_files=[path for path in _read_path_list(args.base_changed_files) if is_valid_repo_path(path)],
