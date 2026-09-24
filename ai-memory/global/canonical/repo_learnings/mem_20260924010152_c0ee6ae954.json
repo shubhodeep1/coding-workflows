@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review and release gates use bounded retries, budgets, and explicit blocked-state handling to prevent unbounded automation loops.",
   "timestamps": {
     "created_at": "2026-09-24T01:01:52Z",
