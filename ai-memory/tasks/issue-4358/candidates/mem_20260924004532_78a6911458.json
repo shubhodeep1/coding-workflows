@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `7901726e688a083ada212981f4e42242083abd63`\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: The issue explicitly permits changing only the existing canary file. A three-line replacement is complete and consistent with the Security > Correctness > Backward compatibility priority order; no broader changes are justified.\n\n## Automation and wiring\n\n- Change type: modify existing data fixture only; no new script or subsystem.\n- Scheduler/PR-push entry point: unchanged; existing E2E smoke automation consumes the canary.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Future-removal registry: not applicable.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n\t- Replace its contents exactly with:\n\t  ```text\n\t  status: ok\n\t  run_id: alt-35939081506\n\t  updated-by: ai-pipeline\n\t  ```\n\nNo other files may be modified.\n\n## Functions or modules to implement\n\n- None. This is an exact fixture-content update.\n\n## Data structures affected\n\n- Three-line plain-text canary record.\n- Preserve field order, spelling, punctuation, and one value per line.\n\n## API/interface changes\n\n- No API, CLI, environment-variable, workflow, or schema changes.\n- The observable canary `run_id` changes from `26151428977` to `alt-35939081506`.\n\n## Decisions\n\n### D1 \u2014 Perform an exact whole-file replacement\n\n- **Chosen:** Replace the existing three lines with the issue-specified three lines, preserving a final newline.\n- **Alternatives considered:** Edit only the `run_id` value or update related tests and documentation.\n- **Why:** Whole-file replacement most reliably guarantees exact content, while related edits would violate the one-file scope constraint.\n\n## Security considerations\n\n- Trust boundaries: none added or changed.\n- Authorization: no endpoint, worker, or privileged surface is introduced.\n- External-input validation: not applicable; the required static content is fully specified.\n- Abuse cases: prevent accidental insertion of extra lines, secrets, control characters, or unrelated metadata by verifying exact byte-for-byte content.\n- Money handling: not applicable.\n\n## Risks and edge cases\n\n- The current file exists but contains a different `run_id`; this is expected task drift, not a codebase conflict.\n- Extra whitespace, blank lines, altered field order, or a missing final newline would violate the exact-content requirement.\n- Repository-wide formatting or changelog updates must not be applied because only the canary file may change.\n\n## Testing considerations\n\n1. Compare the file content exactly against the requested three-line payload.\n2. Confirm `git diff --name-only` reports only `tests/e2e_smoke_canary.txt`.\n3. Confirm the diff contains no whitespace-only or unrelated changes.\n4. No broader test suite is necessary for this static fixture update.\n\n## Pre-execution self-check\n\n- Clarification answer maps to the clear-status response: no questions were required.\n- Planning ref matches the supplied `main` checkout and commit.\n- The target file exists and the required replacement is fully specified.\n- The plan respects the one-file scope constraint.\n- No external dependency, credential, supervisor, database operation, or new interface is required.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "bc901132fa67d50c8d920ceb47b1665ebb62767ca4adcff0fb3f29a756ba5414",
+  "lineage": {
+    "issue_number": 4358,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35939347868",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35939347868",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4358"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924004532_78a6911458",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4358,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35939347868"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4358",
+  "timestamps": {
+    "created_at": "2026-09-24T00:45:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
