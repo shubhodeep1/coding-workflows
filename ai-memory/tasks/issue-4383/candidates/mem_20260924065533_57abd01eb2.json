@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"E2E orchestrator smoke: independent canary updates\",\"issues\":[{\"id\":\"issue-1\",\"title\":\"Update first E2E smoke canary\",\"priority\":1},{\"id\":\"issue-2\",\"title\":\"Update second E2E smoke canary\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "6af9f311e586a8208bf1dae3f1040d2d46d42e4612f4cce2a4b2a78f4ceaa9b6",
+  "lineage": {
+    "issue_number": 4383,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35966512752",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35966512752",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260924065533_57abd01eb2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4383,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35966512752"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'E2E orchestrator smoke: independent canary updates' into 2 issues (tracking #4383)",
+  "timestamps": {
+    "created_at": "2026-09-24T06:55:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
