@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "Multiple merged changes touched `scripts/untrusted_process_sandbox.sh`, agent/workflow launch scripts, and trusted Git-write helpers. When modifying agent execution, recovery, or review flows, check that untrusted processes cannot make privileged Git changes and update the process-isolation and workflow-contract tests.",
+  "fingerprint": "3cc4bc503f504b5d93f95ce51cf240e678880864a397a349328d682acfd3433d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35968052121",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35968052121",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4311",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4325",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4326",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4329",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4350",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4312",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4328",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4330",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4335",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4351"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260924071053_d3f6633d04",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Changes involving model or agent subprocesses commonly require preserving the repository\u2019s untrusted-process isolation and trusted Git-write boundaries.",
+  "timestamps": {
+    "created_at": "2026-09-24T07:10:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
