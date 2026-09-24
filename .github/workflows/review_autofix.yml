@@ -9111,6 +9111,8 @@ jobs:
           REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPORT_WRAPPER_SHA: ${{ env.SCRIPT_REF }}
           REPORT_SUMMARY_LINE_FILE: ${{ env.RUNTIME_DIR }}/review_autofix_run_summary_line.txt
+          # Ownership facts for the heal intake's self-inflicted routing.
+          PR_CHANGED_FILES_FILE: ${{ env.PR_CHANGED_FILES_FILE }}
         run: |
           set -uo pipefail
           reporter="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal_autofix_report.sh"
