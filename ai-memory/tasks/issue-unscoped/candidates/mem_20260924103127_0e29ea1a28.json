@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:49-53, 2150-2172 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: `run_review_rb_validator_python` does not pass `--writable-output-dir` to the sandbox, so review-fix authorization output paths under `${RUNTIME_DIR}` are read-only in the validator sandbox.\n  WHY: `files_touched_scope_guard.py` writes to those paths and receives EACCES in real CI, causing the review-blocked fix authorization check to fail with a misleading authorization diagnostic.\n- scripts/review_conflict_resolve.sh:run_resolver_validator_python function (definition and calls) | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `run_resolver_validator_python` does not accept or pass `--writable-output-dir` to the sandbox for validators that write output files or directories outside its default writable area.\n  WHY: The sandbox denies those writes, causing validator failures and potentially security guard bypasses or misleading diagnostic errors.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:49-53, 2150-2172 | severity=critical | confidence=5\n  PROBLEM: `run_review_rb_validator_python` does not pass `--writable-output-dir` to `untrusted_process_sandbox.sh`, leaving the authorization output paths under `${RUNTIME_DIR}` read-only in the sandbox.\n  WHY: Writes by `files_touched_scope_guard.py` receive EACCES, and the caller exits with a misleading authorization diagnostic.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:run_review_rb_validator_python function (definition and calls) | confidence=4\n  PROBLEM: The validator helper function fails to accept and pass the `--writable-output-dir` argument to `untrusted_process_sandbox.sh`.\n  WHY: Validators require write access to output files outside the sandbox's default writable directory, so writes are blocked by `ReadOnlyPaths=/` and the caller emits a misleading authorization diagnostic.\n- scripts/review_conflict_resolve.sh:run_resolver_validator_python function (definition and calls) | confidence=4\n  PROBLEM: The validator helper function fails to accept and pass the `--writable-output-dir` argument to `untrusted_process_sandbox.sh`.\n  WHY: `files_touched_scope_guard.py` and `verify_integration_fingerprints.py` require write access to output files or directories outside the default sandbox writable area, causing validator failures and potential security guard bypasses or misleading diagnostic errors.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh:49-53, 2160-2172 | severity=critical | confidence=4\n  PROBLEM: `run_review_rb_validator_python` invokes the sandbox without `--writable-output-dir` for authorization output paths under `${RUNTIME_DIR}`.\n  WHY: The writes receive EACCES, and the review-blocked path exits with a misleading authorization diagnostic; the test does not exercise the `--validate-review-fix-authorization` call site.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_rb_judge.sh:49-53, 2160-2171 | severity=critical | confidence=5\n  PROBLEM: `run_review_rb_validator_python` does not pass `--writable-output-dir` to the sandbox for authorization output paths under `${RUNTIME_DIR}`.\n  WHY: In real CI, the output writes raise PermissionError (EACCES), so the review-blocked fix authorization validation fails and exits with a misleading error before the fix can be committed or pushed.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b1222b515b5798def27d13dc6d6cae87c771050d0033dd0d4de4c27145cdab2b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4376,
+    "run_id": "35979751060",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35979751060",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924103127_0e29ea1a28",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4376,
+    "run_id": "35979751060"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T10:31:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
