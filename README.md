@@ -326,9 +326,13 @@ Copy the ready-to-use templates from [`workflow-templates/`](workflow-templates/
 
 At minimum, create these three core wrappers. Each job carries the same `if:` predicate as the
 reusable workflow it calls (see `agents.md`, "Phase wrapper predicate parity"). `ai-clarify`
-automatically triages newly opened issues unless they carry `ai:orchestrator-tracking`,
-`ai:security-audit`, or `ai:retro`; its `/reclarify` route accepts only comments from a user whose
-`author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`. The `/answer` route in `ai-plan` and the
+automatically triages newly opened issues only when the original author is a GitHub `User` with
+`author_association` of `OWNER`, `MEMBER`, or `COLLABORATOR`, or the exact `github-actions[bot]`
+identity with type `Bot`. Issues labelled `ai:orchestrator-tracking`, `ai:security-audit`, or
+`ai:retro` remain excluded. A trusted maintainer can start clarification on an outside issue with
+`/reclarify` and continue planning with `/answer`, but must explicitly post `/approved` after
+reviewing the plan: an outside author's issue is never auto-approved. The `/reclarify` route accepts
+only comments from a user whose `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`. The `/answer` route in `ai-plan` and the
 `/approved` route in `ai-implement` accept the same trusted-user associations and also accept
 `github-actions[bot]` with their documented auto-answer and auto-approve markers, respectively. Copy
 the predicate verbatim — a wrapper without it still runs the reusable workflow's own job-level gate,
@@ -348,7 +352,7 @@ permissions:
 jobs:
   clarify:
     if: >-
-      (github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) ||
+      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@<40-character-release-sha> # stable
     secrets: inherit
@@ -1239,7 +1243,7 @@ through `clarify → plan → implement → review`.
   autofix editor summary` ends the streak only when a newer failure comment
   does not show that the same run failed after posting its summary. A single
   retryable failure stays with the stall poller's retry. The report carries
-  the run's `finalize_reason` (or the editor flag that fired:
+  the run's `finalize_reason` (or the flag that fired: `reviewers_failed`,
   `editor_empty_noop`, `editor_changes_lost`, `editor_refusal`), the
   `REVIEW_AUTOFIX_RUN_SUMMARY_V1` line, and log tails as evidence; resolver
   escalations are left to the `ai:resolver-escalated` label path. The
@@ -1251,6 +1255,25 @@ through `clarify → plan → implement → review`.
   checkout; a missing optional reporter logs `skip reason=reporter_missing`.
   The model catalog and reviewer roster now come from the same workflow
   commit, without merging rows from PR-head or moving `main` snapshots.
+- **Reviewer failures name the failing phase:** if the `Run reviewer models`
+  step fails, the editor never runs. `Post editor summary comment` names the failure `reviewers_failed` instead
+  of `editor_empty_noop` (failure marker, fingerprint, cap reason, heal report
+  and the run summary's `finalize_reason`), sets `AUTOFIX_REVIEWERS_FAILED=true`
+  and writes evidence (`workflow_failure_heal.py reviewer-failure-evidence`:
+  each slot's last exit code, the summariser's,
+  `dominant_rc`, and up to 10 error lines a support script prefixed with its own
+  name), which every fingerprint call site and the heal report read. The retry
+  handling is unchanged: the same no-output comment, `AUTOFIX_EDITOR_EMPTY_NOOP=true`,
+  no immediate `ai:review-blocked`. On PR #4323 every reviewer slot and the
+  summariser exited 226 and the run was reported as an empty editor.
+- **Cap reports link the failed runs:** the `fingerprint-cap-block` job's own
+  run has no failed job, so its heal report used to reach the intake with
+  "no failed run could be linked". The job now passes the PR comments it
+  already fetched (`PR_ISSUE_COMMENTS_FILE`) and the marker author
+  (`AUTOFIX_FAILURE_MARKER_AUTHOR`) to the reporter, which lists the runs of
+  that author's `review-autofix-failure:v1` markers for the head first in
+  `run_refs` (at most 3, newest first), so the intake reads their failed jobs'
+  logs. The cap report's streak counts only those failures. No extra API call.
 - **Trigger (releases):** `workflow_run: completed` with conclusion `failure`
   or `timed_out` on `Test & Mark Stable Release`, `Mark Stable Release`,
   `Promote main to stable`, `Auto release stable`, and
@@ -1315,8 +1338,12 @@ through `clarify → plan → implement → review`.
   Two further tokens cover review/autofix failures **self-inflicted** by a
   branch of this repository. The autofix reporter sends ownership facts with
   its report (`base_branch`, `script_ref`, the PR's `changed_files`, and
-  `crash_file`, taken from a `…/scripts/<name>: line N:` shell error or an
-  `::error::` line naming a `scripts/` or `.github/workflows/` path); before the
+  `crash_file`, taken from a `…/scripts/<name>: line N:` shell error, an
+  `::error::` line naming a `scripts/` or `.github/workflows/` path, or a line a
+  support script prefixed with its own name, such as
+  `untrusted_process_sandbox: …` or `write_opencode_config.sh: …`, when that
+  script exists in the staged support bundle and the line contains a failure
+  signal, not just a status message); before the
   model runs, the intake compares the crash file with the PR's changed files
   and with `git diff --name-only origin/main origin/<base>` on its own
   checkout, logs `WORKFLOW_HEAL crash_ownership=<pr|base|none> crash_file=… base=…`,
@@ -1347,6 +1374,29 @@ through `clarify → plan → implement → review`.
   `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, is logged as
   `classification_remapped … to=workflow-defect reason=…` and takes the
   `workflow-defect` route above.
+- **Heal PR reconcile:** a heal PR filed on a source PR's head branch is
+  stacked on that PR. When a pull request in coding-workflows closes, the
+  `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` runs
+  `scripts/workflow_failure_heal_pr_reconcile.sh` for every open
+  `ai:workflow-heal` issue whose body names that PR
+  (`workflow-failure-heal:source=<repo>#<n>`) and whose `ai/issue-<issue>` PR
+  is based on the closed PR's head branch. Closed without merging: the heal PR
+  is closed with a comment (never re-pointed, since its branch carries the
+  rejected commits), `ai:merge-queued` is removed, and the heal issue is closed
+  as not planned. Merged: the source PR's final head (`refs/pull/<n>/head`) and
+  then its base are merged into the heal branch, which is pushed as a normal
+  fast-forward (the repository ruleset rejects force pushes on every branch),
+  and the heal PR is re-pointed at that base, so its diff is only the heal
+  changes (a heal PR already based on the source base is merged the same way).
+  A merge conflict, nothing left to apply, a missing base, or an explicit
+  remote push rejection against an unchanged heal branch closes the heal PR
+  and issue instead. A branch that moved, a transient push failure, or an
+  unknown remote state is left alone with a workflow warning. A failed base
+  update after a successful push closes the heal PR and issue rather than
+  leaving the fix open on the wrong base or claiming a completed retarget.
+  Log lines are prefixed `WORKFLOW_HEAL_PR_RECONCILE`
+  (`closed … reason=…`, `retargeted …`, `skip reason=…`). Disable with the
+  repository variable `WORKFLOW_HEAL_PR_RECONCILE_ENABLED=false`.
   `consumer-app-defect` opens the issue **in
   the consumer repository** for its own pipeline. `consumer-config` (missing
   secret, variable, permission) sends a Telegram ERROR with the diagnosis and
@@ -1623,6 +1673,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets that PR's head branch (falling back to this value when the branch is gone). |
 | `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
+| `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
 | `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED` | `true` | Identical-failure fingerprint cap in the `gate` job of `review_autofix.yml`. Every review/autofix failure comment ends with a `<!-- review-autofix-failure:v1 head=… reason=… fp=… degraded=… run=… -->` marker, where `fp` fingerprints the failure reason plus the normalised stderr of the editor and Collect PR metadata stages. When the trailing markers for the current head (authored by the `GH_PAT` account) share one fingerprint `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` times, the gate logs `AUTOFIX_FINGERPRINT_CAP_TRIPPED`, skips the run (`skip_reason=fingerprint_cap`, no reviewer or editor call), and the `fingerprint-cap-block` job labels the linked issues `ai:review-blocked` (the PR itself when it has none), posts one `review-autofix-failure-cap:v1` comment, sends an `identical_failure_cap` heal report and a Telegram WARNING. Later dispatches on the same head log `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`, and the poller's noop-suspicious recovery sweep stops re-dispatching that head (it logs `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` and sends no retry WARNING); a push resets the count; `force_rb_judge` dispatches bypass it; lookup failures log `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED` and run normally. Set to `false` to stop evaluating the cap (the markers keep being written). |
 | `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` | `3` | Identical failures on one head that trip the fingerprint cap above. Non-numeric or `0` falls back to `3`. |

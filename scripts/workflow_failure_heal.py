@@ -524,11 +524,19 @@ def build_autofix_failure_payload(
 	base_branch: str | None = None,
 	script_ref: str | None = None,
 	changed_files: Iterable[str] | None = None,
+	failure_marker_author: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a failed review/autofix run on a PR.
 
 	``failure_fingerprint`` is the optional ``fp`` of the run's
 	``review-autofix-failure:v1`` marker; it is sent only when it is 64 hex.
+
+	``failure_marker_author`` is the identity the workflow posts failure
+	comments as. When given, the runs named by that author's
+	``review-autofix-failure:v1`` markers for the PR head are listed first in
+	``run_refs`` (newest first), ahead of ``run_id``, so the intake reads the
+	logs of the runs that actually failed. The identical-failure cap needs
+	this: its own run stops in the gate and has no failed job to read.
 
 	``base_branch``, ``script_ref`` and ``changed_files`` are the optional
 	ownership facts the intake's self-inflicted routing uses; each is sent only
@@ -550,7 +558,14 @@ def build_autofix_failure_payload(
 		"issue_url": sanitize_text(pr.get("html_url"), 300),
 		"label": None,
 		"labels": _labels_of(pr)[:50],
-		"run_refs": [{"repo": repo, "run_id": str(run_number), "url": sanitize_text(run_url, 300)}] if run_number else [],
+		"run_refs": _autofix_failure_run_refs(
+			repo=repo,
+			comments=comments,
+			head_sha=head_sha,
+			failure_marker_author=failure_marker_author,
+			run_number=run_number,
+			run_url=run_url,
+		),
 		"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
 		"source_gen": None,
 		"source_root": None,
@@ -582,6 +597,31 @@ def build_autofix_failure_payload(
 	if crash:
 		payload["crash_file"] = crash
 	return payload
+
+
+def _autofix_failure_run_refs(
+	*,
+	repo: str,
+	comments: list[dict[str, Any]],
+	head_sha: str,
+	failure_marker_author: str | None,
+	run_number: int | None,
+	run_url: str | None,
+) -> list[dict[str, str]]:
+	"""``run_refs`` for an autofix report: trusted marker runs for the head (newest first), then this run."""
+	refs: list[dict[str, str]] = []
+	seen: set[str] = set()
+	if failure_marker_author and is_valid_sha(head_sha):
+		markers = parse_failure_markers(comments, head_sha=head_sha, author_login=failure_marker_author)
+		for marker in reversed(markers):
+			marker_run = _positive_int(marker.get("run"))
+			if marker_run is None or str(marker_run) in seen:
+				continue
+			seen.add(str(marker_run))
+			refs.append({"repo": repo, "run_id": str(marker_run), "url": f"https://github.com/{repo}/actions/runs/{marker_run}"})
+	if run_number and str(run_number) not in seen:
+		refs.append({"repo": repo, "run_id": str(run_number), "url": sanitize_text(run_url, 300)})
+	return refs[:MAX_RUN_REFS]
 
 
 def _normalize_script_ref(value: Any) -> str | None:
@@ -626,12 +666,17 @@ def normalize_changed_files(paths: Iterable[Any]) -> list[str]:
 def extract_crash_file(evidence_text: Any) -> str | None:
 	"""Name the repository file a review/autofix failure crashed in, if the evidence says.
 
-	Two shapes are recognised, first match wins in this order:
+	Three shapes are recognised, first match wins in this order:
 
 	- a shell error ``…/scripts/<name>: line N: …`` -> ``scripts/<name>``,
 	since the staged support bundle keeps the ``scripts/`` directory name;
 	- a ``::error::`` / ``##[error]`` line naming a ``scripts/…`` or
-	``.github/workflows/…`` path -> that path.
+	``.github/workflows/…`` path -> that path;
+	- a line a support script prefixed with its own name
+	(``untrusted_process_sandbox: …``, ``write_opencode_config.sh: …``,
+	optionally after ``  | `` or ``::error::``) -> ``scripts/<name>``, but only
+	when that file sits next to this helper (the staged support bundle), so a
+	name that is not a repository script is never reported.
 
 	Anything else (an error line that names no path) returns ``None``.
 	"""
@@ -651,6 +696,29 @@ def extract_crash_file(evidence_text: Any) -> str | None:
 			candidate = match.group("path").rstrip(".")
 			if is_valid_repo_path(candidate):
 				return candidate
+	for line in text.split("\n"):
+		candidate = _self_named_script(line)
+		if candidate:
+			return candidate
+	return None
+
+
+def _self_named_script(line: str) -> str | None:
+	"""``scripts/<name>`` for a line a support script prefixed with its own name, if that script exists."""
+	stripped = line.strip()
+	if stripped.startswith("| "):
+		stripped = stripped[2:].strip()
+	match = _SELF_NAMED_SCRIPT_LINE_RE.match(stripped)
+	if not match:
+		return None
+	if not _CRASH_ERROR_LINE_RE.match(stripped) and not _SELF_NAMED_SCRIPT_FAILURE_RE.search(match.group("rest")):
+		return None
+	name = match.group("name")
+	scripts_dir = Path(__file__).resolve().parent
+	for file_name in ((name,) if name.endswith((".sh", ".py")) else (f"{name}.sh", f"{name}.py")):
+		candidate = f"scripts/{file_name}"
+		if is_valid_repo_path(candidate) and (scripts_dir / file_name).is_file():
+			return candidate
 	return None
 
 
@@ -1017,6 +1085,10 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 		return explicit
 	if flags.get("EDITOR_PREFLIGHT_FAILED") == "true":
 		return "editor_preflight_failed"
+	# The reviewer step failed, so the editor never ran: name the earliest
+	# failing phase rather than the empty editor output it left behind.
+	if flags.get("AUTOFIX_REVIEWERS_FAILED") == "true":
+		return "reviewers_failed"
 	if flags.get("AUTOFIX_EDITOR_EMPTY_NOOP") == "true":
 		return "editor_empty_noop"
 	if flags.get("EDITOR_CHANGES_LOST") == "true":
@@ -1026,6 +1098,62 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 	if _FAILURE_REASON_RE.match(finalize_reason or ""):
 		return finalize_reason
 	return "workflow_failure"
+
+
+_REVIEWER_SLOT_EXIT_RE = re.compile(r"Reviewer slot (?P<slot>\S+) .*execution failed on attempt [0-9]+ \(exit=(?P<rc>[0-9]{1,3})\)")
+_SUMMARISER_EXIT_RE = re.compile(r"summariser \([^)]*\): (?:attempt [0-9]+ exited rc=(?P<rc>[0-9]{1,3})\.|all [0-9]+ attempts failed \(last rc=(?P<last_rc>[0-9]{1,3})\))")
+# A support script that names itself at the start of its error line, e.g.
+# `untrusted_process_sandbox: …` or `write_opencode_config.sh: …`.
+_SELF_NAMED_SCRIPT_LINE_RE = re.compile(r"^(?:::error::|##\[error\])?\s*(?P<name>[a-z][a-z0-9]*_[a-z0-9_]*(?:\.(?:sh|py))?): (?P<rest>\S.*)$")
+_SELF_NAMED_SCRIPT_FAILURE_RE = re.compile(r"\b(?:[a-z0-9_]+_(?:failed|error)|fail(?:ed|ure)?|error|invalid|missing|denied|exhausted|exception|fatal)\b|\brc=[1-9][0-9]*\b", re.IGNORECASE)
+REVIEWER_FAILURE_HELPER_LINES_MAX = 10
+
+
+def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
+	"""Summarise why the reviewer step failed, from the per-slot and summariser logs.
+
+	Emits one ``reviewer_slot_exit`` line per failed slot (its last recorded
+	exit code), the summariser's last exit code, the most common exit code
+	across them (``dominant_rc``), and up to REVIEWER_FAILURE_HELPER_LINES_MAX
+	distinct error lines a support script prefixed with its own name (a slot's
+	stderr is indented ``  | `` in its log). The text feeds the failure
+	fingerprint and the heal report, so it keeps only stable fields: no
+	timestamps, attempt counts or run ids.
+	"""
+	slot_codes: dict[str, str] = {}
+	summariser_code = ""
+	helper_lines: list[str] = []
+	for text in log_texts:
+		for raw_line in sanitize_text(text).split("\n"):
+			line = raw_line.strip()
+			if line.startswith("| "):
+				line = line[2:].strip()
+			slot_match = _REVIEWER_SLOT_EXIT_RE.search(line)
+			if slot_match:
+				slot_codes[single_line(slot_match.group("slot"), 100)] = slot_match.group("rc")
+				continue
+			summariser_match = _SUMMARISER_EXIT_RE.search(line)
+			if summariser_match:
+				summariser_code = summariser_match.group("rc") or summariser_match.group("last_rc") or summariser_code
+				continue
+			helper_match = _SELF_NAMED_SCRIPT_LINE_RE.match(line)
+			if helper_match and (_CRASH_ERROR_LINE_RE.match(line) or _SELF_NAMED_SCRIPT_FAILURE_RE.search(helper_match.group("rest"))) and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
+				helper_line = single_line(line, 300)
+				if helper_line not in helper_lines:
+					helper_lines.append(helper_line)
+	codes = list(slot_codes.values()) + ([summariser_code] if summariser_code else [])
+	lines = ["reviewers_failed=true"]
+	lines.extend(f"reviewer_slot_exit slot={slot} exit={code}" for slot, code in sorted(slot_codes.items()))
+	if summariser_code:
+		lines.append(f"summariser_exit rc={summariser_code}")
+	if codes:
+		counts: dict[str, int] = {}
+		for code in codes:
+			counts[code] = counts.get(code, 0) + 1
+		dominant = max(counts, key=lambda code: (counts[code], -codes.index(code)))
+		lines.append(f"dominant_rc={dominant}")
+	lines.extend(helper_lines)
+	return "\n".join(lines) + "\n"
 
 
 def _finalize_reason_from_summary_line(path: str) -> str:
@@ -1694,6 +1822,7 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		base_branch=args.base_branch or None,
 		script_ref=args.script_ref or None,
 		changed_files=_read_path_list(args.changed_files_file),
+		failure_marker_author=args.failure_marker_author or None,
 	)
 	validate_payload(payload)
 	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -1768,6 +1897,17 @@ def _cmd_autofix_failure_fingerprint(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"reason={safe_token(reason)}\n")
 	if args.head_sha:
 		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None) + "\n")
+	return 0
+
+
+def _cmd_reviewer_failure_evidence(args: argparse.Namespace) -> int:
+	texts: list[str] = []
+	for path in args.log_file or []:
+		try:
+			texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
+		except OSError:
+			continue
+	sys.stdout.write(reviewer_failure_evidence(texts))
 	return 0
 
 
@@ -1962,6 +2102,11 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--base-branch", default="")
 	p.add_argument("--script-ref", default="")
 	p.add_argument("--changed-files-file", default="")
+	p.add_argument(
+		"--failure-marker-author",
+		default="",
+		help="list the runs of this author's review-autofix-failure:v1 markers for the PR head in run_refs",
+	)
 	p.set_defaults(func=_cmd_build_autofix_payload)
 
 	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
@@ -1985,6 +2130,10 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--run-id", default="")
 	p.set_defaults(func=_cmd_autofix_failure_fingerprint)
+
+	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
+	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
+	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
 	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= for the trailing identical failures on a head")
 	p.add_argument("--comments-json", required=True)

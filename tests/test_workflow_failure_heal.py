@@ -196,7 +196,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 def test_stable_log_prefixes_are_registered() -> None:
 	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
-	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL"):
+	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
 
@@ -1940,6 +1940,8 @@ def test_derived_failure_reason_matches_the_reporter_precedence() -> None:
 		({"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "EDITOR_CHANGES_LOST": "true"}, None),
 		({"EDITOR_CHANGES_LOST": "true", "EDITOR_NOOP_REFUSAL": "true"}, None),
 		({"EDITOR_NOOP_REFUSAL": "true"}, RUN_SUMMARY_LINE),
+		({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, RUN_SUMMARY_LINE),
+		({"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_REVIEWERS_FAILED": "true"}, None),
 		({}, RUN_SUMMARY_LINE.replace("editor_empty_noop", "reviewers_unavailable")),
 		({}, None),
 	]
@@ -2357,8 +2359,11 @@ def test_extract_crash_file_on_observed_error_lines() -> None:
 	assert heal.extract_crash_file(DIGEST_ERROR_LINE) is None
 	assert heal.extract_crash_file("2026-09-22T01:00:00Z ::error::Step failed in .github/workflows/review_autofix.yml.") == ".github/workflows/review_autofix.yml"
 	assert heal.extract_crash_file("::error::bad call in /tmp/x/scripts/review_collect_pr_metadata.sh (exit 1)") == "scripts/review_collect_pr_metadata.sh"
-	# A bare script name, a non-error line, and traversal never name a file.
-	assert heal.extract_crash_file("::error::resolve_integration_ref.sh: Integration branch missing") is None
+	# A script naming itself at the start of an error line names that script
+	# when it exists (PR #4323 heal follow-up); an unknown name, a non-error
+	# line, and traversal never name a file.
+	assert heal.extract_crash_file("::error::resolve_integration_ref.sh: Integration branch missing") == "scripts/resolve_integration_ref.sh"
+	assert heal.extract_crash_file("::error::not_a_real_helper.sh: Integration branch missing") is None
 	assert heal.extract_crash_file("note: scripts/review_apply_fixes.sh was staged") is None
 	assert heal.extract_crash_file("::error::see scripts/../etc/passwd") is None
 	assert heal.extract_crash_file("") is None and heal.extract_crash_file(None) is None
@@ -2699,3 +2704,168 @@ def test_heal_workflows_wire_self_inflicted_routing() -> None:
 	steps = [step for job in review["jobs"].values() for step in job.get("steps", []) if step.get("name") == "Report autofix failure to workflow failure heal"]
 	assert len(steps) == 1
 	assert steps[0]["env"]["PR_CHANGED_FILES_FILE"] == "${{ env.PR_CHANGED_FILES_FILE }}"
+
+
+# --- Failed runs, earliest failing phase, self-named script errors (PR #4323) ---
+#
+# The identical-failure cap on PR #4323 reported `editor_empty_noop` with no
+# linked run: the cap run stops in the gate and has no failed job, and the
+# editor never ran because every reviewer slot and the summariser had exited
+# 226. The heal model saw three lines of cap text and diagnosed the editor.
+
+REVIEWER_SLOT_LOG_226 = (
+	"Reviewer slot minimax/minimax-m3 (minimax/minimax-m3) attempt 1 run budget: budget_elapsed_secs=117\n"
+	"Reviewer slot minimax/minimax-m3 (minimax/minimax-m3) execution failed on attempt 1 (exit=226).\n"
+	"Reviewer slot minimax/minimax-m3 (minimax/minimax-m3) OpenCode stderr on attempt 1:\n"
+	"  | untrusted_process_sandbox: sandbox_namespace_setup_failed role=reviewer rc=226 unit=untrusted-sandbox-reviewer-1-2.service\n"
+	"  | OpenCode structured reviewer output contained no text events.\n"
+)
+REVIEWER_SLOT_LOG_CONFIG = (
+	"##[error]write_opencode_config.sh: model 'z-ai/glm-5.2' is missing or duplicated in the model catalog\n"
+	"Reviewer slot z-ai/glm-5.2 (z-ai/glm-5.2) execution failed on attempt 1 (exit=1).\n"
+)
+SUMMARISER_LOG_226 = (
+	"summariser (pass1): attempt 1/10 — model=openai/gpt-5.6-luna reasoning=medium\n"
+	"summariser (pass1): attempt 1 exited rc=226.\n"
+	"summariser (pass1): attempt 2 exited rc=226.\n"
+)
+
+
+def _trusted_failure_comments(runs: list[str], *, head: str = SHA_B) -> list[dict]:
+	return [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, head=head, run=run) for run in runs]
+
+
+def test_autofix_payload_lists_the_trusted_failed_runs_first() -> None:
+	comments = [
+		*_trusted_failure_comments(["101", "102"]),
+		# Ignored: another author, another head, a duplicate run.
+		_failure_marker_comment(AUTOFIX_NOOP_COMMENT, head=SHA_B, run="999", author="drive-by-user"),
+		_failure_marker_comment(AUTOFIX_NOOP_COMMENT, head=SHA_A, run="555"),
+		*_trusted_failure_comments(["103", "103"]),
+	]
+	kwargs = dict(
+		repo=CONSUMER_REPO,
+		pr=_pr(),
+		comments=comments,
+		workflow_name="AI Review",
+		failure_reason="identical_failure_cap",
+		failure_evidence="identical_failure_cap: 3 identical review/autofix failures\n",
+		failure_streak=3,
+		run_id="500",
+		run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		wrapper_sha=SHA_A,
+		reporter_run_url=None,
+	)
+	payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, failure_marker_author=CAP_AUTHOR.upper()))
+	assert [ref["run_id"] for ref in payload["run_refs"]] == ["103", "102", "101"]
+	assert payload["run_refs"][0]["url"] == f"https://github.com/{CONSUMER_REPO}/actions/runs/103"
+	# One trusted run leaves room for this run; without an author only this run is listed.
+	one = heal.build_autofix_failure_payload(**{**kwargs, "comments": _trusted_failure_comments(["101"])}, failure_marker_author=CAP_AUTHOR)
+	assert [ref["run_id"] for ref in one["run_refs"]] == ["101", "500"]
+	plain = heal.build_autofix_failure_payload(**kwargs)
+	assert [ref["run_id"] for ref in plain["run_refs"]] == ["500"]
+
+
+def test_autofix_report_cap_links_the_failed_runs_and_counts_only_them() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-runs-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(
+			tmp,
+			comments=_trusted_failure_comments(["101", "102", "103"]),
+			flags={
+				"AUTOFIX_FAILURE_REASON": "identical_failure_cap",
+				"AUTOFIX_FAILURE_FP": FP_HEX,
+				"WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "1",
+				"AUTOFIX_FAILURE_MARKER_AUTHOR": CAP_AUTHOR,
+			},
+		)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=identical_failure_cap streak=3" in result.stdout, result.stdout + result.stderr
+		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["103", "102", "101"]
+		assert payload["failure_streak"] == 3
+	# An older staged helper without the flag still reports, listing only this run.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-old-helper-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(
+			tmp,
+			comments=_trusted_failure_comments(["101"]),
+			flags={"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "1", "AUTOFIX_FAILURE_MARKER_AUTHOR": CAP_AUTHOR},
+		)
+		staged_helper = work / "scripts" / "workflow_failure_heal.py"
+		old_text = staged_helper.read_text(encoding="utf-8")
+		old_text = old_text.replace('\tp.add_argument(\n\t\t"--failure-marker-author",\n\t\tdefault="",\n\t\thelp="list the runs of this author\'s review-autofix-failure:v1 markers for the PR head in run_refs",\n\t)\n', "")
+		old_text = old_text.replace("failure_marker_author=args.failure_marker_author or None,", "")
+		assert "failure-marker-author" not in old_text
+		staged_helper.write_text(old_text, encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=identical_failure_cap streak=1" in result.stdout, result.stdout + result.stderr
+		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500"]
+
+
+def test_reviewer_failure_evidence_names_exit_codes_and_self_named_errors() -> None:
+	evidence = heal.reviewer_failure_evidence([REVIEWER_SLOT_LOG_226 + "  | write_opencode_config.sh: loaded model X\n", REVIEWER_SLOT_LOG_CONFIG, SUMMARISER_LOG_226])
+	lines = evidence.splitlines()
+	assert lines[:5] == [
+		"reviewers_failed=true",
+		"reviewer_slot_exit slot=minimax/minimax-m3 exit=226",
+		"reviewer_slot_exit slot=z-ai/glm-5.2 exit=1",
+		"summariser_exit rc=226",
+		"dominant_rc=226",
+	]
+	assert "untrusted_process_sandbox: sandbox_namespace_setup_failed role=reviewer rc=226 unit=untrusted-sandbox-reviewer-1-2.service" in lines
+	assert "##[error]write_opencode_config.sh: model 'z-ai/glm-5.2' is missing or duplicated in the model catalog" in lines
+	assert "write_opencode_config.sh: loaded model X" not in evidence
+	# Stable across attempt counts and budget lines, so it fingerprints the same.
+	again = heal.reviewer_failure_evidence([REVIEWER_SLOT_LOG_226.replace("budget_elapsed_secs=117", "budget_elapsed_secs=9"), REVIEWER_SLOT_LOG_CONFIG, SUMMARISER_LOG_226 + "summariser (pass1): attempt 3 exited rc=226.\n"])
+	assert again == evidence
+	# The all-attempts line alone still records the summariser code.
+	assert "summariser_exit rc=226" in heal.reviewer_failure_evidence(["::error::summariser (pass1): all 10 attempts failed (last rc=226). See /tmp/x.log.\n"])
+	assert heal.reviewer_failure_evidence([]) == "reviewers_failed=true\n"
+	result = subprocess.run(
+		[sys.executable, str(SCRIPTS_DIR / "workflow_failure_heal.py"), "reviewer-failure-evidence", "--log-file", "/nonexistent.log"],
+		capture_output=True, text=True, check=False, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+	assert result.returncode == 0 and result.stdout == "reviewers_failed=true\n"
+
+
+def test_reviewers_failed_names_the_failure_before_the_editor_flags() -> None:
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}) == "reviewers_failed"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_REVIEWERS_FAILED": "true"}) == "identical_failure_cap"
+	for flags in ({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, {"AUTOFIX_REVIEWERS_FAILED": "false", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}):
+		expected = heal.derive_autofix_failure_reason(flags)
+		with tempfile.TemporaryDirectory(prefix="heal-reason-reviewers-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, _state_file, env = _stage_autofix_report(tmp, comments=[], flags={**flags, "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "99"})
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert f"skip reason=below_streak pr=4174 reason={expected} " in result.stdout, (flags, result.stdout)
+	# The run summary's finalize_reason follows the same order.
+	for flags, expected in (({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, "reviewers_failed"), ({"AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, "editor_empty_noop")):
+		with tempfile.TemporaryDirectory(prefix="heal-summary-reviewers-") as tmp_name:
+			tmp = Path(tmp_name)
+			result = subprocess.run(
+				["bash", str(SCRIPTS_DIR / "review_autofix_step_iteration_summary.sh")],
+				capture_output=True, text=True, check=False,
+				env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp), "GITHUB_STEP_SUMMARY": str(tmp / "summary.md"), "GITHUB_ENV": str(tmp / "env"), "RUNTIME_DIR": str(tmp), "PYTHONDONTWRITEBYTECODE": "1", **flags},
+			)
+			summary_lines = [line for line in result.stdout.splitlines() if line.startswith("REVIEW_AUTOFIX_RUN_SUMMARY_V1 ")]
+			assert summary_lines, result.stdout + result.stderr
+			assert json.loads(summary_lines[-1].split(" ", 1)[1])["finalize_reason"] == expected
+
+
+def test_extract_crash_file_on_self_named_script_errors() -> None:
+	# A slot's stderr, indented in its log, naming the sandbox helper.
+	assert heal.extract_crash_file("  | write_opencode_config.sh: model 'x/y' is missing") == "scripts/write_opencode_config.sh"
+	assert heal.extract_crash_file("reviewers_failed=true\ngh_helpers: retry exhausted") == "scripts/gh_helpers.sh"
+	assert heal.extract_crash_file("::error::workflow_failure_heal: bad payload") == "scripts/workflow_failure_heal.py"
+	assert heal.extract_crash_file("gh_helpers: retried") is None
+	assert heal.extract_crash_file("write_opencode_config.sh: loaded model X") is None
+	assert heal.extract_crash_file("write_opencode_config.sh: loaded model X\n  | write_opencode_config.sh: model 'x/y' is missing") == "scripts/write_opencode_config.sh"
+	assert heal.extract_crash_file("write_opencode_config.sh: catalog_load_failed") == "scripts/write_opencode_config.sh"
+	# A name that is not a script next to the helper names nothing.
+	assert heal.extract_crash_file("untrusted_process_sandbox_missing_helper: rc=226") is None
+	assert heal.extract_crash_file("opencode_agent_failure phase=review_run_reviewers rc=226") is None
+	assert heal.extract_crash_file("REVIEWER_SLOT_STATE: slot=x") is None
+	# The shell crash line and path-naming error lines still win.
+	assert heal.extract_crash_file("gh_helpers: retry exhausted\n" + EDITOR_GUARD_CRASH_LINE) == "scripts/review_apply_fixes.sh"

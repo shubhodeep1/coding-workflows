@@ -22,6 +22,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    a `Q1`/`Q2` batch.
 2. **clarify-respond** (`orchestrate_clarify_respond.yml`) — answer the
    clarifier's questions on behalf of an orchestrator-managed issue.
+   Both clarification workflows run Codex through `scripts/clarify_isolated_run.sh`
+   in a read-only, network-isolated container with a host-side model broker.
+   They stage the helper and Dockerfile from the support ref (main fallback);
+   isolation failures never fall back to host Codex. GitHub-side fetching,
+   memory, retry, and comment handling remain on the runner.
 3. **plan** (`plan.yml`, `internal-plan.yml`) — read the clarified issue and
    emit a structured implementation plan with files-to-change and a
    per-issue ≤60-minute time budget.
@@ -132,14 +137,29 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `autofix_failure`): it reports a failed review/autofix run on a pull
     request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2) runs in a
     row failed on that PR, counted from the workflow's own failure comments,
-    so the stall poller's single retry is not pre-empted. Reporters wrap
+    so the stall poller's single retry is not pre-empted. A failed
+    `Run reviewer models` step (the editor never ran) is reported as
+    `reviewers_failed` with per-slot / summariser exit codes
+    (`reviewers_failure_evidence.txt`, `AUTOFIX_REVIEWERS_FAILED=true`) rather
+    than `editor_empty_noop`; the identical-failure cap's report lists the
+    failed runs from the head's `review-autofix-failure:v1` markers
+    (`AUTOFIX_FAILURE_MARKER_AUTHOR`) so the intake reads their logs; and a
+    support script's self-named error line (`untrusted_process_sandbox: …`)
+    counts as the crash file when that script exists. When a PR in this repo
+    closes, the `heal-pr-reconcile` job (`internal-cancel-on-pr-close.yml`,
+    `scripts/workflow_failure_heal_pr_reconcile.sh`,
+    `WORKFLOW_HEAL_PR_RECONCILE_ENABLED`) closes the heal PRs stacked on its
+    head branch and their heal issues (source unmerged), or merges its final
+    head and its base into their heal branches (fast-forward push, no force)
+    and re-points them at its base (source merged). Reporters wrap
     the report as `client_payload: {schema_version, report}` (GitHub caps
     `client_payload` at 10 top-level properties); the intake unwraps it and
     accepts the flat shape too, and a rejected dispatch logs `detail=` with
     the first 300 characters of the API error. On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
-    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL`.
+    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
+    `WORKFLOW_HEAL`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -1262,6 +1282,7 @@ and shipped:
 - `CHECK_TRIAGE`
 - `WORKFLOW_HEAL_REPORT`
 - `WORKFLOW_HEAL_AUTOFIX_REPORT`
+- `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
@@ -1444,6 +1465,7 @@ LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
 LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
+LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED

@@ -1930,6 +1930,10 @@ jobs:
           # Heal report: the cap is the streak, so the reporter sends it on
           # the first call. The evidence is the gate's marker data, written to
           # a *log*.txt file because the reporter tails those from RUNTIME_DIR.
+          # The comments fetched above carry the failed runs' markers; with the
+          # marker author the reporter lists those runs in run_refs, so the
+          # intake reads their logs instead of this run's (which has no failed
+          # job). No extra API call (§15).
           reporter="$(support_file workflow_failure_heal_autofix_report.sh)"
           heal_py="$(support_file workflow_failure_heal.py)"
           if [ -z "${reporter}" ] || [ -z "${heal_py}" ]; then
@@ -1946,6 +1950,8 @@ jobs:
               WORKFLOW_HEAL_PY="${heal_py}" \
               RUNTIME_DIR="${work_dir}" \
               PR_PAYLOAD_FILE="${pr_json}" \
+              PR_ISSUE_COMMENTS_FILE="${fresh_cap_comments_file}" \
+              AUTOFIX_FAILURE_MARKER_AUTHOR="${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" \
               REPORT_WRAPPER_SHA="${WORKFLOW_SUPPORT_REF}" \
               REPORT_SUMMARY_LINE_FILE="${work_dir}/no_summary_line.txt" \
               bash "${reporter}" || true
@@ -4713,6 +4719,7 @@ jobs:
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -4732,6 +4739,28 @@ jobs:
           if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
             echo "::warning::Editor produced no summary and no committed changes — treating as retryable no-op."
             RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            # A failed reviewer step skips the editor, so its empty output is
+            # only the symptom (PR #4323: every reviewer slot and the
+            # summariser exited 226 and the run was reported as
+            # editor_empty_noop). Name the earliest failing phase and keep the
+            # slot / summariser exit codes as evidence; the retry handling
+            # below is unchanged.
+            autofix_empty_failure_reason="editor_empty_noop"
+            noop_explanation="The editor stage completed without a structured summary and without committing any file changes. This typically indicates a transient agent crash, timeout, or empty prompt rather than a reviewable defect in the PR."
+            if [ "${REVIEWERS_STEP_OUTCOME:-}" = "failure" ]; then
+              autofix_empty_failure_reason="reviewers_failed"
+              noop_explanation="The reviewer stage failed, so the editor never ran and no file changes were committed. The reviewer and summariser exit codes are in the workflow run log."
+              echo "AUTOFIX_REVIEWERS_FAILED=true" >> "$GITHUB_ENV"
+              if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+                reviewers_failure_log_args=()
+                for reviewers_failure_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log; do
+                  [ -f "${reviewers_failure_log}" ] && reviewers_failure_log_args+=(--log-file "${reviewers_failure_log}")
+                done
+                PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" reviewer-failure-evidence "${reviewers_failure_log_args[@]}" \
+                  > "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || : > "${RUNTIME_DIR}/reviewers_failure_evidence.txt"
+                echo "AUTOFIX_REVIEWERS_FAILED reason=reviewers_failed $(grep -m1 '^dominant_rc=' "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || echo dominant_rc=unknown)"
+              fi
+            fi
             # review-autofix-failure:v1 marker for the gate's identical-failure
             # fingerprint cap. Same evidence files and reason precedence as
             # "Assemble failure evidence", so every failure comment of one run
@@ -4739,8 +4768,9 @@ jobs:
             AUTOFIX_FAILURE_MARKER_SUFFIX=""
             if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
               autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
-                --failure-reason "editor_empty_noop" \
+                --failure-reason "${autofix_empty_failure_reason}" \
                 --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
@@ -4753,7 +4783,7 @@ jobs:
             NOOP_BODY="$(cat <<EOF
           **AI review/autofix produced no output — will retry**
 
-          The editor stage completed without a structured summary and without committing any file changes. This typically indicates a transient agent crash, timeout, or empty prompt rather than a reviewable defect in the PR. No \`ai:review-blocked\` label is being applied for this run.
+          ${noop_explanation} No \`ai:review-blocked\` label is being applied for this run.
 
           [View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
           EOF
@@ -6339,6 +6369,7 @@ jobs:
           if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
             autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
               --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
               --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
@@ -6427,6 +6458,7 @@ jobs:
           if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
             autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
               --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
               --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
@@ -6667,6 +6699,7 @@ jobs:
           fi
           fingerprint_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
             --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
             --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
             --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
             --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
