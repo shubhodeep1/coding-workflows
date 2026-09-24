@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Editor workspace guard failures now report a safety rejection instead of an empty-output retry.** The review workflow retains the editor attempt's stdout, stderr, and bounded guard report in its failure artifact, posts a guard-specific PR comment, and leaves workflow-failure review-blocked escalation active. Hidden-path rejection and the guard's fail-closed behavior are unchanged.

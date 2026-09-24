@@ -4409,6 +4409,11 @@ jobs:
               echo "::warning::Editor produced no summary on first iteration — retrying once after ${_instep_retry_sleep}s before falling through to noop-comment path."
               sleep "${_instep_retry_sleep}"
               bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" || {
+                if [ "${AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED:-false}" = "true" ] ||
+                   grep -qx 'AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED=true' "${GITHUB_ENV}"; then
+                  echo "::error::Editor in-step retry was rejected by the workspace guard."
+                  exit 78
+                fi
                 echo "::warning::Editor in-step retry also failed; downstream noop-comment path will fire."
               }
             fi
@@ -4623,13 +4628,28 @@ jobs:
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Post editor summary comment
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          if [ "${AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED:-false}" = "true" ]; then
+            echo "::error::Editor workspace guard rejected a worktree change; review publication is blocked."
+            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            GUARD_BODY="$(cat <<EOF
+          **AI review/autofix editor workspace guard rejected a change — not retrying as empty output**
+
+          The editor workspace guard rejected a worktree change. The editor stopped before output parsing or retry; no editor fix from this attempt may be published. See the guard report and per-attempt transcript in the failure-log artifact. Workflow-failure review-blocked handling remains active.
+
+          [View workflow run](${RUN_URL}) for details.
+          EOF
+          )"
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${GUARD_BODY}" >/dev/null 2>&1 || true
+            exit 1
+          fi
 
           # Empty-editor-output short-circuit.
           #
@@ -7665,6 +7685,7 @@ jobs:
           if [ -d "${PREVIOUS_REVIEWS_DIR:-}" ]; then
             for f in "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.txt \
                      "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err \
+                     "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*_guard_report.json \
                      "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*_changes_lost.txt \
                      "${PREVIOUS_REVIEWS_DIR}"/review_*.txt \
                      "${PREVIOUS_REVIEWS_DIR}"/review_*.log \

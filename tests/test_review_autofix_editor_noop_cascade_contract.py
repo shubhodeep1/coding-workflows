@@ -33,6 +33,7 @@ prompt copies, and success-path cleanup of the per-attempt prompt file.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -1252,6 +1253,113 @@ def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_p
 	assert NOOP_WARNING_LITERAL in pr_comment
 	assert "failed on every attempt" in pr_comment
 	assert "Last provider error from the final attempt: `not captured" in pr_comment
+
+
+def test_editor_workspace_guard_failure_retains_evidence(tmp_path: Path) -> None:
+	text = _review_apply_fixes_text()
+	start = text.index('  if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \\', text.index('  kill "${wd_pid}"'))
+	end = text.index('  editor_clean_output=', start)
+	guard_branch = text[start:end]
+	guard_branch = re.sub(r'^  if ! bash .*?--report "\$\{editor_workspace_report\}"; then', '  if ! false; then', guard_branch, count=1, flags=re.S)
+	assert 'if ! false; then' in guard_branch
+	for report_state in ("present", "missing", "malformed"):
+		previous_reviews = tmp_path / report_state
+		previous_reviews.mkdir()
+		output = previous_reviews / "model.out"
+		stderr = previous_reviews / "model.err"
+		output.write_text("editor transcript\n", encoding="utf-8")
+		stderr.write_text("editor stderr\n", encoding="utf-8")
+		report = previous_reviews / "guard.json"
+		if report_state == "present":
+			report.write_text(json.dumps({
+				"schema_version": "post_agent_workspace_report.v1",
+				"rejected": [{"path": ".ai/\n::error::forged", "change": "modified", "reason": "hidden-path"}],
+			}), encoding="utf-8")
+		elif report_state == "malformed":
+			report.write_text('{"rejected": [}', encoding="utf-8")
+		github_env = previous_reviews / "github_env"
+		github_env.touch()
+		result = subprocess.run(
+			["bash", "-euo", "pipefail", "-c", guard_branch],
+			env={"PATH": os.environ["PATH"], "GITHUB_ENV": str(github_env),
+				"PREVIOUS_REVIEWS_DIR": str(previous_reviews), "attempt": "2",
+				"tmp_output": str(output), "tmp_err": str(stderr), "editor_workspace_report": str(report)},
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 78, result.stderr
+		assert "AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED=true" in github_env.read_text(encoding="utf-8")
+		assert (previous_reviews / "editor_attempt_2.txt").read_text(encoding="utf-8") == "editor transcript\n"
+		assert (previous_reviews / "editor_attempt_2.err").read_text(encoding="utf-8") == "editor stderr\n"
+		if report_state == "present":
+			assert json.loads((previous_reviews / "editor_attempt_2_guard_report.json").read_text(encoding="utf-8"))["rejected"][0]["change"] == "modified"
+			assert 'change="modified" reason="hidden-path"' in result.stdout
+			assert "\n::error::forged" not in result.stdout
+		elif report_state == "malformed":
+			assert "EDITOR_WORKSPACE_GUARD_REPORT=unreadable_or_invalid" in result.stdout
+		else:
+			assert "EDITOR_WORKSPACE_GUARD_REPORT=missing_or_oversized" in result.stdout
+
+
+def test_editor_workspace_guard_failure_workflow_routing(tmp_path: Path) -> None:
+	workflow = _review_autofix_text()
+	editor_step = _step_block(workflow, "Apply fixes with editor model")
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"\n' in editor_step
+	assert 'grep -qx \'AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED=true\' "${GITHUB_ENV}"' in editor_step
+	assert editor_step.index('bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"\n') < editor_step.index('Editor in-step retry also failed')
+	summary_step = _step_block(workflow, "Post editor summary comment")
+	assert "env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED == 'true'" in summary_step.split("run: |")[0]
+	assert summary_step.index('if [ "${AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED:-false}" = "true" ]') < summary_step.index('AUTOFIX_EDITOR_EMPTY_NOOP=true')
+	assert 'editor_attempt_*_guard_report.json' in _step_block(workflow, "Stage codex logs for upload (failure or empty-editor)")
+	for name in ("Mark linked issues review-blocked (workflow failure)", "Post review-blocked comment on PR (workflow failure)"):
+		assert "env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true'" in _step_block(workflow, name).split('run: |')[0]
+	for name in ("Commit changes", "Push all pending commits", "Mark linked issues ready to merge"):
+		gate = _step_block(workflow, name).split('run: |')[0]
+		assert "if:" in gate and "always()" not in gate and "failure()" not in gate
+
+	support_dir = tmp_path / "support"
+	support_dir.mkdir()
+	(support_dir / "gh_helpers.sh").write_text('gh_retry() { printf "%s\\n" "$@" > "$COMMENT_CAPTURE"; }\n', encoding="utf-8")
+	github_env = tmp_path / "github_env"
+	github_env.touch()
+	comment_capture = tmp_path / "comment"
+	summary_script = _step_run_script(summary_step)
+	result = subprocess.run(["bash", "-euo", "pipefail", "-c", summary_script], env={
+		"PATH": os.environ["PATH"], "SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED": "true", "GITHUB_ENV": str(github_env),
+		"EDITOR_SUMMARY_FILE": str(tmp_path / "empty"), "PR_NUMBER": "4413",
+		"COMMENT_CAPTURE": str(comment_capture),
+	}, capture_output=True, text=True, check=False)
+	assert result.returncode == 1, result.stderr
+	assert "workspace guard rejected a change" in comment_capture.read_text(encoding="utf-8")
+	assert "AUTOFIX_EDITOR_EMPTY_NOOP" not in github_env.read_text(encoding="utf-8")
+
+	retry_start = editor_step.index('bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" || {')
+	retry_end = editor_step.index('\n              }', retry_start) + len('\n              }')
+	retry_script = editor_step[retry_start:retry_end]
+	for guard_failed in (True, False):
+		(support_dir / "review_apply_fixes.sh").write_text(
+			'echo "AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED=true" >> "$GITHUB_ENV"\nexit 78\n'
+			if guard_failed else 'exit 1\n', encoding="utf-8",
+		)
+		github_env.write_text("", encoding="utf-8")
+		result = subprocess.run(["bash", "-euo", "pipefail", "-c", retry_script], env={
+			"PATH": os.environ["PATH"], "SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"GITHUB_ENV": str(github_env),
+		}, capture_output=True, text=True, check=False)
+		assert result.returncode == (78 if guard_failed else 0), result.stderr
+		assert ("Editor in-step retry also failed" in result.stdout) is not guard_failed
+
+	first_invocation = 'bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"'
+	(support_dir / "review_apply_fixes.sh").write_text(
+		'echo "AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED=true" >> "$GITHUB_ENV"\nexit 78\n', encoding="utf-8",
+	)
+	github_env.write_text("", encoding="utf-8")
+	result = subprocess.run(["bash", "-euo", "pipefail", "-c", first_invocation], env={
+		"PATH": os.environ["PATH"], "SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"GITHUB_ENV": str(github_env),
+	}, capture_output=True, text=True, check=False)
+	assert result.returncode == 78
+	assert "AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED=true" in github_env.read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

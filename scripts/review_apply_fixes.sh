@@ -2082,6 +2082,39 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     --workspace "${PWD}" --manifest "${editor_workspace_manifest}" \
     --quarantine-dir "${editor_workspace_quarantine}" \
     --changed-paths-out "${editor_workspace_paths}" --report "${editor_workspace_report}"; then
+    echo "AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED=true" >> "${GITHUB_ENV:?}"
+    cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" 2>/dev/null || true
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+    if [ -f "${editor_workspace_report}" ] && [ ! -L "${editor_workspace_report}" ] \
+        && [ "$(stat -c %s "${editor_workspace_report}" 2>/dev/null)" -le 1048576 ]; then
+      cp "${editor_workspace_report}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}_guard_report.json" 2>/dev/null || true
+      if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -S - "${editor_workspace_report}" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as report_file:
+        report = json.load(report_file)
+    if not isinstance(report, dict) or report.get("schema_version") != "post_agent_workspace_report.v1":
+        raise ValueError("invalid report")
+    rejected = report.get("rejected")
+    if not isinstance(rejected, list):
+        raise ValueError("invalid rejected rows")
+    for row in rejected[:10]:
+        if not isinstance(row, dict) or any(not isinstance(row.get(field), str) for field in ("path", "change", "reason")):
+            raise ValueError("invalid rejected row")
+        fields = [json.dumps(row[field][:160], ensure_ascii=True) for field in ("path", "change", "reason")]
+        print("EDITOR_WORKSPACE_GUARD_REJECTED path={} change={} reason={}".format(*fields))
+    print("EDITOR_WORKSPACE_GUARD_REJECTED_COUNT={}".format(len(rejected)))
+except (OSError, UnicodeError, ValueError, TypeError):
+    sys.exit(1)
+PY
+      then
+        echo "EDITOR_WORKSPACE_GUARD_REPORT=unreadable_or_invalid"
+      fi
+    else
+      echo "EDITOR_WORKSPACE_GUARD_REPORT=missing_or_oversized"
+    fi
     echo "::error::Editor workspace guard rejected attempt ${attempt}; aborting before output parsing or retry."
     exit 78
   fi
