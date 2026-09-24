@@ -196,7 +196,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 def test_stable_log_prefixes_are_registered() -> None:
 	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
-	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL"):
+	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
 

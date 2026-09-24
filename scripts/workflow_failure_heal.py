@@ -666,7 +666,7 @@ def normalize_changed_files(paths: Iterable[Any]) -> list[str]:
 def extract_crash_file(evidence_text: Any) -> str | None:
 	"""Name the repository file a review/autofix failure crashed in, if the evidence says.
 
-	Two shapes are recognised, first match wins in this order:
+	Three shapes are recognised, first match wins in this order:
 
 	- a shell error ``…/scripts/<name>: line N: …`` -> ``scripts/<name>``,
 	since the staged support bundle keeps the ``scripts/`` directory name;

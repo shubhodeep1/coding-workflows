@@ -143,7 +143,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the first 300 characters of the API error. On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
-    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL`.
+    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
+    `WORKFLOW_HEAL`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -1273,6 +1274,7 @@ and shipped:
 - `CHECK_TRIAGE`
 - `WORKFLOW_HEAL_REPORT`
 - `WORKFLOW_HEAL_AUTOFIX_REPORT`
+- `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
@@ -1454,6 +1456,7 @@ LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
 LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
+LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED

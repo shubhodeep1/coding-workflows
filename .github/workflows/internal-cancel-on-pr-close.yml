@@ -23,9 +23,10 @@ jobs:
     # the rejected commits) or move the heal commits onto the source base and
     # re-point them (source merged). PR #4349 was stranded on the closed
     # PR #4323's branch. See scripts/workflow_failure_heal_pr_reconcile.sh.
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && vars.WORKFLOW_HEAL_PR_RECONCILE_ENABLED != 'false'
     runs-on: ubuntu-latest
     permissions:
+      # GitHub's job token only reads; checkout and reconciliation writes use GH_PAT.
       contents: read
     concurrency:
       group: heal-pr-reconcile-${{ github.event.pull_request.number }}

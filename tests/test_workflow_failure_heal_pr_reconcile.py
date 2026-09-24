@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -65,6 +66,8 @@ elif method == "GET" and path == f"repos/{state['repo']}/pulls":
 	out = [pr for pr in state["pulls"] if pr["state"] == "open" and f"{owner}:{pr['head']['ref']}" == fields.get("head")]
 elif method == "PATCH" and path.startswith(f"repos/{state['repo']}/pulls/"):
 	number = int(path.rsplit("/", 1)[1])
+	if "base" in fields and os.environ.get("FAKE_GH_FAIL_BASE_PATCH") == "1":
+		state_path.write_text(json.dumps(state)); sys.exit(1)
 	for pr in state["pulls"]:
 		if pr["number"] == number:
 			if "state" in fields: pr["state"] = fields["state"]
@@ -244,6 +247,78 @@ def test_merged_source_with_conflicting_heal_commit_closes_heal_pr() -> None:
 		assert _writes(state, "PATCH", f"issues/{HEAL_ISSUE}")[0]["fields"] == {"state": "closed", "state_reason": "not_planned"}
 
 
+def test_merged_source_with_rejected_push_closes_heal_pr_when_branch_is_unchanged() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		stage = _stage(Path(tmp_name))
+		_squash_merge_source(stage)
+		# Simulate a branch rule rejecting every push, not a competing push.
+		hook = stage["origin"] / "hooks" / "pre-receive"
+		hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+		hook.chmod(0o755)
+		result, state = _run(stage, merged=True)
+		assert result.returncode == 0, result.stderr
+		assert f"closed heal_pr={HEAL_PR} heal_issue={HEAL_ISSUE} source_pr={SOURCE_PR} reason=source_merged_push_rejected" in result.stdout
+		assert _origin_ref(stage, f"refs/heads/{HEAL_BRANCH}") == stage["heal_sha"]
+		assert _writes(state, "PATCH", f"pulls/{HEAL_PR}")[0]["fields"] == {"state": "closed"}
+		assert _writes(state, "PATCH", f"issues/{HEAL_ISSUE}")
+
+
+def test_push_rejection_after_concurrent_update_preserves_heal_pr() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		stage = _stage(Path(tmp_name))
+		_squash_merge_source(stage)
+		# Move the remote branch at push time, after the script fetched the old SHA.
+		real_git = shutil.which("git")
+		assert real_git
+		git_wrapper = stage["bin"] / "git"
+		git_wrapper.write_text(
+			f"#!/bin/sh\nif [ \"$1\" = '-C' ] && [ \"$3\" = 'push' ]; then\n"
+			f"  \"{real_git}\" -C \"{stage['origin']}\" update-ref refs/heads/{HEAL_BRANCH} {stage['source_sha']}\n"
+			f"  exit 1\nfi\nexec \"{real_git}\" \"$@\"\n", encoding="utf-8",
+		)
+		git_wrapper.chmod(0o755)
+		result, state = _run(stage, merged=True)
+		assert result.returncode == 0, result.stderr
+		assert f"skip reason=heal_branch_moved heal_pr={HEAL_PR}" in result.stdout
+		assert _origin_ref(stage, f"refs/heads/{HEAL_BRANCH}") == stage["source_sha"]
+		assert not state.get("writes")
+
+
+def test_unclassified_push_failure_warns_without_closing_heal_pr() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		stage = _stage(Path(tmp_name))
+		_squash_merge_source(stage)
+		real_git = shutil.which("git")
+		assert real_git
+		git_wrapper = stage["bin"] / "git"
+		git_wrapper.write_text(
+			f"#!/bin/sh\nif [ \"$1\" = '-C' ] && [ \"$3\" = 'push' ]; then exit 1; fi\nexec \"{real_git}\" \"$@\"\n",
+			encoding="utf-8",
+		)
+		git_wrapper.chmod(0o755)
+		result, state = _run(stage, merged=True)
+		assert result.returncode == 0, result.stderr
+		assert f"skip reason=push_state_unknown heal_pr={HEAL_PR}" in result.stdout
+		assert "::warning::WORKFLOW_HEAL_PR_RECONCILE reconcile_incomplete" in result.stdout
+		assert _origin_ref(stage, f"refs/heads/{HEAL_BRANCH}") == stage["heal_sha"]
+		assert not state.get("writes")
+
+
+def test_failed_base_update_closes_instead_of_claiming_retarget_after_push() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		stage = _stage(Path(tmp_name))
+		base_sha = _squash_merge_source(stage)
+		result, state = _run(stage, merged=True, FAKE_GH_FAIL_BASE_PATCH="1")
+		assert result.returncode == 0, result.stderr
+		assert "::warning::WORKFLOW_HEAL_PR_RECONCILE heal_pr_retarget_failed" in result.stdout
+		assert f"closed heal_pr={HEAL_PR} heal_issue={HEAL_ISSUE} source_pr={SOURCE_PR} reason=source_merged_base_update_failed" in result.stdout
+		assert "retargeted heal_pr=" not in result.stdout
+		assert _is_ancestor(stage, base_sha, _origin_ref(stage, f"refs/heads/{HEAL_BRANCH}"))
+		assert state["pulls"][0]["base"]["ref"] == SOURCE_BRANCH
+		assert _writes(state, "PATCH", f"pulls/{HEAL_PR}")[-1]["fields"] == {"state": "closed"}
+		assert _writes(state, "PATCH", f"issues/{HEAL_ISSUE}")[-1]["fields"] == {"state": "closed", "state_reason": "not_planned"}
+
+
 def test_heal_pr_on_an_unrelated_base_and_gates_are_left_alone() -> None:
 	with tempfile.TemporaryDirectory() as tmp_name:
 		stage = _stage(Path(tmp_name), heal_base="stable")
@@ -266,7 +341,7 @@ def test_heal_pr_on_an_unrelated_base_and_gates_are_left_alone() -> None:
 def test_workflow_runs_reconcile_on_pr_close_only() -> None:
 	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 	job = workflow["jobs"]["heal-pr-reconcile"]
-	assert job["if"] == "github.event_name == 'pull_request' && github.event.action == 'closed'"
+	assert job["if"] == "github.event_name == 'pull_request' && github.event.action == 'closed' && vars.WORKFLOW_HEAL_PR_RECONCILE_ENABLED != 'false'"
 	assert job["env"]["SOURCE_PR_MERGED"] == "${{ github.event.pull_request.merged }}"
 	assert job["env"]["WORKFLOW_HEAL_PR_RECONCILE_ENABLED"] == "${{ vars.WORKFLOW_HEAL_PR_RECONCILE_ENABLED || 'true' }}"
 	steps = job["steps"]

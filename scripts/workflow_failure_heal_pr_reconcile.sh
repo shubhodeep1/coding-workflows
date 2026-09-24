@@ -37,8 +37,8 @@
 #   WORKFLOW_HEAL_PR_RECONCILE_ENABLED ("false" disables; default true),
 #   WORKFLOW_HEAL_LABEL (default ai:workflow-heal)
 #
-# Never fails the job: every exit is 0 and every outcome is one log line
-# prefixed WORKFLOW_HEAL_PR_RECONCILE.
+# Never fails the job: every exit is 0 and outcomes are logged with the
+# WORKFLOW_HEAL_PR_RECONCILE prefix. Incomplete operations also emit warnings.
 
 set -uo pipefail
 
@@ -202,15 +202,31 @@ _retarget_heal()
 		return 1
 	fi
 	# A plain fast-forward push: merged_sha descends from heal_head_sha.
-	if ! git -C "${merge_dir}" push --quiet origin "${merged_sha}:refs/heads/${heal_branch}" >/dev/null 2>&1; then
+	if ! git -C "${merge_dir}" push --quiet origin "${merged_sha}:refs/heads/${heal_branch}" >/dev/null 2>"${WORK_DIR}/push_${heal_pr}.stderr"; then
 		git worktree remove --force "${merge_dir}" >/dev/null 2>&1 || true
-		RETARGET_FAIL_REASON="push_rejected"
+		# A moved branch needs another reconciliation, not closure. An unchanged
+		# branch with an explicit remote rejection cannot be retargeted safely;
+		# an unclassified failure may be a transient transport problem.
+		local remote_heal_ref
+		remote_heal_ref="$(git ls-remote --exit-code origin "refs/heads/${heal_branch}" 2>/dev/null)" || remote_heal_ref=""
+		if [ -z "${remote_heal_ref}" ]; then
+			RETARGET_FAIL_REASON="push_state_unknown"
+		elif [ "${remote_heal_ref%%$'\t'*}" != "${heal_head_sha}" ]; then
+			RETARGET_FAIL_REASON="heal_branch_moved"
+		elif grep -Eqi 'remote rejected|GH006|GH013|protected branch|repository rule' "${WORK_DIR}/push_${heal_pr}.stderr"; then
+			RETARGET_FAIL_REASON="push_rejected"
+		else
+			RETARGET_FAIL_REASON="push_state_unknown"
+		fi
 		return 1
 	fi
 	git worktree remove --force "${merge_dir}" >/dev/null 2>&1 || true
 	if [ "${heal_base}" != "${BASE_REF}" ] \
 		&& ! gh_retry gh api --method PATCH "repos/${REPO}/pulls/${heal_pr}" -f base="${BASE_REF}" >/dev/null 2>&1; then
 		log "warn heal_pr_retarget_failed heal_pr=${heal_pr} base=${BASE_REF} merged_sha=${merged_sha}"
+		echo "::warning::WORKFLOW_HEAL_PR_RECONCILE heal_pr_retarget_failed heal_pr=${heal_pr} base=${BASE_REF} merged_sha=${merged_sha}"
+		RETARGET_FAIL_REASON="base_update_failed"
+		return 1
 	fi
 	_comment "${heal_pr}" "Source pull request #${SOURCE_PR} merged into \`${BASE_REF}\`. Merged #${SOURCE_PR}'s final head and \`${BASE_REF}\` into this branch (now \`${merged_sha:0:12}\`) and re-pointed this pull request at \`${BASE_REF}\`, so its diff is only this fix.
 
@@ -246,8 +262,10 @@ for heal_issue in "${HEAL_ISSUES[@]}"; do
 		if _retarget_heal "${heal_pr}" "${heal_branch}" "${heal_head_sha}" "${heal_base}"; then
 			continue
 		fi
-		if [ "${RETARGET_FAIL_REASON}" = "heal_branch_moved" ] || [ "${RETARGET_FAIL_REASON}" = "push_rejected" ]; then
-			# Someone else is updating the branch right now: never close over them.
+		if [ "${RETARGET_FAIL_REASON}" = "heal_branch_moved" ] || [ "${RETARGET_FAIL_REASON}" = "push_state_unknown" ]; then
+			# Do not close when remote state is unknown or the branch moved.
+			log "warn reconcile_incomplete heal_pr=${heal_pr} reason=${RETARGET_FAIL_REASON} source_pr=${SOURCE_PR}"
+			echo "::warning::WORKFLOW_HEAL_PR_RECONCILE reconcile_incomplete heal_pr=${heal_pr} reason=${RETARGET_FAIL_REASON} source_pr=${SOURCE_PR}"
 			log "skip reason=${RETARGET_FAIL_REASON} heal_pr=${heal_pr} source_pr=${SOURCE_PR}"
 			continue
 		fi
