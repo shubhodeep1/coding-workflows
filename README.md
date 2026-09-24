@@ -1276,7 +1276,31 @@ through `clarify → plan → implement → review`.
   merging it would carry the PR's unreleased changes into `stable`. When the
   PR branch no longer exists, the issue falls back to `stable` and the intake
   logs `warn source_pr_branch_missing`. The `created` log line records the
-  choice as `target_branch_source=default|failed_run_branch|source_pr_head`.
+  choice as `target_branch_source=default|failed_run_branch|source_pr_head|base_branch`.
+  Two further tokens cover review/autofix failures **self-inflicted** by a
+  branch of this repository. The autofix reporter sends ownership facts with
+  its report (`base_branch`, `script_ref`, the PR's `changed_files`, and
+  `crash_file`, taken from a `…/scripts/<name>: line N:` shell error or an
+  `::error::` line naming a `scripts/` or `.github/workflows/` path); before the
+  model runs, the intake compares the crash file with the PR's changed files
+  and with `git diff --name-only origin/main origin/<base>` on its own
+  checkout, logs `WORKFLOW_HEAL crash_ownership=<pr|base|none> crash_file=… base=…`,
+  and adds an `## Ownership facts` block to the prompt. `pr-self-inflicted`
+  (the crash file is in the PR's own diff) posts the diagnosis on the PR under
+  "**Workflow failure heal: this failure is caused by this pull request's own
+  changes**" for the review-blocked judge and opens no issue.
+  `base-self-inflicted` (the base branch changed the file relative to `main`
+  and the PR did not) opens the `ai:workflow-heal` issue with
+  `Target branch:` set to that base branch (`target_branch_source=base_branch`);
+  for an `orchestrator/project-<N>` base it also carries `Tracking issue: #N`,
+  `Integration branch:` and `Refs #N` and the label `ai:orchestrator-managed`,
+  so the project picks it up as a child. `stable` is never targeted by either:
+  a PR based on `main` or `stable` has no base-side ownership. A self-inflicted
+  token that the computed ownership does not back (consumer report, no crash
+  file, ownership `none` or the other side), or any self-inflicted token while
+  `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, is logged as
+  `classification_remapped … to=workflow-defect reason=…` and takes the
+  `workflow-defect` route above.
   `consumer-app-defect` opens the issue **in
   the consumer repository** for its own pipeline. `consumer-config` (missing
   secret, variable, permission) sends a Telegram ERROR with the diagnosis and
@@ -1540,6 +1564,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets that PR's head branch (falling back to this value when the branch is gone). |
+| `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
 | `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED` | `true` | Identical-failure fingerprint cap in the `gate` job of `review_autofix.yml`. Every review/autofix failure comment ends with a `<!-- review-autofix-failure:v1 head=… reason=… fp=… degraded=… run=… -->` marker, where `fp` fingerprints the failure reason plus the normalised stderr of the editor and Collect PR metadata stages. When the trailing markers for the current head (authored by the `GH_PAT` account) share one fingerprint `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` times, the gate logs `AUTOFIX_FINGERPRINT_CAP_TRIPPED`, skips the run (`skip_reason=fingerprint_cap`, no reviewer or editor call), and the `fingerprint-cap-block` job labels the linked issues `ai:review-blocked` (the PR itself when it has none), posts one `review-autofix-failure-cap:v1` comment, sends an `identical_failure_cap` heal report and a Telegram WARNING. Later dispatches on the same head log `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`; a push resets the count; `force_rb_judge` dispatches bypass it; lookup failures log `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED` and run normally. Set to `false` to stop evaluating the cap (the markers keep being written). |
 | `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` | `3` | Identical failures on one head that trip the fingerprint cap above. Non-numeric or `0` falls back to `3`. |
