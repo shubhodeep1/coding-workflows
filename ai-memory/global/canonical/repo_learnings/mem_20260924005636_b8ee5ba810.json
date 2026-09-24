@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Agent-produced changes are handled as untrusted input and isolated from privileged repository operations.",
   "timestamps": {
     "created_at": "2026-09-24T00:56:36Z",
