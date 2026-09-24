@@ -2394,7 +2394,7 @@ def test_parse_classification_accepts_self_inflicted_tokens() -> None:
 	assert not set(heal.SELF_INFLICTED_CLASSIFICATIONS) & set(heal.UPSTREAM_ISSUE_CLASSIFICATIONS)
 
 
-def _self_inflicted_payload(*, changed_files: list[str], crash_line: str = EDITOR_GUARD_CRASH_LINE, base_branch: str = INTEGRATION_BRANCH, source_repo: str = SELF_REPO) -> dict:
+def _self_inflicted_payload(*, changed_files: list[str], crash_line: str = EDITOR_GUARD_CRASH_LINE, base_branch: str = INTEGRATION_BRANCH, source_repo: str = SELF_REPO, script_ref: str = SHA_A) -> dict:
 	payload = heal.build_autofix_failure_payload(
 		repo=source_repo,
 		pr=_pr(),
@@ -2408,7 +2408,7 @@ def _self_inflicted_payload(*, changed_files: list[str], crash_line: str = EDITO
 		wrapper_sha=SHA_A,
 		reporter_run_url=f"https://github.com/{source_repo}/actions/runs/500",
 		base_branch=base_branch,
-		script_ref=SHA_A,
+		script_ref=script_ref,
 		changed_files=changed_files,
 	)
 	payload["issue_url"] = f"https://github.com/{source_repo}/pull/4174"
@@ -2584,6 +2584,74 @@ def test_intake_self_inflicted_routing_flag_off_restores_workflow_defect_route()
 	match = TARGET_BRANCH_RE.search(created["body"])
 	assert match and (match.group(1) or match.group(2)) == "ai/issue-4173"
 	assert "target_branch_source=source_pr_head" in result.stdout
+
+
+# Every model process exits before writing anything: no file is named.
+SANDBOX_226_LINE = "Reviewer slot z-ai/glm-5.2 (z-ai/glm-5.2) execution failed on attempt 1 (exit=226)."
+
+
+def test_classify_pipeline_ownership() -> None:
+	pipeline = ["README.md", "scripts/opencode_helpers.sh", ".github/actions/install-opencode/action.yml", ".github/workflows/review_autofix.yml", ".github/workflows/ci.yml"]
+	assert heal.classify_pipeline_ownership(crash_file=None, changed_files=pipeline, script_ref=SHA_B, head_sha=SHA_B) == (
+		"pr",
+		["scripts/opencode_helpers.sh", ".github/actions/install-opencode/action.yml", ".github/workflows/review_autofix.yml"],
+	)
+	# A crash file keeps the crash-file basis in charge.
+	assert heal.classify_pipeline_ownership(crash_file="scripts/a.sh", changed_files=pipeline, script_ref=SHA_B, head_sha=SHA_B) == ("none", [])
+	# The run did not execute the PR head's scripts.
+	assert heal.classify_pipeline_ownership(crash_file=None, changed_files=pipeline, script_ref=SHA_A, head_sha=SHA_B) == ("none", [])
+	assert heal.classify_pipeline_ownership(crash_file=None, changed_files=pipeline, script_ref="stable", head_sha=SHA_B) == ("none", [])
+	assert heal.classify_pipeline_ownership(crash_file=None, changed_files=pipeline, script_ref=None, head_sha=None) == ("none", [])
+	# No pipeline file in the PR diff.
+	assert heal.classify_pipeline_ownership(crash_file=None, changed_files=["README.md", ".github/workflows/ci.yml"], script_ref=SHA_B, head_sha=SHA_B) == ("none", [])
+	many = [f"scripts/f{i}.sh" for i in range(30)]
+	assert heal.classify_pipeline_ownership(crash_file=None, changed_files=many, script_ref=SHA_B, head_sha=SHA_B)[1] == many[: heal.PIPELINE_OWNERSHIP_FILES_MAX]
+
+
+def test_classify_pipeline_ownership_cli() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-pipe-own-") as tmp_name:
+		payload_file = Path(tmp_name) / "p.json"
+		payload_file.write_text(json.dumps(_self_inflicted_payload(changed_files=["README.md", "scripts/opencode_helpers.sh"], crash_line=SANDBOX_226_LINE, script_ref=SHA_B)), encoding="utf-8")
+		out = subprocess.run(["python3", str(SCRIPTS_DIR / "workflow_failure_heal.py"), "classify-pipeline-ownership", "--payload-json", str(payload_file)], capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+		assert out.stdout.splitlines() == ["pr", "scripts/opencode_helpers.sh"]
+
+
+def test_intake_pipeline_ownership_routes_fileless_failure_to_pr() -> None:
+	# PR #4376 shape: every slot exits 226, the evidence names no file, the run
+	# staged the PR head's scripts, and the PR changes a pipeline script.
+	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh", "README.md"], crash_line=SANDBOX_226_LINE, script_ref=SHA_B)
+	assert "crash_file" not in payload
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL crash_ownership=pr crash_file=none basis=pipeline_files files=1 base={INTEGRATION_BRANCH}" in result.stdout
+	assert "## Ownership facts" in prompt and "- Ownership: pr" in prompt and "- Ownership basis: pipeline files" in prompt
+	assert "  - scripts/opencode_helpers.sh" in prompt and "  - README.md" not in prompt
+	assert "classification_remapped" not in result.stdout
+	assert "issues_created" not in state_after
+	comments = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
+	assert len(comments) == 1
+	body = comments[0]["body"]
+	assert "failed without naming a file" in body and "`scripts/opencode_helpers.sh`" in body
+	# No base diff is needed for this basis: no git fetch warning.
+	assert "crash_ownership_base_diff_failed" not in result.stdout
+
+
+def test_intake_pipeline_ownership_needs_the_pr_head_scripts() -> None:
+	# The run staged another ref: no ownership, so the token is remapped.
+	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"], crash_line=SANDBOX_226_LINE)
+	result, state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "crash_ownership=" not in result.stdout and "- Ownership:" not in prompt
+	assert "classification_remapped from=pr-self-inflicted to=workflow-defect reason=ownership_none" in result.stdout
+	assert len(state_after["issues_created"]) == 1
+	# Routing off: the pipeline basis is not computed either.
+	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"], crash_line=SANDBOX_226_LINE, script_ref=SHA_B)
+	result, _state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED, extra_env={"WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED": "false"})
+	assert "crash_ownership=" not in result.stdout and "- Ownership:" not in prompt
+	# Consumer reports never get it.
+	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"], crash_line=SANDBOX_226_LINE, script_ref=SHA_B, source_repo=CONSUMER_REPO)
+	result, _state_after, prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_PR_SELF_INFLICTED)
+	assert "crash_ownership=" not in result.stdout and "- Ownership:" not in prompt
 
 
 def test_autofix_report_sends_ownership_facts() -> None:

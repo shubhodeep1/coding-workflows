@@ -670,6 +670,41 @@ def classify_crash_ownership(*, crash_file: str | None, changed_files: Iterable[
 	return "none"
 
 
+# Files the review/autofix pipeline executes from the staged script ref.
+REVIEW_PIPELINE_FILE_PREFIXES = ("scripts/", ".github/actions/")
+REVIEW_PIPELINE_FILES = (".github/workflows/review_autofix.yml",)
+PIPELINE_OWNERSHIP_FILES_MAX = 20
+
+
+def classify_pipeline_ownership(*, crash_file: str | None, changed_files: Iterable[str], script_ref: str | None, head_sha: str | None) -> tuple[str, list[str]]:
+	"""Return (``pr`` or ``none``, the pipeline files the PR changes) for a failure that names no file.
+
+	Some self-inflicted failures never name a file: a sandbox the PR adds can
+	make every model process exit before it writes anything (PR #4376: systemd
+	status 226 on every slot), so :func:`extract_crash_file` finds nothing and
+	:func:`classify_crash_ownership` says ``none``. This second basis says
+	``pr`` when there is no crash file, the run staged the pull request head's
+	own scripts (``script_ref`` equals ``head_sha``), and the pull request
+	changes files the pipeline executes (``scripts/``, ``.github/actions/``,
+	``.github/workflows/review_autofix.yml``). The list is capped at
+	``PIPELINE_OWNERSHIP_FILES_MAX`` entries. Anything else is ``none``.
+	"""
+	if crash_file:
+		return "none", []
+	ref = str(script_ref or "").strip().lower()
+	head = str(head_sha or "").strip().lower()
+	if not is_valid_sha(ref) or ref != head:
+		return "none", []
+	files = [
+		path
+		for path in changed_files
+		if isinstance(path, str) and (path.startswith(REVIEW_PIPELINE_FILE_PREFIXES) or path in REVIEW_PIPELINE_FILES)
+	]
+	if not files:
+		return "none", []
+	return "pr", files[:PIPELINE_OWNERSHIP_FILES_MAX]
+
+
 def orchestrator_tracking_issue(branch: Any) -> int | None:
 	"""The tracking issue number of an ``orchestrator/project-<N>`` branch, else None."""
 	match = _ORCHESTRATOR_BRANCH_RE.match(str(branch or ""))
@@ -1687,6 +1722,20 @@ def _cmd_classify_crash_ownership(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_classify_pipeline_ownership(args: argparse.Namespace) -> int:
+	payload = validate_payload(_load_json_file(args.payload_json))
+	ownership, files = classify_pipeline_ownership(
+		crash_file=payload.get("crash_file"),
+		changed_files=payload.get("changed_files") or [],
+		script_ref=payload.get("script_ref"),
+		head_sha=payload.get("head_sha"),
+	)
+	sys.stdout.write(ownership + "\n")
+	for path in files:
+		sys.stdout.write(path + "\n")
+	return 0
+
+
 def _cmd_autofix_failure_streak(args: argparse.Namespace) -> int:
 	try:
 		comments = _load_json_file(args.comments_json)
@@ -1911,6 +1960,10 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--payload-json", required=True)
 	p.add_argument("--base-changed-files", default="")
 	p.set_defaults(func=_cmd_classify_crash_ownership)
+
+	p = sub.add_parser("classify-pipeline-ownership", help="Print pr / none, then the pipeline files the PR changes, for a failure that names no file")
+	p.add_argument("--payload-json", required=True)
+	p.set_defaults(func=_cmd_classify_pipeline_ownership)
 
 	p = sub.add_parser("autofix-failure-streak", help="Count trailing review/autofix failure comments on a PR")
 	p.add_argument("--comments-json", required=True)
