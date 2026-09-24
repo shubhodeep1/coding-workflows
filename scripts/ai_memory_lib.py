@@ -88,7 +88,7 @@ ALLOWED_CATEGORIES = {
 }
 
 ALLOWED_SCOPE_LEVELS = {"global", "task", "run"}
-ALLOWED_LESSONS_LEARNED_PHASES = {"review_autofix", "implement", "judge", "implement_plan"}
+ALLOWED_LESSONS_LEARNED_PHASES = {"review_autofix", "implement", "judge", "implement_plan", "orchestrator_completion"}
 ALLOWED_LESSONS_LEARNED_KINDS = {
     "out_of_plan_fix",
     "unexpected_judge_verdict",
