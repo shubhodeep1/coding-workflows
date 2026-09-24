@@ -207,3 +207,45 @@ No `TODO`, `FIXME`, or `HACK` markers were found in the audited workflow and scr
 | Code modularization | Label and review helpers, their script callers, and `review_autofix.yml` | Large |
 | Expression size reduction | `implement.yml` and staged script(s) | Medium |
 | Medium/Low fixes | Reviewer summariser, poller, API helper, and associated tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-24)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is proven safe for automatic implementation. `NEEDS_VERIFICATION` requires specified checks first. `RISKY_SKIP` identifies a possible reduction that must not be auto-implemented because a retry, pagination, polling, or race-safety contract is involved.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — RISKY_SKIP.** **Calls:** `.github/workflows/clarify.yml:479` and `.github/workflows/clarify.yml:481-495`. **Count:** 2 → potentially 1 when semantic caching is enabled and the full-history fetch succeeds. **Endpoint:** `GET /repos/{repo}/issues/{issue}/comments`. **Evidence:** The first read saves the ascending first 50 comments; the second fetches the same thread with `--paginate --slurp` to build full history. **Proposed fix:** In the `Fetch issue comments` step, derive `ISSUE_COMMENTS_FILE` from the full-history response while retaining its first-50 limit and the required first read as a fallback if full-history collection fails. **Safety rationale:** The calls use different `per_page` values and the second paginates; replacing the required read with a fail-open optional read could change failure behavior. **Downstream signal:** Do not auto-implement. Manually verify first-50 ordering across page boundaries and test full-history API, parse, and partial-page failures before changing either read.
+
+- **MERGE-002 — RISKY_SKIP.** **Calls:** `scripts/review_merge_train.sh:255-261` (`_mt_find_marker_comment_id`) and `scripts/review_merge_train.sh:273-287` (`_mt_upsert_comment`). **Count:** 2 → potentially 1 read when a marker comment exists; comment writes are unchanged. **Endpoints:** `GET /repos/{repo}/issues/{pr}/comments?per_page=100` and `GET /repos/{repo}/issues/comments/{id}`. **Evidence:** The paginated list filters on `.body` but returns only `.id`; `_mt_upsert_comment` then fetches that comment’s body to compare it with the proposed body. **Proposed fix:** Have `_mt_find_marker_comment_id` return the selected comment’s ID and body together, and update `_mt_upsert_comment` to compare the returned body. **Safety rationale:** The list paginates, and the separate body read can observe an intervening edit that the list cannot. **Downstream signal:** Do not auto-implement. Manually verify marker selection across pages, concurrent comment edits, and the current fail-open behavior before removing the individual-comment read.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — RISKY_SKIP.** **Calls:** `.github/workflows/test-and-mark-stable.yml:1848-1864` and `.github/workflows/test-and-mark-stable.yml:1893-1904`. **Count:** 2 → potentially 1 jobs read per poll iteration when `JOBS_JSON` is empty and the first read succeeds. **Endpoint:** `GET /repos/{repo}/actions/runs/{run_id}/jobs?per_page=10`. **Evidence:** The first read retains the jobs response in `JOBS_STEP_JSON` for step timing; the later read requests the same endpoint solely to select `JOB_ID_FOR_SIZE`. **Proposed fix:** In this release-test poll step, select the job ID locally from `JOBS_STEP_JSON` when valid, retaining the later API call when that payload is unavailable. **Safety rationale:** Both reads are inside activity polling; the later read may see a newly indexed job and affect the inactivity guard. **Downstream signal:** Do not auto-implement. Manually test indexing delays, changing job status between reads, first-read failure, and inactivity-timer behavior before reusing the snapshot.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — The duplicate reads are in the poller; manually preserve its fresh PR-state checks before merge.
+- API-002: RISKY_SKIP — The adjacent issue reads are in poller reissue paths; manually preserve each read’s empty-on-failure behavior.
+- BATCH-001: RISKY_SKIP — Post-mutation label refresh is in the poller; a pre-mutation snapshot cannot replace it.
+- BATCH-002: RISKY_SKIP — Poller PR-close handling requires manual review of state freshness and per-candidate fallback.
+- API-003: RISKY_SKIP — Permanent-failure classification changes retry-loop behavior; rate-limit and transient-failure handling need manual review.
+
+### Summary Counts
+
+Counts include **net-new findings only**; Deep Audit cross-references are excluded.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 3 | MERGE-001, MERGE-002, REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
