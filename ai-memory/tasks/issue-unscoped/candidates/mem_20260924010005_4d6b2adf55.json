@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "Merged changes commonly update workflow files and add targeted Python tests for pipeline contracts, isolation, recovery, conflict handling, and security-audit behavior. When changing a workflow, plan for a deterministic contract test that checks the relevant wiring and failure behavior, not only a happy-path execution.",
+  "fingerprint": "fb6c1c5f2bef66d0e26c17aa5309a414ea1e8d6fc9f9354a585f12e3c40a2091",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35940543987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35940543987",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4311",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4325",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4326",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4329",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4350",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4312",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4328",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4330",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4335",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4351"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260924010005_4d6b2adf55",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is protected by contract-focused tests alongside shell and YAML changes.",
+  "timestamps": {
+    "created_at": "2026-09-24T01:00:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
