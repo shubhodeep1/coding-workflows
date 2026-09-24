@@ -59,6 +59,17 @@ Exactly one token on its own line, chosen from:
 - `transient` -- a rate limit, a provider outage, a network error, a runner
   loss, or a race that a re-run would clear, with no defect to fix.
 - `inconclusive` -- the evidence does not support a confident diagnosis.
+- `pr-self-inflicted` -- the failing run executed scripts from the pull
+  request head; the crash is in a file the pull request itself changed. The
+  fix belongs in that pull request, not in a separate issue.
+- `base-self-inflicted` -- the failing run executed scripts from the pull
+  request head; the crash is in a file the base branch changed relative to
+  main and the pull request did not. The fix belongs on that base branch.
+Use `pr-self-inflicted` or `base-self-inflicted` ONLY when the failure
+context contains an `## Ownership facts` block and that block reports
+ownership `pr` (for `pr-self-inflicted`) or `base` (for
+`base-self-inflicted`), and the evidence confirms the crash is in that file.
+Without the block, or when it reports `none`, choose among the other tokens.
 
 ## Summary
 One or two sentences: what failed and the single most likely cause.

@@ -96,7 +96,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `Target branch: stable`, or the PR's head branch when a review/autofix
     failure comes from a PR in this repo, since that run executed the PR's
     own workflow code; `consumer-app-defect` → issue in the consumer;
-    `consumer-config` / `transient` → Telegram + comment only), de-dupes by
+    `consumer-config` / `transient` → Telegram + comment only; for a
+    review/autofix failure from this repo whose crash file the intake can
+    attribute, `pr-self-inflicted` → diagnosis comment on the PR, no issue,
+    and `base-self-inflicted` → issue targeting the PR's base branch with
+    orchestrator lineage lines and `ai:orchestrator-managed` for an
+    `orchestrator/project-<N>` base; ownership comes from the report's
+    `changed_files` / `crash_file` and the intake's own
+    `git diff origin/main origin/<base>`, and a token it does not back, or
+    `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, routes as
+    `workflow-defect`), de-dupes by
     fingerprint (label `ai:workflow-heal`), caps the lineage at
     `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
     `ai:workflow-heal-escalated` + Telegram), and bounds the volume with
