@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_step_scripts_contract.py: lines 49-52 inside `test_moved_steps_run_only_the_resolving_wrapper` \u2014 the four `expected_lines` entries for the second and third resolution paths | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The PR diff hardcodes the runner's resolved `${GITHUB_WORKSPACE}` path inside the f-string, while the workflow wrapper still emits the `${GITHUB_WORKSPACE}` placeholder, causing the contract assertion to fail for all 5 moved steps.\n  WHY: The CI contract test compares the literal expected wrapper lines against the workflow lines and exits non-zero; z-ai_glm-5_2 reports that the test uses `${{GITHUB_WORKSPACE}}` and found no issue, so the reviewers disagree and the highest reported severity is retained.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_step_scripts_contract.py: lines 49-52 inside `test_moved_steps_run_only_the_resolving_wrapper` \u2014 the four `expected_lines` entries for the second and third resolution paths | severity=BLOCKER | confidence=5\n  PROBLEM: The PR diff hardcodes the runner's resolved `${GITHUB_WORKSPACE}` path (`$/home/runner/work/coding-workflows/coding-workflows/.codex-workflow-src/...`) inside the f-string, while the workflow wrapper at `.github/workflows/review_autofix.yml:4042-4043` (and the other four moved-step wrappers) still emits the `${GITHUB_WORKSPACE}` placeholder.\n  WHY: The f-string only interpolates `{script_name}` \u2014 `$` is literal \u2014 so the assertion compares different strings; `test_moved_steps_run_only_the_resolving_wrapper` fails for all 5 moved steps and the CI step exits non-zero.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "296f937cd4e9a19c008f9540bcb887aa7c21bb1ad8744cb83c7d030ace36d588",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4369,
+    "run_id": "35944115509",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35944115509",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924023454_199803eba6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4369,
+    "run_id": "35944115509"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T02:34:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
