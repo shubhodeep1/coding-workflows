@@ -6987,6 +6987,7 @@ def test_review_support_identity_is_bound_across_jobs() -> None:
 	assert "review_support_ref: ${{ steps.resolve_support.outputs.review_support_ref }}" in gate_job
 	assert "review_support_repo: ${{ steps.resolve_support.outputs.review_support_repo }}" in gate_job
 	assert "WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in gate_job
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in _step_block("Resolve trusted review support commit")
 	assert "gh api repos/shubhodeep1/coding-workflows/branches/main" in gate_job
 	assert "gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable" in gate_job
 	assert "gh api repos/shubhodeep1/coding-workflows/commits/stable" not in gate_job

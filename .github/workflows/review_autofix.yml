@@ -281,7 +281,7 @@ jobs:
         env:
           CALLER_REPOSITORY: ${{ github.repository }}
           WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
