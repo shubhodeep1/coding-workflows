@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `ai/issue-4390` at `20ce1f4419f9a68ed662e1238a864412420ef763`. This matches the issue\u2019s integration-branch metadata. The auto-answer confirms that no clarification is needed.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/untrusted_process_sandbox.sh` workspace-guard role  \nScope-mode justification: The existing sandbox role, reconciliation guard, and isolation tests provide the complete implementation path; no new mechanism is needed. The complete fix includes both external-metadata access and regression coverage rather than merely suppressing the error. This follows the \u00a76 priority order: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and lifecycle\n\n- **Existing code only:** Extend the existing sandbox; add no script or supervisor.\n- **Entry point:** `.github/workflows/internal-review.yml` on PR `opened`/`synchronize` (and its existing review redispatch path) invokes `.github/workflows/review_autofix.yml`. No scheduler wiring changes are needed.\n- **Database gate and future-removal registry:** Not applicable.\n\n## Files likely to change\n\n- `scripts/untrusted_process_sandbox.sh` \u2014 provide validated Git context exclusively to the `workspace-guard` role.\n- `tests/test_agent_process_isolation.py` \u2014 cover a `.git`-free copied workspace and role isolation.\n- `changelog.d/4407-workspace-guard-external-git.md` \u2014 record the observable review failure-mode fix; do not edit `CHANGELOG.md`.\n\n## Functions or modules to implement\n\nIn `scripts/untrusted_process_sandbox.sh`, extend the existing workspace-guard validation and `common_env` assembly. For a copied workspace, canonicalize and verify the caller\u2019s external `GIT_DIR` and `GIT_WORK_TREE`; require the latter to identify the sandbox\u2019s canonical workspace and verify Git resolves the former as that workspace\u2019s repository. Pass the verified pair only to `workspace-guard`. Keep the existing Git-metadata path protections read-only, including under `PrivateTmp=yes`. Preserve ordinary in-workspace `.git` handling.\n\n**Representative pattern:** Follow the existing `workspace-guard` role in `scripts/untrusted_process_sandbox.sh`, its `snapshot`/`reconcile` calls in `scripts/review_apply_fixes.sh`, and the isolation tests in `tests/test_agent_process_isolation.py`. Do not introduce a second reconciliation path.\n\n## Data structures affected\n\nOnly the workspace-guard process environment gains the verified Git path pair. Manifest and report schemas, labels, and log prefixes remain unchanged.\n\n## API/interface changes\n\nNo new CLI flags, workflow inputs, or external API calls. Existing caller-provided `GIT_DIR` and `GIT_WORK_TREE` become available to the isolated guard **after validation**, not to model or other validator roles.\n\n## Decisions\n\n### D1 \u2014 Limit Git context to the reconciliation guard\n- **Chosen:** Validate the caller\u2019s external Git directory and worktree, then expose them only to `workspace-guard`.\n- **Alternatives considered:** Expose Git variables to every sandbox role; change the Python guard to skip ignore classification; copy `.git` into the workspace.\n- **Why:** The existing guard needs Git for `check-ignore`, while broader access or a skipped check would weaken isolation or fail-closed reconciliation.\n\n### D2 \u2014 Keep the fix in the shared sandbox\n- **Chosen:** Extend the existing role-specific environment and metadata-mount handling, with a copied-workspace regression.\n- **Alternatives considered:** Add review-workflow-specific Git setup.\n- **Why:** The shared sandbox already serves review, implementation, and other guard callers; a local workflow workaround would leave the same failure possible elsewhere.\n\n## Security considerations\n\nThe caller\u2019s Git path variables cross into a credentialless, network-denied process. Reject missing, noncanonical, mismatched, or inaccessible external metadata rather than mounting an arbitrary caller-supplied path. Keep Git metadata read-only and out of writer/model roles; retain the sanitized Git configuration, `PrivateTmp=yes`, and fail-closed `check-ignore` behavior. Test attempts to point the guard at a different worktree or writable/unsafe metadata location, as well as an ignored file that must still be rejected.\n\n## Risks and edge cases\n\n- A symlinked or relocated Git directory, partial `GIT_DIR`/`GIT_WORK_TREE` pair, or metadata hidden by `PrivateTmp=yes` must fail closed with a useful diagnostic.\n- In-workspace `.git` repositories must continue to work without the external pair.\n- **Evidence distinction:** `editor_empty_noop` is the intake classification; the cited terminal failure is workspace-guard rejection before editor-output parsing. Plan against the latter, not an assumed model no-op.\n- Unrelated pre-existing worktree modifications are present; implementation must leave them untouched.\n\n## Testing considerations\n\nExtend `tests/test_agent_process_isolation.py` to snapshot and reconcile a copied workspace without `.git`, using external metadata through the sandbox test mode. Assert an authorized change passes, an ignored path is quarantined/rejected, invalid Git context fails closed, and model/other roles receive no Git path pair. Preserve the existing read-only-metadata and private-tmp contracts. Run focused pytest, shell syntax/lint where available, then the relevant CI suite; treat tooling not installed at the repository\u2019s pinned version as unverified.\n\n## Pre-execution self-check\n\nThe checkout matches the target branch; the required inputs and existing automation entry point are identifiable. The plan retains the guard rather than bypassing it, adds no manual operation, and stays within the reported defect\u2019s scope.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a3376e1f277ff9ec5e726752bd1c6465295ec19ab43c26a8e6bcfb5034f28098",
+  "lineage": {
+    "issue_number": 4407,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36026081300",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36026081300",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4407"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924162053_4d3dadbbf9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4407,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36026081300"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4407",
+  "timestamps": {
+    "created_at": "2026-09-24T16:20:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
