@@ -96,8 +96,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `Target branch: stable`, or the PR's head branch when a review/autofix
     failure comes from a PR in this repo, since that run executed the PR's
     own workflow code; `consumer-app-defect` → issue in the consumer;
-    `consumer-config` / `transient` → Telegram + comment only), de-dupes by
-    fingerprint (label `ai:workflow-heal`), caps the lineage at
+    `consumer-config` / `transient` → Telegram + comment only;
+    `already-fixed` → Telegram + comment only, honoured only when its
+    `## Fixed by` section cites a commit that landed after the failing SHA,
+    otherwise filed as `inconclusive`). The prompt carries the branch progress
+    since the failing SHA (one REST compare call + a branch-tip worktree) and
+    the earlier heal issues of the same fingerprint / lineage. It de-dupes by
+    fingerprint (label `ai:workflow-heal`; the promote cycle's `[cycle:<id>]`
+    run-name suffix is ignored, and the error signature comes from the steps'
+    `##[error]` output, not the echoed step script), caps the lineage at
     `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
     `ai:workflow-heal-escalated` + Telegram), and bounds the volume with
     `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`. A

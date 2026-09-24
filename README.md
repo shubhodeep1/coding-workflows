@@ -1260,7 +1260,22 @@ through `clarify → plan → implement → review`.
   release SHA the failing run used, and runs the diagnosis model
   (`WORKFLOW_HEAL_MODEL`, default `openai/gpt-5.6-sol`, `xhigh`) with
   `prompts/mode-workflow-failure-heal.txt`. Stable log lines are prefixed
-  `WORKFLOW_HEAL`.
+  `WORKFLOW_HEAL`. The log filter drops the script source GitHub echoes at the
+  top of every `run:` step (the ANSI-cyan lines inside `##[group]Run …`), so
+  the tail the model reads is what the steps printed; errors a step raised
+  appear as `##[error]…`.
+- **"Already fixed?" context:** the prompt also carries (1) the branch
+  progress since the failing code, from one REST compare call
+  (`compare/<sha>...<branch>`: a release run or a review/autofix run in this
+  repo compares its head SHA with its branch, a consumer report compares its
+  wrapper pin with `WORKFLOW_HEAL_TARGET_BRANCH`), listing the newest 60
+  commits and up to 200 changed files, plus a `HEAL_BRANCH_TIP_DIR` worktree
+  of the branch tip next to `HEAL_SOURCE_DIR`; and (2) up to 5 earlier heal
+  issues sharing the fingerprint or lineage root, with their state and their
+  root cause / suggested fix, read from the issue list the budget decision
+  already fetches. The intake logs
+  `branch_progress available=… branch=… sha=… ahead_by=… reason=…`; a failed
+  compare only removes the context (`reason=compare_fetch_failed`).
 - **Classification and routing:** the diagnosis starts with a
   `## Classification` token. `workflow-defect` and `inconclusive` open an issue
   **in coding-workflows** (label `ai:workflow-heal`) whose body carries
@@ -1280,11 +1295,22 @@ through `clarify → plan → implement → review`.
   `consumer-app-defect` opens the issue **in
   the consumer repository** for its own pipeline. `consumer-config` (missing
   secret, variable, permission) sends a Telegram ERROR with the diagnosis and
-  opens nothing; `transient` sends a DEBUG note and opens nothing. Every
-  outcome is also posted as a comment on the escalated issue.
+  opens nothing; `transient` sends a DEBUG note and opens nothing.
+  `already-fixed` (the defect is real but a commit that landed after the
+  failing SHA already fixes it) sends a DEBUG note and opens nothing, logging
+  `already_fixed_verified commits=…` and `no_issue classification=already-fixed`;
+  a consumer's comment adds that the next wrapper sync picks up the fix. The
+  claim must cite, under `## Fixed by`, a commit from the branch-progress list
+  (`check-already-fixed`). Otherwise the intake logs
+  `warn already_fixed_unverified reason=branch_progress_unavailable|no_commits_after_failing_sha|fixed_by_section_missing|fixed_by_commit_not_after_failing_sha`
+  and files the report as `inconclusive` with a note at the top of the body.
+  Every outcome is also posted as a comment on the escalated issue.
 - **De-duplication and lineage:** the failure is fingerprinted from the failed
-  workflow name, the failing step, and a normalised error signature (numbers,
-  SHAs, URLs, and temp paths stripped) — the same bug in ten consumers is one
+  workflow name (minus the `[cycle:<id>]` suffix a promote cycle puts on its
+  Test & Mark Stable Release run name, so every cycle shares one fingerprint),
+  the failing step, and a normalised error signature built from the step's
+  `##[error]` / `::error::` output (numbers, SHAs, URLs, and temp paths
+  stripped) — the same bug in ten consumers is one
   issue with an occurrence comment per report (`<!-- workflow-failure-heal:fp=… -->`).
   A recurrence after the previous heal issue closed increments the generation
   (`<!-- workflow-failure-heal:gen=N -->`, `root=…`); an escalation on a heal
