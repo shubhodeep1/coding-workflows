@@ -22,6 +22,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    a `Q1`/`Q2` batch.
 2. **clarify-respond** (`orchestrate_clarify_respond.yml`) — answer the
    clarifier's questions on behalf of an orchestrator-managed issue.
+   Both clarification workflows run Codex through `scripts/clarify_isolated_run.sh`
+   in a read-only, network-isolated container with a host-side model broker.
+   They stage the helper and Dockerfile from the support ref (main fallback);
+   isolation failures never fall back to host Codex. GitHub-side fetching,
+   memory, retry, and comment handling remain on the runner.
 3. **plan** (`plan.yml`, `internal-plan.yml`) — read the clarified issue and
    emit a structured implementation plan with files-to-change and a
    per-issue ≤60-minute time budget.

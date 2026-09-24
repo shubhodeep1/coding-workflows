@@ -125,7 +125,7 @@ def main():
 		server.mode = "broker"
 		server.api_key = key
 		server.model = model
-		os.chmod(sys.argv[2], 0o666)  # Parent directory is run-private on the host.
+		os.chmod(sys.argv[2], 0o600)  # The container uses the host UID to connect.
 	else:
 		server = http.server.HTTPServer(("127.0.0.1", 8765), Relay)
 		server.mode = "bridge"

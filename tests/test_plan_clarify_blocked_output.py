@@ -256,6 +256,8 @@ def test_clarify_agent_runs_only_in_isolated_container() -> None:
 	assert '".git"' in runner and '".env"' in runner and 'os.O_NOFOLLOW' in runner
 	assert 'trap cleanup EXIT' in runner and "trap 'exit 143' TERM" in runner
 	assert 'docker rm -f "${container_name}"' in runner
+	assert 'mkdir -m 0700 "${run_root}/socket"' in runner
+	assert 'os.chmod(sys.argv[2], 0o600)' in _read(REPO_ROOT / "scripts" / "clarify_openrouter_broker.py")
 	assert "--sandbox danger-full-access" not in wf.split("- name: Run Codex", 1)[1]
 	assert "if cat \"${CODEX_PROMPT_FILE}\" | codex" not in wf
 	assert 'max_attempts=3' in wf

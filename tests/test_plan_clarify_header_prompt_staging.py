@@ -100,6 +100,22 @@ def test_clarify_sandbox_support_has_main_snapshot_fallback() -> None:
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in clarify
 
 
+def test_clarify_respond_isolates_every_model_call() -> None:
+	respond = (WORKFLOW_DIR / "orchestrate_clarify_respond.yml").read_text(encoding="utf-8")
+	assert "orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do" in respond
+	assert 'sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"' in respond
+	assert '.codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile' in respond
+	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in respond
+	assert 'printf \'%s\\n\' "${_fetched_scripts[@]}" clarify_sandbox/ .gitignore' in respond
+	assert "--sandbox danger-full-access" not in respond
+	assert "codex --ask-for-approval" not in respond
+	assert respond.count('bash scripts/clarify_isolated_run.sh ') == 3
+	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}"' in respond
+	assert 'bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt"' in respond
+	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}"' in respond
+	assert respond.count("CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}") == 2
+
+
 def test_render_callers_stage_header_prompt() -> None:
 	"""Every workflow rendering prompts/header.txt must stage it first."""
 	callers = _workflows_rendering_header()

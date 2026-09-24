@@ -28,7 +28,8 @@ cleanup()
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-mkdir -m 0755 "${run_root}/socket" "${run_root}/source" "${run_root}/results"
+mkdir -m 0700 "${run_root}/socket"
+mkdir -m 0755 "${run_root}/source" "${run_root}/results"
 
 # Include only regular, tracked source files with safe path classes. Never
 # follow a symlink (including parent directories); do not include .git,
