@@ -595,8 +595,8 @@ as frontmatter, so the command body must remain the first line.
 
 One deliberate exception that is **not** a command pin: `/implement-plan-claude`
 waits for each phase PR to merge through a 3-hourly check-in (its **Check-in
-Loop** section). The checker is a Haiku session started with
-`create_session` (`model: claude-haiku-4-5-20251001`) that runs
+Loop** section). The checker is a Sonnet session started with
+`create_session` (`model: claude-sonnet-5`) that runs
 `.claude/scripts/check_in_status.py`, re-arms itself with `send_later`, and,
 when the wait is over, starts the next **stage session** on the model the
 operator picked. Every stage (a phase, a blocked-PR fix, the conformance
@@ -610,12 +610,18 @@ unless it is waiting on the user; the command's session is never woken to
 continue, because a 3-hour gap outlives the prompt cache and a wake would
 re-send the whole history at full price. Routines created with
 `create_new_session_on_fire` are not used: their sessions get no MCP tools
-and no repository, so they cannot report. Stage sessions need Auto mode (the
-command asks for it in step 0), because allow rules cannot match the
-generated MCP server name of a `create_session` child. Progress between
+and no repository, so they cannot report. Stage sessions and checkers need Auto mode (the
+command asks for it in step 0): outside it the claude-code-remote write
+tools (`send_later`, `create_session`, `archive_session`, the trigger tools)
+prompt on every call whatever the allowlist says, and Haiku 4.5 cannot run
+in Auto mode, which is why the checker is Sonnet. Progress between
 stages is persisted in `docs/implement-plan/<slug>.md`
-(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt;
-the log's `## Lessons` section is ingested into AI memory on merge (see the
+(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt. Only the chain archives its own sessions: a `… — waiting: …` checker
+holds the project's only pending check-in, so archiving it by hand stalls the
+project until the 24h safety net fires. To nudge a stalled project, start the
+next stage session by hand with a `— resume.` block; to stop one, delete its
+safety-net trigger and archive its checker together. The log's `## Lessons`
+section is ingested into AI memory on merge (see the
 Memory subsystem notes).
 
 No field here changes what any consumer repo receives on the `@stable`
@@ -629,7 +635,7 @@ carried frontmatter.
 
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
 pushes a branch and a pull request exists for it, the session starts a
-Haiku checker session (`create_session`, titled `PR #<n> status check-in`)
+Sonnet checker session (`create_session`, titled `PR #<n> status check-in`)
 whose prompt carries the next steps for each terminal state. The checker
 runs `.claude/scripts/check_in_status.py --terminal-only` (one REST read),
 re-arms itself with `send_later` every 180 minutes while the PR is open, and
@@ -637,7 +643,7 @@ once it merges or closes writes the report in its own session, renames
 itself `PR #<n> merged — …`, and sends one `PushNotification`. The pushing
 session is never woken. PRs opened by `/implement-plan-claude` are covered
 by that command's own checker. Without `create_session` the session falls
-back to a `send_later` self check-in with a Haiku subagent doing the read.
+back to a `send_later` self check-in with a Sonnet subagent doing the read.
 It never handles CI, reviews, comments, or conflicts; that stays a direct
 §12 request.
 
@@ -662,10 +668,15 @@ It never handles CI, reviews, comments, or conflicts; that stays a direct
   `create_session` see the claude-code-remote tools under a generated server
   name; the one observed in this account's cloud environment,
   `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a`, is allowlisted as a whole
-  server (allow rules cannot wildcard the server segment), so unattended
-  checkers and stage sessions do not stall on a prompt the Auto-mode
-  classifier sometimes raises. In an environment with a different name the
-  rule is inert.
+  server and tool by tool (allow rules cannot wildcard the server segment),
+  and `ReadNotifications` is allowed for the notice a wake queues. In an
+  environment with a different name those rules are inert. The
+  claude-code-remote write tools (`send_later`, `create_session`,
+  `archive_session`, the trigger tools) are not covered by any allow rule:
+  outside Auto mode they ask on every call with only *Deny* / *Allow once*
+  (verified with probe sessions on 2026-09-24), so checkers and stage
+  sessions run in Auto mode and checkers use Sonnet, not Haiku, which cannot
+  run in Auto mode.
 - Tests: `tests/test_pr_check_in_reminder.py` and
   `tests/test_check_in_status.py` (own `ci.yml` steps).
 - Relationship to §25: the check-in is the scheduled self check-in §25.C

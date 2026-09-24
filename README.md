@@ -1023,7 +1023,7 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (`hooks/pr_merge_status_guard.py`, §21), the PR-watch guard
 > (`hooks/pr_watch_guard.py`, §25), and the post-push PR status check-in
 > reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
-> interactive session start a small Haiku checker session for every pull
+> interactive session start a small Sonnet checker session for every pull
 > request it pushes; the checker runs `.claude/scripts/check_in_status.py` every
 > 3 hours (re-armed with `send_later`), and once the PR merges or closes it
 > reports the next steps (or that the pushing session can be closed) without
