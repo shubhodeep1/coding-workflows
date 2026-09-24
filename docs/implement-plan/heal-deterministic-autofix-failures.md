@@ -5,7 +5,7 @@
 - Status: IN_PROGRESS
 - Stage: phase 4/4
 - Activation: not started
-- Waiting on: PR #4374 (phase 4 PR; number predicted, see Notes)
+- Waiting on: PR #4375
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: see the phase 4 PR report (Haiku checker session + safety net)
 - Last updated: 2026-09-24
@@ -15,7 +15,7 @@
 1. [x] Phase 1 — Heal dispatch envelope and visible rejection — PR #4303 merged 2026-09-23; interventions: 0
 2. [x] Phase 2 — Identical-failure fingerprint cap — PR #4327 merged 2026-09-23; interventions: 0
 3. [x] Phase 3 — Self-inflicted classification and routing — PR #4365 merged 2026-09-24; interventions: 0
-4. [ ] Phase 4 — Editor preflight and main-pinned divergence check — PR #4374 open (waiting); interventions: 0
+4. [ ] Phase 4 — Editor preflight and main-pinned divergence check — PR #4375 open (waiting); interventions: 0
 
 ## Security pass
 - not started
@@ -39,5 +39,5 @@
 - 2026-09-24: phase 4 resumed from checker session_01WZAzPjEn2HGD4joLA2ZdZq in session_0174Kdk3odzxZxX9Nmm72cfH; previous stage and checker archived, safety net trig_01Pt2eeqYKwxGJs38xCVDATC deleted.
 - 2026-09-24: phase 4 plan-vs-main differences: `review_apply_fixes.sh` on main has no `: "${VAR:?…}"` guard (the #4259 guard lived only on that PR's branch), so `preflight_required_vars` starts empty and the contract test keeps it complete; `CODEX_HELPERS_PATH` is referenced nowhere, so the preflight checks it only when set (requiring it would fail every run).
 - 2026-09-24: phase 4 additions beyond the plan text, all additive: (a) the preflight skips with `reason=editor_not_scheduled` in Claude-branch review mode or a terminal resume, where the editor never runs, and logs `reason=disabled` under the kill switch; (b) the preflight runs after the file checks, so the existing missing-file failures and alerts are unchanged; (c) `derive_autofix_failure_reason` in `workflow_failure_heal.py` gains the same `EDITOR_PREFLIGHT_FAILED` precedence as the reporter, because "Assemble failure evidence" exports its reason as `AUTOFIX_FAILURE_REASON` (parity is test-pinned); (d) the main-pinned test fetches `origin/main` only when the ref is missing and uses `--depth=1` only on an already-shallow checkout, so it never makes a full local clone shallow.
-- 2026-09-24: phase 4 predicted PR 4374 for the changelog fragment.
+- 2026-09-24: phase 4 predicted PR 4374 for the changelog fragment; GitHub assigned #4375, fragment renamed.
 - 2026-09-24: `tests/test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean` fails locally only without `gawk` (container lacked it); passes once installed. Unrelated to phase 4.
