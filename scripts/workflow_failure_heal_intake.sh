@@ -23,8 +23,12 @@
 #      duplicate -> occurrence comment; lineage cap -> escalate;
 #      budget cap -> alert; otherwise continue.
 #   4. Checks out the coding-workflows source at the release SHA the failing run
-#      used, runs the diagnosis model (codex / MODEL_EDITOR) with
-#      prompts/mode-workflow-failure-heal.txt, and reads its classification.
+#      used, fetches the branch progress since that SHA (one compare call) and
+#      the earlier heal issues of the same fingerprint / lineage (from the list
+#      already fetched in step 3), runs the diagnosis model (codex /
+#      MODEL_EDITOR) with prompts/mode-workflow-failure-heal.txt, and reads its
+#      classification. An `already-fixed` answer must cite a commit that landed
+#      after the failing SHA, or it is downgraded to `inconclusive`.
 #   5. Routes the outcome:
 #        workflow-defect, inconclusive -> issue in coding-workflows
 #          (label ai:workflow-heal, `Target branch: stable` so the fix is a
@@ -36,6 +40,7 @@
 #        consumer-app-defect           -> issue in the source repository
 #        consumer-config               -> Telegram ERROR + comment, no issue
 #        transient                     -> Telegram DEBUG + comment, no issue
+#        already-fixed (verified)      -> Telegram DEBUG + comment, no issue
 #
 # The opened issue is a normal issue, so the existing clarify -> plan ->
 # implement -> review pipeline picks it up. This script never pushes code.
@@ -280,7 +285,7 @@ SELF_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_self.json"
 SOURCE_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_source.json"
 ISSUES_FILE="${RUNTIME_DIR}/heal_issues.json"
 if ! gh_retry gh api --method GET --paginate "repos/${SELF_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
-	--jq '.[] | {number, state, body: (.body // ""), created_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
 	| jq -s --arg repository "${SELF_REPO}" 'map(. + {repository: $repository})' > "${SELF_ISSUES_FILE}" 2>/dev/null; then
 	log "error heal_issue_list_failed"
 	tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
@@ -291,7 +296,7 @@ fi
 # repositories that can own the issue produced by this intake.
 if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
 	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
-		--jq '.[] | {number, state, body: (.body // ""), created_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
 		| jq -s --arg repository "${SOURCE_REPO}" 'map(. + {repository: $repository})' > "${SOURCE_ISSUES_FILE}" 2>/dev/null; then
 		log "error heal_issue_list_failed repo=${SOURCE_REPO}"
 		tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues in ${SOURCE_REPO}; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
@@ -397,6 +402,62 @@ if [ "${SOURCE_CHECKOUT,,}" != "false" ] && git rev-parse --is-inside-work-tree 
 	fi
 fi
 
+# --- "Is this already fixed?" context ---------------------------------------
+#
+# Branch progress: one `GET repos/<self>/compare/<failing sha>...<branch>` call.
+# CLAUDE.md §15 audit: the jobs, job-log, heal-issue-list and branch-existence
+# calls in this script carry no commit history, so none of them can say whether
+# the branch moved past the code that failed. Reference per report kind: a
+# release run or a review/autofix run in this repo -> its head SHA vs its
+# branch; a consumer report -> its wrapper release pin vs the heal target
+# branch. Fail open: without a usable response the model is told progress is
+# unavailable, and an `already-fixed` answer is then downgraded.
+#
+# Earlier heals: rendered from ${ISSUES_FILE} (already fetched for the budget
+# decision), so no extra API call.
+
+PROGRESS_SHA=""
+PROGRESS_BRANCH=""
+if [ "${SOURCE_KIND}" = "workflow_run" ] || { [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; }; then
+	PROGRESS_SHA="${HEAD_SHA}"
+	PROGRESS_BRANCH="${HEAD_BRANCH}"
+elif [ -n "${WRAPPER_SHA}" ]; then
+	PROGRESS_SHA="${WRAPPER_SHA}"
+	PROGRESS_BRANCH="${TARGET_BRANCH_DEFAULT}"
+fi
+PROGRESS_COMPARE_FILE="${RUNTIME_DIR}/branch_compare.json"
+PROGRESS_FILE="${RUNTIME_DIR}/branch_progress.json"
+PROGRESS_REASON=""
+: > "${PROGRESS_COMPARE_FILE}"
+if [ -z "${PROGRESS_SHA}" ] || [ -z "${PROGRESS_BRANCH}" ]; then
+	PROGRESS_REASON="no_reference_sha"
+elif ! gh_api_json_to_file "${PROGRESS_COMPARE_FILE}" gh api --method GET "repos/${SELF_REPO}/compare/${PROGRESS_SHA}...${PROGRESS_BRANCH}" 2>/dev/null; then
+	PROGRESS_REASON="compare_fetch_failed"
+fi
+if ! python3 "${HEAL_PY}" branch-progress --compare-json "${PROGRESS_COMPARE_FILE}" --failed-sha "${PROGRESS_SHA:-none}" --branch "${PROGRESS_BRANCH:-none}" --reason "${PROGRESS_REASON}" > "${PROGRESS_FILE}" 2>/dev/null \
+	|| ! jq -e 'type == "object"' "${PROGRESS_FILE}" >/dev/null 2>&1; then
+	printf '{"available": false, "reason": "branch_progress_failed"}\n' > "${PROGRESS_FILE}"
+fi
+log "branch_progress available=$(jq -r '.available' "${PROGRESS_FILE}") branch=${PROGRESS_BRANCH:-none} sha=${PROGRESS_SHA:-none} ahead_by=$(jq -r '.ahead_by // "none"' "${PROGRESS_FILE}") reason=$(jq -r '.reason // "none"' "${PROGRESS_FILE}")"
+# Branch tip checkout (git fetch, no API call) so the model can diff the code
+# that failed against the code that runs now; the working directory is the
+# intake's own checkout, which is not the progress branch for every report.
+HEAL_BRANCH_TIP_DIR="${RUNTIME_DIR}/heal_branch_tip"
+HEAL_BRANCH_TIP_NOTE="unavailable"
+PROGRESS_TIP_SHA="$(jq -r 'if .available == true and (.ahead_by // 0) > 0 then .tip_sha else "" end' "${PROGRESS_FILE}" 2>/dev/null || echo "")"
+if [ -n "${PROGRESS_TIP_SHA}" ] && [ "${SOURCE_CHECKOUT,,}" != "false" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	if _git_fetch_diagnosis_ref "${PROGRESS_TIP_SHA}" \
+		&& git worktree add --quiet --detach "${HEAL_BRANCH_TIP_DIR}" FETCH_HEAD >/dev/null 2>&1; then
+		HEAL_BRANCH_TIP_NOTE="${HEAL_BRANCH_TIP_DIR} (coding-workflows ${PROGRESS_BRANCH} at ${PROGRESS_TIP_SHA})"
+		log "branch_tip_checkout ref=${PROGRESS_TIP_SHA} branch=${PROGRESS_BRANCH} path=${HEAL_BRANCH_TIP_DIR}"
+	else
+		log "warn branch_tip_checkout_failed ref=${PROGRESS_TIP_SHA} branch=${PROGRESS_BRANCH}"
+	fi
+fi
+LINEAGE_FILE="${RUNTIME_DIR}/heal_lineage.txt"
+python3 "${HEAL_PY}" lineage-context --issues-json "${ISSUES_FILE}" --fingerprint "${FP}" --root "${ROOT}" > "${LINEAGE_FILE}" 2>/dev/null \
+	|| printf '(earlier heal issues unavailable)\n' > "${LINEAGE_FILE}"
+
 # --- Run the diagnosis model -----------------------------------------------
 
 PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
@@ -421,6 +482,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	echo
 	echo "=== FAILURE CONTEXT ==="
 	echo "HEAL_SOURCE_DIR: ${HEAL_SOURCE_NOTE}"
+	echo "HEAL_BRANCH_TIP_DIR: ${HEAL_BRANCH_TIP_NOTE}"
 	echo "Source repository: ${SOURCE_REPO}"
 	echo "Report kind: ${SOURCE_KIND}"
 	if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
@@ -454,6 +516,12 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		cat "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || true
 		echo
 	fi
+	echo "=== BRANCH PROGRESS SINCE THE FAILING SHA ==="
+	python3 "${HEAL_PY}" render-branch-progress --summary-json "${PROGRESS_FILE}" 2>/dev/null || echo "(branch progress unavailable)"
+	echo
+	echo "=== EARLIER HEAL ISSUES FOR THIS FAILURE (UNTRUSTED) ==="
+	cat "${LINEAGE_FILE}" 2>/dev/null || true
+	echo
 	echo "=== FAILED RUN LOGS (UNTRUSTED) ==="
 	if [ "${SUMMARY_COUNT}" -gt 0 ]; then
 		while IFS=$'\t' read -r run_url job_name workflow_name failing_step log_file; do
@@ -513,6 +581,29 @@ fi
 
 CLASSIFICATION="$(python3 "${HEAL_PY}" parse-classification --diagnosis-file "${DIAG_FILE}" 2>/dev/null || echo "inconclusive")"
 log "classification=${CLASSIFICATION} source=${SOURCE_LABEL} fp=${FP} gen=${GEN}"
+
+# An `already-fixed` answer suppresses the issue, so it has to be checkable:
+# the `## Fixed by` section must cite a commit that landed on the branch after
+# the failing SHA. Anything less is filed as `inconclusive`, with a note.
+ALREADY_FIXED_COMMITS=""
+if [ "${CLASSIFICATION}" = "already-fixed" ]; then
+	ALREADY_FIXED_CHECK_FILE="${RUNTIME_DIR}/already_fixed_check.json"
+	python3 "${HEAL_PY}" check-already-fixed --diagnosis-file "${DIAG_FILE}" --summary-json "${PROGRESS_FILE}" > "${ALREADY_FIXED_CHECK_FILE}" 2>/dev/null \
+		|| printf '{"ok": false, "reason": "check_failed", "commits": []}\n' > "${ALREADY_FIXED_CHECK_FILE}"
+	if jq -e '.ok == true' "${ALREADY_FIXED_CHECK_FILE}" >/dev/null 2>&1; then
+		ALREADY_FIXED_COMMITS="$(jq -r '[.commits[] | .[0:12]] | join(",")' "${ALREADY_FIXED_CHECK_FILE}")"
+		log "already_fixed_verified commits=${ALREADY_FIXED_COMMITS} branch=${PROGRESS_BRANCH} source=${SOURCE_LABEL} fp=${FP}"
+	else
+		ALREADY_FIXED_REJECT_REASON="$(jq -r '.reason // "check_failed"' "${ALREADY_FIXED_CHECK_FILE}" 2>/dev/null || echo check_failed)"
+		log "warn already_fixed_unverified reason=${ALREADY_FIXED_REJECT_REASON} source=${SOURCE_LABEL} fp=${FP}; filing as inconclusive"
+		CLASSIFICATION="inconclusive"
+		{
+			echo "> **Heal intake note:** the diagnosis below classified this failure as \`already-fixed\`, but the claim could not be verified (\`${ALREADY_FIXED_REJECT_REASON}\`): it must cite, under \`## Fixed by\`, a commit that landed on the branch after the failing SHA. It was filed as \`inconclusive\` instead. Confirm whether the failure still reproduces on the current branch before planning a fix."
+			echo
+			cat "${DIAG_FILE}"
+		} > "${DIAG_FILE}.tmp" && mv "${DIAG_FILE}.tmp" "${DIAG_FILE}"
+	fi
+fi
 
 # --- Route -----------------------------------------------------------------
 
@@ -650,6 +741,28 @@ case "${CLASSIFICATION}" in
 		else
 			tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} looks transient, no issue opened. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}" "DEBUG" >/dev/null 2>&1 || true
 		fi
+		;;
+	already-fixed)
+		{
+			echo "<!-- workflow-failure-heal:outcome -->"
+			echo "Workflow failure heal classified this failure as \`already-fixed\`: \`${PROGRESS_BRANCH}\` gained commit(s) ${ALREADY_FIXED_COMMITS//,/, } after the failing SHA \`${PROGRESS_SHA}\`, and the diagnosis attributes the fix to them. No fix issue was opened."
+			if [ "${PROGRESS_SHA}" = "${WRAPPER_SHA}" ] && [ -n "${WRAPPER_SHA}" ]; then
+				echo
+				echo "This repository's workflow wrappers are pinned to the older release; the next wrapper sync to \`${PROGRESS_BRANCH}\` picks up the fix."
+			fi
+			echo
+			echo "<details><summary>Automated diagnosis</summary>"
+			echo
+			cat "${DIAG_FILE}"
+			echo
+			echo "</details>"
+			echo
+			echo "Heal intake run: ${RUN_URL}"
+		} > "${RUNTIME_DIR}/source_comment.md"
+		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
+		SUMMARY_LINE="$(sed -n '/^## Summary/,/^## /p' "${DIAG_FILE}" | sed '1d;/^## /d' | tr '\n' ' ' | head -c 400)"
+		log "no_issue classification=${CLASSIFICATION} fixed_by=${ALREADY_FIXED_COMMITS} branch=${PROGRESS_BRANCH} source=${SOURCE_LABEL} fp=${FP}"
+		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}') is already fixed on ${PROGRESS_BRANCH} by ${ALREADY_FIXED_COMMITS}; no issue opened. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "DEBUG" >/dev/null 2>&1 || true
 		;;
 	*)
 		log "error unknown_classification value=${CLASSIFICATION}"

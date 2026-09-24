@@ -654,6 +654,96 @@ def test_filter_log_keeps_signal_lines_and_bounds_size() -> None:
 	assert len(bounded.encode("utf-8")) <= 1_100
 
 
+SHA_C = "c" * 40
+SHA_FIX = "4d2c9dcb5d12d89e462facf2712d27d66162d74d"
+
+
+def _compare(ahead_by: int, commits: list[tuple[str, str]], files: list[str] | None = None, status: str = "ahead") -> dict:
+	return {
+		"status": status,
+		"ahead_by": ahead_by,
+		"behind_by": 0,
+		"total_commits": ahead_by,
+		"commits": [{"sha": sha, "commit": {"message": message}} for sha, message in commits],
+		"files": [{"filename": name, "patch": "@@ -1 +1 @@"} for name in (files or [])],
+	}
+
+
+def test_summarize_branch_progress_validates_and_bounds_the_compare_response() -> None:
+	compare = _compare(2, [(SHA_FIX, "AI implementation for issue #4350 (#4351)\n\nbody"), (SHA_C, "Merge pull request #4352")], [".github/workflows/test-and-mark-stable.yml"])
+	summary = heal.summarize_branch_progress(compare, failed_sha=SHA_A, branch="main")
+	assert summary["available"] is True
+	assert summary["ahead_by"] == 2 and summary["tip_sha"] == SHA_C and summary["status"] == "ahead"
+	assert summary["commits"][0] == {"sha": SHA_FIX, "subject": "AI implementation for issue #4350 (#4351)"}
+	assert summary["files"] == [".github/workflows/test-and-mark-stable.yml"]
+	assert summary["commits_truncated"] is False
+	identical = heal.summarize_branch_progress(_compare(0, [], status="identical"), failed_sha=SHA_A, branch="main")
+	assert identical["available"] and identical["tip_sha"] == SHA_A
+	# Untrusted shapes are rejected, never trusted.
+	assert heal.summarize_branch_progress(None, failed_sha=SHA_A, branch="main")["reason"] == "invalid_compare_response"
+	assert heal.summarize_branch_progress({"status": "ahead", "ahead_by": "2"}, failed_sha=SHA_A, branch="main")["available"] is False
+	assert heal.summarize_branch_progress({"status": "weird", "ahead_by": 1}, failed_sha=SHA_A, branch="main")["available"] is False
+	assert heal.summarize_branch_progress(compare, failed_sha="nope", branch="main")["reason"] == "invalid_reference"
+	assert heal.summarize_branch_progress(compare, failed_sha=SHA_A, branch="bad..branch")["reason"] == "invalid_reference"
+	junk = _compare(3, [(SHA_FIX, "ok")])
+	junk["commits"] += [{"sha": "zz"}, "text", {"sha": SHA_C.upper()}]
+	cleaned = heal.summarize_branch_progress(junk, failed_sha=SHA_A, branch="main")
+	assert [c["sha"] for c in cleaned["commits"]] == [SHA_FIX, SHA_C]
+	assert heal.summarize_branch_progress(_compare(400, [(SHA_FIX, "x")]), failed_sha=SHA_A, branch="main")["commits_truncated"] is True
+
+
+def test_render_branch_progress_states_whether_the_failing_code_is_current() -> None:
+	ahead = heal.summarize_branch_progress(_compare(1, [(SHA_FIX, "Adopt the active review run")], ["scripts/x.sh"]), failed_sha=SHA_A, branch="main")
+	text = heal.render_branch_progress(ahead)
+	assert "`main` has 1 commit(s) after the failing SHA" in text
+	assert f"- {SHA_FIX[:12]} Adopt the active review run" in text
+	assert "- scripts/x.sh" in text and "HEAL_BRANCH_TIP_DIR" in text
+	current = heal.render_branch_progress(heal.summarize_branch_progress(_compare(0, [], status="identical"), failed_sha=SHA_A, branch="main"))
+	assert "still the current code" in current
+	unavailable = heal.render_branch_progress({"available": False, "reason": "compare_fetch_failed"})
+	assert "compare_fetch_failed" in unavailable and "`already-fixed`" in unavailable
+
+
+def test_render_heal_lineage_context_lists_same_fingerprint_and_lineage_issues() -> None:
+	fp = "1" * 64
+	root = "2" * 64
+	body = (
+		f"<!-- {heal.MARKER_PREFIX}fp={fp} -->\n<!-- {heal.MARKER_PREFIX}gen=1 -->\n<!-- {heal.MARKER_PREFIX}root={root} -->\n"
+		"## Root cause\nPhase 4b redispatches behind queued work.\n\n## Suggested fix\nAdopt the oldest active run.\n\n## Affected files\n- x\n"
+	)
+	issues = [
+		{"number": 4350, "state": "closed", "state_reason": "completed", "closed_at": "2026-09-23T22:32:16Z", "title": "Workflow heal: Test & Mark Stable Release failed on stable", "body": body, "created_at": "2026-09-23T19:28:02Z", "html_url": "u4350"},
+		{"number": 4360, "state": "open", "title": "same lineage", "body": f"<!-- {heal.MARKER_PREFIX}fp={'3' * 64} -->\n<!-- {heal.MARKER_PREFIX}root={root} -->", "created_at": "x", "html_url": "u4360"},
+		{"number": 4361, "state": "open", "title": "unrelated", "body": f"<!-- {heal.MARKER_PREFIX}fp={'4' * 64} -->", "created_at": "x", "html_url": "u4361"},
+		{"number": 4362, "state": "open", "title": "a pull request", "body": body, "pull_request": True},
+	]
+	text = heal.render_heal_lineage_context(issues, fp=fp, root=root)
+	assert text.index("#4360") < text.index("#4350")  # newest first
+	assert "[closed (completed), closed 2026-09-23T22:32:16Z]" in text
+	assert "Phase 4b redispatches behind queued work." in text and "Adopt the oldest active run." in text
+	assert "Affected files" not in text
+	assert "#4361" not in text and "#4362" not in text
+	assert "no earlier heal issue" in heal.render_heal_lineage_context([], fp=fp, root=root)
+
+
+def test_check_heal_already_fixed_claim_requires_a_cited_commit_after_the_failing_sha() -> None:
+	summary = heal.summarize_branch_progress(_compare(2, [(SHA_FIX, "fix"), (SHA_C, "merge")]), failed_sha=SHA_A, branch="main")
+	good = f"## Classification\nalready-fixed\n\n## Fixed by\n- `{SHA_FIX[:12]}` adopts the active run (test-and-mark-stable.yml:2341)\n"
+	verdict = heal.check_heal_already_fixed_claim(good, summary)
+	assert verdict == {"ok": True, "reason": "fixed_by_commit_verified", "commits": [SHA_FIX]}
+	assert heal.check_heal_already_fixed_claim(good.replace("## Fixed by", "## Evidence"), summary)["reason"] == "fixed_by_section_missing"
+	assert heal.check_heal_already_fixed_claim(good.replace(SHA_FIX[:12], "deadbeef1234"), summary)["reason"] == "fixed_by_commit_not_after_failing_sha"
+	# A SHA cited outside the Fixed by section does not count.
+	elsewhere = f"## Evidence\n{SHA_FIX[:12]}\n\n## Fixed by\nsomething vague\n"
+	assert heal.check_heal_already_fixed_claim(elsewhere, summary)["ok"] is False
+	# Six hex chars are too short to identify a commit.
+	assert heal.check_heal_already_fixed_claim(good.replace(SHA_FIX[:12], SHA_FIX[:6]), summary)["ok"] is False
+	identical = heal.summarize_branch_progress(_compare(0, [], status="identical"), failed_sha=SHA_A, branch="main")
+	assert heal.check_heal_already_fixed_claim(good, identical)["reason"] == "no_commits_after_failing_sha"
+	assert heal.check_heal_already_fixed_claim(good, {"available": False, "reason": "x"})["reason"] == "branch_progress_unavailable"
+	assert heal.parse_classification("## Classification\n`already-fixed`\n") == "already-fixed"
+
+
 # ---------------------------------------------------------------------------
 # Shell drivers against a mock gh / mock codex
 # ---------------------------------------------------------------------------
@@ -758,6 +848,13 @@ if args[:1] == ["api"]:
 		if text is None:
 			fail("HTTP 404")
 		out(text)
+	if "/compare/" in path:
+		if method != "GET":
+			fail("HTTP method must be GET for compare")
+		compare = state.get("compare")
+		if compare is None:
+			fail("HTTP 404")
+		out(json.dumps(compare))
 	if "/branches/" in path:
 		branch = urllib.parse.unquote(path.split("/branches/")[-1])
 		if branch in state.get("branches", ["stable", "main"]):
@@ -1162,6 +1259,90 @@ def test_intake_workflow_run_preserves_slash_bearing_target_branch() -> None:
 	assert match and (match.group(1) or match.group(2)) == branch_name
 	branch_calls = [call for call in state_after["calls"] if any("/branches/" in part for part in call)]
 	assert branch_calls and "%2F" in next(part for part in branch_calls[0] if "/branches/" in part)
+
+
+def _gate_run_payload() -> dict:
+	return heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Test & Mark Stable Release [cycle:35939056453]", "conclusion": "failure", "head_sha": SHA_A, "head_branch": "main", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Test & Mark Stable Release [cycle:35939056453]"},
+	)
+
+
+def _gate_state(**overrides) -> dict:
+	gate_log = "2026-09-24T01:23:12.7531832Z ##[error]Retry review run did not complete within 25 minutes\n"
+	state = _intake_state(
+		jobs={"500": [{"id": 9001, "name": "e2e-smoke-test", "workflow_name": "Test & Mark Stable Release [cycle:35939056453]", "conclusion": "failure", "steps": [{"name": "Phase 4b: Verify editor restored canary (pytest + retry)", "conclusion": "failure"}]}]},
+		job_logs={"9001": gate_log},
+		compare=_compare(2, [(SHA_FIX, "AI implementation for issue #4350 (#4351)"), (SHA_C, "Merge pull request #4352")], [".github/workflows/test-and-mark-stable.yml"]),
+	)
+	state.update(overrides)
+	return state
+
+
+DIAG_ALREADY_FIXED = (
+	"## Classification\nalready-fixed\n\n## Summary\nPhase 4b redispatched behind queued review work; #4351 adopts the active run.\n\n"
+	f"## Fixed by\n- {SHA_FIX[:12]} adopts the oldest eligible active review run (.github/workflows/test-and-mark-stable.yml:2341)\n"
+)
+
+
+def test_intake_gives_the_model_branch_progress_and_earlier_heals() -> None:
+	signature = heal.error_signature(heal.filter_log(_gate_state()["job_logs"]["9001"]))
+	fp = heal.fingerprint("Test & Mark Stable Release", "Phase 4b: Verify editor restored canary (pytest + retry)", signature)
+	prior = _heal_issue(4350, state="closed", fp=fp)
+	prior.update({"title": "Workflow heal: Test & Mark Stable Release failed on stable", "state_reason": "completed", "closed_at": "2026-09-23T22:32:16Z"})
+	prior["body"] += "\n## Suggested fix\nAdopt the oldest active review run.\n"
+	result, state_after, prompt = _run_intake(_gate_run_payload(), _gate_state(heal_issues=[prior]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL branch_progress available=true branch=main" in result.stdout and "ahead_by=2" in result.stdout
+	compare_calls = [call for call in state_after["calls"] if any("/compare/" in part for part in call)]
+	assert len(compare_calls) == 1
+	assert f"repos/{SELF_REPO}/compare/{SHA_A}...main" in compare_calls[0]
+	assert "=== BRANCH PROGRESS SINCE THE FAILING SHA ===" in prompt
+	assert f"- {SHA_FIX[:12]} AI implementation for issue #4350 (#4351)" in prompt
+	assert "- .github/workflows/test-and-mark-stable.yml" in prompt
+	assert "=== EARLIER HEAL ISSUES FOR THIS FAILURE (UNTRUSTED) ===" in prompt
+	assert "#4350 [closed (completed)" in prompt and "Adopt the oldest active review run." in prompt
+	assert "HEAL_BRANCH_TIP_DIR: unavailable" in prompt  # source checkout is off in tests
+	# The cycle-tagged run joined #4350's lineage instead of starting its own.
+	created = state_after["issues_created"][0]
+	markers = heal.parse_heal_markers(created["body"])
+	assert markers["gen"] == "2" and markers["fp"] == fp
+
+
+def test_intake_already_fixed_with_a_verified_commit_opens_no_issue() -> None:
+	result, state_after, _ = _run_intake(_gate_run_payload(), _gate_state(), diagnosis=DIAG_ALREADY_FIXED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL already_fixed_verified commits={SHA_FIX[:12]} branch=main" in result.stdout
+	assert "WORKFLOW_HEAL no_issue classification=already-fixed" in result.stdout
+	assert "issues_created" not in state_after
+
+
+def test_intake_already_fixed_consumer_report_comments_with_the_sync_hint() -> None:
+	compare = _compare(1, [(SHA_FIX, "AI implementation for issue #4350 (#4351)")])
+	result, state_after, prompt = _run_intake(_consumer_payload(), _intake_state(compare=compare), diagnosis=DIAG_ALREADY_FIXED)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "issues_created" not in state_after
+	assert any(f"repos/{SELF_REPO}/compare/{SHA_A}...stable" in part for call in state_after["calls"] for part in call)
+	comment = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments"][0]
+	assert "`already-fixed`" in comment["body"] and SHA_FIX[:12] in comment["body"]
+	assert "next wrapper sync to `stable`" in comment["body"]
+
+
+def test_intake_downgrades_an_unverifiable_already_fixed_claim() -> None:
+	cases = [
+		(_gate_state(), DIAG_ALREADY_FIXED.replace(SHA_FIX[:12], "deadbeef1234"), "fixed_by_commit_not_after_failing_sha"),
+		(_gate_state(compare=None), DIAG_ALREADY_FIXED, "branch_progress_unavailable"),
+		(_gate_state(compare=_compare(0, [], status="identical")), DIAG_ALREADY_FIXED, "no_commits_after_failing_sha"),
+	]
+	for state, diagnosis, reason in cases:
+		result, state_after, prompt = _run_intake(_gate_run_payload(), state, diagnosis=diagnosis)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL warn already_fixed_unverified reason={reason}" in result.stdout, (reason, result.stdout)
+		created = state_after["issues_created"][0]
+		assert heal.parse_heal_markers(created["body"])["classification"] == "inconclusive"
+		assert "**Heal intake note:**" in created["body"] and f"`{reason}`" in created["body"]
+		if state.get("compare") is None:
+			assert "branch progress unavailable: compare_fetch_failed" in prompt
 
 
 def test_intake_without_linked_runs_still_files_from_label_context() -> None:

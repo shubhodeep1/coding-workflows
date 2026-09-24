@@ -71,7 +71,12 @@ CLASSIFICATIONS: tuple[str, ...] = (
 	"consumer-config",
 	"transient",
 	"inconclusive",
+	"already-fixed",
 )
+# `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
+# confirms the diagnosis cites a commit that landed on the branch after the
+# failing SHA; otherwise the intake downgrades it to `inconclusive`.
+ALREADY_FIXED_CLASSIFICATION = "already-fixed"
 # Classifications that open an issue in coding-workflows.
 UPSTREAM_ISSUE_CLASSIFICATIONS = ("workflow-defect", "inconclusive")
 
@@ -121,6 +126,16 @@ MAX_PAYLOAD_BYTES = 60_000
 DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 SIGNATURE_LINE_LIMIT = 5
 SIGNATURE_CHAR_LIMIT = 500
+# Branch progress since the failing SHA (one compare call per intake). The
+# compare API returns at most 250 commits and 300 files; the prompt shows the
+# newest BRANCH_PROGRESS_COMMITS_SHOWN / first BRANCH_PROGRESS_FILES_SHOWN.
+BRANCH_PROGRESS_COMMIT_LIMIT = 250
+BRANCH_PROGRESS_FILE_LIMIT = 300
+BRANCH_PROGRESS_COMMITS_SHOWN = 60
+BRANCH_PROGRESS_FILES_SHOWN = 200
+# Earlier heal issues of the same fingerprint / lineage shown to the model.
+HEAL_LINEAGE_CONTEXT_LIMIT = 5
+HEAL_LINEAGE_EXCERPT_LIMIT = 1500
 
 _REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -138,6 +153,8 @@ _ORCHESTRATOR_STATE_V2_COMMENT_RE = re.compile(
 	re.DOTALL,
 )
 _CLASSIFICATION_RE = re.compile(r"^##\s*Classification\s*$", re.IGNORECASE | re.MULTILINE)
+_HEAL_FIXED_BY_SECTION_RE = re.compile(r"^##\s*Fixed by\s*$", re.IGNORECASE | re.MULTILINE)
+_HEAL_COMMIT_REF_RE = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s?")
@@ -1237,6 +1254,174 @@ def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str) 
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Branch progress + earlier heals: "is this already fixed?" context
+# ---------------------------------------------------------------------------
+
+
+def summarize_branch_progress(compare: Any, *, failed_sha: str, branch: str) -> dict[str, Any]:
+	"""Reduce a GitHub compare response to what the diagnosis model needs.
+
+	``compare`` is the raw ``GET repos/<repo>/compare/<failed_sha>...<branch>``
+	body (untrusted: every field is re-validated). Returns ``{"available":
+	True, branch, failed_sha, status, ahead_by, tip_sha, commits: [{sha,
+	subject}] oldest first, files: [path], commits_truncated, files_truncated}``
+	or ``{"available": False, "reason": ...}`` when the response is unusable.
+	"""
+	if not is_valid_sha(failed_sha) or not is_valid_branch(branch):
+		return {"available": False, "reason": "invalid_reference"}
+	if not isinstance(compare, dict):
+		return {"available": False, "reason": "invalid_compare_response"}
+	ahead_by = compare.get("ahead_by")
+	status = compare.get("status")
+	if not isinstance(ahead_by, int) or isinstance(ahead_by, bool) or ahead_by < 0 or status not in ("identical", "ahead", "behind", "diverged"):
+		return {"available": False, "reason": "invalid_compare_response"}
+	commits: list[dict[str, str]] = []
+	for item in compare.get("commits") or []:
+		if not isinstance(item, dict):
+			continue
+		sha = str(item.get("sha") or "").lower()
+		if not is_valid_sha(sha):
+			continue
+		message = (item.get("commit") or {}).get("message") if isinstance(item.get("commit"), dict) else ""
+		commits.append({"sha": sha, "subject": single_line(str(message or "").split("\n", 1)[0], 160)})
+	commits = commits[-BRANCH_PROGRESS_COMMIT_LIMIT:]
+	files: list[str] = []
+	for item in compare.get("files") or []:
+		if isinstance(item, dict) and isinstance(item.get("filename"), str):
+			files.append(single_line(item["filename"], 300))
+		if len(files) >= BRANCH_PROGRESS_FILE_LIMIT:
+			break
+	tip_sha = commits[-1]["sha"] if commits else failed_sha
+	return {
+		"available": True,
+		"branch": branch,
+		"failed_sha": failed_sha,
+		"status": status,
+		"ahead_by": ahead_by,
+		"tip_sha": tip_sha,
+		"commits": commits,
+		"files": files,
+		"commits_truncated": ahead_by > len(commits),
+		"files_truncated": len(compare.get("files") or []) > len(files),
+	}
+
+
+def render_branch_progress(summary: dict[str, Any]) -> str:
+	"""Render the branch-progress block for the diagnosis prompt."""
+	if not isinstance(summary, dict) or not summary.get("available"):
+		reason = summary.get("reason") if isinstance(summary, dict) else "unavailable"
+		return (
+			f"(branch progress unavailable: {single_line(reason or 'unavailable', 80)}. "
+			"Do not classify as `already-fixed` without it.)\n"
+		)
+	branch = summary["branch"]
+	failed = summary["failed_sha"]
+	ahead = summary["ahead_by"]
+	lines = [f"Failing SHA: {failed}", f"Branch: {branch}  Tip: {summary['tip_sha']}  Compare status: {summary['status']}"]
+	if ahead == 0:
+		lines.append(f"`{branch}` has no commits after the failing SHA: the code that failed is still the current code.")
+		return "\n".join(lines) + "\n"
+	lines.append(
+		f"`{branch}` has {ahead} commit(s) after the failing SHA. HEAL_SOURCE_DIR holds the failing SHA and "
+		f"HEAL_BRANCH_TIP_DIR holds `{branch}` at its tip (paths in FAILURE CONTEXT); diff the two to see what changed."
+	)
+	lines.append("")
+	shown = summary["commits"][-BRANCH_PROGRESS_COMMITS_SHOWN:]
+	hidden = ahead - len(shown)
+	lines.append(f"Commits after the failing SHA (oldest first{f', {hidden} older not shown' if hidden > 0 else ''}):")
+	for commit in shown:
+		lines.append(f"- {commit['sha'][:12]} {commit['subject']}")
+	lines.append("")
+	files = summary["files"][:BRANCH_PROGRESS_FILES_SHOWN]
+	more = "" if len(files) == len(summary["files"]) and not summary.get("files_truncated") else " (list truncated)"
+	lines.append(f"Files changed on `{branch}` since the failing SHA{more}:")
+	lines.extend(f"- {path}" for path in files)
+	return "\n".join(lines) + "\n"
+
+
+def _markdown_section(markdown: str, heading: str, limit: int) -> str:
+	"""Return the body of ``## <heading>`` (up to the next ``## ``), bounded."""
+	match = re.search(r"^##\s*" + re.escape(heading) + r"\s*$", markdown, re.IGNORECASE | re.MULTILINE)
+	if not match:
+		return ""
+	rest = markdown[match.end():]
+	end = re.search(r"^##\s", rest, re.MULTILINE)
+	return sanitize_text((rest[: end.start()] if end else rest).strip(), limit)
+
+
+def render_heal_lineage_context(issues: Iterable[dict[str, Any]], *, fp: str, root: str) -> str:
+	"""Render earlier heal issues that share this fingerprint or lineage root.
+
+	``issues`` is the same ``ai:workflow-heal`` issue list the budget decision
+	reads (no extra API call); each item may carry ``title``, ``closed_at`` and
+	``state_reason``. Newest first, at most HEAL_LINEAGE_CONTEXT_LIMIT, each
+	with its bounded ``Root cause`` and ``Suggested fix`` sections.
+	"""
+	related: list[tuple[int, dict[str, Any]]] = []
+	for issue in issues:
+		if not isinstance(issue, dict) or issue.get("pull_request"):
+			continue
+		number = _positive_int(issue.get("number"))
+		if number is None:
+			continue
+		markers = parse_heal_markers(issue.get("body"))
+		if markers.get("fp") == fp or (root and markers.get("root") == root):
+			related.append((number, issue))
+	if not related:
+		return "(no earlier heal issue shares this failure's fingerprint or lineage)\n"
+	related.sort(key=lambda pair: pair[0], reverse=True)
+	lines: list[str] = []
+	for number, issue in related[:HEAL_LINEAGE_CONTEXT_LIMIT]:
+		body = sanitize_text(issue.get("body"))
+		markers = parse_heal_markers(body)
+		state = single_line(issue.get("state") or "unknown", 20)
+		reason = single_line(issue.get("state_reason") or "", 30)
+		closed = single_line(issue.get("closed_at") or "", 40)
+		status = state + (f" ({reason})" if reason else "") + (f", closed {closed}" if closed else "")
+		repo = issue.get("repository") if is_valid_repo_slug(issue.get("repository")) else ""
+		ref = f"{repo}#{number}" if repo else f"#{number}"
+		lines.append(f"--- {ref} [{status}] gen {markers.get('gen') or '1'}: {single_line(issue.get('title') or '', 200)} ---")
+		lines.append(f"Opened: {single_line(issue.get('created_at') or 'unknown', 40)}  URL: {sanitize_text(issue.get('html_url'), 300)}")
+		for heading in ("Root cause", "Suggested fix"):
+			excerpt = _markdown_section(body, heading, HEAL_LINEAGE_EXCERPT_LIMIT)
+			if excerpt:
+				lines.append(f"{heading}:")
+				lines.append(excerpt)
+		lines.append("")
+	return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def check_heal_already_fixed_claim(diagnosis: str, summary: dict[str, Any]) -> dict[str, Any]:
+	"""Verify an ``already-fixed`` diagnosis against the branch progress.
+
+	The claim stands only when the branch has commits after the failing SHA
+	and the ``## Fixed by`` section cites at least one of them (a 7-40 hex
+	prefix of a commit in ``summary['commits']``). Returns ``{"ok": bool,
+	"reason": str, "commits": [full shas cited and found]}``.
+	"""
+	if not isinstance(summary, dict) or not summary.get("available"):
+		return {"ok": False, "reason": "branch_progress_unavailable", "commits": []}
+	if int(summary.get("ahead_by") or 0) <= 0:
+		return {"ok": False, "reason": "no_commits_after_failing_sha", "commits": []}
+	text = sanitize_text(diagnosis)
+	match = _HEAL_FIXED_BY_SECTION_RE.search(text)
+	if not match:
+		return {"ok": False, "reason": "fixed_by_section_missing", "commits": []}
+	rest = text[match.end():]
+	end = re.search(r"^##\s", rest, re.MULTILINE)
+	section = rest[: end.start()] if end else rest
+	known = [commit["sha"] for commit in summary.get("commits") or [] if isinstance(commit, dict) and is_valid_sha(commit.get("sha"))]
+	cited: list[str] = []
+	for token in _HEAL_COMMIT_REF_RE.findall(section.lower()):
+		for sha in known:
+			if sha.startswith(token) and sha not in cited:
+				cited.append(sha)
+	if not cited:
+		return {"ok": False, "reason": "fixed_by_commit_not_after_failing_sha", "commits": []}
+	return {"ok": True, "reason": "fixed_by_commit_verified", "commits": cited}
+
+
 def _write_json(value: Any) -> None:
 	sys.stdout.write(json.dumps(value, sort_keys=True))
 	sys.stdout.write("\n")
@@ -1451,6 +1636,35 @@ def _cmd_compose_occurrence(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_branch_progress(args: argparse.Namespace) -> int:
+	try:
+		compare = _load_json_file(args.compare_json)
+	except (OSError, ValueError):
+		compare = None
+	summary = summarize_branch_progress(compare, failed_sha=args.failed_sha.lower(), branch=args.branch)
+	if not summary.get("available") and args.reason:
+		summary = {"available": False, "reason": single_line(args.reason, 80)}
+	_write_json(summary)
+	return 0
+
+
+def _cmd_render_branch_progress(args: argparse.Namespace) -> int:
+	sys.stdout.write(render_branch_progress(_load_json_file(args.summary_json)))
+	return 0
+
+
+def _cmd_lineage_context(args: argparse.Namespace) -> int:
+	issues = _load_json_file(args.issues_json)
+	sys.stdout.write(render_heal_lineage_context(issues if isinstance(issues, list) else [], fp=args.fingerprint, root=args.root))
+	return 0
+
+
+def _cmd_check_already_fixed(args: argparse.Namespace) -> int:
+	diagnosis = Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace")
+	_write_json(check_heal_already_fixed_claim(diagnosis, _load_json_file(args.summary_json)))
+	return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -1573,6 +1787,28 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--payload-json", required=True)
 	p.add_argument("--intake-run-url", required=True)
 	p.set_defaults(func=_cmd_compose_occurrence)
+
+	p = sub.add_parser("branch-progress", help="Summarise a compare response (failing SHA ... branch) as JSON")
+	p.add_argument("--compare-json", required=True)
+	p.add_argument("--failed-sha", required=True)
+	p.add_argument("--branch", required=True)
+	p.add_argument("--reason", default="", help="Reason to record when the compare response is missing or unusable")
+	p.set_defaults(func=_cmd_branch_progress)
+
+	p = sub.add_parser("render-branch-progress", help="Render the branch-progress prompt block")
+	p.add_argument("--summary-json", required=True)
+	p.set_defaults(func=_cmd_render_branch_progress)
+
+	p = sub.add_parser("lineage-context", help="Render earlier heal issues sharing the fingerprint / lineage root")
+	p.add_argument("--issues-json", required=True)
+	p.add_argument("--fingerprint", required=True)
+	p.add_argument("--root", default="")
+	p.set_defaults(func=_cmd_lineage_context)
+
+	p = sub.add_parser("check-already-fixed", help="Verify an already-fixed diagnosis cites a commit after the failing SHA")
+	p.add_argument("--diagnosis-file", required=True)
+	p.add_argument("--summary-json", required=True)
+	p.set_defaults(func=_cmd_check_already_fixed)
 	return parser
 
 
