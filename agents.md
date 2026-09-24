@@ -719,6 +719,20 @@ when the bounded fix-cycle budget is exhausted.
   nested `.git` metadata. The sandbox exposes only the loopback provider proxy
   and never passes GitHub tokens, runner command files, authenticated remotes,
   provider credentials, or host Codex auth caches.
+- The sandbox's systemd unit runs with `PrivateTmp=yes`, so the host's `/tmp`
+  and `/var/tmp` do not exist inside it. The sandbox keeps its own state (the
+  `agent-sandbox.*` scratch dir and the temporary `provider-credential.*`
+  file) under `RUNNER_TEMP` whenever `--runtime-dir` (every pipeline's
+  `RUNTIME_DIR`) resolves under `/tmp` or `/var/tmp`. Failure modes:
+  - a path the unit must see (scratch dir, workspace,
+    `CODEX_THREAD_REUSE_*_FILE` write paths, Git metadata) still under `/tmp`
+    or `/var/tmp` exits 1 before launch with
+    `untrusted_process_sandbox: sandbox_private_tmp_path role=<role> path=<path>`;
+  - a unit that fails while building its mount namespace (systemd status 226)
+    logs `untrusted_process_sandbox: sandbox_namespace_setup_failed role=<role>
+    rc=226 unit=<unit>` followed by up to 20 journal lines for that unit, and
+    the script exits 226. `systemd-run` runs without `--quiet`, so its unit
+    name and exit status also appear on stderr.
 - `scripts/model_provider_proxy.py` derives a non-empty model allowlist from
 	trusted configuration and defaults to 64 requests, one concurrent request,
 	65,536 output tokens, and USD 25 cumulative spend. It reserves worst-case
