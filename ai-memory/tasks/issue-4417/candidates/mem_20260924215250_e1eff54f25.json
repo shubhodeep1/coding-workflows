@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan \u2014 issue #4417\n\nPlanning ref: `71b945bbab6231b2cb1b18882789a9877b292a3a` on `ai/issue-4411`; this matches the integration-branch metadata. The `/answer` comment was auto-posted because no clarification questions were needed.\n\nScope-mode: Hold Scope\nReuse-audit: extends `scripts/review_apply_fixes.sh` and its existing `post_agent_workspace_guard.py` report\nScope-mode justification: Fix the demonstrated misclassification without changing the hidden-path policy or attributing the manifest edit to PR #4413. Capturing the existing per-attempt evidence as well as classifying the failure is the complete, low-risk option; it needs no new dependency or external interface. This follows the Core Priorities ordering: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and lifecycle\n\n- **Existing operation extended:** the review editor and its failure-reporting path; no new script.\n- **Automatic entry point:** `.github/workflows/internal-review.yml` on PR `opened`/`synchronize` and its existing review dispatch, calling `.github/workflows/review_autofix.yml`.\n- **Supervisor / database gate / removal registry:** none needed.\n\n## Files likely to change\n\n- `scripts/review_apply_fixes.sh` \u2014 preserve the guard rejection report and attempt transcript; publish a distinct failure signal while retaining fail-closed exit behavior.\n- `.github/workflows/review_autofix.yml` \u2014 keep a guard rejection out of the retryable empty-summary branch, surface its diagnosis, and include the report in the existing failure-log artifact.\n- `tests/test_review_autofix_editor_noop_cascade_contract.py` \u2014 pin classification and failure-handler behavior.\n- `tests/test_agent_process_isolation.py` \u2014 extend the existing guard-boundary contract if needed to cover report and transcript preservation.\n- `changelog.d/4417-editor-guard-failure-classification.md` \u2014 record the operator-visible correction.\n\n## Implementation\n\n1. At the editor reconcile failure in `review_apply_fixes.sh`, retain exit `78` and the \u201cabort before output parsing or retry\u201d boundary. Before exiting, preserve attempt-2 stdout/stderr alongside existing editor-attempt diagnostics. Read the guard\u2019s **existing** report, when present, to log bounded rejected `path`, `change`, and `reason` fields; distinguish an absent or unreadable report without treating it as success. Set an additive guard-failure signal for subsequent workflow steps.\n2. In `review_autofix.yml`, ensure the first editor invocation and the bounded in-step retry both propagate that safety failure. The retry\u2019s catch block must not convert it into a normal empty-output fallback.\n3. Have \u201cPost editor summary comment\u201d recognize the guard-failure signal **before** its missing-summary test. Report a guard rejection rather than setting `AUTOFIX_EDITOR_EMPTY_NOOP`; leave the step failed so existing workflow-failure escalation runs. Give its PR failure comment a guard-specific explanation and link to the run. Keep commit, ready-label, resolver-publication, and merge paths unavailable on this failure.\n4. Stage the per-attempt guard report in the existing failure-log artifact, not the quarantined file contents. Leave `post_agent_workspace_guard.py`\u2019s hidden-path rejection unchanged.\n\n## Data structures and interfaces\n\n- Add one internal, additive `$GITHUB_ENV` failure signal; retain all existing flags, exit codes, labels, and log prefixes.\n- Reuse `post_agent_workspace_report.v1` and its `rejected[]` rows. No new GitHub API request, endpoint, external interface, or state schema is required.\n\n## Decisions\n\n### D1 \u2014 Classify the guard failure separately from editor no-op\n- **Chosen:** Preserve the guard report and attempt evidence, then route the nonzero guard result through workflow-failure reporting.\n- **Alternatives considered:** Treat a missing editor summary as a retryable no-op; exempt the hidden manifest from the guard.\n- **Why:** Neither alternative explains or safely resolves a rejected workspace mutation. The existing guard must remain fail-closed.\n\n## Security considerations\n\nThe editor workspace and guard-report path metadata are untrusted. Validate the expected report shape and bound diagnostic output; escape control characters so a crafted filename cannot forge an Actions command or misleading log line. Do not upload quarantined payloads or print file contents. The existing authenticated workflow comment and failure handlers remain the only reporting surfaces; no new authorization path is introduced. An absent, malformed, or unreadable report must still block publication.\n\n## Risks and edge cases\n\n- The supplied log excerpt shows a hidden-manifest rejection, but not who changed `.ai/.workspace_source_manifest.txt`. Do not alter its guard rule without the attempt-2 transcript and full report.\n- The additional #4397 occurrence identifies `editor_empty_noop` but supplies no guard-rejection evidence; do not assume it has the same immediate cause.\n- The in-step retry currently catches a failed `review_apply_fixes.sh` invocation; verify that a rejection there cannot be swallowed.\n- A guard failure can occur without a report. Classification must rely on the reconcile failure, not on successful report parsing.\n\n## Testing and verification\n\nAdd focused tests for a rejected report, a missing report, both editor-invocation positions, retained exit `78`, preserved diagnostics, and guard-specific failure reporting without `AUTOFIX_EDITOR_EMPTY_NOOP`. Assert that existing failure escalation remains reachable and no commit or merge path is enabled. Run the affected contract tests and shell/YAML checks on the repository\u2019s pinned toolchain. Target implementation time: **\u226460 minutes**.\n\nAssumption: this issue requests correction of failure reporting, not a fix for the as-yet-unidentified writer of the manifest. Missing context: the full attempt-2 transcript and guard report were not supplied; they are needed to investigate that writer, but not to implement this classification fix.\n\nPLAN_SELF_CHECK: WARNING: The manifest mutation\u2019s origin cannot be established from the supplied evidence.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "41d83ddecca7263052ce24fc74ec920ca272d2b16f022d60423ca05a6c92c439",
+  "lineage": {
+    "issue_number": 4417,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36063511124",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36063511124",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4417"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924215250_e1eff54f25",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4417,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36063511124"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4417",
+  "timestamps": {
+    "created_at": "2026-09-24T21:52:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
