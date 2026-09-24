@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_step_scripts_contract.py:lines 44-67 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The f-string literal in expected_lines[1] and expected_lines[2] hardcodes a runner-local absolute path instead of producing the `${GITHUB_WORKSPACE}/...` path used by the workflow.\n  WHY: The CI step \"Review autofix step-script contract and workflow file size guard tests\" in .github/workflows/ci.yml:676-679 compares workflow lines containing `${GITHUB_WORKSPACE}/...` against expected lines containing `$/home/runner/work/coding-workflows/coding-workflows/...`, so the test fails on every runner.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: tests/test_review_autofix_step_scripts_contract.py\n  Line or code reference: lines 44-67, function test_moved_steps_run_only_the_resolving_wrapper, the expected_lines f-strings for indices 1 and 2\n  Problem: The f-string literal in expected_lines[1] and expected_lines[2] hardcodes a runner-local absolute path:\n  f'[ -f \"${{REVIEW_AUTOFIX_STEP_SCRIPT}}\" ] || REVIEW_AUTOFIX_STEP_SCRIPT=\"$/home/runner/work/coding-workflows/coding-workflows/.codex-workflow-src/scripts/{script_name}\"'\n  f'[ -f \"${{REVIEW_AUTOFIX_STEP_SCRIPT}}\" ] || REVIEW_AUTOFIX_STEP_SCRIPT=\"$/home/runner/work/coding-workflows/coding-workflows/.codex-workflow-src-main/scripts/{script_name}\"'\n  The Python f-string produces literal \"$/home/runner/work/coding-workflows/coding-workflows/.codex-workflow-src/scripts/...\" and \"$-codex-workflow-src-main/scripts/...\" text (the $ is a literal character because it is followed by /, not a valid identifier start). The actual workflow .github/workflows/review_autofix.yml uses ${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/<script_name> and \"${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/<script_name>\" on those same lines. The expected_lines[1] and expected_lines[2] should produce \"${GITHUB_WORKSPACE}/...\" (via ${{GITHUB_WORKSPACE}} in the f-string), matching what the workflow contains.\n  Why it fails at runtime: The CI step \"Review autofix step-script contract and workflow file size guard tests\" in .github/workflows/ci.yml:676-679 runs this test on every PR. The first assertion in test_moved_steps_run_only_the_resolving_wrapper, `assert run_lines[:4] == expected_lines, f\"{step_name}: unexpected resolution order:\\n{run}\"`, compares the first four lines of the workflow step's `run:` block (which contain ${GITHUB_WORKSPACE}/...) against expected_lines (which contain $/home/runner/work/coding-workflows/coding-workflows/...). The list comparison fails immediately on the first step (Pre-review deterministic merge-topology gate) at line index 1. The test exits non-zero, the CI job fails, and the PR cannot merge. The intent of the test (pinning the wrapper resolution order across SUPPORT_SCRIPTS_DIR, .codex-workflow-src, .codex-workflow-src-main) is correct, but the hardcoded absolute path defeats it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "23a4513a5d17d0292ad3193b8252ef193b9f62b327a034841a5cab165cf02265",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35944088288",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35944088288",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924020841_40796aea5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35944088288"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T02:08:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
