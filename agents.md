@@ -533,7 +533,11 @@ and no repository, so they cannot report. Stage sessions need Auto mode (the
 command asks for it in step 0), because allow rules cannot match the
 generated MCP server name of a `create_session` child. Progress between
 stages is persisted in `docs/implement-plan/<slug>.md`
-(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt.
+(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt. Only the chain archives its own sessions: a `… — waiting: …` checker
+holds the project's only pending check-in, so archiving it by hand stalls the
+project until the 24h safety net fires. To nudge a stalled project, start the
+next stage session by hand with a `— resume.` block; to stop one, delete its
+safety-net trigger and archive its checker together.
 
 No field here changes what any consumer repo receives on the `@stable`
 sync: `.claude/commands/` is not part of the synced surface, and the
