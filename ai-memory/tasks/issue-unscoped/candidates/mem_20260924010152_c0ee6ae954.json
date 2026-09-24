@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "The review-autofix and test-and-mark-stable workflows have recurring changes for convergence, pass-cycle limits, editor waits, and review-blocked budgets. Changes to these workflows should preserve explicit termination conditions and distinguish a blocked review from a transient command failure.",
+  "fingerprint": "bcf343b41d5065f37d1ac8642dec864ab362c3af9961677cb17fc9a1d40d0395",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35940543987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35940543987",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4311",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4325",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4326",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4329",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4350",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4312",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4328",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4330",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4335",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4351"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260924010152_c0ee6ae954",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Review and release gates use bounded retries, budgets, and explicit blocked-state handling to prevent unbounded automation loops.",
+  "timestamps": {
+    "created_at": "2026-09-24T01:01:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
