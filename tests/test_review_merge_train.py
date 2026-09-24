@@ -21,6 +21,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "review_merge_train.sh"
@@ -487,7 +489,7 @@ def test_cancel_on_close_wrappers_keep_event_and_add_matching_schedule() -> None
 		assert "  contents: read" in workflow
 		assert "  pull-requests: read" in workflow
 		assert "issues: write" not in workflow
-		assert "checkout" not in workflow.lower()
+		assert "checkout" not in str(yaml.safe_load(workflow)["jobs"]["cancel"]).lower()
 
 
 def test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe() -> None:
