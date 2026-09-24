@@ -65,18 +65,18 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
+# `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
+# confirms the diagnosis cites a commit that landed on the branch after the
+# failing SHA; otherwise the intake downgrades it to `inconclusive`.
+ALREADY_FIXED_CLASSIFICATION = "already-fixed"
 CLASSIFICATIONS: tuple[str, ...] = (
 	"workflow-defect",
 	"consumer-app-defect",
 	"consumer-config",
 	"transient",
 	"inconclusive",
-	"already-fixed",
+	ALREADY_FIXED_CLASSIFICATION,
 )
-# `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
-# confirms the diagnosis cites a commit that landed on the branch after the
-# failing SHA; otherwise the intake downgrades it to `inconclusive`.
-ALREADY_FIXED_CLASSIFICATION = "already-fixed"
 # Classifications that open an issue in coding-workflows.
 UPSTREAM_ISSUE_CLASSIFICATIONS = ("workflow-defect", "inconclusive")
 

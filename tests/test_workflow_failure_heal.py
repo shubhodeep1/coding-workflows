@@ -1331,6 +1331,7 @@ def test_intake_already_fixed_consumer_report_comments_with_the_sync_hint() -> N
 def test_intake_downgrades_an_unverifiable_already_fixed_claim() -> None:
 	cases = [
 		(_gate_state(), DIAG_ALREADY_FIXED.replace(SHA_FIX[:12], "deadbeef1234"), "fixed_by_commit_not_after_failing_sha"),
+		(_gate_state(), DIAG_ALREADY_FIXED.replace("## Fixed by", "## Evidence"), "fixed_by_section_missing"),
 		(_gate_state(compare=None), DIAG_ALREADY_FIXED, "branch_progress_unavailable"),
 		(_gate_state(compare=_compare(0, [], status="identical")), DIAG_ALREADY_FIXED, "no_commits_after_failing_sha"),
 	]
