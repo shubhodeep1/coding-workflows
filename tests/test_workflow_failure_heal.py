@@ -15,11 +15,16 @@ import re
 import shutil
 import subprocess
 import tempfile
+import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -1461,7 +1466,9 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}"
 	assert step["env"]["REPORT_WORKFLOW_NAME"] == "${{ github.workflow }}"
 	assert "workflow_failure_heal_autofix_report.sh" in step["run"]
-	summary_step = steps[names.index("Append review pipeline iteration summary")]
+	# The summary step body lives in scripts/review_autofix_step_iteration_summary.sh.
+	expanded_steps = yaml.safe_load(expanded_review_autofix_text())["jobs"]["codex-agent"]["steps"]
+	summary_step = expanded_steps[names.index("Append review pipeline iteration summary")]
 	assert "review_autofix_run_summary_line.txt" in summary_step["run"]
 	staging = STAGE_SUPPORT_SCRIPT.read_text(encoding="utf-8")
 	optional = re.search(r'^OPTIONAL_BOOTSTRAP_SCRIPTS="([^"]*)"', staging, re.MULTILINE)
