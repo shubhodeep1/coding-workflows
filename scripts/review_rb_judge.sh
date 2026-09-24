@@ -2042,7 +2042,8 @@ __EDIT_DISCIPLINE__
         --workspace "${PWD}" --manifest "${rb_fix_workspace_manifest}" \
         --quarantine-dir "${rb_fix_workspace_quarantine}" \
         --changed-paths-out "${rb_fix_workspace_paths}" --report "${rb_fix_workspace_report}"; then
-        rb_fix_rc=78
+        echo "::error::Review-blocked fix workspace guard rejected attempt ${rb_fix_attempt}; aborting before output parsing or publication."
+        exit 78
       fi
       if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix OpenCode" )"; then
         :
@@ -2514,13 +2515,13 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         RB_FOLLOWUP_INTEGRATION_BRANCH=""
         RB_FOLLOWUP_PARENT_DECLARED_DEFAULT="false"
         if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
-          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | run_review_rb_validator_python -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
 print(m.group(1).strip() if m else "")
 ' 2>/dev/null || echo "")"
-          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | run_review_rb_validator_python -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE)
