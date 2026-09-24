@@ -52,6 +52,9 @@ trap on_step_exit EXIT
 exec 3>&2
 exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
+IMPLEMENT_VALIDATOR_OUTPUT_DIR="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/validator-output-implement"
+mkdir -p "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}"
+
 run_implement_validator_python() {
   local sandbox_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh"
   local validator_entry="${1:-}"
@@ -67,6 +70,7 @@ run_implement_validator_python() {
   if [ -x "${sandbox_helper}" ]; then
     bash "${sandbox_helper}" \
       --role validator --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}" \
+      --writable-output-dir "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}" \
       -- /usr/bin/python3 -I -S "$@"
     return $?
   fi
@@ -499,8 +503,8 @@ if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${generated_security_adv
 else
   scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
   if [ -n "${scope_staged}" ]; then
-    scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
-    scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+    scope_staged_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-staged.XXXXXX")"
+    scope_allowlist_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-allowlist.XXXXXX")"
     printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
     scope_violations=""
     scope_rc=0
@@ -524,6 +528,7 @@ else
         scope_validator_cmd=(
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh"
           --role validator --workspace "${WORKSPACE_PATH:-${PWD}}" --runtime-dir "${RUNTIME_DIR}"
+          --writable-output-dir "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}"
           -- /usr/bin/python3 -I -S
         )
       fi
@@ -681,9 +686,9 @@ bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/trusted_git_write.sh" \
 if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ] && [ -n "${ISSUE_SCOPE_LOCK_GLOB:-}" ]; then
   scope_committed="$(git diff-tree --no-commit-id --name-only --diff-filter=ACMRD -r --root --no-renames HEAD || true)"
   if [ -n "${scope_committed}" ]; then
-    scope_committed_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-committed.XXXXXX")"
-    scope_glob_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-glob.XXXXXX")"
-    scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+    scope_committed_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-committed.XXXXXX")"
+    scope_glob_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-glob.XXXXXX")"
+    scope_allowlist_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-allowlist.XXXXXX")"
     printf '%s\n' "${scope_committed}" > "${scope_committed_file}"
     printf '%s\n' "${ISSUE_SCOPE_LOCK_GLOB}" > "${scope_glob_file}"
     scope_violations=""

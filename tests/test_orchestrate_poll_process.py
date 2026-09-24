@@ -20172,11 +20172,18 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# integration branches still pick up the shipped self-heal helpers.
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in wf_body
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in wf_body
-	assert (
-		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
-		'review_conflict_prepare.sh review_collect_pr_metadata.sh files_touched_scope_guard.py '
-		'render_prompt.py opencode_helpers.sh write_opencode_config.sh"'
-	) in stage_helper_body
+	main_primary_line = next(
+		line for line in stage_helper_body.splitlines() if line.startswith("MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=")
+	)
+	for atomic_runtime_file in (
+		"verify_integration_fingerprints.py",
+		"post_agent_workspace_guard.py",
+		"review_apply_fixes.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+		"untrusted_process_sandbox.sh",
+	):
+		assert atomic_runtime_file in main_primary_line
 	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in stage_helper_body
 	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in stage_helper_body
 	assert 'SUPPORT_SCRIPTS_DIR="scripts"' not in stage_helper_body
@@ -20205,6 +20212,7 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# when fingerprint verification rejects the resolver output.
 	assert "IS_INTEGRATION_SYNC" in resolve_body
 	assert "verify_integration_fingerprints.py" in resolve_body
+	assert '--repo-root "${integration_judge_workspace}"' in POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert "--baseline-fingerprints-state" in resolve_body
 	assert "--compare-against-baseline" in resolve_body
 	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in resolve_body
