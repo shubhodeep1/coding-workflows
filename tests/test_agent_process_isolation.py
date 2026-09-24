@@ -496,6 +496,8 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 				"GH_PAT": "synthetic-gh-pat",
 				"GITHUB_ENV": str(root / "github-env"),
 				"GITHUB_OUTPUT": str(root / "github-output"),
+				"GIT_DIR": str(REPO_ROOT / ".git"),
+				"GIT_WORK_TREE": str(REPO_ROOT),
 				"MODEL_PROVIDER_CREDENTIAL_FILE": str(credential),
 				"RUNTIME_DIR": str(root),
 				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
@@ -519,6 +521,7 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 		for forbidden_name in (
 			"BASH_ENV", "ENV", "GH_TOKEN", "GH_PAT", "GITHUB_TOKEN", "GITHUB_ENV",
 			"GITHUB_OUTPUT", "GITHUB_PATH", "GITHUB_STATE", "SSH_AUTH_SOCK", "OPENROUTER_API_KEY",
+			"GIT_DIR", "GIT_WORK_TREE",
 		):
 			assert forbidden_name not in isolated_environment
 		assert isolated_environment["SANDBOX_PROVIDER_TOKEN"] == "sandbox-proxy"
@@ -585,14 +588,16 @@ def test_sandbox_systemd_unit_reports_namespace_failures() -> None:
 
 def test_workspace_guard_rejects_private_tmp_paths_before_execution() -> None:
 	with tempfile.TemporaryDirectory(dir="/tmp") as runtime_directory, \
-		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory:
+		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as workspace_directory:
 		runner_temp_root = Path(runner_temp_directory).resolve()
 		runtime_root = Path(runtime_directory).resolve()
+		subprocess.run(["git", "init", "-q", workspace_directory], check=True)
 		environment = os.environ.copy()
 		environment.pop("POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256", None)
 		environment.update({"RUNNER_TEMP": str(runner_temp_root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1"})
 		command = [
-			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(REPO_ROOT),
+			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", workspace_directory,
 			"--runtime-dir", str(runner_temp_root), "--", "/usr/bin/python3", "-I", "-S",
 			"-c", "print('guard launched')",
 		]
@@ -617,14 +622,16 @@ def test_workspace_guard_rejects_private_tmp_paths_before_execution() -> None:
 
 def test_workspace_guard_rejects_symlinked_output_and_invalid_executable() -> None:
 	with tempfile.TemporaryDirectory(dir="/tmp") as runtime_directory, \
-		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory:
+		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as workspace_directory:
 		runner_temp_root = Path(runner_temp_directory).resolve()
+		subprocess.run(["git", "init", "-q", workspace_directory], check=True)
 		redirect = runner_temp_root / "redirect"
 		redirect.symlink_to(runtime_directory, target_is_directory=True)
 		environment = os.environ.copy()
 		environment.update({"RUNNER_TEMP": str(runner_temp_root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1"})
 		command = [
-			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(REPO_ROOT),
+			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", workspace_directory,
 			"--runtime-dir", str(runner_temp_root), "--", "/usr/bin/python3", "-I", "-S",
 			"-c", "print('guard launched')", "--report", str(redirect / "report.json"),
 		]
@@ -647,6 +654,72 @@ def test_workspace_guard_rejects_symlinked_output_and_invalid_executable() -> No
 		assert "workspace guard executable integrity check failed" in mismatched.stderr
 
 
+def test_workspace_guard_external_git_context_keeps_ignore_classification() -> None:
+	with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		git_dir = root / "metadata"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", "--separate-git-dir", str(git_dir), str(workspace)], check=True)
+		(workspace / ".gitignore").write_text("*.ignored\n", encoding="utf-8")
+		(workspace / ".git").unlink()
+		environment = os.environ.copy()
+		environment.update({
+			"GIT_DIR": str(git_dir), "GIT_WORK_TREE": str(workspace),
+			"RUNTIME_DIR": str(runtime), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		manifest = runtime / "manifest.json"
+		command = [
+			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(workspace),
+			"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S",
+			str(WORKSPACE_GUARD),
+		]
+		snapshot = subprocess.run(
+			command + ["snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			env=environment, capture_output=True, text=True,
+		)
+		assert snapshot.returncode == 0, snapshot.stderr
+		(workspace / "safe.txt").write_text("safe\n", encoding="utf-8")
+		quarantine = runtime / "quarantine"
+		reconcile_args = command + [
+			"reconcile", "--workspace", str(workspace), "--manifest", str(manifest),
+			"--quarantine-dir", str(quarantine), "--changed-paths-out", str(runtime / "changed.txt"),
+			"--report", str(runtime / "report.json"),
+		]
+		safe_reconciled = subprocess.run(reconcile_args, env=environment, capture_output=True, text=True)
+		assert safe_reconciled.returncode == 0, safe_reconciled.stderr
+		assert (workspace / "safe.txt").read_text(encoding="utf-8") == "safe\n"
+		snapshot = subprocess.run(
+			command + ["snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			env=environment, capture_output=True, text=True,
+		)
+		assert snapshot.returncode == 0, snapshot.stderr
+		(workspace / "payload.ignored").write_text("blocked\n", encoding="utf-8")
+		reconciled = subprocess.run(reconcile_args, env=environment, capture_output=True, text=True)
+		assert reconciled.returncode == 20, reconciled.stderr
+		assert (workspace / "safe.txt").read_text(encoding="utf-8") == "safe\n"
+		assert not (workspace / "payload.ignored").exists()
+		assert (quarantine / "payload.ignored").read_text(encoding="utf-8") == "blocked\n"
+		assert "git ignore classification failed" not in reconciled.stderr
+
+		for invalid_context in (
+			{"GIT_DIR": "", "GIT_WORK_TREE": ""},
+			{"GIT_WORK_TREE": ""},
+			{"GIT_DIR": str(root / "missing")},
+			{"GIT_WORK_TREE": str(root)},
+		):
+			blocked = subprocess.run(
+				reconcile_args, env=environment | invalid_context, capture_output=True, text=True,
+			)
+			assert blocked.returncode != 0
+			assert "workspace guard" in blocked.stderr
+
+		assert 'InaccessiblePaths=${protected_git_path}' in SANDBOX.read_text(encoding="utf-8")
+		assert 'ReadOnlyPaths=${protected_git_path}' in SANDBOX.read_text(encoding="utf-8")
+
+
 def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	module_text = PROXY.read_text(encoding="utf-8")
 	assert '"POST": {"/chat/completions", "/responses", "/embeddings"}' in module_text
@@ -662,7 +735,7 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "implement-repair|diagnose|reviewer" in sandbox_text
 	assert 'find "${workspace}" -xdev -name .git -print0' in sandbox_text
 	assert 'InaccessiblePaths=${protected_git_path}' in sandbox_text
-	assert "GIT_DIR|GIT_WORK_TREE" not in sandbox_text
+	assert 'common_env+=("GIT_DIR=${guard_git_dir}" "GIT_WORK_TREE=${workspace}")' in sandbox_text
 	assert "ThreadingHTTPServer" not in module_text
 	assert "class BoundedHTTPServer" in module_text
 	assert "ThreadPoolExecutor" in module_text

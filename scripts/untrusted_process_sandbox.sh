@@ -31,6 +31,25 @@ esac
 workspace="$(cd "${workspace}" && pwd -P)"
 requested_runtime_dir="${runtime_dir}"
 runtime_dir="$(cd "${runtime_dir}" && pwd -P)"
+guard_git_dir=""
+if [ "${role}" = workspace-guard ]; then
+	if [ -n "${GIT_DIR:-}" ] || [ -n "${GIT_WORK_TREE:-}" ]; then
+		[ -n "${GIT_DIR:-}" ] && [ -n "${GIT_WORK_TREE:-}" ] \
+			|| { echo "untrusted_process_sandbox: incomplete workspace guard Git context" >&2; exit 1; }
+		[ -d "${GIT_DIR}" ] && [ -d "${GIT_WORK_TREE}" ] \
+			|| { echo "untrusted_process_sandbox: invalid workspace guard Git context" >&2; exit 1; }
+		guard_git_dir="$(cd "${GIT_DIR}" && pwd -P)"
+		guard_git_work_tree="$(cd "${GIT_WORK_TREE}" && pwd -P)"
+		[ "${guard_git_work_tree}" = "${workspace}" ] \
+			|| { echo "untrusted_process_sandbox: workspace guard worktree mismatch" >&2; exit 1; }
+		[ "$(GIT_DIR="${guard_git_dir}" GIT_WORK_TREE="${workspace}" git rev-parse --absolute-git-dir 2>/dev/null)" = "${guard_git_dir}" ] \
+			&& [ "$(GIT_DIR="${guard_git_dir}" GIT_WORK_TREE="${workspace}" git rev-parse --show-toplevel 2>/dev/null)" = "${workspace}" ] \
+			|| { echo "untrusted_process_sandbox: invalid workspace guard Git repository" >&2; exit 1; }
+	else
+		[ "$(git -C "${workspace}" rev-parse --show-toplevel 2>/dev/null)" = "${workspace}" ] \
+			|| { echo "untrusted_process_sandbox: workspace guard Git context is unavailable" >&2; exit 1; }
+	fi
+fi
 provider_required=true
 case "${role}" in
 	validator|workspace-guard)
@@ -290,6 +309,9 @@ while IFS= read -r -d '' nested_git_entry; do
 		fi
 	fi
 done < <(find "${workspace}" -xdev -name .git -print0 2>/dev/null)
+if [ -n "${guard_git_dir}" ]; then
+	append_git_metadata_path "${guard_git_dir}"
+fi
 
 sandbox_path="${PATH}"
 if [ "${provider_required}" != true ]; then
@@ -314,6 +336,9 @@ common_env=(
 )
 if [ "${provider_required}" = true ]; then
 	common_env+=("SANDBOX_PROVIDER_TOKEN=sandbox-proxy")
+fi
+if [ -n "${guard_git_dir}" ]; then
+	common_env+=("GIT_DIR=${guard_git_dir}" "GIT_WORK_TREE=${workspace}")
 fi
 runtime_write_paths=()
 while IFS='=' read -r environment_name environment_value; do
