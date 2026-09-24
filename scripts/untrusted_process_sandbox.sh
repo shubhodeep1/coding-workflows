@@ -433,7 +433,7 @@ if [ "${sandbox_unit_rc}" -eq 226 ]; then
 	# 226 is systemd's EXIT_NAMESPACE: the unit failed while building its mount
 	# namespace, before the command ran.  The reason is only in the journal.
 	echo "untrusted_process_sandbox: sandbox_namespace_setup_failed role=${role} rc=226 unit=${sandbox_unit_name}" >&2
-	timeout 10 "${sandbox_journal_cmd[@]}" --no-pager -o cat -n 20 -u "${sandbox_unit_name}" 2>/dev/null \
+	timeout --kill-after=2 10 "${sandbox_journal_cmd[@]}" --no-pager -o cat -n 20 -u "${sandbox_unit_name}" 2>/dev/null \
 		| sed 's/^/untrusted_process_sandbox: sandbox_namespace_setup_failed journal: /' >&2 || true
 fi
 exit "${sandbox_unit_rc}"

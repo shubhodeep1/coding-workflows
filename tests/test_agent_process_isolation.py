@@ -131,6 +131,7 @@ def test_sandbox_systemd_unit_reports_namespace_failures() -> None:
 	assert 'sandbox_dir="$(mktemp -d "${sandbox_state_root%/}/agent-sandbox.XXXXXX")"' in sandbox_source
 	assert "sandbox_namespace_setup_failed role=${role} rc=226" in sandbox_source
 	assert "sandbox_private_tmp_path role=${role}" in sandbox_source
+	assert 'timeout --kill-after=2 10 "${sandbox_journal_cmd[@]}"' in sandbox_source
 
 
 def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
