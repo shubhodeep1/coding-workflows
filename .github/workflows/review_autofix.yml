@@ -2287,6 +2287,59 @@ jobs:
             fi
           done
 
+          # Model catalog backfill. REVIEWER_MODELS and the reviewer failback
+          # chains come from this workflow's ref, but the branch-pinned
+          # stage_workflow_support.sh stages codex_model_catalog.json from the
+          # PR branch first. A branch forked before a roster change lacks the
+          # new slugs, and write_opencode_config.sh then fails those reviewer
+          # slots with "model '<slug>' is missing or duplicated in the model
+          # catalog" (PR #4323, run 35933627432: z-ai/glm-5.2 and
+          # google/gemini-3.1-flash-lite). Append every main-snapshot row whose
+          # slug the staged catalog lacks. Rows already staged win, nothing is
+          # removed, and any read/parse problem only logs a warning.
+          staged_model_catalog="${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          main_model_catalog=".codex-workflow-src-main/scripts/codex_model_catalog.json"
+          if [ -f "${staged_model_catalog}" ] && [ -f "${main_model_catalog}" ]; then
+            if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${staged_model_catalog}" "${main_model_catalog}" <<'PY'
+          import json
+          import os
+          import sys
+          import tempfile
+
+          staged_path, main_path = sys.argv[1:3]
+          with open(staged_path, encoding="utf-8") as handle:
+              staged = json.load(handle)
+          with open(main_path, encoding="utf-8") as handle:
+              main = json.load(handle)
+          staged_rows = staged.get("models") if isinstance(staged, dict) else None
+          main_rows = main.get("models") if isinstance(main, dict) else None
+          if not isinstance(staged_rows, list) or not isinstance(main_rows, list):
+              print("::warning::MODEL_CATALOG_BACKFILL skipped reason=models_array_missing")
+              sys.exit(0)
+          staged_slugs = {row.get("slug") for row in staged_rows if isinstance(row, dict)}
+          added_slugs = []
+          for row in main_rows:
+              slug = row.get("slug") if isinstance(row, dict) else None
+              if isinstance(slug, str) and slug and slug not in staged_slugs:
+                  staged_rows.append(row)
+                  staged_slugs.add(slug)
+                  added_slugs.append(slug)
+          if added_slugs:
+              fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(staged_path), prefix=".codex_model_catalog.", suffix=".json")
+              with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                  json.dump(staged, handle, indent=2)
+                  handle.write("\n")
+              os.chmod(tmp_path, 0o644)
+              os.replace(tmp_path, staged_path)
+              print(f"::notice::MODEL_CATALOG_BACKFILL added={len(added_slugs)} slugs={','.join(added_slugs)} source=main_snapshot")
+          else:
+              print("MODEL_CATALOG_BACKFILL added=0 source=main_snapshot")
+          PY
+            then
+              echo "::warning::MODEL_CATALOG_BACKFILL failed; reviewer slots whose model is missing from the branch catalog will fail their OpenCode config for this run."
+            fi
+          fi
+
           # Identical-failure fingerprint cap: the failure-comment steps and
           # "Assemble failure evidence" stamp each failure comment with a
           # review-autofix-failure:v1 marker computed by

@@ -1236,7 +1236,15 @@ through `clarify → plan → implement → review`.
   of `review_autofix.yml` also backfills the pair
   (`REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS`) from the main snapshot when the
   branch predates them, so a PR branch forked before the reporter landed
-  still reports instead of logging `skip reason=reporter_missing`.
+  still reports instead of logging `skip reason=reporter_missing`. The same
+  step also appends any `scripts/codex_model_catalog.json` row the staged
+  (branch) catalog lacks from the main snapshot, because `REVIEWER_MODELS`
+  comes from the workflow ref while the catalog comes from the PR branch.
+  Rows the branch already has win and nothing is removed; the step logs
+  `MODEL_CATALOG_BACKFILL added=<n> slugs=<list> source=main_snapshot` and
+  only warns on a read or parse failure. Without it, a branch that predates a
+  roster change fails the new reviewer slots with "model '<slug>' is missing
+  or duplicated in the model catalog" (run 35933627432 on PR #4323).
 - **Trigger (releases):** `workflow_run: completed` with conclusion `failure`
   or `timed_out` on `Test & Mark Stable Release`, `Mark Stable Release`,
   `Promote main to stable`, `Auto release stable`, and

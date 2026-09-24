@@ -6890,3 +6890,100 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+
+def _run_model_catalog_backfill(tmp: Path, staged_catalog: dict | str, main_catalog: dict | str | None) -> tuple[subprocess.CompletedProcess[str], Path]:
+	"""Run the "Model catalog backfill" block of "Stage workflow support files" in ``tmp``."""
+	workflow = yaml.safe_load(_workflow_text())
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	stage_run = next(step["run"] for step in steps if step.get("name") == "Stage workflow support files")
+	start = stage_run.index("# Model catalog backfill.")
+	end = stage_run.index("\nfi\n", stage_run.index("MODEL_CATALOG_BACKFILL failed", start)) + len("\nfi\n")
+	snippet = "set -euo pipefail\n" + stage_run[start:end]
+	support = tmp / "support" / "scripts"
+	support.mkdir(parents=True, exist_ok=True)
+	main_dir = tmp / ".codex-workflow-src-main" / "scripts"
+	main_dir.mkdir(parents=True, exist_ok=True)
+	staged_path = support / "codex_model_catalog.json"
+	staged_path.write_text(staged_catalog if isinstance(staged_catalog, str) else json.dumps(staged_catalog), encoding="utf-8")
+	main_path = main_dir / "codex_model_catalog.json"
+	main_path.unlink(missing_ok=True)
+	if main_catalog is not None:
+		main_path.write_text(main_catalog if isinstance(main_catalog, str) else json.dumps(main_catalog), encoding="utf-8")
+	result = subprocess.run(
+		["bash", "-c", snippet],
+		cwd=tmp,
+		env={**os.environ, "SUPPORT_SCRIPTS_DIR": str(support)},
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	return result, staged_path
+
+
+def _write_reviewer_opencode_config(tmp: Path, catalog_path: Path, model_slug: str) -> subprocess.CompletedProcess[str]:
+	models_cache = tmp / "models.json"
+	models_cache.write_text(
+		json.dumps({"openrouter": {"models": {model_slug: {"limit": {"context": 1000000, "output": 1000}}}}}),
+		encoding="utf-8",
+	)
+	return subprocess.run(
+		[
+			"bash", str(REPO_ROOT / "scripts" / "write_opencode_config.sh"),
+			"--role", "reviewer", "--model", model_slug,
+			"--project-path", str(tmp), "--config-path", str(tmp / "config.json"), "--serena", "off",
+		],
+		env={**os.environ, "OPENCODE_MODEL_CATALOG_PATH": str(catalog_path), "OPENCODE_MODELS_PATH": str(models_cache)},
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+
+
+def test_stage_step_backfills_missing_model_catalog_rows_from_main() -> None:
+	# Regression: run 35933627432 on PR #4323 staged the PR branch's catalog,
+	# which predates the reviewer roster refresh, so the @main roster's
+	# z-ai/glm-5.2 slot failed write_opencode_config.sh before launch.
+	branch_row = {"slug": "x-ai/grok-4.20", "context_window": 1}
+	main_catalog = {
+		"models": [
+			{"slug": "x-ai/grok-4.20", "context_window": 2},
+			{"slug": "z-ai/glm-5.2", "context_window": 1000000},
+		]
+	}
+	with tempfile.TemporaryDirectory(prefix="model-catalog-backfill-") as td:
+		tmp = Path(td)
+		# Without a main snapshot the block is a no-op and the original failure reproduces.
+		result, staged_path = _run_model_catalog_backfill(tmp, {"models": [branch_row]}, None)
+		assert result.returncode == 0, result.stderr
+		assert json.loads(staged_path.read_text(encoding="utf-8")) == {"models": [branch_row]}
+		before = _write_reviewer_opencode_config(tmp, staged_path, "z-ai/glm-5.2")
+		assert before.returncode != 0
+		assert "model 'z-ai/glm-5.2' is missing or duplicated in the model catalog" in before.stderr
+
+		result, staged_path = _run_model_catalog_backfill(tmp, {"models": [branch_row]}, main_catalog)
+		assert result.returncode == 0, result.stderr
+		assert "MODEL_CATALOG_BACKFILL added=1 slugs=z-ai/glm-5.2 source=main_snapshot" in result.stdout
+		staged = json.loads(staged_path.read_text(encoding="utf-8"))
+		# The branch row wins over main's row for the same slug; only the missing slug is appended.
+		assert staged["models"] == [branch_row, {"slug": "z-ai/glm-5.2", "context_window": 1000000}]
+		after = _write_reviewer_opencode_config(tmp, staged_path, "z-ai/glm-5.2")
+		assert after.returncode == 0, after.stderr
+
+		# A second pass adds nothing.
+		result, _ = _run_model_catalog_backfill(tmp, staged, main_catalog)
+		assert "MODEL_CATALOG_BACKFILL added=0 source=main_snapshot" in result.stdout
+
+
+def test_stage_step_model_catalog_backfill_fails_open() -> None:
+	branch_catalog = {"models": [{"slug": "x-ai/grok-4.20"}]}
+	for main_catalog, expected in (
+		("{not json", "::warning::MODEL_CATALOG_BACKFILL failed"),
+		({"no_models": []}, "::warning::MODEL_CATALOG_BACKFILL skipped reason=models_array_missing"),
+	):
+		with tempfile.TemporaryDirectory(prefix="model-catalog-backfill-") as td:
+			result, staged_path = _run_model_catalog_backfill(Path(td), branch_catalog, main_catalog)
+			assert result.returncode == 0, result.stderr
+			assert expected in result.stdout + result.stderr
+			assert json.loads(staged_path.read_text(encoding="utf-8")) == branch_catalog
