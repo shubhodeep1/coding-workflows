@@ -10,9 +10,9 @@
 #      the guise of "merge resolution" — and the run aborts.
 #
 #   2. Per-file syntax sanity.  For every modified .sh, run `bash -n`.
-#      For every modified .py, run `python3 -m py_compile`.  Catches
-#      truncated heredocs, missing fi/done, etc., before they reach a
-#      consumer repo.
+#      For every modified .py, parse with `ast.parse` without writing
+#      bytecode. Catches truncated heredocs, missing fi/done, etc., before
+#      they reach a consumer repo.
 #
 #   3. Workflow → script reference integrity.  For every modified
 #      .github/workflows/*.yml file, invoke check_workflow_script_refs.py
@@ -284,8 +284,10 @@ while IFS= read -r touched; do
 			fi
 			;;
 		*.py)
-			if ! run_isolated_validator_python -m py_compile "${REPO_ROOT}/${touched}" 2>&1; then
-				echo "::error::py_compile failed for ${touched}" >&2
+			if ! run_isolated_validator_python -c \
+				'import ast,pathlib,sys; source=pathlib.Path(sys.argv[1]); ast.parse(source.read_text(encoding="utf-8"), filename=str(source))' \
+				"${REPO_ROOT}/${touched}" 2>&1; then
+				echo "::error::Python syntax validation failed for ${touched}" >&2
 				syntax_failed=$((syntax_failed + 1))
 			fi
 			;;

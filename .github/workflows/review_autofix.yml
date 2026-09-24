@@ -1792,14 +1792,18 @@ jobs:
           # every metadata producer, validator, and commit producer on one
           # complete snapshot even while reviewing an in-flight stale branch.
           security_sensitive_support_files=(
+            verify_integration_fingerprints.py
             review_collect_pr_metadata.sh
             files_touched_scope_guard.py
             post_agent_workspace_guard.py
             check_resolver_diff.sh
+            review_apply_fixes.sh
             review_commit_changes.sh
             review_conflict_prepare.sh
             review_conflict_resolve.sh
             review_rb_judge.sh
+            trusted_git_write.sh
+            untrusted_process_sandbox.sh
           )
           security_sensitive_support_root=".codex-workflow-src-main"
           for security_sensitive_support_file in "${security_sensitive_support_files[@]}"; do
@@ -1815,12 +1819,12 @@ jobs:
               exit 1
             fi
           done
-          for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py post_agent_workspace_guard.py check_resolver_diff.sh; do
+          for metadata_guard_support_file in verify_integration_fingerprints.py review_collect_pr_metadata.sh files_touched_scope_guard.py post_agent_workspace_guard.py check_resolver_diff.sh untrusted_process_sandbox.sh; do
             install -m 0755 \
               "${security_sensitive_support_root}/scripts/${metadata_guard_support_file}" \
               "${SUPPORT_SCRIPTS_DIR}/${metadata_guard_support_file}"
           done
-          for commit_producer_support_file in review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh review_rb_judge.sh; do
+          for commit_producer_support_file in review_apply_fixes.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh review_rb_judge.sh trusted_git_write.sh; do
             install -m 0755 \
               "${security_sensitive_support_root}/scripts/${commit_producer_support_file}" \
               "${SUPPORT_SCRIPTS_DIR}/${commit_producer_support_file}"

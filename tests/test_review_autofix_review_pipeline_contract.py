@@ -3123,12 +3123,17 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	assert "review_collect_pr_metadata.sh" in required_bootstrap_line, required_bootstrap_line
 	assert "review_collect_pr_metadata.sh" in main_primary_bootstrap_line, main_primary_bootstrap_line
 	for security_sensitive_support_file in (
+		"verify_integration_fingerprints.py",
 		"review_collect_pr_metadata.sh",
 		"files_touched_scope_guard.py",
+		"post_agent_workspace_guard.py",
+		"review_apply_fixes.sh",
 		"review_commit_changes.sh",
 		"review_conflict_prepare.sh",
 		"review_conflict_resolve.sh",
 		"review_rb_judge.sh",
+		"trusted_git_write.sh",
+		"untrusted_process_sandbox.sh",
 	):
 		assert security_sensitive_support_file in main_primary_bootstrap_line, main_primary_bootstrap_line
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"' in block
@@ -3137,12 +3142,17 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	assert 'security_sensitive_support_root=".codex-workflow-src"' in stage_block
 	assert stage_block.index('if [ ! -f "${security_sensitive_support_src}" ]; then') < stage_block.index('install -m 0755 \\')
 	for security_sensitive_support_file in (
+		"verify_integration_fingerprints.py",
 		"review_collect_pr_metadata.sh",
 		"files_touched_scope_guard.py",
+		"post_agent_workspace_guard.py",
+		"review_apply_fixes.sh",
 		"review_commit_changes.sh",
 		"review_conflict_prepare.sh",
 		"review_conflict_resolve.sh",
 		"review_rb_judge.sh",
+		"trusted_git_write.sh",
+		"untrusted_process_sandbox.sh",
 	):
 		assert security_sensitive_support_file in stage_block
 	assert 'gh_retry "${PR_PAYLOAD_FILE}"' not in block

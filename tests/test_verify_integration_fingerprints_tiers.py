@@ -90,6 +90,23 @@ def test_verify_integration_fingerprints_default_and_explicit_strict_match() -> 
 		assert default_result[0] == 1
 
 
+def test_verify_integration_fingerprints_explicit_repo_root_ignores_validator_cwd() -> None:
+	mod = _verifier_module()
+	fingerprints = {
+		"1500": _must_contain_issue(1500, 1501, ["EXPECTED_LINE"]),
+	}
+	with _sandbox({"scripts/example.py": "EXPECTED_LINE\n"}, fingerprints) as (sandbox, fp_path):
+		with tempfile.TemporaryDirectory(prefix="verifier-external-cwd-") as external_cwd:
+			rc, out, err = _run_verifier(
+				mod,
+				["--repo-root", str(sandbox), str(fp_path)],
+				Path(external_cwd),
+			)
+		assert rc == 0
+		assert "all merged sub-issue intent preserved" in out
+		assert err == ""
+
+
 def test_verify_integration_fingerprints_ratio_passes_at_ninety_five_percent_per_issue() -> None:
 	mod = _verifier_module()
 	regexes = _regexes("LINE", 20)
