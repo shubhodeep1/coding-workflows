@@ -6914,7 +6914,7 @@ def _run_model_catalog_backfill(tmp: Path, staged_catalog: dict | str, main_cata
 	result = subprocess.run(
 		["bash", "-c", snippet],
 		cwd=tmp,
-		env={**os.environ, "SUPPORT_SCRIPTS_DIR": str(support)},
+		env=_git_clean_env({"SUPPORT_SCRIPTS_DIR": str(support)}),
 		text=True,
 		capture_output=True,
 		check=False,

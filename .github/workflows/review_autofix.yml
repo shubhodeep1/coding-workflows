@@ -2331,7 +2331,7 @@ jobs:
                   handle.write("\n")
               os.chmod(tmp_path, 0o644)
               os.replace(tmp_path, staged_path)
-              print(f"::notice::MODEL_CATALOG_BACKFILL added={len(added_slugs)} slugs={','.join(added_slugs)} source=main_snapshot")
+              print(f"MODEL_CATALOG_BACKFILL added={len(added_slugs)} slugs={','.join(added_slugs)} source=main_snapshot")
           else:
               print("MODEL_CATALOG_BACKFILL added=0 source=main_snapshot")
           PY
