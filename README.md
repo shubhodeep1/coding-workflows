@@ -1376,12 +1376,13 @@ through `clarify → plan → implement → review`.
   is based on the closed PR's head branch. Closed without merging: the heal PR
   is closed with a comment (never re-pointed, since its branch carries the
   rejected commits), `ai:merge-queued` is removed, and the heal issue is closed
-  as not planned. Merged: only the heal commits are moved onto the source PR's
-  base (`git rebase --onto <base> refs/pull/<n>/head`), the heal branch is
-  force-pushed with a lease, and the heal PR is re-pointed at that base (a PR
-  GitHub already re-pointed after deleting the head branch is rebased the same
-  way). A rebase conflict, nothing left to apply, or a missing base closes the
-  heal PR and issue instead; a heal branch that moved meanwhile is left alone.
+  as not planned. Merged: the source PR's final head (`refs/pull/<n>/head`) and
+  then its base are merged into the heal branch, which is pushed as a normal
+  fast-forward (the repository ruleset rejects force pushes on every branch),
+  and the heal PR is re-pointed at that base, so its diff is only the heal
+  changes (a heal PR already based on the source base is merged the same way).
+  A merge conflict, nothing left to apply, or a missing base closes the heal PR
+  and issue instead; a heal branch that moved meanwhile is left alone.
   Log lines are prefixed `WORKFLOW_HEAL_PR_RECONCILE`
   (`closed … reason=…`, `retargeted …`, `skip reason=…`). Disable with the
   repository variable `WORKFLOW_HEAL_PR_RECONCILE_ENABLED=false`.

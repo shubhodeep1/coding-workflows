@@ -1,5 +1,5 @@
 <!-- changelog: fixed -->
-- **Workflow failure heal now sees the runs that failed, names reviewer failures correctly, and cleans up heal PRs when their source PR closes.** The identical-failure cap's heal report links the failed review runs, and a failed reviewer step is reported as `reviewers_failed` rather than `editor_empty_noop`. When a pull request in coding-workflows closes, its heal PRs are closed or moved onto its base.
+- **Workflow failure heal now sees the runs that failed, names reviewer failures correctly, and cleans up heal PRs when their source PR closes.** The identical-failure cap's heal report links the failed review runs, and a failed reviewer step is reported as `reviewers_failed` rather than `editor_empty_noop`. When a pull request in coding-workflows closes, its heal PRs are closed or brought up to its base and re-pointed.
 
 On PR #4323, review/autofix stopped after three identical runs reported as `editor_empty_noop`. The heal issue filed from the cap (#4342) said "no failed run could be linked" and blamed the editor. In fact every reviewer slot and the summariser had exited with systemd status 226, and the editor never ran. The fix PR (#4349) then stayed open and merge-queued on #4323's branch after #4323 closed unmerged. Three changes address this. The `fingerprint-cap-block` job passes the PR comments it already fetched to `scripts/workflow_failure_heal_autofix_report.sh`, which lists the runs named by the head's `review-autofix-failure:v1` markers in `run_refs`. A failed `Run reviewer models` step is reported as `reviewers_failed`, with per-slot and summariser exit codes as evidence. And the new `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` runs `scripts/workflow_failure_heal_pr_reconcile.sh` when a pull request closes.
 
@@ -9,9 +9,9 @@ On PR #4323, review/autofix stopped after three identical runs reported as `edit
 | New API calls in the cap path | 0 |
 | Self-named script error lines kept as reviewer-failure evidence | up to 10 |
 | Heal PR outcome when the source PR closes unmerged | closed; heal issue closed as not planned |
-| Heal PR outcome when the source PR merges | heal commits rebased onto the source base, PR re-pointed |
+| Heal PR outcome when the source PR merges | source head and base merged in (fast-forward push), PR re-pointed |
 
-What this means for operators: a cap-triggered heal issue now carries the failed runs' logs, and an error line such as `untrusted_process_sandbox: …` counts as the crash file for ownership routing when that script exists. Review retries are unchanged: a reviewer failure still posts the "AI review/autofix produced no output — will retry" comment and applies no immediate `ai:review-blocked`. A heal PR no longer outlives its source PR: it is closed, or moved onto the base with only its own commits. Set `WORKFLOW_HEAL_PR_RECONCILE_ENABLED=false` to turn the reconcile job off.
+What this means for operators: a cap-triggered heal issue now carries the failed runs' logs, and an error line such as `untrusted_process_sandbox: …` counts as the crash file for ownership routing when that script exists. Review retries are unchanged: a reviewer failure still posts the "AI review/autofix produced no output — will retry" comment and applies no immediate `ai:review-blocked`. A heal PR no longer outlives its source PR: it is closed, or re-pointed at the base with a diff of only its own changes. No force push is used, so the repository's non-fast-forward rule is respected. Set `WORKFLOW_HEAL_PR_RECONCILE_ENABLED=false` to turn the reconcile job off.
 
 ### For contributors
 

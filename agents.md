@@ -134,8 +134,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     closes, the `heal-pr-reconcile` job (`internal-cancel-on-pr-close.yml`,
     `scripts/workflow_failure_heal_pr_reconcile.sh`,
     `WORKFLOW_HEAL_PR_RECONCILE_ENABLED`) closes the heal PRs stacked on its
-    head branch and their heal issues (source unmerged), or rebases their heal
-    commits onto its base and re-points them (source merged). Reporters wrap
+    head branch and their heal issues (source unmerged), or merges its final
+    head and its base into their heal branches (fast-forward push, no force)
+    and re-points them at its base (source merged). Reporters wrap
     the report as `client_payload: {schema_version, report}` (GitHub caps
     `client_payload` at 10 top-level properties); the intake unwraps it and
     accepts the flat shape too, and a rejected dispatch logs `detail=` with

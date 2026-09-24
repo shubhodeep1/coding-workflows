@@ -13,11 +13,12 @@
 #   * source closed without merging -> close the heal PR with a comment and
 #     never re-point it: its branch carries the rejected commits. The heal
 #     issue is closed as not planned with a comment.
-#   * source merged -> move only the heal commits onto the source PR's base
-#     (git rebase --onto <base> <source head> <heal branch>), force-push the
-#     heal branch with a lease, and re-point the heal PR at that base. A rebase
-#     conflict, a heal branch with nothing left to apply, or a missing base
-#     closes the heal PR and its issue as above instead.
+#   * source merged -> merge the source PR's final head (refs/pull/<n>/head)
+#     and then the source PR's base into the heal branch, push it as a normal
+#     fast-forward (the repository ruleset rejects force pushes on every
+#     branch), and re-point the heal PR at that base; its diff is then only the
+#     heal changes. A merge conflict, a heal branch with nothing left to apply,
+#     or a missing base closes the heal PR and its issue as above instead.
 #
 # A heal PR is recognised only through its heal issue: an open issue labelled
 # ai:workflow-heal whose body carries
@@ -28,7 +29,7 @@
 # API budget (CLAUDE.md §15): one paginated GET of the open heal issues, one
 # GET of the open PRs per matching heal issue, then the writes for each heal
 # PR acted on. Nothing else in this path already holds that data. Git reads
-# and the push go through the git remote.
+# and the (fast-forward) push go through the git remote.
 #
 # Required env: GH_TOKEN, REPOSITORY, SOURCE_PR_NUMBER, SOURCE_PR_MERGED,
 #   SOURCE_HEAD_REF, SOURCE_HEAD_SHA, SOURCE_BASE_REF
@@ -134,9 +135,14 @@ _Workflow failure heal PR reconcile._"
 	log "closed heal_pr=${heal_pr} heal_issue=${heal_issue} source_pr=${SOURCE_PR} reason=${reason}"
 }
 
-# Move the heal commits onto the source PR's base and re-point the heal PR
-# (Q11). Returns 1 with RETARGET_FAIL_REASON set when the heal PR must be
-# closed instead.
+# Bring the source PR's base into the heal branch and re-point the heal PR
+# (Q11, as a merge: the repository ruleset rejects non-fast-forward pushes on
+# every branch, so the heal branch cannot be rebased and force-pushed).
+# Merging the source PR's final head first picks up any source commits made
+# after the heal branch was cut; merging the base second then only adds what
+# the base gained beyond the source PR. The heal PR's diff against the base is
+# afterwards exactly the heal changes. Returns 1 with RETARGET_FAIL_REASON set
+# when the heal PR must be closed or left alone instead.
 RETARGET_FAIL_REASON=""
 _retarget_heal()
 {
@@ -149,7 +155,7 @@ _retarget_heal()
 		RETARGET_FAIL_REASON="no_git_checkout"
 		return 1
 	fi
-	# refs/pull/<n>/head outlives the source branch once GitHub deletes it.
+	# refs/pull/<n>/head outlives the source branch.
 	if ! git fetch --quiet --no-tags origin \
 		"+refs/pull/${SOURCE_PR}/head:${source_ref}" \
 		"+refs/heads/${heal_branch}:${heal_remote_ref}" >/dev/null 2>&1; then
@@ -164,45 +170,53 @@ _retarget_heal()
 		RETARGET_FAIL_REASON="heal_branch_moved"
 		return 1
 	fi
-	local rebase_dir="${WORK_DIR}/rebase-${heal_pr}"
-	rm -rf "${rebase_dir}"
+	local merge_dir="${WORK_DIR}/merge-${heal_pr}"
+	rm -rf "${merge_dir}"
 	git worktree prune >/dev/null 2>&1 || true
-	if ! git worktree add --quiet --detach "${rebase_dir}" "${heal_remote_ref}" >/dev/null 2>&1; then
+	if ! git worktree add --quiet --detach "${merge_dir}" "${heal_remote_ref}" >/dev/null 2>&1; then
 		RETARGET_FAIL_REASON="worktree_failed"
 		return 1
 	fi
-	# Commits on the heal branch that the source PR's head does not have: the
-	# heal fix itself, never the source PR's own commits.
-	if ! GIT_COMMITTER_NAME="codex-bot" GIT_COMMITTER_EMAIL="codex@users.noreply.github.com" \
-		git -C "${rebase_dir}" rebase --quiet --onto "${base_remote_ref}" "${source_ref}" >/dev/null 2>&1; then
-		git -C "${rebase_dir}" rebase --abort >/dev/null 2>&1 || true
-		git worktree remove --force "${rebase_dir}" >/dev/null 2>&1 || true
-		RETARGET_FAIL_REASON="rebase_conflict"
-		return 1
-	fi
-	local rebased_sha
-	rebased_sha="$(git -C "${rebase_dir}" rev-parse HEAD 2>/dev/null || echo "")"
-	if [ -z "${rebased_sha}" ] || [ "$(git rev-list --count "${base_remote_ref}..${rebased_sha}" 2>/dev/null || echo 0)" = "0" ]; then
-		git worktree remove --force "${rebase_dir}" >/dev/null 2>&1 || true
+	local merge_ref merge_message
+	for merge_ref in "${source_ref}" "${base_remote_ref}"; do
+		if [ "${merge_ref}" = "${source_ref}" ]; then
+			merge_message="Merge the final head of #${SOURCE_PR} into ${heal_branch}"
+		else
+			merge_message="Merge ${BASE_REF} into ${heal_branch} after #${SOURCE_PR} merged"
+		fi
+		if ! GIT_AUTHOR_NAME="codex-bot" GIT_AUTHOR_EMAIL="codex@users.noreply.github.com" \
+			GIT_COMMITTER_NAME="codex-bot" GIT_COMMITTER_EMAIL="codex@users.noreply.github.com" \
+			git -C "${merge_dir}" merge --quiet --no-edit -m "${merge_message}" "${merge_ref}" >/dev/null 2>&1; then
+			git -C "${merge_dir}" merge --abort >/dev/null 2>&1 || true
+			git worktree remove --force "${merge_dir}" >/dev/null 2>&1 || true
+			RETARGET_FAIL_REASON="merge_conflict"
+			return 1
+		fi
+	done
+	local merged_sha
+	merged_sha="$(git -C "${merge_dir}" rev-parse HEAD 2>/dev/null || echo "")"
+	if [ -z "${merged_sha}" ] || git diff --quiet "${base_remote_ref}" "${merged_sha}" 2>/dev/null; then
+		# The base already carries everything this fix changes.
+		git worktree remove --force "${merge_dir}" >/dev/null 2>&1 || true
 		RETARGET_FAIL_REASON="nothing_to_apply"
 		return 1
 	fi
-	if ! git -C "${rebase_dir}" push --quiet --force-with-lease="refs/heads/${heal_branch}:${heal_head_sha}" \
-		origin "${rebased_sha}:refs/heads/${heal_branch}" >/dev/null 2>&1; then
-		git worktree remove --force "${rebase_dir}" >/dev/null 2>&1 || true
+	# A plain fast-forward push: merged_sha descends from heal_head_sha.
+	if ! git -C "${merge_dir}" push --quiet origin "${merged_sha}:refs/heads/${heal_branch}" >/dev/null 2>&1; then
+		git worktree remove --force "${merge_dir}" >/dev/null 2>&1 || true
 		RETARGET_FAIL_REASON="push_rejected"
 		return 1
 	fi
-	git worktree remove --force "${rebase_dir}" >/dev/null 2>&1 || true
+	git worktree remove --force "${merge_dir}" >/dev/null 2>&1 || true
 	if [ "${heal_base}" != "${BASE_REF}" ] \
 		&& ! gh_retry gh api --method PATCH "repos/${REPO}/pulls/${heal_pr}" -f base="${BASE_REF}" >/dev/null 2>&1; then
-		log "warn heal_pr_retarget_failed heal_pr=${heal_pr} base=${BASE_REF} rebased_sha=${rebased_sha}"
+		log "warn heal_pr_retarget_failed heal_pr=${heal_pr} base=${BASE_REF} merged_sha=${merged_sha}"
 	fi
-	_comment "${heal_pr}" "Source pull request #${SOURCE_PR} merged into \`${BASE_REF}\`. Moved this fix's own commits onto \`${BASE_REF}\` (\`git rebase --onto ${BASE_REF} <#${SOURCE_PR} head> ${heal_branch}\`, now \`${rebased_sha:0:12}\`) and re-pointed this pull request at \`${BASE_REF}\`.
+	_comment "${heal_pr}" "Source pull request #${SOURCE_PR} merged into \`${BASE_REF}\`. Merged #${SOURCE_PR}'s final head and \`${BASE_REF}\` into this branch (now \`${merged_sha:0:12}\`) and re-pointed this pull request at \`${BASE_REF}\`, so its diff is only this fix.
 
 ---
 _Workflow failure heal PR reconcile._"
-	log "retargeted heal_pr=${heal_pr} heal_branch=${heal_branch} source_pr=${SOURCE_PR} base=${BASE_REF} old_head=${heal_head_sha} new_head=${rebased_sha}"
+	log "retargeted heal_pr=${heal_pr} heal_branch=${heal_branch} source_pr=${SOURCE_PR} base=${BASE_REF} old_head=${heal_head_sha} new_head=${merged_sha}"
 	return 0
 }
 

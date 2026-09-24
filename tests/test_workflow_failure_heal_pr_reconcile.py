@@ -3,11 +3,13 @@
 
 PR #4349 (the heal fix for PR #4323's review/autofix failure) stayed open,
 merge-queued, on the branch of PR #4323 after PR #4323 closed unmerged. The
-script closes such heal PRs, or, when the source PR merged, moves only the
-heal commits onto the source base and re-points the heal PR.
+script closes such heal PRs, or, when the source PR merged, merges the source
+PR's final head and its base into the heal branch (a fast-forward push: the
+repository ruleset rejects force pushes) and re-points the heal PR.
 
-Each case runs the script against a real bare git origin (the source PR head
-under refs/pull/<n>/head, a squash-merged base) and a fake `gh` that serves the
+Each case runs the script against a real bare git origin that refuses
+non-fast-forward pushes (the source PR head under refs/pull/<n>/head, a
+squash-merged base) and a fake `gh` that serves the
 heal issue / PR listings from a JSON state file and records every write.
 """
 
@@ -96,6 +98,8 @@ def _stage(tmp: Path, *, heal_touches_source: bool = False, heal_base: str = SOU
 	"""Origin with base, source PR head (refs/pull), a heal branch cut from an older source head, a squash merge."""
 	origin = tmp / "origin.git"
 	_git(tmp, "init", "-q", "--bare", str(origin))
+	# Like ruleset 14197800 (non_fast_forward on ~ALL branches).
+	_git(origin, "config", "receive.denyNonFastForwards", "true")
 	seed = tmp / "seed"
 	_git(tmp, "init", "-q", "-b", BASE, str(seed))
 	_commit(seed, "base.txt", "base\n", "base")
@@ -191,7 +195,11 @@ def test_unmerged_source_closes_heal_pr_and_issue_without_touching_the_branch() 
 		assert not any("4400" in w["path"] for w in state["writes"])
 
 
-def test_merged_source_moves_only_the_heal_commits_onto_the_base() -> None:
+def _is_ancestor(stage: dict, ancestor: str, descendant: str) -> bool:
+	return subprocess.run(["git", "merge-base", "--is-ancestor", ancestor, descendant], cwd=stage["origin"], check=False).returncode == 0
+
+
+def test_merged_source_merges_head_and_base_so_the_diff_is_only_the_heal_fix() -> None:
 	with tempfile.TemporaryDirectory() as tmp_name:
 		stage = _stage(Path(tmp_name))
 		base_sha = _squash_merge_source(stage)
@@ -199,24 +207,29 @@ def test_merged_source_moves_only_the_heal_commits_onto_the_base() -> None:
 		assert result.returncode == 0, result.stderr
 		assert f"retargeted heal_pr={HEAL_PR} heal_branch={HEAL_BRANCH} source_pr={SOURCE_PR} base={BASE}" in result.stdout, result.stdout
 		new_head = _origin_ref(stage, f"refs/heads/{HEAL_BRANCH}")
+		# A fast-forward of the old heal head that contains the base tip ...
 		assert new_head != stage["heal_sha"]
-		# Exactly the heal commit on top of the squash-merged base.
-		assert _git(stage["origin"], "rev-parse", f"{new_head}^") == base_sha
-		assert _git(stage["origin"], "log", "--format=%s", f"{base_sha}..{new_head}") == "heal fix"
+		assert _is_ancestor(stage, stage["heal_sha"], new_head)
+		assert _is_ancestor(stage, stage["source_sha"], new_head)
+		assert _is_ancestor(stage, base_sha, new_head)
+		# ... whose diff against the base (what the re-pointed PR shows) is only the heal fix.
+		assert _git(stage["origin"], "diff", "--name-only", base_sha, new_head) == "heal.txt"
 		assert _git(stage["origin"], "show", f"{new_head}:source.txt") == "v2"
 		assert _writes(state, "PATCH", f"pulls/{HEAL_PR}")[0]["fields"] == {"base": BASE}
 		assert f"merged into `{BASE}`" in _writes(state, "POST", f"issues/{HEAL_PR}/comments")[0]["fields"]["body"]
 		assert not _writes(state, "PATCH", f"issues/{HEAL_ISSUE}")
 
 
-def test_merged_source_already_repointed_by_github_is_rebased_without_a_base_patch() -> None:
+def test_merged_source_already_repointed_is_merged_without_a_base_patch() -> None:
 	# GitHub re-points PRs to the merged PR's base when it deletes the head branch.
 	with tempfile.TemporaryDirectory() as tmp_name:
 		stage = _stage(Path(tmp_name), heal_base=BASE)
 		base_sha = _squash_merge_source(stage)
 		result, state = _run(stage, merged=True)
 		assert "retargeted" in result.stdout, result.stdout
-		assert _git(stage["origin"], "rev-parse", f"refs/heads/{HEAL_BRANCH}^") == base_sha
+		new_head = _origin_ref(stage, f"refs/heads/{HEAL_BRANCH}")
+		assert _is_ancestor(stage, base_sha, new_head)
+		assert _git(stage["origin"], "diff", "--name-only", base_sha, new_head) == "heal.txt"
 		assert not _writes(state, "PATCH", f"pulls/{HEAL_PR}")
 
 
@@ -225,7 +238,7 @@ def test_merged_source_with_conflicting_heal_commit_closes_heal_pr() -> None:
 		stage = _stage(Path(tmp_name), heal_touches_source=True)
 		_squash_merge_source(stage)
 		result, state = _run(stage, merged=True)
-		assert f"closed heal_pr={HEAL_PR} heal_issue={HEAL_ISSUE} source_pr={SOURCE_PR} reason=source_merged_rebase_conflict" in result.stdout, result.stdout
+		assert f"closed heal_pr={HEAL_PR} heal_issue={HEAL_ISSUE} source_pr={SOURCE_PR} reason=source_merged_merge_conflict" in result.stdout, result.stdout
 		assert _origin_ref(stage, f"refs/heads/{HEAL_BRANCH}") == stage["heal_sha"]
 		assert _writes(state, "PATCH", f"pulls/{HEAL_PR}")[0]["fields"] == {"state": "closed"}
 		assert _writes(state, "PATCH", f"issues/{HEAL_ISSUE}")[0]["fields"] == {"state": "closed", "state_reason": "not_planned"}
