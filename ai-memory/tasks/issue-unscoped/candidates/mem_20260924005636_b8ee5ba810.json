@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.94,
+  "details": "Recent workflow changes repeatedly use sandboxing, provider proxies, workspace safety checks, and dedicated trusted-write helpers around implementation, planning, review, and security-audit agents. Preserve this separation whenever modifying automation that executes model-generated commands or applies model-generated patches.",
+  "fingerprint": "940e4b8746c835f63ea650054163636dae142630d9ffc319b3e8ac227db834ab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35940543987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35940543987",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4311",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4325",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4326",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4329",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4350",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4312",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4328",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4330",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4335",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4351"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260924005636_b8ee5ba810",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Agent-produced changes are handled as untrusted input and isolated from privileged repository operations.",
+  "timestamps": {
+    "created_at": "2026-09-24T00:56:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
