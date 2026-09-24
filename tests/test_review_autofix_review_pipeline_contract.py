@@ -6866,9 +6866,9 @@ def _origin_main_ref() -> str | None:
 	shallow = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=REPO_ROOT, capture_output=True, text=True, check=False).stdout.strip() == "true"
 	# --depth only on an already-shallow checkout (CI): it would turn a full
 	# local clone shallow.
-	fetch = ["git", "fetch", "--depth=1", "origin", "main"] if shallow else ["git", "fetch", "origin", "main"]
+	fetch = ["git", "fetch", "--depth=1", "origin", "main:refs/remotes/origin/main"] if shallow else ["git", "fetch", "origin", "main:refs/remotes/origin/main"]
 	try:
-		subprocess.run(fetch + [":refs/remotes/origin/main"], cwd=REPO_ROOT, capture_output=True, check=False, timeout=120)
+		subprocess.run(fetch, cwd=REPO_ROOT, capture_output=True, check=False, timeout=120)
 	except (OSError, subprocess.TimeoutExpired):
 		return None
 	return "origin/main" if _has_ref() else None
