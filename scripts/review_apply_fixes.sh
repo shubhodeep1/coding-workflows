@@ -2134,7 +2134,10 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Change status:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints|${_REFUSAL_REGEX}" "${tmp_output}"; then
       reviewer_validation_ok=true
       changes_lost_detected=false
+      reviewer_checksum_mismatch_count=0
+      reviewer_manifest_file_count=0
       while IFS= read -r manifest_path; do
+        reviewer_manifest_file_count=$((reviewer_manifest_file_count + 1))
         manifest_sha="$(sha256sum "${manifest_path}" | awk '{print $1}')"
         if ! awk -v file_path="${manifest_path}" '
           BEGIN { in_section=0; count=0 }
@@ -2198,8 +2201,15 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
         fi
         if [ "${match_count}" -ne 1 ]; then
           echo "::warning::EDITOR_REVIEWER_CHECKSUM_UNVERIFIED attempt=${attempt} file=${manifest_path} expected_sha=${manifest_sha} path_entries=${processed_path_count} checksum_matches=${match_count} — accepting on the file path and issue audit."
+          reviewer_checksum_mismatch_count=$((reviewer_checksum_mismatch_count + 1))
         fi
       done < "${REVIEWER_MANIFEST_FILE}"
+      # One line per attempt so a single miscopied hash is easy to tell apart from
+      # a summary whose checksums are all wrong. files_checked stops early when a
+      # missing entry fails the attempt.
+      if [ "${reviewer_checksum_mismatch_count}" -gt 0 ]; then
+        echo "::warning::EDITOR_REVIEWER_CHECKSUM_SUMMARY attempt=${attempt} files_checked=${reviewer_manifest_file_count} checksum_mismatches=${reviewer_checksum_mismatch_count} validation_ok=${reviewer_validation_ok}"
+      fi
 
       if [ "${reviewer_validation_ok}" = true ]; then
         # ── Verify claimed changes actually persisted on disk ──
