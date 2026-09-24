@@ -932,6 +932,8 @@ def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
 	assert "GH_PAT: ${{ secrets.GH_PAT }}" not in commit_step
 	assert "refusing retry or partial-work salvage" in implement
 	assert implement.count('echo "POST_AGENT_WORKSPACE_GUARD_FAILED=true" >> "$GITHUB_ENV"') >= 4
+	assert '::error::Post-agent workspace guard rejected repair attempt ${attempt} after model failure;' in implement
+	assert '::error::Post-agent workspace guard rejected repair attempt ${attempt};' in implement
 	assert implement.count("env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true'") >= 12
 	assert "Review-blocked fix workspace guard rejected" in (
 		REPO_ROOT / "scripts" / "review_rb_judge.sh"
