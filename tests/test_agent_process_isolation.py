@@ -474,6 +474,78 @@ def test_resolver_python_syntax_validation_is_read_only() -> None:
 		assert not (workspace / "__pycache__").exists()
 
 
+def test_resolver_strict_manifests_are_visible_to_isolated_validator() -> None:
+	with tempfile.TemporaryDirectory(dir="/tmp") as directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as runner_directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		(workspace / "conflicted.txt").write_text("resolved\n", encoding="utf-8")
+		(workspace / "clean.txt").write_text("merged\n", encoding="utf-8")
+		clean_blob = subprocess.check_output(
+			["git", "-C", str(workspace), "hash-object", "clean.txt"], text=True,
+		).strip()
+		conflicted = root / "conflicted-set.txt"
+		touched = root / "touched-set.txt"
+		spans = root / "spans.json"
+		clean = root / "clean.tsv"
+		conflicted.write_text("conflicted.txt\n", encoding="utf-8")
+		touched.write_text("conflicted.txt\n", encoding="utf-8")
+		spans.write_text(json.dumps({"conflicted.txt": {
+			"mode": "100644", "anchors": ["", "Cg=="],
+		}}), encoding="utf-8")
+		clean.write_text(f"100644\t{clean_blob}\tclean.txt\n", encoding="utf-8")
+		wrapper = Path(runner_directory) / "validator-wrapper.sh"
+		wrapper.write_text(
+			'#!/usr/bin/env bash\n'
+			'for manifest in "${@: -3}"; do\n'
+			'  case "$manifest" in /tmp/*|/var/tmp/*) exit 44 ;; esac\n'
+			'done\n'
+			'exec bash "$ACTUAL_SANDBOX" "$@"\n', encoding="utf-8",
+		)
+		wrapper.chmod(0o700)
+		environment = os.environ.copy()
+		environment.update({
+			"ACTUAL_SANDBOX": str(SANDBOX),
+			"POST_AGENT_VALIDATION_SANDBOX": str(wrapper),
+			"POST_AGENT_VALIDATION_RUNTIME_DIR": runner_directory,
+			"RUNNER_TEMP": runner_directory,
+			"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		command = [
+			"bash", str(RESOLVER_GUARD), "--repo-root", str(workspace),
+			"--conflicted-set", str(conflicted), "--touched-set", str(touched),
+			"--conflict-spans", str(spans), "--clean-manifest", str(clean),
+			"--strict-manifests",
+		]
+
+		def run_guard() -> subprocess.CompletedProcess[str]:
+			result = subprocess.run(command, env=environment, capture_output=True, text=True)
+			assert list(Path(runner_directory).glob("resolver-validator.*")) == []
+			return result
+
+		valid = run_guard()
+		assert valid.returncode == 0, valid.stderr
+		spans.write_text(json.dumps({"conflicted.txt": {
+			"mode": "100644", "anchors": ["T1RIRVI=", "Cg=="],
+		}}), encoding="utf-8")
+		invalid_spans = run_guard()
+		assert invalid_spans.returncode != 0
+		assert "resolver changed content outside conflict spans" in invalid_spans.stderr
+		spans.write_text(json.dumps({"conflicted.txt": {
+			"mode": "100644", "anchors": ["", "Cg=="],
+		}}), encoding="utf-8")
+		(workspace / "clean.txt").write_text("tampered\n", encoding="utf-8")
+		invalid_clean = run_guard()
+		assert invalid_clean.returncode != 0
+		assert "resolver changed deterministically merged content" in invalid_clean.stderr
+		environment["RUNNER_TEMP"] = directory
+		blocked = run_guard()
+		assert blocked.returncode != 0
+		assert "canonical RUNNER_TEMP outside private tmp is required" in blocked.stderr
+
+
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		root = Path(directory)
