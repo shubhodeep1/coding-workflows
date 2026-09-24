@@ -459,7 +459,7 @@ record_orchestrator_lesson_event() {
     return 0
   fi
   if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py append-lesson-event \
-    --state-file "${STATE_FILE}" --event-json "${event_json}" >/dev/null 2>&1; then
+    --state-file "${STATE_FILE}" --event-json "${event_json}" >/dev/null; then
     echo "::warning::tracking #${TRACKING_NUM:-?}: could not record orchestrator lesson event; continuing fail-open" >&2
   fi
   return 0

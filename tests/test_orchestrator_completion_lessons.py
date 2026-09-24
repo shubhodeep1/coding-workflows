@@ -300,6 +300,15 @@ emit_orchestrator_completion_lessons
 	assert len(_memory_lessons(poller_repo)) == 1
 
 
+def test_record_orchestrator_lesson_event_preserves_diagnostic(tmp_path: Path) -> None:
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps(_state()), encoding="utf-8")
+	result = _run_bash(_emitter_script(state_file) + "record_orchestrator_lesson_event 'not-json'\n", REPO_ROOT)
+	assert result.returncode == 0
+	assert "ORCHESTRATE_ERROR: Expecting value" in result.stderr
+	assert "could not record orchestrator lesson event" in result.stderr
+
+
 @pytest.mark.parametrize("switch", ["AI_MEMORY_ENABLED", "LESSONS_LEARNED_ENABLED"])
 def test_emitter_honours_kill_switches(poller_repo: Path, tmp_path: Path, switch: str) -> None:
 	state_file = tmp_path / "state.json"
