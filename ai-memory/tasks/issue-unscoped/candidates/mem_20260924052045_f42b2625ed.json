@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:6869-6910 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: `_origin_main_ref()` appends `:refs/remotes/origin/main` as a separate empty-source refspec, so the fallback fetch does not populate the local tracking ref and the main-pinned contract check can be skipped.\n  WHY: In CI `origin/main` is usually pre-fetched and masks the defect, while local runs without that ref leave `_has_ref()` false and silently skip the comparison; severity differs between MAJOR and NIT reports, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_review_pipeline_contract.py\n  Line or code reference: _origin_main_ref() function, lines ~6900-6910\n  Problem: The git fetch command uses an incorrect refspec, which fails to update the local tracking ref in scenarios where it is missing.\n  WHY: The refspec passed as an argument after the main branch is `:refs/remotes/origin/main`. In `git fetch`, an empty-source refspec (with a leading colon) is a delete refspec, not a \"fetch from main to tracking\" refspec. As a result, the command `git fetch origin main :refs/remotes/origin/main` does not correctly update `refs/remotes/origin/main`. In CI, where the base branch is typically pre-fetched, `_has_ref()` returns true and this logic is masked. In local runs where `origin/main` is missing, the fetch silently fails to update the tracking ref, `_has_ref()` remains false, and the contract check skips comparison, potentially allowing contract drift to go undetected.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_review_pipeline_contract.py\n  Line or code reference: lines 6869-6871 in `_origin_main_ref()`\n  Problem: `fetch + [\":refs/remotes/origin/main\"]` builds argv `[\"git\", \"fetch\", \"--depth=1\", \"origin\", \"main\", \":refs/remotes/origin/main\"]`. The second refspec (`:refs/remotes/origin/main`) is a delete refspec (empty `<src>`), not a fetch refspec. Without `--prune`, git ignores it, so `refs/remotes/origin/main` is never updated.\n  WHY: In CI, `actions/checkout` populates `origin/main` before this test runs, so `_has_ref()` returns true and the buggy fetch is skipped \u2014 masking the defect. In a local checkout without `origin/main`, the fetch silently fails to create `refs/remotes/origin/main`, `_has_ref()` returns false, and `test_main_pinned_scripts_add_no_runtime_output_over_main` skips its `origin/main` comparison with a WARNING (lines 6891-6893). The PR #4273 contract check \u2014 the entire point of the test \u2014 never runs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_review_pipeline_contract.py\n  Line or code reference: `_origin_main_ref()` at lines 6869-6871\n  Problem: The git fetch refspec is malformed. Line 6869 builds `fetch = [\"git\", \"fetch\", ..., \"origin\", \"main\"]`, then line 6871 appends `\":refs/remotes/origin/main\"` as a separate argument. The resulting command is `git fetch origin main :refs/remotes/origin/main`, which has two refspecs: `main` (fetches to FETCH_HEAD only) and `:refs/remotes/origin/main` (an empty-source refspec that deletes the local tracking ref rather than populating it). The intended refspec is `main:refs/remotes/origin/main` as a single argument.\n  WHY: In CI this is masked because `actions/checkout` already provides `origin/main`, so `_has_ref()` returns true at line 6864 and the fetch path is never reached. In a local clone without `origin/main` (the exact scenario this fetch exists to handle), the empty-source refspec does not populate `refs/remotes/origin/main`, `_has_ref()` returns false at line 6874, and `test_main_pinned_scripts_add_no_runtime_output_over_main` silently skips the PR #4273 contract check with a warning. The contract test that catches main-pinned scripts writing unauthorized runtime outputs never runs in the local environments where developers would benefit from it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_review_autofix_review_pipeline_contract.py:6890\n  PROBLEM: `_origin_main_ref git fetch uses separate \":refs/remotes/origin/main\" (empty-source refspec); does not update tracking ref in non-CI envs without origin/main`\n  WHY: `Test skips main-pinned contract check (PR #4273) with warning`\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_review_autofix_review_pipeline_contract.py\n  Line or code reference: _origin_main_ref(), lines 6869-6871: `fetch = [\"git\", \"fetch\", \"--depth=1\", \"origin\", \"main\"] if shallow else [\"git\", \"fetch\", \"origin\", \"main\"]` followed by `subprocess.run(fetch + [\":refs/remotes/origin/main\"], ...)`\n  Problem: The refspec `:refs/remotes/origin/main` (empty source, leading colon) is a deletion refspec that only takes effect with `--prune`. Without `--prune`, git ignores it. The `main` refspec (no colon) fetches to `FETCH_HEAD` only, not to `refs/remotes/origin/main`. So the fetch never updates the tracking ref that `_has_ref()` checks (`origin/main^{commit}`). The intended refspec is `main:refs/remotes/origin/main` (single argument mapping remote `main` to the local tracking ref).\n  WHY: In CI this is masked because `actions/checkout` already provides `origin/main`, so `_has_ref()` succeeds at line 6864 without fetching. In a local run without `origin/main`, the fetch runs but does not create the tracking ref, so the test's live comparison never executes \u2014 the contract check it is meant to enforce is silently skipped outside CI.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d2603158fbdd83e9f9f526e5ec8f011127b5c23f386d1ee10a2dcbf2947d9dd8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4375,
+    "run_id": "35953719426",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35953719426",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924052045_f42b2625ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4375,
+    "run_id": "35953719426"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T05:20:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
