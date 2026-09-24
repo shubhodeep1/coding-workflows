@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -6788,6 +6789,200 @@ def test_identical_failure_fingerprint_stage_stderr_is_captured() -> None:
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh" 2> >(tee -a "${RUNTIME_DIR}/collect_metadata_stderr.txt" >&2)' in _step_block("Collect PR metadata")
 
 
+
+_EDITOR_GUARD_RE = re.compile(r':\s+"\$\{([A-Za-z_][A-Za-z0-9_]*):\?')
+_EDITOR_PREFLIGHT_VAR_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*$")
+
+
+def _code_lines(text: str) -> list[str]:
+	return [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+
+
+def _editor_preflight_body(text: str) -> str:
+	lines = text.splitlines()
+	start = lines.index("review_apply_fixes_preflight()")
+	end = next(idx for idx in range(start + 1, len(lines)) if lines[idx] == "}")
+	return "\n".join(lines[start:end + 1])
+
+
+def _editor_preflight_guard_gaps(text: str) -> set[str]:
+	"""Guarded names (`: "${VAR:?…}"`, comments ignored) missing from the preflight list."""
+	guarded = {m.group(1) for line in _code_lines(text) for m in _EDITOR_GUARD_RE.finditer(line)}
+	body = _editor_preflight_body(text)
+	array = body[body.index("preflight_required_vars=("):]
+	array = array[:array.index("\n\t)")]
+	listed = {m.group(1) for line in _code_lines(array) if (m := _EDITOR_PREFLIGHT_VAR_RE.match(line))}
+	return guarded - listed
+
+
+def test_editor_preflight_mode_covers_every_guard() -> None:
+	text = APPLY_FIXES.read_text(encoding="utf-8")
+	assert re.search(r"^# supports: --preflight$", text, re.MULTILINE)
+	assert 'if [ "${1:-}" = "--preflight" ]; then\n\treview_apply_fixes_preflight\n\texit $?\nfi' in text
+	# The dispatch sits after the helper sourcing and before any top-level
+	# work (prompt files, reviewer bundles) the editor run does.
+	dispatch = text.index('if [ "${1:-}" = "--preflight" ]; then')
+	assert text.index('source "${OPENCODE_HELPERS_PATH}"') < dispatch < text.index('REVIEWER_MANIFEST_FILE="${RUNTIME_DIR}/reviewer_manifest.txt"')
+	assert _editor_preflight_guard_gaps(text) == set()
+	# The rule rejects a guard added without its preflight entry, and a
+	# commented-out guard or the comment text itself is not a guard.
+	guarded = text.replace("CODEX_STALL_GUARD_HELPER=", ': "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"\nCODEX_STALL_GUARD_HELPER=', 1)
+	assert _editor_preflight_guard_gaps(guarded) == {"OPENROUTER_API_KEY"}
+	covered = guarded.replace("\t\t# same change.\n\t)", "\t\t# same change.\n\t\tOPENROUTER_API_KEY\n\t)", 1)
+	assert covered != guarded
+	assert _editor_preflight_guard_gaps(covered) == set()
+
+
+def test_editor_preflight_mode_reports_each_check_and_fails_fast() -> None:
+	with tempfile.TemporaryDirectory(prefix="editor-preflight-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		runtime_dir = tmp / "runtime"
+		runtime_dir.mkdir()
+		(bin_dir / "opencode").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		(bin_dir / "opencode").chmod(0o755)
+		date_executable = shutil.which("date")
+		dirname_executable = shutil.which("dirname")
+		bash_executable = shutil.which("bash")
+		assert date_executable and dirname_executable and bash_executable
+		(bin_dir / "date").symlink_to(date_executable)
+		(bin_dir / "dirname").symlink_to(dirname_executable)
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"RUNTIME_DIR": str(runtime_dir),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		})
+		env.pop("CODEX_HELPERS_PATH", None)
+		ok = subprocess.run(["bash", str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
+		assert ok.returncode == 0, ok.stderr
+		assert ok.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=ok checks=4 failed=0"
+		for check in ("opencode_helpers", "opencode_config_writer", "opencode_binary", "runtime_dir"):
+			assert f"REVIEW_EDITOR_PREFLIGHT check={check} result=ok " in ok.stderr
+		assert list(runtime_dir.iterdir()) == [], "preflight must not write runtime files"
+
+		(bin_dir / "opencode").unlink()
+		env["PATH"] = str(bin_dir)
+		env["RUNTIME_DIR"] = str(tmp / "missing-runtime")
+		env["CODEX_HELPERS_PATH"] = str(tmp / "missing-codex-helpers.sh")
+		bad = subprocess.run([bash_executable, str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
+		assert bad.returncode == 1, bad.stderr
+		assert bad.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=fail checks=5 failed=3"
+		for check in ("codex_helpers", "opencode_binary", "runtime_dir"):
+			assert f"REVIEW_EDITOR_PREFLIGHT check={check} result=fail " in bad.stderr
+
+
+def _step_explicit_env_names(step_name: str) -> list[str]:
+	block = _step_block(step_name)
+	env = block[block.index("\n        env:\n") + len("\n        env:\n"):block.index("\n        run: |")]
+	return [line.strip().split(":", 1)[0] for line in env.splitlines() if line.startswith("          ") and not line.strip().startswith("#")]
+
+
+def test_editor_preflight_step_wiring() -> None:
+	preflight = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	editor_env = _step_explicit_env_names("Apply fixes with editor model")
+	assert editor_env == ["GH_TOKEN", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
+	editor = _step_block("Apply fixes with editor model")
+	for name in editor_env:
+		line = next(line.strip() for line in editor.splitlines() if line.strip().startswith(f"{name}:"))
+		assert line in preflight, name
+	assert "REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}" in preflight
+	probe = preflight.index("""grep -q '^# supports: --preflight' "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh\"""")
+	flag = preflight.index('"${REVIEW_EDITOR_PREFLIGHT_ENABLED:-true}"')
+	invoke = preflight.index('bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" --preflight 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)')
+	assert flag < probe < invoke
+	# The file checks run (and fail) first; the editor preflight follows them.
+	assert preflight.index('echo "Preflight check PASSED: all required files present."') < flag
+	assert 'echo "EDITOR_PREFLIGHT_FAILED=true" >> "$GITHUB_ENV"' in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT result=fail" in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT skip reason=unsupported script_ref=${SCRIPT_REF:-unknown}" in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT skip reason=disabled" in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT skip reason=editor_not_scheduled" in preflight
+
+
+_RUNTIME_OUTPUT_RE = re.compile(r'(?:>>?|\btee(?:\s+-a)?)\s*"?(\$\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}[^"\s;)|&]*)')
+
+
+def _runtime_outputs(text: str) -> set[str]:
+	"""Runtime files a script writes: `${RUNTIME_DIR…}/<file>` and `${*_FILE}` redirect or tee targets."""
+	outputs: set[str] = set()
+	for line in _code_lines(text):
+		for match in _RUNTIME_OUTPUT_RE.finditer(line):
+			target = re.sub(r"^\$\{([A-Za-z_][A-Za-z0-9_]*):-[^}]*\}", r"${\1}", match.group(1))
+			name = target[2:target.index("}")]
+			if (name == "RUNTIME_DIR" and target.startswith("${RUNTIME_DIR}/")) or name.endswith("_FILE"):
+				outputs.add(target)
+	return outputs
+
+
+def _main_primary_scripts() -> list[str]:
+	line = next(line for line in _stage_helper_text().splitlines() if line.startswith("MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="))
+	return line.split("=", 1)[1].strip('"').split()
+
+
+def _origin_main_ref() -> str | None:
+	def _has_ref() -> bool:
+		return subprocess.run(["git", "rev-parse", "--verify", "--quiet", "origin/main^{commit}"], cwd=REPO_ROOT, capture_output=True, check=False).returncode == 0
+	if _has_ref():
+		return "origin/main"
+	shallow = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=REPO_ROOT, capture_output=True, text=True, check=False).stdout.strip() == "true"
+	# --depth only on an already-shallow checkout (CI): it would turn a full
+	# local clone shallow.
+	fetch = ["git", "fetch", "--depth=1", "origin", "main:refs/remotes/origin/main"] if shallow else ["git", "fetch", "origin", "main:refs/remotes/origin/main"]
+	try:
+		subprocess.run(fetch, cwd=REPO_ROOT, capture_output=True, check=False, timeout=120)
+	except (OSError, subprocess.TimeoutExpired):
+		return None
+	return "origin/main" if _has_ref() else None
+
+
+def _main_pinned_output_violations(branch_text: str, main_text: str) -> set[str]:
+	return _runtime_outputs(branch_text) - _runtime_outputs(main_text)
+
+
+def test_main_pinned_scripts_add_no_runtime_output_over_main() -> None:
+	# The rule itself: a branch copy of a main-primary script that writes a
+	# runtime file the main copy does not (PR #4273's metadata digest) fails.
+	main_copy = 'printf "%s\\n" "${x}" > "${PR_BODY_FILE}"\n: > "${RUNTIME_DIR}/metadata.txt"\n'
+	branch_copy = main_copy + 'jq -n "{}" > "${RUNTIME_DIR}/linked_issue_digest.json"\necho x | tee -a "${DIGEST_FILE}" >/dev/null\n'
+	assert _main_pinned_output_violations(branch_copy, main_copy) == {"${RUNTIME_DIR}/linked_issue_digest.json", "${DIGEST_FILE}"}
+	assert _main_pinned_output_violations(main_copy, branch_copy) == set()
+	assert _runtime_outputs('# > "${RUNTIME_DIR}/commented.txt"\ncat x > "${RUNTIME_DIR:-/tmp}/y.txt" 2>/dev/null\n') == {"${RUNTIME_DIR}/y.txt"}
+
+	ref = _origin_main_ref()
+	if ref is None:
+		print("WARNING: origin/main unavailable; skipping the main-pinned runtime-output comparison (fail open)")
+		return
+	names = _main_primary_scripts()
+	assert names, "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS is empty"
+	for name in names:
+		branch_path = REPO_ROOT / "scripts" / name
+		if not branch_path.is_file():
+			continue
+		shown = subprocess.run(["git", "show", f"{ref}:scripts/{name}"], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+		if shown.returncode != 0:
+			continue
+		branch_text = branch_path.read_text(encoding="utf-8")
+		if branch_text == shown.stdout:
+			continue
+		violations = _main_pinned_output_violations(branch_text, shown.stdout)
+		assert not violations, (
+			f"scripts/{name} is in MAIN_PRIMARY_BOOTSTRAP_SCRIPTS, so review runs stage the {ref} copy and ignore this one; "
+			f"these runtime outputs exist only in the branch copy: {sorted(violations)}"
+		)
+
+
+def test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop() -> None:
+	text = _stage_helper_text()
+	start = text.index("for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do")
+	loop = text[start:text.index("\ndone\n", start)]
+	assert 'if ! cmp -s ".codex-workflow-src/scripts/${f}" "${src}"; then' in loop
+	assert 'echo "::notice::STAGE_MAIN_PINNED_DIVERGENCE script=${f} script_ref=${SCRIPT_REF:-unknown}"' in loop
+	assert loop.index("Bootstrapped ${f} from main snapshot (branch copy ignored).") < loop.index("STAGE_MAIN_PINNED_DIVERGENCE")
+	assert text.count("STAGE_MAIN_PINNED_DIVERGENCE") == 1
+
+
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
@@ -6890,6 +7085,11 @@ def main() -> int:
 	test_identical_failure_fingerprint_cap_block_job_wiring()
 	test_identical_failure_fingerprint_marker_on_every_failure_comment()
 	test_identical_failure_fingerprint_stage_stderr_is_captured()
+	test_editor_preflight_mode_covers_every_guard()
+	test_editor_preflight_mode_reports_each_check_and_fails_fast()
+	test_editor_preflight_step_wiring()
+	test_main_pinned_scripts_add_no_runtime_output_over_main()
+	test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 

@@ -1942,6 +1942,9 @@ def test_derived_failure_reason_matches_the_reporter_precedence() -> None:
 	cases = [
 		({"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, RUN_SUMMARY_LINE),
 		({"AUTOFIX_FAILURE_REASON": "Not A Reason", "EDITOR_CHANGES_LOST": "true"}, RUN_SUMMARY_LINE),
+		({"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "EDITOR_PREFLIGHT_FAILED": "true"}, None),
+		({"EDITOR_PREFLIGHT_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, RUN_SUMMARY_LINE),
+		({"EDITOR_PREFLIGHT_FAILED": "false"}, None),
 		({"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "EDITOR_CHANGES_LOST": "true"}, None),
 		({"EDITOR_CHANGES_LOST": "true", "EDITOR_NOOP_REFUSAL": "true"}, None),
 		({"EDITOR_NOOP_REFUSAL": "true"}, RUN_SUMMARY_LINE),
@@ -1958,6 +1961,23 @@ def test_derived_failure_reason_matches_the_reporter_precedence() -> None:
 			work, _state_file, env = _stage_autofix_report(tmp, comments=[], flags={**flags, "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "99"}, summary_line=summary_line)
 			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
 			assert f"skip reason=below_streak pr=4174 reason={expected} " in result.stdout, (flags, expected, result.stdout)
+
+
+def test_editor_preflight_failed_precedence() -> None:
+	# A failed editor preflight means the editor never ran: it names the
+	# failure ahead of the editor flags and the run summary, and only an
+	# explicit AUTOFIX_FAILURE_REASON (the fingerprint cap) wins over it.
+	assert heal.derive_autofix_failure_reason({"EDITOR_PREFLIGHT_FAILED": "true"}) == "editor_preflight_failed"
+	assert heal.derive_autofix_failure_reason({"EDITOR_PREFLIGHT_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true", "EDITOR_CHANGES_LOST": "true"}, "reviewers_unavailable") == "editor_preflight_failed"
+	assert heal.derive_autofix_failure_reason({"EDITOR_PREFLIGHT_FAILED": "true", "AUTOFIX_FAILURE_REASON": "identical_failure_cap"}) == "identical_failure_cap"
+	assert heal.derive_autofix_failure_reason({"EDITOR_PREFLIGHT_FAILED": "false"}) == "workflow_failure"
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-preflight-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"EDITOR_PREFLIGHT_FAILED": "true", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "1"})
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_preflight_failed streak=1" in result.stdout, result.stdout + result.stderr
+		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+		assert payload["failure_reason"] == "editor_preflight_failed"
 
 
 def test_autofix_report_honours_cap_reason_and_carries_fingerprint() -> None:
