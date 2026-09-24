@@ -122,7 +122,20 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `autofix_failure`): it reports a failed review/autofix run on a pull
     request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2) runs in a
     row failed on that PR, counted from the workflow's own failure comments,
-    so the stall poller's single retry is not pre-empted. Reporters wrap
+    so the stall poller's single retry is not pre-empted. A failed
+    `Run reviewer models` step (the editor never ran) is reported as
+    `reviewers_failed` with per-slot / summariser exit codes
+    (`reviewers_failure_evidence.txt`, `AUTOFIX_REVIEWERS_FAILED=true`) rather
+    than `editor_empty_noop`; the identical-failure cap's report lists the
+    failed runs from the head's `review-autofix-failure:v1` markers
+    (`AUTOFIX_FAILURE_MARKER_AUTHOR`) so the intake reads their logs; and a
+    support script's self-named error line (`untrusted_process_sandbox: …`)
+    counts as the crash file when that script exists. When a PR in this repo
+    closes, the `heal-pr-reconcile` job (`internal-cancel-on-pr-close.yml`,
+    `scripts/workflow_failure_heal_pr_reconcile.sh`,
+    `WORKFLOW_HEAL_PR_RECONCILE_ENABLED`) closes the heal PRs stacked on its
+    head branch and their heal issues (source unmerged), or rebases their heal
+    commits onto its base and re-points them (source merged). Reporters wrap
     the report as `client_payload: {schema_version, report}` (GitHub caps
     `client_payload` at 10 top-level properties); the intake unwraps it and
     accepts the flat shape too, and a rejected dispatch logs `detail=` with
