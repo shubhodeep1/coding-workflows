@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ingest_implement_plan_lessons.py:135 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The lesson parsing logic might be brittle for multi-line lesson text if future progress logs contain continuation lines that are not formatted as part of the lesson list item.\n  WHY: The current parsing logic joins the text with a single space but does not handle improperly formatted continuation lines.\n- scripts/ingest_implement_plan_lessons.py:247 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fail-open implementation can hide legitimate ingestion failures.\n  WHY: If the script crashes due to unexpected log-format or environment changes, it prints a warning and returns 0, masking failures in recording lessons.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement \"/implement-plan-claude\" step 8 (conformance audit) that runs conformance before security and validation.\n  expected_change_site: .claude/commands/implement-plan-claude.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff modifies `.claude/commands/implement-plan-claude.md` to renumber steps, but step 8 still describes \"Security pass\" rather than \"Conformance audit\"; the actual implementation or description of the conformance audit does not appear in the modified steps.\n- requirement: \"After completion, the verify-activation stage checks only activation (\u2014 scope activation). A project with no conformance run recorded... runs the full-scope check instead, exactly as before.\"\n  expected_change_site: .claude/commands/verify-activation.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The diff modifies `verify-activation.md` but does not explicitly document or implement the logic for \"activation\" scope checking for existing or missing conformance run records.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ingest_implement_plan_lessons.py:135 | severity=low | confidence=2\n  PROBLEM: The lesson parsing logic might be brittle for multi-line lesson text if they exist in future progress logs.\n  WHY: The current parsing logic joins the text with a single space but doesn't handle continuation lines if they are not formatted properly in the progress log as part of the lesson list item.\n- scripts/ingest_implement_plan_lessons.py:247 | severity=high | confidence=4\n  PROBLEM: The fail-open implementation might hide legitimate issues if the ingestion script itself fails during execution.\n  WHY: If the script crashes due to unexpected changes in the log format or environment issues, the error is caught and printed to stderr with a warning, returning 0. This could mask failures in recording lessons that should have been captured.\n- TASK_GAP:\n  Requirement: Implement \"/implement-plan-claude\" step 8 (conformance audit) that runs conformance before security and validation.\n  Expected change site: .claude/commands/implement-plan-claude.md\n  Evidence of absence: The PR diff modifies `.claude/commands/implement-plan-claude.md` to renumber steps, but step 8 still describes \"Security pass\" rather than \"Conformance audit\" as described in the PR summary and the new procedure in the diff. The actual implementation (or description thereof) for the conformance audit does not appear in the modified steps.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP:\n  Requirement: \"After completion, the verify-activation stage checks only activation (\u2014 scope activation). A project with no conformance run recorded... runs the full-scope check instead, exactly as before.\"\n  Expected change site: .claude/commands/verify-activation.md\n  Evidence of absence: The diff modifies `verify-activation.md` but does not explicitly document or implement the logic for the \"activation\" scope checking for existing/missing conformance run records.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "18476fc0bbfedf7f54c9c15139ff028670a4bcfb0e5e824214e701ddb8549eab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4367,
+    "run_id": "35941796583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35941796583",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924025231_2d3b8cd22d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4367,
+    "run_id": "35941796583"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T02:52:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
