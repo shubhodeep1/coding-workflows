@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -6841,8 +6842,12 @@ def test_editor_preflight_mode_reports_each_check_and_fails_fast() -> None:
 		runtime_dir.mkdir()
 		(bin_dir / "opencode").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
 		(bin_dir / "opencode").chmod(0o755)
-		(bin_dir / "date").symlink_to("/usr/bin/date")
-		(bin_dir / "dirname").symlink_to("/usr/bin/dirname")
+		date_executable = shutil.which("date")
+		dirname_executable = shutil.which("dirname")
+		bash_executable = shutil.which("bash")
+		assert date_executable and dirname_executable and bash_executable
+		(bin_dir / "date").symlink_to(date_executable)
+		(bin_dir / "dirname").symlink_to(dirname_executable)
 		env = os.environ.copy()
 		env.update({
 			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
@@ -6861,7 +6866,7 @@ def test_editor_preflight_mode_reports_each_check_and_fails_fast() -> None:
 		env["PATH"] = str(bin_dir)
 		env["RUNTIME_DIR"] = str(tmp / "missing-runtime")
 		env["CODEX_HELPERS_PATH"] = str(tmp / "missing-codex-helpers.sh")
-		bad = subprocess.run(["/usr/bin/bash", str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
+		bad = subprocess.run([bash_executable, str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
 		assert bad.returncode == 1, bad.stderr
 		assert bad.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=fail checks=5 failed=3"
 		for check in ("codex_helpers", "opencode_binary", "runtime_dir"):
