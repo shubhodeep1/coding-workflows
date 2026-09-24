@@ -5,13 +5,25 @@
   "entry_id": "processed_command_4417_5822868215_approved",
   "issue_number": 4417,
   "metadata": {
+    "branch": "ai/issue-4417",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "changelog.d/4417-editor-guard-failure-classification.md",
+      "scripts/review_apply_fixes.sh",
+      "tests/test_review_autofix_editor_noop_cascade_contract.py"
+    ],
+    "issue_number": 4417,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4417",
+    "pr_number": 4418,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4418",
+    "run_attempt": "1",
+    "run_id": "36064316735",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36064316735"
   },
   "run_attempt": 1,
   "run_id": "36064316735",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-24T21:56:11Z",
+  "status": "completed",
+  "timestamp": "2026-09-24T22:07:07Z",
   "workflow": "implement"
 }
