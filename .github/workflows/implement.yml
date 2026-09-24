@@ -4067,6 +4067,7 @@ jobs:
                 --quarantine-dir "${repair_workspace_quarantine}" \
                 --changed-paths-out "${repair_workspace_paths}" --report "${repair_workspace_report}"; then
                 echo "POST_AGENT_WORKSPACE_GUARD_FAILED=true" >> "$GITHUB_ENV"
+                echo "::error::Post-agent workspace guard rejected repair attempt ${attempt} after model failure; refusing retry or partial-work salvage."
                 exit 78
               fi
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
@@ -4081,6 +4082,7 @@ jobs:
               --quarantine-dir "${repair_workspace_quarantine}" \
               --changed-paths-out "${repair_workspace_paths}" --report "${repair_workspace_report}"; then
               echo "POST_AGENT_WORKSPACE_GUARD_FAILED=true" >> "$GITHUB_ENV"
+              echo "::error::Post-agent workspace guard rejected repair attempt ${attempt}; refusing retry or partial-work salvage."
               exit 78
             fi
             emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
