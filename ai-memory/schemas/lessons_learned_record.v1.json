@@ -36,15 +36,14 @@
     },
     "phase": {
       "type": "string",
-      "enum": ["review_autofix", "implement", "judge", "implement_plan", "orchestrator_completion"]
+      "enum": ["review_autofix", "implement", "judge"]
     },
     "lesson_kind": {
       "type": "string",
       "enum": [
         "out_of_plan_fix",
         "unexpected_judge_verdict",
-        "review_finding_outside_plan_scope",
-        "project_retrospective"
+        "review_finding_outside_plan_scope"
       ]
     },
     "lesson_text": {
