@@ -1529,7 +1529,7 @@ stall recovery — those keep their own policies.
 After an interactive Claude Code session pushes work and a pull request
 exists for it, the session **arms a 3-hourly status check-in for that pull
 request** and keeps it armed until the PR is terminal (merged, or closed
-without merging). The check-in runs in a small Haiku checker session,
+without merging). The check-in runs in a small Sonnet checker session,
 reads the PR's state and nothing else, and when the PR is terminal reports
 the next steps, or says the pushing session can be closed because there
 are none. This section applies in this repo
@@ -1545,7 +1545,7 @@ CI or review events, and never touches the PR. §25 and its
 - **Every pull request the session opens**, and **every existing pull
   request the session pushes new commits to**, including PRs opened by a
   slash command (`/seed-repo`, `/investigate-issue`, and the rest).
-  `/implement-plan-claude` is the exception: its own Haiku checker is the
+  `/implement-plan-claude` is the exception: its own Sonnet checker is the
   check-in for every PR it opens, so it arms no second one.
 - **One check-in per PR.** Arm it once the PR exists (right after
   `create_pull_request`, or right after the first push to an existing PR).
@@ -1562,11 +1562,11 @@ CI or review events, and never touches the PR. §25 and its
 
 Waking the session that pushed costs its whole conversation on every
 check, and a 3-hour gap outlives the prompt cache. The check-in therefore
-runs in its own small **Haiku checker session**, and the pushing session is
+runs in its own small **Sonnet checker session**, and the pushing session is
 never woken:
 
 1. Call `create_session` (Claude Code Remote MCP server) with
-   `source_url` = the repository, `model: claude-haiku-4-5-20251001`,
+   `source_url` = the repository, `model: claude-sonnet-5`,
    `permission_mode` = this session's mode, `title` =
    `PR #<n> status check-in`, and a standalone prompt that names the
    repository, the PR number and URL, the §26.C steps, and the **next
@@ -1580,15 +1580,18 @@ never woken:
 A session started by a Routine with `create_new_session_on_fire` has no
 MCP tools and no repository, so it cannot run the check; `create_session`
 gives the checker both, and the checker re-arms itself with `send_later`.
-A checker only runs unattended when this session is in Auto mode (or
-every tool it calls is allowlisted); otherwise it waits on a permission
-prompt.
+A checker only runs unattended in Auto mode, so it inherits it only when
+this session is in Auto mode; otherwise it waits on a permission prompt
+at every re-arm. Outside Auto mode the claude-code-remote write tools
+(`send_later`, `create_session`, `archive_session`, and the trigger tools)
+ask on every call whatever `permissions.allow` says, and Haiku 4.5 cannot
+run in Auto mode, which is why the checker is Sonnet.
 
 When `create_session` is not available (a local CLI, desktop, or IDE
 session without the Claude Code Remote MCP server), arm `send_later` into
 this session with `delay_minutes: 180`, `initiation: own_followup`, and a
-message that restates §26.C; on each wake, delegate the check to a Haiku
-subagent (the Agent tool with `model: "haiku"`) and continue with §26.D on
+message that restates §26.C; on each wake, delegate the check to a Sonnet
+subagent (the Agent tool with `model: "sonnet"`) and continue with §26.D on
 this session when it reports a terminal state. When `send_later` is
 missing too, use `CronCreate` (recurring, every 3 hours, deleted with
 `CronDelete` once the PR is terminal) and tell the user once that this

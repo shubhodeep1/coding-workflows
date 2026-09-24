@@ -98,6 +98,15 @@ for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
   fi
   if [ "${src}" = ".codex-workflow-src-main/scripts/${f}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
     echo "::notice::Bootstrapped ${f} from main snapshot (branch copy ignored)."
+    # A branch copy that differs from main is ignored here, so any new
+    # runtime output it writes never appears under this YAML (PR #4273:
+    # review_collect_pr_metadata.sh made main-primary by the same branch that
+    # added a file only its branch copy writes). Notice only, no behaviour;
+    # tests/test_review_autofix_review_pipeline_contract.py rejects a branch
+    # copy that introduces a runtime output its main copy lacks.
+    if ! cmp -s ".codex-workflow-src/scripts/${f}" "${src}"; then
+      echo "::notice::STAGE_MAIN_PINNED_DIVERGENCE script=${f} script_ref=${SCRIPT_REF:-unknown}"
+    fi
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done

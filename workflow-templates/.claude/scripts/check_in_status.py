@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic "is the wait over?" check for the Haiku check-in sessions.
+"""Deterministic "is the wait over?" check for the Sonnet check-in sessions.
 
 Used by the `/implement-plan-claude` checker session and the CLAUDE.md §26
 post-push PR status check-in. The checker model only runs this script and

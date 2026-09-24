@@ -395,6 +395,22 @@ a new value, add it to the appropriate overrides file with a
   "Collect PR metadata" with `required env LINKED_ISSUE_METADATA_FILE is
   unset` while the stall poller kept re-dispatching. `main` now exports the
   variable as well, so the same path is defined on both sides.
+- Main-pinned scripts (`MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` in
+  `scripts/stage_workflow_support.sh`) are the reverse case: the review stages
+  the `main` copy and ignores the branch copy, so a runtime output only the
+  branch copy writes never appears (PR #4273, `orchestrator/project-4139`).
+  Staging logs `::notice::STAGE_MAIN_PINNED_DIVERGENCE script=<name>
+  script_ref=<ref>` for every such branch copy that differs from `main`, and
+  `tests/test_review_autofix_review_pipeline_contract.py`
+  (`test_main_pinned_scripts_add_no_runtime_output_over_main`) fails when the
+  branch copy writes a `${RUNTIME_DIR}/…` or `${…_FILE}` output the `main`
+  copy does not.
+- Editor preconditions are checked before the reviewers: the preflight step
+  runs `scripts/review_apply_fixes.sh --preflight` (`REVIEW_EDITOR_PREFLIGHT`,
+  kill switch `REVIEW_EDITOR_PREFLIGHT_ENABLED`). A new `: "${VAR:?…}"` guard
+  in that script must also be listed in `review_apply_fixes_preflight()`
+  (contract-tested), and the variable must already be set when the preflight
+  step runs.
 
 ## Workflow file size limit
 
@@ -602,8 +618,8 @@ as frontmatter, so the command body must remain the first line.
 
 One deliberate exception that is **not** a command pin: `/implement-plan-claude`
 waits for each phase PR to merge through a 3-hourly check-in (its **Check-in
-Loop** section). The checker is a Haiku session started with
-`create_session` (`model: claude-haiku-4-5-20251001`) that runs
+Loop** section). The checker is a Sonnet session started with
+`create_session` (`model: claude-sonnet-5`) that runs
 `.claude/scripts/check_in_status.py`, re-arms itself with `send_later`, and,
 when the wait is over, starts the next **stage session** on the model the
 operator picked. Every stage (a phase, a blocked-PR fix, the conformance
@@ -617,12 +633,18 @@ unless it is waiting on the user; the command's session is never woken to
 continue, because a 3-hour gap outlives the prompt cache and a wake would
 re-send the whole history at full price. Routines created with
 `create_new_session_on_fire` are not used: their sessions get no MCP tools
-and no repository, so they cannot report. Stage sessions need Auto mode (the
-command asks for it in step 0), because allow rules cannot match the
-generated MCP server name of a `create_session` child. Progress between
+and no repository, so they cannot report. Stage sessions and checkers need Auto mode (the
+command asks for it in step 0): outside it the claude-code-remote write
+tools (`send_later`, `create_session`, `archive_session`, the trigger tools)
+prompt on every call whatever the allowlist says, and Haiku 4.5 cannot run
+in Auto mode, which is why the checker is Sonnet. Progress between
 stages is persisted in `docs/implement-plan/<slug>.md`
-(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt;
-the log's `## Lessons` section is ingested into AI memory on merge (see the
+(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt. Only the chain archives its own sessions: a `… — waiting: …` checker
+holds the project's only pending check-in, so archiving it by hand stalls the
+project until the 24h safety net fires. To nudge a stalled project, start the
+next stage session by hand with a `— resume.` block; to stop one, delete its
+safety-net trigger and archive its checker together. The log's `## Lessons`
+section is ingested into AI memory on merge (see the
 Memory subsystem notes).
 
 No field here changes what any consumer repo receives on the `@stable`
@@ -636,7 +658,7 @@ carried frontmatter.
 
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
 pushes a branch and a pull request exists for it, the session starts a
-Haiku checker session (`create_session`, titled `PR #<n> status check-in`)
+Sonnet checker session (`create_session`, titled `PR #<n> status check-in`)
 whose prompt carries the next steps for each terminal state. The checker
 runs `.claude/scripts/check_in_status.py --terminal-only` (one REST read),
 re-arms itself with `send_later` every 180 minutes while the PR is open, and
@@ -644,7 +666,7 @@ once it merges or closes writes the report in its own session, renames
 itself `PR #<n> merged — …`, and sends one `PushNotification`. The pushing
 session is never woken. PRs opened by `/implement-plan-claude` are covered
 by that command's own checker. Without `create_session` the session falls
-back to a `send_later` self check-in with a Haiku subagent doing the read.
+back to a `send_later` self check-in with a Sonnet subagent doing the read.
 It never handles CI, reviews, comments, or conflicts; that stays a direct
 §12 request.
 
@@ -669,10 +691,15 @@ It never handles CI, reviews, comments, or conflicts; that stays a direct
   `create_session` see the claude-code-remote tools under a generated server
   name; the one observed in this account's cloud environment,
   `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a`, is allowlisted as a whole
-  server (allow rules cannot wildcard the server segment), so unattended
-  checkers and stage sessions do not stall on a prompt the Auto-mode
-  classifier sometimes raises. In an environment with a different name the
-  rule is inert.
+  server and tool by tool (allow rules cannot wildcard the server segment),
+  and `ReadNotifications` is allowed for the notice a wake queues. In an
+  environment with a different name those rules are inert. The
+  claude-code-remote write tools (`send_later`, `create_session`,
+  `archive_session`, the trigger tools) are not covered by any allow rule:
+  outside Auto mode they ask on every call with only *Deny* / *Allow once*
+  (verified with probe sessions on 2026-09-24), so checkers and stage
+  sessions run in Auto mode and checkers use Sonnet, not Haiku, which cannot
+  run in Auto mode.
 - Tests: `tests/test_pr_check_in_reminder.py` and
   `tests/test_check_in_status.py` (own `ci.yml` steps).
 - Relationship to §25: the check-in is the scheduled self check-in §25.C
@@ -1245,6 +1272,8 @@ and shipped:
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
 - `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`
+- `REVIEW_EDITOR_PREFLIGHT`
+- `STAGE_MAIN_PINNED_DIVERGENCE`
 - `WORKTREE_REGISTER`
 - `WORKTREE_DEREGISTER`
 - `WORKTREE_GC`
@@ -1425,6 +1454,8 @@ LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
 LOG_PREFIX.name=NOOP_RECOVERY_SKIP_FINGERPRINT_CAP
+LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
+LOG_PREFIX.name=STAGE_MAIN_PINNED_DIVERGENCE
 LOG_PREFIX.name=WORKTREE_REGISTER
 LOG_PREFIX.name=WORKTREE_DEREGISTER
 LOG_PREFIX.name=WORKTREE_GC
