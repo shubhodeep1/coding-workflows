@@ -1,5 +1,5 @@
 """Contract for .claude/scripts/check_in_status.py — the deterministic
-"is the wait over?" verdict the Haiku check-in sessions act on
+"is the wait over?" verdict the Sonnet check-in sessions act on
 (`/implement-plan-claude` Check-in Loop and CLAUDE.md §26)."""
 
 from __future__ import annotations

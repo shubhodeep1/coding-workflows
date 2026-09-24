@@ -19,7 +19,7 @@ branch can lag the live session by one step; each stage session's
 
 Each stage (a phase, a blocked-PR fix, a security or validation read, the
 completion PR, a `/verify-activation` cycle) runs in its own session titled
-`implement-plan <slug> — <stage>`, started by a Haiku checker session once
+`implement-plan <slug> — <stage>`, started by a Sonnet checker session once
 the previous stage's wait is over.
 
 See the **Progress Log** section of `.claude/commands/implement-plan-claude.md`

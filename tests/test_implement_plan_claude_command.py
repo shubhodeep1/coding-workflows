@@ -54,6 +54,10 @@ def test_source_revision_reads_plan_and_log_from_default_branch(text):
 	assert "read both from `origin/<default>`" in text
 
 
-def test_checker_rearms_hourly(text):
-	assert "call send_later with delay_minutes 60" in text
-	assert "delay_minutes 180" not in text
+def test_checker_is_sonnet_every_three_hours(text):
+	# Haiku cannot run in Auto mode, and outside it the claude-code-remote
+	# write tools prompt on every call, so a Haiku checker never runs unattended.
+	assert "`model: claude-sonnet-5`" in text
+	assert "claude-haiku-4-5-20251001" not in text
+	assert '`model: "haiku"`' not in text
+	assert "call send_later with delay_minutes 180" in text
