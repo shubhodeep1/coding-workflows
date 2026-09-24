@@ -494,6 +494,50 @@ def test_fingerprint_ignores_the_promote_cycle_run_name_suffix() -> None:
 	assert heal.fingerprint("Mark Stable Release [cycle:1]", step, signature) != plain
 
 
+# Shape of a raw Actions job log (jobs/<id>/logs): the `run:` step header echoes
+# every script line in ANSI cyan, including `echo "::error::..."` lines that
+# never executed; the runner renders an executed `::error::` as `##[error]`.
+RAW_STEP_LOG = (
+	"2026-09-24T00:57:56.9937438Z ##[group]Run set -euo pipefail\n"
+	"2026-09-24T00:57:56.9938000Z \x1b[36;1mset -euo pipefail\x1b[0m\n"
+	"2026-09-24T00:57:56.9938100Z \x1b[36;1mif [ -z \"${sha}\" ]; then\x1b[0m\n"
+	"2026-09-24T00:57:56.9938200Z \x1b[36;1m  echo \"::error::could not resolve ${branch} head sha before retry dispatch\"\x1b[0m\n"
+	"2026-09-24T00:57:56.9938300Z \x1b[36;1mfi\x1b[0m\n"
+	"2026-09-24T00:57:56.9938400Z shell: /usr/bin/bash -e {0}\n"
+	"2026-09-24T00:57:56.9938500Z env:\n"
+	"2026-09-24T00:57:56.9938600Z   EDITOR_RETRY_BUDGET_MINUTES: 25\n"
+	"2026-09-24T00:57:56.9938700Z ##[endgroup]\n"
+	"2026-09-24T00:58:15.4522834Z   retry run #35940786276: status=pending conclusion=null\n"
+	"2026-09-24T01:23:12.7531832Z ##[error]Retry review run did not complete within 25 minutes\n"
+	"2026-09-24T01:23:12.7534607Z ##[error]Process completed with exit code 1.\n"
+)
+
+
+def test_filter_log_drops_the_echoed_step_script_but_keeps_step_output() -> None:
+	filtered = heal.filter_log(RAW_STEP_LOG)
+	assert "could not resolve ${branch} head sha" not in filtered
+	assert "set -euo pipefail\n" not in filtered.split("##[group]Run set -euo pipefail", 1)[1]
+	# The header line, the env block, and every line the step printed survive.
+	assert "##[group]Run set -euo pipefail" in filtered
+	assert "EDITOR_RETRY_BUDGET_MINUTES: 25" in filtered
+	assert "retry run #35940786276: status=pending" in filtered
+	assert "##[error]Retry review run did not complete within 25 minutes" in filtered
+	# Cyan output printed by the step itself (outside a Run header) is kept.
+	assert "cyan" in heal.filter_log("2026-09-24T00:00:00Z \x1b[36;1mcyan\x1b[0m\n")
+	# Text without a Run header (reporter evidence) is unchanged by the drop.
+	evidence = "::error::PR diff unavailable\nstderr tail\n"
+	assert heal._drop_step_script_lines(evidence) == evidence
+
+
+def test_error_signature_uses_executed_errors_not_the_echoed_script() -> None:
+	signature = heal.error_signature(heal.filter_log(RAW_STEP_LOG))
+	assert signature == "##[error]retry review run did not complete within <n> minutes | ##[error]process completed with exit code <n>."
+	assert "could not resolve" not in signature
+	# A step that fails a different way in the same script gets a different signature.
+	other = RAW_STEP_LOG.replace("Retry review run did not complete within 25 minutes", "Retry review run concluded failure")
+	assert heal.error_signature(heal.filter_log(other)) != signature
+
+
 def _heal_issue(number: int, *, state: str, fp: str, gen: int = 1, root: str | None = None, created: datetime | None = None) -> dict:
 	created = created or datetime(2026, 9, 1, tzinfo=timezone.utc)
 	return {

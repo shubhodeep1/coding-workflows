@@ -147,13 +147,25 @@ _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
 
-# Highest-signal first: the first bucket with any matching line wins.
+# Highest-signal first: the first bucket with any matching line wins. The
+# runner renders a step's `::error::` workflow command as `##[error]` in the job
+# log, so a literal `::error::` in an Actions log is almost always the step's own
+# script source echoed in its header (see _drop_step_script_lines); both forms
+# stay in the first bucket so reporter evidence text keeps matching too.
 _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
-	re.compile(r"::error::", re.IGNORECASE),
+	re.compile(r"::error::|##\[error\]", re.IGNORECASE),
 	re.compile(r"\b[A-Z][A-Z0-9_]*_FAILED\b"),
 	re.compile(r"\bTraceback \(most recent call last\)|^\s*\w+Error:", re.MULTILINE),
 	re.compile(r"\bfatal:|\berror:|\bERROR\b|\bFAILED\b|\bexit code\b|\bexited with\b", re.IGNORECASE),
 )
+# GitHub opens every `run:` step with a `##[group]Run <first line>` header that
+# echoes the whole script, one ANSI-cyan line per source line, before the
+# `shell:` / `env:` block and the closing `##[endgroup]`. Those lines are the
+# step's source, not its output: a script that can print forty different
+# `::error::` messages echoes all forty on every run, whatever actually failed.
+_STEP_HEADER_OPEN_RE = re.compile(r"^##\[group\]Run ")
+_STEP_HEADER_CLOSE_RE = re.compile(r"^##\[endgroup\]")
+_STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
 # Test & Mark Stable Release runs dispatched by a promote cycle carry the
 # cycle's run id in their run name (`run-name: ... [cycle:<id>]`, which
 # scripts/promote_main_cycle.sh matches on). The id is unique per cycle, so it
@@ -664,9 +676,36 @@ def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], sel
 # ---------------------------------------------------------------------------
 
 
+def _drop_step_script_lines(text: str) -> str:
+	"""Remove the echoed step script from raw Actions job-log text.
+
+	Only ANSI-cyan lines inside a ``##[group]Run`` header block are dropped;
+	the header line itself, the ``shell:`` / ``env:`` block, and every line of
+	real step output are kept. Text without such headers (reporter evidence,
+	already-sanitised logs) is returned unchanged.
+	"""
+	kept: list[str] = []
+	in_header = False
+	for line in text.split("\n"):
+		content = _LOG_TIMESTAMP_RE.sub("", line)
+		if _STEP_HEADER_OPEN_RE.match(content):
+			in_header = True
+		elif in_header and _STEP_HEADER_CLOSE_RE.match(content):
+			in_header = False
+		elif in_header and content.startswith(_STEP_SCRIPT_LINE_PREFIX):
+			continue
+		kept.append(line)
+	return "\n".join(kept)
+
+
 def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> str:
-	"""Keep the high-signal lines plus the tail of a job log, bounded."""
-	lines = sanitize_text(text).split("\n")
+	"""Keep the high-signal lines plus the tail of a job log, bounded.
+
+	The echoed step script is dropped first (it has to be, before ANSI codes
+	are stripped), so the tail and the high-signal matches cover what the
+	steps printed rather than their source.
+	"""
+	lines = sanitize_text(_drop_step_script_lines(text)).split("\n")
 	kept: list[str] = []
 	seen: set[int] = set()
 	tail_start = max(0, len(lines) - max_lines)
