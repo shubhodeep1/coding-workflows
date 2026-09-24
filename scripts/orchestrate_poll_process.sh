@@ -23296,6 +23296,18 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #     carries the cycle-local _CONFLICT_DISPATCH_TRACKER guard, so a
 #     conflict-sweep dispatch already this tick will not be
 #     duplicated). Telegram WARNING.
+#     Exception: when the PR's current head already carries a
+#     `<!-- review-autofix-failure-cap:v1 head=<sha> ... -->` marker
+#     posted by this token's identity, review_autofix.yml's gate trips
+#     the identical-failure fingerprint cap (already_applied=true) and
+#     ends every dispatch before any job that could post a new warning.
+#     The count can then never reach NOOP_MAX_RETRIES, so re-dispatching
+#     looped forever (PR #4332: a "retry 3/3" dispatch and Telegram
+#     WARNING on every poll cycle). The sweep logs
+#     NOOP_RECOVERY_SKIP_FINGERPRINT_CAP and skips the dispatch and the
+#     alert instead. A push (new head) clears the skip by construction.
+#     Fails open: an unresolvable head SHA or token identity keeps the
+#     legacy re-dispatch.
 #   - If the count is >= NOOP_MAX_RETRIES: enter the force-merge
 #     fallback. Force-merge fails CLOSED — every precondition is
 #     audited individually, and any single gate failure aborts with an
@@ -23343,7 +23355,11 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 # call and exits. A noop-suspicious PR additionally costs 1 commits
 # call, 1 pulls call (force-merge gate), and 1 check-runs call (force-
 # merge gate D) — gated so they only fire when the retry threshold has
-# been reached.
+# been reached. The fingerprint-cap skip reuses the comments and commits
+# already fetched (head SHA = last entry of the commits list) and adds at
+# most one `GET /user` per poll cycle, issued lazily only when some PR's
+# current head carries a cap marker; its result is cached for the rest
+# of the sweep.
 # ---------------------------------------------------------------
 echo ""
 echo "========================================"
@@ -23354,6 +23370,11 @@ NOOP_WARNING_LITERAL="⚠️ **Editor no-op suspicious**"
 NOOP_RECOVERY_DISPATCHED=0
 NOOP_FORCE_MERGED=0
 NOOP_RECOVERY_BLOCKED=0
+NOOP_RECOVERY_CAP_SKIPPED=0
+# Token identity that posts the fingerprint-cap marker. Resolved lazily
+# (one GET /user per cycle, only when a cap marker is seen) and cached.
+NOOP_CAP_TRUSTED_LOGIN=""
+NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
 NOOP_MAX_RETRIES=3
 # Operator-facing opt-outs. `e2e-smoke-test` mirrors the workflow's
 # own auto-merge suppression so the smoke-test bait-removal race
@@ -23482,6 +23503,30 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 
 	# ── Step 3a: under threshold → re-dispatch ──
 	if [ "${N_NOOP_COUNT}" -lt "${NOOP_MAX_RETRIES}" ]; then
+		# Fingerprint-cap skip (see the sweep header). The commits list
+		# is oldest-first, so its last entry is the current head.
+		N_NOOP_CAP_HEAD_SHA="$(echo "${N_COMMITS_JSON}" | jq -r '.[-1].sha // ""' 2>/dev/null || echo "")"
+		if [[ "${N_NOOP_CAP_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+			N_NOOP_CAP_AUTHORS="$(echo "${N_COMMENTS_JSON}" | jq -r \
+				--arg marker "<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA} " \
+				'[.[] | select((.body // "") | contains($marker)) | (.user.login // "" | ascii_downcase)] | unique | .[]' \
+				2>/dev/null || echo "")"
+			if [ -n "${N_NOOP_CAP_AUTHORS}" ] && [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "unset" ]; then
+				NOOP_CAP_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+				if [ -n "${NOOP_CAP_TRUSTED_LOGIN}" ]; then
+					NOOP_CAP_TRUSTED_LOGIN_STATE="ok"
+				else
+					NOOP_CAP_TRUSTED_LOGIN_STATE="failed"
+					echo "::warning::Noop-suspicious sweep could not resolve the token identity; fingerprint-cap skip disabled this cycle (re-dispatch continues)."
+				fi
+			fi
+			if [ -n "${N_NOOP_CAP_AUTHORS}" ] && [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "ok" ] \
+				&& printf '%s\n' "${N_NOOP_CAP_AUTHORS}" | grep -Fxq -- "${NOOP_CAP_TRUSTED_LOGIN}"; then
+				echo "NOOP_RECOVERY_SKIP_FINGERPRINT_CAP pr=${N_PR} head=${N_NOOP_CAP_HEAD_SHA} count=${N_NOOP_COUNT} max=${NOOP_MAX_RETRIES}"
+				NOOP_RECOVERY_CAP_SKIPPED=$((NOOP_RECOVERY_CAP_SKIPPED + 1))
+				continue
+			fi
+		fi
 		_noop_dispatch_rc=0
 		_dispatch_review_for_conflicts "${N_PR}" "${N_HEAD}" || _noop_dispatch_rc=$?
 		if [ "${_noop_dispatch_rc}" -eq 0 ]; then
@@ -23679,3 +23724,4 @@ done
 
 write_state_snapshot_actions_runs_export || true
 echo "Noop-suspicious recovery complete. Dispatched: ${NOOP_RECOVERY_DISPATCHED}, force-merged: ${NOOP_FORCE_MERGED}, blocked: ${NOOP_RECOVERY_BLOCKED}."
+echo "Noop-suspicious recovery skipped (fingerprint cap already applied on head): ${NOOP_RECOVERY_CAP_SKIPPED}."
