@@ -189,6 +189,10 @@ fi
 # validation step can diff against it.
 RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
 git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+RESOLVER_INITIAL_UNMERGED_PATHS_FILE="${RUNTIME_DIR}/resolver_initial_unmerged_paths.txt"
+RESOLVER_FINGERPRINT_ONLY_PATHS_FILE="${RUNTIME_DIR}/resolver_fingerprint_only_paths.txt"
+cp "${RESOLVER_ALLOWLIST_FILE}" "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}"
+: > "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}"
 _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
 echo "Resolver allowlist (unmerged paths at merge replay): ${_resolver_allowlist_count} entries (git merge exit=${_merge_exit})"
 if [ "${_resolver_allowlist_count}" -gt 0 ]; then
@@ -604,6 +608,7 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
     if [ "${_fp_new_count}" -gt 0 ]; then
       echo "Fingerprint-violation expansion: ${_fp_new_count} auto-merged file(s) failed a fingerprint check — adding to resolver working set:"
       sed 's/^/ - /' "${_fp_new_tmp}" || true
+      cp "${_fp_new_tmp}" "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}"
       # Append to the unmerged-paths allowlist and re-sort+dedup so
       # the workflow-file guard in review_conflict_resolve.sh and the
       # conflicted-set in check_resolver_diff.sh both treat these
