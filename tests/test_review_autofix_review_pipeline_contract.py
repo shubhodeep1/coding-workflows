@@ -4535,6 +4535,82 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert "SEVERITY: high` by default" in prompt_text
 
 
+def test_gate_protects_executable_configuration_from_both_skip_routes() -> None:
+	# Run the real gate body with the existing mocked /pulls/{n}/files
+	# harness. The doc-only branch needs a large change under docs/; the
+	# small-diff branch also accepts root and nested paths outside docs/.
+	from test_workflow_failure_heal import SHA_A, _run_gate
+
+	base_pr = {
+		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A},
+		"labels": [], "additions": 1, "deletions": 1, "changed_files": 1,
+		"mergeable": True, "mergeable_state": "clean", "title": "test", "body": "",
+	}
+	protected_paths = (
+		"Dockerfile", "src/DOCKERFILE.prod", "apps/dev.Dockerfile", "docs/Dockerfile-prod",
+		"nested/Containerfile", "docker-compose.yml", "docs/.dockerignore", "docs/DOCKER-COMPOSE-prod.YML",
+		"docs/compose.override.yaml", "docs/Compose.yaml", "docs/Makefile",
+		"docs/build.gradle.kts", "docs/Taskfile.yml", "docs/pytest.config.py", "docs/BUILD.bazel",
+		"docs/custom.json", "docs/build.rules.toml", "docs/requirements-dev.txt",
+		"docs/.npmrc", "docs/test.sh",
+	)
+	for materiality in ("false", "true"):
+		for path in protected_paths:
+			with tempfile.TemporaryDirectory(prefix="gate-executable-") as tmp_name:
+				# Large docs/ changes qualify only via the doc-only route;
+				# other paths qualify only via the small-diff route.
+				additions = 400 if path.startswith("docs/") else 1
+				result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+					"pr": {**base_pr, "additions": additions, "deletions": additions},
+					"file_pages": [[{"filename": path, "status": "modified"}]],
+				}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": materiality})
+				assert result.returncode == 0, (path, result.stderr)
+				assert outputs["deterministic_skip"] == "false" and outputs["should_run"] == "true", (path, result.stdout)
+				assert "protected_suppressed=true" in result.stdout, (path, result.stdout)
+				assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1, path
+
+	# A rename out of an executable configuration is still protected, even
+	# when only the new filename looks like ordinary documentation.
+	for additions, destination, source in (
+		(1, "docs/guide.md", "src/DOCKERFILE.prod"),
+		(400, "docs/guide.md", "docs/compose.override.yaml"),
+	):
+		with tempfile.TemporaryDirectory(prefix="gate-executable-rename-") as tmp_name:
+			result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+				"pr": {**base_pr, "additions": additions, "deletions": additions},
+				"file_pages": [[{"filename": destination, "previous_filename": source, "status": "renamed"}]],
+			}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+			assert result.returncode == 0, result.stderr
+			assert outputs["should_run"] == "true" and outputs["deterministic_skip"] == "false", result.stdout
+			assert "protected_suppressed=true" in result.stdout
+			assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1
+
+	for additions, path, expected_reason in (
+		(400, "docs/guide.md", "docs_only"),
+		(400, "docs/docker-compose.md", "docs_only"),
+		(1, "src/widget.py", "small_diff"),
+	):
+		with tempfile.TemporaryDirectory(prefix="gate-benign-skip-") as tmp_name:
+			result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+				"pr": {**base_pr, "additions": additions, "deletions": additions},
+				"file_pages": [[{"filename": path, "status": "modified"}]],
+			}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+			assert result.returncode == 0, (path, result.stderr)
+			assert outputs["deterministic_skip"] == "true" and outputs["should_run"] == "false", (path, result.stdout)
+			assert outputs["det_skip_reason"] == expected_reason, path
+			assert "protected_suppressed=false" in result.stdout, path
+			assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1, path
+	with tempfile.TemporaryDirectory(prefix="gate-incomplete-files-") as tmp_name:
+		result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+			"pr": {**base_pr, "changed_files": 2},
+			"file_pages": [[{"filename": "Dockerfile", "status": "modified"}]],
+		}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+		assert result.returncode == 0, result.stderr
+		assert outputs["deterministic_skip"] == "false" and outputs["should_run"] == "true", result.stdout
+		assert "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE" in result.stdout
+		assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1
+
+
 def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers() -> None:
 	workflow = _workflow_text()
 	stage_helper = _stage_helper_text()

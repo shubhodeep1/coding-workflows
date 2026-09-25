@@ -168,6 +168,7 @@ changelog.d/4399-trusted-review-support.md
 changelog.d/4400-clarify-isolation.md
 changelog.d/4428-workflow-heal-prompt-parity.md
 changelog.d/4431-protect-deterministic-review-skip.md
+changelog.d/4432-isolate-review-pr-execution.md
 changelog.d/4433-python-startup-boundaries.md
 changelog.d/4438-implement-plan-claude-fixer-project-branch.md
 changelog.d/4439-audit-plans-implement-plan-claude-gate.md
@@ -500,7 +501,10 @@ scripts/review_resolve_review_threads.sh
 scripts/review_resolve_review_threads_plan.py
 scripts/review_run_judge_interim.sh
 scripts/review_run_reviewers.sh
+scripts/review_sandbox/Dockerfile
 scripts/review_synthesise_smoke.sh
+scripts/review_untrusted_sandbox.sh
+scripts/review_untrusted_workspace.py
 scripts/reviewer_failback_chains.json
 scripts/run_plan_codex.sh
 scripts/run_validation_repo_checks.sh
