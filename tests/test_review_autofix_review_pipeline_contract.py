@@ -5188,7 +5188,7 @@ def test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain() -> 
 def _review_pipeline_summary_contract_block() -> str:
 	step_block = _step_block("Append review pipeline iteration summary")
 	assert '### Review Pipeline — Iteration ${iteration_label}' in step_block
-	assert 'review_autofix_step_iteration_summary.sh' in _workflow_text()
+	assert 'review_autofix_step_iteration_summary.sh' in WORKFLOW.read_text(encoding='utf-8')
 	return step_block
 
 

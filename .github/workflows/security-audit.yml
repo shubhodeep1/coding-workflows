@@ -5,10 +5,24 @@ name: Security Audit
     # GitHub Actions schedules are literal YAML, not repo-variable driven.
     # Keep README's SECURITY_AUDIT_CRON row aligned with this value.
     - cron: "0 8 * * 0"
-  workflow_dispatch: {}
+  # `ref` is set by /implement-plan-claude when it audits a project branch;
+  # scheduled runs and a bare dispatch leave it empty and audit the default
+  # branch exactly as before.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch to audit instead of the default branch (empty = default branch). Scope is the branch's changes since its merge-base with the default branch; follow-up issues target the branch."
+        required: false
+        default: ""
+        type: string
   # Consumer repos run this workflow through the synced
   # workflow-templates/ai-security-audit.yml wrapper (called @stable).
   workflow_call:
+    inputs:
+      ref:
+        required: false
+        default: ""
+        type: string
     secrets:
       GH_PAT:
         required: false
@@ -49,7 +63,31 @@ jobs:
           # scripts/security_audit.sh diffs HEAD against the last audited
           # commit recorded on the tracker issue body.
           fetch-depth: 0
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ inputs.ref || github.event.repository.default_branch }}
+
+      - name: Resolve audit target
+        env:
+          AUDIT_TARGET_REF_INPUT: ${{ inputs.ref || '' }}
+          AUDIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AUDIT_TARGET_REF_INPUT}" ] || [ "${AUDIT_TARGET_REF_INPUT}" = "${AUDIT_DEFAULT_BRANCH}" ]; then
+            echo "SECURITY_AUDIT_TARGET: default branch ${AUDIT_DEFAULT_BRANCH}"
+            exit 0
+          fi
+          # fetch-depth: 0 above fetched every branch, so the default
+          # branch's remote-tracking ref is available for the merge-base.
+          if ! audit_diff_base="$(git merge-base "refs/remotes/origin/${AUDIT_DEFAULT_BRANCH}" HEAD)"; then
+            echo "::error::Could not compute the merge-base of ${AUDIT_TARGET_REF_INPUT} with ${AUDIT_DEFAULT_BRANCH}."
+            exit 1
+          fi
+          audit_diff_head="$(git rev-parse HEAD)"
+          echo "SECURITY_AUDIT_TARGET: branch ${AUDIT_TARGET_REF_INPUT} range ${audit_diff_base}..${audit_diff_head}"
+          {
+            echo "SECURITY_AUDIT_TARGET_REF=${AUDIT_TARGET_REF_INPUT}"
+            echo "SECURITY_AUDIT_DIFF_BASE=${audit_diff_base}"
+            echo "SECURITY_AUDIT_DIFF_HEAD=${audit_diff_head}"
+          } >> "$GITHUB_ENV"
 
       - name: Resolve workflow support ref
         run: |

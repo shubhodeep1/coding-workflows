@@ -64,6 +64,25 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on PRs whose
+   head ref starts with `claude/implement-plan-` the reviewer panel runs as
+   usual, but the GPT editor, conflict resolver, push / re-trigger tail and
+   review-blocked judge are skipped. `scripts/review_autofix_step_claude_fixer_handoff.sh`
+   posts the consensus ledger (or the pre-review conflict) and an
+   `<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->`
+   comment for the `/implement-plan-claude` session, which fixes the round in
+   one `[claude-autofix]` commit (counted toward `MAX_AUTOFIX_ITERATIONS`) or
+   answers with `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->` and a
+   `claude_fixer_converged_head=<sha>` dispatch; the gate verifies both
+   markers for that exact head (hand-off by the `GH_PAT` identity, verdict by
+   an OWNER / MEMBER / COLLABORATOR) and the `claude-fixer-auto-merge` job
+   enables auto-merge. Zero ledger entries and no failing check auto-merge in
+   the run; at the cap the PR itself is labelled `ai:review-blocked`; dispatch
+   re-runs on a head that already has a hand-off are skipped
+   (`claude_fixer_awaiting_session`). `[claude-intervention]` and
+   `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`
+   and `[ai-merge-resolve]`. The consolidator / floor stages live inside the
+   editor step, so they do not run in this mode.
 8. **conflict resolver** (`prompts/conflict-resolver.txt`,
    `integration-sync-conflict-resolver.txt`) — merge-conflict resolution
    inside autofix. In consumer repos the resolver, the review-blocked judge
@@ -416,6 +435,15 @@ a new value, add it to the appropriate overrides file with a
   failure-path reporter skips when support staging did not complete or its
   optional Python helper is absent; neither case executes `scripts/` from
   the PR worktree.
+- `internal-review.yml` itself must not forward a `with:` input that
+  `review_autofix.yml` on `main` does not define yet: GitHub validates the
+  call against `main`'s file, so every review run on the PR adding the input
+  ends as a zero-job `startup_failure` (runs 36088124636 through 36095647423
+  on PR #4438, `input "claude_fixer_converged_head" is not defined`). Add the
+  input to `review_autofix.yml` (and the `@stable`-pinned consumer
+  `ai-review.yml`, which moves in lockstep with the release), and in this
+  repo dispatch `review_autofix.yml` directly for it, as
+  `/implement-plan-claude` does for `claude_fixer_converged_head`.
 - Consequence for contributors and the unattended editor: a helper on the PR
   branch may not depend on a new workflow export until that export is on
   `main`. New variables a staged helper reads must default inside the helper
@@ -644,21 +672,31 @@ model, not the command file. A file that starts with `---` would be parsed
 as frontmatter, so the command body must remain the first line.
 
 One deliberate exception that is **not** a command pin: `/implement-plan-claude`
-waits for each phase PR to merge through a 3-hourly check-in (its **Check-in
-Loop** section). The checker is a Sonnet session started with
-`create_session` (`model: claude-sonnet-5`) that runs
-`.claude/scripts/check_in_status.py`, re-arms itself with `send_later`, and,
-when the wait is over, starts the next **stage session** on the model the
-operator picked. Every stage (a phase, a blocked-PR fix, the conformance
+waits for each review round and each merge through an hourly check-in (its
+**Check-in Loop** section). The checker is a low-effort Sonnet session:
+`create_session` (`model: claude-sonnet-5`) with the prompt `/effort low`
+alone, then a one-shot `create_trigger` into it carrying the instructions,
+because `/effort low` is not applied when more text follows it in one prompt
+(CLAUDE.md §26.B). It runs `.claude/scripts/check_in_status.py`, re-arms
+itself with `send_later` every 60 minutes, and, when the wait is over, starts
+the next **stage session** on the model the operator picked. Every stage (a
+phase, a review round, a blocked-PR fix, the conformance
 audit (`/verify-activation — scope conformance`, run after the last phase
 and before the security pass, and again after any Claude-written
-validation fix), a security or validation read, the completion PR, a
-`/verify-activation — scope activation` cycle, the `/deploy-activate`
-hand-off) runs in its own fresh session titled
+validation fix), a security or validation read, the completion PR, the
+final merge, a `/verify-activation — scope activation` cycle, the
+`/deploy-activate` hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
 unless it is waiting on the user; the command's session is never woken to
-continue, because a 3-hour gap outlives the prompt cache and a wake would
-re-send the whole history at full price. Routines created with
+continue, because the gap between check-ins outlives the prompt cache and a
+wake would re-send the whole history at full price. New projects work on a
+project branch `claude/implement-plan-<slug>` with a draft final PR into the
+default branch (the orchestrator's `orchestrator/project-<N>` equivalent):
+phase and fix PRs target it, security (`security-audit.yml` `ref` input) and
+validation (`validate.yml` `target_ref` input) run against it, and the final
+PR is marked ready, reviewed as a whole, and auto-merged only after every
+stage passed. Projects whose log predates the project branch finish straight
+on the default branch. Routines created with
 `create_new_session_on_fire` are not used: their sessions get no MCP tools
 and no repository, so they cannot report. Stage sessions and checkers need Auto mode (the
 command asks for it in step 0): outside it the claude-code-remote write
@@ -685,10 +723,12 @@ carried frontmatter.
 
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
 pushes a branch and a pull request exists for it, the session starts a
-Sonnet checker session (`create_session`, titled `PR #<n> status check-in`)
-whose prompt carries the next steps for each terminal state. The checker
+low-effort Sonnet checker session (`create_session`, titled
+`PR #<n> status check-in`, prompt `/effort low` alone) and delivers its
+instructions, including the next steps for each terminal state, through a
+one-shot `create_trigger` into that session two minutes later. The checker
 runs `.claude/scripts/check_in_status.py --terminal-only` (one REST read),
-re-arms itself with `send_later` every 180 minutes while the PR is open, and
+re-arms itself with `send_later` every 60 minutes while the PR is open, and
 once it merges or closes writes the report in its own session, renames
 itself `PR #<n> merged — …`, and sends one `PushNotification`. The pushing
 session is never woken. PRs opened by `/implement-plan-claude` are covered
@@ -1413,6 +1453,12 @@ and shipped:
 - `sandbox_namespace_setup_failed`
 - `opencode_agent_failure`
 - `MODEL_CATALOG_BACKFILL`
+- `AUTOFIX_GATE_CLAUDE_FIXER`
+- `AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED`
+- `CLAUDE_FIXER_HANDOFF`
+- `CLAUDE_FIXER_REVIEW_BLOCKED`
+- `CLAUDE_FIXER_AUTO_MERGE`
+- `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1601,6 +1647,12 @@ LOG_PREFIX.name=sandbox_private_tmp_path
 LOG_PREFIX.name=sandbox_namespace_setup_failed
 LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
+LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
+LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
+LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
+LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
+LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
+LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---
 
