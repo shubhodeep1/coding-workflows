@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/.workspace_source_manifest.txt:157-164 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The manifest omits the changelog fragment `changelog.d/4431-protect-deterministic-review-skip.md` introduced by this PR.\n  WHY: The manifest-based workspace and conflict-resolution paths may miss or drop the fragment; severity disagreement: BLOCKER from google_gemini-3_1-flash-lite versus NIT from the other reviewers, using the highest severity.\n- .github/workflows/review_autofix.yml:1024 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_2]\n  PROBLEM: The comment says `pipefail` rejects a failed page, but the pipeline's exit status is not propagated because `pipefail` is not active.\n  WHY: A failed `gh api` command may be masked by successful `jq`; the length validator is what catches partial data, so the comment misstates the safety mechanism; severity disagreement: MAJOR from google_gemini-3_1-flash-lite versus NIT from z-ai_glm-5_2, using the highest severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: manifest must list all source files incl. new changelog.d/4431-protect-deterministic-review-skip.md\n  expected_change_site: .ai/.workspace_source_manifest.txt\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: the diff adds two other changelog entries but omits changelog.d/4431-protect-deterministic-review-skip.md\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .ai/.workspace_source_manifest.txt:157-164 | severity=BLOCKER | confidence=5\n  PROBLEM: The manifest is missing the new changelog fragment file changelog.d/4431-protect-deterministic-review-skip.md introduced in this PR.\n  WHY: The workspace manifest is the source of truth for the workspace inventory. An incomplete inventory can cause the manifest-union resolver to drop the 4431 fragment during a later merge, leading to a loss of changelog context.\n- .github/workflows/review_autofix.yml:1024 | severity=MAJOR | confidence=4\n  PROBLEM: The inline comment incorrectly claims that \"pipefail rejects a failed page\" for the pipeline command, despite the shell context lacking `set -o pipefail`.\n  WHY: Without `set -o pipefail`, the exit status of the pipeline is determined only by the final command (`jq -s`). If the `gh api` fetch fails, the pipeline may not fail, potentially allowing the script to proceed with partial or corrupted data if the subsequent commands exit successfully. The robustness of this check currently relies entirely on the `length == $expected` validator, not the pipeline's exit status as claimed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .ai/.workspace_source_manifest.txt:160-161 | severity=NIT | confidence=4\n  PROBLEM: The manifest is updated with `changelog.d/4428-workflow-heal-prompt-parity.md` and `changelog.d/heal-autofix-source-pr-dedup.md`, but the fragment this PR introduces \u2014 `changelog.d/4431-protect-deterministic-review-skip.md` (present in `pr_changed_files.txt`) \u2014 is not added.\n  WHY: The manifest is described as a sorted, unique-line inventory of source files used by `scripts/workspace_init.sh` and the deterministic `CONFLICT_MANIFEST_UNION_ENABLED` resolver path. A merge against a base that conflicts on this file will compute the three-way set against a manifest that does not list the new fragment, so the resolver can pick a \"clean\" inventory that drops `4431-protect-deterministic-review-skip.md` from the workspace (or, more narrowly, miss it on workspace_init when the file is reached through the manifest instead of `git ls-files`). Even if regeneration catches up before the next conflict, this is exactly the out-of-sync shape the resolver is supposed to prevent.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .ai/.workspace_source_manifest.txt:157-164 | severity=NIT | confidence=4\n  PROBLEM: The manifest adds entries for changelog.d/4428-workflow-heal-prompt-parity.md and changelog.d/heal-autofix-source-pr-dedup.md but omits the fragment this PR introduces: changelog.d/4431-protect-deterministic-review-skip.md.\n  WHY: The workspace manifest is a sorted unique-line inventory of source files. When it is out of sync with the actual tree, conflict-resolution code that relies on the manifest as the source of truth will not see the new fragment. In a later PR that touches overlapping changelog entries, the manifest-union resolver could miss the 4431 fragment when computing the three-way merge, producing an incomplete inventory.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: manifest must list all source files incl. new changelog.d/4431-protect-deterministic-review-skip.md\n  Expected: entry after 4428 line\n  Evidence: absent (diff adds 2 other changelogs only)\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .ai/.workspace_source_manifest.txt:160-161 | severity=NIT | confidence=4\n  PROBLEM: The manifest adds entries for `changelog.d/4428-workflow-heal-prompt-parity.md` and `changelog.d/heal-autofix-source-pr-dedup.md` but omits the fragment this PR introduces: `changelog.d/4431-protect-deterministic-review-skip.md`, which would sort between the two added lines.\n  WHY: The manifest-union conflict resolver uses the committed manifest as the base for 3-way set algebra. If a sibling PR concurrently edits the manifest, the 4431 fragment \u2014 absent from this PR's version \u2014 would not appear in `(ours \u2212 base)` and could be dropped from the merged inventory until the next `workspace_init.sh` regeneration.\n- .github/workflows/review_autofix.yml:~1024 | severity=NIT | confidence=2\n  PROBLEM: The comment states \"pipefail rejects a failed page\" for the `gh api --paginate | jq -s` pipeline, but if `set -o pipefail` is not active in this step, a mid-pagination `gh api` failure would not fail the pipeline \u2014 `jq -s` could still exit 0 on partial output.\n  WHY: No runtime failure \u2014 the validation catches partial data regardless. The comment is misleading about which mechanism provides the safety guarantee.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6daa8fc5ac2247743c3abd85c6a402e2c42190e2960acbead495bff76e91a320",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4434,
+    "run_id": "36085969007",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36085969007",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925024440_6a0034ceca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4434,
+    "run_id": "36085969007"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T02:44:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
