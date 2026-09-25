@@ -293,6 +293,36 @@ if ! [[ "${SECURITY_AUDIT_FIX_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]]; then
 	SECURITY_AUDIT_FIX_DIFF_MAX_BYTES="96000"
 fi
 
+# Optional non-default branch the audit targets (issues mode only), set by the
+# workflow's `ref` dispatch input for /implement-plan-claude project branches.
+# The workflow also sets SECURITY_AUDIT_DIFF_BASE / SECURITY_AUDIT_DIFF_HEAD to
+# the branch's merge-base with the default branch and its head, so the audit
+# covers exactly the project's changes.  Follow-up issues then carry an
+# `Integration branch:` line (scripts/resolve_integration_ref.sh routes their
+# fix PRs onto that branch), and the tracker's default-branch
+# last-audited-commit marker is left untouched.
+SECURITY_AUDIT_TARGET_REF="${SECURITY_AUDIT_TARGET_REF:-}"
+if [ -n "${SECURITY_AUDIT_TARGET_REF}" ]; then
+	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" != "issues" ]; then
+		echo "SECURITY_AUDIT_TARGET_REF is only valid in issues mode" >&2
+		exit 1
+	fi
+	if [ -z "${SECURITY_AUDIT_DIFF_BASE}" ]; then
+		echo "SECURITY_AUDIT_TARGET_REF requires SECURITY_AUDIT_DIFF_BASE and SECURITY_AUDIT_DIFF_HEAD" >&2
+		exit 1
+	fi
+	if ! git check-ref-format --branch "${SECURITY_AUDIT_TARGET_REF}" >/dev/null 2>&1; then
+		echo "SECURITY_AUDIT_TARGET_REF must be a valid branch name" >&2
+		exit 1
+	fi
+fi
+# When true (issues mode only), every surviving finding without an existing
+# follow-up gets one, instead of stopping at MAX_FOLLOWUP_ISSUES_PER_WEEK.
+# /implement-plan-claude sets it on the audits it dispatches: a finding
+# deferred by the weekly cap is never re-found by a later incremental audit,
+# so the cap would let a project pass its security gate with open findings.
+SECURITY_AUDIT_BYPASS_WEEKLY_CAP="${SECURITY_AUDIT_BYPASS_WEEKLY_CAP:-false}"
+
 # Skip the whole audit when HEAD matches the last audited commit recorded on
 # the tracker issue (log-only skip; no issue comment).
 SECURITY_AUDIT_SKIP_IF_UNCHANGED="${SECURITY_AUDIT_SKIP_IF_UNCHANGED:-true}"
@@ -1587,7 +1617,9 @@ python3 - \
 	"${MAX_FOLLOWUP_ISSUES_PER_WEEK}" \
 	"${AUDIT_SCOPE_MODE}" \
 	"${AUDIT_SCOPE_HEAD_SHA}" \
-	"${AUDIT_SCOPE_BASE_SHA}" <<'PY'
+	"${AUDIT_SCOPE_BASE_SHA}" \
+	"${SECURITY_AUDIT_TARGET_REF}" \
+	"${SECURITY_AUDIT_BYPASS_WEEKLY_CAP}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -1612,6 +1644,8 @@ max_followups_per_week = int(sys.argv[12])
 audit_scope_mode = sys.argv[13]
 head_sha = sys.argv[14].strip()
 last_audited_sha = sys.argv[15].strip()
+target_ref = sys.argv[16].strip()
+bypass_weekly_cap = sys.argv[17].strip().lower() in ("1", "true", "yes", "on")
 
 
 def load_json(path: Path, *, label: str):
@@ -1676,12 +1710,14 @@ for finding in findings:
 	if finding_id in existing_finding_ids:
 		skipped_existing_count += 1
 		continue
-	if len(planned_followups) >= remaining_weekly_capacity:
+	if not bypass_weekly_cap and len(planned_followups) >= remaining_weekly_capacity:
 		skipped_weekly_cap_count += 1
 		continue
 	planned_followups.append(finding)
 
-if audit_scope_mode == "incremental" and last_audited_sha:
+if target_ref:
+	scope_line = f"- Audit scope: branch `{target_ref}` changes since its merge-base with the default branch (`{last_audited_sha}`..`{head_sha}`)"
+elif audit_scope_mode == "incremental" and last_audited_sha:
 	scope_line = f"- Audit scope: incremental (`{last_audited_sha}`..`{head_sha}`)"
 else:
 	scope_line = "- Audit scope: full default-branch checkout"
@@ -1703,6 +1739,8 @@ comment_lines = [
 	f"- Findings skipped because a marked follow-up issue already exists: {skipped_existing_count}",
 	f"- Findings deferred by the weekly cap: {skipped_weekly_cap_count}",
 ]
+if bypass_weekly_cap:
+	comment_lines.append("- Weekly follow-up cap: bypassed for this run (SECURITY_AUDIT_BYPASS_WEEKLY_CAP)")
 
 if findings:
 	comment_lines.extend(["", "### Findings", ""])
@@ -1737,6 +1775,12 @@ for idx, finding in enumerate(planned_followups):
 		f"- Severity: `{finding['severity']}`",
 		f"- Confidence: `{finding['confidence']}/10`",
 		f"- Location: `{finding['file']}:{finding['line']}`",
+	]
+	if target_ref:
+		# resolve_integration_ref.sh reads this line, so clarify / plan /
+		# implement check out the audited branch and the fix PR targets it.
+		body_lines.append(f"- Integration branch: `{target_ref}`")
+	body_lines += [
 		"",
 		"## Exploit scenario",
 		str(finding["exploit_scenario"]),
@@ -1753,6 +1797,7 @@ followup_summary_env_path.write_text(
 		[
 			f"SURVIVING_FINDINGS_COUNT={shlex.quote(str(len(findings)))}",
 			f"FOLLOWUP_CREATE_COUNT={shlex.quote(str(len(planned_followups)))}",
+			f"FOLLOWUP_DEFERRED_COUNT={shlex.quote(str(skipped_weekly_cap_count))}",
 		]
 	)
 	+ "\n",
@@ -1773,7 +1818,11 @@ while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE; do
 		--body-file "${FOLLOWUP_BODY_PATH}" >/dev/null
 done < "${FOLLOWUP_INDEX_FILE}"
 
-if [ -n "${HEAD_SHA}" ]; then
+if [ -n "${SECURITY_AUDIT_TARGET_REF}" ]; then
+	# A branch audit covers a range that is not on the default branch; the
+	# marker records default-branch progress only, so leave it untouched.
+	echo "security-audit: target_ref=${SECURITY_AUDIT_TARGET_REF}; leaving the tracker's last-audited-commit marker unchanged."
+elif [ -n "${HEAD_SHA}" ]; then
 	# Persist the audited HEAD SHA on the tracker body so the next run can
 	# skip when unchanged or diff-scope against it. One extra `gh issue edit`
 	# per completed audit; reads are free because the tracker-discovery
@@ -1794,4 +1843,4 @@ fi
 # shellcheck disable=SC1090
 source "${FOLLOWUP_SUMMARY_ENV}"
 
-echo "security-audit: tracker=#${TRACKER_NUMBER} findings=${SURVIVING_FINDINGS_COUNT} followups_created=${FOLLOWUP_CREATE_COUNT}"
+echo "security-audit: tracker=#${TRACKER_NUMBER} findings=${SURVIVING_FINDINGS_COUNT} followups_created=${FOLLOWUP_CREATE_COUNT} deferred_by_weekly_cap=${FOLLOWUP_DEFERRED_COUNT}"

@@ -5,7 +5,18 @@ name: AI Security Audit
 on:
   schedule:
     - cron: '0 8 * * 0'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch to audit instead of the default branch (empty = default branch)"
+        required: false
+        default: ""
+        type: string
+      bypass_weekly_cap:
+        description: "Open a follow-up for every surviving finding instead of stopping at the weekly cap"
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
   issues: write
@@ -15,4 +26,7 @@ concurrency:
 jobs:
   security-audit:
     uses: shubhodeep1/coding-workflows/.github/workflows/security-audit.yml@stable
+    with:
+      ref: ${{ inputs.ref || '' }}
+      bypass_weekly_cap: ${{ inputs.bypass_weekly_cap == true }}
     secrets: inherit
