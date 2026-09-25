@@ -1617,7 +1617,7 @@ blame_header_pattern = re.compile(r"^\^?([0-9a-f]{40,64}) [0-9]+ [0-9]+(?: [0-9]
 ancestry_cache: dict[str, bool | None] = {}
 ownership_warned_files: set[str] = set()
 causal_diff_cache: dict[str, tuple[bool | None, list[tuple[int, int, bool, bool, bool, bool]]]] = {}
-cross_file_causal_change_cache: tuple[bool, bool] | None = None
+cross_file_causal_change_cache: tuple[bool, bool, bool] | None = None
 # DIFF_SINCE selects candidate files only. Ownership and deleted-guard
 # causality always cover the complete project range.
 causal_diff_base_sha = audit_scope_base_sha
@@ -1726,8 +1726,23 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 				check=False,
 			)
 		except (OSError, ValueError):
-			cross_file_causal_change_cache = (False, False)
+			cross_file_causal_change_cache = (False, False, False)
 		else:
+			cross_file_non_python_added = False
+			current_diff_path = ""
+			for diff_line in cross_file_causal_result.stdout.splitlines():
+				if diff_line.startswith("+++ b/"):
+					current_diff_path = diff_line[6:]
+				elif diff_line.startswith("diff --git "):
+					current_diff_path = ""
+				elif diff_line.startswith("rename to "):
+					if not diff_line[10:].endswith((".py", ".md", ".txt", ".rst")):
+						cross_file_non_python_added = True
+				elif diff_line.startswith(("Binary files ", "GIT binary patch", "deleted file mode ")):
+					cross_file_non_python_added = True
+				elif diff_line.startswith(("+", "-")) and not diff_line.startswith(("+++", "---")):
+					if not current_diff_path or not current_diff_path.endswith((".py", ".md", ".txt", ".rst")):
+						cross_file_non_python_added = True
 			cross_file_guard_deleted = any(
 				diff_line.startswith("-")
 				and not diff_line.startswith("---")
@@ -1737,12 +1752,13 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 			cross_file_causal_change_cache = (
 				cross_file_causal_result.returncode == 0,
 				cross_file_guard_deleted,
+				cross_file_non_python_added,
 			)
-	cross_file_causal_ok, cross_file_guard_deleted = cross_file_causal_change_cache
+	cross_file_causal_ok, cross_file_guard_deleted, cross_file_non_python_added = cross_file_causal_change_cache
 	if not cross_file_causal_ok:
 		warn_ownership_once(file_name)
 		return True
-	if cross_file_guard_deleted and access_control_finding_pattern.search(
+	if (cross_file_guard_deleted or cross_file_non_python_added) and access_control_finding_pattern.search(
 		str(finding.get("owasp_or_stride_category") or "")
 	):
 		return True

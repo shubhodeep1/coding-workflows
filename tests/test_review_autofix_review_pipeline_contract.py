@@ -6439,8 +6439,8 @@ def _run_dependency_install_step(
 ) -> dict[str, str]:
 	"""Execute the dependency-install step body against a synthetic repo.
 
-	`pip` and `python3` are stubbed on PATH so nothing is really installed:
-	the `python3` stub reports pytest importability from `pytest_importable`
+	`pip`, `python3`, and `docker` are stubbed on PATH so nothing is really installed:
+	the isolated Docker probe reports pytest importability from `pytest_importable`
 	and records every invocation.  Returns the step's stdout/stderr under
 	"output" and the recorded stub invocations under "calls".
 	"""
@@ -6470,13 +6470,16 @@ def _run_dependency_install_step(
 			"exit 0\n" % (0 if pytest_importable else 1)
 		)
 		(bin_dir / "docker").write_text(
-			'#!/bin/sh\necho "docker $*" >> "$STUB_CALL_LOG"\nexit 1\n'
+			'#!/bin/sh\necho "docker $*" >> "$STUB_CALL_LOG"\n'
+			'case "$*" in *"/review-venv/bin/python -I -c import pytest"*) exit %d ;; esac\nexit 1\n'
+			% (0 if pytest_importable else 1)
 		)
 		for stub in ("docker", "pip", "python3"):
 			(bin_dir / stub).chmod(0o755)
 		env = _git_clean_env()
 		env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
 		env["STUB_CALL_LOG"] = str(log_path)
+		env["REVIEW_PYTHON_DEPENDENCY_VOLUME"] = "fixture-volume"
 		completed = subprocess.run(
 			["bash", str(script_path)],
 			cwd=str(repo),
@@ -6504,7 +6507,8 @@ def test_dependency_install_never_bootstraps_pytest_on_the_privileged_host() -> 
 
 def test_dependency_install_container_uses_allowlisted_network_proxy() -> None:
 	step = _step_run_script("Install project dependencies (best-effort)")
-	assert "--network none" not in step
+	assert '--network none --read-only --cap-drop ALL' in step
+	assert '/review-venv/bin/python -I -c \'import pytest\'' in step
 	assert 'docker network create --internal "${review_dependency_network}"' in step
 	assert '--network "${review_dependency_network}"' in step
 	assert "HTTP_PROXY=http://dependency-proxy:8080" in step
@@ -6995,7 +6999,7 @@ def test_conflict_resolver_authorizes_mixed_marker_and_fingerprint_hunks() -> No
 	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
 	python_start = prepare.index("import base64\nimport difflib\nimport json\n")
 	python_body = prepare[python_start:prepare.index("\nPY\n  then", python_start)]
-	with tempfile.TemporaryDirectory(prefix="mixed-resolver-boundary-") as directory:
+	with tempfile.TemporaryDirectory(prefix="mixed-resolver-boundary-", dir=Path.home()) as directory:
 		repo = Path(directory) / "repo"
 		repo.mkdir()
 		subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -7050,10 +7054,19 @@ def test_conflict_resolver_authorizes_mixed_marker_and_fingerprint_hunks() -> No
 			"--repo-root", str(repo), "--conflicted-set", str(conflicted), "--touched-set", str(touched),
 			"--conflict-spans", str(spans), "--clean-manifest", str(clean_manifest), "--strict-manifests",
 		]
-		accepted = subprocess.run(command, capture_output=True, text=True, check=False)
+		artifact_dir = Path(directory) / "validator-artifacts"
+		artifact_dir.mkdir(mode=0o700)
+		validator_env = _git_clean_env()
+		validator_env.update({
+			"RUNNER_TEMP": directory,
+			"POST_AGENT_VALIDATION_SANDBOX": str(REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh"),
+			"POST_AGENT_VALIDATION_RUNTIME_DIR": str(artifact_dir),
+			"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		accepted = subprocess.run(command, env=validator_env, capture_output=True, text=True, check=False)
 		assert accepted.returncode == 0, accepted.stderr
 		(repo / "fingerprint.txt").write_text("tampered\nREQUIRED\nend\n", encoding="utf-8")
-		rejected = subprocess.run(command, capture_output=True, text=True, check=False)
+		rejected = subprocess.run(command, env=validator_env, capture_output=True, text=True, check=False)
 		assert rejected.returncode == 1
 		assert "outside conflict spans" in rejected.stderr
 

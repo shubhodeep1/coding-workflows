@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -157,6 +159,32 @@ def snapshot(args: argparse.Namespace) -> int:
 	}
 	_write_json(manifest_path, payload)
 	print(f"POST_AGENT_WORKSPACE_GUARD_OK action=snapshot entries={len(payload['entries'])}")
+	return 0
+
+
+def dispose(args: argparse.Namespace) -> int:
+	workspace = _resolved_workspace(args.workspace)
+	manifest_path = Path(args.manifest).resolve(strict=True)
+	if manifest_path == workspace or workspace in manifest_path.parents:
+		raise GuardError("manifest must be outside the workspace")
+	_load_manifest(manifest_path, workspace)
+	try:
+		quarantine_root = Path(tempfile.mkdtemp(prefix="post-agent-rejected-", dir=workspace.parent))
+	except OSError as quarantine_error:
+		if quarantine_error.errno != errno.ENOSPC:
+			raise
+		# A same-directory rename may succeed even when no space remains for mkdir.
+		quarantine_root = workspace.parent / f"post-agent-rejected-{os.urandom(16).hex()}"
+		if quarantine_root.exists() or quarantine_root.is_symlink():
+			raise GuardError("quarantine destination already exists")
+		os.rename(workspace, quarantine_root)
+	else:
+		try:
+			os.rename(workspace, quarantine_root / "workspace")
+		except OSError:
+			quarantine_root.rmdir()
+			raise
+	print("POST_AGENT_WORKSPACE_DISPOSED", file=sys.stderr)
 	return 0
 
 
@@ -414,6 +442,10 @@ def build_parser() -> argparse.ArgumentParser:
 	reconcile_parser.add_argument("--changed-paths-out", required=True)
 	reconcile_parser.add_argument("--report", required=True)
 	reconcile_parser.set_defaults(handler=reconcile)
+	dispose_parser = subparsers.add_parser("dispose")
+	dispose_parser.add_argument("--workspace", required=True)
+	dispose_parser.add_argument("--manifest", required=True)
+	dispose_parser.set_defaults(handler=dispose)
 	return parser
 
 

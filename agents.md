@@ -735,6 +735,23 @@ when the bounded fix-cycle budget is exhausted.
     name and exit status also appear on stderr.
 - Post-agent snapshot and reconcile run in separate credentialless
   `workspace-guard` units; validators run in credentialless `validator` units.
+  Validator units cannot read checkout, linked, or nested Git metadata; workflow
+  reference validation runs a staged checker outside the writable checkout.
+  Review and poller checkouts do not persist Git credentials; a host-scoped
+  credential helper supplies the repository's `GH_PAT` only
+  to trusted Git calls and is not passed into model or validator units.
+  The workspace guard alone receives validated `GIT_DIR` / `GIT_WORK_TREE`
+  for ignore classification when the model-writable copy has no `.git` entry;
+  other sandbox roles remain without that Git context.
+  Security-pass cross-file ownership keeps non-Python content additions
+  blocking for access-control findings, but a Python-only mode change does
+  not count as a new cross-language route.
+  After a failed reconciliation, the host checks the snapshot's workspace
+  identity and moves that entire worktree into a private sibling quarantine
+  before subsequent steps (falling back to a same-directory rename when
+  disk exhaustion prevents creating a quarantine directory). Poller state
+  snapshots skip a failed poll tick,
+  and the review iteration summary starts Python isolated outside the checkout.
   Their per-run mode-0700 `POST_AGENT_ARTIFACT_DIR` lives below the resolved
   `RUNNER_TEMP` outside both the checkout and host `/tmp`/`/var/tmp`.
   Host-only `RUNTIME_DIR` paths remain under `/tmp`; isolated validator input

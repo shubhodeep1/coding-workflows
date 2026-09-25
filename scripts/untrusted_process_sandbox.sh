@@ -365,6 +365,16 @@ if [ "${provider_required}" = true ]; then
 else
 	common_env+=("POST_AGENT_ARTIFACT_DIR=${runtime_dir}")
 fi
+if [ "${role}" = workspace-guard ] && [ -n "${GIT_DIR:-}" ]; then
+	# The writable workspace can be a copy without .git; only the guard needs
+	# the host checkout's metadata to classify paths against Git ignore rules.
+	[ -n "${GIT_WORK_TREE:-}" ] && [ -d "${GIT_WORK_TREE}" ] \
+		&& [ "$(cd "${GIT_WORK_TREE}" && pwd -P)" = "${workspace}" ] \
+		&& [[ "${GIT_DIR}" = /* ]] && [ -f "${GIT_DIR}/HEAD" ] || {
+		echo "untrusted_process_sandbox: workspace Git context is invalid" >&2; exit 1;
+	}
+	common_env+=("GIT_DIR=${GIT_DIR}" "GIT_WORK_TREE=${workspace}")
+fi
 runtime_write_paths=()
 while IFS='=' read -r environment_name environment_value; do
 	case "${environment_name}" in
@@ -477,6 +487,13 @@ credential_inaccessible_entry="${credential_file} "
 if sandbox_path_is_private_tmp "${credential_file}"; then
 	credential_inaccessible_entry=""
 fi
+if [ -n "${REVIEW_GIT_CREDENTIAL_DIR:-}" ]; then
+	[ -d "${REVIEW_GIT_CREDENTIAL_DIR}" ] && [ ! -L "${REVIEW_GIT_CREDENTIAL_DIR}" ] \
+		|| { echo "untrusted_process_sandbox: Git credential directory is unavailable" >&2; exit 1; }
+	if ! sandbox_path_is_private_tmp "${REVIEW_GIT_CREDENTIAL_DIR}"; then
+		credential_inaccessible_entry+="${REVIEW_GIT_CREDENTIAL_DIR} "
+	fi
+fi
 systemd_run=(systemd-run)
 sandbox_journal_cmd=(journalctl)
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
@@ -529,7 +546,7 @@ case "${role}" in
 esac
 for protected_git_path in "${git_metadata_paths[@]:-}"; do
 	[ -n "${protected_git_path}" ] || continue
-	if [ "${provider_required}" = true ]; then
+	if [ "${provider_required}" = true ] || [ "${role}" = validator ]; then
 		systemd_properties+=(--property="InaccessiblePaths=${protected_git_path}")
 	else
 		systemd_properties+=(--property="ReadOnlyPaths=${protected_git_path}")
@@ -549,5 +566,19 @@ if [ "${sandbox_unit_rc}" -eq 226 ]; then
 	echo "untrusted_process_sandbox: sandbox_namespace_setup_failed role=${role} rc=226 unit=${sandbox_unit_name}" >&2
 	timeout --kill-after=2 10 "${sandbox_journal_cmd[@]}" --no-pager -o cat -n 20 -u "${sandbox_unit_name}" 2>/dev/null \
 		| sed 's/^/untrusted_process_sandbox: sandbox_namespace_setup_failed journal: /' >&2 || true
+fi
+if [ "${role}" = workspace-guard ] && [ "${guard_action}" = reconcile ] && [ "${sandbox_unit_rc}" -ne 0 ]; then
+	guard_manifest=""
+	guard_previous=""
+	for guard_argument in "$@"; do
+		if [ "${guard_previous}" = --manifest ]; then guard_manifest="${guard_argument}"; break; fi
+		guard_previous="${guard_argument}"
+	done
+	if [ -n "${guard_manifest}" ] && [ -f "${guard_manifest}" ]; then
+		/usr/bin/python3 -I -S "${4}" dispose --workspace "${workspace}" --manifest "${guard_manifest}" || \
+			echo "::error::untrusted_process_sandbox: workspace disposal failed; contaminated workspace remains at ${workspace}" >&2
+	else
+		echo "::error::untrusted_process_sandbox: workspace disposal skipped; manifest unavailable and contaminated workspace remains at ${workspace}" >&2
+	fi
 fi
 exit "${sandbox_unit_rc}"

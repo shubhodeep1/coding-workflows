@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import argparse
+import errno
 import importlib.util
 import http.client
 import json
@@ -18,6 +20,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +71,182 @@ def test_workspace_guard_quarantines_ignored_python_startup_payload() -> None:
 		assert (quarantine / "sitecustomize.py").is_file()
 		assert "sitecustomize.py" in changed.read_text(encoding="utf-8").splitlines()
 		assert json.loads(report.read_text(encoding="utf-8"))["rejected"][0]["reason"] == "python-startup-path"
+
+
+def test_guard_disposes_workspace_after_inventory_error() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		manifest = root / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "sitecustomize.py").write_text("raise RuntimeError('startup executed')\n", encoding="utf-8")
+		(workspace / "bad\x01name").write_text("invalid\n", encoding="utf-8")
+		result = subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile", "--workspace", str(workspace),
+			 "--manifest", str(manifest), "--quarantine-dir", str(root / "quarantine"),
+			 "--changed-paths-out", str(root / "changed"), "--report", str(root / "report")],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20
+		disposed = subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "dispose", "--workspace", str(workspace), "--manifest", str(manifest)],
+			capture_output=True, text=True, check=False,
+		)
+		assert disposed.returncode == 0, disposed.stderr
+		assert not workspace.exists()
+		assert list(root.glob("post-agent-rejected-*/workspace/sitecustomize.py"))
+
+
+def test_guard_disposes_workspace_when_quarantine_mkdir_runs_out_of_space(monkeypatch: pytest.MonkeyPatch) -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		manifest = root / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "sitecustomize.py").write_text("raise RuntimeError('startup executed')\n", encoding="utf-8")
+		guard_module = runpy.run_path(str(WORKSPACE_GUARD))
+
+		def fail_quarantine_mkdir(*args: object, **kwargs: object) -> str:
+			raise OSError(errno.ENOSPC, "No space left on device")
+
+		monkeypatch.setattr(guard_module["tempfile"], "mkdtemp", fail_quarantine_mkdir)
+		assert guard_module["dispose"](argparse.Namespace(workspace=str(workspace), manifest=str(manifest))) == 0
+		assert not workspace.exists()
+		assert list(root.glob("post-agent-rejected-*/sitecustomize.py"))
+
+
+def test_guard_disposal_refuses_mismatched_snapshot_identity() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		manifest = root / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		payload = json.loads(manifest.read_text(encoding="utf-8"))
+		payload["workspace"]["inode"] += 1
+		manifest.write_text(json.dumps(payload), encoding="utf-8")
+		result = subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "dispose", "--workspace", str(workspace), "--manifest", str(manifest)],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20
+		assert workspace.is_dir()
+
+
+def test_workspace_guard_uses_external_git_metadata_without_exposing_it_to_validator() -> None:
+	with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+		root = Path(directory)
+		source = root / "source"
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir(mode=0o700)
+		subprocess.run(["git", "init", "-q", str(source)], check=True)
+		(workspace / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
+		assert not (workspace / ".git").exists()
+		environment = os.environ.copy()
+		environment.update({
+			"GIT_DIR": str(source / ".git"), "GIT_WORK_TREE": str(workspace),
+			"RUNNER_TEMP": str(root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		manifest = runtime / "manifest.json"
+		base = ["bash", str(SANDBOX), "--workspace", str(workspace), "--runtime-dir", str(runtime)]
+		snapshot = subprocess.run(
+			base + ["--role", "workspace-guard", "--guard-action", "snapshot", "--",
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot",
+				"--workspace", str(workspace), "--manifest", str(manifest)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert snapshot.returncode == 0, snapshot.stderr
+		(workspace / "ignored.tmp").write_text("ignore me\n", encoding="utf-8")
+		reconcile = subprocess.run(
+			base + ["--role", "workspace-guard", "--guard-action", "reconcile", "--",
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"),
+				"--changed-paths-out", str(runtime / "changed"), "--report", str(runtime / "report")],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert reconcile.returncode == 20, reconcile.stderr
+		assert json.loads((runtime / "report").read_text(encoding="utf-8"))["rejected"][0]["reason"] == "ignored-path"
+		validator = subprocess.run(
+			base + ["--role", "validator", "--", "/usr/bin/python3", "-I", "-S", "-c",
+				"import os; assert 'GIT_DIR' not in os.environ and 'GIT_WORK_TREE' not in os.environ"],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert validator.returncode == 0, validator.stderr
+
+
+def test_resolver_checker_and_validator_metadata_are_not_from_checkout() -> None:
+	resolver = RESOLVER_GUARD.read_text(encoding="utf-8")
+	sandbox = SANDBOX.read_text(encoding="utf-8")
+	assert 'checker="${POST_AGENT_VALIDATION_CHECKER:-}"' in resolver
+	assert '${REPO_ROOT}/scripts/check_workflow_script_refs.py' not in resolver
+	assert '[ "${provider_required}" = true ] || [ "${role}" = validator ]' in sandbox
+	assert 'InaccessiblePaths=${protected_git_path}' in sandbox
+	assert 'dispose --workspace "${workspace}"' in sandbox
+	review = (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	poller = (REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert 'POST_AGENT_VALIDATION_CHECKER=${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py' in review
+	assert '"${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py"' in poller
+	assert 'if: ${{ success() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED' in poller
+	assert 'git remote set-url origin "https://x-access-token:' not in review
+	assert 'GIT_CONFIG_KEY_0: credential.helper' in review
+	assert 'persist-credentials: false' in review
+	assert 'python3 -c "import pytest"' not in review
+
+
+@pytest.mark.parametrize("workflow_name", ("review_autofix.yml", "orchestrate_poll.yml"))
+def test_git_token_is_not_job_wide_and_sandbox_masks_credential(workflow_name: str) -> None:
+	workflow_text = (REPO_ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+	job_env = workflow_text.split("      PYTHONSAFEPATH: '1'\n", 1)[1].split("    steps:\n", 1)[0]
+	assert "REVIEW_GIT_TOKEN:" not in job_env
+	assert "${REVIEW_GIT_CREDENTIAL_DIR}/token" in job_env
+	assert "REVIEW_GIT_TOKEN: ${{ secrets.GH_PAT }}" in workflow_text
+	assert "umask 077" in workflow_text
+	assert "REVIEW_GIT_CREDENTIAL_DIR=${credential_dir}" in workflow_text
+	assert 'rm -rf -- "${REVIEW_GIT_CREDENTIAL_DIR}"' in workflow_text
+	assert 'credential_inaccessible_entry+="${REVIEW_GIT_CREDENTIAL_DIR} "' in SANDBOX.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("workflow_name", ("review_autofix.yml", "orchestrate_poll.yml"))
+def test_git_credential_helper_reads_private_file_only(workflow_name: str) -> None:
+	workflow_document = yaml.safe_load((REPO_ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8"))
+	job_name = "codex-agent" if workflow_name == "review_autofix.yml" else "poll"
+	helper_command = workflow_document["jobs"][job_name]["env"]["GIT_CONFIG_VALUE_0"]
+	with tempfile.TemporaryDirectory() as credential_dir_path:
+		(Path(credential_dir_path) / "token").write_text("synthetic-git-token\n", encoding="utf-8")
+		git_environment = os.environ.copy()
+		git_environment.update({
+			"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper",
+			"GIT_CONFIG_VALUE_0": helper_command, "GIT_CONFIG_GLOBAL": "/dev/null",
+			"GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+			"GITHUB_SERVER_URL": "https://github.com", "REVIEW_GIT_CREDENTIAL_DIR": credential_dir_path,
+		})
+		credential_result = subprocess.run(
+			["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
+			env=git_environment, capture_output=True, text=True, check=False,
+		)
+		assert credential_result.returncode == 0, credential_result.stderr
+		assert "password=synthetic-git-token" in credential_result.stdout
+		(Path(credential_dir_path) / "token").unlink()
+		denied_result = subprocess.run(
+			["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
+			env=git_environment, capture_output=True, text=True, check=False,
+		)
+		assert denied_result.returncode != 0
+		assert "synthetic-git-token" not in denied_result.stdout
 
 
 def test_workspace_guard_restores_authorized_new_regular_file() -> None:
@@ -515,6 +694,31 @@ def test_private_tmp_units_exchange_guard_artifacts() -> None:
 				env=isolated_env, capture_output=True, text=True, check=False,
 			)
 			assert no_credentials_or_network.returncode == 0, no_credentials_or_network.stderr
+		(workspace / "sitecustomize.py").write_text("raise RuntimeError('startup executed')\n", encoding="utf-8")
+		(workspace / "bad\x01name").write_text("invalid\n", encoding="utf-8")
+		failed_reconcile = subprocess.run(
+			base + ["--guard-action", "reconcile", "--", "/usr/bin/python3", "-I", "-S",
+				str(WORKSPACE_GUARD), "reconcile", "--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(artifacts / "quarantine"), "--report", str(report),
+				"--changed-paths-out", str(paths)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert failed_reconcile.returncode != 0
+		assert "POST_AGENT_WORKSPACE_DISPOSED" in failed_reconcile.stderr
+		assert not workspace.exists()
+		assert list(root.glob("post-agent-rejected-*/workspace/sitecustomize.py"))
+		workspace.mkdir()
+		missing_manifest = artifacts / "missing-manifest.json"
+		missing_result = subprocess.run(
+			base + ["--guard-action", "reconcile", "--", "/usr/bin/python3", "-I", "-S",
+				str(WORKSPACE_GUARD), "reconcile", "--workspace", str(workspace),
+				"--manifest", str(missing_manifest), "--quarantine-dir", str(artifacts / "quarantine"),
+				"--report", str(report), "--changed-paths-out", str(paths)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert missing_result.returncode != 0
+		assert "::error::untrusted_process_sandbox: workspace disposal skipped; manifest unavailable" in missing_result.stderr
+		assert workspace.is_dir()
 
 
 def test_resolver_python_syntax_validation_is_read_only() -> None:
@@ -727,7 +931,7 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "implement-repair|diagnose|reviewer" in sandbox_text
 	assert 'find "${workspace}" -xdev -name .git -print0' in sandbox_text
 	assert 'InaccessiblePaths=${protected_git_path}' in sandbox_text
-	assert "GIT_DIR|GIT_WORK_TREE" not in sandbox_text
+	assert 'if [ "${role}" = workspace-guard ] && [ -n "${GIT_DIR:-}" ]; then' in sandbox_text
 	assert "ThreadingHTTPServer" not in module_text
 	assert "class BoundedHTTPServer" in module_text
 	assert "ThreadPoolExecutor" in module_text

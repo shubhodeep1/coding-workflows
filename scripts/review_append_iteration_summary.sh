@@ -167,7 +167,7 @@ structured_summary_line="$(
   LEDGER_STATUS_FILE="${ledger_status_file}" \
   COMMITTED_FILES_FILE="${committed_files_file}" \
   PYTHONDONTWRITEBYTECODE=1 \
-  python3 - <<'PY' || true
+  python3 -I -S - <<'PY' || true
 from __future__ import annotations
 
 import glob

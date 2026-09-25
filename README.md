@@ -19,6 +19,8 @@ This repository contains reusable `workflow_call` workflows that power the full 
 
 Review/autofix stages `scripts/review_pre_review_merge_topology.sh`, `scripts/review_detect_merge_conflicts.sh`, and `scripts/review_append_iteration_summary.sh` from the workflow support ref. The first two retain their existing success gates; the final summary step still runs with `always()` when a runtime directory exists. If support staging did not complete, the summary tries the checked-out main support snapshot and then the primary support checkout; if neither contains the helper, it logs a warning and leaves the job outcome unchanged. No new configuration or manual setup is needed.
 
+Review/autofix and the orchestrator poller keep their Git credential in a temporary, private runner directory rather than a job-wide token environment variable or checkout Git config. Trusted Git operations use a host-scoped credential helper; model and validator sandbox units cannot access the directory. Only workspace-guard units receive the validated external Git directory for ignore classification in metadata-free workspace copies; validators and models do not. Each job removes the credential in its always-run cleanup step; a missing credential fails Git authentication closed.
+
 For the issue → PR pipeline state machine and the full command vocabulary, see [`docs/how-it-works.md`](docs/how-it-works.md).
 
 ### Memory System

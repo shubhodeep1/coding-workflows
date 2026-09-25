@@ -116,21 +116,13 @@ cd "${REPO_ROOT}"
 run_isolated_validator_python() {
 	local sandbox_helper="${POST_AGENT_VALIDATION_SANDBOX:-}"
 	local validation_runtime_dir="${POST_AGENT_VALIDATION_RUNTIME_DIR:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}}"
-	if [ -n "${sandbox_helper}" ]; then
-		[ -x "${sandbox_helper}" ] || {
-			echo "::error::check_resolver_diff.sh: isolated validator sandbox is unavailable" >&2
-			return 1
-		}
-		bash "${sandbox_helper}" \
-			--role validator --workspace "${REPO_ROOT}" --runtime-dir "${validation_runtime_dir}" \
-			-- /usr/bin/python3 -I -S "$@"
-		return $?
-	fi
-	(
-		cd "${TMPDIR:-/tmp}"
-		env -i HOME="${TMPDIR:-/tmp}" PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
-			PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S "$@"
-	)
+	[ -n "${sandbox_helper}" ] && [ -x "${sandbox_helper}" ] || {
+		echo "::error::check_resolver_diff.sh: isolated validator sandbox is unavailable" >&2
+		return 1
+	}
+	bash "${sandbox_helper}" \
+		--role validator --workspace "${REPO_ROOT}" --runtime-dir "${validation_runtime_dir}" \
+		-- /usr/bin/python3 -I -S "$@"
 }
 
 # Sort+dedupe both sets in place so comm sees consistent ordering.
@@ -322,9 +314,9 @@ while IFS= read -r touched; do
 done < "${TOUCHED_SET}"
 
 if [ "${#workflow_files[@]}" -gt 0 ]; then
-	checker="${REPO_ROOT}/scripts/check_workflow_script_refs.py"
-	if [ ! -f "${checker}" ]; then
-		echo "::error::check_workflow_script_refs.py not found at ${checker}" >&2
+	checker="${POST_AGENT_VALIDATION_CHECKER:-}"
+	if [ -z "${checker}" ] || [ ! -f "${checker}" ] || [ -L "${checker}" ]; then
+		echo "::error::Trusted workflow-reference checker unavailable" >&2
 		exit 1
 	fi
 	if ! run_isolated_validator_python "${checker}" \
