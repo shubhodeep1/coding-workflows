@@ -37,10 +37,10 @@ env:
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   ORCH_WORKTREE_REGISTRY_ENABLED: ${{ vars.ORCH_WORKTREE_REGISTRY_ENABLED || 'false' }}
   ORCH_WORKTREE_TTL_SECS: ${{ vars.ORCH_WORKTREE_TTL_SECS || '3600' }}
-  MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
-  # Defaults to xhigh to match the repo-wide gpt-5.6-sol reasoning-level
+  MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+  # Defaults to high to match the repo-wide gpt-6-sol reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_JUDGE.
-  MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'xhigh' }}
+  MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'high' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
@@ -724,6 +724,8 @@ jobs:
           MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
           MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
           SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
+          SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE: ${{ vars.SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE || 'true' }}
+          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
@@ -820,8 +822,8 @@ jobs:
           # integration backpressure (ORCH_INTEGRATION_MAX_AHEAD_COMMITS). Set
           # the repo variable to a positive integer (e.g. 6) to re-enable.
           ORCH_INTEGRATION_STALE_ALERT_HOURS: ${{ vars.ORCH_INTEGRATION_STALE_ALERT_HOURS || '0' }}
-          MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
+          MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           # Default lowered from 'xhigh' to 'high' in lockstep with
           # review_autofix.yml's CONFLICT_RESOLVER_REASONING_EFFORT (see the
           # comment block there for the full rationale — runs 25627236793 /
@@ -833,6 +835,17 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
         run: bash scripts/orchestrate_poll_process.sh
+
+      - name: Release staged-support latches without active projects
+        if: steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
+          STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
+        run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
@@ -856,6 +869,7 @@ jobs:
 
       - name: Upload state snapshot artifact
         if: ${{ success() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: state-snapshot
@@ -921,9 +935,9 @@ jobs:
           if [ -n "$(git -C "${PUBLISH_DIR}" status --porcelain)" ]; then
             git -C "${PUBLISH_DIR}" add -A state.json snapshots
             git -C "${PUBLISH_DIR}" commit --quiet -m "Update state snapshot ${TICK_SLUG}"
-            # The uploaded artifact is authoritative for this tick; keep branch
-            # publication best-effort so a transient push failure does not fail
-            # the full poll run.
+            # Keep the branch push best-effort so a transient publication
+            # failure does not fail an otherwise successful poll cycle. The
+            # run artifact provides an independent best-effort copy.
             publish_ok=false
             for attempt in 1 2 3; do
               if git -C "${PUBLISH_DIR}" push --quiet --force origin "HEAD:${BRANCH_NAME}"; then
@@ -933,7 +947,7 @@ jobs:
               if [ "${attempt}" -lt 3 ]; then sleep 2; fi
             done
             if [ "${publish_ok}" != "true" ]; then
-              echo "::warning::State snapshot branch publish failed after 3 attempts; artifact upload remains authoritative for this tick"
+              echo "::warning::State snapshot branch publish failed after 3 attempts; this tick may be available only from the run artifact"
             fi
           else
             echo "State snapshot branch already up to date."

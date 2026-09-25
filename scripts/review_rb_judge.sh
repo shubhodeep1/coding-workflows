@@ -71,9 +71,7 @@ run_review_rb_validator_python() {
 LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
   "${SUPPORT_SCRIPTS_DIR}/ledger_emit_substate.sh" \
-  ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
-  ".codex-workflow-src-main/scripts/ledger_emit_substate.sh" \
-  "scripts/ledger_emit_substate.sh"; do
+  ".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
   if [ -f "${_ledger_candidate}" ]; then
     LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
     break
@@ -151,9 +149,6 @@ fi
 if [ -f "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" ]; then
   # shellcheck disable=SC1091
   source "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" 2>/dev/null || true
-elif [ -f "scripts/pr_checks_lib.sh" ]; then
-  # shellcheck disable=SC1091
-  source scripts/pr_checks_lib.sh 2>/dev/null || true
 fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   # Keep prompt sanitization available even when gh_helpers.sh was not
@@ -309,7 +304,7 @@ emit_context_budget_warn_for_prompt() {
 
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
     python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
@@ -456,7 +451,7 @@ emit_review_rb_lessons_learned_records() {
 
   telemetry_json="$(printf '%s\n' "${judge_json}" | {
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
     python3 - "${PWD}" "${issue_number}" "${pr_number}" <<'PY'
 import json
 import os
@@ -773,18 +768,13 @@ render_review_rb_semble_prefetch() {
 if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
   :
 else
-  # Try to re-fetch the helper script if it was removed during cleanup.
-  wf_source="${REPOSITORY%/*}/coding-workflows"
-  if [ "${REPOSITORY}" = "${wf_source}" ]; then
-    script_ref="${GITHUB_SHA}"
-  else
-    script_ref="stable"
-  fi
+  # Fetch only the verified workflow commit if cleanup removed the helper.
+  wf_source="shubhodeep1/coding-workflows"
+  script_ref="${SCRIPT_REF:-}"
   mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-  if { gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
-    "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || \
-     gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
-      "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; } && \
+  if [[ "${script_ref}" =~ ^[0-9a-f]{40}$ ]] &&
+    gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
+      "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null &&
     [ -s "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
     chmod +x "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
   else
@@ -974,7 +964,11 @@ RB_LINKED_ISSUES_GRAPHQL_JSON="$(gh_retry gh api graphql \
 	-f owner="${REPOSITORY%/*}" \
 	-f name="${REPOSITORY#*/}" \
 	-F number="${PR_NUMBER}" \
-	-f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number body labels(first: 100) { nodes { name } pageInfo { hasNextPage } } } } } } }' || true)"
+	-f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { baseRefName closingIssuesReferences(first: 50) { nodes { number body labels(first: 100) { nodes { name } pageInfo { hasNextPage } } } } } } }' || true)"
+PR_BASE_REF="$(printf '%s' "${RB_LINKED_ISSUES_GRAPHQL_JSON}" | jq -r '.data.repository.pullRequest.baseRefName // ""' 2>/dev/null || true)"
+if [ -z "${PR_BASE_REF}" ]; then
+	PR_BASE_REF="$(printf '%s\n' "${_pr_meta}" | jq -r '.base.ref // ""' 2>/dev/null || true)"
+fi
 ISSUE_NUMBERS="$(printf '%s' "${RB_LINKED_ISSUES_GRAPHQL_JSON}" | jq -r '
 	.data.repository.pullRequest.closingIssuesReferences.nodes[]?
 	| select(try ((type == "object") and ((.number | type) == "number")) catch false)
@@ -1400,10 +1394,10 @@ rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 # window on a single attempt before emitting the final JSON.
 # Stepping the effort down each retry frees enough budget for the
 # model to terminate exploration and write the JSON. Starting
-# level is resolved from JUDGE_REASONING_EFFORT (default `xhigh`,
+# level is resolved from JUDGE_REASONING_EFFORT (default `high`,
 # override via the THINKING_LEVEL_REVIEW_BLOCKED_JUDGE repo var).
 # Keep the ladder inside the reasoning levels advertised for the
-# default gpt-5.6-sol judge path; `low` is the floor in this script.
+# default gpt-6-sol judge path; `low` is the floor in this script.
 case "${JUDGE_REASONING_EFFORT}" in
   xhigh)   JUDGE_ATTEMPT_LEVELS=("xhigh" "high" "medium") ;;
   high)    JUDGE_ATTEMPT_LEVELS=("high" "medium" "low") ;;
@@ -2839,7 +2833,139 @@ print(m.group(1) if m else "")
         fi
       fi
 
-      FULL_NEW_BODY="${NEW_ISSUE_BODY}
+      # Spot-fix allowlist: union the judge's cited files with the files the
+      # closed PR already changed.  implement.yml enforces `files_touched`
+      # as a hard commit allowlist, and a reissue that "continues from the
+      # closed PR head" legitimately re-touches everything that PR touched
+      # (contracts, README, changelog fragment, tests).  binance-blessings#294
+      # (reissue of #292 / PR #293) listed only the two cited .py files while
+      # its own body ordered updates to three db/contracts/*.yml files, the
+      # README and the changelog fragment; the scope guard rejected nine
+      # staged paths and latched ai:scope-blocked for a human.  PR files that
+      # no longer exist at the closed head (deleted by the PR) or fail the
+      # path validator are skipped, never a reason to fall back to redo.
+      # Fail-open: a failed file listing keeps the judge's files only.  One
+      # paginated `pulls/<n>/files` call (§15), spot-fix only.
+      if [ "${RB_EFFECTIVE_REISSUE_MODE}" = "spot-fix" ] && [ -n "${RB_BASELINE_BRANCH}" ] && [ "${#RB_REISSUE_FILES[@]}" -gt 0 ]; then
+        RB_PR_FILES_JUDGE_COUNT="${#RB_REISSUE_FILES[@]}"
+        RB_PR_FILES_ADDED=0
+        RB_PR_FILES_SKIPPED=0
+        if RB_PR_CHANGED_FILES_JSON="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" 2>/dev/null)" \
+          && RB_PR_CHANGED_FILES="$(printf '%s\n' "${RB_PR_CHANGED_FILES_JSON}" | jq -r '.[]? | .filename? | select(type == "string" and length > 0)' 2>/dev/null)"; then
+          declare -A RB_PR_FILE_SEEN=()
+          for RB_FILE in "${RB_REISSUE_FILES[@]}"; do
+            RB_PR_FILE_SEEN["${RB_FILE}"]="1"
+          done
+          while IFS= read -r RB_PR_FILE; do
+            [ -n "${RB_PR_FILE}" ] || continue
+            [ -z "${RB_PR_FILE_SEEN["${RB_PR_FILE}"]+x}" ] || continue
+            RB_PR_FILE_SEEN["${RB_PR_FILE}"]="1"
+            if ! _rb_valid_repo_relative_path "${RB_PR_FILE}" \
+              || ! git ls-tree -r --name-only "${RB_HEAD_SHA}" -- "${RB_PR_FILE}" 2>/dev/null | grep -Fx -- "${RB_PR_FILE}" >/dev/null 2>&1; then
+              RB_PR_FILES_SKIPPED=$((RB_PR_FILES_SKIPPED + 1))
+              continue
+            fi
+            RB_REISSUE_FILES+=("${RB_PR_FILE}")
+            RB_PR_FILES_ADDED=$((RB_PR_FILES_ADDED + 1))
+          done <<< "${RB_PR_CHANGED_FILES}"
+          unset RB_PR_FILE_SEEN
+          echo "REISSUE_FILES_TOUCHED_UNION pr=${PR_NUMBER} judge_files=${RB_PR_FILES_JUDGE_COUNT} pr_files_added=${RB_PR_FILES_ADDED} pr_files_skipped=${RB_PR_FILES_SKIPPED} total=${#RB_REISSUE_FILES[@]}"
+        else
+          echo "::warning::Could not list the changed files of PR #${PR_NUMBER}; the spot-fix files_touched allowlist carries only the judge's cited files."
+        fi
+      fi
+
+      # Carry the parent issue's orchestrator metadata into the reissue.  The
+      # poller's security-pass successor adoption
+      # (resolve_security_pass_fix_successor) matches the replacement on the
+      # exact `- Tracking issue: #<N>` and `- Local ID: \`<id>\`` lines, and
+      # plan.yml / implement.yml resolve the integration branch from
+      # `- Integration branch:`.  A reissue without them is invisible to the
+      # orchestrator: binance-blessings#249 was terminalized as
+      # `fix_issue_closed_without_merged_pr` at 13:42Z on 2026-09-19, three
+      # minutes after this judge reissued #292 as #294, and #294 itself was
+      # planned against main instead of orchestrator/project-249.  Source
+      # order matches the follow-up path above: the parent's own metadata
+      # block first, then the PR base when it is an orchestrator integration
+      # branch.  The block goes BEFORE the review-blocked footer because
+      # implement.yml's baseline resolver requires that footer to run to the
+      # end of the body.
+      RB_REISSUE_PARENT_ORCH_METADATA_LINES=""
+      if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
+        RB_REISSUE_PARENT_ORCH_METADATA_LINES="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+import re, sys
+body = sys.stdin.read()
+lines = body.splitlines()
+start = next((i for i, line in enumerate(lines) if re.match(r"^\s*\*\*Orchestrator metadata\*\*", line)), None)
+if start is None:
+    sys.exit(0)
+block = []
+for line in lines[start + 1:]:
+    if line.strip() == "---":
+        break
+    block.append(line.rstrip())
+patterns = (
+    (r"^- Tracking issue: #(\d+)$", "- Tracking issue: #{}"),
+    (r"^- Integration branch: `([A-Za-z0-9._/-]+)`$", "- Integration branch: `{}`"),
+    (r"^- Local ID: `([A-Za-z0-9_.:-]+)`$", "- Local ID: `{}`"),
+    (r"^- Priority: (\d+)$", "- Priority: {}"),
+    (r"^- Managed by: (AI Orchestrator)$", "- Managed by: {}"),
+)
+for pattern, template in patterns:
+    match = next((re.fullmatch(pattern, line) for line in block if re.fullmatch(pattern, line)), None)
+    if match:
+        print(template.format(match.group(1)))
+' 2>/dev/null || echo "")"
+      fi
+      RB_REISSUE_ORCH_METADATA_LINES=""
+      RB_REISSUE_BASE_TRACKING_ISSUE=""
+      if [[ "${PR_BASE_REF:-}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+        RB_REISSUE_BASE_TRACKING_ISSUE="${BASH_REMATCH[1]}"
+        if [ -n "${RB_REISSUE_PARENT_ORCH_METADATA_LINES}" ] \
+          && printf '%s\n' "${RB_REISSUE_PARENT_ORCH_METADATA_LINES}" | grep -qxF -- "- Tracking issue: #${RB_REISSUE_BASE_TRACKING_ISSUE}" \
+          && printf '%s\n' "${RB_REISSUE_PARENT_ORCH_METADATA_LINES}" | grep -qxF -- "- Integration branch: \`${PR_BASE_REF}\`"; then
+          RB_REISSUE_ORCH_METADATA_LINES="${RB_REISSUE_PARENT_ORCH_METADATA_LINES}"
+        elif [ -n "${RB_REISSUE_PARENT_ORCH_METADATA_LINES}" ]; then
+          echo "::warning::Ignoring parent issue orchestrator metadata that does not match verified PR base ${PR_BASE_REF}; carrying only base-derived lineage."
+        fi
+        if [ -z "${RB_REISSUE_ORCH_METADATA_LINES}" ]; then
+          RB_REISSUE_ORCH_METADATA_LINES="- Tracking issue: #${RB_REISSUE_BASE_TRACKING_ISSUE}
+- Integration branch: \`${PR_BASE_REF}\`"
+        fi
+      elif [ -n "${RB_REISSUE_PARENT_ORCH_METADATA_LINES}" ]; then
+        echo "::warning::Ignoring parent issue orchestrator metadata because PR base ${PR_BASE_REF:-unknown} does not identify a tracking project."
+      fi
+
+      # The judge body is untrusted prose. Remove only canonical lineage lines
+      # so the validated block below is the sole successor-adoption authority.
+      NEW_ISSUE_BODY="$(printf '%s\n' "${NEW_ISSUE_BODY}" | python3 -c '
+import re
+import sys
+
+canonical_line_patterns = (
+    r"\s*\*\*Orchestrator metadata\*\*(?:\s*\(do not edit\))?\s*",
+    r"\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#\d+\s*",
+    r"\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*[^`\n]+?\s*`?\s*",
+    r"\s*(?:-\s*)?(?:\*\*Local ID:\*\*|Local ID:)\s*`?\s*[^`\n]+?\s*`?\s*",
+    r"\s*(?:-\s*)?(?:\*\*Priority:\*\*|Priority:)\s*\d+\s*",
+    r"\s*(?:-\s*)?(?:\*\*Managed by:\*\*|Managed by:)\s*.+\s*",
+)
+for body_line in sys.stdin.read().splitlines():
+    if not any(re.fullmatch(line_pattern, body_line) for line_pattern in canonical_line_patterns):
+        print(body_line)
+')"
+      FULL_NEW_BODY="${NEW_ISSUE_BODY}"
+      if [ -n "${RB_REISSUE_ORCH_METADATA_LINES}" ]; then
+        FULL_NEW_BODY="${FULL_NEW_BODY}
+
+---
+**Orchestrator metadata** (do not edit)
+${RB_REISSUE_ORCH_METADATA_LINES}"
+        echo "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=${FIRST_ISSUE:-none} lines=$(printf '%s\n' "${RB_REISSUE_ORCH_METADATA_LINES}" | grep -c .)"
+      else
+        echo "REISSUE_ORCHESTRATOR_METADATA_ABSENT parent=${FIRST_ISSUE:-none} pr_base=${PR_BASE_REF:-none}"
+      fi
+      FULL_NEW_BODY="${FULL_NEW_BODY}
 
 ---
 **Review-blocked reissue metadata**

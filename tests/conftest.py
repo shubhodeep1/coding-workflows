@@ -34,6 +34,31 @@ the guarantee suite-wide: the repo-pinning variables are removed from
 resolves its repository from ``cwd`` (or from variables the test sets
 itself). Tests that deliberately exercise ``GIT_DIR`` handling keep working
 because they set the variables inside the test body.
+
+Staged-support ledger isolation
+-------------------------------
+The same implement workflow exports the self-repo staged-support ledger
+paths into ``$GITHUB_ENV`` ("Stage workflow support files"):
+``STAGED_SUPPORT_LEDGER``, ``STAGED_SUPPORT_BASE_DIR``,
+``STAGED_SUPPORT_EDITOR_HEAD_LEDGER`` and ``IMPLEMENT_STAGED_SUPPORT_RUN_DIR``.
+``scripts/implement_staged_support_workspace.sh`` and
+``scripts/implement_commit_changes.sh`` read ``STAGED_SUPPORT_EDITOR_HEAD_LEDGER``
+from the environment before falling back to a path next to the ledger, so a
+test that runs either helper against a scratch runtime directory but builds its
+environment from ``os.environ`` appends its fixture paths to the *workflow's*
+editor-head ledger instead of its own.
+
+That is how implement runs 35614385686, 35628923735, 35642366131 and
+35656715219 (issues #4227 / #4242, project #4139) failed: the editor ran
+``tests/test_implement_post_codex_recovery.py`` to validate its change, the
+round-trip test appended ``scripts/helper.sh`` to
+``/tmp/codex-implement-<run>/staged_support_editor_head.txt``, and the
+workflow's post-editor ``reinstall`` then died with
+``IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh`` after the
+editor had already produced a complete change set. The stall poller retried
+and re-issued the same failing run four times. The variables are stripped
+here for the same reason as the git ones: a helper under test must only see
+the runtime paths the test itself sets.
 """
 
 from __future__ import annotations
@@ -55,17 +80,32 @@ REPO_PINNING_GIT_ENV_VARS = (
 	"GIT_ALTERNATE_OBJECT_DIRECTORIES",
 )
 
+# Self-repo staged-support runtime paths that implement.yml exports into
+# $GITHUB_ENV. The workspace and commit helpers prefer these over their
+# ledger-relative defaults, so an inherited value points a test's helper run
+# at the live workflow's ledger (see the module docstring).
+STAGED_SUPPORT_RUNTIME_ENV_VARS = (
+	"STAGED_SUPPORT_LEDGER",
+	"STAGED_SUPPORT_BASE_DIR",
+	"STAGED_SUPPORT_EDITOR_HEAD_LEDGER",
+	"IMPLEMENT_STAGED_SUPPORT_RUN_DIR",
+)
+
+# Every workflow-runtime variable the session fixture strips.
+WORKFLOW_RUNTIME_ENV_VARS = REPO_PINNING_GIT_ENV_VARS + STAGED_SUPPORT_RUNTIME_ENV_VARS
+
 
 @pytest.fixture(autouse=True, scope="session")
 def _isolate_repo_pinning_git_environment():
-	"""Strip repo-pinning git variables for the whole test session.
+	"""Strip workflow-runtime variables for the whole test session.
 
-	Runs once before the first test and restores the original values after
-	the last one, so a caller that launched pytest with the variables set
-	(the unattended workflows) gets its environment back unchanged.
+	Covers the repo-pinning git variables and the staged-support ledger
+	paths. Runs once before the first test and restores the original values
+	after the last one, so a caller that launched pytest with the variables
+	set (the unattended workflows) gets its environment back unchanged.
 	"""
 	saved_values = {}
-	for variable_name in REPO_PINNING_GIT_ENV_VARS:
+	for variable_name in WORKFLOW_RUNTIME_ENV_VARS:
 		if variable_name in os.environ:
 			saved_values[variable_name] = os.environ.pop(variable_name)
 	try:

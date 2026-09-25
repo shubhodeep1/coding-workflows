@@ -14,11 +14,26 @@
 #   AUTO_RELEASE_SKIPPED reason=up_to_date        branch tip == tag commit
 #   AUTO_RELEASE_SKIPPED reason=branch_not_ahead   branch is behind or diverged
 #                                                 from the tag; fail closed
-#   AUTO_RELEASE_SKIPPED reason=release_in_flight the gate is queued/running
+#   AUTO_RELEASE_SKIPPED reason=release_in_flight the gate (any branch), a
+#                                                 promote-main-to-stable run
+#                                                 or a legacy mark-stable run
+#                                                 is queued/running
 #   AUTO_RELEASE_SKIPPED reason=last_gate_failed  the gate already failed or
-#                                                 was cancelled on this exact
-#                                                 tip; a human must look
+#                                                 timed out on this exact tip
+#                                                 AUTO_RELEASE_STABLE_MAX_ATTEMPTS
+#                                                 times; a human must look (a
+#                                                 cancelled gate is retried and
+#                                                 never counts as an attempt)
 #   AUTO_RELEASE_DISPATCHED sha=<tip>
+#
+# Retry budget: a gate that failed on the current tip is re-dispatched on the
+# next tick until AUTO_RELEASE_STABLE_MAX_ATTEMPTS completed runs on that tip
+# have ended in failure / timed_out / startup_failure. A transient failure (a
+# GitHub-side push rejection, a runner loss after the tests ran) therefore
+# releases on a later tick by itself; a deterministic failure stops costing
+# gate runs after the budget and waits for the branch to move (a workflow-heal
+# hotfix on `stable` is such a move) or for a human re-run. Attempts are
+# counted from the 30 most recent gate runs the workflow-runs read returns.
 #
 # API calls per run (§15): 2 ref reads (+1 to dereference an annotated tag),
 # 1 compare, 3 workflow-runs lists (the release gate, promote-main-to-stable,
@@ -31,6 +46,8 @@
 #   AUTO_RELEASE_STABLE_BRANCH          default stable
 #   AUTO_RELEASE_STABLE_TAG             default stable
 #   AUTO_RELEASE_STABLE_WORKFLOW_FILE   default test-and-mark-stable.yml
+#   AUTO_RELEASE_STABLE_MAX_ATTEMPTS    default 3 (failed gate runs per tip
+#                                       before the tip is held)
 #   GITHUB_OUTPUT                       receives dispatched=/sha=
 
 set -euo pipefail
@@ -43,6 +60,7 @@ AUTO_RELEASE_STABLE_ENABLED="${AUTO_RELEASE_STABLE_ENABLED:-true}"
 AUTO_RELEASE_STABLE_BRANCH="${AUTO_RELEASE_STABLE_BRANCH:-stable}"
 AUTO_RELEASE_STABLE_TAG="${AUTO_RELEASE_STABLE_TAG:-stable}"
 AUTO_RELEASE_STABLE_WORKFLOW_FILE="${AUTO_RELEASE_STABLE_WORKFLOW_FILE:-test-and-mark-stable.yml}"
+AUTO_RELEASE_STABLE_MAX_ATTEMPTS="${AUTO_RELEASE_STABLE_MAX_ATTEMPTS:-3}"
 
 for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 	if [ -z "${!required_env:-}" ]; then
@@ -50,6 +68,10 @@ for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 		exit 1
 	fi
 done
+if ! [[ "${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}" -lt 1 ]; then
+	echo "::error::AUTO_RELEASE_STABLE_MAX_ATTEMPTS must be a positive integer (got '${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}')."
+	exit 1
+fi
 
 emit_output()
 {
@@ -138,12 +160,17 @@ if [[ "${tag_commit}" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${AUTO_RELEASE_STABLE_WORKFLOW_FILE}/runs?per_page=30")"
-active_count="$(printf '%s' "${runs_json}" | jq -r --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select((.head_branch // "") == $branch) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+# Any branch: the gate's e2e-smoke-test job runs under a per-repository
+# cancel-in-progress group, so dispatching a stable gate while the promote
+# cycle's gate_only run on main is active would cancel that run.
+active_count="$(printf '%s' "${runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
 # The gate-runs endpoint above cannot report a promotion that has moved
 # `stable` but has not dispatched its gate yet, so this requires a separate
 # workflow-scoped read.
 promote_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/promote-main-to-stable.yml/runs?per_page=30")"
-promote_active_count="$(printf '%s' "${promote_runs_json}" | jq -r '[.workflow_runs[]? | select(.event == "workflow_dispatch") | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+# Any event: a scheduled cycle tick is about to dispatch (or is waiting on)
+# its own gate run, which the group above would otherwise cancel.
+promote_active_count="$(printf '%s' "${promote_runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
 active_count=$((active_count + promote_active_count))
 # The legacy manual release path (mark-stable.yml) also writes refs/tags/stable.
 legacy_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/mark-stable.yml/runs?per_page=30")"
@@ -155,13 +182,19 @@ fi
 # Restrict to runs on the stable branch: the promote cycle runs the same
 # workflow in gate_only mode on the default branch, and when the two branches
 # share a tip a failed smoke gate there must not read as a failed release.
-last_conclusion_on_tip="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha and .head_branch == $branch)] | sort_by(.created_at) | last | .conclusion // empty')"
-case "${last_conclusion_on_tip}" in
-	failure|cancelled|timed_out|startup_failure)
-		echo "::warning::${AUTO_RELEASE_STABLE_WORKFLOW_FILE} already ended with '${last_conclusion_on_tip}' on ${AUTO_RELEASE_STABLE_BRANCH}@${branch_tip}; not re-dispatching until the branch moves or a human re-runs the gate."
-		skip_release last_gate_failed "sha=${branch_tip} conclusion=${last_conclusion_on_tip}"
-		;;
-esac
+# `cancelled` is deliberately not counted: a cancelled gate proved nothing
+# (concurrency, a runner loss, an operator), so the next tick simply tries
+# again instead of spending an attempt.
+failed_attempts_on_tip="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha and .head_branch == $branch and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure"))] | length')"
+[[ "${failed_attempts_on_tip}" =~ ^[0-9]+$ ]] || failed_attempts_on_tip=0
+if [ "${failed_attempts_on_tip}" -ge "${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}" ]; then
+	last_conclusion_on_tip="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha and .head_branch == $branch and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure"))] | sort_by(.created_at) | last | .conclusion // empty')"
+	echo "::warning::${AUTO_RELEASE_STABLE_WORKFLOW_FILE} already failed ${failed_attempts_on_tip} time(s) on ${AUTO_RELEASE_STABLE_BRANCH}@${branch_tip} (last '${last_conclusion_on_tip}', budget ${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}); not re-dispatching until the branch moves or a human re-runs the gate."
+	skip_release last_gate_failed "sha=${branch_tip} conclusion=${last_conclusion_on_tip} attempts=${failed_attempts_on_tip} max=${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}"
+fi
+if [ "${failed_attempts_on_tip}" -gt 0 ]; then
+	echo "Retrying ${AUTO_RELEASE_STABLE_WORKFLOW_FILE} on ${AUTO_RELEASE_STABLE_BRANCH}@${branch_tip}: ${failed_attempts_on_tip} failed attempt(s) so far, budget ${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}."
+fi
 
 echo "Dispatching ${AUTO_RELEASE_STABLE_WORKFLOW_FILE} on ${AUTO_RELEASE_STABLE_BRANCH} (tip ${branch_tip}, tag at ${tag_commit:-none})."
 gh_retry gh workflow run "${AUTO_RELEASE_STABLE_WORKFLOW_FILE}" \

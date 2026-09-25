@@ -110,12 +110,12 @@ env:
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   REVIEWER_MODELS: |
     minimax/minimax-m3
-    moonshotai/kimi-k3
+    z-ai/glm-5.2
     deepseek/deepseek-v4-pro
-    mistralai/mistral-small-2603
+    google/gemini-3.1-flash-lite
     qwen/qwen3.7-plus
-    x-ai/grok-4.6
-  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
+    x-ai/grok-4.20
+  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
   # Capacity-fallback editor (autofix) model. On the final editor attempt
   # scripts/review_apply_fixes.sh switches --model to this slug, which sits in
   # a different OpenRouter/OpenAI per-model TPM bucket than the primary, so a
@@ -123,9 +123,9 @@ env:
   # out without a model change on the earlier attempts. Set to the primary
   # slug (or clear it) to disable the switch. Inherited by review_apply_fixes.sh
   # via the step environment.
-  MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5' }}
-  # Defaults to xhigh to match the repo-wide gpt-5.6-sol reasoning-level
-  # policy. Override per-repo via vars.THINKING_LEVEL_REVIEWER; the smoke
+  MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.6-sol' }}
+  # Defaults to xhigh. The reviewer slots are non-GPT models, so they are
+  # outside the gpt-6-sol `high` default. Override per-repo via vars.THINKING_LEVEL_REVIEWER; the smoke
   # path forces `low` separately in the "Detect smoke test" step.
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   REVIEWER_VERBOSITY: ${{ vars.VERBOSITY_REVIEWER || 'low' }}
@@ -143,7 +143,7 @@ env:
   REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
   REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}
   REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6' }}
+  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}
   REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
   REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
   REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -160,14 +160,14 @@ env:
   REVIEWER_SLOT_BACKOFF_BUDGET_RATIO: ${{ vars.REVIEWER_SLOT_BACKOFF_BUDGET_RATIO || '0.05' }}
   REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
   REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
-  # Editor (OpenCode apply-fixes loop). Production defaults to xhigh
-  # (repo-wide gpt-5.6-sol policy); smoke runs override to `medium` via the
+  # Editor (OpenCode apply-fixes loop). Production defaults to high
+  # (repo-wide gpt-6-sol policy); smoke runs override to `medium` via the
   # "Detect smoke test PR" step (search "EDITOR_REASONING_EFFORT=medium"
   # below) — that medium override is preserved deliberately because the
   # smoke editor's bait-line task is the only known empty-output failure
   # mode where xhigh has been observed to time out. Each editor attempt passes
   # EDITOR_REASONING_EFFORT as its isolated OpenCode variant.
-  EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
+  EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'high' }}
   # Compatibility setting retained for existing consumers. OpenCode has no
   # model-verbosity equivalent; operational CLI logs remain fixed at INFO.
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'low' }}
@@ -199,14 +199,14 @@ env:
   REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
   AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}
   AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}
-  AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.6-luna' }}
+  AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-6-luna' }}
   AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
   REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
   # pass-2 feeds the editor), all reviewer outputs are fed to one OpenCode
   # call that emits a consolidated ledger. Hard-fails the workflow on repeat
   # failure — job-level "Telegram failure" step surfaces the incident.
-  XPOLL_SUMMARISER_MODEL: ${{ vars.XPOLL_SUMMARISER_MODEL || 'openai/gpt-5.6-luna' }}
+  XPOLL_SUMMARISER_MODEL: ${{ vars.XPOLL_SUMMARISER_MODEL || 'openai/gpt-6-luna' }}
   XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'medium' }}
   XPOLL_SUMMARISER_LINES_PER_REVIEWER: ${{ vars.XPOLL_SUMMARISER_LINES_PER_REVIEWER || '160' }}
   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '2400' }}
@@ -247,11 +247,20 @@ env:
     review_pre_review_merge_topology.sh review_detect_merge_conflicts.sh review_append_iteration_summary.sh
   REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
     render_prompt.py
+  # The workflow-failure-heal reporter pair the failure-path step "Report
+  # autofix failure to workflow failure heal" runs. Optional (never
+  # preflight-checked): the staging backfill copies them from the main
+  # verified workflow checkout when the staging helper does not install them.
+  REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS: >-
+    workflow_failure_heal.py workflow_failure_heal_autofix_report.sh
 
 jobs:
   gate:
     runs-on: ubuntu-latest
     outputs:
+      review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}
+      review_support_ref: ${{ steps.resolve_support.outputs.review_support_ref }}
+      review_support_repo: ${{ steps.resolve_support.outputs.review_support_repo }}
       should_run: ${{ steps.evaluate.outputs.should_run }}
       post_merge_dispatch: ${{ steps.evaluate.outputs.post_merge_dispatch }}
       skip_reason: ${{ steps.evaluate.outputs.skip_reason }}
@@ -264,7 +273,117 @@ jobs:
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
       post_merge_validate_context_definitely_empty: ${{ steps.evaluate.outputs.post_merge_validate_context_definitely_empty }}
+      # Identical-failure fingerprint cap (consumed by fingerprint-cap-block).
+      fingerprint_cap: ${{ steps.evaluate.outputs.fingerprint_cap }}
+      fingerprint_cap_fp: ${{ steps.evaluate.outputs.fingerprint_cap_fp }}
+      fingerprint_cap_reason: ${{ steps.evaluate.outputs.fingerprint_cap_reason }}
+      fingerprint_cap_count: ${{ steps.evaluate.outputs.fingerprint_cap_count }}
+      fingerprint_cap_max: ${{ steps.evaluate.outputs.fingerprint_cap_max }}
+      fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
+      fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
     steps:
+      - name: Resolve trusted review support commit
+        id: resolve_support
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          support_event_sha="$(jq -r '.workflow_sha // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          trusted_main_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@refs/heads/main$'
+          trusted_stable_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@refs/tags/stable$'
+          source_branch_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@refs/heads/[^[:space:]]+$'
+          trusted_consumer_pin='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@[0-9a-f]{40}$'
+          if [ "${support_workflow_repository}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${support_event_sha}" =~ ^[0-9a-f]{40}$ ]] ||
+             { [[ ! "${support_workflow_ref}" =~ ${trusted_main_ref} ]] &&
+               [[ ! "${support_workflow_ref}" =~ ${trusted_stable_ref} ]] &&
+               { [ "${CALLER_REPOSITORY}" != "shubhodeep1/coding-workflows" ] || [[ ! "${support_workflow_ref}" =~ ${source_branch_ref} ]]; } &&
+               { [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] || [[ ! "${support_workflow_ref}" =~ ${trusted_consumer_pin} ]]; }; }; then
+            echo "::error::Review support identity is unapproved (workflow_ref=${support_workflow_ref:-missing})."
+            exit 1
+          fi
+          if [[ "${support_workflow_ref}" =~ ${trusted_consumer_pin} ]]; then
+            support_sha="${support_workflow_ref##*@}"
+            support_ref="${support_sha}"
+          elif [[ "${support_workflow_ref}" =~ ${trusted_stable_ref} ]]; then
+            # No existing gate lookup resolves the release tag. /commits/stable
+            # selects the branch when both a branch and tag have that name.
+            support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+            support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+            support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
+              support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+              support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            fi
+            if [ "${support_tag_type}" != "commit" ]; then
+              echo "::error::Review support stable tag did not resolve to a commit."
+              exit 1
+            fi
+            support_ref="refs/tags/stable"
+          else
+            # The job workflow SHA follows a same-repo PR head. Read protected main independently.
+            # Gate PR metadata lookups do not include source-repository branch protection or SHA.
+            support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
+            support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
+            if ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
+              echo "::error::Review support main branch is not confirmed protected."
+              exit 1
+            fi
+            support_ref="refs/heads/main"
+          fi
+          if [[ ! "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Review support ref did not resolve to an immutable commit SHA."
+            exit 1
+          fi
+          echo "review_support_sha=${support_sha}" >> "$GITHUB_OUTPUT"
+          echo "review_support_ref=${support_ref}" >> "$GITHUB_OUTPUT"
+          echo "review_support_repo=${support_workflow_repository}" >> "$GITHUB_OUTPUT"
+
+      # The identical-failure fingerprint cap in "Evaluate review gate" runs
+      # scripts/workflow_failure_heal.py. Only that file is checked out
+      # (sparse, depth 1), from the same protected commit as codex-agent;
+      # the gate fails open without the
+      # autofix-identical-failure-count subcommand.
+      - name: Checkout fingerprint cap helper
+        id: checkout_fingerprint_cap
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ steps.resolve_support.outputs.review_support_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          sparse-checkout: scripts/workflow_failure_heal.py
+          sparse-checkout-cone-mode: false
+
+      - name: Verify fingerprint cap support identity
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        env:
+          WORKFLOW_REPOSITORY: ${{ steps.resolve_support.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ steps.resolve_support.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.checkout_fingerprint_cap.outcome }}" != "success" ]; then
+            echo "::warning::Optional fingerprint cap helper checkout failed; continuing without it."
+            exit 0
+          fi
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
+            echo "::error::Unverified fingerprint cap support checkout."
+            exit 1
+          fi
+          echo "FINGERPRINT_CAP_SUPPORT_VERIFIED=true" >> "$GITHUB_ENV"
+
       - name: Evaluate review gate
         id: evaluate
         env:
@@ -295,6 +414,8 @@ jobs:
           #     CHANGELOG*, docs/**.
           #   * OR total additions ≤ AUTOFIX_SKIP_MAX_ADDITIONS (default 10)
           #     AND total deletions ≤ AUTOFIX_SKIP_MAX_DELETIONS (default 10).
+          # Both branches require a complete /files list with no protected
+          # instruction, automation, or root configuration paths.
           # Override per PR: title contains [force-review] OR PR has the
           # `force-review` label — skip is bypassed and full review runs.
           # When the gate fires, the sibling `deterministic-skip-merge` job
@@ -319,6 +440,12 @@ jobs:
           # No-PR claude-branch-review path inputs (push-without-PR caller).
           FORCE_CLAUDE_BRANCH_REVIEW: ${{ inputs.force_claude_branch_review }}
           HEAD_REF_OVERRIDE: ${{ inputs.head_ref_override }}
+          # Identical-failure fingerprint cap (see the block below the
+          # terminal same-head skip). Default on, three identical failures on
+          # one head; set REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false to stop
+          # evaluating the cap (failure comments keep their marker).
+          REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}
+          REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
         run: |
           set -euo pipefail
 
@@ -336,6 +463,7 @@ jobs:
           pr_labels=""
           pr_additions=""
           pr_deletions=""
+          pr_changed_files=""
           pr_mergeable=""
           pr_mergeable_state=""
           pr_head_sha_gate=""
@@ -363,12 +491,10 @@ jobs:
             # labels (force-review override check below), per-PR
             # additions/deletions totals (deterministic-skip size check), and
             # mergeable/mergeable_state (deterministic-skip conflict
-            # suppression below). The /pulls/{n} endpoint already exposes all
-            # of these; using them avoids a paginated /files call on the
-            # small-diff branch and adds no new API call for the conflict
-            # check.
+            # suppression below), and changed_files (to verify the paginated
+            # path list before either skip branch can run).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
@@ -377,6 +503,7 @@ jobs:
               pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
               pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
               pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
+              pr_changed_files="$(printf '%s' "${_pr_gate}" | jq -r '.changed_files | if type == "number" and . == floor then tostring else "" end' 2>/dev/null || echo "")"
               pr_mergeable="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable // ""' 2>/dev/null || echo "")"
               pr_mergeable_state="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable_state // ""' 2>/dev/null || echo "")"
               if [ -z "$(printf '%s' "${pr_title_cached}" | tr -d '[:space:]')" ]; then
@@ -533,6 +660,51 @@ jobs:
             fi
           fi
 
+          # ----- PR comments shared by the terminal same-head skip and the
+          # identical-failure fingerprint cap (CLAUDE.md §15) -----
+          # Both checks authenticate workflow-owned PR-comment markers against
+          # the login GH_PAT posts as, and both read the PR's issue comments.
+          # gate_fetch_marker_comments issues the `gh api user` lookup and the
+          # paginated comments call at most once per gate evaluation, on first
+          # use, so enabling both checks still costs one comments call. The
+          # file keeps only the comments either parser reads: the
+          # REVIEW_AUTOFIX_PARTIAL_V1 markers (verbatim), and the failure /
+          # cap markers, failure comment texts and editor summaries the cap
+          # scan reads (other bodies clipped to their first and last 2000
+          # characters; both markers sit at the ends of their comments).
+          # gate_marker_fetch_state: pending | ok | marker_author_unavailable
+          # | api_error.
+          gate_marker_fetch_state="pending"
+          gate_marker_author_login=""
+          gate_marker_comments_file="${RUNNER_TEMP:-/tmp}/review_gate_marker_comments.json"
+          gate_fetch_marker_comments()
+          {
+            if [ "${gate_marker_fetch_state}" != "pending" ]; then
+              return 0
+            fi
+            # The existing PR and comments calls do not expose the identity
+            # authenticated by GH_PAT, so this lookup cannot be merged into
+            # either response. Resolve it once for this gate evaluation.
+            if ! gate_marker_author_login="$(gh api user --jq '.login // ""' 2>/dev/null)"; then
+              gate_marker_author_login=""
+            fi
+            if [ -z "${gate_marker_author_login}" ]; then
+              gate_marker_fetch_state="marker_author_unavailable"
+              return 0
+            fi
+            # $b is a jq variable, not a shell expansion.
+            # shellcheck disable=SC2016
+            if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -f per_page=100 \
+              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious"))) | {id: .id, author_login: (.user.login // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
+              2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
+              && [ -s "${gate_marker_comments_file}" ]; then
+              gate_marker_fetch_state="ok"
+            else
+              gate_marker_fetch_state="api_error"
+            fi
+          }
+
           # ----- Terminal same-head skip (workflow_dispatch only) -----
           # The partial-finalize path caps same-head resume rounds at
           # REVIEW_MAX_RESUME_ROUNDS and marks the cycle terminal
@@ -568,8 +740,8 @@ jobs:
           # Cost (CLAUDE.md §15): head_sha rides on the existing /pulls fetch
           # above. The authenticated marker author cannot be derived from that
           # response or the comments response, so eligible dispatches issue one
-          # GET /user plus one paginated GET /issues/{n}/comments. Both calls
-          # are skipped unless every earlier gate passed and the PR is mergeable.
+          # GET /user plus one paginated GET /issues/{n}/comments, shared with
+          # the fingerprint cap below through gate_fetch_marker_comments.
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
             && [ "${AUTOFIX_SKIP_TERMINAL_SAME_HEAD:-true}" != "false" ] \
@@ -589,24 +761,19 @@ jobs:
             elif [ -z "${pr_head_sha_gate}" ]; then
               echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED pr=${PR_NUMBER} head_sha=unknown reason=head_sha_unavailable"
             else
-              terminal_marker_author_login=""
-              # The existing PR and comments calls do not expose the identity
-              # authenticated by GH_PAT, so this lookup cannot be merged into
-              # either response. Resolve it once for this gate evaluation.
-              if ! terminal_marker_author_login="$(gh api user --jq '.login // ""' 2>/dev/null)"; then
-                terminal_marker_author_login=""
-              fi
+              gate_fetch_marker_comments
+              terminal_marker_author_login="${gate_marker_author_login}"
               if [ -z "${terminal_marker_author_login}" ]; then
                 echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=marker_author_unavailable"
               else
-                # Keep only marker comments (id, author, created_at, body) so
-                # the parser below can authenticate the workflow-owned state.
+                # Keep only the partial-finalize marker comments (id, author,
+                # created_at, body) so the parser below can authenticate the
+                # workflow-owned state.
                 partial_marker_comments_json=""
-                if ! partial_marker_comments_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-                  -f per_page=100 \
-                  --jq '[.[] | select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) | {id: .id, author_login: (.user.login // ""), created_at: (.created_at // ""), body: (.body // "")}]' \
-                  2>/dev/null | jq -c -s 'add // []' 2>/dev/null)"; then
-                  partial_marker_comments_json=""
+                if [ "${gate_marker_fetch_state}" = "ok" ]; then
+                  if ! partial_marker_comments_json="$(jq -c '[.[] | select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->"))]' "${gate_marker_comments_file}" 2>/dev/null)"; then
+                    partial_marker_comments_json=""
+                  fi
                 fi
                 if [ -z "${partial_marker_comments_json}" ]; then
                   echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error"
@@ -720,6 +887,97 @@ jobs:
             fi
           fi
 
+          # ----- Identical-failure fingerprint cap -----
+          # Every failure comment the codex-agent job posts ends with a
+          # `<!-- review-autofix-failure:v1 head=<sha> reason=<r> fp=<sha256>
+          # degraded=<0|1> run=<id> -->` marker (fp = the failure reason plus
+          # the normalised error signature of the failing stage's stderr).
+          # When the trailing markers for the current head written by the
+          # GH_PAT identity share one fingerprint REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL
+          # (default 3) times, the failure is deterministic: another run on
+          # this head spends reviewer and editor models to fail the same way
+          # (PR #4259: seven identical editor failures on one head, about 75
+          # minutes each). Stop here instead and hand the PR to the sibling
+          # fingerprint-cap-block job, which labels the linked issues (or the
+          # PR) ai:review-blocked, posts one cap comment and reports the
+          # failure to workflow failure heal. A push (new head) resets the
+          # count by construction.
+          #
+          # Scope and fail-open rules:
+          #   * Every event (pull_request and workflow_dispatch) of a PR with
+          #     a known head SHA, once every earlier gate passed.
+          #   * force_rb_judge dispatches (stall poller) bypass the cap: the
+          #     review-blocked judge is the cap's intended consumer.
+          #   * A missing helper, a comments / identity lookup failure, or a
+          #     parse failure logs AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED and
+          #     keeps the normal gate result.
+          #   * vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false disables it.
+          # Cost (CLAUDE.md §15): the comments are the ones
+          # gate_fetch_marker_comments already fetched for the terminal
+          # same-head skip, or one GET /user plus one paginated GET
+          # /issues/{n}/comments when that skip did not run.
+          FINGERPRINT_CAP="false"
+          FINGERPRINT_CAP_FP=""
+          FINGERPRINT_CAP_REASON=""
+          FINGERPRINT_CAP_COUNT="0"
+          FINGERPRINT_CAP_ALREADY_APPLIED="false"
+          FINGERPRINT_CAP_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3}"
+          case "${FINGERPRINT_CAP_MAX}" in
+            ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
+          esac
+          if [ "${SHOULD_RUN}" = "true" ] \
+            && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \
+            && [ "${FINGERPRINT_CAP_SUPPORT_VERIFIED:-false}" = "true" ] \
+            && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            fingerprint_cap_helper=""
+            for fingerprint_cap_candidate in .codex-workflow-src/scripts/workflow_failure_heal.py; do
+              if [ -f "${fingerprint_cap_candidate}" ] && grep -q 'autofix-identical-failure-count' "${fingerprint_cap_candidate}"; then
+                fingerprint_cap_helper="${fingerprint_cap_candidate}"
+                break
+              fi
+            done
+            if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then
+              echo "AUTOFIX_FINGERPRINT cap=bypassed pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} reason=force_rb_judge"
+            elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=unknown reason=head_sha_unavailable"
+            elif [ -z "${fingerprint_cap_helper}" ]; then
+              echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=helper_missing"
+            else
+              gate_fetch_marker_comments
+              if [ "${gate_marker_fetch_state}" != "ok" ]; then
+                echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=${gate_marker_fetch_state}"
+              else
+                fingerprint_cap_decision=""
+                if ! fingerprint_cap_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
+                  --comments-json "${gate_marker_comments_file}" \
+                  --head-sha "${pr_head_sha_gate}" \
+                  --author-login "${gate_marker_author_login}" 2>/dev/null)"; then
+                  fingerprint_cap_decision=""
+                fi
+                fingerprint_cap_count="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
+                if ! [[ "${fingerprint_cap_count}" =~ ^[0-9]+$ ]]; then
+                  echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=parse_error"
+                else
+                  FINGERPRINT_CAP_COUNT="${fingerprint_cap_count}"
+                  FINGERPRINT_CAP_FP="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "fp" { print $2 }' | tail -n 1)"
+                  FINGERPRINT_CAP_REASON="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
+                  if [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "cap_applied" { print $2 }' | tail -n 1)" = "true" ]; then
+                    FINGERPRINT_CAP_ALREADY_APPLIED="true"
+                    echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
+                  fi
+                  if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ]; then
+                    FINGERPRINT_CAP="true"
+                    SHOULD_RUN="false"
+                    SKIP_REASON="fingerprint_cap"
+                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}"
+                  else
+                    echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX}"
+                  fi
+                fi
+              fi
+            fi
+          fi
+
           # Deterministic pre-review skip (last gate check):
           # If all earlier gates have passed (SHOULD_RUN still true) and the
           # PR qualifies as doc-only or under the size threshold, flip
@@ -757,33 +1015,43 @@ jobs:
                 SMALL_DIFF="true"
               fi
 
-              # Doc-only check: only reach for the paginated /files API if
-              # (a) the operator hasn't disabled the doc-only branch AND
-              # (b) the cheap size check did not already qualify the PR.
-              # /files is the only call where filenames are available;
-              # /pulls/{n} does not include them.
+              # Even a size-qualified PR needs path evidence: a two-line
+              # instruction change must never bypass review. Fetch once for
+              # both branches and reuse the same list for materiality.
               DOC_ONLY="false"
               file_count=""
               pr_files_json=""
-              if [ "${SMALL_DIFF}" != "true" ] && [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
+              FILES_SKIP_SUPPRESSED="false"
+              PROTECTED_SKIP_SUPPRESSED="false"
+              if [ "${SMALL_DIFF}" = "true" ] || [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
                 # `gh api --paginate --jq '[…]'` emits one JSON array per
                 # page. Without `jq -s 'add // []'` the concatenated output
-                # is not a single valid JSON document and downstream jq
-                # silently falls back to 0/empty — which on a >1-page PR
-                # would erroneously evaluate as doc-only. Slurp + add
-                # merges all pages into one array. JSON parse failure
-                # treats the lookup as unavailable (fail-open below).
-                pr_files_json=""
-                if ! pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+                # is not one document. pipefail propagates fetch failures;
+                # the length check rejects partial pagination results.
+                if ! pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename, previous_filename: .previous_filename, status: .status}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
                   pr_files_json=""
                 fi
-
-                if [ -n "${pr_files_json}" ] && [ "${pr_files_json}" != "[]" ]; then
-                  file_count="$(printf '%s' "${pr_files_json}" | jq 'length' 2>/dev/null || echo 0)"
-                  if [ "${file_count}" != "0" ]; then
+                # Missing, malformed, partial, or capped API evidence never
+                # authorizes a skip. Validate rename sources and destinations.
+                if [[ "${pr_changed_files}" =~ ^[1-9][0-9]*$ ]] \
+                  && [ -n "${pr_files_json}" ] \
+                  && printf '%s' "${pr_files_json}" | jq -e --argjson expected "${pr_changed_files}" '
+                    def valid_path:
+                      type == "string" and length > 0 and
+                      (startswith("/") | not) and (contains("\\") | not) and
+                      (test("[[:cntrl:]]") | not) and
+                      (split("/") | all(. != "" and . != "." and . != ".."));
+                    type == "array" and length > 0 and length < 3000 and
+                    length == $expected and length == ([.[].filename] | unique | length) and
+                    all(.[]; type == "object" and (.filename | valid_path) and
+                      (.previous_filename == null or (.previous_filename | valid_path)) and
+                      (.status | type == "string" and length > 0) and
+                      (.status != "renamed" or (.previous_filename | valid_path)))
+                  ' >/dev/null 2>&1; then
+                  file_count="${pr_changed_files}"
+                  if [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
                     DOC_ONLY="true"
                     while IFS= read -r fname; do
-                      [ -n "${fname}" ] || continue
                       base="${fname##*/}"
                       lc_fname="${fname,,}"
                       lc_base="${base,,}"
@@ -804,8 +1072,29 @@ jobs:
                       break
                     done < <(printf '%s' "${pr_files_json}" | jq -r '.[].filename' 2>/dev/null || true)
                   fi
+                  while IFS= read -r fname; do
+                    lc_fname="${fname,,}"
+                    lc_base="${lc_fname##*/}"
+                    case "${lc_base}" in
+                      agents.md|claude.md|unattended_system_instructions.md)
+                        PROTECTED_SKIP_SUPPRESSED="true" ;;
+                    esac
+                    case "${lc_fname}" in
+                      .github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*|validation/*|ai-memory/*|db/contracts/*)
+                        PROTECTED_SKIP_SUPPRESSED="true" ;;
+                    esac
+                    # Root build, dependency and lint configuration already
+                    # recognized by the materiality classifier.
+                    if [ "${lc_fname}" = "${lc_base}" ]; then
+                      case "${lc_base}" in
+                        package.json|pyproject.toml|cargo.toml|go.mod|go.work|makefile|.editorconfig|turbo.json|pytest.ini|tox.ini|noxfile.py|*.config.js|*.config.cjs|*.config.mjs|*.config.ts|package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|cargo.lock|poetry.lock|uv.lock|go.sum|pipfile|pipfile.lock|requirements*.txt|constraints*.txt|.eslintrc*|eslint.config.*|.prettierrc*|.stylelintrc*|stylelint.config.*|ruff.toml|.ruff.toml|.flake8|pylintrc|biome.json|biome.jsonc)
+                          PROTECTED_SKIP_SUPPRESSED="true" ;;
+                      esac
+                    fi
+                  done < <(printf '%s' "${pr_files_json}" | jq -r '.[] | .filename, (.previous_filename // empty)' 2>/dev/null)
                 else
-                  echo "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE pr=${PR_NUMBER} — /files fetch failed or empty, doc-only check inconclusive."
+                  FILES_SKIP_SUPPRESSED="true"
+                  echo "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE pr=${PR_NUMBER} — /files missing, invalid, truncated, or inconsistent with changed_files; running review."
                 fi
               fi
 
@@ -819,6 +1108,10 @@ jobs:
                 candidate_skip_reason="small_diff"
               fi
 
+              if [ "${candidate_skip}" = "true" ] && [ "${PROTECTED_SKIP_SUPPRESSED}" = "true" ]; then
+                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=protected_path pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
+              fi
+
               MATERIALITY_SKIP_SUPPRESSED="false"
               case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
                 1|true|yes|on)
@@ -830,15 +1123,7 @@ jobs:
                   # visible here and fails open for helper-only signals such as
                   # repo-verified new top-level directories.
                   if [ "${candidate_skip}" = "true" ]; then
-                    if [ -z "${pr_files_json}" ] || [ "${pr_files_json}" = "[]" ]; then
-                      if pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
-                        file_count="$(printf '%s' "${pr_files_json}" | jq 'length' 2>/dev/null || echo "${file_count:-0}")"
-                      else
-                        pr_files_json=""
-                      fi
-                    fi
-
-                    if [ -n "${pr_files_json}" ] && [ "${pr_files_json}" != "[]" ]; then
+                    if [ "${FILES_SKIP_SUPPRESSED}" != "true" ]; then
                       # Mirror the helper's visible path rules here so the gate
                       # only suppresses deterministic skip when the helper would
                       # later classify the diff medium/high from PR file paths
@@ -1051,14 +1336,16 @@ jobs:
               fi
 
               if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
-                && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ]; then
+                && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${FILES_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ]; then
                 DETERMINISTIC_SKIP="true"
                 DET_SKIP_REASON="${candidate_skip_reason}"
                 SHOULD_RUN="false"
                 SKIP_REASON="deterministic_skip_${candidate_skip_reason}"
               fi
 
-              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-skipped} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED}"
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-unavailable} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED} files_suppressed=${FILES_SKIP_SUPPRESSED} protected_suppressed=${PROTECTED_SKIP_SUPPRESSED}"
             fi
           fi
 
@@ -1094,6 +1381,13 @@ jobs:
           printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
           echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap=${FINGERPRINT_CAP}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_fp=${FINGERPRINT_CAP_FP}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_reason=${FINGERPRINT_CAP_REASON}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_count=${FINGERPRINT_CAP_COUNT}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_max=${FINGERPRINT_CAP_MAX}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -1108,19 +1402,33 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
-      WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
       POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}
       POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}
     steps:
       - name: Checkout workflow support source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ env.WORKFLOW_SUPPORT_REF }}
+          ref: ${{ needs.gate.outputs.review_support_sha }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+
+      - name: Verify workflow support source
+        env:
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
+            echo "::error::Unverified workflow support checkout."
+            exit 1
+          fi
+          echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
       - name: Dispatch standalone validate for orchestrator short-circuit issues
         run: |
@@ -1257,17 +1565,31 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
-      WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
     steps:
       - name: Checkout workflow support source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ env.WORKFLOW_SUPPORT_REF }}
+          ref: ${{ needs.gate.outputs.review_support_sha }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+
+      - name: Verify workflow support source
+        env:
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
+            echo "::error::Unverified workflow support checkout."
+            exit 1
+          fi
+          echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
       - name: Force orchestrate poll after merged PR handling
         env:
@@ -1504,6 +1826,256 @@ jobs:
           # 4) Workflow run summary
           write_deterministic_skip_summary
 
+  fingerprint-cap-block:
+    # Outcome of the gate's identical-failure fingerprint cap: the same
+    # failure repeated REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL times on one
+    # head, so the gate stopped this run before codex-agent. Label the linked
+    # issues ai:review-blocked (the stall poller then dispatches the
+    # review-blocked judge) or, with no linked issue, the PR itself; post one
+    # cap comment; and report the failure to workflow failure heal. Later
+    # dispatches on the same head see the cap marker in the gate's comment
+    # scan, log AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED, and skip this job.
+    # API cost (CLAUDE.md §15): one fresh paginated comments GET after the
+    # concurrency lock, one GET /pulls/{n} (linked issues and the reporter's
+    # PR payload), then the label and comment writes.
+    needs: gate
+    runs-on: ubuntu-latest
+    concurrency:
+      group: fingerprint-cap-${{ github.repository }}-${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    if: ${{ needs.gate.outputs.fingerprint_cap == 'true' && needs.gate.outputs.fingerprint_cap_already_applied != 'true' }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      FINGERPRINT_CAP_FP: ${{ needs.gate.outputs.fingerprint_cap_fp }}
+      FINGERPRINT_CAP_REASON: ${{ needs.gate.outputs.fingerprint_cap_reason }}
+      FINGERPRINT_CAP_COUNT: ${{ needs.gate.outputs.fingerprint_cap_count }}
+      FINGERPRINT_CAP_MAX: ${{ needs.gate.outputs.fingerprint_cap_max }}
+      FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
+      FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+      REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Checkout workflow support source
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ needs.gate.outputs.review_support_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/gh_helpers.sh
+            scripts/label_helpers.sh
+            scripts/tg_helpers.sh
+            scripts/workflow_failure_heal.py
+            scripts/workflow_failure_heal_autofix_report.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Verify workflow support source
+        env:
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
+            echo "::error::Unverified workflow support checkout."
+            exit 1
+          fi
+          echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
+
+      - name: Apply identical-failure cap outcome
+        run: |
+          set -uo pipefail
+
+          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Skipping fingerprint-cap-block: invalid PR number '${PR_NUMBER}'."
+            exit 0
+          fi
+          if [ "${FINGERPRINT_CAP_ALREADY_APPLIED}" = "true" ]; then
+            echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
+            exit 0
+          fi
+
+          # Only the verified workflow checkout may supply executable support.
+          support_file()
+          {
+            local name="$1"
+            if [ -f ".codex-workflow-src/scripts/${name}" ]; then
+              printf '%s' ".codex-workflow-src/scripts/${name}"
+            fi
+          }
+          helper="$(support_file gh_helpers.sh)"
+          # shellcheck disable=SC1090
+          [ -n "${helper}" ] && source "${helper}" 2>/dev/null
+          helper="$(support_file label_helpers.sh)"
+          # shellcheck disable=SC1090
+          [ -n "${helper}" ] && source "${helper}" 2>/dev/null
+          helper="$(support_file tg_helpers.sh)"
+          # shellcheck disable=SC1090
+          [ -n "${helper}" ] && source "${helper}" 2>/dev/null
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          if ! type ensure_label_exists >/dev/null 2>&1; then
+            ensure_label_exists() {
+              gh_retry gh label create "$1" --repo "$2" \
+                --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
+                >/dev/null 2>&1 || true
+            }
+          fi
+          if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
+            set_issue_phase_label_resilient() {
+              ensure_label_exists "$2" "$3" || true
+              gh_retry gh api -X POST "repos/$3/issues/$1/labels" -f "labels[]=$2" >/dev/null 2>&1 \
+                || echo "::warning::Fallback label add failed for #$1."
+            }
+          fi
+
+          work_dir="${RUNNER_TEMP:-/tmp}/fingerprint_cap"
+          mkdir -p "${work_dir}"
+          # The gate snapshot can predate another queued cap job. The
+          # per-PR concurrency lock above serializes writers; re-read comments
+          # after acquiring it so only the first job applies side effects.
+          # The PR read below cannot provide comments or their author (§15).
+          fresh_cap_comments_file="${work_dir}/fresh_comments.json"
+          if [ -z "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" ] \
+            || ! gh_retry gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
+              --jq '[.[] | {author_login: (.user.login // ""), body: (.body // "")}]' \
+              | jq -c -s 'add // []' > "${fresh_cap_comments_file}"; then
+            echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=fresh_cap_marker_lookup_failed"
+            exit 0
+          fi
+          if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" \
+            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")))' \
+            "${fresh_cap_comments_file}" >/dev/null; then
+            echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
+            exit 0
+          fi
+          pr_json="${work_dir}/pr_payload.json"
+          if ! gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "${pr_json}" 2>/dev/null; then
+            echo "::warning::Could not fetch PR #${PR_NUMBER}; labeling the PR itself ai:review-blocked without linked-issue resolution."
+            printf '{}' > "${pr_json}"
+          fi
+          pr_state="$(jq -r '.state // ""' "${pr_json}" 2>/dev/null || echo "")"
+          current_head="$(jq -r '.head.sha // ""' "${pr_json}" 2>/dev/null || echo "")"
+          if [ "${pr_state}" = "closed" ]; then
+            echo "AUTOFIX_FINGERPRINT cap=skipped pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=pr_closed"
+            exit 0
+          fi
+          if [ -n "${current_head}" ] && [ "${current_head}" != "${PR_HEAD_SHA}" ]; then
+            # A push landed after the gate: the new head has no identical
+            # failures yet and gets its own run.
+            echo "AUTOFIX_FINGERPRINT cap=skipped pr=${PR_NUMBER} head=${PR_HEAD_SHA} current_head=${current_head} reason=head_moved"
+            exit 0
+          fi
+
+          # Linked issues: strict current-repo closing-keyword refs and
+          # repo-scoped issue URLs in the PR title/body (the same fallback the
+          # workflow-failure review-blocked step uses).
+          issue_numbers=""
+          pr_text="$(jq -r '[.title // "", .body // ""] | join(" ")' "${pr_json}" 2>/dev/null || echo "")"
+          if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
+            issue_numbers="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${pr_text}" || true)"
+          else
+            echo "::warning::extract_repo_scoped_issue_refs_from_text unavailable; labeling the PR itself."
+          fi
+
+          ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
+          labeled_summary=""
+          if [ -n "${issue_numbers}" ]; then
+            while IFS= read -r issue_number; do
+              [ -n "${issue_number}" ] || continue
+              echo "Setting ai:review-blocked on issue #${issue_number} (identical-failure cap)"
+              set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
+              labeled_summary="${labeled_summary:+${labeled_summary}, }#${issue_number}"
+            done <<< "${issue_numbers}"
+            labeled_summary="linked issue(s) ${labeled_summary}"
+          else
+            if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null 2>&1; then
+              echo "::warning::Failed to add ai:review-blocked to PR #${PR_NUMBER}."
+            fi
+            labeled_summary="this pull request (no linked issue found)"
+          fi
+
+          cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} -->"
+          BODY="$(cat <<EOF
+          **AI review/autofix stopped: identical failure repeated**
+
+          The last ${FINGERPRINT_CAP_COUNT} review/autofix runs on head \`${PR_HEAD_SHA:0:12}\` failed the same way (failure reason \`${FINGERPRINT_CAP_REASON}\`, fingerprint \`${FINGERPRINT_CAP_FP:0:16}\`). Another run on this head would fail again, so this run stopped in the gate before any reviewer or editor model call.
+
+          - Labeled \`ai:review-blocked\`: ${labeled_summary}.
+          - This failure is also sent to workflow failure heal (run log line \`WORKFLOW_HEAL_AUTOFIX_REPORT\`).
+          - A push to this branch (a new head) resets the count.
+          - Operators: set the repository variable \`REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false\` to disable the cap, or raise \`REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL\` (currently ${FINGERPRINT_CAP_MAX}).
+
+          [View workflow run](${REPORT_RUN_URL})
+
+          ${cap_marker}
+          EOF
+          )"
+          if ! gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1; then
+            echo "::warning::Failed to post the identical-failure cap comment on PR #${PR_NUMBER}."
+          fi
+          echo "AUTOFIX_FINGERPRINT cap=applied pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT} labeled=$(printf '%s' "${labeled_summary}" | tr -c 'A-Za-z0-9#,_.-' '_')"
+
+          if type tg_send_msg >/dev/null 2>&1; then
+            MSG="⚠️ Review/autofix stopped: identical failure repeated ${FINGERPRINT_CAP_COUNT}x on #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="Reason: ${FINGERPRINT_CAP_REASON} — labeled ai:review-blocked (${labeled_summary})"
+            MSG+=$'\n'
+            MSG+="PR: ${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/pull/${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="Run: ${REPORT_RUN_URL}"
+            tg_send_msg "${MSG}" "WARNING" >/dev/null || true
+          fi
+
+          # Heal report: the cap is the streak, so the reporter sends it on
+          # the first call. The evidence is the gate's marker data, written to
+          # a *log*.txt file because the reporter tails those from RUNTIME_DIR.
+          # The comments fetched above carry the failed runs' markers; with the
+          # marker author the reporter lists those runs in run_refs, so the
+          # intake reads their logs instead of this run's (which has no failed
+          # job). No extra API call (§15).
+          reporter="$(support_file workflow_failure_heal_autofix_report.sh)"
+          heal_py="$(support_file workflow_failure_heal.py)"
+          if [ -z "${reporter}" ] || [ -z "${heal_py}" ]; then
+            echo "WORKFLOW_HEAL_AUTOFIX_REPORT skip reason=reporter_missing path=${reporter:-workflow_failure_heal_autofix_report.sh}"
+          else
+            {
+              echo "identical_failure_cap: ${FINGERPRINT_CAP_COUNT} identical review/autofix failures on head ${PR_HEAD_SHA} (max ${FINGERPRINT_CAP_MAX})"
+              echo "repeated failure_reason=${FINGERPRINT_CAP_REASON}"
+              echo "failure_fingerprint=${FINGERPRINT_CAP_FP}"
+            } > "${work_dir}/fingerprint_cap_log.txt"
+            AUTOFIX_FAILURE_REASON="identical_failure_cap" \
+              AUTOFIX_FAILURE_FP="${FINGERPRINT_CAP_FP}" \
+              WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK="1" \
+              WORKFLOW_HEAL_PY="${heal_py}" \
+              RUNTIME_DIR="${work_dir}" \
+              PR_PAYLOAD_FILE="${pr_json}" \
+              PR_ISSUE_COMMENTS_FILE="${fresh_cap_comments_file}" \
+              AUTOFIX_FAILURE_MARKER_AUTHOR="${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" \
+              REPORT_WRAPPER_SHA="${WORKFLOW_SUPPORT_REF}" \
+              REPORT_SUMMARY_LINE_FILE="${work_dir}/no_summary_line.txt" \
+              bash "${reporter}" || true
+          fi
+
+          {
+            echo "## Identical-failure cap tripped"
+            echo ""
+            echo "- **PR:** #${PR_NUMBER} at \`${PR_HEAD_SHA}\`"
+            echo "- **Identical failures:** ${FINGERPRINT_CAP_COUNT} (max ${FINGERPRINT_CAP_MAX}), reason \`${FINGERPRINT_CAP_REASON}\`"
+            echo "- **Labeled ai:review-blocked:** ${labeled_summary}"
+            echo "- **Reviewer panel + editor cycle:** SKIPPED"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   codex-agent:
     needs: gate
     # Display name surfaces the gate's no-PR claude_branch_review decision in
@@ -1568,14 +2140,18 @@ jobs:
         IFS= read -r token < "${REVIEW_GIT_CREDENTIAL_DIR}/token" || [ -n "$token" ] || exit 1;
         [ -n "$token" ] && printf 'username=x-access-token\npassword=%s\n' "$token"; }; f
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      # Head the gate evaluated; the review-autofix-failure:v1 marker on every
+      # failure comment records it so the gate's identical-failure cap can
+      # match markers to the current head.
+      AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
       WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
       # Review-pipeline knobs: mirror the landed script defaults so repo-var
       # overrides are honored without changing current branch behaviour.
       REVIEW_FLOOR_RULES_ENABLED: ${{ vars.REVIEW_FLOOR_RULES_ENABLED || '1' }}
       REVIEW_FLOOR_KEYWORDS_FILE: ${{ vars.REVIEW_FLOOR_KEYWORDS_FILE || '' }}
       REVIEW_CONSOLIDATOR_ENABLED: ${{ vars.REVIEW_CONSOLIDATOR_ENABLED || '1' }}
-      REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-5.6-sol' }}
-      REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'xhigh' }}
+      REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-6-sol' }}
+      REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'high' }}
       REVIEW_CONSOLIDATOR_TIMEOUT_SECS: ${{ vars.REVIEW_CONSOLIDATOR_TIMEOUT_SECS || '300' }}
       REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}
       REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}
@@ -1593,7 +2169,7 @@ jobs:
       REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
       REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}
       REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6' }}
+      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}
       REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
       REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
       REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -1621,7 +2197,7 @@ jobs:
       SLOP_SCAN_ENABLED: ${{ vars.SLOP_SCAN_ENABLED || 'true' }}
       AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}
       AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}
-      AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.6-luna' }}
+      AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-6-luna' }}
       AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
       REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}
       JUDGE_INTERIM_ENABLED: ${{ vars.JUDGE_INTERIM_ENABLED || 'false' }}
@@ -1629,7 +2205,7 @@ jobs:
       JUDGE_INTERIM_TIMEOUT_S: ${{ vars.JUDGE_INTERIM_TIMEOUT_S || '120' }}
       BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED: ${{ vars.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED || 'false' }}
       BEHAVIOURAL_SMOKE_LANG: ${{ vars.BEHAVIOURAL_SMOKE_LANG || '' }}
-      BEHAVIOURAL_SMOKE_MODEL: ${{ vars.BEHAVIOURAL_SMOKE_MODEL || 'openai/gpt-5.6-luna' }}
+      BEHAVIOURAL_SMOKE_MODEL: ${{ vars.BEHAVIOURAL_SMOKE_MODEL || 'openai/gpt-6-luna' }}
       BEHAVIOURAL_SMOKE_TIMEOUT_S: ${{ vars.BEHAVIOURAL_SMOKE_TIMEOUT_S || '120' }}
       VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
@@ -1729,18 +2305,22 @@ jobs:
         run: df -h /
 
       - name: Resolve workflow support ref
+        env:
+          WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}
         run: |
           set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
-          else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]]; then
+            echo "::error::Untrusted or unavailable review workflow identity."
+            exit 1
           fi
+          echo "SCRIPT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
       - name: Checkout workflow support source
         id: checkout_support_source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -1750,47 +2330,21 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-          persist-credentials: false
-
       - name: Ensure workflow support source checkout
         run: |
           set -euo pipefail
-          if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+          if [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the verified workflow identity."
             exit 1
           fi
-
-      - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src-main
-          fetch-depth: 1
-          persist-credentials: false
 
       - name: Stage workflow support files
         id: stage_workflow_support
         run: |
           set -euo pipefail
           helper=".codex-workflow-src/scripts/stage_workflow_support.sh"
-          if [ ! -f "${helper}" ] && [ -f ".codex-workflow-src-main/scripts/stage_workflow_support.sh" ]; then
-            helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"
-          fi
           if [ ! -f "${helper}" ]; then
-            echo "::error::stage_workflow_support.sh not found in checked-out support sources (${SCRIPT_REF} and optional main snapshot) in shubhodeep1/coding-workflows."
+            echo "::error::stage_workflow_support.sh not found in verified workflow support commit ${SCRIPT_REF}."
             exit 1
           fi
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
@@ -1804,9 +2358,8 @@ jobs:
           SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
           echo "PYTHONPATH=${SUPPORT_SCRIPTS_DIR}" >> "$GITHUB_ENV"
 
-          # The branch-pinned staging helper can predate these artifacts. Keep
-          # every metadata producer, validator, and commit producer on one
-          # complete snapshot even while reviewing an in-flight stale branch.
+          # Keep every metadata producer, validator, and commit producer on
+          # the independently verified workflow-commit snapshot.
           security_sensitive_support_files=(
             verify_integration_fingerprints.py
             review_collect_pr_metadata.sh
@@ -1821,13 +2374,7 @@ jobs:
             trusted_git_write.sh
             untrusted_process_sandbox.sh
           )
-          security_sensitive_support_root=".codex-workflow-src-main"
-          for security_sensitive_support_file in "${security_sensitive_support_files[@]}"; do
-            if [ ! -f "${security_sensitive_support_root}/scripts/${security_sensitive_support_file}" ]; then
-              security_sensitive_support_root=".codex-workflow-src"
-              break
-            fi
-          done
+          security_sensitive_support_root=".codex-workflow-src"
           for security_sensitive_support_file in "${security_sensitive_support_files[@]}"; do
             security_sensitive_support_src="${security_sensitive_support_root}/scripts/${security_sensitive_support_file}"
             if [ ! -f "${security_sensitive_support_src}" ]; then
@@ -1854,61 +2401,80 @@ jobs:
 
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
             backfill_src=".codex-workflow-src/scripts/transcript_archive.sh"
-            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/transcript_archive.sh" ]; then
-              backfill_src=".codex-workflow-src-main/scripts/transcript_archive.sh"
-            fi
             if [ -f "${backfill_src}" ]; then
               install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh"
-              echo "::notice::Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+              echo "::notice::Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
             else
-              echo "::warning::Optional transcript archive helper transcript_archive.sh was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; transcript archiving remains disabled for this run."
+              echo "::warning::Optional transcript archive helper transcript_archive.sh was not staged and could not be backfilled from the verified workflow support checkout; transcript archiving remains disabled for this run."
             fi
           fi
 
           # Backfill the preflight-checked SUPPORT_SCRIPTS_DIR subset that the
-          # branch-pinned staging helper did not stage. review_autofix.yml runs
-          # @main, but stage_workflow_support.sh is sourced from the PR branch
-          # checkout (SCRIPT_REF). When the PR branch predates a commit that
-          # introduced a new preflight-checked script (e.g. assemble_prompt.sh,
-          # added in #3501), the stale helper never iterates that name, so it is
-          # never copied — and the helper's own main-snapshot fallback is skipped
-          # for the same reason. The shared REVIEW_PREFLIGHT_*_SUPPORT_SCRIPTS env
+          # verified staging helper did not stage. The workflow-defined
+          # preflight lists are authoritative for this subset. The shared REVIEW_PREFLIGHT_*_SUPPORT_SCRIPTS env
           # vars are the single source of truth for this checked subset.
           for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do
             if [ -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               continue
             fi
             backfill_src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              backfill_src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ -f "${backfill_src}" ]; then
               install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
-              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
             else
-              echo "::warning::Preflight support script ${f} was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; the later preflight step will report whether this is a hard or soft miss."
+              echo "::warning::Preflight support script ${f} was not staged and could not be backfilled from the verified workflow support checkout; the later preflight step will report whether this is a hard or soft miss."
             fi
           done
 
+          # Backfill the workflow-failure-heal reporter pair the same way. The
+          # pair rides the OPTIONAL_BOOTSTRAP_SCRIPTS loop; a miss only
+          # disables the report for this run.
+          for f in ${REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS}; do
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
+              continue
+            fi
+            backfill_src=".codex-workflow-src/scripts/${f}"
+            if [ -f "${backfill_src}" ]; then
+              install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+            else
+              echo "::warning::Workflow-failure-heal reporter script ${f} was not staged and could not be backfilled from the verified workflow support checkout; the Report autofix failure to workflow failure heal step will skip with reason=reporter_missing for this run."
+            fi
+          done
+
+          # Catalog and reviewer helpers share the gate-verified support commit; no
+          # cross-ref row merge is required. Preserve the stable log key.
+          echo "MODEL_CATALOG_BACKFILL added=0 source=workflow_commit"
+
+          # Identical-failure fingerprint cap: the failure-comment steps and
+          # "Assemble failure evidence" stamp each failure comment with a
+          # review-autofix-failure:v1 marker computed by
+          # workflow_failure_heal.py autofix-failure-fingerprint. A branch
+          # from the trusted workflow commit provides the subcommand. Point
+          # AUTOFIX_FAILURE_HEAL_PY at that copy. Empty → those steps post their
+          # comments without a marker (fail open).
+          AUTOFIX_FAILURE_HEAL_PY=""
+          for failure_heal_py_candidate in "${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal.py"; do
+            if [ -f "${failure_heal_py_candidate}" ] && grep -q 'autofix-failure-fingerprint' "${failure_heal_py_candidate}"; then
+              AUTOFIX_FAILURE_HEAL_PY="${failure_heal_py_candidate}"
+              break
+            fi
+          done
+          echo "AUTOFIX_FAILURE_HEAL_PY=${AUTOFIX_FAILURE_HEAL_PY}" >> "$GITHUB_ENV"
+
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then
             src=".codex-workflow-src/prompts/_nag_reminders.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/_nag_reminders.txt" ]; then
-              src=".codex-workflow-src-main/prompts/_nag_reminders.txt"
-            fi
             if [ -f "${src}" ]; then
               install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
-              echo "::notice::Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+              echo "::notice::Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
             else
-              echo "::warning::_nag_reminders.txt was not staged and could not be backfilled from .codex-workflow-src/prompts or .codex-workflow-src-main/prompts; nag reminders will fail open for this run."
+              echo "::warning::_nag_reminders.txt was not staged and could not be backfilled from the verified workflow support checkout; nag reminders will fail open for this run."
               rm -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
             fi
           fi
 
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
             src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
-              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
-            fi
             if [ -f "${src}" ]; then
               install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
             else
@@ -2242,8 +2808,6 @@ jobs:
           wrapper_script=""
           if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh" ]; then
             wrapper_script="${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"
-          elif [ -f scripts/build_semble_wrapper.sh ]; then
-            wrapper_script="scripts/build_semble_wrapper.sh"
           fi
           if [ -n "${wrapper_script}" ]; then
             # The wrapper is documented "always exit 0" (every failure path
@@ -2345,6 +2909,9 @@ jobs:
             exit 1
           fi
           echo "linked_issue_metadata_sha256=${linked_issue_metadata_sha256}" >> "$GITHUB_OUTPUT"
+          # Keep the stage's stderr for the failure fingerprint ("Assemble
+          # failure evidence"); it still reaches the step log through tee.
+          bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh" 2> >(tee -a "${RUNTIME_DIR}/collect_metadata_stderr.txt" >&2)
 
       - name: Retrieve reviewer memory context (fail-open)
         run: |
@@ -2681,15 +3248,49 @@ jobs:
           PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
           PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
 
+          # PR_TITLE is retained deliberately. Free-text fixture-tag
+          # matching on the PR title/body was removed (see below), so
+          # nothing in this step reads it any more, but it is an existing
+          # identifier and CLAUDE.md §6 forbids removing one without the
+          # ask flow. PR_BODY is still used by the linked-issue lookup.
+
           IS_SMOKE=false
 
-          # Direct match on PR title/body
-          if echo "${PR_TITLE}" | grep -qi '\[E2E Smoke Test\]' \
-             || echo "${PR_BODY}" | grep -qi '\[E2E Smoke Test\]'; then
+          # Primary signal: the `e2e-smoke-test` label.
+          #
+          # This replaces a free-text scan of the PR title and body for a
+          # `[E2E <variant>]` fixture tag. That scan misclassified any real
+          # PR that merely *discussed* the fixture tags -- documentation
+          # changes, and changes to this detection logic itself. The
+          # consequences were not cosmetic: a misclassified PR had its
+          # reviewer/editor reasoning pinned, its review alerts silenced,
+          # and IS_SMOKE_TEST exported, which makes
+          # scripts/review_apply_fixes.sh append a "must call apply_patch
+          # on tests/e2e_smoke_canary.txt" directive to the editor prompt
+          # -- i.e. it could push the autofix editor to touch the canary
+          # file on an unrelated PR.
+          #
+          # The label is a reliable primary because implement.yml applies
+          # it atomically at `gh pr create` (see its "Atomically apply
+          # force-review + e2e-smoke-test labels at PR creation time"
+          # comment), specifically so it is already in the
+          # `pull_request: opened` payload this gate snapshots -- a label
+          # added post-creation cannot rewind the gate decision. Confirmed
+          # on release run 35672590166: PR #4252 (from the
+          # `[E2E Smoke Test]` canary fixture) and PR #4253 (from the
+          # `[E2E Smoke Test alt-model]` fixture) both carried
+          # `force-review` + `e2e-smoke-test`.
+          if jq -e '[.labels[]?.name] | index("e2e-smoke-test") != null' "${PR_PAYLOAD_FILE}" >/dev/null 2>&1; then
             IS_SMOKE=true
           fi
 
-          # Check linked issue title. Only honour GitHub's closing-keyword
+          # Fallback: the linked issue's title. Kept as a second signal so
+          # a smoke PR whose label somehow did not land is still detected,
+          # and safe to keep because it is anchored and resolves a real
+          # issue rather than scanning prose -- a documentation PR's linked
+          # issue title does not begin with the fixture tag.
+          #
+          # Only honour GitHub's closing-keyword
           # pattern (Closes/Fixes/Resolves + #N or issue URL, case-insensitive)
           # to avoid false-matching loose "issue #N" mentions inside log
           # citations or backticked fragments quoted in the PR body — which
@@ -2704,7 +3305,11 @@ jobs:
             ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' || true)
             if [ -n "${ISSUE_NUM:-}" ]; then
               ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
-              if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+              # Anchored, matching the `^\[E2E ` convention used by
+              # clarify.yml, plan.yml and implement.yml: real AI issue
+              # titles never begin with the fixture tag, so this cannot
+              # fire on a production issue that merely quotes one.
+              if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
                 IS_SMOKE=true
               fi
             fi
@@ -3271,9 +3876,7 @@ jobs:
 
           slop_scan_script=""
           for candidate in \
-            "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py" \
-            "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/slop_scan_local.py" \
-            "${GITHUB_WORKSPACE}/scripts/slop_scan_local.py"
+            "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py"
           do
             if [ -f "${candidate}" ]; then
               slop_scan_script="${candidate}"
@@ -3408,6 +4011,15 @@ jobs:
 
       - name: "Preflight: Verify required files before reviewer invocation"
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        # The editor preflight below runs review_apply_fixes.sh --preflight
+        # with the editor step's explicit env entries, so it sees what the
+        # editor will see ("Apply fixes with editor model").
+        env:
+          BASH_ENV: ""
+          ENV: ""
+          REPOSITORY: ${{ github.repository }}
+          TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
+          REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
 
@@ -3562,6 +4174,35 @@ jobs:
           fi
           echo "Preflight check PASSED: all required files present."
 
+          # Editor preflight: run the staged editor script's precondition
+          # guards now, so a deterministic editor failure (PR #4259: a
+          # `: "${VAR:?…}"` guard) fails here in seconds instead of after the
+          # reviewers. Skipped when the editor is not scheduled for this run,
+          # and fail-open for a staged copy that predates --preflight. On
+          # failure the run takes the ordinary failure path with
+          # EDITOR_PREFLIGHT_FAILED=true (failure_reason editor_preflight_failed).
+          # Kill switch: REVIEW_EDITOR_PREFLIGHT_ENABLED=false.
+          case "$(printf '%s' "${REVIEW_EDITOR_PREFLIGHT_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+            0|false|no|off)
+              echo "REVIEW_EDITOR_PREFLIGHT skip reason=disabled script_ref=${SCRIPT_REF:-unknown}"
+              ;;
+            *)
+              if [ "${CLAUDE_BRANCH_REVIEW_MODE:-false}" = "true" ] || [ "${AUTOFIX_RESUME_TERMINAL:-false}" = "true" ]; then
+                echo "REVIEW_EDITOR_PREFLIGHT skip reason=editor_not_scheduled script_ref=${SCRIPT_REF:-unknown}"
+              elif ! grep -q '^# supports: --preflight' "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" 2>/dev/null; then
+                echo "REVIEW_EDITOR_PREFLIGHT skip reason=unsupported script_ref=${SCRIPT_REF:-unknown}"
+              else
+                editor_preflight_rc=0
+                bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" --preflight 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2) || editor_preflight_rc=$?
+                if [ "${editor_preflight_rc}" -ne 0 ]; then
+                  echo "EDITOR_PREFLIGHT_FAILED=true" >> "$GITHUB_ENV"
+                  echo "::error::REVIEW_EDITOR_PREFLIGHT result=fail rc=${editor_preflight_rc} script_ref=${SCRIPT_REF:-unknown}"
+                  exit 1
+                fi
+              fi
+              ;;
+          esac
+
       - name: Show disk usage (pre LLM call)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: df -h /
@@ -3613,7 +4254,13 @@ jobs:
           AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
           LOCAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
         run: |
-          bash "${SUPPORT_SCRIPTS_DIR}/review_pre_review_merge_topology.sh"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_merge_topology_gate.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_merge_topology_gate.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_merge_topology_gate.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Pre-review deterministic merge-topology gate'."
+            exit 1
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
       - name: Run reviewer models
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         id: reviewers
@@ -4074,7 +4721,9 @@ jobs:
             echo "Pre-editor snapshot captured: $(wc -l < "${PRE_EDITOR_STATE_FILE}") entries"
           fi
 
-          bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"
+          # Keep the editor's stderr for the failure fingerprint ("Assemble
+          # failure evidence"); it still reaches the step log through tee.
+          bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)
 
           # Bounded in-step retry for first-iteration empty-output failures.
           #
@@ -4156,7 +4805,7 @@ jobs:
             if [ "${_prior_autofix_count}" = "0" ]; then
               echo "::warning::Editor produced no summary on first iteration — retrying once after ${_instep_retry_sleep}s before falling through to noop-comment path."
               sleep "${_instep_retry_sleep}"
-              bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" || {
+              bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2) || {
                 echo "::warning::Editor in-step retry also failed; downstream noop-comment path will fire."
               }
             fi
@@ -4374,6 +5023,7 @@ jobs:
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -4393,14 +5043,56 @@ jobs:
           if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
             echo "::warning::Editor produced no summary and no committed changes — treating as retryable no-op."
             RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            # A failed reviewer step skips the editor, so its empty output is
+            # only the symptom (PR #4323: every reviewer slot and the
+            # summariser exited 226 and the run was reported as
+            # editor_empty_noop). Name the earliest failing phase and keep the
+            # slot / summariser exit codes as evidence; the retry handling
+            # below is unchanged.
+            autofix_empty_failure_reason="editor_empty_noop"
+            noop_explanation="The editor stage completed without a structured summary and without committing any file changes. This typically indicates a transient agent crash, timeout, or empty prompt rather than a reviewable defect in the PR."
+            if [ "${REVIEWERS_STEP_OUTCOME:-}" = "failure" ]; then
+              autofix_empty_failure_reason="reviewers_failed"
+              noop_explanation="The reviewer stage failed, so the editor never ran and no file changes were committed. The reviewer and summariser exit codes are in the workflow run log."
+              echo "AUTOFIX_REVIEWERS_FAILED=true" >> "$GITHUB_ENV"
+              if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+                reviewers_failure_log_args=()
+                for reviewers_failure_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log; do
+                  [ -f "${reviewers_failure_log}" ] && reviewers_failure_log_args+=(--log-file "${reviewers_failure_log}")
+                done
+                PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" reviewer-failure-evidence "${reviewers_failure_log_args[@]}" \
+                  > "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || : > "${RUNTIME_DIR}/reviewers_failure_evidence.txt"
+                echo "AUTOFIX_REVIEWERS_FAILED reason=reviewers_failed $(grep -m1 '^dominant_rc=' "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || echo dominant_rc=unknown)"
+              fi
+            fi
+            # review-autofix-failure:v1 marker for the gate's identical-failure
+            # fingerprint cap. Same evidence files and reason precedence as
+            # "Assemble failure evidence", so every failure comment of one run
+            # carries one fingerprint. Empty when the helper is unavailable.
+            AUTOFIX_FAILURE_MARKER_SUFFIX=""
+            if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+              autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+                --failure-reason "${autofix_empty_failure_reason}" \
+                --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+                --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+                --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+              if [ -n "${autofix_failure_marker_line}" ]; then
+                AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
+              fi
+            fi
             NOOP_BODY="$(cat <<EOF
           **AI review/autofix produced no output — will retry**
 
-          The editor stage completed without a structured summary and without committing any file changes. This typically indicates a transient agent crash, timeout, or empty prompt rather than a reviewable defect in the PR. No \`ai:review-blocked\` label is being applied for this run.
+          ${noop_explanation} No \`ai:review-blocked\` label is being applied for this run.
 
           [View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
           EOF
           )"
+            NOOP_BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${NOOP_BODY}" >/dev/null 2>&1 || true
             echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"
             exit 1
@@ -4503,201 +5195,13 @@ jobs:
         # (bitsafe.io PR #177 / run 25653654000).
         if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         run: |
-          set -euo pipefail
-
-          EDITOR_CHANGES_LOST="false"
-
-          if [ -s "${EDITOR_SUMMARY_FILE:-}" ]; then
-            # Prefer the authoritative "Change status:" section emitted by
-            # the editor prompt (see scripts/review_apply_fixes.sh editor
-            # response format). The section contains exactly one bullet
-            # with value "edited" or "not-edited" (or "not edited",
-            # normalized to "not-edited"). Capture both the
-            # below-header bullet form and any inline value on the header
-            # line ("Change status: edited") to be robust to minor
-            # formatting drift.
-            change_status_section="$(awk '
-              /^[[:space:]]*Change status:/ {
-                header=$0
-                sub(/^[[:space:]]*Change status:[[:space:]]*/, "", header)
-                if (header != "") print header
-                in_section=1
-                next
-              }
-              in_section && /^[[:space:]]*[A-Za-z].*:/ { exit }
-              in_section { print }
-            ' "${EDITOR_SUMMARY_FILE}")"
-            change_status="$(printf '%s\n' "${change_status_section}" | grep -iE '^[[:space:]]*-?[[:space:]]*(edited|not-edited|not[[:space:]]+edited)[[:space:]]*$' | head -1 | sed -E 's/^[[:space:]]*-?[[:space:]]*//; s/[[:space:]]*$//; s/^not[[:space:]]+edited$/not-edited/I' | tr '[:upper:]' '[:lower:]' || true)"
-
-            # Extract the "Changes made:" section, stopping at the next
-            # top-level section header (line starting with a non-dash
-            # alphabetic word followed by a colon). Used both for the
-            # heuristic fallback below and for the error-context printout
-            # when the authoritative signal reports "edited".
-            changes_section="$(awk '
-              /^[[:space:]]*Changes made:/ { in_section=1; next }
-              in_section && /^[[:space:]]*[A-Za-z].*:/ { exit }
-              in_section { print }
-            ' "${EDITOR_SUMMARY_FILE}")"
-
-            edit_claim_regex='\b(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b'
-            strong_edit_claim_regex='\b(modif(y|ied|ies|ying)|change(d|s|ing)?|updat(e|ed|es|ing)|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b'
-            no_change_phrase_regex='no ((repository|repo|code|file)[[:space:]]+)?(file[[:space:]]+)?(changes?|modifications?|edits?)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)|no[[:space:]]+(repository[[:space:]]+)?files[[:space:]]+(were[[:space:]]+)?modified|no[[:space:]]+changes[[:space:]]+(were[[:space:]]+)?made|no[[:space:]]+modifications|no[[:space:]]+(repository[[:space:]]+)?files[[:space:]]+(are|is)[[:space:]]+modified|no[[:space:]]+(repository[[:space:]]+)?files[[:space:]]+(were[[:space:]]+)?changed|no[[:space:]]+changes\b'
-            no_change_declaration_regex="^[[:space:]]*(-[[:space:]]*)?([^;:,]*[;:,-][[:space:]]*)?(${no_change_phrase_regex})([[:space:]]*[[:punct:]]*)?"
-
-            has_real_changes="false"
-            if [ "${change_status}" = "edited" ] || [ "${change_status}" = "not-edited" ]; then
-              # Authoritative path: trust the editor's self-reported status.
-              # The free-text heuristic below is only consulted when the
-              # "Change status:" line is missing or not one of the two
-              # known values (older cached summaries or malformed output).
-              if [ "${change_status}" = "edited" ]; then
-                has_real_changes="true"
-              elif [ -n "${changes_section}" ] && \
-                printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' | grep -viE "^[[:space:]]*-[[:space:]]*(${no_change_phrase_regex})([[:space:][:punct:]]*)$" | grep -qiE "${edit_claim_regex}"; then
-                echo "::warning::Editor reported Change status: not-edited but Changes made contains edit-like claims; trusting Change status."
-              fi
-            elif [ -n "${changes_section}" ]; then
-              # Fallback heuristic: used only when the authoritative
-              # "Change status:" signal is missing/malformed.
-              # If the first non-blank line is a "- none" variant or an
-              # explicit "no (repository) files were modified / no changes
-              # made / no modifications" declaration (with any trailing
-              # description), treat the entire section as "no changes".
-              # Editors may append informational bullets (validation runs,
-              # missing-context notes, action summaries with file mentions)
-              # below such declarations that are not real file-change claims;
-              # without this guard those bullets trigger a false-positive
-              # EDITOR_CHANGES_LOST error because edit_claim_regex loosely
-              # matches generic edit-like substrings (for example `change`)
-              # in informational text.
-              first_line="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | head -1 || true)"
-              # Strip lines that are blank, match "- none*", are indented
-              # nested sub-bullets (continuations of validation/assumption
-              # headers), or are informational metadata bullets
-              # (e.g. "- Validation executed").
-              substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' || true)"
-              # Stricter bullet-start edit regex for multi-line contradiction checks.
-              bullet_edit_regex='^[[:space:]]*-[[:space:]]*(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))([[:space:][:punct:]]|$)'
-              if printf '%s\n' "${first_line}" | grep -qiE "^[[:space:]]*-[[:space:]]*(${no_change_phrase_regex})([[:space:][:punct:]].*)?$"; then
-                # Explicit "no files modified / no changes made / no
-                # modifications" first-bullet is a deliberate declaration
-                # from the editor. Trust it and short-circuit to "no real
-                # changes" — the remainder check below is intentionally
-                # conservative and can match generic edit-like words in
-                # purely informational bullets, and
-                # would fire a false-positive EDITOR_CHANGES_LOST error.
-                # Same-line contradictions ("no files modified but updated
-                # X") and multi-line explicit edit bullets are still caught.
-                first_line_suffix="$(printf '%s\n' "${first_line}" | sed -E "s/^[[:space:]]*-[[:space:]]*(${no_change_phrase_regex})[[:space:][:punct:]]*//I")"
-                if printf '%s\n' "${first_line_suffix}" | grep -qiE "${edit_claim_regex}"; then
-                  has_real_changes="true"
-                elif [ -n "${substantive}" ]; then
-                  if printf '%s\n' "${substantive}" | grep -qiE "(${no_change_phrase_regex}).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
-                    has_real_changes="true"
-                  else
-                    # Multi-line contradiction detection: check remaining
-                    # bullets for explicit edit verbs at bullet start.
-                    remainder="$(printf '%s\n' "${substantive}" | grep -viE "${no_change_declaration_regex}" || true)"
-                    if printf '%s\n' "${remainder}" | grep -qiE "${bullet_edit_regex}"; then
-                      has_real_changes="true"
-                    fi
-                  fi
-                fi
-              elif printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)'; then
-                # Preserve contradictory summaries such as "- none" followed
-                # by "- created ...".
-                if [ -n "${substantive}" ]; then
-                  if printf '%s\n' "${substantive}" | grep -qiE "((${strong_edit_claim_regex}).*(${no_change_phrase_regex})|(${no_change_phrase_regex}).*(${strong_edit_claim_regex}))"; then
-                    has_real_changes="true"
-                  elif printf '%s\n' "${substantive}" | grep -qiE "(${no_change_phrase_regex}).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
-                    has_real_changes="true"
-                  else
-                    remainder="$(printf '%s\n' "${substantive}" | grep -viE "${no_change_declaration_regex}" || true)"
-                    if printf '%s\n' "${remainder}" | grep -qiE "${edit_claim_regex}"; then
-                      has_real_changes="true"
-                    fi
-                  fi
-                fi
-              else
-                # Strip lines that are blank, match "- none*", are indented
-                # nested sub-bullets (continuations of validation/assumption
-                # headers), or are informational metadata
-                # (e.g. "- Validation executed: ...") that the editor may
-                # emit when no files changed. Keep explicit "no changes"
-                # lines for contradiction detection.
-                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' || true)"
-                if [ -n "${substantive}" ]; then
-                  if printf '%s\n' "${substantive}" | grep -qiE "((${strong_edit_claim_regex}).*(${no_change_phrase_regex})|(${no_change_phrase_regex}).*(${strong_edit_claim_regex}))"; then
-                    has_real_changes="true"
-                  elif printf '%s\n' "${substantive}" | grep -qiE "${no_change_phrase_regex}"; then
-                    # Preserve contradictory mixed lines ("no changes, but
-                    # updated ...") so they still count as real change claims.
-                    if printf '%s\n' "${substantive}" | grep -qiE "(${no_change_phrase_regex}).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
-                      has_real_changes="true"
-                    else
-                      # Remove standalone no-modification declarations, but
-                      # still detect mixed sections that claim concrete edits.
-                      remainder="$(printf '%s\n' "${substantive}" | grep -viE "${no_change_declaration_regex}" || true)"
-                      if printf '%s\n' "${remainder}" | grep -qiE "${edit_claim_regex}"; then
-                        has_real_changes="true"
-                      fi
-                    fi
-                  else
-                    if printf '%s\n' "${substantive}" | grep -qiE "${edit_claim_regex}"; then
-                      has_real_changes="true"
-                    fi
-                  fi
-                fi
-                # Echo retained substantive content whenever this fallback
-                # branch sees non-empty filtered lines. This makes future
-                # false-positive investigations tractable — reviewers can see
-                # exactly which bullets were considered.
-                if [ -n "${substantive}" ]; then
-                  echo "Substantive bullets retained by detector regex:"
-                  printf '%s\n' "${substantive}" | head -20
-                fi
-              fi
-            fi
-
-            if [ "${has_real_changes}" = "true" ]; then
-              # Defense-in-depth: before firing the warning and blocking
-              # auto-merge, re-check the working-tree state and the
-              # narrative "Changes made:" block via the shared shim. If
-              # both indicate no real edits, downgrade to an
-              # informational log line and do not block auto-merge.
-              # Keeps the hard failure only when there is real evidence
-              # of lost edits. See: fun-token-multi-chain PR #117.
-              #
-              # The script is bootstrapped to ${SUPPORT_SCRIPTS_DIR} by the
-              # bootstrap step (REQUIRED_BOOTSTRAP_SCRIPTS).  Reading from
-              # ${GITHUB_WORKSPACE}/scripts/ would silently skip the recheck
-              # in every consumer repo (only the workflow-source repo
-              # vendors this path), which is how the bitsafe.io PR #177 /
-              # run 25653654000 false positive escaped this safety net.
-              recheck_script="${SUPPORT_SCRIPTS_DIR}/detect_editor_changes_lost.sh"
-              if [ -x "${recheck_script}" ]; then
-                recheck_result="$(bash "${recheck_script}" "${EDITOR_SUMMARY_FILE}" 2>/dev/null || echo "true")"
-                if [ "${recheck_result}" = "false" ]; then
-                  echo "Notice: Change status: reported edited but working tree is clean and narrative claims no concrete changes; treating as false positive (no warning, auto-merge not blocked)."
-                  has_real_changes="false"
-                fi
-              fi
-            fi
-
-            if [ "${has_real_changes}" = "true" ]; then
-              if [ "${CAN_PUSH:-}" = "true" ]; then
-                echo "::error::Editor claimed changes but no commit was produced. This indicates a mismatch between the editor summary and final git state (changes may have failed to persist, or may have been discarded during commit validation)."
-              else
-                echo "::error::Editor claimed changes but no commit was produced. Push is disabled (CAN_PUSH=${CAN_PUSH:-false}), so this does not necessarily indicate a tool persistence failure."
-              fi
-              echo "Editor-claimed changes:"
-              printf '%s\n' "${changes_section}" | head -20
-              EDITOR_CHANGES_LOST="true"
-            fi
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_editor_uncommitted_changes.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_uncommitted_changes.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_editor_uncommitted_changes.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect editor-claimed-but-uncommitted changes'."
+            exit 1
           fi
-
-          echo "EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST}" >> "$GITHUB_ENV"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Validate editor no-op disposition
         # When the editor claims no changes are needed (did_commit=false,
@@ -4880,11 +5384,25 @@ jobs:
         # which in turn fires the (futile) Codex resolver and produces a
         # `FAILED_STEPS=1` cascade that the e2e poller treats as the proximate
         # failure (analysis: e2e-smoke-failure-25126757724.md §B/D).
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        #
+        # A terminal same-head resume (AUTOFIX_RESUME_TERMINAL=true) does NOT
+        # skip this step or the resolver steps below. The gate job keeps a
+        # conflicted PR on codex-agent precisely so this step can run on the
+        # same head; skipping it here left PR #4332 dirty while the poller's
+        # conflict sweep re-dispatched a no-op run every tick. The editor and
+        # "Commit changes" still skip on terminal resume, so the only commit a
+        # terminal run can push is a resolved merge.
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          bash "${SUPPORT_SCRIPTS_DIR}/review_detect_merge_conflicts.sh"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_detect_merge_conflicts.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_detect_merge_conflicts.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_detect_merge_conflicts.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect merge conflicts'."
+            exit 1
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
       - name: Prepare merge-conflict resolver prompt and pre-snapshot
         # Split from "Run Codex resolver, validate, stage, commit" below so
         # that neither run: block exceeds GitHub Actions' 21,000-char
@@ -4906,7 +5424,7 @@ jobs:
         # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
         # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
         # come from the detect step above.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
@@ -4956,7 +5474,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
         timeout-minutes: 170
         env:
           BASH_ENV: ""
@@ -5008,6 +5526,7 @@ jobs:
             echo "::error::Refusing merge resolution: generated-advisory scope validator changed after staging."
             exit 1
           fi
+          echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"
           if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
             source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             ensure_label_exists "ai:resolver-escalated" "${{ github.repository }}" || true
@@ -5074,20 +5593,13 @@ jobs:
           _primary_state="$(_probe_resolver "${RESOLVER_SCRIPT}")"
           if [ "${_primary_state}" != "ok" ]; then
             _fb1="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_conflict_resolve.sh"
-            _fb2="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/review_conflict_resolve.sh"
             _fb1_state="$(_probe_resolver "${_fb1}")"
             if [ "${_fb1_state}" = "ok" ]; then
               echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state} (likely unresolved conflict markers from the merge replay); falling back to ${_fb1} (SCRIPT_REF=${SCRIPT_REF:-unknown})."
               RESOLVER_SCRIPT="${_fb1}"
             else
-              _fb2_state="$(_probe_resolver "${_fb2}")"
-              if [ "${_fb2_state}" = "ok" ]; then
-                echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}; falling back to ${_fb2}."
-                RESOLVER_SCRIPT="${_fb2}"
-              else
-                echo "::error::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}; ${_fb2}=${_fb2_state}. No clean resolver entry-point available."
-                exit 2
-              fi
+              echo "::error::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}. No clean trusted resolver entry-point available."
+              exit 2
             fi
           fi
           bash "${RESOLVER_SCRIPT}"
@@ -5140,7 +5652,7 @@ jobs:
           fi
 
       - name: Telegram conflict resolution message
-        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -5368,7 +5880,7 @@ jobs:
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           JUDGE_FIX_COUNT: ${{ steps.retrigger_guard.outputs.judge_fix_count }}
-          JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE || 'xhigh' }}
+          JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE || 'high' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
@@ -5425,10 +5937,6 @@ jobs:
             if [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/label_helpers.sh" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               install -m 0755 "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/label_helpers.sh" "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
-            elif [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/label_helpers.sh" ]; then
-              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              install -m 0755 "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/label_helpers.sh" "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
               source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             else
               type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
@@ -5618,7 +6126,9 @@ jobs:
         # are pushed together AFTER labeling and auto-merge are configured.
         # This avoids a concurrency self-cancel race where the synchronize
         # event from an earlier push would kill subsequent steps.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        # On a terminal same-head resume only a resolved merge is pushed (see
+        # "Detect merge conflicts"); autofix commits never exist on that path.
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && (env.AUTOFIX_RESUME_TERMINAL != 'true' || env.CONFLICT_RESOLVED == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
@@ -5902,412 +6412,13 @@ jobs:
           WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-
-          current_head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
-          if [ -z "${current_head_sha}" ]; then
-            echo "::warning::Unable to resolve git HEAD for partial finalize marker; restoring same-head resume may fail open on the next run."
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_partial_finalize.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_partial_finalize.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::warning::review_autofix_step_partial_finalize.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Post partial finalize comment and persist runtime marker' (fail open)."
+            exit 0
           fi
-
-          previous_resume_round="${AUTOFIX_RESUME_ROUND:-0}"
-          if ! [[ "${previous_resume_round}" =~ ^[0-9]+$ ]]; then
-            previous_resume_round=0
-          fi
-          previous_progress_fingerprint="${AUTOFIX_RESUME_PROGRESS_FINGERPRINT:-}"
-          previous_resume_head_sha="${AUTOFIX_RESUME_HEAD_SHA:-}"
-          if [ -n "${current_head_sha}" ] && [ -n "${previous_resume_head_sha}" ] && [ "${previous_resume_head_sha}" != "${current_head_sha}" ]; then
-            previous_resume_round=0
-            previous_progress_fingerprint=""
-          fi
-
-          resume_round="$((previous_resume_round + 1))"
-          resume_round_limit="${AUTOFIX_RESUME_ROUND_LIMIT:-${REVIEW_MAX_RESUME_ROUNDS:-3}}"
-          if ! [[ "${resume_round_limit}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::warning::Invalid REVIEW_MAX_RESUME_ROUNDS='${resume_round_limit}'; falling back to 3."
-            resume_round_limit=3
-          fi
-
-          completed_scope_items=()
-          incomplete_scope_items=()
-          if [ "${AUTOFIX_PARTIAL_FINALIZE_PHASE:-}" = "reviewers" ]; then
-            if compgen -G "${PREVIOUS_REVIEWS_DIR}/status_pass1_*.txt" >/dev/null; then
-              completed_scope_items+=(reviewers_pass1)
-              if [ -s "${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt" ]; then
-                completed_scope_items+=(reviewers_pass1_consensus)
-              fi
-              incomplete_scope_items+=(reviewers_pass2)
-            elif [ "${ENABLE_REVIEWER_TWO_PASS:-true}" = "false" ] && compgen -G "${PREVIOUS_REVIEWS_DIR}/status_review_*.txt" >/dev/null; then
-              completed_scope_items+=(reviewers_started)
-              incomplete_scope_items+=(reviewers)
-            else
-              if [ "${ENABLE_REVIEWER_TWO_PASS:-true}" = "false" ]; then
-                incomplete_scope_items+=(reviewers)
-              else
-                incomplete_scope_items+=(reviewers_pass1 reviewers_pass2)
-              fi
-            fi
-            incomplete_scope_items+=(consolidator parser ledger editor)
-          else
-            if compgen -G "${PREVIOUS_REVIEWS_DIR}/status_review_*.txt" >/dev/null || compgen -G "${PREVIOUS_REVIEWS_DIR}/status_pass1_*.txt" >/dev/null; then
-              completed_scope_items+=(reviewers)
-            fi
-            [ -f "${RUNTIME_DIR}/consolidator_raw.txt" ] && completed_scope_items+=(consolidator)
-            [ -f "${RUNTIME_DIR}/parser_stats.txt" ] && completed_scope_items+=(parser)
-            [ -f "${RUNTIME_DIR}/ledger_status.txt" ] && completed_scope_items+=(ledger)
-            incomplete_scope_items+=(editor)
-          fi
-
-          if [ "${#completed_scope_items[@]}" -gt 0 ]; then
-            completed_scope_csv="$(IFS=,; echo "${completed_scope_items[*]}")"
-          else
-            completed_scope_csv="none"
-          fi
-          if [ "${#incomplete_scope_items[@]}" -gt 0 ]; then
-            incomplete_scope_csv="$(IFS=,; echo "${incomplete_scope_items[*]}")"
-          else
-            incomplete_scope_csv="none"
-          fi
-          completed_scope_human="$(printf '%s' "${completed_scope_csv}" | sed 's/,/, /g')"
-          incomplete_scope_human="$(printf '%s' "${incomplete_scope_csv}" | sed 's/,/, /g')"
-
-          validated_edits_committed="false"
-          if [ "${EDITOR_COMMIT_PRODUCED:-false}" = "true" ] || [ "${DID_COMMIT:-false}" = "true" ] || [ "${CONFLICT_RESOLVED:-false}" = "true" ]; then
-            validated_edits_committed="true"
-          fi
-          edits_pushed="${AUTOFIX_EDITS_PUSHED:-false}"
-          validation_tail_can_complete="${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-true}"
-          edits_withheld_for_safety="${AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY:-false}"
-          withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-none}"
-          partial_comment_posted="false"
-
-          partial_publish_note="This run finalized early after \`${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}\` in the \`${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}\` phase so the validated finalize tail could complete before the hard job timeout."
-          if [ "${edits_withheld_for_safety}" = "true" ]; then
-            partial_publish_note="This run finalized early after \`${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}\` in the \`${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}\` phase. The remaining job headroom could not cover the existing validation/publish tail, so the workflow posted findings only and withheld any unpushed edits for safety."
-          fi
-
-          resume_eval_file="$(mktemp)"
-          CURRENT_HEAD_SHA="${current_head_sha}" \
-          PREVIOUS_PROGRESS_FINGERPRINT="${previous_progress_fingerprint}" \
-          PREVIOUS_REVIEWS_DIR_PATH="${PREVIOUS_REVIEWS_DIR:-}" \
-          RUNTIME_DIR_PATH="${RUNTIME_DIR:-}" \
-          EDITOR_SUMMARY_FILE_PATH="${EDITOR_SUMMARY_FILE:-}" \
-          COMMITTED_FILES_FILE_PATH="${COMMITTED_FILES_FILE:-}" \
-          COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
-          INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
-          RESUME_ROUND_VALUE="${resume_round}" \
-          RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
-          PARTIAL_PHASE="${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}" \
-          PARTIAL_REASON="${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}" \
-          VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
-          EDITS_PUSHED="${edits_pushed}" \
-          VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}" \
-          EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}" \
-          WITHHELD_REASON="${withheld_reason}" \
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_eval_file}"
-          from __future__ import annotations
-
-          import glob
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-
-          def parse_bool(value: str) -> bool:
-              return value.strip().lower() == "true"
-
-
-          def describe_path(path_str: str, artifact_label: str) -> dict[str, object]:
-              path = Path(path_str)
-              entry: dict[str, object] = {"path": artifact_label, "exists": path.exists()}
-              if not path.exists():
-                  return entry
-              try:
-                  data = path.read_bytes()
-              except OSError:
-                  entry["read_error"] = True
-                  return entry
-              entry["size"] = len(data)
-              entry["sha256"] = hashlib.sha256(data).hexdigest()
-              return entry
-
-
-          artifacts: list[dict[str, object]] = []
-          previous_reviews_dir = os.environ.get("PREVIOUS_REVIEWS_DIR_PATH", "").strip()
-          runtime_dir = os.environ.get("RUNTIME_DIR_PATH", "").strip()
-          for pattern in (
-              "status_pass1_*.txt",
-              "status_review_*.txt",
-              "pass1_*.txt",
-              "review_*.txt",
-              "consensus_pass1.txt",
-          ):
-              if previous_reviews_dir:
-                  for matched_path in sorted(glob.glob(str(Path(previous_reviews_dir) / pattern))):
-                      artifacts.append(describe_path(matched_path, f"previous_reviews/{Path(matched_path).name}"))
-          for rel_path in (
-              "reviewer_consensus.txt",
-              "floor_tags.txt",
-              "consolidator_raw.txt",
-              "parser_stats.txt",
-              "review_issues.txt",
-              "ledger_status.txt",
-          ):
-              if runtime_dir:
-                  artifacts.append(describe_path(str(Path(runtime_dir) / rel_path), f"runtime/{rel_path}"))
-          for env_name, artifact_label in (
-              ("EDITOR_SUMMARY_FILE_PATH", "runtime/editor_summary.txt"),
-              ("COMMITTED_FILES_FILE_PATH", "runtime/committed_files.txt"),
-          ):
-              candidate = os.environ.get(env_name, "").strip()
-              if candidate:
-                  artifacts.append(describe_path(candidate, artifact_label))
-
-          resume_round = 0
-          try:
-              resume_round = int(os.environ.get("RESUME_ROUND_VALUE", "0") or 0)
-          except ValueError:
-              resume_round = 0
-          if resume_round < 0:
-              resume_round = 0
-
-          resume_round_limit = 3
-          try:
-              resume_round_limit = int(os.environ.get("RESUME_ROUND_LIMIT_VALUE", "3") or 3)
-          except ValueError:
-              resume_round_limit = 3
-          if resume_round_limit <= 0:
-              resume_round_limit = 3
-
-          fingerprint_payload = {
-              "head_sha": os.environ.get("CURRENT_HEAD_SHA", "").strip(),
-              "completed_scope": os.environ.get("COMPLETED_SCOPE_CSV", "").strip(),
-              "incomplete_scope": os.environ.get("INCOMPLETE_SCOPE_CSV", "").strip(),
-              "validated_edits_committed": parse_bool(os.environ.get("VALIDATED_EDITS_COMMITTED", "false")),
-              "edits_pushed": parse_bool(os.environ.get("EDITS_PUSHED", "false")),
-              "validation_tail_can_complete": parse_bool(os.environ.get("VALIDATION_TAIL_CAN_COMPLETE", "false")),
-              "edits_withheld_for_safety": parse_bool(os.environ.get("EDITS_WITHHELD_FOR_SAFETY", "false")),
-              "withheld_reason": os.environ.get("WITHHELD_REASON", "").strip() or "none",
-              "artifacts": artifacts,
-          }
-          progress_fingerprint = hashlib.sha256(
-              json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-          ).hexdigest()
-
-          previous_progress_fingerprint = os.environ.get("PREVIOUS_PROGRESS_FINGERPRINT", "").strip()
-          resume_state = "resumable"
-          resume_should_continue = True
-          if previous_progress_fingerprint and previous_progress_fingerprint == progress_fingerprint:
-              resume_state = "no_progress"
-              resume_should_continue = False
-          elif resume_round >= resume_round_limit:
-              resume_state = "round_budget_exhausted"
-              resume_should_continue = False
-
-          print(f"PROGRESS_FINGERPRINT={progress_fingerprint}")
-          print(f"RESUME_STATE={resume_state}")
-          print(f"RESUME_SHOULD_CONTINUE={'true' if resume_should_continue else 'false'}")
-          print(f"RESUME_TERMINAL={'true' if not resume_should_continue else 'false'}")
-          print(f"TERMINAL_REASON={resume_state if not resume_should_continue else ''}")
-          PY
-          set -a
-          # shellcheck disable=SC1090
-          source "${resume_eval_file}"
-          set +a
-          rm -f "${resume_eval_file}"
-
-          {
-            echo "AUTOFIX_RESUME_ROUND=${resume_round}"
-            echo "AUTOFIX_RESUME_ROUND_LIMIT=${resume_round_limit}"
-            echo "AUTOFIX_RESUME_HEAD_SHA=${current_head_sha}"
-            echo "AUTOFIX_RESUME_COMPLETED_SCOPE=${completed_scope_csv}"
-            echo "AUTOFIX_RESUME_INCOMPLETE_SCOPE=${incomplete_scope_csv}"
-            echo "AUTOFIX_RESUME_PROGRESS_FINGERPRINT=${PROGRESS_FINGERPRINT}"
-            echo "AUTOFIX_RESUME_STATE=${RESUME_STATE}"
-            echo "AUTOFIX_RESUME_SHOULD_CONTINUE=${RESUME_SHOULD_CONTINUE}"
-            echo "AUTOFIX_RESUME_TERMINAL=${RESUME_TERMINAL}"
-            echo "AUTOFIX_RESUME_REASON=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}"
-            echo "AUTOFIX_RESUME_PHASE=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}"
-          } >> "$GITHUB_ENV"
-
-          resume_state_human="$(printf '%s' "${RESUME_STATE}" | tr '_' ' ')"
-          if [ "${RESUME_SHOULD_CONTINUE}" = "true" ]; then
-            resume_state_note="Another same-head continuation run can resume from this marker."
-          else
-            resume_state_note="Same-head resume stops here because ${resume_state_human}."
-          fi
-
-          comment_body_file="$(mktemp)"
-
-          cat > "${comment_body_file}" <<EOF
-          <!-- REVIEW_AUTOFIX_PARTIAL_V1 -->
-          **AI review/autofix partial finalize**
-
-          ${partial_publish_note}
-
-          ${resume_state_note}
-
-          - Completed scope: ${completed_scope_human}
-          - Incomplete scope: ${incomplete_scope_human}
-          - Validated edits committed: ${validated_edits_committed}
-          - Edits pushed: ${edits_pushed}
-          - Validation tail can complete: ${validation_tail_can_complete}
-          - Edits withheld for safety: ${edits_withheld_for_safety}
-          - Withheld reason: ${withheld_reason}
-          - Resume state: ${RESUME_STATE}
-          - Resume round: ${resume_round} of ${resume_round_limit}
-          - Same-head continuation: ${RESUME_SHOULD_CONTINUE}
-          - Head SHA: ${current_head_sha:-unknown}
-          - Run: ${WORKFLOW_RUN_URL}
-
-          \`\`\`text
-          partial_finalize=true
-          reason=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}
-          phase=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}
-          completed_scope=${completed_scope_csv}
-          incomplete_scope=${incomplete_scope_csv}
-          validated_edits_committed=${validated_edits_committed}
-          edits_pushed=${edits_pushed}
-          validation_tail_can_complete=${validation_tail_can_complete}
-          edits_withheld_for_safety=${edits_withheld_for_safety}
-          withheld_reason=${withheld_reason}
-          head_sha=${current_head_sha}
-          resume_round=${resume_round}
-          resume_round_limit=${resume_round_limit}
-          resume_state=${RESUME_STATE}
-          resume_should_continue=${RESUME_SHOULD_CONTINUE}
-          \`\`\`
-          EOF
-
-          if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$(cat "${comment_body_file}")" >/dev/null 2>&1; then
-            partial_comment_posted="true"
-          else
-            echo "::warning::Unable to post partial finalize comment after retries."
-          fi
-          rm -f "${comment_body_file}"
-
-          {
-            echo "AUTOFIX_PARTIAL_COMMENT_POSTED=${partial_comment_posted}"
-            echo "AUTOFIX_RESUME_COMMENT_POSTED=${partial_comment_posted}"
-          } >> "$GITHUB_ENV"
-
-          partial_marker_dir=".ai/review_runtime/pr-${PR_NUMBER}/round-${resume_round}"
-          mkdir -p "${partial_marker_dir}"
-          partial_marker_file="${partial_marker_dir}/partial_finalize.json"
-          PARTIAL_MARKER_FILE="${partial_marker_file}" \
-          PARTIAL_COMMENT_POSTED="${partial_comment_posted}" \
-          CURRENT_HEAD_SHA="${current_head_sha}" \
-          COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
-          INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
-          VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
-          EDITS_PUSHED="${edits_pushed}" \
-          VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}" \
-          EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}" \
-          WITHHELD_REASON="${withheld_reason}" \
-          RESUME_ROUND_VALUE="${resume_round}" \
-          RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
-          RESUME_STATE_VALUE="${RESUME_STATE}" \
-          RESUME_SHOULD_CONTINUE_VALUE="${RESUME_SHOULD_CONTINUE}" \
-          PROGRESS_FINGERPRINT_VALUE="${PROGRESS_FINGERPRINT}" \
-          PREVIOUS_REVIEWS_DIR_PATH="${PREVIOUS_REVIEWS_DIR:-}" \
-          RUNTIME_DIR_PATH="${RUNTIME_DIR:-}" \
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-          from __future__ import annotations
-
-          import json
-          import os
-          import shutil
-          from pathlib import Path
-
-
-          def parse_bool(name: str) -> bool:
-              return os.environ.get(name, "").strip().lower() == "true"
-
-
-          def parse_csv(name: str) -> list[str]:
-              raw = os.environ.get(name, "").strip()
-              if not raw or raw == "none":
-                  return []
-              return [item for item in raw.split(",") if item]
-
-
-          def optional_path(name: str) -> Path | None:
-              raw = os.environ.get(name, "").strip()
-              return Path(raw) if raw else None
-
-
-          def copy_artifacts(source_paths: list[Path], destination_dir: Path) -> None:
-              copied_any = False
-              for source_path in source_paths:
-                  if not source_path.is_file():
-                      continue
-                  if not copied_any:
-                      destination_dir.mkdir(parents=True, exist_ok=True)
-                      copied_any = True
-                  shutil.copy2(source_path, destination_dir / source_path.name)
-
-
-          partial_marker_path = Path(os.environ["PARTIAL_MARKER_FILE"])
-          partial_marker_dir = partial_marker_path.parent
-          previous_reviews_dir = optional_path("PREVIOUS_REVIEWS_DIR_PATH")
-          runtime_dir = optional_path("RUNTIME_DIR_PATH")
-
-          previous_review_artifacts: list[Path] = []
-          if previous_reviews_dir is not None:
-              for pattern in (
-                  "status_pass1_*.txt",
-                  "status_review_*.txt",
-                  "pass1_*.txt",
-                  "review_*.txt",
-                  "consensus_pass1.txt",
-              ):
-                  previous_review_artifacts.extend(sorted(previous_reviews_dir.glob(pattern)))
-          copy_artifacts(previous_review_artifacts, partial_marker_dir / "previous_reviews")
-
-          runtime_artifacts: list[Path] = []
-          if runtime_dir is not None:
-              for file_name in (
-                  "reviewer_consensus.txt",
-                  "floor_tags.txt",
-                  "consolidator_raw.txt",
-                  "parser_stats.txt",
-                  "review_issues.txt",
-                  "ledger_status.txt",
-                  "editor_summary.txt",
-                  "committed_files.txt",
-              ):
-                  runtime_artifacts.append(runtime_dir / file_name)
-          copy_artifacts(runtime_artifacts, partial_marker_dir / "runtime")
-
-          payload = {
-              "schema_version": 1,
-              "partial_finalize": True,
-              "reason": os.environ.get("AUTOFIX_PARTIAL_FINALIZE_REASON", "").strip() or "unknown",
-              "phase": os.environ.get("AUTOFIX_PARTIAL_FINALIZE_PHASE", "").strip() or "unknown",
-              "head_sha": os.environ.get("CURRENT_HEAD_SHA", "").strip(),
-              "completed_scope": parse_csv("COMPLETED_SCOPE_CSV"),
-              "incomplete_scope": parse_csv("INCOMPLETE_SCOPE_CSV"),
-              "validated_edits_committed": parse_bool("VALIDATED_EDITS_COMMITTED"),
-              "edits_pushed": parse_bool("EDITS_PUSHED"),
-              "validation_tail_can_complete": parse_bool("VALIDATION_TAIL_CAN_COMPLETE"),
-              "edits_withheld_for_safety": parse_bool("EDITS_WITHHELD_FOR_SAFETY"),
-              "withheld_reason": os.environ.get("WITHHELD_REASON", "").strip() or "none",
-              "resume_round": int(os.environ.get("RESUME_ROUND_VALUE", "0") or 0),
-              "resume_round_limit": int(os.environ.get("RESUME_ROUND_LIMIT_VALUE", "0") or 0),
-              "resume_state": os.environ.get("RESUME_STATE_VALUE", "").strip() or "resumable",
-              "resume_should_continue": parse_bool("RESUME_SHOULD_CONTINUE_VALUE"),
-              "progress_fingerprint": os.environ.get("PROGRESS_FINGERPRINT_VALUE", "").strip(),
-              "comment_posted": parse_bool("PARTIAL_COMMENT_POSTED"),
-          }
-          partial_marker_path.write_text(
-              json.dumps(payload, sort_keys=True, indent=2) + "\n",
-              encoding="utf-8",
-          )
-          PY
-          echo "AUTOFIX_PARTIAL_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
-          echo "AUTOFIX_RESUME_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Stage review-issue ledger for partial finalize cache save
         if: always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
@@ -6525,6 +6636,25 @@ jobs:
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+          # review-autofix-failure:v1 marker for the gate's identical-failure
+          # fingerprint cap. Same evidence files and reason precedence as
+          # "Assemble failure evidence", so every failure comment of one run
+          # carries one fingerprint. Empty when the helper is unavailable.
+          AUTOFIX_FAILURE_MARKER_SUFFIX=""
+          if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+            autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+              --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+              --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+              --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+            if [ -n "${autofix_failure_marker_line}" ]; then
+              AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
+            fi
+          fi
+
           if [ "${CHANGES_LOST_REDISPATCHED:-false}" = "true" ]; then
             MSG="⚠️ Editor changes lost (retrying): #${PR_NUMBER}"
             MSG+=$'\n'
@@ -6568,6 +6698,7 @@ jobs:
               BODY+="**Next steps:** re-run the review workflow manually or apply the changes from the editor summary above."
               BODY+=$'\n\n'
               BODY+="Run: ${RUN_URL}"
+              BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
               gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
             else
               MSG="⚠️ Editor changes lost (push disabled): #${PR_NUMBER}"
@@ -6593,6 +6724,25 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # review-autofix-failure:v1 marker for the gate's identical-failure
+          # fingerprint cap. Same evidence files and reason precedence as
+          # "Assemble failure evidence", so every failure comment of one run
+          # carries one fingerprint. Empty when the helper is unavailable.
+          AUTOFIX_FAILURE_MARKER_SUFFIX=""
+          if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+            autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+              --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+              --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+              --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+            if [ -n "${autofix_failure_marker_line}" ]; then
+              AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
+            fi
+          fi
 
           # Branch the operator-facing alert on EDITOR_NOOP_REFUSAL (set by
           # the "Validate editor no-op disposition" step's Check 1b when the
@@ -6629,6 +6779,7 @@ jobs:
             BODY+="This is typically transient. Re-running the AI Review workflow after the provider-side prompt cache expires usually clears it; manual review is only needed if the refusal recurs."
             BODY+=$'\n'
             BODY+="Auto-merge has been **blocked**."
+            BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
           elif [ "${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}" = "true" ]; then
             # Every editor attempt failed and review_apply_fixes.sh wrote
@@ -6679,6 +6830,7 @@ jobs:
             BODY+="Last provider error from the final attempt: \`${editor_last_error}\`"
             BODY+=$'\n\n'
             BODY+="Auto-merge has been **blocked**. The review run is re-dispatched automatically; if the same error recurs, inspect the editor step log of the linked run — a re-run will not clear a deterministic failure."
+            BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
           else
             MSG="⚠️ Editor no-op suspicious: #${PR_NUMBER}"
@@ -6697,6 +6849,7 @@ jobs:
             BODY+="Possible causes: editor failed silently, did not read reviewer files, or audit counts are inconsistent."
             BODY+=$'\n'
             BODY+="Auto-merge has been **blocked**. Please review the editor summary and re-run the workflow if appropriate."
+            BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
           fi
 
@@ -6797,6 +6950,52 @@ jobs:
             echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"
           fi
+
+      - name: Assemble failure evidence
+        # Identical-failure fingerprint cap: fingerprint this run's failure
+        # from the bounded stderr tails of the stages the deterministic
+        # failures were seen in (editor, Collect PR metadata) and export the
+        # review-autofix-failure:v1 marker, the fingerprint and the failure
+        # reason for the failure comment and the heal reporter below. The
+        # gate counts these markers per head. Fail-open: without the helper
+        # the marker is empty and the comments post without it.
+        if: always() && (failure() || env.EDITOR_NOOP_SUSPICIOUS == 'true' || env.EDITOR_CHANGES_LOST == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ -z "${AUTOFIX_FAILURE_HEAL_PY:-}" ] || [ ! -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+            echo "AUTOFIX_FAILURE_MARKER=" >> "$GITHUB_ENV"
+            echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_missing"
+            exit 0
+          fi
+          evidence_out=""
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
+            evidence_out="${RUNTIME_DIR}/failure_evidence_tail.txt"
+          fi
+          fingerprint_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+            --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+            --evidence-out "${evidence_out}" \
+            --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+            --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
+          failure_fp="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^fp=//p' | head -n 1)"
+          failure_degraded="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^degraded=//p' | head -n 1)"
+          failure_reason="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^reason=//p' | head -n 1)"
+          failure_marker="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^marker=//p' | head -n 1)"
+          if ! [[ "${failure_fp}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "AUTOFIX_FAILURE_MARKER=" >> "$GITHUB_ENV"
+            echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_failed"
+            exit 0
+          fi
+          {
+            echo "AUTOFIX_FAILURE_FP=${failure_fp}"
+            echo "AUTOFIX_FAILURE_REASON=${failure_reason}"
+            echo "AUTOFIX_FAILURE_MARKER=${failure_marker}"
+          } >> "$GITHUB_ENV"
+          echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${failure_reason} fp=${failure_fp} degraded=${failure_degraded:-1}"
 
       - name: Mark linked issues review-blocked (workflow failure)
         if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
@@ -6932,6 +7131,10 @@ jobs:
           Linked issues have been labeled \`ai:review-blocked\`.
           EOF
           )"
+          fi
+          # review-autofix-failure:v1 marker ("Assemble failure evidence").
+          if [ -n "${AUTOFIX_FAILURE_MARKER:-}" ]; then
+            BODY+=$'\n\n'"${AUTOFIX_FAILURE_MARKER}"
           fi
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
@@ -7176,18 +7379,50 @@ jobs:
           JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
         run: |
-          # Run from the staged support bundle, or from a checkout if staging
-          # failed after RUNTIME_DIR was created (this step uses always()).
-          for summary_helper_candidate in "${SUPPORT_SCRIPTS_DIR:-}/review_append_iteration_summary.sh" \
-            "${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src-main/scripts/review_append_iteration_summary.sh" \
-            "${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts/review_append_iteration_summary.sh"; do
-            if [ -f "${summary_helper_candidate}" ]; then
-              cd "${RUNNER_TEMP:?RUNNER_TEMP is required for safe summary startup}"
-              env -u BASH_ENV -u ENV bash "${summary_helper_candidate}"
-              exit $?
-            fi
-          done
-          echo "::warning::review_append_iteration_summary.sh unavailable after support staging; iteration summary could not be emitted."
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_iteration_summary.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_iteration_summary.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::warning::review_autofix_step_iteration_summary.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Append review pipeline iteration summary' (fail open)."
+            exit 0
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
+      - name: Report autofix failure to workflow failure heal
+        # Workflow failure heal (README "Workflow Failure Heal"): after the
+        # failure alerts, hand a repeated review/autofix failure on this PR to
+        # coding-workflows' heal intake so it is diagnosed and fixed through
+        # the normal pipeline. The reporter counts consecutive failed runs from
+        # the PR comments fetched at run start and reports only past
+        # WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK (default 2); a single retryable
+        # failure stays with the stall poller. Resolver escalations are already
+        # reported through the ai:resolver-escalated label path. Fail-open by
+        # construction: the script always exits 0 and the step never blocks
+        # cleanup.
+        if: (failure() || env.EDITOR_CHANGES_LOST == 'true' || env.EDITOR_NOOP_SUSPICIOUS == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPORT_WRAPPER_SHA: ${{ env.SCRIPT_REF }}
+          REPORT_SUMMARY_LINE_FILE: ${{ env.RUNTIME_DIR }}/review_autofix_run_summary_line.txt
+          # Ownership facts for the heal intake's self-inflicted routing.
+          PR_CHANGED_FILES_FILE: ${{ env.PR_CHANGED_FILES_FILE }}
+        run: |
+          set -uo pipefail
+          if [ -z "${SUPPORT_SCRIPTS_DIR:-}" ]; then
+            echo "WORKFLOW_HEAL_AUTOFIX_REPORT skip reason=reporter_missing path=unstaged_support"
+            exit 0
+          fi
+          reporter="${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal_autofix_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_AUTOFIX_REPORT skip reason=reporter_missing path=${reporter}"
+            exit 0
+          fi
+          WORKFLOW_HEAL_PY="${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal.py" bash "${reporter}" || true
+
       - name: Cleanup temporary artifacts
         if: always()
         run: |

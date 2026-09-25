@@ -1,5 +1,15 @@
 # Review autofix: terminalize deterministic editor failures and make partial-finalize resume advance
 
+> **Status note (2026-09-22):** P1 of this plan (D1, D2, D5: the attempt
+> marker, the elapsed-time bound and the deterministic-exit routing) is
+> superseded by P2 of
+> `docs/plans/heal-deterministic-autofix-failures-plan.md`, which routes a
+> PR to `ai:review-blocked` after repeated identical failures on one head
+> using a failure fingerprint instead of an elapsed-time heuristic, and
+> covers failures outside the editor step. P2 of this plan (D3, D4: the
+> resume-round recovery and the stable cache path) is unaffected and still
+> valid. Neither phase of this plan has been implemented as of this note.
+
 ## Summary
 
 Stop `review_autofix.yml` from re-running multi-hour reviewer cycles into an

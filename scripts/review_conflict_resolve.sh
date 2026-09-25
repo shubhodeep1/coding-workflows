@@ -44,6 +44,44 @@ set -euo pipefail
 if [ -n "${WORKSPACE_PATH:-}" ]; then
   cd "${WORKSPACE_PATH}"
 fi
+stage_resolver_touched_path_or_fail() {
+  local resolver_staging_path="$1"
+  local resolver_staging_exit_code=0
+
+  if [ -e "${resolver_staging_path}" ] || [ -L "${resolver_staging_path}" ]; then
+    if git add -- "${resolver_staging_path}"; then
+      return 0
+    else
+      resolver_staging_exit_code=$?
+    fi
+  elif git rm -q -- "${resolver_staging_path}"; then
+    return 0
+  else
+    resolver_staging_exit_code=$?
+  fi
+
+  echo "::error::Failed to stage conflict resolver path: ${resolver_staging_path} (git exit=${resolver_staging_exit_code})"
+  echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+  return 1
+}
+
+verify_resolver_index_complete_or_fail() {
+  local resolver_unmerged_remaining_file="${RUNTIME_DIR}/resolver_unmerged_remaining.txt"
+
+  if ! git diff --name-only --diff-filter=U -- > "${resolver_unmerged_remaining_file}"; then
+    echo "::error::Unable to inspect the Git index for unresolved merge entries; refusing to create [ai-merge-resolve] commit."
+    echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+    return 1
+  fi
+  if [ ! -s "${resolver_unmerged_remaining_file}" ]; then
+    return 0
+  fi
+
+  echo "::error::Conflict resolver left unmerged Git index entries; refusing to create [ai-merge-resolve] commit."
+  sed 's/^/ - /' "${resolver_unmerged_remaining_file}" || true
+  echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+  return 1
+}
 
 # Deterministic-resolution short-circuit: review_conflict_prepare.sh
 # commits the [ai-merge-resolve] merge itself when every unmerged path
@@ -59,6 +97,16 @@ fi
 if [ "${CONFLICT_RESOLVED:-false}" = "true" ]; then
   echo "CONFLICT_RESOLVED=true was already set by review_conflict_prepare.sh (deterministic resolution committed, push deferred); skipping OpenCode resolver."
   exit 0
+fi
+
+RESOLVER_INITIAL_UNMERGED_PATHS_FILE="${RUNTIME_DIR}/resolver_initial_unmerged_paths.txt"
+RESOLVER_FINGERPRINT_ONLY_PATHS_FILE="${RUNTIME_DIR}/resolver_fingerprint_only_paths.txt"
+if [ -f "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}" ] && [ -f "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}" ]; then
+  _resolver_initial_unmerged_count="$(wc -l < "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}" | tr -d '[:space:]')"
+  _resolver_fingerprint_only_count="$(wc -l < "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}" | tr -d '[:space:]')"
+  echo "Resolver path classification: initial_unmerged=${_resolver_initial_unmerged_count} fingerprint_only=${_resolver_fingerprint_only_count}"
+else
+  echo "::warning::Resolver path classification snapshots are unavailable; continuing with the combined resolver allowlist."
 fi
 
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
@@ -91,33 +139,18 @@ WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_
 ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
-# This script is staged main-primary (stage_workflow_support.sh
-# MAIN_PRIMARY_BOOTSTRAP_SCRIPTS), so it can execute against a support bundle
-# whose staging list predates its opencode dependencies: a consumer repo whose
-# SCRIPT_REF (e.g. stable) carries a stage_workflow_support.sh from before the
-# opencode cutover stages this resolver from main but never stages
-# opencode_helpers.sh / write_opencode_config.sh into SUPPORT_SCRIPTS_DIR
-# (drhyg_ecommerce_automation runs 33278423340 / 33279585316 died here with
-# failure_class=helpers_missing on every conflicted PR). Resolve each missing
-# dependency from the on-disk support checkouts instead — main snapshot first,
-# to match this script's own main-primary source — before the hard guard
-# below. Paths are absolute because OPENCODE_HELPERS_PATH is re-sourced later
-# from a bash -c whose cwd may differ.
+# The staged bundle and the verified workflow checkout are the only runtime
+# sources. Older releases once used a moving main snapshot to supply missing
+# dependencies (drhyg_ecommerce_automation runs 33278423340 / 33279585316);
+# never substitute the PR worktree, even on the workflow source repository.
+# Paths are absolute because OPENCODE_HELPERS_PATH is re-sourced later from
+# a bash -c whose cwd may differ.
 _resolver_dependency_fallback()
 {
   local dependency_name="$1" dependency_candidate
   local -a dependency_candidates=(
-    "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src-main/scripts/${dependency_name}"
     "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src/scripts/${dependency_name}"
   )
-  # The workspace scripts/ candidate is trusted only on the workflow source
-  # repo itself, where scripts/ is the canonical source. On consumer repos
-  # that path can carry PR-modified code, and sourcing it would break the
-  # "run only staged support helpers" posture — the support checkouts above
-  # are the only acceptable fallbacks there.
-  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-    dependency_candidates+=("${GITHUB_WORKSPACE:-${PWD}}/scripts/${dependency_name}")
-  fi
   for dependency_candidate in "${dependency_candidates[@]}"; do
     if [ -f "${dependency_candidate}" ] && [ -r "${dependency_candidate}" ]; then
       printf '%s\n' "${dependency_candidate}"
@@ -128,13 +161,13 @@ _resolver_dependency_fallback()
 }
 if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || [ ! -r "${OPENCODE_HELPERS_PATH}" ]; then
   if _resolver_fallback_path="$(_resolver_dependency_fallback opencode_helpers.sh)"; then
-    echo "::warning::opencode_helpers.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to ${_resolver_fallback_path} (staging list at SCRIPT_REF=${SCRIPT_REF:-unknown} likely predates the opencode cutover)."
+    echo "::warning::opencode_helpers.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to verified checkout at ${_resolver_fallback_path} (SCRIPT_REF=${SCRIPT_REF:-unknown})."
     OPENCODE_HELPERS_PATH="${_resolver_fallback_path}"
   fi
 fi
 if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
   if _resolver_fallback_path="$(_resolver_dependency_fallback write_opencode_config.sh)"; then
-    echo "::warning::write_opencode_config.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to ${_resolver_fallback_path} (staging list at SCRIPT_REF=${SCRIPT_REF:-unknown} likely predates the opencode cutover)."
+    echo "::warning::write_opencode_config.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to verified checkout at ${_resolver_fallback_path} (SCRIPT_REF=${SCRIPT_REF:-unknown})."
     OPENCODE_CONFIG_WRITER_PATH="${_resolver_fallback_path}"
   fi
 fi
@@ -159,9 +192,7 @@ CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
 CODEX_THREAD_REUSE_HELPER=""
 for _thread_reuse_candidate in \
   "${SUPPORT_SCRIPTS_DIR:-scripts}/codex_thread_reuse.sh" \
-  "scripts/codex_thread_reuse.sh" \
-  ".codex-workflow-src/scripts/codex_thread_reuse.sh" \
-  ".codex-workflow-src-main/scripts/codex_thread_reuse.sh"; do
+  ".codex-workflow-src/scripts/codex_thread_reuse.sh"; do
   if [ -f "${_thread_reuse_candidate}" ]; then
     CODEX_THREAD_REUSE_HELPER="${_thread_reuse_candidate}"
     break
@@ -176,17 +207,12 @@ fi
 
 resolve_conflict_thread_reuse_asset() {
   local repo_path="$1"
-  local candidate=""
+  local candidate=".codex-workflow-src/${repo_path}"
 
-  for candidate in \
-    "${repo_path}" \
-    ".codex-workflow-src/${repo_path}" \
-    ".codex-workflow-src-main/${repo_path}"; do
-    if [ -f "${candidate}" ]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
+  if [ -f "${candidate}" ]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
 
   return 1
 }
@@ -237,8 +263,7 @@ resolve_ledger_substate_helper() {
   local candidate
   for candidate in \
     "${SUPPORT_SCRIPTS_DIR:-scripts}/ledger_emit_substate.sh" \
-    ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
-    "scripts/ledger_emit_substate.sh"; do
+    ".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
     if [ -f "${candidate}" ]; then
       printf '%s\n' "${candidate}"
       return 0
@@ -2531,10 +2556,9 @@ if [ -n "$(git status --porcelain)" ]; then
       case "${touched_path}" in
         node_modules|node_modules/*|*/node_modules|*/node_modules/*) continue ;;
       esac
-      if [ -e "${touched_path}" ]; then
-        git add -- "${touched_path}" 2>/dev/null || true
-      else
-        git rm -q -- "${touched_path}" 2>/dev/null || true
+      if ! stage_resolver_touched_path_or_fail "${touched_path}"; then
+        rm -f "${RESOLVER_TOUCHED_FILE}"
+        exit 1
       fi
     done < "${RESOLVER_TOUCHED_FILE}"
     rm -f "${RESOLVER_TOUCHED_FILE}"
@@ -2562,11 +2586,9 @@ if [ -n "$(git status --porcelain)" ]; then
     STAGED_FILES="$(git diff --cached --name-only || true)"
     echo "Staged files after protected-path reset:"
     printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
-    if git diff --cached --quiet; then
-      echo "No repository changes remain after protected-path reset; skipping merge-resolve commit."
-      echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
-      exit 0
-    fi
+  fi
+  if ! verify_resolver_index_complete_or_fail; then
+    exit 1
   fi
   resolver_generated_advisory_staged_file="$(mktemp "${POST_AGENT_ARTIFACT_DIR}/resolver-generated-advisory-staged.XXXXXX")"
   resolver_merge_head="$(git rev-parse --verify MERGE_HEAD 2>/dev/null || true)"

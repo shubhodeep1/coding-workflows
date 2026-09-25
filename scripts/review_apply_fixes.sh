@@ -98,6 +98,102 @@ if ! command -v maybe_inject_nag >/dev/null 2>&1; then
   maybe_inject_nag() { return 0; }
 fi
 
+# Editor preflight (README "Orchestrator PR autofix flow"). The review
+# workflow's "Preflight: Verify required files before reviewer invocation"
+# step runs `review_apply_fixes.sh --preflight` before the reviewers, so a
+# deterministic editor precondition failure costs seconds instead of a full
+# reviewer pass (PR #4259: a `: "${VAR:?…}"` guard failed after ~75 minutes of
+# reviewers, seven runs in a row). The step probes for the marker below and
+# skips older staged copies that lack it.
+# supports: --preflight
+#
+# The preflight runs after the helper sourcing above, so a helper that unsets
+# or rewrites a variable at source time is seen exactly as the editor sees it.
+# It has no side effects and makes no model or network call. Every line goes
+# to stderr so the step's failure evidence (editor_stage_stderr.txt) carries
+# it into the failure fingerprint.
+review_apply_fixes_preflight()
+{
+	local -a preflight_required_vars=(
+		# One entry per `: "${VAR:?…}"` guard in this script, checked with the
+		# same unset-or-empty rule. This list is the single source:
+		# tests/test_review_autofix_review_pipeline_contract.py fails when a
+		# guard is added without its entry. A guarded variable must already be
+		# set when the preflight step runs (job env, the editor step's explicit
+		# env, or GITHUB_ENV exports from earlier steps).
+		# A function named setup_editor_isolation, where a branch defines one,
+		# adds its prerequisite checks to this function in dry-run form in the
+		# same change.
+	)
+	local preflight_checks=0
+	local preflight_failed=0
+	local preflight_var=""
+	local preflight_opencode_bin=""
+
+	_review_apply_fixes_preflight_result()
+	{
+		local check_name="$1"
+		local check_result="$2"
+		local check_detail="$3"
+		preflight_checks=$((preflight_checks + 1))
+		if [ "${check_result}" != "ok" ]; then
+			preflight_failed=$((preflight_failed + 1))
+		fi
+		printf 'REVIEW_EDITOR_PREFLIGHT check=%s result=%s detail=%s\n' \
+			"${check_name}" "${check_result}" "${check_detail}" >&2
+	}
+
+	for preflight_var in ${preflight_required_vars[@]+"${preflight_required_vars[@]}"}; do
+		if [ -n "${!preflight_var:-}" ]; then
+			_review_apply_fixes_preflight_result "env_${preflight_var}" ok set
+		else
+			_review_apply_fixes_preflight_result "env_${preflight_var}" fail unset_or_empty
+		fi
+	done
+
+	if [ -r "${OPENCODE_HELPERS_PATH}" ]; then
+		_review_apply_fixes_preflight_result opencode_helpers ok "${OPENCODE_HELPERS_PATH}"
+	else
+		_review_apply_fixes_preflight_result opencode_helpers fail "unreadable:${OPENCODE_HELPERS_PATH}"
+	fi
+	if [ -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+		_review_apply_fixes_preflight_result opencode_config_writer ok "${OPENCODE_CONFIG_WRITER_PATH}"
+	else
+		_review_apply_fixes_preflight_result opencode_config_writer fail "unreadable:${OPENCODE_CONFIG_WRITER_PATH}"
+	fi
+	# CODEX_HELPERS_PATH is not used by this script on main; a caller that
+	# sets it gets the readability check, an unset value is not a failure.
+	if [ -n "${CODEX_HELPERS_PATH:-}" ]; then
+		if [ -r "${CODEX_HELPERS_PATH}" ]; then
+			_review_apply_fixes_preflight_result codex_helpers ok "${CODEX_HELPERS_PATH}"
+		else
+			_review_apply_fixes_preflight_result codex_helpers fail "unreadable:${CODEX_HELPERS_PATH}"
+		fi
+	fi
+	if preflight_opencode_bin="$(command -v opencode 2>/dev/null)" && [ -n "${preflight_opencode_bin}" ]; then
+		_review_apply_fixes_preflight_result opencode_binary ok "${preflight_opencode_bin}"
+	else
+		_review_apply_fixes_preflight_result opencode_binary fail not_in_path
+	fi
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
+		_review_apply_fixes_preflight_result runtime_dir ok "${RUNTIME_DIR}"
+	else
+		_review_apply_fixes_preflight_result runtime_dir fail "not_writable:${RUNTIME_DIR:-unset}"
+	fi
+
+	if [ "${preflight_failed}" -gt 0 ]; then
+		printf 'REVIEW_EDITOR_PREFLIGHT result=fail checks=%s failed=%s\n' "${preflight_checks}" "${preflight_failed}" >&2
+		return 1
+	fi
+	printf 'REVIEW_EDITOR_PREFLIGHT result=ok checks=%s failed=0\n' "${preflight_checks}" >&2
+	return 0
+}
+
+if [ "${1:-}" = "--preflight" ]; then
+	review_apply_fixes_preflight
+	exit $?
+fi
+
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 LESSONS_LEARNED_ENABLED="${LESSONS_LEARNED_ENABLED:-true}"
@@ -198,7 +294,7 @@ emit_context_budget_warn_for_prompt() {
 
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
     python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
@@ -258,7 +354,7 @@ emit_lessons_learned_for_out_of_plan_fix() {
 
   telemetry_json="$(printf '%s\n' "${current_diff_paths}" | {
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
     python3 - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
 import json
 import os
@@ -687,9 +783,7 @@ resolve_support_script() {
   local candidate
   for candidate in \
     "${SUPPORT_SCRIPTS_DIR}/${script_name}" \
-    ".codex-workflow-src/scripts/${script_name}" \
-    ".codex-workflow-src-main/scripts/${script_name}" \
-    "scripts/${script_name}"; do
+    ".codex-workflow-src/scripts/${script_name}"; do
     if [ -f "${candidate}" ]; then
       printf '%s' "${candidate}"
       return 0
@@ -700,17 +794,12 @@ resolve_support_script() {
 
 resolve_review_thread_reuse_asset() {
   local repo_path="$1"
-  local candidate=""
+  local candidate=".codex-workflow-src/${repo_path}"
 
-  for candidate in \
-    "${repo_path}" \
-    ".codex-workflow-src/${repo_path}" \
-    ".codex-workflow-src-main/${repo_path}"; do
-    if [ -f "${candidate}" ]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
+  if [ -f "${candidate}" ]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
 
   return 1
 }
@@ -1036,8 +1125,10 @@ __SMOKE_OVERRIDE__
   # under _PROMPT_BUDGET_TOTAL_BYTES (default 800KB ≈ 200k tokens at
   # ~4 bytes/token) so a single oversized input artifact can't blow
   # past the editor model's context window. The current default
-  # gpt-5.6-sol has a 1.05M context, but the capacity-fallback gpt-5.5 keeps a 272k standard context (lower than the
-  # legacy editor default 400k); 200k of inputs leaves room for the static
+  # gpt-6-sol and the capacity-fallback gpt-5.6-sol both have a 1.05M
+  # context, but the budget stays sized for a 272k standard context (the
+  # former gpt-5.5 fallback, still selectable via
+  # WORKFLOW_EDITOR_FALLBACK_MODEL); 200k of inputs leaves room for the static
   # prefix (~10k tokens) and the response budget (~30k tokens) within
   # the 272k window. Cleaned up after the heredoc completes.
   _init_prompt_budget
@@ -1059,7 +1150,7 @@ __SMOKE_OVERRIDE__
   #     the legacy editor default, hoisting either copy to win cache hits
   #     produced the 6/6 empty-output autofix failure on
   #     fun-token-multi-chain run 25437168681 (PR #2176 root cause).
-  #     Even on the current gpt-5.6-sol default the tail position keeps
+  #     Even on the current gpt-6-sol default the tail position keeps
   #     the cue tight, so the placement remains load-bearing.
   #   - The non-cached overhead is ~420 tokens/run × $2/Mtok ≈ $0.001
   #     per autofix run. The failure mode being prevented burns
@@ -1282,7 +1373,7 @@ PRE-FIX PLANNING
 Fix every valid reviewer finding in one pass. Read all reviewer outputs, the consensus file, and PR comments; classify each finding as WILL_FIX, ALREADY_FIXED, or REJECT; then execute WILL_FIX items in priority order (CI failures → functional bugs → correctness → hardening). The goal is comprehensive coverage in a single pass so subsequent iterations find minimal remaining issues.
 
 REVIEWER CONSENSUS SIGNAL
-The reviewer consensus content (already inlined above as ${REVIEWER_CONSENSUS_FILE}) consolidates all pass-2 reviewer findings into one ledger via a cheap summariser model (gpt-5.6-luna, medium reasoning). It has:
+The reviewer consensus content (already inlined above as ${REVIEWER_CONSENSUS_FILE}) consolidates all pass-2 reviewer findings into one ledger via a cheap summariser model (gpt-6-luna, medium reasoning). It has:
 - a "=== CONSENSUS FINDINGS ===" block with cross-reviewer-deduplicated findings
   (each entry lists "flagged_by: [reviewer_slug, ...]" — >=2 slugs ⇒ higher
   confidence; a single slug ⇒ one reviewer only, potentially speculative),
@@ -1713,7 +1804,7 @@ rm -f "${EDITOR_SUMMARY_FILE}"
 # override rendered correctly (see openai/codex#11151 — the 5.3-codex
 # slug doesn't get matched into the apply_patch-providing branch in
 # codex's offline model_info fallback). Kept as defense-in-depth on
-# the gpt-5.6-sol default so smoke runs stay deterministic regardless of
+# the gpt-6-sol default so smoke runs stay deterministic regardless of
 # editor model.
 #
 # Apply the override's specified resolution deterministically before
@@ -1872,7 +1963,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     break
   fi
   # Capacity-fallback: on the final editor attempt switch the editor model to
-  # MODEL_EDITOR_FALLBACK so a sustained gpt-5.6-sol saturation can be ridden out.
+  # MODEL_EDITOR_FALLBACK so a sustained gpt-6-sol saturation can be ridden out.
   EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
   if [ "${attempt}" -eq "${editor_max_attempts}" ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
     EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"
@@ -2176,7 +2267,10 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Change status:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints|${_REFUSAL_REGEX}" "${tmp_output}"; then
       reviewer_validation_ok=true
       changes_lost_detected=false
+      reviewer_checksum_mismatch_count=0
+      reviewer_manifest_file_count=0
       while IFS= read -r manifest_path; do
+        reviewer_manifest_file_count=$((reviewer_manifest_file_count + 1))
         manifest_sha="$(sha256sum "${manifest_path}" | awk '{print $1}')"
         if ! awk -v file_path="${manifest_path}" '
           BEGIN { in_section=0; count=0 }
@@ -2206,8 +2300,9 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
         fi
 
         # Keep this awk program single-quote-safe: embedding literal single quotes here breaks CI shell parsing.
-        match_count="$(awk -v file_path="${manifest_path}" -v file_sha="${manifest_sha}" '
-          BEGIN { in_section=0; count=0 }
+        # Prints "<entries naming the file> <entries naming the file AND carrying its checksum>".
+        processed_entry_counts="$(awk -v file_path="${manifest_path}" -v file_sha="${manifest_sha}" '
+          BEGIN { in_section=0; path_count=0; count=0 }
           /^Reviewer files processed:[[:space:]]*$/ { in_section=1; next }
           in_section && /^[A-Za-z].*:[[:space:]]*$/ { in_section=0 }
           in_section && /^- / {
@@ -2218,18 +2313,36 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
               sub(".*/", "", basename)
               path_found = index(normalized, tolower(basename)) > 0
             }
-            if (path_found && index(normalized, tolower(file_sha)) > 0) {
-              count++
+            if (path_found) {
+              path_count++
+              if (index(normalized, tolower(file_sha)) > 0) {
+                count++
+              }
             }
           }
-          END { print count }
+          END { print path_count, count }
         ' "${tmp_output}")"
-        if [ "${match_count}" -ne 1 ]; then
-          echo "Reviewer validation failed for ${manifest_path}: expected exactly one matching entry with checksum ${manifest_sha}, found ${match_count}."
+        read -r processed_path_count match_count <<< "${processed_entry_counts}"
+        # A missing entry still fails the attempt. A wrong checksum only warns: the editor
+        # model has to copy a 64-char hash by hand and garbles one often enough to discard
+        # correct edits (release gate run 35802596362 lost a correct canary fix on all three
+        # attempts), while the audit check above already proves each file was read.
+        if [ "${processed_path_count}" -lt 1 ]; then
+          echo "Reviewer validation failed for ${manifest_path}: no entry under Reviewer files processed names this file."
           reviewer_validation_ok=false
           break
         fi
+        if [ "${match_count}" -ne 1 ]; then
+          echo "::warning::EDITOR_REVIEWER_CHECKSUM_UNVERIFIED attempt=${attempt} file=${manifest_path} expected_sha=${manifest_sha} path_entries=${processed_path_count} checksum_matches=${match_count} — accepting on the file path and issue audit."
+          reviewer_checksum_mismatch_count=$((reviewer_checksum_mismatch_count + 1))
+        fi
       done < "${REVIEWER_MANIFEST_FILE}"
+      # One line per attempt so a single miscopied hash is easy to tell apart from
+      # a summary whose checksums are all wrong. files_checked includes each manifest
+      # entry reached before validation terminates, including the failing entry.
+      if [ "${reviewer_checksum_mismatch_count}" -gt 0 ]; then
+        echo "::warning::EDITOR_REVIEWER_CHECKSUM_SUMMARY attempt=${attempt} files_checked=${reviewer_manifest_file_count} checksum_mismatches=${reviewer_checksum_mismatch_count} validation_ok=${reviewer_validation_ok}"
+      fi
 
       if [ "${reviewer_validation_ok}" = true ]; then
         # ── Verify claimed changes actually persisted on disk ──

@@ -75,12 +75,19 @@ def expand_loop_items(items_blob: str, assignments: dict[str, list[str]]) -> lis
 	return expanded
 
 
+def strip_full_line_comments(text: str) -> str:
+	return "\n".join(
+		line for line in text.splitlines() if not line.lstrip().startswith("#")
+	)
+
+
 def extract_refs(text: str) -> set[str]:
 	refs: set[str] = set()
-	assignments = extract_assignment_words(text)
-	refs.update(EXPLICIT_REF.findall(text))
-	refs.update(SCRIPTS_VAR_REF.findall(text))
-	for items_blob, body in FOR_LOOP.findall(text):
+	filtered_text = strip_full_line_comments(text)
+	assignments = extract_assignment_words(filtered_text)
+	refs.update(EXPLICIT_REF.findall(filtered_text))
+	refs.update(SCRIPTS_VAR_REF.findall(filtered_text))
+	for items_blob, body in FOR_LOOP.findall(filtered_text):
 		# Only treat the loop as a script-fetch loop when its body actually
 		# uses scripts/${f} (either as a fetch path or a local path under
 		# SUPPORT_SCRIPTS_DIR).  This avoids matching unrelated for-loops
