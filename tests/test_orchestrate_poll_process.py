@@ -4166,6 +4166,8 @@ def test_security_pass_reaudit_after_merged_fix_is_a_delta_with_prior_findings()
 			"security_pass_active_fix_issues": [],
 			"security_pass_head_sha": "",
 			"security_pass_last_audited_sha": "__integration_head__",
+			"security_pass_audited_ownership": "project-lines",
+			"security_pass_audited_context_lines": 3,
 			"security_pass_reported_findings": [
 				{
 					"cycle": 1,
@@ -4250,6 +4252,8 @@ def test_security_pass_reaudit_hands_fix_cycle_diff_to_engine_and_carries_it_onc
 			"security_pass_active_fix_issues": [],
 			"security_pass_head_sha": "",
 			"security_pass_last_audited_sha": "__integration_head__",
+			"security_pass_audited_ownership": "project-lines",
+			"security_pass_audited_context_lines": 3,
 			"security_pass_reported_findings": [
 				{
 					"cycle": 1,
@@ -4334,6 +4338,8 @@ def test_security_pass_head_advance_after_clean_pass_reaudits_only_the_delta() -
 			"security_pass_status": "passed",
 			"security_pass_active_fix_issues": [],
 			"security_pass_head_sha": "__integration_head__",
+			"security_pass_audited_ownership": "project-lines",
+			"security_pass_audited_context_lines": 3,
 		}
 	)
 	result = _run_poller(
@@ -4374,9 +4380,165 @@ def _passed_security_state_for_rebind() -> dict:
 			"security_pass_active_fix_issues": [],
 			"security_pass_head_sha": "__integration_head__",
 			"security_pass_last_audited_sha": "__integration_head__",
+			"security_pass_audited_ownership": "project-lines",
+			"security_pass_audited_context_lines": 3,
 		}
 	)
 	return state
+
+
+def test_security_pass_policy_change_reaudits_full_range_and_retires_unfiled_advisory() -> None:
+	for new_head in ("__integration_head__", "__advanced_integration_head__"):
+		state = _passed_security_state_for_rebind()
+		state["security_pass_cycle"] = 2
+		advisory = _security_pass_test_finding()
+		state["security_pass_advisory_backlog"] = [{**advisory, "audited_head_sha": "a" * 40}]
+		state["security_pass_waived_findings"] = [
+			{**advisory, "source": "preexisting", "waived_by": "line-ownership", "audited_head_sha": "a" * 40},
+			{**advisory, "finding_id": "accepted", "waiver_match_key": "sha256:" + "b" * 64,
+			 "source": "judge", "waived_by": "security-pass-exhaustion-judge"},
+		]
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload([advisory]),
+			issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+			branch_ref_shas={"orchestrator/project-192": new_head},
+			env_overrides={"SECURITY_PASS_LINE_OWNERSHIP": "file"},
+		)
+		capture = result["security_audit_capture"]
+		assert capture is not None
+		assert capture["diff_since"] == ""
+		assert [row["source"] for row in capture["waived_findings"]] == ["judge"]
+		assert result["latest_state"]["security_pass_status"] == "blocked"
+		assert result["latest_state"]["security_pass_advisory_backlog"] == []
+		assert result.get("advisory_create_attempts", []) == []
+		assert [row["source"] for row in result["latest_state"]["security_pass_waived_findings"]] == ["judge"]
+		assert result["latest_state"]["security_pass_audited_ownership"] == "file"
+		assert result["latest_state"]["security_pass_audited_context_lines"] == 3
+		assert result["latest_state"]["security_pass_cycle"] == (2 if new_head == "__integration_head__" else 0)
+		assert "SECURITY_PASS_REBOUND" not in result["stdout"]
+		assert "mode=full reason=ownership_policy_changed" in result["stdout"]
+
+
+def test_security_pass_policy_change_preserves_filed_advisory_history_and_explicit_waivers() -> None:
+	state = _passed_security_state_for_rebind()
+	advisory = _security_pass_test_finding()
+	state["security_pass_waived_findings"] = [
+		{**advisory, "source": "preexisting", "waived_by": "line-ownership", "issue": 900},
+		{**advisory, "finding_id": "operator-accepted", "waiver_match_key": "sha256:" + "c" * 64,
+		 "source": "operator", "waived_by": "maintainer"},
+	]
+	state["security_pass_followup_issues"] = [
+		{"finding_id": advisory["finding_id"], "waiver_match_key": advisory["waiver_match_key"], "issue": 900}
+	]
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([advisory]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_LINE_OWNERSHIP": "file"},
+	)
+	assert result["security_audit_capture"]["diff_since"] == ""
+	assert [row["source"] for row in result["security_audit_capture"]["waived_findings"]] == ["operator"]
+	assert result["latest_state"]["security_pass_followup_issues"] == state["security_pass_followup_issues"]
+	assert result["latest_state"]["security_pass_status"] == "blocked"
+	assert result.get("advisory_create_attempts", []) == []
+
+
+def test_security_pass_file_rollback_after_head_advance_retains_filed_reference() -> None:
+	state = _passed_security_state_for_rebind()
+	advisory = _security_pass_test_finding()
+	state["security_pass_waived_findings"] = [
+		{**advisory, "source": "preexisting", "waived_by": "line-ownership", "issue": 900}
+	]
+	state["security_pass_followup_issues"] = [
+		{"finding_id": advisory["finding_id"], "waiver_match_key": advisory["waiver_match_key"], "issue": 900}
+	]
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([advisory]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		branch_ref_shas={"orchestrator/project-192": "__advanced_integration_head__"},
+		env_overrides={"SECURITY_PASS_LINE_OWNERSHIP": "file"},
+	)
+	assert result["security_audit_capture"]["diff_since"] == ""
+	assert result["latest_state"]["security_pass_status"] == "blocked"
+	assert result["latest_state"]["security_pass_followup_issues"] == state["security_pass_followup_issues"]
+	assert result.get("advisory_create_attempts", []) == []
+
+
+def test_security_pass_context_change_and_legacy_policy_force_audit() -> None:
+	for old_policy in ({"security_pass_audited_context_lines": 3}, {}):
+		state = _passed_security_state_for_rebind()
+		if old_policy:
+			state.update(old_policy)
+		else:
+			state.pop("security_pass_audited_context_lines")
+			state.pop("security_pass_audited_ownership")
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload(),
+			issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+			env_overrides={"SECURITY_PASS_OWNERSHIP_CONTEXT_LINES": "4"},
+		)
+		assert result["security_audit_capture"]["diff_since"] == ""
+		assert result["latest_state"]["security_pass_status"] == "passed"
+		assert result["latest_state"]["security_pass_audited_context_lines"] == 4
+		assert result["latest_state"]["security_pass_cycle"] == 2
+
+	unchanged = _run_poller(
+		state=_passed_security_state_for_rebind(), enable_validation="false", max_validate_cycles="3",
+		enable_security_pass="true", security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:planning"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_OWNERSHIP_CONTEXT_LINES": "03"},
+	)
+	assert unchanged["security_audit_capture"] is None
+
+
+def test_security_pass_reclassification_reuses_filed_advisory_key() -> None:
+	state = _passed_security_state_for_rebind()
+	state["security_pass_audited_ownership"] = "file"
+	advisory = _security_pass_test_finding()
+	state["security_pass_followup_issues"] = [
+		{"finding_id": advisory["finding_id"], "waiver_match_key": advisory["waiver_match_key"], "issue": 900}
+	]
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_additive_payload(advisory_findings=[advisory]),
+		issue_labels={10: ["ai:planning"]}, existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["security_audit_capture"]["diff_since"] == ""
+	assert result.get("advisory_create_attempts", []) == []
+	assert result["latest_state"]["security_pass_followup_issues"] == state["security_pass_followup_issues"]
+	assert result["latest_state"]["security_pass_waived_findings"][0]["issue"] == 900
+	assert result["latest_state"]["security_pass_status"] == "passed"
+
+
+def test_security_pass_failed_policy_reaudit_does_not_drain_stale_backlog() -> None:
+	state = _passed_security_state_for_rebind()
+	advisory = _security_pass_test_finding()
+	state["security_pass_advisory_backlog"] = [{**advisory, "audited_head_sha": "a" * 40}]
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_exit_code=1,
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_LINE_OWNERSHIP": "file"},
+	)
+	assert result.get("advisory_create_attempts", []) == []
+	assert [row["finding_id"] for row in result["latest_state"]["security_pass_advisory_backlog"]] == [advisory["finding_id"]]
+	assert result["latest_state"]["security_pass_status"] != "passed"
+
+
+def test_security_pass_file_mode_rejects_engine_advisory_output() -> None:
+	state = _passed_security_state_for_rebind()
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_additive_payload(advisory_findings=[_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_LINE_OWNERSHIP": "file"},
+	)
+	assert result["security_audit_capture"]["diff_since"] == ""
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result.get("advisory_create_attempts", []) == []
 
 
 def test_security_pass_clean_sync_merge_rebinds_without_model_run() -> None:
@@ -4923,6 +5085,8 @@ def test_security_pass_advisory_backlog_drains_while_fix_issue_is_in_progress() 
 		{
 			"integration_branch": "orchestrator/project-192",
 			"security_pass_status": "blocked",
+			"security_pass_audited_ownership": "project-lines",
+			"security_pass_audited_context_lines": 3,
 			"security_pass_active_fix_issues": [900],
 			"security_pass_advisory_backlog": backlog,
 		}
