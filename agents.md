@@ -77,12 +77,18 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->`
    comment for the `/implement-plan-claude` session, which fixes the round in
    one `[claude-autofix]` commit (counted toward `MAX_AUTOFIX_ITERATIONS`) or
-   answers with `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->` and a
-   `claude_fixer_converged_head=<sha>` dispatch; the gate verifies both
-   markers for that exact head (hand-off by the `GH_PAT` identity, verdict by
-   an OWNER / MEMBER / COLLABORATOR) and the `claude-fixer-auto-merge` job
-   enables auto-merge. Zero ledger entries and no failing check auto-merge in
-   the run; at the cap the PR itself is labelled `ai:review-blocked`; dispatch
+   asks a separately authenticated, dedicated bot to attest to the exact
+   ledger digest in an alongside v2 verdict. `CLAUDE_FIXER_VERDICT_BOT_LOGIN`
+   defaults empty, disabling verdict convergence; a collaborator's v1 verdict
+   never authorizes auto-merge. An accepted dispatch re-runs the reviewer
+   panel on the same head; only zero findings plus a fresh `ready`, same-head
+   check-run snapshot can enable head-bound auto-merge. Remaining findings
+   block the PR for intervention rather than another same-head verdict cycle.
+   The bot's comment keeps `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`
+   alongside the v2 digest marker; the session dispatches
+   `claude_fixer_converged_head=<sha>` for verification. Zero ledger entries
+   with a clean check snapshot auto-merge in the run; at the cap the PR itself
+   is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
    (`claude_fixer_awaiting_session`). `[claude-intervention]` and
    `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`
