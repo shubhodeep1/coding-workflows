@@ -386,3 +386,143 @@ def test_handoff_rejects_malformed_head():
 
 def test_expanded_workflow_carries_the_handoff_body():
 	assert "ai:claude-fixer-handoff:v1 kind=findings" in expanded_review_autofix_text()
+
+
+# ---- the real "Evaluate review gate" script, end to end with a stubbed gh ----
+
+GATE_MOCK_GH = r'''#!/usr/bin/env python3
+import json, os, subprocess, sys
+from pathlib import Path
+
+state = json.loads(Path(os.environ["MOCK_GATE_STATE"]).read_text())
+args = sys.argv[1:]
+jq = args[args.index("--jq") + 1] if "--jq" in args else None
+path = next((a for a in args[1:] if a.startswith("repos/") or a == "user"), "")
+
+def emit(value):
+	text = json.dumps(value)
+	if jq is not None:
+		text = subprocess.run(["jq", "-rc", jq], input=text, capture_output=True, text=True, check=True).stdout
+	sys.stdout.write(text if text.endswith("\n") else text + "\n")
+
+if args[:1] != ["api"]:
+	sys.exit(1)
+if path == "user":
+	emit({"login": state["login"]})
+elif path.endswith("/comments"):
+	emit(state["comments"])
+elif path.endswith("/files"):
+	emit([{"filename": "scripts/big_change.sh"}])
+elif "/pulls/" in path:
+	emit(state["pr"])
+else:
+	sys.exit(1)
+'''
+
+
+def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str = "workflow_dispatch", converged_head: str = "", extra_env: dict | None = None):
+	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "gh").write_text(GATE_MOCK_GH, encoding="utf-8")
+	(bin_dir / "gh").chmod(0o755)
+	state_file = tmp / "state.json"
+	state_file.write_text(json.dumps({
+		"login": AUTHOR,
+		"comments": [
+			{"id": i, "user": {"login": c["author_login"]}, "author_association": c["author_association"], "created_at": "2026-09-25T00:00:00Z", "body": c["body"]}
+			for i, c in enumerate(comments, 1)
+		],
+		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1"},
+	}), encoding="utf-8")
+	output_file = tmp / "out.txt"
+	output_file.write_text("", encoding="utf-8")
+	(tmp / "runner_temp").mkdir()
+	env = {
+		"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+		"HOME": str(tmp),
+		"MOCK_GATE_STATE": str(state_file),
+		"GITHUB_OUTPUT": str(output_file),
+		"RUNNER_TEMP": str(tmp / "runner_temp"),
+		"GH_TOKEN": "x",
+		"REPOSITORY": "o/r",
+		"EVENT_NAME": event_name,
+		"EVENT_ACTION": "",
+		"PR_NUMBER": "42",
+		"PR_HEAD_SHA": "",
+		"PR_IS_DRAFT": "false",
+		"PR_SKIP_AI": "false",
+		"PR_TITLE": "Demo — phase 1/2: x",
+		"PR_BODY": "Refs #1",
+		"FORCE_RB_JUDGE": "false",
+		"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false",
+		"CLAUDE_FIXER_ENABLED": "true",
+		"CLAUDE_FIXER_CONVERGED_HEAD": converged_head,
+	}
+	env.update(extra_env or {})
+	script = tmp / "gate.sh"
+	script.write_text(gate_run, encoding="utf-8")
+	proc = subprocess.run(["bash", str(script)], cwd=tmp, env=env, capture_output=True, text=True)
+	outputs = dict(line.split("=", 1) for line in output_file.read_text(encoding="utf-8").splitlines() if "=" in line)
+	return proc, outputs
+
+
+FIXER_REF = "claude/implement-plan-demo-phase-1"
+
+
+def test_gate_marks_fixer_prs_and_runs_the_first_round():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[], event_name="pull_request")
+	assert proc.returncode == 0, proc.stderr
+	assert out["claude_fixer"] == "true" and out["should_run"] == "true" and out["claude_fixer_converged"] == "false"
+
+
+def test_gate_leaves_other_prs_alone():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref="ai/issue-7", comments=[_c(HANDOFF)])
+	assert proc.returncode == 0, proc.stderr
+	assert out["claude_fixer"] == "false" and out["should_run"] == "true"
+
+
+def test_gate_skips_dispatch_rerun_while_the_session_owns_the_round():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF)])
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_awaiting_session"
+
+
+def test_gate_accepts_a_verified_convergence_dispatch():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(
+			Path(td),
+			head_ref=FIXER_REF,
+			comments=[_c(HANDOFF), _c(VERDICT, author="dev", association="COLLABORATOR")],
+			converged_head=HEAD,
+		)
+	assert proc.returncode == 0, proc.stderr
+	assert out["claude_fixer_converged"] == "true"
+	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_converged"
+	assert out["deterministic_skip"] == "false"
+	assert out["head_sha"] == HEAD
+
+
+def test_gate_rejects_convergence_without_verdict_stale_head_or_non_fixer_pr():
+	cases = (
+		(FIXER_REF, [_c(HANDOFF)], HEAD),
+		(FIXER_REF, [_c(HANDOFF), _c(VERDICT)], "d" * 40),
+		("ai/issue-7", [_c(HANDOFF), _c(VERDICT)], HEAD),
+		(FIXER_REF, [_c(HANDOFF), _c(VERDICT, association="NONE")], HEAD),
+	)
+	for head_ref, comments, converged in cases:
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=head_ref, comments=comments, converged_head=converged)
+		assert proc.returncode == 0, proc.stderr
+		assert out["claude_fixer_converged"] == "false", (head_ref, converged)
+		assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_converged_unverified"
+
+
+def test_gate_disabled_by_repo_var():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF)], extra_env={"CLAUDE_FIXER_ENABLED": "false"})
+	assert proc.returncode == 0, proc.stderr
+	assert out["claude_fixer"] == "false" and out["should_run"] == "true"

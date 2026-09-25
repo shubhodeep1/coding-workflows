@@ -747,13 +747,13 @@ jobs:
           case ",${pr_labels}," in
             *,force-review,*) claude_fixer_force_review="true" ;;
           esac
-          if [ "${SHOULD_RUN}" = "true" ] && [ -n "${CLAUDE_FIXER_CONVERGED_HEAD}" ]; then
+          if [ "${SHOULD_RUN}" = "true" ] && [ -n "${CLAUDE_FIXER_CONVERGED_HEAD:-}" ]; then
             SHOULD_RUN="false"
             SKIP_REASON="claude_fixer_converged_unverified"
             claude_fixer_converged_detail=""
             if [ "${CLAUDE_FIXER}" != "true" ]; then
               claude_fixer_converged_detail="not_claude_fixer_pr"
-            elif ! [[ "${CLAUDE_FIXER_CONVERGED_HEAD}" =~ ^[0-9a-f]{40}$ ]] || [ "${CLAUDE_FIXER_CONVERGED_HEAD}" != "${pr_head_sha_gate}" ]; then
+            elif ! [[ "${CLAUDE_FIXER_CONVERGED_HEAD:-}" =~ ^[0-9a-f]{40}$ ]] || [ "${CLAUDE_FIXER_CONVERGED_HEAD:-}" != "${pr_head_sha_gate}" ]; then
               claude_fixer_converged_detail="stale_or_invalid_head current=${pr_head_sha_gate:-unknown}"
             else
               gate_fetch_marker_comments
@@ -769,7 +769,7 @@ jobs:
                 claude_fixer_converged_detail="handoff_or_verdict_missing"
               fi
             fi
-            echo "AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} requested=${CLAUDE_FIXER_CONVERGED_HEAD} accepted=${CLAUDE_FIXER_CONVERGED} detail=${claude_fixer_converged_detail:-verified}"
+            echo "AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} requested=${CLAUDE_FIXER_CONVERGED_HEAD:-} accepted=${CLAUDE_FIXER_CONVERGED} detail=${claude_fixer_converged_detail:-verified}"
           elif [ "${SHOULD_RUN}" = "true" ] && [ "${CLAUDE_FIXER}" = "true" ] \
             && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
             && [ "${FORCE_RB_JUDGE:-false}" != "true" ] \
