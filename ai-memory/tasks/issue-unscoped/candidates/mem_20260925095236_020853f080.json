@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/security-audit.yml:55-72 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The identity gate rejects direct source-repository `schedule` and `workflow_dispatch` runs because `job.workflow_repository` and `job.workflow_ref` are empty for those invocations.\n  WHY: Those runs exit before checkout or audit work; all reviewers rated this BLOCKER, with no severity disagreement.\n- tests/test_security_audit_workflow_contract.py:371-421 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: `_audit_workflow_step` can raise `StopIteration` for a missing step, and callers accessing `[\"run\"]` can raise `KeyError` for a step without a `run` key.\n  WHY: A missing or `uses:` step causes the test helper or its caller to crash instead of reporting a meaningful assertion failure; severity ranged from NIT to MAJOR, so the highest rating is used.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run audit actions and scripts from an immutable protected support commit. Check out the requested branch separately as read-only audit data and validate its branch and SHA before use.\"\n  expected_change_site: .github/workflows/security-audit.yml:50-240 (resolve_support/verify/audit-data steps + test)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: implemented (verified support SHA from protected main/stable, separate credential-free audit-data checkout, contract tests at tests/test_security_audit_workflow_contract.py:435).\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/security-audit.yml | severity=BLOCKER | confidence=5\n  Code reference: \"Resolve trusted audit support commit\" step, the identity gate that reads `job.workflow_repository` and `job.workflow_ref` from `toJSON(job)`\n  PROBLEM: Direct source-repository `schedule` and `workflow_dispatch` invocations have neither context field, so the identity gate exits before checkout or audit work.\n  WHY: The weekly scheduled audit and manual dispatches fail, producing no audit findings.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/security-audit.yml:55-66 | severity=BLOCKER | confidence=4\n  PROBLEM: The identity gate relies on `job.workflow_repository` and `workflow_ref`, which are not populated for direct scheduled or manually dispatched runs in the source repository.\n  WHY: The scheduled audit and manual dispatches fail early and cannot run the audit.\n- tests/test_security_audit_workflow_contract.py | severity=NIT | confidence=3\n  Code reference: _audit_workflow_step helper (defined in test scope)\n  PROBLEM: The helper does not validate that the returned step contains `run:` and raises `StopIteration` if the step name is not found.\n  WHY: A caller targeting a `uses:` step can raise `KeyError` instead of failing gracefully.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/security-audit.yml:~58-72 | severity=BLOCKER | confidence=5\n  Code reference: Step \"Resolve trusted audit support commit\", lines ~58-72 (the `WORKFLOW_JOB_JSON: ${{ toJSON(job) }}` gate that reads `job.workflow_repository` / `job.workflow_ref`)\n  PROBLEM: Direct source-repository schedule and workflow dispatch runs produce empty identity fields, causing the gate to exit before the audit steps.\n  WHY: The primary weekly and manual audit paths fail; the contract test does not cover empty identity fields.\n- tests/test_security_audit_workflow_contract.py:~371-375 | severity=NIT | confidence=3\n  Code reference: Lines ~371-375 (`_audit_workflow_step` helper used by both new `_run_audit_workflow_resolution` and `test_security_audit_workflow_keeps_executable_support_outside_data_checkout`)\n  PROBLEM: `_audit_workflow_step(name)` raises `StopIteration` when no step matches and returns the raw step dict, so callers using `[\"run\"]` raise `KeyError` for a `uses:` action.\n  WHY: A future test querying a `uses:` step or a renamed/removed step crashes with `StopIteration` or `KeyError` rather than a meaningful assertion failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/security-audit.yml:56, 61-62, 66-71 | severity=BLOCKER | confidence=5\n  Code reference: lines 56, 61-62, 66-71 (the \"Resolve trusted audit support commit\" step)\n  PROBLEM: Direct source-repository schedule and workflow dispatch runs have empty `job.workflow_repository` and `job.workflow_ref`, causing the identity gate to exit.\n  WHY: The weekly scheduled audit and manual dispatches fail before checkout or audit work; the contract test does not cover the empty-fields case.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_security_audit_workflow_contract.py:371\n  Code reference: _run_audit_workflow_resolution:421\n  PROBLEM: `_audit_workflow_step` uses bare `next(...)`, and `_run_audit_workflow_resolution` accesses `[\"run\"]` without a guard.\n  WHY: A missing step name or a step without `\"run\"` raises `StopIteration` or `KeyError`, crashing the test instead of producing a clean assertion.\n- TASK_GAP\n  Requirement: \"Run audit actions and scripts from an immutable protected support commit. Check out the requested branch separately as read-only audit data and validate its branch and SHA before use.\"\n  Expected change site: .github/workflows/security-audit.yml:50-240 (resolve_support/verify/audit-data steps + test)\n  Evidence of absence: implemented (verified support SHA from protected main/stable, separate credential-free audit-data checkout, contract tests at tests/test_security_audit_workflow_contract.py:435).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(Reviewer failed after non-retryable error on attempt 1; no findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3583de8707163137b643de880a3f6a914397e856eae47d4c5cae8fc915658944",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4457,
+    "run_id": "36116053454",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36116053454",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925095236_020853f080",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4457,
+    "run_id": "36116053454"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T09:52:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
