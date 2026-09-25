@@ -1878,6 +1878,9 @@ case "${RB_ACTION}" in
       echo "judge_action=merge" >> "$GITHUB_OUTPUT"
     else
       if [ "${RB_MERGE_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+        echo "::warning::Approved merge refused because PR #${PR_NUMBER} head changed after the decision."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
         echo "judge_skip_reason=approved_merge_precondition_failed" >> "$GITHUB_OUTPUT"
       elif [ "${RB_MERGE_STATE}" = "open" ] && [ -z "${RB_MERGEABLE}" ]; then
         echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"

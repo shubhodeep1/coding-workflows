@@ -103,6 +103,8 @@ def _run_guard(
 				"CODEX_OUTPUT_FILE": str(codex_output),
 				"ISSUE_NUMBER": "1",
 				"PLAN_PROGRESS_COMMENT_ID": "",
+				# The guard sources gh_helpers.sh from the staged support bundle.
+				"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 			}
 		)
 		proc = subprocess.run(

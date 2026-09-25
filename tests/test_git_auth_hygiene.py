@@ -81,6 +81,10 @@ def test_networked_git_steps_use_ephemeral_authentication() -> None:
 			step_start = text.index(f"- name: {step_name}")
 			step_end = text.find("\n      - name:", step_start + 1)
 			step_block = text[step_start : step_end if step_end >= 0 else None]
+			# Steps moved out under the workflow size limit source their body
+			# from scripts/review_autofix_step_<slug>.sh; check that body too.
+			for step_script in re.findall(r"review_autofix_step_[a-z0-9_]+\.sh", step_block):
+				step_block += (REPO_ROOT / "scripts" / step_script).read_text(encoding="utf-8")
 			assert "GIT_CONFIG_VALUE_0" in step_block, f"{workflow_name}: {step_name}"
 		if workflow_name == "review_autofix.yml":
 			assert 'echo "GIT_CONFIG_VALUE_0=' not in text, "Git auth must not persist into model steps"
@@ -264,9 +268,11 @@ def test_review_support_uses_only_the_immutable_workflow_definition_sha() -> Non
 	resolve_start = workflow_text.index("- name: Resolve workflow support ref")
 	resolve_end = workflow_text.index("\n      - name:", resolve_start + 1)
 	resolve_block = workflow_text[resolve_start:resolve_end]
-	assert "${{ job.workflow_repository }}" in resolve_block
-	assert "${{ job.workflow_sha }}" in resolve_block
-	assert "^[0-9a-fA-F]{40}$" in resolve_block
+	# Review support comes from the gate-verified reusable-workflow commit
+	# (source-repository PRs use protected main's commit, not the PR head).
+	assert "${{ needs.gate.outputs.review_support_repo }}" in resolve_block
+	assert "${{ needs.gate.outputs.review_support_sha }}" in resolve_block
+	assert "^[0-9a-f]{40}$" in resolve_block
 	assert "github.sha" not in resolve_block
 	assert 'SCRIPT_REF=stable' not in resolve_block
 	assert ".codex-workflow-src-main" not in workflow_text

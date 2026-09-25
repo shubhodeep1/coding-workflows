@@ -365,6 +365,7 @@ jobs:
           fetch-depth: 1
           sparse-checkout: scripts/workflow_failure_heal.py
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Verify fingerprint cap support identity
         if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
@@ -1429,8 +1430,8 @@ jobs:
     steps:
       - name: Validate immutable workflow support source
         env:
-          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SUPPORT_REF: ${{ job.workflow_sha }}
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          WORKFLOW_SUPPORT_REF: ${{ fromJSON(toJSON(job)).workflow_sha }}
         run: |
           set -euo pipefail
           if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "shubhodeep1/coding-workflows" ]; then
@@ -1605,8 +1606,8 @@ jobs:
     steps:
       - name: Validate immutable workflow support source
         env:
-          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SUPPORT_REF: ${{ job.workflow_sha }}
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          WORKFLOW_SUPPORT_REF: ${{ fromJSON(toJSON(job)).workflow_sha }}
         run: |
           set -euo pipefail
           if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "shubhodeep1/coding-workflows" ]; then
@@ -1928,6 +1929,7 @@ jobs:
             scripts/workflow_failure_heal.py
             scripts/workflow_failure_heal_autofix_report.sh
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Verify workflow support source
         env:

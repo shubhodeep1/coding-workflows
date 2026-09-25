@@ -348,14 +348,23 @@ if args[:1] == ["api"]:
 	api_responses = state.get("api_responses", {}) or {}
 	matched = None
 	api_response_sequences = state.get("api_response_sequences", {}) or {}
-	for pattern, responses in api_response_sequences.items():
-		if pattern and pattern in path and responses:
-			matched = responses.pop(0)
-			break
-	for pattern, resp in api_responses.items():
-		if matched is None and pattern and pattern in path:
-			matched = resp
-			break
+	# The most specific (longest) matching pattern wins across both tables,
+	# so a "pulls/42" sequence never answers a "pulls/42/files" request.
+	candidates = [
+		(len(pattern), "sequence", pattern)
+		for pattern, responses in api_response_sequences.items()
+		if pattern and pattern in path and responses
+	] + [
+		(len(pattern), "response", pattern)
+		for pattern in api_responses
+		if pattern and pattern in path
+	]
+	if candidates:
+		_, source, pattern = max(candidates, key=lambda candidate: candidate[0])
+		if source == "sequence":
+			matched = api_response_sequences[pattern].pop(0)
+		else:
+			matched = api_responses[pattern]
 	save()
 	if matched is not None:
 		# Honour `--jq` server-side filtering: emit the filtered string,
@@ -1804,6 +1813,7 @@ _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
 review_blocked_prepare_successor_issue() {{ jq -cn --arg body "$8" '{{status:"not_found",url:null,body:$body}}'; }}
 review_rb_send_warning() {{ :; }}
+review_rb_run_isolated_python() {{ python3 -I -B "$@"; }}
 sleep() {{ :; }}
 source "{pr_checks_lib_path}"
 
