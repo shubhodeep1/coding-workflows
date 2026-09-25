@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:2091 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: Using `/usr/bin/python3` assumes Python is installed at that location, which may limit portability across runner images.\n  WHY: Gemini flags the absolute path as a portability concern; Minimax says it does not fail on current runners and is intentional hardening.\n- .github/workflows/review_autofix.yml:4641 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The suppressed `gh_retry gh api` failure provides no diagnostic when posting the PR comment fails.\n  WHY: A permanent API error such as a 404 or 401 can leave the operator without visibility into why the diagnostic comment was not posted.\n- scripts/review_apply_fixes.sh:2109-2118 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `EDITOR_WORKSPACE_GUARD_REPORT` error markers omit the attempt number, making it harder to identify which attempt produced the report error.\n  WHY: When multiple attempts have mixed guard states, correlating the marker with its attempt requires cross-referencing the artifact filename.\n- .github/workflows/review_autofix.yml:4680-4681 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The suppressed `gh_retry gh api` failure provides no diagnostic when posting the guard-specific PR comment fails.\n  WHY: A permanent failure, such as a deleted PR or token-scope issue, leaves no log signal explaining why the comment was not posted.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Coverage depth (no full integration simulation).\"\n  expected_change_site: tests/test_review_autofix_editor_noop_cascade_contract.py, test_editor_workspace_guard_failure_workflow_routing\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: test_editor_workspace_guard_failure_workflow_routing verifies workflow gate conditions and exercises the summary comment script under present, missing, and malformed report states; no integration test exercises the full failure path end-to-end.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_apply_fixes.sh:2092 | severity=low | confidence=[2]\n  PROBLEM: The guard-report parser uses a hardcoded path to `python3` (`/usr/bin/python3`).\n  WHY: This assumes the runner image always has Python at this location and is a fragile portability assumption if runner images change.\n- .github/workflows/review_autofix.yml:4641 | severity=high | confidence=[3]\n  PROBLEM: The `gh_retry gh api ... >/dev/null 2>&1 || true` swallowing handles both transient and permanent API errors without feedback.\n  WHY: If posting the PR comment fails, the operator has no visibility into why the guard triggered or why the diagnostic comment was not posted.\n- scripts/review_apply_fixes.sh:2110 | severity=low | confidence=[2]\n  PROBLEM: The log emission `echo \"EDITOR_WORKSPACE_GUARD_REPORT=unreadable_or_invalid\"` does not include the attempt number.\n  WHY: In runs with multiple editor attempts and mixed guard states, the logs are ambiguous when correlating a marker with a specific failed attempt.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:4680-4681 (`gh_retry gh api ... >/dev/null 2>&1 || true; exit 1`) | severity=low | confidence=[3]\n  PROBLEM: The `|| true` on the `gh_retry` call swallows permanent API failures when posting the PR comment.\n  WHY: Operators see only the generic guard rejection error and have no log signal that the comment endpoint failed.\n- scripts/review_apply_fixes.sh:2109-2118 (`echo \"EDITOR_WORKSPACE_GUARD_REPORT=unreadable_or_invalid\"`, `echo \"EDITOR_WORKSPACE_GUARD_REPORT=missing_or_oversized\"`) | severity=low | confidence=[2]\n  PROBLEM: The `EDITOR_WORKSPACE_GUARD_REPORT=*` log markers omit the attempt number.\n  WHY: Correlating a report error with its originating attempt requires cross-referencing the artifact path.\n- scripts/review_apply_fixes.sh:2091 (`/usr/bin/python3 -I -S - \"${editor_workspace_report}\"`) | severity=low | confidence=[1]\n  PROBLEM: The absolute Python path was listed as a portability concern.\n  WHY: This review states that the path does not fail on current runner images and is intentional hardening.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:1310-1380, test `test_editor_workspace_guard_failure_workflow_routing` | severity=low | confidence=[2]\n  PROBLEM: No integration test exercises the full failure path end-to-end.\n  WHY: Existing tests verify workflow gate conditions and exercise the summary comment script under present, missing, and malformed report states; the review describes the remaining issue as coverage depth rather than a concrete runtime failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/review_autofix.yml:4680 | severity=low | confidence=[]\n  PROBLEM: The `gh_retry gh api ... >/dev/null 2>&1 || true` suppresses permanent PR-comment posting failures.\n  WHY: If posting fails due to a deleted PR or token-scope issue, the guard-specific PR comment is silently lost without an indication in the logs.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f2558559fd3a17c87e80441947db05205dcae2c4897a17a9fae6522dd1059123",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4418,
+    "run_id": "36080420868",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36080420868",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925011645_94b51c4b16",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4418,
+    "run_id": "36080420868"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T01:16:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
