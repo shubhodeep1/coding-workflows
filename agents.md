@@ -163,6 +163,38 @@ Phases of the unattended pipeline (each is a separate workflow file under
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
     `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
     `WORKFLOW_HEAL`.
+15. **Claude issue implementer** (`clarify.yml` route step,
+    `scripts/claude_issue_route.py`, `scripts/claude_issue_handoff.sh`,
+    `claude-issue-intake.yml`, `scripts/claude_issue_intake.sh`,
+    `.claude/commands/claude-issue-dispatch.md`,
+    `.claude/commands/implement-issue-claude.md`) — standalone issues are
+    implemented by Claude Code by default. On issue open / `/reclarify`,
+    clarify's `Decide clarify route` step routes each issue that would
+    otherwise run Codex clarify. Orchestrator-managed issues (label or
+    `Managed by: AI Orchestrator` body line), tracking / security-audit /
+    retro issues and `^[E2E ` fixtures → codex. Otherwise `ai:codex` → codex,
+    then `ai:claude` → claude, then repo var `AI_ISSUE_IMPLEMENTER` (default
+    `claude`; `codex` switches the repo). A route error falls back to codex.
+    A Claude route skips Codex clarify, claims the issue with `ai:claude`, and
+    sends a `claude-issue` `repository_dispatch` (`claude_issue.v1`, ≤ 10
+    top-level keys) to coding-workflows. The intake validates the repo against
+    `.github/ai/consumer_repos.json` plus coding-workflows and POSTs the
+    **Claude issue dispatcher** routine's `/fire` endpoint (repo var
+    `CLAUDE_ISSUE_ROUTINE_ID`, secret `CLAUDE_ISSUE_ROUTINE_TOKEN`, header
+    `CLAUDE_ISSUE_ROUTINE_BETA`), retrying 408/429/5xx/network errors with
+    2/4/8/16 s backoff. Fire text is fixed keys only, with no issue prose.
+    The routine starts an Opus session in the target repo running
+    `/implement-issue-claude`: a single-phase plan
+    `docs/plans/issue-<N>-<topic>-plan.md` (header `Source issue:` +
+    `Security pass: run|skip`), branch `claude/implement-plan-<slug>-phase-1`,
+    PR body `Refs #N`, then `/implement-plan-claude` issue mode (the completion
+    PR carries `Fixes #N`). No-clash gates: `plan.yml` / `implement.yml`
+    (`AI_PHASE_GATE_V1 … reason=claude_routed outcome=skip`) and standalone
+    stall recovery (`STALL_SKIP … reason=claude_routed`) ignore issues with
+    `ai:claude` and no `ai:codex`. Failures label `ai:claude-handoff-failed`
+    (handoff / intake) or `ai:claude-blocked` (CLAUDE.md §28.C hard blocker in
+    the session). Both Claude commands act instead of asking (CLAUDE.md §28).
+    Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -1310,6 +1342,8 @@ and shipped:
 - `WORKTREE_REGISTER_FAIL`
 - `WORKTREE_DEREGISTER_FAIL`
 - `opencode_agent_failure`
+- `CLAUDE_ISSUE_HANDOFF`
+- `CLAUDE_ISSUE_INTAKE`
 - `MODEL_CATALOG_BACKFILL`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -1494,6 +1528,8 @@ LOG_PREFIX.name=WORKTREE_REGISTER_FAIL
 LOG_PREFIX.name=WORKTREE_DEREGISTER_FAIL
 LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
+LOG_PREFIX.name=CLAUDE_ISSUE_HANDOFF
+LOG_PREFIX.name=CLAUDE_ISSUE_INTAKE
 
 ---
 
@@ -1717,6 +1753,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
+.github/workflows/claude-issue-intake.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml
