@@ -242,6 +242,21 @@ def test_fixer_handoff_answered_by_verdict_keeps_waiting(monkeypatch, capsys):
 	assert out["done"] is False
 
 
+def test_fixer_handoff_instruction_cannot_answer_its_own_round(monkeypatch, capsys):
+	body = _handoff() + "\nReply with `" + _verdict().splitlines()[0] + "` when done."
+	_stub_fixer(monkeypatch, {"repos/o/r/pulls/7": _fixer_pr()}, [_comment(body)])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "review-round"
+
+
+def test_fixer_new_handoff_on_same_head_supersedes_old_verdict(monkeypatch, capsys):
+	_stub_fixer(monkeypatch, {"repos/o/r/pulls/7": _fixer_pr()}, [
+		_comment(_handoff()), _comment(_verdict()), _comment(_handoff(round_number=2)),
+	])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "review-round" and out["round"] == 2
+
+
 def test_fixer_handoff_for_an_older_head_is_ignored(monkeypatch, capsys):
 	_stub_fixer(
 		monkeypatch,

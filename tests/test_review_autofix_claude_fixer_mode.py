@@ -196,7 +196,7 @@ def _gate_jq(label: str) -> str:
 
 def _jq_true(program: str, comments: list[dict]) -> bool:
 	with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
-		json.dump(comments, handle)
+		json.dump([{"id": index, **comment} for index, comment in enumerate(comments, 1)], handle)
 	try:
 		proc = subprocess.run(["jq", "-e", "--arg", "head", HEAD, "--arg", "author", AUTHOR, program, handle.name], capture_output=True, text=True)
 	finally:
@@ -224,6 +224,12 @@ def test_converged_requires_workflow_handoff_and_trusted_verdict():
 	assert not _jq_true(program, [_c(CONFLICT), _c(VERDICT)])
 	# Markers for another head do not count.
 	assert not _jq_true(program, [_c(HANDOFF.replace(HEAD, "d" * 40)), _c(VERDICT)])
+	# The workflow's handoff instruction used to embed a literal verdict marker.
+	assert not _jq_true(program, [_c(HANDOFF + "\nReply with `" + VERDICT + "`.")])
+	# A force-review of the same head creates a new handoff requiring a new reply.
+	assert not _jq_true(program, [_c(HANDOFF), _c(VERDICT), _c(HANDOFF.replace("round=1", "round=2"))])
+	assert not _jq_true(program, [_c(HANDOFF), _c(VERDICT), _c(CONFLICT)])
+	assert _jq_true(program, [_c(HANDOFF), _c(VERDICT), _c(HANDOFF.replace("round=1", "round=2")), _c(VERDICT)])
 
 
 def test_dispatch_rerun_is_skipped_once_a_handoff_names_the_head():
@@ -336,7 +342,8 @@ def test_handoff_posts_findings_ledger_then_marker():
 	assert calls[0]["args"][:4] == ["api", "-X", "POST", "repos/o/r/issues/42/comments"]
 	assert f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=2 -->" in body
 	assert "Reviewer ledger entries: 2" in body
-	assert f"<!-- ai:claude-fixer-verdict:v1 head={HEAD} -->" in body
+	assert "ai:claude-fixer-verdict:v1" in body
+	assert f"<!-- ai:claude-fixer-verdict:v1 head={HEAD} -->" not in body
 	assert f"claude_fixer_converged_head={HEAD}" in body
 	assert "[claude-autofix]" in body
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
@@ -514,6 +521,18 @@ def test_gate_accepts_a_verified_convergence_dispatch():
 	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_converged"
 	assert out["deterministic_skip"] == "false"
 	assert out["head_sha"] == HEAD
+
+
+def test_gate_rejects_an_embedded_or_stale_verdict_for_current_head():
+	for comments in (
+		[_c(HANDOFF + "\nReply with `" + VERDICT + "`.")],
+		[_c(HANDOFF), _c(VERDICT), _c(HANDOFF.replace("round=1", "round=2"))],
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=comments, converged_head=HEAD)
+		assert proc.returncode == 0, proc.stderr
+		assert out["claude_fixer_converged"] == "false"
+		assert out["skip_reason"] == "claude_fixer_converged_unverified"
 
 
 def test_gate_rejects_convergence_without_verdict_stale_head_or_non_fixer_pr():

@@ -762,8 +762,13 @@ jobs:
               if [ "${gate_marker_fetch_state}" != "ok" ]; then
                 claude_fixer_converged_detail="comments_${gate_marker_fetch_state}"
               elif jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
-                  (any(.[]; .author_login == $author and ((.body // "") | contains("<!-- ai:claude-fixer-handoff:v1 kind=findings head=" + $head + " ")))) and
-                  (any(.[]; ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")) and ((.body // "") | contains("<!-- ai:claude-fixer-verdict:v1 head=" + $head + " -->"))))
+                  ([.[] | select((.id | type) == "number" and .author_login == $author and
+                    ((.body // "") | test("<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->")))] | max_by(.id)) as $latest_handoff |
+                  $latest_handoff != null and
+                  (($latest_handoff.body // "") | contains("<!-- ai:claude-fixer-handoff:v1 kind=findings head=" + $head + " ")) and
+                  any(.[]; (.id | type) == "number" and .id > $latest_handoff.id and
+                    ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")) and
+                    ((.body // "") | contains("<!-- ai:claude-fixer-verdict:v1 head=" + $head + " -->")))
                 ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
                 CLAUDE_FIXER_CONVERGED="true"
                 SKIP_REASON="claude_fixer_converged"

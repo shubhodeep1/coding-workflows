@@ -120,7 +120,7 @@ fi
   echo
   echo "Claude-fixer mode: the GPT editor did not run. The \`/implement-plan-claude\` session judges each finding against the code, then either"
   echo "- fixes the valid ones in **one** commit whose subject starts with \`[claude-autofix]\` and pushes it (the push starts the next review round; the commits count toward \`MAX_AUTOFIX_ITERATIONS\` like \`[ai-autofix]\` ones), or"
-  echo "- when nothing valid is left, replies with a comment listing each finding as rejected with a reason and ending in \`<!-- ai:claude-fixer-verdict:v1 head=${HEAD_SHA} -->\`, then dispatches this workflow with \`claude_fixer_converged_head=${HEAD_SHA}\`, which enables auto-merge on this head."
+  echo "- when nothing valid is left, replies with a separate comment listing each finding as rejected with a reason and ending in the \`ai:claude-fixer-verdict:v1\` marker for this head, then dispatches this workflow with \`claude_fixer_converged_head=${HEAD_SHA}\`, which enables auto-merge on this head."
   echo
   echo "<!-- ai:claude-fixer-handoff:v1 kind=findings head=${HEAD_SHA} round=${claude_fixer_round} -->"
 } > "${claude_fixer_body_file}"

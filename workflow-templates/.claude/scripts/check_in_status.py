@@ -234,9 +234,15 @@ def _check_claude_fixer_pr(repo: str, number: int, head_sha: str, head_ref: str,
 		body = comment.get("body") or ""
 		if not isinstance(body, str):
 			continue
+		current_head_handoff = False
 		for match in FIXER_HANDOFF_RE.finditer(body):
 			if match.group(2) == head_sha:
 				latest_handoff = (match.group(1), int(match.group(3)))
+				answered = False
+				current_head_handoff = True
+				break
+		if current_head_handoff:
+			continue
 		for match in FIXER_VERDICT_RE.finditer(body):
 			if match.group(1) == head_sha:
 				answered = True
