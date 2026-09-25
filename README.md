@@ -17,6 +17,8 @@ This repository contains reusable `workflow_call` workflows that power the full 
 9. **Update Workflows** — Automatically updates existing and creates new workflow wrappers in consumer repos when upstream templates change
 10. **Security Audit (source repo only)** — Weekly/manual default-branch OWASP Top 10 + STRIDE audit that records findings on a stable tracker issue and opens bounded follow-ups
 
+Review/autofix stages `scripts/review_pre_review_merge_topology.sh`, `scripts/review_detect_merge_conflicts.sh`, and `scripts/review_append_iteration_summary.sh` from the workflow support ref. The first two retain their existing success gates; the final summary step still runs with `always()` when a runtime directory exists. If support staging did not complete, the summary tries the checked-out main support snapshot and then the primary support checkout; if neither contains the helper, it logs a warning and leaves the job outcome unchanged. No new configuration or manual setup is needed.
+
 For the issue → PR pipeline state machine and the full command vocabulary, see [`docs/how-it-works.md`](docs/how-it-works.md).
 
 ### Memory System

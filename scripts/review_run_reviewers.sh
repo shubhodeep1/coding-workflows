@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Review steps clear BASH_ENV, so enter the worktree explicitly before reading relative prompt files.
+if [ -n "${WORKSPACE_PATH:-}" ]; then
+  cd "${WORKSPACE_PATH}"
+fi
 # Source rate-limit-aware GH API helpers (provides gh_retry and the
 # Telegram admin alert on GH API rate-limit events).
 if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then

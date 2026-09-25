@@ -176,7 +176,7 @@ def test_implement_preflight_lints_title_and_body_together():
 	workflow = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
 	assert 'PR_TITLE_FILE="${RUNTIME_DIR}/pr-body-lint/title.txt"' in workflow
 	assert 'PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"' in workflow
-	assert 'PR_LINT_FILE="${RUNTIME_DIR}/pr-body-lint/lint-input.txt"' in workflow
+	assert 'PR_LINT_FILE="${POST_AGENT_ARTIFACT_DIR}/pr-body-lint/lint-input.txt"' in workflow
 	assert 'PR_TITLE="AI implementation for issue #${ISSUE_NUMBER}"' in workflow
 	assert "printf '%s\\n\\n' \"${PR_TITLE}\" > \"${PR_LINT_FILE}\"" in workflow
 	assert 'cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"' in workflow
@@ -398,6 +398,26 @@ def test_main_exit_codes():
 	finally:
 		import shutil
 		shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_offline_issue_label_map_avoids_github_lookup():
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory(prefix="lint-pr-body-map-") as directory:
+		label_map = Path(directory) / "labels.json"
+		label_map.write_text(
+			'{"owner/repo#7":["ai:orchestrator-tracking"],"owner/repo#8":[]}\n',
+			encoding="utf-8",
+		)
+		loaded = mod._load_issue_label_map(label_map)
+		violations, errors = mod.lint(
+			pr_body="Fixes #7\nCloses #8\n",
+			commit_messages=[],
+			repo="owner/repo",
+			fail_open_on_lookup_error=False,
+			label_lookup=lambda repo, issue: loaded.get((repo, issue)),
+		)
+		assert [violation.issue for violation in violations] == [7]
+		assert errors == []
 
 
 def main() -> int:

@@ -10,7 +10,9 @@ that failure classification is correct.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -30,7 +32,10 @@ FULL_RM_LINE = (
 
 
 def _workflow() -> str:
-    return REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
+    return REVIEW_AUTOFIX_WF.read_text(encoding="utf-8") + "\n" + "\n".join(
+        (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
+        for name in ("review_pre_review_merge_topology.sh", "review_detect_merge_conflicts.sh")
+    )
 
 
 def _section(start_marker: str, end_marker: str) -> str:
@@ -39,7 +44,15 @@ def _section(start_marker: str, end_marker: str) -> str:
     assert start != -1, f"Expected section start marker: {start_marker!r}"
     end = wf.find(end_marker, start)
     assert end != -1, f"Expected section end marker after {start_marker!r}: {end_marker!r}"
-    return wf[start:end]
+    section = wf[start:end]
+    for step_name, script_name in (
+        ("Pre-review deterministic merge-topology gate", "review_pre_review_merge_topology.sh"),
+        ("Detect merge conflicts", "review_detect_merge_conflicts.sh"),
+    ):
+        if start_marker == f"- name: {step_name}":
+            assert f'bash "${{SUPPORT_SCRIPTS_DIR}}/{script_name}"' in section
+            return section + "\n" + (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+    return section
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +81,7 @@ def test_known_ci_artifacts_removed_before_git_reset_in_detect_step():
     )
     # Match the actual git command (not a comment line) by requiring a newline
     # immediately before the indented command.
-    reset_match = re.search(r"\n\s+git reset --hard HEAD\s*\n", detect_step)
+    reset_match = re.search(r"\n\s*git reset --hard HEAD\s*\n", detect_step)
     rm_pos = detect_step.find(FULL_RM_LINE)
     assert rm_pos != -1, (
         f"Expected {FULL_RM_LINE!r} to appear in the Detect merge conflicts step"
@@ -499,3 +512,20 @@ def test_all_merge_probes_share_the_promisor_recovery():
         "probe + backfill retry, in each of the two merge-performing steps). A "
         "new probe must carry the promisor recovery too."
     )
+
+
+def test_review_model_helpers_enter_worktree_without_bash_env(tmp_path: Path):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    for script_name in (
+        "review_run_reviewers.sh", "review_apply_fixes.sh",
+        "review_conflict_resolve.sh", "review_rb_judge.sh",
+    ):
+        script = (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+        entry = script.split('if [ -n "${WORKSPACE_PATH:-}" ]; then', 1)[1].split("\nfi", 1)[0]
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", 'if [ -n "${WORKSPACE_PATH:-}" ]; then' + entry + "\nfi\npwd -P"],
+            cwd=tmp_path, env=dict(os.environ, WORKSPACE_PATH=str(worktree), BASH_ENV="", ENV=""),
+            capture_output=True, text=True, check=True,
+        )
+        assert result.stdout.strip() == str(worktree), script_name

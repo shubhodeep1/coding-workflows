@@ -8,6 +8,7 @@ import http.client
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import socket
 import tempfile
@@ -16,6 +17,8 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SANDBOX = REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh"
@@ -23,6 +26,581 @@ PROXY = REPO_ROOT / "scripts" / "model_provider_proxy.py"
 PACKAGE_PROXY = REPO_ROOT / "scripts" / "package_download_proxy.py"
 TRUSTED_GIT_WRITE = REPO_ROOT / "scripts" / "trusted_git_write.sh"
 CAUSALITY = REPO_ROOT / "scripts" / "security_audit_causality.py"
+WORKSPACE_GUARD = REPO_ROOT / "scripts" / "post_agent_workspace_guard.py"
+RESOLVER_GUARD = REPO_ROOT / "scripts" / "check_resolver_diff.sh"
+
+
+def test_workspace_guard_quarantines_ignored_python_startup_payload() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		(workspace / ".gitignore").write_text("*.py\n", encoding="utf-8")
+		(workspace / "tracked.txt").write_text("base\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(workspace), "add", ".gitignore", "tracked.txt"], check=True)
+		subprocess.run(
+			["git", "-C", str(workspace), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+			check=True,
+		)
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "sitecustomize.py").write_text("raise RuntimeError('loaded')\n", encoding="utf-8")
+		changed = runtime / "changed.txt"
+		report = runtime / "report.json"
+		quarantine = runtime / "quarantine"
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(quarantine), "--changed-paths-out", str(changed),
+				"--report", str(report),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20
+		assert not (workspace / "sitecustomize.py").exists()
+		assert (quarantine / "sitecustomize.py").is_file()
+		assert "sitecustomize.py" in changed.read_text(encoding="utf-8").splitlines()
+		assert json.loads(report.read_text(encoding="utf-8"))["rejected"][0]["reason"] == "python-startup-path"
+
+
+def test_workspace_guard_restores_authorized_new_regular_file() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "new-source.txt").write_text("safe\n", encoding="utf-8")
+		changed = runtime / "changed.txt"
+		report = runtime / "report.json"
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"), "--changed-paths-out", str(changed),
+				"--report", str(report),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert (workspace / "new-source.txt").read_text(encoding="utf-8") == "safe\n"
+		assert json.loads(report.read_text(encoding="utf-8"))["restored"] == ["new-source.txt"]
+
+
+def test_workspace_guard_refuses_forged_workspace_manifest() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		manifest = root / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot",
+			 "--workspace", str(workspace), "--manifest", str(manifest)], check=True,
+		)
+		payload = json.loads(manifest.read_text(encoding="utf-8"))
+		payload["workspace"]["inode"] += 1
+		manifest.write_text(json.dumps(payload), encoding="utf-8")
+		(workspace / "safe.txt").write_text("safe\n", encoding="utf-8")
+		result = subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+			 "--workspace", str(workspace), "--manifest", str(manifest),
+			 "--quarantine-dir", str(root / "quarantine"),
+			 "--changed-paths-out", str(root / "changed.txt"), "--report", str(root / "report.json")],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode != 0
+		assert not (root / "changed.txt").exists()
+		assert not (root / "report.json").exists()
+
+
+def test_workspace_guard_detects_symlink_to_git_metadata() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "metadata-link").symlink_to(".git")
+		changed = runtime / "changed.txt"
+		report = runtime / "report.json"
+		quarantine = runtime / "quarantine"
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(quarantine), "--changed-paths-out", str(changed),
+				"--report", str(report),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20
+		assert not (workspace / "metadata-link").exists()
+		assert (quarantine / "metadata-link").is_symlink()
+		assert json.loads(report.read_text(encoding="utf-8"))["rejected"][0]["reason"] == "unsupported-object"
+
+
+def test_workspace_guard_preserves_safe_file_when_rejecting_sibling() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "safe.txt").write_text("safe\n", encoding="utf-8")
+		(workspace / "sitecustomize.py").write_text("raise RuntimeError('loaded')\n", encoding="utf-8")
+		report = runtime / "report.json"
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"),
+				"--changed-paths-out", str(runtime / "changed.txt"), "--report", str(report),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20
+		assert (workspace / "safe.txt").read_text(encoding="utf-8") == "safe\n"
+		assert not (workspace / "sitecustomize.py").exists()
+		assert json.loads(report.read_text(encoding="utf-8"))["restored"] == ["safe.txt"]
+
+
+def test_workspace_guard_rejects_nested_github_and_prior_symlink_type_change() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		(workspace / "tracked-link").symlink_to("target")
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "tracked-link").unlink()
+		(workspace / "tracked-link").write_text("replacement\n", encoding="utf-8")
+		(workspace / "src" / ".github").mkdir(parents=True)
+		(workspace / "src" / ".github" / "payload.txt").write_text("hidden\n", encoding="utf-8")
+		report = runtime / "report.json"
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"),
+				"--changed-paths-out", str(runtime / "changed.txt"), "--report", str(report),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20
+		reasons = {row["path"]: row["reason"] for row in json.loads(report.read_text(encoding="utf-8"))["rejected"]}
+		assert reasons["tracked-link"] == "unsupported-object"
+		assert reasons["src/.github"] == "hidden-path"
+
+
+def test_workspace_guard_reports_regular_file_replaced_by_directory() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		(workspace / "config.py").write_text("VALUE = 1\n", encoding="utf-8")
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "config.py").unlink()
+		(workspace / "config.py").mkdir()
+		(workspace / "config.py" / "payload.py").write_text("VALUE = 2\n", encoding="utf-8")
+		changed = runtime / "changed.txt"
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"), "--changed-paths-out", str(changed),
+				"--report", str(runtime / "report.json"),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "config.py" in changed.read_text(encoding="utf-8").splitlines()
+
+
+def test_workspace_guard_restores_unreadable_directory_mode_before_blocking() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		protected = workspace / "protected"
+		protected.mkdir()
+		(protected / "base.txt").write_text("base\n", encoding="utf-8")
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(protected / "sitecustomize.py").write_text("raise RuntimeError('loaded')\n", encoding="utf-8")
+		protected.chmod(0)
+		report = runtime / "report.json"
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"),
+				"--changed-paths-out", str(runtime / "changed.txt"), "--report", str(report),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20
+		assert protected.stat().st_mode & 0o777 == 0o755
+		assert not (protected / "sitecustomize.py").exists()
+		reasons = {row["path"]: row["reason"] for row in json.loads(report.read_text(encoding="utf-8"))["rejected"]}
+		assert reasons["protected"] == "directory-mode-changed"
+		assert reasons["protected/sitecustomize.py"] == "python-startup-path"
+
+
+def test_workspace_guard_normalizes_new_unreadable_directory_before_quarantine() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		created = workspace / "output"
+		created.mkdir()
+		(created / "safe.txt").write_text("safe\n", encoding="utf-8")
+		(created / "sitecustomize.py").write_text("raise RuntimeError('loaded')\n", encoding="utf-8")
+		created.chmod(0)
+		report = runtime / "report.json"
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"),
+				"--changed-paths-out", str(runtime / "changed.txt"), "--report", str(report),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20, result.stderr
+		assert created.stat().st_mode & 0o700 == 0o700
+		assert (created / "safe.txt").read_text(encoding="utf-8") == "safe\n"
+		assert not (created / "sitecustomize.py").exists()
+		assert (runtime / "quarantine" / "output" / "sitecustomize.py").is_file()
+		reasons = {row["path"]: row["reason"] for row in json.loads(report.read_text(encoding="utf-8"))["rejected"]}
+		assert reasons["output"] == "directory-mode-changed"
+		assert reasons["output/sitecustomize.py"] == "python-startup-path"
+
+
+def test_workspace_guard_quarantines_inside_unchanged_restrictive_directory() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		restricted = workspace / "restricted"
+		restricted.mkdir()
+		restricted.chmod(0)
+		manifest = runtime / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		restricted.chmod(0o700)
+		(restricted / "sitecustomize.py").write_text("raise RuntimeError('loaded')\n", encoding="utf-8")
+		restricted.chmod(0)
+		result = subprocess.run(
+			[
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"),
+				"--changed-paths-out", str(runtime / "changed.txt"),
+				"--report", str(runtime / "report.json"),
+			],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20, result.stderr
+		assert restricted.stat().st_mode & 0o777 == 0
+		restricted.chmod(0o700)
+		assert not (restricted / "sitecustomize.py").exists()
+		assert (runtime / "quarantine" / "restricted" / "sitecustomize.py").is_file()
+
+
+def test_validator_role_uses_isolated_no_site_python_outside_workspace() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir(mode=0o700)
+		validator_output = runtime / "validator-output"
+		validator_output.mkdir()
+		validator_result = validator_output / "result.txt"
+		sentinel = root / "startup-ran"
+		(workspace / "sitecustomize.py").write_text(
+			f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('bad')\n",
+			encoding="utf-8",
+		)
+		environment = os.environ.copy()
+		environment.update(
+			{
+				"GH_PAT": "synthetic-secret",
+				"PYTHONPATH": str(workspace),
+				"RUNTIME_DIR": str(runtime),
+				"RUNNER_TEMP": str(root),
+				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+			}
+		)
+		result = subprocess.run(
+			[
+				"bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+				"--runtime-dir", str(runtime), "--writable-output-dir", str(validator_output),
+				"--", "/usr/bin/python3", "-I", "-S", "-c",
+				"import json,os,pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ok'); print(json.dumps([sys.flags.isolated,sys.flags.no_site,os.getcwd(),os.getenv('GH_PAT')]))",
+				str(validator_result),
+			],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		isolated, no_site, cwd, credential = json.loads(result.stdout)
+		assert (isolated, no_site, credential) == (1, 1, None)
+		assert Path(cwd) != workspace
+		assert not sentinel.exists()
+		assert validator_result.read_text(encoding="utf-8") == "ok"
+
+
+def test_resolver_fingerprint_baseline_capture_uses_validator_output() -> None:
+	resolver_script = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	assert 'run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py"' in resolver_script
+	assert '--baseline-fingerprints-state "${RESOLVER_FP_BASELINE_STATE_FILE}"' in resolver_script
+	with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		runtime = root / "runtime"
+		runtime.mkdir(mode=0o700)
+		output_dir = runtime / "validator-output-resolver"
+		output_dir.mkdir()
+		fingerprints = root / "fingerprints.json"
+		fingerprints.write_text("{}\n", encoding="utf-8")
+		baseline = output_dir / "baseline.json"
+		environment = os.environ.copy()
+		environment.update({"RUNNER_TEMP": str(root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1"})
+		result = subprocess.run(
+			["bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+			 "--runtime-dir", str(runtime), "--writable-output-dir", str(output_dir),
+			 "--", "/usr/bin/python3", "-I", "-S", str(REPO_ROOT / "scripts/verify_integration_fingerprints.py"),
+			 "--repo-root", str(workspace), "--baseline-fingerprints-state", str(baseline), str(fingerprints)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert json.loads(baseline.read_text(encoding="utf-8"))["fingerprints"] == {}
+
+
+def test_private_tmp_units_exchange_guard_artifacts() -> None:
+	if shutil.which("systemd-run") is None:
+		pytest.skip("systemd-run is unavailable")
+	probe = subprocess.run(
+		["systemd-run", "--user", "--wait", "--pipe", "--collect", "--service-type=exec", "/usr/bin/true"],
+		capture_output=True, text=True, check=False,
+	)
+	if probe.returncode:
+		pytest.skip("systemd user manager is unavailable")
+	with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		artifacts = root / "artifacts"
+		artifacts.mkdir(mode=0o700)
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		environment = os.environ.copy()
+		environment.pop("UNTRUSTED_PROCESS_SANDBOX_TEST_MODE", None)
+		environment["RUNNER_TEMP"] = str(root)
+		manifest = artifacts / "manifest.json"
+		base = ["bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(workspace),
+			"--runtime-dir", str(artifacts)]
+		snapshot = subprocess.run(
+			base + ["--guard-action", "snapshot", "--", "/usr/bin/python3", "-I", "-S",
+				str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert snapshot.returncode == 0, snapshot.stderr
+		assert manifest.is_file()
+		(workspace / "safe.txt").write_text("safe\n", encoding="utf-8")
+		report = artifacts / "report.json"
+		paths = artifacts / "paths.txt"
+		reconcile = subprocess.run(
+			base + ["--guard-action", "reconcile", "--", "/usr/bin/python3", "-I", "-S",
+				str(WORKSPACE_GUARD), "reconcile", "--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(artifacts / "quarantine"), "--report", str(report),
+				"--changed-paths-out", str(paths)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert reconcile.returncode == 0, reconcile.stderr
+		assert json.loads(report.read_text(encoding="utf-8"))["changed_paths"] == ["safe.txt"]
+		assert paths.read_text(encoding="utf-8") == "safe.txt\n"
+		with tempfile.NamedTemporaryFile(dir="/tmp") as host_input:
+			inaccessible = subprocess.run(
+				base + ["--guard-action", "snapshot", "--", "/usr/bin/python3", "-I", "-S",
+					str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", host_input.name],
+				env=environment, capture_output=True, text=True, check=False,
+			)
+			assert inaccessible.returncode != 0
+		validator_output = artifacts / "validator-output"
+		validator_output.mkdir()
+		validation = subprocess.run(
+			["bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+				"--runtime-dir", str(artifacts), "--writable-output-dir", str(validator_output),
+				"--", "/usr/bin/python3", "-I", "-S", "-c",
+				"import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ok'); "
+				"pathlib.Path(sys.argv[2]).write_text('bad')",
+				str(validator_output / "result.txt"), str(artifacts / "sibling.txt")],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert validation.returncode != 0
+		assert (validator_output / "result.txt").read_text(encoding="utf-8") == "ok"
+		assert not (artifacts / "sibling.txt").exists()
+		with socket.socket() as listener:
+			listener.bind(("127.0.0.1", 0))
+			listener.listen(1)
+			isolated_env = dict(environment, GH_TOKEN="private", OPENROUTER_API_KEY="private")
+			no_credentials_or_network = subprocess.run(
+				["bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+				 "--runtime-dir", str(artifacts), "--", "/usr/bin/python3", "-I", "-S", "-c",
+				 "import os,socket,sys; assert 'GH_TOKEN' not in os.environ; "
+				 "assert 'OPENROUTER_API_KEY' not in os.environ; "
+				 "probe=socket.socket(); probe.settimeout(2); "
+				 "assert probe.connect_ex(('127.0.0.1', int(sys.argv[1]))) != 0",
+				 str(listener.getsockname()[1])],
+				env=isolated_env, capture_output=True, text=True, check=False,
+			)
+			assert no_credentials_or_network.returncode == 0, no_credentials_or_network.stderr
+
+
+def test_resolver_python_syntax_validation_is_read_only() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir(mode=0o700)
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		(workspace / "valid.py").write_text("VALUE = 1\n", encoding="utf-8")
+		conflicted = runtime / "conflicted.txt"
+		touched = runtime / "touched.txt"
+		conflicted.write_text("valid.py\n", encoding="utf-8")
+		touched.write_text("valid.py\n", encoding="utf-8")
+		environment = os.environ.copy()
+		environment.update(
+			{
+				"POST_AGENT_VALIDATION_SANDBOX": str(SANDBOX),
+				"POST_AGENT_VALIDATION_RUNTIME_DIR": str(runtime),
+				"RUNNER_TEMP": str(root),
+				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+			}
+		)
+		result = subprocess.run(
+			[
+				"bash", str(RESOLVER_GUARD), "--repo-root", str(workspace),
+				"--conflicted-set", str(conflicted), "--touched-set", str(touched),
+			],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert not (workspace / "__pycache__").exists()
+
+
+def test_resolver_syntax_validation_accepts_deleted_python_path() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		removed = workspace / "removed.py"
+		removed.write_text("VALUE = 1\n", encoding="utf-8")
+		removed.unlink()
+		conflicted = root / "conflicted.txt"
+		touched = root / "touched.txt"
+		conflicted.write_text("removed.py\n", encoding="utf-8")
+		touched.write_text("removed.py\n", encoding="utf-8")
+		result = subprocess.run(
+			["bash", str(RESOLVER_GUARD), "--repo-root", str(workspace),
+			 "--conflicted-set", str(conflicted), "--touched-set", str(touched)],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "touched=1 conflicted=1" in result.stdout
+
+
+@pytest.mark.parametrize(("script_name", "initializer_end"), [
+	("review_apply_fixes.sh", "\n\nrun_editor_codex_attempt()"),
+	("review_conflict_resolve.sh", "\nrun_resolver_validator_python()"),
+	("review_rb_judge.sh", "\nrun_review_rb_validator_python()"),
+	("orchestrate_poll_process.sh", "\nTRUSTED_POLLER_REVIEW_SCOPE_GUARD="),
+])
+def test_staged_writer_creates_unit_visible_artifacts_without_workflow_export(
+	script_name: str, initializer_end: str,
+) -> None:
+	script = (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+	start = script.index('if [ -z "${POST_AGENT_ARTIFACT_DIR:-}" ]; then')
+	initializer = script[start:script.index(initializer_end, start)]
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		env_file = root / "github-env.txt"
+		env_file.touch()
+		environment = os.environ.copy()
+		environment.pop("POST_AGENT_ARTIFACT_DIR", None)
+		environment.update({"RUNNER_TEMP": str(root), "GITHUB_ENV": str(env_file),
+			"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2"})
+		result = subprocess.run(
+			["bash", "-euo", "pipefail", "-c", initializer + '\nprintf "%s\\n" "$POST_AGENT_ARTIFACT_DIR"'],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		artifact = Path(result.stdout.strip())
+		assert artifact.parent == root
+		assert artifact.stat().st_mode & 0o777 == 0o700
+		assert env_file.read_text(encoding="utf-8") == f"POST_AGENT_ARTIFACT_DIR={artifact}\n"
 
 
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
@@ -306,6 +884,40 @@ def test_workflows_do_not_give_github_tokens_to_primary_model_steps() -> None:
 	assert "untrusted_process_sandbox.sh" in (REPO_ROOT / "scripts/opencode_helpers.sh").read_text(encoding="utf-8")
 	assert 'BASH_ENV: ""' in implement_step
 	assert 'BASH_ENV: ""' in editor_step
+
+
+def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
+	implement = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	for role in ("implement", "repair"):
+		assert f"post-agent-{role}-" in implement
+	assert implement.count("post_agent_workspace_guard.py\" snapshot") >= 2
+	assert implement.count("post_agent_workspace_guard.py\" reconcile") >= 2
+
+	for script_name in (
+		"review_apply_fixes.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+		"orchestrate_poll_process.sh",
+	):
+		script = (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+		assert "post_agent_workspace_guard.py" in script or "TRUSTED_POLLER_WORKSPACE_GUARD" in script
+		assert "workspace-guard" in script
+		assert "reconcile" in script
+
+	commit_step = (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8").split(
+		"      - name: Commit changes\n", 1
+	)[1].split("\n      - name:", 1)[0]
+	assert "GH_PAT: ${{ secrets.GH_PAT }}" not in commit_step
+	assert "refusing retry or partial-work salvage" in implement
+	assert "Review-blocked fix workspace guard rejected" in (
+		REPO_ROOT / "scripts" / "review_rb_judge.sh"
+	).read_text(encoding="utf-8")
+	assert "--writable-output-dir" in (REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh").read_text(
+		encoding="utf-8"
+	)
+	resolver_guard = RESOLVER_GUARD.read_text(encoding="utf-8")
+	assert "ast.parse" in resolver_guard
+	assert "-m py_compile" not in resolver_guard
 
 
 def test_trusted_git_writer_never_executes_repository_hooks() -> None:

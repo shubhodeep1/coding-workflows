@@ -1,0 +1,3 @@
+<!-- changelog: fixed -->
+- **Post-agent guards exchange manifests across isolated systemd units.** Implement, review/autofix, and poller workflows now keep per-run guard and validator artifacts in a mode-0700 `RUNNER_TEMP` directory outside host `/tmp` and the workspace. Guard rejection stops publication, and validator units keep their credentialless, network-denied boundary without changing `PrivateTmp=yes`.
+  Review model helpers also enter `WORKSPACE_PATH` explicitly when their workflow steps clear `BASH_ENV`, preserving access to pre-assembled prompts and ensuring edits target the review worktree.

@@ -41,6 +41,10 @@
 
 set -euo pipefail
 
+if [ -n "${WORKSPACE_PATH:-}" ]; then
+  cd "${WORKSPACE_PATH}"
+fi
+
 # Deterministic-resolution short-circuit: review_conflict_prepare.sh
 # commits the [ai-merge-resolve] merge itself when every unmerged path
 # was deterministically resolvable (currently: the
@@ -60,6 +64,29 @@ fi
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+post_agent_workspace_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR:-scripts}/post_agent_workspace_guard.py" 2>/dev/null | awk '{print $1}')"
+if ! [[ "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+  || [ "${post_agent_workspace_guard_actual_sha256}" != "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256}" ]; then
+  echo "::error::Post-agent workspace guard is unavailable or changed after staging." >&2
+  exit 1
+fi
+if [ -z "${POST_AGENT_ARTIFACT_DIR:-}" ]; then
+  if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "${RUNNER_TEMP}" ]; then
+    echo "::error::RUNNER_TEMP is required for post-agent artifacts." >&2
+    exit 78
+  fi
+  POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-review-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}.XXXXXX")"
+  export POST_AGENT_ARTIFACT_DIR
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    printf 'POST_AGENT_ARTIFACT_DIR=%s\n' "${POST_AGENT_ARTIFACT_DIR}" >> "${GITHUB_ENV}"
+  fi
+fi
+run_resolver_validator_python() {
+  bash "${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh" \
+    --role validator --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+    --writable-output-dir "${POST_AGENT_ARTIFACT_DIR}/validator-output-resolver" \
+    -- /usr/bin/python3 -I -S "$@"
+}
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
@@ -469,7 +496,8 @@ RESOLVER_MARKER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_marker_violations.txt"
 RESOLVER_FP_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_fp_violations.txt"
 RESOLVER_FP_VIOLATIONS_PREV_FILE="${RUNTIME_DIR}/resolver_fp_violations_prev.txt"
 RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt"
-RESOLVER_FP_BASELINE_STATE_FILE="${RUNTIME_DIR}/resolver_fp_baseline_state.json"
+mkdir -p "${POST_AGENT_ARTIFACT_DIR}/validator-output-resolver"
+RESOLVER_FP_BASELINE_STATE_FILE="${POST_AGENT_ARTIFACT_DIR}/validator-output-resolver/resolver_fp_baseline_state.json"
 RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact.json"
 
 # Snapshot every in-scope file (the resolver's allowlist, which
@@ -574,7 +602,8 @@ _capture_fingerprints_baseline()
   fi
   local _baseline_capture_exit=0
   INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+    run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      --repo-root "${PWD}" \
       --baseline-fingerprints-state "${RESOLVER_FP_BASELINE_STATE_FILE}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" || _baseline_capture_exit=$?
   if [ "${_baseline_capture_exit}" -ne 0 ] || [ ! -s "${RESOLVER_FP_BASELINE_STATE_FILE}" ]; then
@@ -941,7 +970,8 @@ _verify_fingerprints_soft() {
     )
   fi
   INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+    run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      --repo-root "${PWD}" \
       "${_verifier_args[@]}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" \
       > "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" 2>&1 || RESOLVER_FP_EXIT=$?
@@ -1873,6 +1903,17 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # _build_retry_prompt and the retry-log line for every iteration.
   _codex_exit=0
   _attempt_started_at=$(date +%s)
+  resolver_workspace_manifest="${POST_AGENT_ARTIFACT_DIR}/post-agent-resolver-${attempt}.manifest.json"
+  resolver_workspace_paths="${POST_AGENT_ARTIFACT_DIR}/post-agent-resolver-${attempt}.paths.txt"
+  resolver_workspace_report="${POST_AGENT_ARTIFACT_DIR}/post-agent-resolver-${attempt}.report.json"
+  resolver_workspace_quarantine="${POST_AGENT_ARTIFACT_DIR}/post-agent-resolver-${attempt}.quarantine"
+  if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+    --role workspace-guard --guard-action snapshot --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
+    --workspace "${PWD}" --manifest "${resolver_workspace_manifest}"; then
+    echo "::error::Conflict resolver workspace snapshot failed for attempt ${attempt}; aborting before model execution."
+    exit 78
+  fi
   # Strip any invalid UTF-8 bytes that may have leaked into the
   # retry-prompt (rebuilt inside the loop, so we sanitise each
   # iteration). See sanitize_codex_prompt_file in scripts/gh_helpers.sh.
@@ -1924,6 +1965,20 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         || _codex_exit=$?
     fi
   fi
+  if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+    --role workspace-guard --guard-action reconcile --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
+    --workspace "${PWD}" --manifest "${resolver_workspace_manifest}" \
+    --quarantine-dir "${resolver_workspace_quarantine}" \
+    --changed-paths-out "${resolver_workspace_paths}" --report "${resolver_workspace_report}"; then
+    echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation; aborting before output parsing."
+    exit 78
+  fi
+  if [ "${_codex_exit}" -eq 78 ]; then
+    echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation."
+    emit_conflict_resolver_substate "Failed" "${attempt}"
+    exit 78
+  fi
   resolver_clean_output="${tmp_output}.ansi-clean"
   if opencode_strip_ansi < "${tmp_output}" > "${resolver_clean_output}"; then
     mv "${resolver_clean_output}" "${tmp_output}"
@@ -1941,11 +1996,6 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${_stall_state}" = "observed" ]; then
     echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
     emit_conflict_resolver_substate "codex_stall_observed" "${attempt}"
-  fi
-  if [ "${_codex_exit}" -eq 78 ]; then
-    echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation."
-    emit_conflict_resolver_substate "Failed" "${attempt}"
-    exit 78
   fi
   # Graceful-SIGTERM-at-timer-boundary diagnostic. If OpenCode installs
   # a SIGTERM handler that completes cleanup and exits 0 within the
@@ -2212,7 +2262,8 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         )
       fi
       INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-        python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+        run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+          --repo-root "${PWD}" \
           "${_final_verifier_args[@]}" \
           "${INTEGRATION_FINGERPRINTS_FILE}" || _final_fp_exit=$?
       if [ "${_final_fp_exit}" -eq 1 ]; then
@@ -2292,7 +2343,11 @@ if [ -n "$(git status --porcelain)" ]; then
     # comment block below the pre-snapshot diff for the full
     # rationale).
     RESOLVER_TOUCHED_FILE="${RUNTIME_DIR}/codex_touched_resolver.txt"
-    : > "${RESOLVER_TOUCHED_FILE}"
+    if [ -s "${resolver_workspace_paths:-/nonexistent}" ]; then
+      cp "${resolver_workspace_paths}" "${RESOLVER_TOUCHED_FILE}"
+    else
+      : > "${RESOLVER_TOUCHED_FILE}"
+    fi
     if [ -f "${PRE_RESOLVER_STATE_FILE:-/nonexistent}" ]; then
       PRE_UNTRACKED_LIST="$(mktemp)"
       POST_UNTRACKED_LIST="$(mktemp)"
@@ -2422,7 +2477,9 @@ if [ -n "$(git status --porcelain)" ]; then
       exit 1
     fi
 
-    if ! "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
+    if ! POST_AGENT_VALIDATION_SANDBOX="${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+      POST_AGENT_VALIDATION_RUNTIME_DIR="${POST_AGENT_ARTIFACT_DIR}" \
+      "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
         --conflicted-set "${CONFLICTED_PATHS_FILE}" \
         --touched-set    "${RESOLVER_TOUCHED_FILE}" \
         --conflict-spans "${CONFLICT_SPANS_FILE}" \
@@ -2511,7 +2568,7 @@ if [ -n "$(git status --porcelain)" ]; then
       exit 0
     fi
   fi
-  resolver_generated_advisory_staged_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/resolver-generated-advisory-staged.XXXXXX")"
+  resolver_generated_advisory_staged_file="$(mktemp "${POST_AGENT_ARTIFACT_DIR}/resolver-generated-advisory-staged.XXXXXX")"
   resolver_merge_head="$(git rev-parse --verify MERGE_HEAD 2>/dev/null || true)"
   if [ -n "${resolver_merge_head}" ]; then
     git diff --cached --name-only "${resolver_merge_head}" | sed '/^$/d' > "${resolver_generated_advisory_staged_file}"
@@ -2536,7 +2593,7 @@ if [ -n "$(git status --porcelain)" ]; then
     && [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
     && [ -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
     set +e
-    resolver_generated_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
+    resolver_generated_advisory_violations="$(run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
       --linked-issue-metadata-file "${LINKED_ISSUE_METADATA_FILE}" \
       --linked-issue-metadata-sha256 "${LINKED_ISSUE_METADATA_EXPECTED_SHA256:-}" \
       --staged-file "${resolver_generated_advisory_staged_file}" \

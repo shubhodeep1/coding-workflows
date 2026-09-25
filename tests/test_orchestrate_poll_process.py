@@ -264,8 +264,15 @@ def _run_poller_subprocess(
 		sandbox = Path(tempfile.mkdtemp(prefix="poller-sandbox-"))
 		owns_sandbox = True
 		_make_poller_sandbox(sandbox)
+	artifact_root = Path(tempfile.mkdtemp(prefix="poller-artifacts-", dir=sandbox.parent))
+	artifact_root.chmod(0o700)
+	shutil.copy2(REPO_ROOT / "scripts" / "post_agent_workspace_guard.py", artifact_root / "post_agent_workspace_guard.py")
+	shutil.copy2(REPO_ROOT / "scripts" / "files_touched_scope_guard.py", artifact_root / "files_touched_scope_guard.py")
 	try:
 		env = dict(env)
+		env["RUNNER_TEMP"] = str(sandbox.parent)
+		env.setdefault("POST_AGENT_ARTIFACT_DIR", str(artifact_root))
+		env.setdefault("UNTRUSTED_PROCESS_SANDBOX_TEST_MODE", "1")
 		# The review-autofix runner injects a BASH_ENV helper that cd's every
 		# bash subprocess back to WORKSPACE_PATH. Sandbox-based poller tests
 		# rely on cwd=str(sandbox), so strip that hook (and its companion
@@ -308,6 +315,7 @@ def _run_poller_subprocess(
 			)
 		return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 	finally:
+		shutil.rmtree(artifact_root, ignore_errors=True)
 		if owns_sandbox:
 			shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -20172,11 +20180,18 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# integration branches still pick up the shipped self-heal helpers.
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in wf_body
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in wf_body
-	assert (
-		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
-		'review_conflict_prepare.sh review_collect_pr_metadata.sh files_touched_scope_guard.py '
-		'render_prompt.py opencode_helpers.sh write_opencode_config.sh"'
-	) in stage_helper_body
+	main_primary_line = next(
+		line for line in stage_helper_body.splitlines() if line.startswith("MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=")
+	)
+	for atomic_runtime_file in (
+		"verify_integration_fingerprints.py",
+		"post_agent_workspace_guard.py",
+		"review_apply_fixes.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+		"untrusted_process_sandbox.sh",
+	):
+		assert atomic_runtime_file in main_primary_line
 	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in stage_helper_body
 	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in stage_helper_body
 	assert 'SUPPORT_SCRIPTS_DIR="scripts"' not in stage_helper_body
@@ -20205,6 +20220,7 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# when fingerprint verification rejects the resolver output.
 	assert "IS_INTEGRATION_SYNC" in resolve_body
 	assert "verify_integration_fingerprints.py" in resolve_body
+	assert '--repo-root "${integration_judge_workspace}"' in POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert "--baseline-fingerprints-state" in resolve_body
 	assert "--compare-against-baseline" in resolve_body
 	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in resolve_body
@@ -21552,9 +21568,9 @@ def test_poller_review_blocked_writer_uses_immutable_trusted_git_boundary() -> N
 	workflow = POLLER_WORKFLOW.read_text(encoding="utf-8")
 	assert 'TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"' in script
 	assert 'install -m 0755 scripts/trusted_git_write.sh "${TRUSTED_POLLER_GIT_WRITER}"' not in script
-	assert 'for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh check_resolver_diff.sh files_touched_scope_guard.py' in workflow
+	assert 'for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py check_resolver_diff.sh files_touched_scope_guard.py' in workflow
 	assert 'install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"' in workflow
-	assert 'TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${RUNTIME_DIR}/files_touched_scope_guard.py"' in script
+	assert 'TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${POST_AGENT_ARTIFACT_DIR}/files_touched_scope_guard.py"' in script
 	assert "--build-review-fix-authorization" in script
 	assert "--validate-review-fix-authorization" in script
 	assert '--conflict-spans "${rb_review_fix_spans_file}"' in script

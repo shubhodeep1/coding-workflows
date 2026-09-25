@@ -167,9 +167,24 @@ fi
 
 TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"
 TRUSTED_POLLER_RESOLVER_GUARD="${RUNTIME_DIR}/check_resolver_diff.sh"
-TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${RUNTIME_DIR}/files_touched_scope_guard.py"
+if [ -z "${POST_AGENT_ARTIFACT_DIR:-}" ]; then
+	if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "${RUNNER_TEMP}" ]; then
+		echo "::error::RUNNER_TEMP is required for post-agent artifacts." >&2
+		exit 78
+	fi
+	POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-poller-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}.XXXXXX")"
+	export POST_AGENT_ARTIFACT_DIR
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		printf 'POST_AGENT_ARTIFACT_DIR=%s\n' "${POST_AGENT_ARTIFACT_DIR}" >> "${GITHUB_ENV}"
+	fi
+fi
+TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${POST_AGENT_ARTIFACT_DIR}/files_touched_scope_guard.py"
+TRUSTED_POLLER_WORKSPACE_GUARD="${POST_AGENT_ARTIFACT_DIR}/post_agent_workspace_guard.py"
 UNTRUSTED_POLLER_SANDBOX="${RUNTIME_DIR}/untrusted_process_sandbox.sh"
 UNTRUSTED_POLLER_PROVIDER_PROXY="${RUNTIME_DIR}/model_provider_proxy.py"
+POLLER_VALIDATOR_OUTPUT_DIR="${POST_AGENT_ARTIFACT_DIR}/validator-output-poller"
+mkdir -p "${POLLER_VALIDATOR_OUTPUT_DIR}"
+TRUSTED_POLLER_WORKSPACE_GUARD_SHA256="$(sha256sum "${TRUSTED_POLLER_WORKSPACE_GUARD}" 2>/dev/null | awk '{print $1}')"
 if [ ! -f "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" ] && [ -f scripts/files_touched_scope_guard.py ]; then
 	install -m 0755 scripts/files_touched_scope_guard.py "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}"
 fi
@@ -186,10 +201,37 @@ prepare_untrusted_poller_runtime() {
 		echo "::error::Pre-staged review scope guard is unavailable" >&2
 		return 1
 	}
+	[ -x "${TRUSTED_POLLER_WORKSPACE_GUARD}" ] \
+		&& [[ "${TRUSTED_POLLER_WORKSPACE_GUARD_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
+		&& [ "$(sha256sum "${TRUSTED_POLLER_WORKSPACE_GUARD}" 2>/dev/null | awk '{print $1}')" = "${TRUSTED_POLLER_WORKSPACE_GUARD_SHA256}" ] || {
+		echo "::error::Pre-staged post-agent workspace guard is unavailable or changed" >&2
+		return 1
+	}
 	[ -x "${UNTRUSTED_POLLER_SANDBOX}" ] && [ -x "${UNTRUSTED_POLLER_PROVIDER_PROXY}" ] || {
 		echo "::error::Pre-staged untrusted-process runtime is unavailable" >&2
 		return 1
 	}
+}
+
+run_poller_workspace_guard() {
+	local guard_action="$1"
+	local guard_workspace="$2"
+	shift 2
+	prepare_untrusted_poller_runtime || return 1
+	bash "${UNTRUSTED_POLLER_SANDBOX}" \
+		--role workspace-guard --guard-action "${guard_action}" --workspace "${guard_workspace}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+		-- /usr/bin/python3 -I -S "${TRUSTED_POLLER_WORKSPACE_GUARD}" "${guard_action}" \
+		--workspace "${guard_workspace}" "$@"
+}
+
+run_poller_isolated_python() {
+	local validator_workspace="$1"
+	shift
+	prepare_untrusted_poller_runtime || return 1
+	bash "${UNTRUSTED_POLLER_SANDBOX}" \
+		--role validator --workspace "${validator_workspace}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+		--writable-output-dir "${POLLER_VALIDATOR_OUTPUT_DIR}" \
+		-- /usr/bin/python3 -I -S "$@"
 }
 
 run_untrusted_poller_codex() {
@@ -8609,18 +8651,18 @@ invoke_judge_for_integration_conflict() {
 		echo "::warning::Could not resolve immutable integration-conflict refs for PR #${final_pr}."
 		return 1
 	fi
-	integration_judge_workspace="$(mktemp -d "${RUNTIME_DIR}/integration-judge-worktree.XXXXXX")"
+	integration_judge_workspace="$(mktemp -d "${RUNNER_TEMP}/integration-judge-worktree.XXXXXX")"
 	rmdir "${integration_judge_workspace}"
 	if ! git worktree add --detach "${integration_judge_workspace}" "${integration_head_sha}" >/dev/null 2>&1; then
 		echo "::warning::Could not create isolated integration-conflict worktree for PR #${final_pr}."
 		return 1
 	fi
-	integration_allowed_paths_file="${RUNTIME_DIR}/integration_judge_allowed_${final_pr}.txt"
-	integration_actual_paths_file="${RUNTIME_DIR}/integration_judge_actual_${final_pr}.txt"
-	integration_conflict_spans_file="${RUNTIME_DIR}/integration_judge_conflict_spans_${final_pr}.json"
-	integration_clean_manifest_file="${RUNTIME_DIR}/integration_judge_clean_manifest_${final_pr}.tsv"
+	integration_allowed_paths_file="${POST_AGENT_ARTIFACT_DIR}/integration_judge_allowed_${final_pr}.txt"
+	integration_actual_paths_file="${POST_AGENT_ARTIFACT_DIR}/integration_judge_actual_${final_pr}.txt"
+	integration_conflict_spans_file="${POST_AGENT_ARTIFACT_DIR}/integration_judge_conflict_spans_${final_pr}.json"
+	integration_clean_manifest_file="${POST_AGENT_ARTIFACT_DIR}/integration_judge_clean_manifest_${final_pr}.tsv"
 	integration_merge_tree_output="${RUNTIME_DIR}/integration_judge_merge_tree_${final_pr}.txt"
-	integration_fingerprints_file="${RUNTIME_DIR}/integration_judge_fingerprints_${final_pr}.json"
+	integration_fingerprints_file="${POST_AGENT_ARTIFACT_DIR}/integration_judge_fingerprints_${final_pr}.json"
 	integration_merge_tree_rc=0
 	git -C "${integration_judge_workspace}" merge-tree --write-tree \
 		"${integration_head_sha}" "${default_head_sha}" > "${integration_merge_tree_output}" 2>/dev/null \
@@ -8887,16 +8929,29 @@ PY
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
-	if run_untrusted_poller_codex resolver "${integration_judge_workspace}" \
+	integration_workspace_manifest="${POST_AGENT_ARTIFACT_DIR}/post-agent-integration-${final_pr}.manifest.json"
+	integration_workspace_report="${POST_AGENT_ARTIFACT_DIR}/post-agent-integration-${final_pr}.report.json"
+	integration_workspace_quarantine="${POST_AGENT_ARTIFACT_DIR}/post-agent-integration-${final_pr}.quarantine"
+	run_poller_workspace_guard snapshot "${integration_judge_workspace}" \
+		--manifest "${integration_workspace_manifest}" || return 1
+	integration_model_rc=0
+	run_untrusted_poller_codex resolver "${integration_judge_workspace}" \
 		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
 		exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
 		--sandbox workspace-write < "${prompt_file}" > "${output_file}" \
-		2>> "${RUNTIME_DIR}/integration_judge.log"; then
-		{
-			git -C "${integration_judge_workspace}" diff --name-only "${integration_expected_tree}" --
-			git -C "${integration_judge_workspace}" ls-files --others --exclude-standard
-		} | sed '/^$/d' | LC_ALL=C sort -u > "${integration_actual_paths_file}"
-		if ! bash "${TRUSTED_POLLER_RESOLVER_GUARD}" \
+		2>> "${RUNTIME_DIR}/integration_judge.log" || integration_model_rc=$?
+	if ! run_poller_workspace_guard reconcile "${integration_judge_workspace}" \
+		--manifest "${integration_workspace_manifest}" \
+		--quarantine-dir "${integration_workspace_quarantine}" \
+		--changed-paths-out "${integration_actual_paths_file}" --report "${integration_workspace_report}"; then
+		echo "::warning::Integration-conflict workspace guard rejected PR #${final_pr}; discarding the isolated worktree."
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		return 1
+	fi
+	if [ "${integration_model_rc}" -eq 0 ]; then
+		if ! POST_AGENT_VALIDATION_SANDBOX="${UNTRUSTED_POLLER_SANDBOX}" \
+			POST_AGENT_VALIDATION_RUNTIME_DIR="${POST_AGENT_ARTIFACT_DIR}" \
+			bash "${TRUSTED_POLLER_RESOLVER_GUARD}" \
 			--repo-root "${integration_judge_workspace}" \
 			--conflicted-set "${integration_allowed_paths_file}" \
 			--touched-set "${integration_actual_paths_file}" \
@@ -8929,18 +8984,17 @@ PY
 					[ -n "${integration_changed_path}" ] || continue
 					case "${integration_changed_path}" in
 						*.sh) bash -n "${integration_judge_workspace}/${integration_changed_path}" || integration_syntax_ok=false ;;
-						*.py) PYTHONDONTWRITEBYTECODE=1 python3 -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])' "${integration_judge_workspace}/${integration_changed_path}" || integration_syntax_ok=false ;;
+						*.py) run_poller_isolated_python "${integration_judge_workspace}" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])' "${integration_judge_workspace}/${integration_changed_path}" || integration_syntax_ok=false ;;
 					esac
 				done < "${integration_actual_paths_file}"
 				if [ "${integration_syntax_ok}" = "true" ]; then
 					jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${integration_fingerprints_file}"
 					integration_fingerprint_rc=0
-					(
-						cd "${integration_judge_workspace}"
-						INTEGRATION_BRANCH_NAME="${integration_branch}" \
-							PYTHONDONTWRITEBYTECODE=1 python3 "${poller_repo_root}/scripts/verify_integration_fingerprints.py" \
-							"${integration_fingerprints_file}"
-					) || integration_fingerprint_rc=$?
+					INTEGRATION_BRANCH_NAME="${integration_branch}" \
+						run_poller_isolated_python "${integration_judge_workspace}" \
+						"${poller_repo_root}/scripts/verify_integration_fingerprints.py" \
+						--repo-root "${integration_judge_workspace}" \
+						"${integration_fingerprints_file}" || integration_fingerprint_rc=$?
 					if [ "${integration_fingerprint_rc}" -eq 0 ]; then
 						git -C "${integration_judge_workspace}" add -A --
 						if bash "${TRUSTED_POLLER_GIT_WRITER}" commit \
@@ -20565,11 +20619,26 @@ ${FOLLOWUP_BLOCK_REASON}"
       else
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
+          rb_workspace_manifest="${POST_AGENT_ARTIFACT_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.manifest.json"
+          rb_workspace_report="${POST_AGENT_ARTIFACT_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.report.json"
+          rb_workspace_paths="${POST_AGENT_ARTIFACT_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.paths.txt"
+          rb_workspace_quarantine="${POST_AGENT_ARTIFACT_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.quarantine"
+          if ! run_poller_workspace_guard snapshot "${PWD}" --manifest "${rb_workspace_manifest}"; then
+			echo "::error::Review-blocked workspace snapshot failed for PR #${RB_PR}; terminating the poller before model execution."
+			exit 78
+		  fi
+          rb_model_rc=0
           run_untrusted_poller_codex judge-fix "${PWD}" \
             codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
             exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox workspace-write \
-            < "${RB_JUDGE_PROMPT_FILE}" > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
-          if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
+            < "${RB_JUDGE_PROMPT_FILE}" > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || rb_model_rc=$?
+          if ! run_poller_workspace_guard reconcile "${PWD}" \
+            --manifest "${rb_workspace_manifest}" --quarantine-dir "${rb_workspace_quarantine}" \
+            --changed-paths-out "${rb_workspace_paths}" --report "${rb_workspace_report}"; then
+			echo "::error::Review-blocked workspace guard rejected PR #${RB_PR}; terminating the poller before output parsing."
+			exit 78
+          fi
+          if [ "${rb_model_rc}" -eq 0 ] && grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
             break
           fi
@@ -20590,10 +20659,10 @@ ${FOLLOWUP_BLOCK_REASON}"
       fi
 
       # Parse judge output
-      RB_JUDGE_JSON="$(python3 -c "
+      RB_JUDGE_JSON="$(run_poller_isolated_python "${PWD}" -c "
 import json, re, sys
 
-raw = open('${RB_JUDGE_OUTPUT_FILE}', 'r').read()
+raw = sys.stdin.read()
 
 try:
     data = json.loads(raw.strip())
@@ -20625,7 +20694,7 @@ for i, ch in enumerate(cleaned):
 
 print('Could not parse review-blocked judge JSON', file=sys.stderr)
 sys.exit(1)
-" 2>/dev/null || echo "")"
+" < "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || echo "")"
 
       if [ -z "${RB_JUDGE_JSON}" ]; then
         echo "::warning::Could not parse review-blocked judge output for #${rb_issue}"
@@ -20913,15 +20982,16 @@ ${RB_REVIEW_FIX_AUTHORIZATION_MARKER}"
 	                git config user.name "codex-bot"
 	                git config user.email "codex@users.noreply.github.com"
 	                rb_review_fix_touched_file="${RUNTIME_DIR}/rb_review_fix_touched_${RB_PR}.txt"
-	                rb_review_fix_allowed_file="${RUNTIME_DIR}/rb_review_fix_allowed_${RB_PR}.txt"
-	                rb_review_fix_spans_file="${RUNTIME_DIR}/rb_review_fix_spans_${RB_PR}.json"
+	                rb_review_fix_allowed_file="${POLLER_VALIDATOR_OUTPUT_DIR}/rb_review_fix_allowed_${RB_PR}.txt"
+	                rb_review_fix_spans_file="${POLLER_VALIDATOR_OUTPUT_DIR}/rb_review_fix_spans_${RB_PR}.json"
 	                rb_review_fix_clean_file="${RUNTIME_DIR}/rb_review_fix_clean_${RB_PR}.tsv"
-	                {
-	                  git diff --name-only HEAD --
-	                  git ls-files --others --exclude-standard
-	                } | sed '/^$/d' | LC_ALL=C sort -u > "${rb_review_fix_touched_file}"
+	                if [ -s "${rb_workspace_paths:-/nonexistent}" ]; then
+	                  cp "${rb_workspace_paths}" "${rb_review_fix_touched_file}"
+	                else
+	                  : > "${rb_review_fix_touched_file}"
+	                fi
 	                : > "${rb_review_fix_clean_file}"
-	                if ! PYTHONDONTWRITEBYTECODE=1 python3 "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" \
+	                if ! run_poller_isolated_python "${PWD}" "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" \
 	                  --validate-review-fix-authorization \
 	                  --review-fix-repo "${PWD}" \
 	                  --review-fix-repository "${GITHUB_REPOSITORY}" \
@@ -20947,7 +21017,9 @@ ${RB_REVIEW_FIX_AUTHORIZATION_MARKER}"
 	                  REVIEW_BLOCKED_STATE_CHANGED=true
 	                  continue
 	                fi
-	                if ! bash "${TRUSTED_POLLER_RESOLVER_GUARD}" \
+	                if ! POST_AGENT_VALIDATION_SANDBOX="${UNTRUSTED_POLLER_SANDBOX}" \
+	                  POST_AGENT_VALIDATION_RUNTIME_DIR="${POST_AGENT_ARTIFACT_DIR}" \
+	                  bash "${TRUSTED_POLLER_RESOLVER_GUARD}" \
 	                  --repo-root "${PWD}" \
 	                  --conflicted-set "${rb_review_fix_allowed_file}" \
 	                  --touched-set "${rb_review_fix_touched_file}" \

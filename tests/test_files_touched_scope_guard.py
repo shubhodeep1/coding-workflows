@@ -479,10 +479,15 @@ def _run_fragment(
 	scope_guard_expected_sha256: str | None = None,
 ) -> tuple[int, str, str]:
 	fragment = _scope_fragment(label)
-	with tempfile.TemporaryDirectory() as td:
+	with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as artifact_tmp:
 		tdp = Path(td)
 		(tdp / "scripts").mkdir()
 		helper_path = tdp / "scripts" / "files_touched_scope_guard.py"
+		shutil.copy(REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh", tdp / "scripts" / "untrusted_process_sandbox.sh")
+		(tdp / "scripts" / "untrusted_process_sandbox.sh").chmod(0o755)
+		artifact_dir = Path(artifact_tmp) / "artifacts"
+		artifact_dir.mkdir(mode=0o700)
+		(artifact_dir / "validator-output-implement-preflight").mkdir()
 		if helper_source is None:
 			shutil.copy(GUARD_SCRIPT, helper_path)
 		else:
@@ -533,6 +538,10 @@ def _run_fragment(
 				"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(tdp / "scripts"),
 				"SUPPORT_SCRIPTS_DIR": str(tdp / "scripts"),
 				"RUNTIME_DIR": str(tdp),
+				"POST_AGENT_ARTIFACT_DIR": str(artifact_dir),
+				"IMPLEMENT_VALIDATOR_OUTPUT_DIR": str(artifact_dir / "validator-output-implement-preflight"),
+				"RUNNER_TEMP": str(artifact_tmp),
+				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
 				"LINKED_ISSUE_METADATA_FILE": str(linked_issue_metadata_file),
 				"STAGED_FILES": "\n".join(staged),
 				"ISSUE_AUTHOR_ASSOCIATION": issue_author_association,
@@ -728,7 +737,11 @@ def _strip_comments(fragment: str) -> str:
 def test_preflight_and_commit_fragments_share_logic() -> None:
 	# Both guard sites must run identical executable logic (only the marker
 	# label and surrounding comments differ).
-	assert _strip_comments(_scope_fragment("preflight")) == _strip_comments(_scope_fragment("commit"))
+	preflight = _strip_comments(_scope_fragment("preflight"))
+	commit = _strip_comments(_scope_fragment("commit")).replace(
+		"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}", "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
+	)
+	assert preflight.split('generated_security_advisory="${GENERATED_SECURITY_ADVISORY:-false}"', 1)[1] == commit.split('generated_security_advisory="${GENERATED_SECURITY_ADVISORY:-false}"', 1)[1]
 
 
 # --------------------------------------------------------------------------
@@ -773,7 +786,8 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	assert 'echo "ISSUE_AUTHOR_LOGIN=${ISSUE_AUTHOR_LOGIN}" >> "$GITHUB_ENV"' not in text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
 	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
-	assert combined_text.count('python3 "${scope_guard_path}"') == 2
+	assert combined_text.count('"${scope_validator_cmd[@]}" "${scope_guard_path}"') == 2
+	assert combined_text.count("/usr/bin/python3 -I -S") >= 2
 	assert combined_text.count('--issue-author-login "${ISSUE_AUTHOR_LOGIN:-}"') == 2
 	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
 	assert "scope_violation_blocked=scope-lock-label" in commit_text
@@ -795,7 +809,17 @@ def test_review_guard_is_bootstrapped_and_uses_linked_issue_metadata() -> None:
 	assert "files_touched_scope_guard.py" in stage_text
 	assert "review_collect_pr_metadata.sh" in main_primary_line
 	assert "files_touched_scope_guard.py" in main_primary_line
-	assert "for metadata_guard_support_file in review_collect_pr_metadata.sh files_touched_scope_guard.py check_resolver_diff.sh; do" in workflow_text
+	for boundary_file in (
+		"verify_integration_fingerprints.py",
+		"post_agent_workspace_guard.py",
+		"review_apply_fixes.sh",
+		"review_commit_changes.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+		"trusted_git_write.sh",
+		"untrusted_process_sandbox.sh",
+	):
+		assert boundary_file in workflow_text
 	assert "id: stage_workflow_support" in workflow_text
 	for digest_output in (
 		"scope_guard_sha256",
@@ -970,7 +994,7 @@ def test_failure_gates_mirror_scope() -> None:
 	for needle in (
 		"- name: Handle no-op implementation",
 		"- name: Capture post-Codex validation errors",
-		"- name: Diagnose post-Codex failure and create fix-up issues",
+		"- name: Diagnose post-Codex failure without GitHub authorization",
 		"- name: Comment on issue failure",
 		"- name: Telegram failure notification",
 	):
@@ -986,7 +1010,7 @@ def test_redispatch_refusal_checks_scope_label() -> None:
 
 def test_bootstrap_fetches_guard_helper() -> None:
 	text = _implement_text()
-	assert "implement_staged_support_workspace.sh files_touched_scope_guard.py; do" in text
+	assert "implement_staged_support_workspace.sh files_touched_scope_guard.py post_agent_workspace_guard.py; do" in text
 
 
 def test_label_contract_and_helper_have_scope_blocked() -> None:

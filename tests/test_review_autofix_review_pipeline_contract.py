@@ -2209,6 +2209,7 @@ def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | Non
 		env = os.environ.copy()
 		env.update({
 			"RUNTIME_DIR": str(runtime),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 			"PREVIOUS_REVIEWS_DIR": str(reviews),
 			"EDITOR_SUMMARY_FILE": str(runtime / "editor_summary.txt"),
 			"COMMITTED_FILES_FILE": str(runtime / "committed_files.txt"),
@@ -3160,7 +3161,7 @@ def test_review_blocked_writer_revalidates_scope_guard_digest_before_execution()
 	rb_judge = RB_JUDGE.read_text(encoding="utf-8")
 	writer_end = rb_judge.index("# Check for changes and commit")
 	digest_check = rb_judge.index("verify_review_scope_guard_integrity", writer_end)
-	guard_execution = rb_judge.index('python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"', digest_check)
+	guard_execution = rb_judge.index('run_review_rb_validator_python "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"', digest_check)
 
 	assert writer_end < digest_check < guard_execution
 	assert '[[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]' in rb_judge
@@ -5164,8 +5165,14 @@ def test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain() -> 
 	)
 
 
+def _review_pipeline_summary_contract_block() -> str:
+	step_block = _step_block("Append review pipeline iteration summary")
+	assert 'bash "${summary_helper_candidate}"' in step_block
+	return step_block + "\n" + (REPO_ROOT / "scripts" / "review_append_iteration_summary.sh").read_text(encoding="utf-8")
+
+
 def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
-	block = _step_block("Append review pipeline iteration summary")
+	block = _review_pipeline_summary_contract_block()
 	assert "### Review Pipeline — Iteration ${iteration_label}" in block
 	assert "REVIEW_AUTOFIX_RUN_SUMMARY_V1" in block
 	assert "printf '\\n### Review Autofix Run Summary\\n\\n' >> \"${GITHUB_STEP_SUMMARY}\"" in block
@@ -5734,7 +5741,7 @@ def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
 
 
 def test_review_pipeline_summary_finalize_reason_marks_partial_runs() -> None:
-	block = _step_block("Append review pipeline iteration summary")
+	block = _review_pipeline_summary_contract_block()
 	assert re.search(
 		r'if resume_state in \{"no_progress", "round_budget_exhausted"\} and not resume_should_continue:\n\s+return resume_state\n\s+if partial_finalize:\n\s+return "partial_finalize"',
 		block,
@@ -5938,7 +5945,7 @@ def test_push_step_exports_edits_pushed_sentinel_for_summary_contract() -> None:
 
 
 def test_review_pipeline_summary_finalize_reason_distinguishes_push_not_allowed() -> None:
-	block = _step_block("Append review pipeline iteration summary")
+	block = _review_pipeline_summary_contract_block()
 	assert re.search(
 		r'if max_iterations_reached and not skip_judge:.*?return "rb_judge_review_blocked"\n\s+if push_needed and not push_allowed:\n\s+return "push_not_allowed"\n\s+if push_needed and not edits_pushed:\n\s+return "push_failed"',
 		block,

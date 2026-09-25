@@ -18,6 +18,10 @@ rm -f /tmp/_rb_judge_syntax_err
 
 set -euo pipefail
 
+if [ -n "${WORKSPACE_PATH:-}" ]; then
+  cd "${WORKSPACE_PATH}"
+fi
+
 verify_review_scope_guard_integrity()
 {
 	local scope_guard_path="${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"
@@ -40,6 +44,30 @@ fi
 SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR}/codex_stall_guard.sh"
+post_agent_workspace_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" 2>/dev/null | awk '{print $1}')"
+if ! [[ "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+  || [ "${post_agent_workspace_guard_actual_sha256}" != "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256}" ]; then
+  echo "::error::Post-agent workspace guard is unavailable or changed after staging." >&2
+  exit 1
+fi
+if [ -z "${POST_AGENT_ARTIFACT_DIR:-}" ]; then
+  if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "${RUNNER_TEMP}" ]; then
+    echo "::error::RUNNER_TEMP is required for post-agent artifacts." >&2
+    exit 78
+  fi
+  POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-review-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}.XXXXXX")"
+  export POST_AGENT_ARTIFACT_DIR
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    printf 'POST_AGENT_ARTIFACT_DIR=%s\n' "${POST_AGENT_ARTIFACT_DIR}" >> "${GITHUB_ENV}"
+  fi
+fi
+run_review_rb_validator_python() {
+  mkdir -p "${POST_AGENT_ARTIFACT_DIR}/validator-output-rb"
+  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+    --role validator --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+    --writable-output-dir "${POST_AGENT_ARTIFACT_DIR}/validator-output-rb" \
+    -- /usr/bin/python3 -I -S "$@"
+}
 LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
   "${SUPPORT_SCRIPTS_DIR}/ledger_emit_substate.sh" \
@@ -2000,6 +2028,17 @@ __EDIT_DISCIPLINE__
       emit_review_rb_substate "review_rb_fix" "judge_fix" "LaunchingAgentProcess" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "InitializingSession" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "StreamingTurn" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
+      rb_fix_workspace_manifest="${POST_AGENT_ARTIFACT_DIR}/post-agent-rb-fix-${rb_fix_attempt}.manifest.json"
+      rb_fix_workspace_paths="${POST_AGENT_ARTIFACT_DIR}/post-agent-rb-fix-${rb_fix_attempt}.paths.txt"
+      rb_fix_workspace_report="${POST_AGENT_ARTIFACT_DIR}/post-agent-rb-fix-${rb_fix_attempt}.report.json"
+      rb_fix_workspace_quarantine="${POST_AGENT_ARTIFACT_DIR}/post-agent-rb-fix-${rb_fix_attempt}.quarantine"
+      if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+        --role workspace-guard --guard-action snapshot --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+        -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
+        --workspace "${PWD}" --manifest "${rb_fix_workspace_manifest}"; then
+        echo "::error::Review-blocked fix workspace snapshot failed for attempt ${rb_fix_attempt}; aborting before model execution."
+        exit 78
+      fi
       : > "${RB_FIX_OUTPUT}"
       if [ "${rb_fix_opencode_ready}" = "true" ] && [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
         "${CODEX_STALL_GUARD_HELPER}" \
@@ -2016,6 +2055,15 @@ __EDIT_DISCIPLINE__
           -- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" || rb_fix_rc=$?
       elif [ "${rb_fix_opencode_ready}" = "true" ]; then
         "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>"${RB_FIX_STDERR}" || rb_fix_rc=$?
+      fi
+      if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+        --role workspace-guard --guard-action reconcile --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+        -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
+        --workspace "${PWD}" --manifest "${rb_fix_workspace_manifest}" \
+        --quarantine-dir "${rb_fix_workspace_quarantine}" \
+        --changed-paths-out "${rb_fix_workspace_paths}" --report "${rb_fix_workspace_report}"; then
+        echo "::error::Review-blocked fix workspace guard rejected attempt ${rb_fix_attempt}; aborting before output parsing or publication."
+        exit 78
       fi
       if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix OpenCode" )"; then
         :
@@ -2119,16 +2167,18 @@ __EDIT_DISCIPLINE__
 	          echo "::error::Refusing review-blocked fix publication from a pre-dirty checkout."
 	          exit 1
 	        fi
-	        rb_fix_touched_file="${RUNTIME_DIR}/review_fix_touched.txt"
-	        rb_fix_allowed_file="${RUNTIME_DIR}/review_fix_allowed.txt"
-	        rb_fix_spans_file="${RUNTIME_DIR}/review_fix_spans.json"
-	        rb_fix_clean_manifest="${RUNTIME_DIR}/review_fix_clean.tsv"
-	        {
-	          git diff --name-only HEAD --
-	          git ls-files --others --exclude-standard
-	        } | sed '/^$/d' | LC_ALL=C sort -u > "${rb_fix_touched_file}"
+	        mkdir -p "${POST_AGENT_ARTIFACT_DIR}/validator-output-rb"
+	        rb_fix_touched_file="${POST_AGENT_ARTIFACT_DIR}/validator-output-rb/review_fix_touched.txt"
+	        rb_fix_allowed_file="${POST_AGENT_ARTIFACT_DIR}/validator-output-rb/review_fix_allowed.txt"
+	        rb_fix_spans_file="${POST_AGENT_ARTIFACT_DIR}/validator-output-rb/review_fix_spans.json"
+	        rb_fix_clean_manifest="${POST_AGENT_ARTIFACT_DIR}/validator-output-rb/review_fix_clean.tsv"
+	        if [ -s "${rb_fix_workspace_paths:-/nonexistent}" ]; then
+	          cp "${rb_fix_workspace_paths}" "${rb_fix_touched_file}"
+	        else
+	          : > "${rb_fix_touched_file}"
+	        fi
 	        : > "${rb_fix_clean_manifest}"
-	        if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
+	        if ! run_review_rb_validator_python "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
 	          --validate-review-fix-authorization \
 	          --review-fix-repo "${PWD}" \
 	          --review-fix-repository "${REPOSITORY}" \
@@ -2148,7 +2198,9 @@ __EDIT_DISCIPLINE__
 	          echo "::error::Protected review-fix path is disabled by ALLOW_WORKFLOW_EDITS=false."
 	          exit 1
 	        fi
-	        if ! bash "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
+	        if ! POST_AGENT_VALIDATION_SANDBOX="${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+	          POST_AGENT_VALIDATION_RUNTIME_DIR="${POST_AGENT_ARTIFACT_DIR}" \
+	          bash "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
 	          --repo-root "${PWD}" \
 	          --conflicted-set "${rb_fix_allowed_file}" \
 	          --touched-set "${rb_fix_touched_file}" \
@@ -2174,7 +2226,7 @@ __EDIT_DISCIPLINE__
           echo "Error: workflow runtime/helper artifacts are staged in consumer repo"
           exit 1
         fi
-        rb_generated_advisory_staged_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/rb-generated-advisory-staged.XXXXXX")"
+        rb_generated_advisory_staged_file="$(mktemp "${POST_AGENT_ARTIFACT_DIR}/rb-generated-advisory-staged.XXXXXX")"
         printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${rb_generated_advisory_staged_file}"
         if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
           LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
@@ -2184,7 +2236,7 @@ __EDIT_DISCIPLINE__
         if [ -f "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" ] \
           && [ -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
           set +e
-          rb_generated_advisory_violations="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
+          rb_generated_advisory_violations="$(run_review_rb_validator_python "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" \
             --linked-issue-metadata-file "${LINKED_ISSUE_METADATA_FILE}" \
             --linked-issue-metadata-sha256 "${LINKED_ISSUE_METADATA_EXPECTED_SHA256:-}" \
             --staged-file "${rb_generated_advisory_staged_file}" \
@@ -2484,13 +2536,13 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         RB_FOLLOWUP_INTEGRATION_BRANCH=""
         RB_FOLLOWUP_PARENT_DECLARED_DEFAULT="false"
         if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
-          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | run_review_rb_validator_python -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
 print(m.group(1).strip() if m else "")
 ' 2>/dev/null || echo "")"
-          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | run_review_rb_validator_python -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE)

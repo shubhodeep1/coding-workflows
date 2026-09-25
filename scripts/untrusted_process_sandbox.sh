@@ -7,6 +7,8 @@ workspace=""
 config_format=""
 config_path=""
 runtime_dir="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}"
+writable_output_dir=""
+guard_action=""
 host_home="${HOME:-/nonexistent}"
 runner_command_files="${RUNNER_TEMP:-/tmp}/_runner_file_commands"
 while [ "$#" -gt 0 ]; do
@@ -16,6 +18,8 @@ while [ "$#" -gt 0 ]; do
 		--config-format) config_format="${2:-}"; shift 2 ;;
 		--config) config_path="${2:-}"; shift 2 ;;
 		--runtime-dir) runtime_dir="${2:-}"; shift 2 ;;
+		--writable-output-dir) writable_output_dir="${2:-}"; shift 2 ;;
+		--guard-action) guard_action="${2:-}"; shift 2 ;;
 		--) shift; break ;;
 		*) echo "untrusted_process_sandbox: unknown argument: $1" >&2; exit 2 ;;
 	esac
@@ -23,14 +27,48 @@ done
 [ "$#" -gt 0 ] || { echo "untrusted_process_sandbox: command is required" >&2; exit 2; }
 case "${role}" in
 	plan|implement|implement-repair|diagnose|reviewer|editor|resolver|judge|judge-fix|summary|audit) ;;
+	validator|workspace-guard) ;;
 	*) echo "untrusted_process_sandbox: invalid role" >&2; exit 2 ;;
 esac
-case "${config_format}" in
-	opencode|codex) ;;
-	*) echo "untrusted_process_sandbox: invalid config format" >&2; exit 2 ;;
-esac
 workspace="$(cd "${workspace}" && pwd -P)"
-[ -r "${config_path}" ] || { echo "untrusted_process_sandbox: config is unreadable" >&2; exit 2; }
+provider_required=true
+case "${role}" in
+	validator|workspace-guard)
+		provider_required=false
+		[ "${1:-}" = /usr/bin/python3 ] && [ "${2:-}" = -I ] && [ "${3:-}" = -S ] || {
+			echo "untrusted_process_sandbox: isolated roles require /usr/bin/python3 -I -S" >&2; exit 2;
+		}
+		[ -z "${config_format}" ] && [ -z "${config_path}" ] || exit 2
+		;;
+	*)
+		case "${config_format}" in opencode|codex) ;; *) echo "untrusted_process_sandbox: invalid config format" >&2; exit 2 ;; esac
+		[ -r "${config_path}" ] || { echo "untrusted_process_sandbox: config is unreadable" >&2; exit 2; }
+		[ -z "${guard_action}" ] && [ -z "${writable_output_dir}" ] || exit 2
+		;;
+esac
+if [ "${provider_required}" = false ]; then
+	[ -n "${RUNNER_TEMP:-}" ] && [ -d "${RUNNER_TEMP}" ] || { echo "untrusted_process_sandbox: RUNNER_TEMP is required" >&2; exit 1; }
+	runner_artifact_root="$(cd "${RUNNER_TEMP}" && pwd -P)"
+	[ -d "${runtime_dir}" ] && [ ! -L "${runtime_dir}" ] || { echo "untrusted_process_sandbox: artifact directory is unavailable" >&2; exit 1; }
+	runtime_dir="$(cd "${runtime_dir}" && pwd -P)"
+	if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" != 1 ]; then
+		case "${runner_artifact_root}/" in /tmp/*|/var/tmp/*) echo "untrusted_process_sandbox: unit-visible RUNNER_TEMP is required" >&2; exit 1 ;; esac
+	fi
+	case "${runtime_dir}/" in "${runner_artifact_root}/"*) ;; *) echo "untrusted_process_sandbox: artifact directory must be under RUNNER_TEMP" >&2; exit 1 ;; esac
+	case "${runtime_dir}/" in "${workspace}/"*|"${workspace}/") echo "untrusted_process_sandbox: artifact directory overlaps workspace" >&2; exit 1 ;; esac
+	[ "$(stat -c %a "${runtime_dir}")" = 700 ] || { echo "untrusted_process_sandbox: artifact directory must be mode 0700" >&2; exit 1; }
+	if [ "${role}" = workspace-guard ]; then
+		case "${guard_action}" in snapshot|reconcile) ;; *) echo "untrusted_process_sandbox: guard action is required" >&2; exit 2 ;; esac
+		[[ "${4:-}" == */post_agent_workspace_guard.py ]] && [ "${5:-}" = "${guard_action}" ] || exit 2
+	else
+		[ -z "${guard_action}" ] || exit 2
+	fi
+	if [ -n "${writable_output_dir}" ]; then
+		[ "${role}" = validator ] && [ -d "${writable_output_dir}" ] && [ ! -L "${writable_output_dir}" ] || exit 2
+		writable_output_dir="$(cd "${writable_output_dir}" && pwd -P)"
+		case "${writable_output_dir}/" in "${runtime_dir}/"*) ;; *) echo "untrusted_process_sandbox: validator output must be inside artifact directory" >&2; exit 2 ;; esac
+	fi
+fi
 
 # The unit below runs with PrivateTmp=yes, which gives it fresh, empty /tmp and
 # /var/tmp.  A ReadWritePaths=/InaccessiblePaths= entry under the host's /tmp
@@ -52,13 +90,17 @@ fi
 
 credential_file="${MODEL_PROVIDER_CREDENTIAL_FILE:-}"
 credential_file_is_temporary=false
-if [ -z "${credential_file}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
+if [ "${provider_required}" = true ] && [ -z "${credential_file}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
 	credential_file="$(mktemp "${sandbox_state_root%/}/provider-credential.XXXXXX")"
 	credential_file_is_temporary=true
 	chmod 600 "${credential_file}"
 	printf '%s' "${OPENROUTER_API_KEY}" > "${credential_file}"
 fi
-[ -r "${credential_file}" ] || { echo "untrusted_process_sandbox: provider credential is unavailable" >&2; exit 1; }
+if [ "${provider_required}" = true ]; then
+	[ -r "${credential_file}" ] || { echo "untrusted_process_sandbox: provider credential is unavailable" >&2; exit 1; }
+else
+	credential_file=""
+fi
 
 sandbox_dir="$(mktemp -d "${sandbox_state_root%/}/agent-sandbox.XXXXXX")"
 ready_file="${sandbox_dir}/proxy-ready.json"
@@ -77,7 +119,46 @@ cleanup()
 	rm -rf -- "${sandbox_dir}"
 }
 trap cleanup EXIT HUP INT TERM
+if [ "${provider_required}" = false ]; then
+	if [ "${role}" = workspace-guard ]; then
+		guard_output_option=""
+		for command_value in "$@"; do
+			if [ -n "${guard_output_option}" ]; then
+				case "${command_value}" in "${runtime_dir}/"*) ;; *) echo "untrusted_process_sandbox: guard artifact is outside run root" >&2; exit 1 ;; esac
+				[ "$(realpath -m -- "${command_value}")" = "${command_value}" ] || { echo "untrusted_process_sandbox: guard artifact path is not canonical" >&2; exit 1; }
+				[ ! -L "${command_value}" ] && [ ! -L "$(dirname "${command_value}")" ] || exit 1
+				guard_output_option=""
+				continue
+			fi
+			case "${command_value}" in --manifest|--report|--changed-paths-out|--quarantine-dir) guard_output_option="${command_value}" ;; esac
+		done
+		[ -z "${guard_output_option}" ] || exit 2
+	fi
+	command_args=("$@")
+	mkdir -m 700 "${sandbox_dir}/inputs"
+	for command_index in "${!command_args[@]}"; do
+		command_value="${command_args[${command_index}]}"
+		command_prefix=""
+		case "${command_value}" in
+			--*=/*) command_prefix="${command_value%%=*}="; command_value="${command_value#*=}" ;;
+		esac
+		case "${command_value}" in "${runtime_dir}/"*) continue ;; esac
+		if sandbox_path_is_private_tmp "${command_value}"; then
+			[ -f "${command_value}" ] && [ ! -L "${command_value}" ] || {
+				echo "untrusted_process_sandbox: private-tmp validator input is not a regular file" >&2; exit 1;
+			}
+			command_input="${sandbox_dir}/inputs/${command_index}"
+			install -m 0400 -- "${command_value}" "${command_input}"
+			command_args[${command_index}]="${command_prefix}${command_input}"
+		fi
+	done
+	set -- "${command_args[@]}"
+fi
 
+proxy_host="127.0.0.1"
+proxy_port="0"
+sandbox_config="${sandbox_dir}/agent-config"
+if [ "${provider_required}" = true ]; then
 proxy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/model_provider_proxy.py"
 [ -r "${proxy_script}" ] || { echo "untrusted_process_sandbox: provider proxy is unavailable" >&2; exit 1; }
 python3 - "${config_format}" "${config_path}" "${proxy_policy_file}" "$@" <<'PY'
@@ -147,7 +228,6 @@ else
 fi
 proxy_url="http://${proxy_host}:${proxy_port}/api/v1"
 
-sandbox_config="${sandbox_dir}/agent-config"
 sandbox_home="${sandbox_dir}/home"
 sandbox_runtime="${sandbox_dir}/runtime"
 mkdir -p "${sandbox_home}" "${sandbox_runtime}"
@@ -188,6 +268,11 @@ if catalog_match is not None:
 	)
 open(path, "w", encoding="utf-8").write(text)
 PY
+fi
+else
+	sandbox_home="${sandbox_dir}/home"
+	sandbox_runtime="${sandbox_dir}/runtime"
+	mkdir -p "${sandbox_home}" "${sandbox_runtime}"
 fi
 
 safe_git_config="${sandbox_dir}/gitconfig"
@@ -260,11 +345,10 @@ done < <(find "${workspace}" -xdev -name .git -print0 2>/dev/null)
 
 common_env=(
 	"HOME=${sandbox_home}"
-	"PATH=${PATH}"
+	"PATH=$([ "${provider_required}" = true ] && printf '%s' "${PATH}" || printf '/usr/bin:/bin')"
 	"LANG=${LANG:-C.UTF-8}"
 	"LC_ALL=${LC_ALL:-C.UTF-8}"
 	"NO_COLOR=1"
-	"SANDBOX_PROVIDER_TOKEN=sandbox-proxy"
 	"UNTRUSTED_PROCESS_ISOLATED=1"
 	"UNTRUSTED_SANDBOX_WORKSPACE=${workspace}"
 	"GIT_CONFIG_GLOBAL=${safe_git_config}"
@@ -276,12 +360,18 @@ common_env=(
 	"RUNTIME_DIR=${sandbox_runtime}"
 	"CODEX_THREAD_REUSE_RUNTIME_DIR=${sandbox_runtime}/thread-reuse"
 )
+if [ "${provider_required}" = true ]; then
+	common_env+=("SANDBOX_PROVIDER_TOKEN=sandbox-proxy")
+else
+	common_env+=("POST_AGENT_ARTIFACT_DIR=${runtime_dir}")
+fi
 runtime_write_paths=()
 while IFS='=' read -r environment_name environment_value; do
 	case "${environment_name}" in
 		CODEX_THREAD_REUSE_RUNTIME_DIR|RUNTIME_DIR)
 			;;
-			CODEX_THREAD_REUSE_OUTPUT_FILE|CODEX_THREAD_REUSE_LOG_FILE|CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE|CODEX_THREAD_REUSE_STATUS_FILE)
+		CODEX_THREAD_REUSE_OUTPUT_FILE|CODEX_THREAD_REUSE_LOG_FILE|CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE|CODEX_THREAD_REUSE_STATUS_FILE)
+			[ "${provider_required}" = true ] || continue
 			if [ -n "${environment_value}" ]; then
 				mkdir -p "$(dirname "${environment_value}")"
 				touch "${environment_value}"
@@ -290,13 +380,14 @@ while IFS='=' read -r environment_name environment_value; do
 			fi
 			;;
 		CODEX_THREAD_REUSE_*|MODEL_EDITOR|MODEL_VERBOSITY)
+			[ "${provider_required}" = true ] || continue
 			common_env+=("${environment_name}=${environment_value}")
 			;;
 	esac
 done < <(env)
 if [ "${config_format}" = opencode ]; then
 	common_env+=("UNTRUSTED_OPENCODE_CONFIG=${sandbox_config}" "OPENCODE_CONFIG=${sandbox_config}")
-else
+elif [ "${config_format}" = codex ]; then
 	common_env+=("CODEX_HOME=${sandbox_config}")
 fi
 
@@ -307,7 +398,7 @@ if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then
 		fi
 	done
 	set +e
-	env -i "${common_env[@]}" "$@"
+	(cd "${sandbox_runtime}" && env -i "${common_env[@]}" "$@")
 	test_command_rc=$?
 	set -e
 	exit "${test_command_rc}"
@@ -375,6 +466,11 @@ for sandbox_private_tmp_checked_path in "${sandbox_dir}" "${workspace}" "${runti
 		exit 1
 	fi
 done
+if [ "${provider_required}" = false ]; then
+	for sandbox_private_tmp_checked_path in "${runtime_dir}" "${writable_output_dir}"; do
+		[ -z "${sandbox_private_tmp_checked_path}" ] || ! sandbox_path_is_private_tmp "${sandbox_private_tmp_checked_path}" || exit 1
+	done
+fi
 # PrivateTmp=yes already hides a caller-supplied credential under /tmp, and
 # naming it in InaccessiblePaths= would make namespace setup fail instead.
 credential_inaccessible_entry="${credential_file} "
@@ -407,19 +503,37 @@ systemd_properties=(
 	--property=OOMPolicy=kill
 	--property="TimeoutStopSec=${sandbox_stop_timeout_sec}"
 	--property=IPAddressDeny=any
-	--property="IPAddressAllow=${proxy_host}/32"
 	--property="InaccessiblePaths=${credential_inaccessible_entry}-/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh"
 	--property=ReadOnlyPaths=/
 	--property="ReadWritePaths=${sandbox_dir}${runtime_write_paths[*]:+ ${runtime_write_paths[*]}}"
 )
+if [ "${provider_required}" = true ]; then
+	systemd_properties+=(--property="IPAddressAllow=${proxy_host}/32")
+fi
 case "${role}" in
 	implement|implement-repair|editor|resolver|judge-fix)
 		systemd_properties+=(--property="ReadWritePaths=${workspace}")
 		;;
+	workspace-guard)
+		if [ "${guard_action}" = reconcile ]; then
+			systemd_properties+=(--property="ReadWritePaths=${workspace} ${runtime_dir}")
+		else
+			systemd_properties+=(--property="ReadWritePaths=${runtime_dir}")
+		fi
+		;;
+	validator)
+		if [ -n "${writable_output_dir}" ]; then
+			systemd_properties+=(--property="ReadWritePaths=${writable_output_dir}")
+		fi
+		;;
 esac
 for protected_git_path in "${git_metadata_paths[@]:-}"; do
 	[ -n "${protected_git_path}" ] || continue
-	systemd_properties+=(--property="InaccessiblePaths=${protected_git_path}")
+	if [ "${provider_required}" = true ]; then
+		systemd_properties+=(--property="InaccessiblePaths=${protected_git_path}")
+	else
+		systemd_properties+=(--property="ReadOnlyPaths=${protected_git_path}")
+	fi
 done
 # No --quiet: systemd-run's unit name and "Main processes terminated with"
 # lines are the only in-band trace of a unit that never reached the command.
@@ -427,7 +541,7 @@ sandbox_unit_rc=0
 "${systemd_run[@]}" --wait --pipe --collect --service-type=exec \
 	--unit="${sandbox_unit_name}" \
 	"${systemd_properties[@]}" \
-	--working-directory="${workspace}" \
+	--working-directory="$([ "${provider_required}" = true ] && printf '%s' "${workspace}" || printf '%s' "${sandbox_runtime}")" \
 	env -i "${common_env[@]}" "$@" || sandbox_unit_rc=$?
 if [ "${sandbox_unit_rc}" -eq 226 ]; then
 	# 226 is systemd's EXIT_NAMESPACE: the unit failed while building its mount

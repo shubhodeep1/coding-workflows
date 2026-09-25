@@ -71,6 +71,21 @@ trusted_git=(
 	-c user.email=codex@users.noreply.github.com
 )
 
+run_trusted_validator_python()
+{
+	local sandbox_helper
+	sandbox_helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/untrusted_process_sandbox.sh"
+	if [ -x "${sandbox_helper}" ]; then
+		bash "${sandbox_helper}" \
+			--role validator --workspace "${repo}" \
+			--runtime-dir "${POST_AGENT_ARTIFACT_DIR:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}}" \
+			-- /usr/bin/python3 -I -S "$@"
+		return $?
+	fi
+	echo "trusted_git_write: validator sandbox is unavailable" >&2
+	return 1
+}
+
 case "${operation}" in
 	commit)
 		if [ -n "${expected_local_head}" ]; then
@@ -121,7 +136,7 @@ case "${operation}" in
 		expected_server_url="${GITHUB_SERVER_URL:-https://github.com}"
 		[[ "${expected_repository}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
 			|| die "GITHUB_REPOSITORY is invalid"
-		remote_url="$(python3 - "${remote_url}" "${expected_repository}" "${expected_server_url}" <<'PY'
+		remote_url="$(run_trusted_validator_python - "${remote_url}" "${expected_repository}" "${expected_server_url}" <<'PY'
 import sys
 from urllib.parse import urlsplit, urlunsplit
 

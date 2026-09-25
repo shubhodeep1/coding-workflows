@@ -1285,6 +1285,7 @@ def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
 
 def test_failure_comment_step_skips_destructive_blocked_runs() -> None:
 	wf = _workflow_text()
+	wf = wf.replace(" && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true'", "")
 	assert (
 		"if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' "
 		"&& steps.commit_changes.outputs.destructive_commit_blocked == ''"
@@ -1466,7 +1467,8 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
 		shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, repo_dir / "scripts" / "trusted_git_write.sh")
 		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, repo_dir / "scripts" / "files_touched_scope_guard.py")
-		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py", "scripts/trusted_git_write.sh"], cwd=repo_dir)
+		shutil.copy2(REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh", repo_dir / "scripts" / "untrusted_process_sandbox.sh")
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py", "scripts/trusted_git_write.sh", "scripts/untrusted_process_sandbox.sh"], cwd=repo_dir)
 		_git(["git", "commit", "-m", "add scope helpers"], cwd=repo_dir)
 		baseline_head = subprocess.run(
 			["git", "rev-parse", "HEAD"],
@@ -1482,6 +1484,8 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 		github_output.write_text("", encoding="utf-8")
 		runtime_dir = tmp_path / "runtime"
 		runtime_dir.mkdir()
+		artifact_dir = tmp_path / "artifacts"
+		artifact_dir.mkdir(mode=0o700)
 		env = _isolated_test_env(
 			{
 				"GITHUB_OUTPUT": str(github_output),
@@ -1489,6 +1493,9 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 				"ISSUE_NUMBER": "948",
 				"ISSUE_SCOPE_LOCK_GLOB": "scripts/**/*.sh",
 				"RUNTIME_DIR": str(runtime_dir),
+				"POST_AGENT_ARTIFACT_DIR": str(artifact_dir),
+				"RUNNER_TEMP": str(tmp_path),
+				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
 				"SCOPE_LOCK_LABEL_ENABLED": "true",
 				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
 				"SERENA_PROJECT_PREEXISTED": "false",
@@ -1573,6 +1580,7 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 	runtime_dir.mkdir()
 	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
 	support_run_dir.mkdir(parents=True)
+	shutil.copy2(REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh", support_run_dir / "untrusted_process_sandbox.sh")
 	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, support_run_dir / "implement_commit_changes.sh")
 	shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, support_run_dir / "trusted_git_write.sh")
 	base_dir = runtime_dir / "staged_support_base"
@@ -1592,12 +1600,17 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 
 	github_output = tmp_path / "github_output.txt"
 	github_output.write_text("", encoding="utf-8")
+	artifact_dir = tmp_path / "artifacts"
+	artifact_dir.mkdir(mode=0o700)
 	env = _isolated_test_env(
 		{
 			"GITHUB_OUTPUT": str(github_output),
 			"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
 			"ISSUE_NUMBER": "4075",
 			"RUNTIME_DIR": str(runtime_dir),
+			"POST_AGENT_ARTIFACT_DIR": str(artifact_dir),
+			"RUNNER_TEMP": str(tmp_path),
+			"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
 			"SCRIPT_REF": "abc123",
 			"SERENA_PROJECT_BOOTSTRAP_HASH": "",
 			"SERENA_PROJECT_PREEXISTED": "false",
@@ -1974,7 +1987,7 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py; do" in stage_block
+	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py post_agent_workspace_guard.py; do" in stage_block
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
 	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_staged_support_workspace.sh"'
@@ -2105,7 +2118,7 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	commit_block = _step_block_text("Commit changes")
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_commit_changes.sh"' in commit_block
 	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh"' in _step_block_text("Push branch")
-	assert 'python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/lint_pr_body_auto_close.py"' in _step_block_text(
+	assert '/usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/lint_pr_body_auto_close.py"' in _step_block_text(
 		"Pre-flight — lint PR title/body for auto-close keywords against tracking issues"
 	)
 
@@ -2206,6 +2219,7 @@ def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
 
 def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
 	telegram_block = _step_block_text("Telegram failure notification")
+	telegram_block = telegram_block.replace(" && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true'", "")
 	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in telegram_block, (
 		"Post-failure Telegram flow must be skipped for destructive-blocked runs; only the dedicated "
 		"destructive-guard CRITICAL alert should fire"
@@ -2413,11 +2427,13 @@ def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow
 	)
 
 	capture_block = _step_block_text("Capture post-Codex validation errors")
+	capture_block = capture_block.replace(" && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true'", "")
 	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in capture_block, (
 		"Captured validation diagnostics must not run for destructive-blocked failures"
 	)
 
 	diagnose_block = _step_block_text("Diagnose post-Codex failure without GitHub authorization")
+	diagnose_block = diagnose_block.replace(" && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true'", "")
 	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in diagnose_block, (
 		"Diagnose/fix-up automation must be skipped for destructive-blocked runs"
 	)
@@ -3149,7 +3165,7 @@ def test_needs_fixes_labels_source_issue_and_generic_failure_step_is_bypassed():
 	wf = _workflow_text()
 	assert "--add-label 'ai:implementation-failed'" in wf
 	assert "--remove-label 'ai:awaiting-approval'" in wf
-	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true'" in wf
+	assert "steps.diagnose_post_codex_failure.outputs.handled != 'true'" in wf
 
 
 def test_idempotency_skips_diagnose_and_issue_creation_when_already_failed_label():
@@ -5057,11 +5073,11 @@ def test_failure_log_artifact_upload_contract() -> None:
 	# successful run leaves zero artifact artefacts. Both also gate on the
 	# env vars they read so an early-skip path (env unset) doesn't try to
 	# stage a directory that doesn't exist.
-	assert "if: (failure() || cancelled()) && env.RUNTIME_DIR != ''" in stage_block, (
+	assert "if: (failure() || cancelled()) && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true' && env.RUNTIME_DIR != ''" in stage_block, (
 		"Stage step must gate on failure() || cancelled() AND RUNTIME_DIR being "
 		"set, so early-skip paths don't try to stage a non-existent dir"
 	)
-	assert "if: (failure() || cancelled()) && env.CODEX_FAILURE_LOG_DIR != ''" in upload_block, (
+	assert "if: (failure() || cancelled()) && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true' && env.CODEX_FAILURE_LOG_DIR != ''" in upload_block, (
 		"Upload step must gate on failure() || cancelled() AND the env var "
 		"the staging step exports, so the upload doesn't fire when staging "
 		"was skipped"

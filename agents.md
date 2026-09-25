@@ -733,6 +733,21 @@ when the bounded fix-cycle budget is exhausted.
     rc=226 unit=<unit>` followed by up to 20 journal lines for that unit, and
     the script exits 226. `systemd-run` runs without `--quiet`, so its unit
     name and exit status also appear on stderr.
+- Post-agent snapshot and reconcile run in separate credentialless
+  `workspace-guard` units; validators run in credentialless `validator` units.
+  Their per-run mode-0700 `POST_AGENT_ARTIFACT_DIR` lives below the resolved
+  `RUNNER_TEMP` outside both the checkout and host `/tmp`/`/var/tmp`.
+  Host-only `RUNTIME_DIR` paths remain under `/tmp`; isolated validator input
+  files from there are copied into the sandbox's private input area. Snapshot
+  manifests, reconciliation reports and changed-path lists remain unit-visible
+  until the host consumes them, then workflow cleanup removes the artifact dir.
+  Staged review helpers can run under a main-pinned workflow that does not yet
+  export `POST_AGENT_ARTIFACT_DIR`; they create a private directory under
+  `RUNNER_TEMP` and publish it through `GITHUB_ENV` for subsequent steps.
+  The resolver's baseline fingerprint capture writes only to a dedicated
+  validator-output subdirectory; its input is copied out of host private tmp.
+  Rejection or a missing unit-visible root stops publication; never disable
+  `PrivateTmp=yes` or run a validator with host credentials as a fallback.
 - `scripts/model_provider_proxy.py` derives a non-empty model allowlist from
 	trusted configuration and defaults to 64 requests, one concurrent request,
 	65,536 output tokens, and USD 25 cumulative spend. It reserves worst-case
@@ -761,6 +776,10 @@ when the bounded fix-cycle budget is exhausted.
   appended to host `PATH`, `PYTHONPATH`, or `VIRTUAL_ENV`; post-editor pytest
   runs only editor-changed Python test targets, with no network, read-only
   source and Git metadata, and unconditional volume cleanup.
+- The review workflow clears `BASH_ENV` for reviewer, editor, resolver, and
+  review-blocked judge steps. Their staged helpers explicitly enter
+  `WORKSPACE_PATH` before reading relative prompt files or publishing edits;
+  a missing worktree fails the step instead of reading the source checkout.
 - `scripts/security_audit_causality.py` emits
   `security_audit_causal_scope.v1` metadata for Python findings. A waiver is
   authoritative only when the shared audit/poller validator confirms its

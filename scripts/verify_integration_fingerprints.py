@@ -2299,9 +2299,21 @@ def main(argv: list[str] | None = None) -> int:
 	ref: str | None = None
 	baseline_out_path: str | None = None
 	compare_baseline_path: str | None = None
+	repo_root: str | None = None
 	verification_tier = "strict"
 	cli_ref_supplied = False
 	while args:
+		if args[0] == "--repo-root":
+			if len(args) < 2:
+				print("::error::verify_integration_fingerprints: --repo-root requires an argument", file=sys.stderr)
+				return 2
+			repo_root = args[1]
+			args = args[2:]
+			continue
+		if args[0].startswith("--repo-root="):
+			repo_root = args[0][len("--repo-root="):]
+			args = args[1:]
+			continue
 		if args[0] == "--list-violated-files":
 			list_mode = True
 			args = args[1:]
@@ -2420,6 +2432,15 @@ def main(argv: list[str] | None = None) -> int:
 			file=sys.stderr,
 		)
 		return 2
+	if repo_root is not None:
+		try:
+			resolved_repo_root = os.path.realpath(repo_root)
+			if not os.path.isdir(resolved_repo_root):
+				raise OSError("not a directory")
+			os.chdir(resolved_repo_root)
+		except OSError as error:
+			print(f"::error::verify_integration_fingerprints: invalid --repo-root: {error}", file=sys.stderr)
+			return 2
 
 	fp_path = args[0] if args else os.environ.get("INTEGRATION_FINGERPRINTS_FILE", "")
 	if len(args) > 1:

@@ -73,8 +73,10 @@ jobs:
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${RUNTIME_DIR}"
+          POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-poller-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
           {
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "POST_AGENT_ARTIFACT_DIR=${POST_AGENT_ARTIFACT_DIR}"
             echo "STATE_FILE=${RUNTIME_DIR}/state.json"
             echo "JUDGE_PROMPT_FILE=${RUNTIME_DIR}/judge_prompt.txt"
             echo "JUDGE_OUTPUT_FILE=${RUNTIME_DIR}/judge_output.txt"
@@ -380,7 +382,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh security_audit.sh security_audit_causality.py files_touched_scope_guard.py check_resolver_diff.sh verify_integration_fingerprints.py worktree_registry.sh worktree_gc.sh; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py security_audit.sh security_audit_causality.py files_touched_scope_guard.py check_resolver_diff.sh verify_integration_fingerprints.py worktree_registry.sh worktree_gc.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -396,8 +398,11 @@ jobs:
           # Freeze the privilege-boundary helpers before any model process can
           # write the checkout. The poller refuses to source these from the
           # model-writable worktree at runtime.
-          for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh check_resolver_diff.sh files_touched_scope_guard.py; do
+          for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py check_resolver_diff.sh files_touched_scope_guard.py; do
             install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"
+          done
+          for f in post_agent_workspace_guard.py files_touched_scope_guard.py; do
+            install -m 0755 "scripts/${f}" "${POST_AGENT_ARTIFACT_DIR}/${f}"
           done
 
           # render_prompt.py is the optional Python backend for the
@@ -1014,3 +1019,11 @@ jobs:
           msg+=$'\n'"Run: ${run_url}"
 
           tg_send_msg "${msg}" "ERROR" >/dev/null || true
+
+      - name: Cleanup post-agent artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ "${POST_AGENT_ARTIFACT_DIR:-}" =~ ^${RUNNER_TEMP}/post-agent-poller-[0-9]+-[0-9]+\.[A-Za-z0-9]+$ ]]; then
+            rm -rf -- "${POST_AGENT_ARTIFACT_DIR}"
+          fi
