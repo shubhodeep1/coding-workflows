@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_workflow_support.sh:lines 103-150 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The install loops for scripts from `.codex-workflow-src/scripts/` lack symlink guards, allowing symlink targets to be installed as trusted executable scripts.\n  WHY: `[ ! -f \"${src}\" ]` follows symlinks, so a planted link can pass the check and have its target content installed and later executed; severity was rated BLOCKER by google_gemini-3_1-flash-lite and MAJOR by the other reviewers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add review_untrusted_sandbox.sh, review_untrusted_workspace.py, and review_sandbox/Dockerfile to the trusted support commit and stage them through scripts/stage_workflow_support.sh.\"\n  expected_change_site: scripts/\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff fails to introduce these files into the scripts directory, which the issue description explicitly names as a prerequisite for the fix.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stage_workflow_support.sh:lines 103-115 and 116-123 | severity=BLOCKER | confidence=4\n  PROBLEM: The MAIN_PRIMARY_BOOTSTRAP_SCRIPTS and OPTIONAL_BOOTSTRAP_SCRIPTS loops lack symlink guards.\n  WHY: An attacker or a malicious PR could introduce symlinks in the support commit pointing outside the trusted checkout, which these loops would then install as executable scripts.\n- TASK_GAP\n  Requirement: \"Add review_untrusted_sandbox.sh, review_untrusted_workspace.py, and review_sandbox/Dockerfile to the trusted support commit and stage them through scripts/stage_workflow_support.sh.\"\n  Expected change site: scripts/\n  Evidence of absence: The PR diff fails to introduce these files into the scripts directory, which the issue description explicitly names as a prerequisite for the fix.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stage_workflow_support.sh:lines 103-115 (MAIN_PRIMARY_BOOTSTRAP_SCRIPTS loop), lines 116-123 (OPTIONAL_BOOTSTRAP_SCRIPTS loop); also lines 125-132 (Serena assets), lines 134-141 (events mirror helpers), lines 143-150 (transcript archive helper) | severity=MAJOR | confidence=4\n  PROBLEM: The MAIN_PRIMARY, OPTIONAL, Serena, events, and transcript archive install loops lack symlink guards.\n  WHY: `[ ! -f \"${src}\" ]` dereferences symlinks, allowing a planted link to pass the check and its target content to be installed in SUPPORT_SCRIPTS_DIR under the trusted name, where downstream steps execute or source it.\n- scripts/stage_workflow_support.sh:lines 103-115, 116-123, 125-132, 134-141, 143-150 | severity=MAJOR | confidence=4\n  PROBLEM: The unguarded install loops can copy symlink targets into SUPPORT_SCRIPTS_DIR under the verified-support trust label.\n  WHY: The `[ -L ]` guards added for REQUIRED_BOOTSTRAP_SCRIPTS and the review_sandbox Dockerfile do not protect the other install loops, so attacker-controlled content can still reach downstream execution.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/stage_workflow_support.sh:lines 103-115 (MAIN_PRIMARY_BOOTSTRAP_SCRIPTS loop) and lines 116-123 (OPTIONAL_BOOTSTRAP_SCRIPTS loop) | severity=MAJOR | confidence=5\n  PROBLEM: The symlink guard added for REQUIRED_BOOTSTRAP_SCRIPTS is not applied to the MAIN_PRIMARY_BOOTSTRAP_SCRIPTS or OPTIONAL_BOOTSTRAP_SCRIPTS loops.\n  WHY: Both loops check only `[ ! -f \"${src}\" ]`, which follows symlinks, allowing a symlink target to be installed as an executable script; the test assertion at `tests/test_review_autofix_review_pipeline_contract.py:7302` checks for the pattern somewhere in the stage helper text but does not verify that all three loops apply it consistently.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/stage_workflow_support.sh:lines 103-115 (MAIN_PRIMARY_BOOTSTRAP_SCRIPTS loop) and 116-123 (OPTIONAL_BOOTSTRAP_SCRIPTS loop) | severity=MAJOR | confidence=4\n  PROBLEM: The symlink guard is not applied to the MAIN_PRIMARY_BOOTSTRAP_SCRIPTS or OPTIONAL_BOOTSTRAP_SCRIPTS loops.\n  WHY: Both loops check only `[ ! -f \"${src}\" ]`, which follows symlinks, allowing a planted link's target content to be installed as a trusted executable script.\n- scripts/stage_workflow_support.sh:lines 103-123 (MAIN_PRIMARY and OPTIONAL install loops) | severity=MAJOR | confidence=4\n  PROBLEM: The unguarded MAIN_PRIMARY and OPTIONAL loops leave adjacent trust boundaries exposed to symlink-following installs.\n  WHY: Scripts installed through these loops execute in reviewer, editor, or conflict-resolver paths with the same privileges as REQUIRED-loop scripts, creating an equivalent trust-boundary bypass.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b17d30c25a669476301dd3e587544a96b133b51f05876fe4aa5ebb28c4485f3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4460,
+    "run_id": "36118999412",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36118999412",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925095232_84848170d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4460,
+    "run_id": "36118999412"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T09:52:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
