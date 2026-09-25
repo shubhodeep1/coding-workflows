@@ -394,6 +394,7 @@ fi
 }
 
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+export PYTHONSAFEPATH=1
 
 security_audit_require_cmd bash
 security_audit_require_cmd python3
@@ -513,7 +514,7 @@ gh_retry gh issue list \
 	--limit 50 \
 		--json number,title,body,state,url > "${TRACKER_CANDIDATES_JSON}"
 
-python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" > "${TRACKER_SELECTION_ENV}" <<'PY'
+python3 -I - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" > "${TRACKER_SELECTION_ENV}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -699,7 +700,7 @@ PRIOR_FINDINGS_COUNT=0
 : > "${PRIOR_FINDINGS_PROMPT_FILE}"
 printf '[]\n' > "${PRIOR_FINDINGS_IDS_FILE}"
 if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
-	if ! PRIOR_FINDINGS_COUNT="$(python3 - \
+	if ! PRIOR_FINDINGS_COUNT="$(python3 -I - \
 		"${REPO_ROOT}" \
 		"${SECURITY_AUDIT_PRIOR_FINDINGS}" \
 		"${PRIOR_FINDINGS_SCOPE_FILE}" \
@@ -820,7 +821,7 @@ FIX_CYCLE_DIFFS_SUMMARY=""
 : > "${FIX_CYCLE_DIFFS_SCOPE_FILE}"
 : > "${FIX_CYCLE_DIFFS_PROMPT_FILE}"
 if [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
-	if FIX_CYCLE_DIFFS_SUMMARY="$(python3 - \
+	if FIX_CYCLE_DIFFS_SUMMARY="$(python3 -I - \
 		"${REPO_ROOT}" \
 		"${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" \
 		"${FIX_CYCLE_DIFFS_SCOPE_FILE}" \
@@ -1050,7 +1051,7 @@ WAIVED_FINDINGS_COUNT=0
 : > "${WAIVED_FINDINGS_PROMPT_FILE}"
 printf '[]\n' > "${WAIVED_FINDINGS_NORMALIZED_FILE}"
 if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
-	if ! WAIVED_FINDINGS_COUNT="$(python3 - \
+	if ! WAIVED_FINDINGS_COUNT="$(python3 -I - \
 		"${SECURITY_AUDIT_WAIVED_FINDINGS}" \
 		"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
 		"${WAIVED_FINDINGS_PROMPT_FILE}" \
@@ -1267,7 +1268,7 @@ else
 	exit "${CODEX_EXECUTION_STATUS}"
 fi
 
-python3 - \
+python3 -I - \
 	"${REPO_ROOT}" \
 	"${CODEX_OUTPUT_FILE}" \
 	"${SECURITY_AUDIT_FP_EXCLUSIONS}" \
@@ -1524,7 +1525,7 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		try:
 			causal_result = subprocess.run(
 				[
-					sys.executable, str(causality_helper_path),
+					sys.executable, "-I", str(causality_helper_path),
 					"--repo", str(repo_root),
 					"--file", normalized_file,
 					"--line", str(line),
@@ -1686,7 +1687,7 @@ def waiver_causality_unchanged(
 			waiver_path.write_text(json.dumps(waiver, ensure_ascii=True), encoding="utf-8")
 			validation_result = subprocess.run(
 				[
-					sys.executable,
+					sys.executable, "-I",
 					str(causality_helper_path),
 					"revalidate-waiver",
 					"--repo", str(repo_root),
@@ -2031,7 +2032,7 @@ summary_path.write_text(
 PY
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
-	if python3 - \
+	if python3 -I - \
 		"${FILTERED_FINDINGS_FILE}" \
 		"${FILTER_SUMMARY_FILE}" \
 		"${ADVISORY_FINDINGS_FILE}" \
@@ -2156,7 +2157,7 @@ gh_retry gh api --method GET --paginate --slurp "repos/${GITHUB_REPOSITORY}/issu
 	-f state=all \
 	-f per_page=100 > "${EXISTING_FOLLOWUPS_JSON}"
 
-python3 - \
+python3 -I - \
 	"${FILTERED_FINDINGS_FILE}" \
 	"${FILTER_SUMMARY_FILE}" \
 	"${EXISTING_FOLLOWUPS_JSON}" \

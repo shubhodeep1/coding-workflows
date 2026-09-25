@@ -902,13 +902,15 @@ def _run_poller(
 			# Commit a malicious integration tree; the trusted main bundle is
 			# frozen later, before the poller's integration checkout.
 			subprocess.run(["git", "-C", str(sandbox), "checkout", "orchestrator/project-192"], check=True, capture_output=True, env=_git_test_env())
-			for name in ("security_audit.sh", "codex_heartbeat.sh", "write_codex_config.sh"):
+			for name in ("security_audit.sh", "codex_heartbeat.sh", "write_codex_config.sh", "worktree_gc.sh", "worktree_registry.sh"):
 				(sandbox / "scripts" / name).write_text(f'#!/usr/bin/env bash\ntouch "{project_support_marker}"\nexit 71\n', encoding="utf-8")
-			for name in ("orchestrate_lib.py", "ai_memory_lib.py"):
+			for name in ("orchestrate_lib.py", "ai_memory_lib.py", "orchestrate_state_v2.py", "ai_labels.py", "check_integration_pr_readiness.py", "security_audit_causality.py", "blocker_check.py"):
 				(sandbox / "scripts" / name).write_text(f'from pathlib import Path\nPath({str(project_support_marker)!r}).touch()\nraise RuntimeError("project code executed")\n', encoding="utf-8")
+			(sandbox / "json.py").write_text(f'from pathlib import Path\nPath({str(project_support_marker)!r}).touch()\nraise RuntimeError("project json shadowed stdlib")\n', encoding="utf-8")
+			(sandbox / ".github" / "ai" / "label_contract.v1.json").write_text("not json\n", encoding="utf-8")
 			for name in ("codex_model_catalog.json", "security_audit_fp_exclusions.json"):
 				(sandbox / "scripts" / name).write_text("not json\n", encoding="utf-8")
-			subprocess.run(["git", "-C", str(sandbox), "add", "scripts"], check=True, capture_output=True, env=_git_test_env())
+			subprocess.run(["git", "-C", str(sandbox), "add", "scripts", "json.py", ".github/ai/label_contract.v1.json"], check=True, capture_output=True, env=_git_test_env())
 			subprocess.run(["git", "-C", str(sandbox), "commit", "--quiet", "-m", "poison project support"], check=True, capture_output=True, env=_git_test_env())
 			subprocess.run(["git", "-C", str(sandbox), "checkout", "main"], check=True, capture_output=True, env=_git_test_env())
 		sandbox_sha_aliases = {
@@ -1122,7 +1124,7 @@ def _run_poller(
 			mock_security_audit.write_text(
 				"#!/usr/bin/env bash\n"
 				"set -euo pipefail\n"
-				"python3 - \"${SECURITY_AUDIT_CAPTURE}\" \"${1:-}\" <<'PY'\n"
+				"python3 -I - \"${SECURITY_AUDIT_CAPTURE}\" \"${1:-}\" <<'PY'\n"
 				"import json, os, sys\n"
 				"from pathlib import Path\n"
 				"Path(sys.argv[1]).write_text(json.dumps({\n"
@@ -1151,7 +1153,7 @@ def _run_poller(
 				"}), encoding='utf-8')\n"
 				"PY\n"
 				f"if [ {int(security_audit_exit_code)} -ne 0 ]; then exit {int(security_audit_exit_code)}; fi\n"
-				"python3 - \"${SECURITY_AUDIT_FINDINGS_OUT}\" <<'PY'\n"
+				"python3 -I - \"${SECURITY_AUDIT_FINDINGS_OUT}\" <<'PY'\n"
 				"import json, sys\n"
 				"from pathlib import Path\n"
 				f"payload = {repr(security_audit_payload or {})}\n"
@@ -1165,6 +1167,7 @@ def _run_poller(
 		trusted_support_dir = tmp / "poller-support-test"
 		shutil.copytree(sandbox / "scripts", trusted_support_dir / "scripts")
 		shutil.copytree(sandbox / "prompts", trusted_support_dir / "prompts")
+		shutil.copytree(sandbox / ".github" / "ai", trusted_support_dir / ".github" / "ai")
 		trusted_support_sha = "a" * 40
 		(trusted_support_dir / ".support_sha").write_text(trusted_support_sha + "\n", encoding="utf-8")
 		for name in ("ai_memory_lib.py", "orchestrate_lib.py", "render_prompt.py", "assemble_prompt.sh", "security_audit_causality.py"):
@@ -3008,6 +3011,9 @@ import sys
 from pathlib import Path
 
 args = sys.argv[1:]
+if args and args[0] == "-I":
+	# Match private support scripts while preserving isolation for real Python.
+	args = args[1:]
 real_python = os.environ.get("REAL_PYTHON_BIN", "python3")
 store_path = Path(os.environ.get("GH_MOCK_STORE", ""))
 
@@ -3447,7 +3453,7 @@ if len(args) >= 2 and _script_matches(args[0], "scripts/orchestrate_state_v2.py"
 		}))
 		sys.exit(0)
 
-proc = subprocess.run([real_python, *args])
+proc = subprocess.run([real_python, *sys.argv[1:]])
 sys.exit(proc.returncode)
 ''',
 		)
@@ -3465,6 +3471,7 @@ sys.exit(proc.returncode)
 				"GH_TOKEN": "test-token",
 				"OPENROUTER_API_KEY": "test-openrouter",
 				"GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_WORKSPACE": str(sandbox),
 				"MODEL_EDITOR": "openai/gpt-5.4",
 				"MODEL_REASONING_EFFORT_JUDGE": "xhigh",
 				"TG_BOT_SECRET": "",
@@ -19297,8 +19304,9 @@ def test_branch_rebuild_replay_configures_git_identity():
 def test_worktree_registry_is_wired_around_poller_worktree_lifecycles():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert "worktree_registry_enabled()" in script
-	assert 'bash scripts/worktree_registry.sh register' in script
-	assert 'bash scripts/worktree_registry.sh deregister' in script
+	assert 'poller_trusted_support_file scripts/worktree_registry.sh' in script
+	assert 'bash "${trusted_registry}" register' in script
+	assert 'bash "${trusted_registry}" deregister' in script
 	assert 'worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"' in script
 	assert 'worktree_registry_register "$(basename -- "${_ws}")" "${_ws}" "${int_sha}" "pr-${pr_num}" "orchestrate-poll"' in script
 	assert 'worktree_registry_register "$(basename -- "${_wh}")" "${_wh}" "${_tmp_branch}" "pr-${pr_num}" "orchestrate-poll"' in script

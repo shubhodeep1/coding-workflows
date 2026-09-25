@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 
@@ -196,7 +198,52 @@ def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> No
 	assert "ORCH_WORKTREE_TTL_SECS: ${{ vars.ORCH_WORKTREE_TTL_SECS || '3600' }}" in wf
 	assert "- name: Run worktree registry GC" in wf
 	assert "if: steps.find_tracking.outputs.has_work == 'true'\n        run: bash scripts/worktree_gc.sh" not in wf
-	assert "run: bash scripts/worktree_gc.sh" in wf
+	assert 'WORKTREE_REGISTRY_ROOT="${GITHUB_WORKSPACE}" PYTHONSAFEPATH=1 bash "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/worktree_gc.sh"' in wf
+	assert 'python3 -I "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/build_state_snapshot.py"' in wf
+	assert '--schema-root "${POLLER_TRUSTED_SUPPORT_DIR}/ai-memory"' in wf
+	assert 'source "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/memory_helpers.sh"' in wf
+	assert 'source "${support_dir}/scripts/tg_helpers.sh"' in wf
+	assert 'source scripts/tg_helpers.sh' not in wf
+
+
+def test_post_checkout_helpers_are_resolved_only_from_verified_support() -> None:
+	wf = _workflow()
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	for dependency in (
+		"orchestrate_state_v2.py", "ai_labels.py", "check_integration_pr_readiness.py",
+		"security_audit_causality.py", "worktree_registry.sh", "build_state_snapshot.py",
+		"gh_helpers.sh", "tg_helpers.sh", "memory_helpers.sh", "blocker_check.py",
+		"state_snapshot.v1.json", "label_contract.v1.json",
+	):
+		assert dependency in wf
+	for dependency in (
+		"scripts/orchestrate_state_v2.py", "scripts/ai_labels.py",
+		"scripts/check_integration_pr_readiness.py", "scripts/security_audit_causality.py",
+		".github/ai/label_contract.v1.json",
+	):
+		assert f"poller_trusted_support_file {dependency}" in poller
+	assert "python3 scripts/orchestrate_state_v2.py" not in poller
+	assert "python3 scripts/ai_labels.py" not in poller
+	assert "python3 scripts/check_integration_pr_readiness.py" not in poller
+	assert "sys.executable, \"-I\", str(causality_helper)" in poller
+	assert 'source "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/memory_helpers.sh"' in wf
+	assert 'source "${support_dir}/scripts/tg_helpers.sh"' in wf
+
+
+def test_telegram_helper_does_not_source_checkout_rate_limit_helper(tmp_path: Path) -> None:
+	trusted = tmp_path / "trusted" / "scripts"
+	trusted.mkdir(parents=True)
+	for name in ("tg_helpers.sh", "gh_helpers.sh", "emit_event.sh"):
+		(trusted / name).write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
+	checkout = tmp_path / "checkout"
+	(checkout / "scripts").mkdir(parents=True)
+	marker = tmp_path / "executed"
+	(checkout / "scripts" / "gh_helpers.sh").write_text(f'touch "{marker}"\n', encoding="utf-8")
+	env = os.environ.copy()
+	env.pop("BASH_ENV", None)
+	result = subprocess.run(["bash", "-c", 'source "$1"', "bash", str(trusted / "tg_helpers.sh")], cwd=checkout, env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert not marker.exists()
 
 
 def main() -> int:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -379,6 +380,34 @@ def test_security_audit_workflow_has_required_triggers_and_checkout_contract() -
 	assert 'ref: ${{ inputs.ref || github.event.repository.default_branch }}' in content
 	# Full history is required by the incremental scope resolver.
 	assert 'fetch-depth: 0' in content
+
+
+def test_branch_audit_isolates_python_imports_from_target_checkout() -> None:
+	content = SCRIPT_PATH.read_text(encoding="utf-8")
+	wf = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "PYTHONSAFEPATH: '1'" in wf
+	assert not re.search(r"\bpython3\s+-(?!I\b)", content)
+	assert 'sys.executable, "-I", str(causality_helper_path)' in content
+	assert 'sys.executable, "-I",' in content
+
+
+def test_branch_audit_does_not_import_checkout_json_module(tmp_path: Path) -> None:
+	repo_dir, base_sha, head_sha = _git_line_ownership_fixture(tmp_path)
+	marker = tmp_path / "poisoned-import"
+	(repo_dir / "json.py").write_text(f'from pathlib import Path\nPath({str(marker)!r}).touch()\nraise RuntimeError("poisoned")\n', encoding="utf-8")
+	output_path = tmp_path / "findings.json"
+	proc, final_state = _run_security_audit(
+		{}, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+		},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads(final_state["security_audit_findings_output"])["findings"] == []
+	assert not marker.exists()
 
 
 def test_security_audit_workflow_wires_codex_and_audit_env() -> None:

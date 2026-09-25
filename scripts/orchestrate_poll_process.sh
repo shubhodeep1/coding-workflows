@@ -10,6 +10,9 @@
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TOOL_CALL_BUDGET_JUDGE
 
 set -euo pipefail
+# The poller later checks out untrusted integration code without restarting.
+# Inherited Python children must never import modules from that checkout.
+export PYTHONSAFEPATH=1
 
 # Set by the verified support staging step. A missing export deliberately
 # resolves outside any usable bundle; never substitute the project checkout.
@@ -67,6 +70,12 @@ fi
 if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
+  # Functions in memory_helpers.sh launch ai_memory.py at call time. Pin
+  # their script directory before an integration checkout can replace it.
+  if poller_trusted_support_file scripts/ai_memory.py >/dev/null \
+    && trusted_memory_script_dir="$(poller_trusted_python_dir)"; then
+    MEMORY_SCRIPTS_DIR="${trusted_memory_script_dir}"
+  fi
 fi
 if [ -f "scripts/transcript_archive.sh" ]; then
   # shellcheck disable=SC1091
@@ -317,8 +326,9 @@ worktree_registry_register() {
 
 	worktree_registry_enabled || return 0
 	[ -n "${name}" ] || return 0
-	[ -f "scripts/worktree_registry.sh" ] || return 0
-	bash scripts/worktree_registry.sh register "${name}" "${path}" "${branch}" "${task_id}" "${owner_phase}" || true
+  local trusted_registry
+  trusted_registry="$(poller_trusted_support_file scripts/worktree_registry.sh)" || return 0
+	WORKTREE_REGISTRY_ROOT="${GITHUB_WORKSPACE:-${PWD}}" bash "${trusted_registry}" register "${name}" "${path}" "${branch}" "${task_id}" "${owner_phase}" || true
 }
 
 worktree_registry_deregister() {
@@ -326,8 +336,9 @@ worktree_registry_deregister() {
 
 	worktree_registry_enabled || return 0
 	[ -n "${name}" ] || return 0
-	[ -f "scripts/worktree_registry.sh" ] || return 0
-	bash scripts/worktree_registry.sh deregister "${name}" || true
+	local trusted_registry
+	trusted_registry="$(poller_trusted_support_file scripts/worktree_registry.sh)" || return 0
+	WORKTREE_REGISTRY_ROOT="${GITHUB_WORKSPACE:-${PWD}}" bash "${trusted_registry}" deregister "${name}" || true
 }
 
 # _judge_truncate_pr_diff_file — Truncate a PR diff file in place to at
@@ -346,7 +357,7 @@ _judge_truncate_pr_diff_file()
 	[ -f "${diff_path}" ] || return 1
 	[[ "${max_bytes}" =~ ^[1-9][0-9]*$ ]] || return 1
 	truncated_tmp="$(mktemp)" || return 1
-	if PYTHONDONTWRITEBYTECODE=1 python3 - "${diff_path}" "${max_bytes}" > "${truncated_tmp}" 2>/dev/null <<'PY'
+	if PYTHONDONTWRITEBYTECODE=1 python3 -I - "${diff_path}" "${max_bytes}" > "${truncated_tmp}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
@@ -374,7 +385,7 @@ extract_judge_json_with_status() {
   local parsed_json=""
 
   [ -s "${output_file}" ] || return 0
-  parsed_json="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${output_file}" <<'PY' 2>/dev/null || true
+  parsed_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I - "${output_file}" <<'PY' 2>/dev/null || true
 import json
 import re
 import subprocess
@@ -2489,13 +2500,14 @@ post_state_comment() {
   # but if the staging list omits it we surface a hard error here rather
   # than silently swallowing pack failures and falling through to stale
   # V1 state on the next poll cycle.
-  if [ ! -f "scripts/orchestrate_state_v2.py" ]; then
-    echo "::error::scripts/orchestrate_state_v2.py is missing from the staged scripts tree; V2 state persistence cannot run for issue #${TRACKING_NUM}. Update the workflow's 'Stage workflow support files' loop to include this helper." >&2
+  local trusted_state_writer
+  if ! trusted_state_writer="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)"; then
+    echo "::error::Verified orchestrate_state_v2.py unavailable for issue #${TRACKING_NUM}." >&2
     return 1
   fi
   local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx chunk_count
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/orchstate_v2_pack.XXXXXX")"
-  if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
+  if ! manifest_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_writer}" pack \
       --state-file "${STATE_FILE}" \
       --out-dir "${pack_dir}" 2>&1)"; then
     echo "::error::orchestrate_state_v2 pack failed for issue #${TRACKING_NUM}: ${manifest_json}" >&2
@@ -2546,10 +2558,8 @@ _mirror_task_state_files_from_state() {
 		return 0
 	fi
 
-	local script_dir task_state_helper
-	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
-	task_state_helper="${script_dir}/task_state.py"
-	if [ ! -f "${task_state_helper}" ]; then
+	local task_state_helper
+	if ! task_state_helper="$(poller_trusted_support_file scripts/task_state.py)"; then
 		echo "TASK_STATE_WRITE_FAIL helper_missing task_state_py_not_staged" >&2
 		return 0
 	fi
@@ -2559,7 +2569,7 @@ _mirror_task_state_files_from_state() {
 		return 0
 	fi
 
-	if ! python3 "${task_state_helper}" mirror-state --state-file "${STATE_FILE}"; then
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I "${task_state_helper}" --repo-root "${GITHUB_WORKSPACE:-${PWD}}" mirror-state --state-file "${STATE_FILE}"; then
 		echo "TASK_STATE_WRITE_FAIL state_file mirror_state_command_failed" >&2
 	fi
 	return 0
@@ -2952,11 +2962,12 @@ extract_latest_valid_orchestrator_state() {
   # legacy V1 single-comment scan.  This keeps existing tracking issues
   # whose state was last persisted as V1 readable until a V2 write
   # supersedes them.  See scripts/orchestrate_state_v2.py for framing.
-  local _v2_comments_file _v2_payload_file _v2_rc
+  local _v2_comments_file _v2_payload_file _v2_rc trusted_state_reader
   _v2_comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_comments.XXXXXX")"
   _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
   printf '%s' "${comments_json}" > "${_v2_comments_file}"
-  python3 scripts/orchestrate_state_v2.py extract \
+  trusted_state_reader="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)" || return 1
+  PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_reader}" extract \
     --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
   if [ "${_v2_rc}" = "0" ] && [ -s "${_v2_payload_file}" ]; then
@@ -3019,7 +3030,8 @@ ensure_label_exists() {
     return 0
   fi
 
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file
+  contract_file="$(poller_trusted_support_file .github/ai/label_contract.v1.json)" || return 1
   local color="1d76db"
   local description="AI workflow label"
   local contract_color=""
@@ -3069,7 +3081,9 @@ ensure_label_exists() {
 set_issue_phase_label() {
   local issue_num="$1"
   local phase_label="$2"
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file trusted_labels
+  contract_file="$(poller_trusted_support_file .github/ai/label_contract.v1.json)" || return 1
+  trusted_labels="$(poller_trusted_support_file scripts/ai_labels.py)" || return 1
 
   ensure_label_exists "${phase_label}"
 
@@ -3081,7 +3095,7 @@ set_issue_phase_label() {
   local phase_changes
   local _resolve_err_file
   _resolve_err_file="$(mktemp)"
-  if ! phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
+  if ! phase_changes="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_labels}" resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
     local _resolve_err
     _resolve_err="$(tr '\n' ' ' < "${_resolve_err_file}" 2>/dev/null || true)"
     rm -f "${_resolve_err_file}"
@@ -3181,7 +3195,7 @@ reconcile_tracking_issue_body_from_state() {
 
 	current_hash="$(jq -r '.tracking_body_sync_hash // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
 	if [ -z "${current_hash}" ] && jq -e '(.project_body_snapshot // "") != ""' "${STATE_FILE}" >/dev/null 2>&1; then
-		current_hash="$(python3 - "${STATE_FILE}" <<'PY'
+		current_hash="$(python3 -I - "${STATE_FILE}" <<'PY'
 import hashlib
 import json
 import sys
@@ -3230,7 +3244,7 @@ PY
 			rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
 			return 1
 		fi
-		if ! python3 - "${issue_json_file}" > "${template_body_file}" <<'PY'
+		if ! python3 -I - "${issue_json_file}" > "${template_body_file}" <<'PY'
 import json
 import sys
 
@@ -3307,7 +3321,9 @@ PY
 				write_label_names_file_from_json "${TRACKING_LABELS:-[]}" "${tracking_labels_file}"
 				pr_labels_json="$(get_issue_labels_json "${final_pr}")"
 				write_label_names_file_from_json "${pr_labels_json}" "${pr_labels_file}"
-				if python3 scripts/check_integration_pr_readiness.py \
+				local trusted_readiness
+				trusted_readiness="$(poller_trusted_support_file scripts/check_integration_pr_readiness.py)" || return 1
+				if PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_readiness}" \
 					--repo "${GITHUB_REPOSITORY}" \
 					--head-ref "${pr_head_ref}" \
 					--head-sha "${pr_head_sha}" \
@@ -3942,7 +3958,9 @@ backfill_validation_fix_issue_merged_label() {
   # `get_issue_labels_json` round-trip.  When empty/omitted the helper
   # falls back to fetching itself, preserving the original contract.
   local cached_labels="${2:-}"
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file trusted_labels
+  contract_file="$(poller_trusted_support_file .github/ai/label_contract.v1.json)" || return 1
+  trusted_labels="$(poller_trusted_support_file scripts/ai_labels.py)" || return 1
   local fix_labels
   local phase_changes
   local edit_args=()
@@ -3970,7 +3988,7 @@ backfill_validation_fix_issue_merged_label() {
 
   edit_args+=(--add-label "ai:merged")
   if [ -f "${contract_file}" ]; then
-    phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
+    phase_changes="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_labels}" resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
     while IFS= read -r remove_label; do
       [ -n "${remove_label}" ] || continue
       if has_label "${fix_labels}" "${remove_label}"; then
@@ -4232,7 +4250,9 @@ reconcile_managed_issue_labels() {
   local issue_state="$3"
   local pr_state="$4"
   local pr_merged="$5"
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file trusted_labels
+  contract_file="$(poller_trusted_support_file .github/ai/label_contract.v1.json)" || return 1
+  trusted_labels="$(poller_trusted_support_file scripts/ai_labels.py)" || return 1
 
   if [ ! -f "${contract_file}" ]; then
     echo "${labels_json}"
@@ -4242,10 +4262,10 @@ reconcile_managed_issue_labels() {
   local labels_csv
   labels_csv="$(echo "${labels_json}" | jq -r 'join(",")' 2>/dev/null || echo "")"
   local repair_json
-  repair_json="$(python3 scripts/ai_labels.py repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
+  repair_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_labels}" repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
 
   local plan_json
-  plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
+  plan_json="$(python3 -I - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
 import json
 import sys
 
@@ -5363,7 +5383,7 @@ Completion remains gated. The scheduled poller will retry automatically."
 # non-zero exit means the findings file was unreadable or malformed.
 render_security_pass_findings_table() {
   local findings_file="$1"
-  python3 - "${findings_file}" <<'PY'
+  python3 -I - "${findings_file}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -5901,7 +5921,7 @@ create_security_pass_fix_issue() {
   if ! render_security_pass_findings_table "${findings_file}" > "${findings_table_file}"; then
     return 1
   fi
-  if ! python3 - "${findings_table_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
+  if ! python3 -I - "${findings_table_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
 from __future__ import annotations
 
 import sys
@@ -6102,8 +6122,8 @@ security_pass_apply_waivers_to_findings() {
   [ "${waived_count}" -gt 0 ] || return 0
 	local current_waiver_head causality_helper
 	current_waiver_head="$(git rev-parse HEAD 2>/dev/null || true)"
-	causality_helper="scripts/security_audit_causality.py"
-  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${current_waiver_head}" "${causality_helper}" "${SECURITY_PASS_LINE_OWNERSHIP}" <<'PY'
+	causality_helper="$(poller_trusted_support_file scripts/security_audit_causality.py)" || return 1
+  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 -I - "${findings_file}" "${STATE_FILE}" "${current_waiver_head}" "${causality_helper}" "${SECURITY_PASS_LINE_OWNERSHIP}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -6140,7 +6160,7 @@ def waiver_for(finding: dict) -> str | None:
 			waiver_file.write_text(json.dumps(waiver, ensure_ascii=True), encoding="utf-8")
 			validation = subprocess.run(
 				[
-					sys.executable, str(causality_helper), "revalidate-waiver",
+					sys.executable, "-I", str(causality_helper), "revalidate-waiver",
 					"--repo", ".",
 					"--audited-head", str(waiver.get("audited_head_sha") or ""),
 					"--current-head", current_head_sha,
@@ -6324,7 +6344,7 @@ create_security_pass_advisory_followup() {
   fi
   body_file="${RUNTIME_DIR}/security_pass_advisory_${TRACKING_NUM}_$(printf '%s' "${finding_id}" | tr -c 'A-Za-z0-9._-' '_').md"
   printf '%s\n' "${finding_json}" > "${body_file}.finding.json"
-  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
+  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 -I - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -7069,7 +7089,7 @@ ${decisions_table}}"
 # Strip notification triggers from judge- or audit-generated prose before it
 # lands in a tracking comment (same rule as render_security_pass_findings_table).
 security_pass_prose() {
-  printf '%s' "${1:-}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+  printf '%s' "${1:-}" | PYTHONDONTWRITEBYTECODE=1 python3 -I -c '
 import re, sys
 text = " ".join(sys.stdin.read().split())
 sys.stdout.write(re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b")))
@@ -7078,7 +7098,7 @@ sys.stdout.write(re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b")))
 
 render_security_pass_judge_decisions_table() {
   local verdict_file="$1"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${verdict_file}" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 python3 -I - "${verdict_file}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -7984,14 +8004,14 @@ ensure_integration_conflict_state_fields() {
 }
 
 extract_autofix_resolver_retry_state_from_pr_body() {
-  # Read the PR body before invoking `python3 - <<'PY'`: the heredoc
+  # Read the PR body before invoking `python3 -I - <<'PY'`: the heredoc
   # consumes stdin for the script itself, so piping directly into
   # python would otherwise drop the body and make the extractor fail
   # closed on every call.
   local retry_state_body=""
   retry_state_body="$(cat)"
 
-  RETRY_STATE_BODY="${retry_state_body}" python3 - <<'PY'
+  RETRY_STATE_BODY="${retry_state_body}" python3 -I - <<'PY'
 from __future__ import annotations
 
 import json
@@ -8102,7 +8122,7 @@ normalize_judge_justification_for_fingerprint() {
   # poller invocation that touched judge fingerprints into a non-zero
   # exit. Reading the text from RAW_TEXT and the script from stdin
   # (`python3 -`) sidesteps the FD-3 dance entirely.
-  RAW_TEXT="${raw_text}" python3 - <<'PY'
+  RAW_TEXT="${raw_text}" python3 -I - <<'PY'
 import os
 import re
 
@@ -8135,7 +8155,7 @@ judge_justification_fingerprint() {
     printf '%s' "${normalized_text}" | shasum -a 256 | awk '{print $1}'
     return 0
   fi
-  printf '%s' "${normalized_text}" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+  printf '%s' "${normalized_text}" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 }
 
 # Capture merged-sub-issue intent fingerprints for a sub-issue whose
@@ -8259,7 +8279,7 @@ capture_intent_fingerprints_for_merged_subissue() {
     FINGERPRINT_MIN_PATTERN_CHARS="${FINGERPRINT_MIN_PATTERN_CHARS}" \
     GIT_COMMAND_TIMEOUT_SECS="${integration_fetch_timeout_secs}" \
     FINGERPRINT_POST_MERGE_REF="${integration_ref_for_capture}" \
-    python3 - "${diff_file}" <<'PY' 2>/dev/null || true
+    python3 -I - "${diff_file}" <<'PY' 2>/dev/null || true
 import json, os, re, subprocess, sys
 from collections import Counter
 
@@ -8734,7 +8754,7 @@ update_eager_pr_validation_status_section() {
 
   pr_body="$(printf '%s' "${pr_json}" | jq -r '.body // ""' 2>/dev/null || echo '')"
   validation_block="$(build_eager_pr_validation_status_block "${next_action_override}")"
-  updated_body="$(printf '%s' "${pr_body}" | VALIDATION_STATUS_BLOCK="${validation_block}" python3 -c '
+  updated_body="$(printf '%s' "${pr_body}" | VALIDATION_STATUS_BLOCK="${validation_block}" python3 -I -c '
 from __future__ import annotations
 
 import os
@@ -9139,7 +9159,7 @@ invoke_judge_for_integration_conflict() {
 		echo "::warning::Integration conflict paths cannot be represented safely for PR #${final_pr}."
 		return 1
 	fi
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - \
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I - \
 		"${integration_judge_workspace}" "${integration_allowed_paths_file}" "${integration_conflict_spans_file}" \
 		"${integration_expected_tree}" <<'PY'
 import base64
@@ -9243,9 +9263,10 @@ PY
   # Ensure codex config exists — mirrors the review-blocked judge setup.
   # Centralised in scripts/write_codex_config.sh — see that script's
   # header for the apply_patch / trust / elevation rationale.
-  bash scripts/write_codex_config.sh \
+  bash "$(poller_trusted_support_file scripts/write_codex_config.sh)" \
     --model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+    --catalog-path "$(poller_trusted_support_file scripts/codex_model_catalog.json)"
 
   local prompt_file
   local output_file
@@ -9879,12 +9900,12 @@ _iso8601_to_epoch() {
 
 _branch_rebuild_audit_get() {
   local integration_branch="$1"
-  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || [ ! -f "scripts/ai_memory.py" ]; then
+  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || ! poller_trusted_support_file scripts/ai_memory.py >/dev/null; then
     return 1
   fi
 
   local audit_json
-  audit_json="$(python3 scripts/ai_memory.py branch-rebuild-audit get \
+  audit_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/ai_memory.py)" branch-rebuild-audit get \
     --repo "${GITHUB_REPOSITORY}" \
     --tracking-issue "${TRACKING_NUM}" \
     --integration-branch "${integration_branch}" 2>/dev/null || echo "")"
@@ -9897,7 +9918,7 @@ _branch_rebuild_audit_get() {
 _branch_rebuild_audit_put() {
   local integration_branch="$1"
   local audit_json="$2"
-  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || [ ! -f "scripts/ai_memory.py" ]; then
+  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || ! poller_trusted_support_file scripts/ai_memory.py >/dev/null; then
     return 1
   fi
 
@@ -9906,7 +9927,7 @@ _branch_rebuild_audit_put() {
   audit_file="$(mktemp "${TMPDIR:-/tmp}/branch-rebuild-audit.XXXXXX" 2>/dev/null || true)"
   [ -n "${audit_file}" ] || return 1
   printf '%s\n' "${audit_json}" > "${audit_file}"
-  result_json="$(python3 scripts/ai_memory.py branch-rebuild-audit put \
+  result_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/ai_memory.py)" branch-rebuild-audit put \
     --repo "${GITHUB_REPOSITORY}" \
     --tracking-issue "${TRACKING_NUM}" \
     --integration-branch "${integration_branch}" \
@@ -13113,8 +13134,8 @@ _load_actions_runs_cached() {
   local now_epoch
   now_epoch="$(date +%s)"
 
-  if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-    cache_json="$(python3 scripts/ai_memory.py actions-runs-cache get --repo "${repo}" || echo '{}')"
+  if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && poller_trusted_support_file scripts/ai_memory.py >/dev/null; then
+    cache_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/ai_memory.py)" actions-runs-cache get --repo "${repo}" || echo '{}')"
     cache_hit="$(printf '%s' "${cache_json}" | jq -r 'if (.ok == true and .hit == true and (.cache | type == "object")) then "true" else "false" end' 2>/dev/null || echo 'false')"
     if [ "${cache_hit}" = "true" ]; then
       cache_payload="$(printf '%s' "${cache_json}" | jq -c '.cache // {}' 2>/dev/null || echo '{}')"
@@ -13194,8 +13215,8 @@ _load_actions_runs_cached() {
       ttl_put_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-refresh.XXXXXX" 2>/dev/null || true)"
       if [ -n "${ttl_put_file}" ]; then
         jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' > "${ttl_put_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${ttl_put_file}"
-        if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-          python3 scripts/ai_memory.py actions-runs-cache put \
+        if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && poller_trusted_support_file scripts/ai_memory.py >/dev/null; then
+          PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/ai_memory.py)" actions-runs-cache put \
             --repo "${repo}" \
             --runs-file "${ttl_put_file}" \
             --etag "${response_etag:-${cached_etag}}" \
@@ -13229,8 +13250,8 @@ _load_actions_runs_cached() {
 		if [ ! -s "${response_body_file}" ]; then
 			jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' > "${response_body_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${response_body_file}"
 		fi
-	if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-		python3 scripts/ai_memory.py actions-runs-cache put \
+	if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && poller_trusted_support_file scripts/ai_memory.py >/dev/null; then
+		PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/ai_memory.py)" actions-runs-cache put \
 			--repo "${repo}" \
 			--runs-file "${response_body_file}" \
 	        --etag "${response_etag}" \
@@ -14201,7 +14222,7 @@ stall_recovery_action_is_terminal() {
 _robust_parse_json_file() {
   local file_path="$1"
   local parse_log="${RUNTIME_DIR:-/tmp}/stall_judge.log"
-  python3 -c "
+  python3 -I -c "
 import json, re, sys
 
 try:
@@ -15301,7 +15322,7 @@ invoke_stall_judge() {
     echo
     echo "=== STALL JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
+    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash "$(poller_trusted_support_file scripts/render_prompt.sh)" prompts/mode-judge-stall-recovery.txt
     echo
     echo "=== STALL DIAGNOSTICS JSON ==="
     echo
@@ -15309,9 +15330,10 @@ invoke_stall_judge() {
   } > "${stall_judge_prompt_file}"
 
   # Centralised in scripts/write_codex_config.sh.
-  bash scripts/write_codex_config.sh \
+  bash "$(poller_trusted_support_file scripts/write_codex_config.sh)" \
     --model "${MODEL_EDITOR}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+    --catalog-path "$(poller_trusted_support_file scripts/codex_model_catalog.json)"
 
   local judge_success="false"
   local attempt
@@ -16776,7 +16798,7 @@ PY
     state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
     state_json="$(_extract_standalone_state_json_from_comments "${comments_json}")"
 
-    updated_state="$(python3 - "$state_json" "$phase" <<'PY'
+    updated_state="$(python3 -I - "$state_json" "$phase" <<'PY'
 import json, sys, time
 state = json.loads(sys.argv[1])
 phase = sys.argv[2]
@@ -18331,7 +18353,7 @@ _runtime_blocker_dispatch_eligible()
 		echo "::warning::[runtime-blocker] failed to create temp file for ${local_id}; failing open."
 		return 0
 	fi
-	if ! blocker_result="$(python3 scripts/blocker_check.py \
+	if ! blocker_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/blocker_check.py)" \
 		--state-file "${STATE_FILE}" \
 		--local-id "${local_id}" \
 		--candidate-details-json "${candidate_truth_json}" 2>"${blocker_err_file}")"; then
@@ -19671,7 +19693,7 @@ The security pass that parked this project ran on workflow engine \`${SP_AUTO_RE
       if [ -z "${REVALIDATE_COMMENT_URL}" ] && [[ "${REVALIDATE_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
         REVALIDATE_COMMENT_URL="$(_gh_url "issues/${TRACKING_NUM}#issuecomment-${REVALIDATE_COMMENT_ID}")"
       fi
-      REVALIDATE_REASON="$(REVALIDATE_COMMENT_BODY="${REVALIDATE_COMMENT_BODY}" python3 - <<'PY'
+      REVALIDATE_REASON="$(REVALIDATE_COMMENT_BODY="${REVALIDATE_COMMENT_BODY}" python3 -I - <<'PY'
 from __future__ import annotations
 
 import os
@@ -20943,9 +20965,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
     # Ensure codex config exists for the judge.
     # Centralised in scripts/write_codex_config.sh.
-    bash scripts/write_codex_config.sh \
+    bash "$(poller_trusted_support_file scripts/write_codex_config.sh)" \
       --model "${MODEL_EDITOR}" \
-      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
+      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+      --catalog-path "$(poller_trusted_support_file scripts/codex_model_catalog.json)"
 
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
     REVIEW_BLOCKED_STATE_CHANGED=false
@@ -21416,7 +21439,7 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "$(poller_trusted_support_file scripts/render_prompt.sh)" prompts/mode-judge-review-blocked.txt
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -23190,9 +23213,10 @@ Manual intervention required." >/dev/null
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
   echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-high}"
   # Centralised in scripts/write_codex_config.sh.
-  bash scripts/write_codex_config.sh \
+  bash "$(poller_trusted_support_file scripts/write_codex_config.sh)" \
     --model "${MODEL_EDITOR}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+    --catalog-path "$(poller_trusted_support_file scripts/codex_model_catalog.json)"
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
     continue
@@ -23352,7 +23376,7 @@ ${PR_DIFF}
     echo
     echo "=== JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt
+    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash "$(poller_trusted_support_file scripts/render_prompt.sh)" prompts/mode-judge.txt
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -23979,7 +24003,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
         _gate_violations=""
         if [ -n "${_gate_integration_branch}" ] \
            && [ "${_gate_fp_count}" -gt 0 ] \
-           && [ -f "scripts/verify_integration_fingerprints.py" ]; then
+           && poller_trusted_support_file scripts/verify_integration_fingerprints.py >/dev/null; then
           # Resolve a fresh ref for the integration branch. In the normal
           # GitHub Actions path, fetch the branch and pin FETCH_HEAD to a
           # concrete commit SHA immediately so later git operations cannot
@@ -24050,7 +24074,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
             jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
             _gate_exit=0
             INTEGRATION_BRANCH_NAME="${_gate_integration_branch}" \
-              python3 scripts/verify_integration_fingerprints.py \
+              PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/verify_integration_fingerprints.py)" \
                 --ref "${_gate_ref}" \
                 "${_gate_fp_file}" \
                 > "${_gate_log_file}" 2>&1 || _gate_exit=$?
@@ -24449,9 +24473,9 @@ NOOP_MAX_RETRIES=3
 NOOP_FORCE_MERGE_SKIP_LABELS=$'e2e-smoke-test\nforce-review'
 
 # Source the shared audit helper once, outside the loop.
-if [ -f scripts/validate_editor_audit.sh ]; then
+if trusted_editor_audit="$(poller_trusted_support_file scripts/validate_editor_audit.sh)"; then
 	# shellcheck source=scripts/validate_editor_audit.sh disable=SC1091
-	source scripts/validate_editor_audit.sh
+	source "${trusted_editor_audit}"
 fi
 
 for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
