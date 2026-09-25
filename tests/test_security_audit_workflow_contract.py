@@ -229,6 +229,8 @@ def _run_security_audit(
 			encoding="utf-8",
 		)
 
+		runner_temp = tmp_path / "runner-temp"
+		runner_temp.mkdir(parents=True, exist_ok=True)
 		run_cwd = cwd or REPO_ROOT
 		env = os.environ.copy()
 		if Path(run_cwd) != REPO_ROOT:
@@ -251,6 +253,9 @@ def _run_security_audit(
 				"PATH": os.pathsep.join((str(bin_dir), *existing_path_entries)),
 				"PYTHONDONTWRITEBYTECODE": "1",
 				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
+				# Per-test model broker pid/ready files; parallel runs must not
+				# share the /tmp fallback path.
+				"RUNNER_TEMP": str(runner_temp),
 			}
 		)
 		if support_dir is not None:
