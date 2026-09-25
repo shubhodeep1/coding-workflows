@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/confine-human-steps-to-activation-plan.md:305 | severity=high | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: Phase 4b treats `behind` as the released state for `compare/<sha>...stable`, but the released state is `ahead` or `identical`.\n  WHY: When the upstream release lands, the check does not match, so it never posts the resume `/answer` and the issue stays `ai:waiting-on-dependency` until the 7-day escalation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/plans/confine-human-steps-to-activation-plan.md:305 | severity=high | confidence=[4]\n  PROBLEM: Phase 4b checks for `behind` to mean released, but the released state for `compare/<sha>...stable` is `ahead` or `identical`.\n  WHY: When the upstream release lands, the check does not match and never posts the resume `/answer`, leaving the issue in `ai:waiting-on-dependency` until the 7-day escalation.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bb063492531b42454f1c9524dca62ef86dec91332bf8b0ada60c8b34fe8b5996",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36096888478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36096888478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925052055_59d614bfba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36096888478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-25T05:20:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
