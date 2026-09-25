@@ -210,6 +210,14 @@ def test_release_assembly_fails_open() -> None:
 		assert 'git reset --hard "${RELEASE_TESTED_SHA}"' in step
 		assert "RELEASE_STALE_TIP" in step
 		assert "::warning::Could not push the assembled changelog" in step
+		# `stable` is both a branch and a tag: the push and the stale-tip
+		# lookup must name refs/heads/ explicitly (a bare `HEAD:stable` is
+		# "dst refspec stable matches more than one", and `git fetch origin
+		# stable` resolves to the tag).
+		assert 'git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"' in step
+		assert '"HEAD:${SOURCE_BRANCH}"' not in step
+		assert 'git ls-remote origin "refs/heads/${SOURCE_BRANCH}"' in step
+		assert 'git fetch origin "${SOURCE_BRANCH}"' not in step
 
 
 def test_consumer_sync_has_the_fifth_category_and_assembly() -> None:

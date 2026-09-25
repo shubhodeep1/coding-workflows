@@ -739,7 +739,8 @@ def test_e2e_guards_push_as_well_as_commit(merged_branch_repo) -> None:
 @pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
 def test_api_write_allowlist_disables_implicit_curl_config(path: Path) -> None:
 	settings = json.loads(path.read_text(encoding="utf-8"))
-	assert settings["permissions"]["allow"] == [
+	allow = settings["permissions"]["allow"]
+	assert allow[:6] == [
 		"Bash(curl -q -sS -X PUT https://api.digitalocean.com/*)",
 		"Bash(curl -q -sS -X POST https://api.digitalocean.com/*)",
 		"Bash(curl -q -sS -X PATCH https://api.digitalocean.com/*)",
@@ -747,6 +748,9 @@ def test_api_write_allowlist_disables_implicit_curl_config(path: Path) -> None:
 		"Bash(curl -q -sS -X POST https://api.cloudflare.com/*)",
 		"Bash(curl -q -sS -X PATCH https://api.cloudflare.com/*)",
 	]
+	# Every allowed curl rule keeps `-q` so an implicit ~/.curlrc cannot alter the call.
+	curl_rules = [rule for rule in allow if rule.startswith("Bash(curl")]
+	assert curl_rules == allow[:6]
 
 
 @pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])

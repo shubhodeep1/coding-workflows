@@ -5,9 +5,12 @@ name: AI Cancel on PR Close
 on:
   pull_request:
     types: [closed]
+  schedule:
+    - cron: "*/5 * * * *"
 permissions:
   actions: write
   contents: read
+  pull-requests: read
 jobs:
   cancel:
     uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@stable

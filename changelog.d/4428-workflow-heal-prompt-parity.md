@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Workflow failure heal diagnoses retain the full ownership safeguards when the prompt is assembled.** Review/autofix failures are no longer attributed to PR or base-branch changes solely because a path matches a trusted runtime helper, and fileless pipeline failures require corroborating evidence before being classified as self-inflicted. This restores parity with the legacy prompt and the release gate's byte-for-byte assembly check.

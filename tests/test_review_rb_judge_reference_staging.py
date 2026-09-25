@@ -22,8 +22,8 @@ Two tests pin the fix:
 
 1. A static contract on scripts/stage_workflow_support.sh: it stages
    output-contract.txt and severity-classification.txt into
-   ${SUPPORT_PROMPTS_DIR}/references/ with the .codex-workflow-src ->
-   .codex-workflow-src-main fallback, and warns (does not exit 1) when a
+   ${SUPPORT_PROMPTS_DIR}/references/ from the verified support checkout,
+   and warns (does not exit 1) when a
    reference is unavailable so older support refs degrade gracefully.
 
 2. A behavioural test that reproduces the bundle layout review_rb_judge.sh
@@ -36,6 +36,7 @@ Two tests pin the fix:
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -77,7 +78,7 @@ def test_stage_workflow_support_stages_judge_reference_assets() -> None:
 			f"missing reference asset prompts/references/{reference_asset}"
 		)
 
-	# The staging loop pins both assets and the standard ref -> main fallback.
+	# The staging loop pins both assets to the verified support checkout.
 	assert (
 		"for reference_asset in output-contract.txt severity-classification.txt; do"
 		in stage_helper
@@ -89,10 +90,7 @@ def test_stage_workflow_support_stages_judge_reference_assets() -> None:
 	assert (
 		'src=".codex-workflow-src/prompts/references/${reference_asset}"' in stage_helper
 	)
-	assert (
-		'src=".codex-workflow-src-main/prompts/references/${reference_asset}"'
-		in stage_helper
-	)
+	assert 'src=".codex-workflow-src-main/prompts/references/${reference_asset}"' not in stage_helper
 	assert (
 		'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/references/${reference_asset}"'
 		in stage_helper
@@ -106,6 +104,51 @@ def test_stage_workflow_support_stages_judge_reference_assets() -> None:
 	assert "for prompt_assembly_asset in " in stage_helper
 	for prompt_asset in JUDGE_TEMPLATE_ASSETS:
 		assert prompt_asset in stage_helper
+
+
+def test_review_staging_uses_only_verified_checkout() -> None:
+	"""A PR worktree cannot supply required or optional review runtime code."""
+	with tempfile.TemporaryDirectory(prefix="trusted-review-support-") as td:
+		workspace = Path(td)
+		trusted = workspace / ".codex-workflow-src"
+		trusted.mkdir()
+		for directory in ("scripts", "prompts", "ai-memory"):
+			shutil.copytree(REPO_ROOT / directory, trusted / directory)
+		shutil.copy2(REPO_ROOT / "unattended_system_instructions.md", trusted / "unattended_system_instructions.md")
+		workspace_scripts = workspace / "scripts"
+		workspace_scripts.mkdir()
+		(workspace_scripts / "gh_helpers.sh").write_text("PR_CONTROLLED\n", encoding="utf-8")
+		(workspace_scripts / "install_semble.sh").write_text("PR_CONTROLLED\n", encoding="utf-8")
+		(workspace_scripts / "stage_workflow_support.sh").write_text("exit 99\n", encoding="utf-8")
+		for arguments in (("init", "-q"), ("add", "."), ("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "trusted")):
+			subprocess.run(["git", "-C", str(trusted), *arguments], check=True, capture_output=True)
+		sha = subprocess.check_output(["git", "-C", str(trusted), "rev-parse", "HEAD"], text=True).strip()
+		github_env = workspace / "github_env"
+		env = {**os.environ, "RUNNER_TEMP": td, "GITHUB_WORKSPACE": td, "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_ENV": str(github_env), "SCRIPT_REF": sha, "PYTHONDONTWRITEBYTECODE": "1"}
+		env.pop("BASH_ENV", None)
+		env.pop("ENV", None)
+		def stage() -> subprocess.CompletedProcess[str]:
+			return subprocess.run(["bash", str(trusted / "scripts/stage_workflow_support.sh")], cwd=workspace, env=env, capture_output=True, text=True)
+
+		result = stage()
+		assert result.returncode == 0, result.stderr
+		bundle = workspace / "coding-workflows-runtime-123-1" / "scripts"
+		assert (bundle / "gh_helpers.sh").read_bytes() == (trusted / "scripts/gh_helpers.sh").read_bytes()
+		assert (bundle / "install_semble.sh").read_bytes() == (trusted / "scripts/install_semble.sh").read_bytes()
+		env["SCRIPT_REF"] = "0" * 40
+		assert stage().returncode != 0
+		env["SCRIPT_REF"] = sha
+		(trusted / "scripts/gh_helpers.sh").unlink()
+		assert stage().returncode != 0  # Never take the PR's required copy.
+		shutil.copy2(REPO_ROOT / "scripts/gh_helpers.sh", trusted / "scripts/gh_helpers.sh")
+		(trusted / "scripts/install_semble.sh").unlink()
+		env["GITHUB_RUN_ID"] = "124"  # Fresh attempt, no previous bundle contents.
+		assert stage().returncode == 0  # Missing optional script stays missing.
+		assert not (workspace / "coding-workflows-runtime-124-1" / "scripts/install_semble.sh").exists()
+		(trusted / "scripts/codex_model_catalog.json").unlink()
+		(workspace_scripts / "codex_model_catalog.json").write_text("{}\n", encoding="utf-8")
+		env["GITHUB_RUN_ID"] = "125"
+		assert stage().returncode != 0  # A PR worktree catalog is not a fallback.
 
 
 def _render_review_blocked_prompt(*, stage_references: bool) -> subprocess.CompletedProcess[str]:

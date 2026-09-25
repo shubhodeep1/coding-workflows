@@ -36,6 +36,12 @@ if [ -n "${SSB_REASON:-}" ]; then
     echo "::warning::Could not verify ai:needs-human on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown."
   fi
   {
+    # Only a genuine git merge-file conflict is fixed by the editor-workspace
+    # restore. Missing ledgers, baselines, unsafe paths, and tool failures stay
+    # human-gated without the poller's auto-release marker.
+    if [ "${SSB_AUTO_RELEASE_SAFE:-}" = "true" ]; then
+      echo "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->"
+    fi
     echo "🚨 **Staged-support restore failed; implementation halted.**"
     echo
     echo "- Workflow run: ${RUN_URL}"

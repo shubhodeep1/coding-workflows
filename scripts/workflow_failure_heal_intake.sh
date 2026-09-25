@@ -1,0 +1,968 @@
+#!/usr/bin/env bash
+#
+# workflow_failure_heal_intake.sh
+#
+# Driven by the Workflow Failure Heal Intake workflow
+# (.github/workflows/workflow-failure-heal-intake.yml) in coding-workflows.
+# Invoked once per report: a `repository_dispatch` (event `workflow-failure-heal`)
+# sent by scripts/workflow_failure_heal_report.sh from a consumer (or from this
+# repo's own internal wrapper), a failed release / promotion `workflow_run`, or a
+# manual `workflow_dispatch` re-run. It:
+#
+#   1. Validates the payload (every field is re-checked; the body, comments, and
+#      logs stay untrusted data for the model; an `autofix_failure` report from
+#      the review/autofix workflow carries its own evidence text) and applies the skip gates:
+#      kill switch, unregistered source repo, smoke-test fixture, self run,
+#      downstream release-gate failure already reported by the gate itself.
+#   2. Fetches the failed jobs + a filtered tail of their logs for the linked
+#      runs (bounded: WORKFLOW_HEAL_MAX_RUNS runs, WORKFLOW_HEAL_MAX_FAILED_JOBS
+#      jobs per run, WORKFLOW_HEAL_MAX_RUN_LOG_BYTES per job).
+#   3. Fingerprints the failure (workflow + failing step + normalised error
+#      signature) and applies the dedup / lineage / budget decision against the
+#      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
+#      duplicate -> occurrence comment (an `autofix_failure` report also
+#      matches an open heal issue filed from the same pull request, and
+#      continues the lineage of a closed one or of the heal issue its
+#      `ai/issue-<N>` head branch fixes); lineage cap -> escalate;
+#      budget cap -> alert; otherwise continue.
+#   4. Checks out the coding-workflows source at the release SHA the failing run
+#      used, fetches the branch progress since that SHA (one compare call) and
+#      the earlier heal issues of the same fingerprint / lineage (from the list
+#      already fetched in step 3), runs the diagnosis model (codex /
+#      MODEL_EDITOR) with prompts/mode-workflow-failure-heal.txt, and reads its
+#      classification. An `already-fixed` answer must cite a commit that landed
+#      after the failing SHA, or it is downgraded to `inconclusive`.
+#   5. Routes the outcome:
+#        workflow-defect, inconclusive -> issue in coding-workflows
+#          (label ai:workflow-heal, `Target branch: stable` so the fix is a
+#          hotfix on the stable line; a failed release run targets the branch it
+#          failed on; a failed review/autofix run on a pull request in this
+#          repo targets that pull request's head branch, because the run
+#          executed the PR's own workflow code — falling back to stable when
+#          the branch no longer exists)
+#        consumer-app-defect           -> issue in the source repository
+#        consumer-config               -> Telegram ERROR + comment, no issue
+#        transient                     -> Telegram DEBUG + comment, no issue
+#        already-fixed (verified)      -> Telegram DEBUG + comment, no issue
+#        pr-self-inflicted             -> diagnosis comment on the pull request,
+#          no issue (the crash is in a file the PR itself changed)
+#        base-self-inflicted           -> issue in coding-workflows targeting the
+#          PR's base branch, with orchestrator lineage lines when that base is
+#          orchestrator/project-<N> (the crash is in a file the base branch
+#          changed relative to main and the PR did not)
+#      The two self-inflicted tokens apply only to review/autofix reports from
+#      this repository with a crash file; the intake computes the ownership
+#      (PR diff from the report, base diff from its own `git diff`) before the
+#      model runs and routes a token the ownership does not back, or any token
+#      while WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false, as
+#      workflow-defect.
+#
+# The opened issue is a normal issue, so the existing clarify -> plan ->
+# implement -> review pipeline picks it up. This script never pushes code.
+# All stable log lines are prefixed WORKFLOW_HEAL.
+#
+# Required env (set by the workflow):
+#   GITHUB_REPOSITORY            owner/repo of coding-workflows (the intake repo)
+#   GH_TOKEN                     GitHub token (GH_PAT) with repo scope on this
+#                                repo and every registered consumer
+#   WORKFLOW_HEAL_PAYLOAD_FILE   raw payload JSON file
+#   RUNTIME_DIR                  scratch dir for intermediate files
+#
+# Optional env (have defaults):
+#   WORKFLOW_HEAL_ENABLED                 "false" to disable; default on
+#   WORKFLOW_HEAL_MAX_LINEAGE_DEPTH       max heal generations per fingerprint (default 3)
+#   WORKFLOW_HEAL_MAX_OPEN_ISSUES         max open ai:workflow-heal issues (default 10)
+#   WORKFLOW_HEAL_MAX_ISSUES_PER_DAY      max ai:workflow-heal issues opened per UTC day (default 20)
+#   WORKFLOW_HEAL_TARGET_BRANCH           branch heal fixes target (default stable)
+#   WORKFLOW_HEAL_MAX_RUNS                failed runs inspected per report (default 3)
+#   WORKFLOW_HEAL_MAX_FAILED_JOBS         failed jobs inspected per run (default 3)
+#   WORKFLOW_HEAL_MAX_RUN_LOG_BYTES       filtered log bytes kept per job (default 60000)
+#   WORKFLOW_HEAL_LOG_TAIL_LINES          log tail lines kept per job (default 400)
+#   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
+#   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
+#   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
+#   WORKFLOW_HEAL_SOURCE_CHECKOUT         "false" to skip the release-SHA worktree (tests)
+#   WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED  "false" routes pr-/base-self-inflicted
+#                                         as workflow-defect and adds no ownership facts (default true)
+#   MODEL_EDITOR                          diagnosis model (default openai/gpt-6-sol)
+#   MODEL_VERBOSITY                       codex verbosity (default low)
+
+set -euo pipefail
+
+log()
+{
+	echo "WORKFLOW_HEAL $*"
+}
+
+# --- Helpers (fail open if unavailable) ------------------------------------
+
+source scripts/gh_helpers.sh 2>/dev/null || true
+type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+type gh_api_json_to_file >/dev/null 2>&1 || gh_api_json_to_file()
+{
+	local _gh_api_json_outfile="$1"
+	shift
+	"$@" > "${_gh_api_json_outfile}"
+}
+source scripts/tg_helpers.sh 2>/dev/null || true
+type tg_send_msg >/dev/null 2>&1 || tg_send_msg() { :; }
+source scripts/label_helpers.sh 2>/dev/null || true
+type ensure_label_exists >/dev/null 2>&1 || ensure_label_exists() { :; }
+
+# --- Config ----------------------------------------------------------------
+
+ENABLED="${WORKFLOW_HEAL_ENABLED:-true}"
+SELF_REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+PAYLOAD_RAW_FILE="${WORKFLOW_HEAL_PAYLOAD_FILE:?WORKFLOW_HEAL_PAYLOAD_FILE is required}"
+RUNTIME_DIR="${RUNTIME_DIR:-/tmp/workflow-heal-intake-${GITHUB_RUN_ID:-local}}"
+mkdir -p "${RUNTIME_DIR}"
+HEAL_PY="${WORKFLOW_HEAL_PY:-scripts/workflow_failure_heal.py}"
+PROMPT_FILE_SRC="${WORKFLOW_HEAL_PROMPT_FILE:-prompts/mode-workflow-failure-heal.txt}"
+REGISTRY_FILE="${WORKFLOW_HEAL_CONSUMER_REGISTRY:-.github/ai/consumer_repos.json}"
+TARGET_BRANCH_DEFAULT="${WORKFLOW_HEAL_TARGET_BRANCH:-stable}"
+SOURCE_CHECKOUT="${WORKFLOW_HEAL_SOURCE_CHECKOUT:-true}"
+SELF_INFLICTED_ROUTING_ENABLED="${WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED:-true}"
+HEAL_LABEL="ai:workflow-heal"
+ESCALATED_LABEL="ai:workflow-heal-escalated"
+RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
+export PYTHONDONTWRITEBYTECODE=1
+
+_positive_or_default()
+{
+	local value="${1:-}" fallback="$2"
+	case "${value}" in
+		''|*[!0-9]*) printf '%s' "${fallback}" ;;
+		*) printf '%s' "${value}" ;;
+	esac
+}
+MAX_DEPTH="$(_positive_or_default "${WORKFLOW_HEAL_MAX_LINEAGE_DEPTH:-}" 3)"
+MAX_OPEN="$(_positive_or_default "${WORKFLOW_HEAL_MAX_OPEN_ISSUES:-}" 10)"
+MAX_PER_DAY="$(_positive_or_default "${WORKFLOW_HEAL_MAX_ISSUES_PER_DAY:-}" 20)"
+MAX_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUNS:-}" 3)"
+MAX_FAILED_JOBS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_FAILED_JOBS:-}" 3)"
+MAX_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUN_LOG_BYTES:-}" 60000)"
+LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
+
+# --- Gates -----------------------------------------------------------------
+
+if [ "${ENABLED,,}" = "false" ]; then
+	log "skip reason=disabled (WORKFLOW_HEAL_ENABLED=false)"
+	exit 0
+fi
+if [ ! -f "${HEAL_PY}" ]; then
+	log "error heal_helper_missing path=${HEAL_PY}"
+	exit 1
+fi
+
+PAYLOAD_FILE="${RUNTIME_DIR}/payload.json"
+if ! python3 "${HEAL_PY}" validate-payload --payload-json "${PAYLOAD_RAW_FILE}" > "${PAYLOAD_FILE}" 2> "${RUNTIME_DIR}/payload_error.txt"; then
+	PAYLOAD_ERROR="$(head -c 300 "${RUNTIME_DIR}/payload_error.txt" 2>/dev/null | tr '\n' ' ' || true)"
+	log "skip reason=invalid_payload detail=${PAYLOAD_ERROR}"
+	tg_send_msg "Workflow failure heal intake received an invalid payload and skipped it: ${PAYLOAD_ERROR}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+	exit 0
+fi
+
+_pf()
+{
+	jq -r "$1" "${PAYLOAD_FILE}"
+}
+SOURCE_REPO="$(_pf '.source_repo')"
+SOURCE_KIND="$(_pf '.source_kind')"
+ISSUE_NUMBER="$(_pf '.issue_number // ""')"
+ISSUE_TITLE="$(_pf '.issue_title // ""')"
+ISSUE_URL="$(_pf '.issue_url // ""')"
+LABEL="$(_pf '.label // ""')"
+WRAPPER_SHA="$(_pf '.wrapper_sha // ""')"
+HEAD_SHA="$(_pf '.head_sha // ""')"
+HEAD_BRANCH="$(_pf '.head_branch // ""')"
+PAYLOAD_WORKFLOW_NAME="$(_pf '.workflow_name // ""')"
+SOURCE_GEN="$(_pf '.source_gen // ""')"
+SOURCE_ROOT="$(_pf '.source_root // ""')"
+FAILURE_REASON="$(_pf '.failure_reason // ""')"
+FAILURE_STREAK="$(_pf '.failure_streak // ""')"
+FAILURE_EVIDENCE_FILE="${RUNTIME_DIR}/failure_evidence.txt"
+_pf '.failure_evidence // ""' > "${FAILURE_EVIDENCE_FILE}"
+PAYLOAD_BASE_BRANCH="$(_pf '.base_branch // ""')"
+PAYLOAD_SCRIPT_REF="$(_pf '.script_ref // ""')"
+PAYLOAD_CRASH_FILE="$(_pf '.crash_file // ""')"
+
+SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --registry-json "${REGISTRY_FILE}" --self-repo "${SELF_REPO}" 2>/dev/null || echo "")"
+if [ -n "${SKIP_REASON}" ]; then
+	log "skip reason=${SKIP_REASON} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
+	if [ "${SKIP_REASON}" = "unregistered_source_repo" ]; then
+		tg_send_msg "Workflow failure heal intake ignored a report from unregistered repository ${SOURCE_REPO} (add it to .github/ai/consumer_repos.json to opt in)."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+	fi
+	exit 0
+fi
+
+SOURCE_LABEL="${SOURCE_REPO}#${ISSUE_NUMBER:-run}"
+log "received source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} label=${LABEL:-none} workflow=${PAYLOAD_WORKFLOW_NAME:-none}"
+
+# --- Collect failed jobs + logs --------------------------------------------
+
+LOG_DIR="${RUNTIME_DIR}/logs"
+mkdir -p "${LOG_DIR}"
+SUMMARIES_FILE="${RUNTIME_DIR}/run_summaries.json"
+printf '[]' > "${SUMMARIES_FILE}"
+LOG_FILES=()
+RUN_COUNT=0
+
+while IFS=$'\t' read -r run_id run_url; do
+	[ -n "${run_id}" ] || continue
+	[[ "${run_id}" =~ ^[0-9]+$ ]] || continue
+	RUN_COUNT=$((RUN_COUNT + 1))
+	if [ "${RUN_COUNT}" -gt "${MAX_RUNS}" ]; then
+		break
+	fi
+	JOBS_FILE="${LOG_DIR}/run-${run_id}-jobs.json"
+	if ! gh_api_json_to_file "${JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
+		log "warn jobs_fetch_failed source=${SOURCE_REPO} run=${run_id}"
+		continue
+	fi
+	if ! jq -e '.jobs | type == "array"' "${JOBS_FILE}" >/dev/null 2>&1; then
+		log "warn jobs_fetch_invalid source=${SOURCE_REPO} run=${run_id}"
+		continue
+	fi
+	JOB_COUNT=0
+	while IFS=$'\t' read -r job_id job_name workflow_name failing_step; do
+		[ -n "${job_id}" ] || continue
+		[[ "${job_id}" =~ ^[0-9]+$ ]] || continue
+		JOB_COUNT=$((JOB_COUNT + 1))
+		if [ "${JOB_COUNT}" -gt "${MAX_FAILED_JOBS}" ]; then
+			break
+		fi
+		RAW_LOG="${LOG_DIR}/run-${run_id}-job-${job_id}.raw"
+		FILTERED_LOG="${LOG_DIR}/run-${run_id}-job-${job_id}.txt"
+		# Job logs carry ANSI colour codes; without --allow-escape-sequences gh
+		# refuses the body ("the response contains terminal escape sequences")
+		# even when stdout is a file, and every job read as "(job log
+		# unavailable)": no error signature, no downstream-gate dedup.
+		if gh_retry gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" > "${RAW_LOG}" 2>/dev/null && [ -s "${RAW_LOG}" ]; then
+			python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}" || : > "${FILTERED_LOG}"
+			rm -f "${RAW_LOG}"
+		else
+			log "warn job_log_fetch_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
+			printf '(job log unavailable)\n' > "${FILTERED_LOG}"
+		fi
+		LOG_FILES+=("${FILTERED_LOG}")
+		jq --arg run_id "${run_id}" --arg url "${run_url}" --arg job_id "${job_id}" --arg job_name "${job_name}" \
+			--arg workflow_name "${workflow_name}" --arg failing_step "${failing_step}" --arg log_file "${FILTERED_LOG}" \
+			'. + [{run_id: $run_id, url: $url, job_id: $job_id, job_name: $job_name, workflow_name: $workflow_name, failing_step: $failing_step, log_file: $log_file}]' \
+			"${SUMMARIES_FILE}" > "${SUMMARIES_FILE}.tmp" && mv "${SUMMARIES_FILE}.tmp" "${SUMMARIES_FILE}"
+	done < <(jq -r '.jobs[] | select((.conclusion // "") | IN("failure","timed_out","cancelled"))
+		| [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // "")]
+		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${JOBS_FILE}")
+done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
+
+SUMMARY_COUNT="$(jq 'length' "${SUMMARIES_FILE}")"
+FIRST_WORKFLOW_NAME="$(jq -r 'map(select(.workflow_name != "")) | first | .workflow_name // ""' "${SUMMARIES_FILE}")"
+FIRST_FAILING_STEP="$(jq -r 'map(select(.failing_step != "")) | first | .failing_step // ""' "${SUMMARIES_FILE}")"
+[ -n "${FIRST_WORKFLOW_NAME}" ] || FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
+if [ -z "${FIRST_WORKFLOW_NAME}" ]; then
+	FIRST_WORKFLOW_NAME="label:${LABEL:-unknown}"
+fi
+
+# A failed promote / auto-release run whose only failure is "the smoke gate
+# failed" duplicates the gate run's own report; the gate run carries the logs.
+if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
+	case "${PAYLOAD_WORKFLOW_NAME}" in
+		"Promote main to stable"|"Auto release stable")
+			if grep -qE 'PROMOTE_CYCLE_FAILED reason=smoke_gate_(failed|timeout)' "${LOG_FILES[@]}" 2>/dev/null; then
+				log "skip reason=downstream_gate_failure workflow=${PAYLOAD_WORKFLOW_NAME}"
+				exit 0
+			fi
+			;;
+	esac
+fi
+
+# --- Fingerprint -------------------------------------------------------------
+
+if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+	# The review job's log ends the same way for every failure class
+	# ("Process completed with exit code 1"), so the reporter's own reason and
+	# evidence identify the failure; the job logs still go to the model below.
+	[ -n "${PAYLOAD_WORKFLOW_NAME}" ] && FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
+	FIRST_FAILING_STEP="autofix:${FAILURE_REASON:-unknown}"
+	if [ -s "${FAILURE_EVIDENCE_FILE}" ]; then
+		SIGNATURE="$(python3 "${HEAL_PY}" error-signature --log-file "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || echo "no-error-lines")"
+	else
+		SIGNATURE="autofix:${FAILURE_REASON:-unknown}"
+	fi
+elif [ "${#LOG_FILES[@]}" -gt 0 ]; then
+	SIG_ARGS=()
+	for f in "${LOG_FILES[@]}"; do
+		SIG_ARGS+=(--log-file "${f}")
+	done
+	SIGNATURE="$(python3 "${HEAL_PY}" error-signature "${SIG_ARGS[@]}" 2>/dev/null || echo "no-error-lines")"
+else
+	SIGNATURE="label:${LABEL:-unknown}"
+fi
+FP="$(python3 "${HEAL_PY}" fingerprint --workflow-name "${FIRST_WORKFLOW_NAME}" --failing-step "${FIRST_FAILING_STEP}" --signature "${SIGNATURE}")"
+log "fingerprint fp=${FP} workflow=${FIRST_WORKFLOW_NAME} step=${FIRST_FAILING_STEP:-none} runs=${SUMMARY_COUNT}"
+
+# --- Dedup / lineage / budget ----------------------------------------------
+
+SELF_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_self.json"
+SOURCE_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_source.json"
+ISSUES_FILE="${RUNTIME_DIR}/heal_issues.json"
+if ! gh_retry gh api --method GET --paginate "repos/${SELF_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
+	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+	| jq -s --arg repository "${SELF_REPO}" 'map(. + {repository: $repository})' > "${SELF_ISSUES_FILE}" 2>/dev/null; then
+	log "error heal_issue_list_failed"
+	tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+	exit 1
+fi
+# The upstream list cannot see consumer-owned heal issues. Fetch the source
+# repository once so deduplication, lineage, and volume budgets cover both
+# repositories that can own the issue produced by this intake.
+if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
+	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
+		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+		| jq -s --arg repository "${SOURCE_REPO}" 'map(. + {repository: $repository})' > "${SOURCE_ISSUES_FILE}" 2>/dev/null; then
+		log "error heal_issue_list_failed repo=${SOURCE_REPO}"
+		tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues in ${SOURCE_REPO}; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+		exit 1
+	fi
+else
+	printf '[]' > "${SOURCE_ISSUES_FILE}"
+fi
+jq -s 'add // []' "${SELF_ISSUES_FILE}" "${SOURCE_ISSUES_FILE}" > "${ISSUES_FILE}"
+jq -e 'type == "array"' "${ISSUES_FILE}" >/dev/null 2>&1 || printf '[]' > "${ISSUES_FILE}"
+
+BUDGET_ARGS=(--issues-json "${ISSUES_FILE}" --fingerprint "${FP}" --preferred-repo "${SOURCE_REPO}" --max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}")
+if [[ "${SOURCE_GEN}" =~ ^[0-9]+$ ]]; then
+	BUDGET_ARGS+=(--source-gen "${SOURCE_GEN}" --source-root "${SOURCE_ROOT}")
+fi
+# A review/autofix report is keyed on its pull request as well as its
+# fingerprint: the evidence (and so the fingerprint) differs run to run, which
+# let one PR open a new heal issue on every failed run. The PR's head branch
+# links the heal issue it fixes (ai/issue-<N>), so a heal fix PR whose own
+# review fails continues that issue's lineage and reaches the cap.
+if [ "${SOURCE_KIND}" = "autofix_failure" ] && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+	BUDGET_ARGS+=(--source-key "${SOURCE_REPO}#${ISSUE_NUMBER}" --source-head-branch "${HEAD_BRANCH}")
+fi
+DECISION_FILE="${RUNTIME_DIR}/decision.json"
+python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" > "${DECISION_FILE}"
+ACTION="$(jq -r '.action' "${DECISION_FILE}")"
+GEN="$(jq -r '.gen // 1' "${DECISION_FILE}")"
+ROOT="$(jq -r '.root // ""' "${DECISION_FILE}")"
+[ -n "${ROOT}" ] || ROOT="${FP}"
+
+ensure_label_exists "${HEAL_LABEL}" "${SELF_REPO}" || true
+ensure_label_exists "${ESCALATED_LABEL}" "${SELF_REPO}" || true
+
+case "${ACTION}" in
+	duplicate)
+		EXISTING="$(jq -r '.existing_issue' "${DECISION_FILE}")"
+		EXISTING_URL="$(jq -r '.existing_url // ""' "${DECISION_FILE}")"
+		EXISTING_REPO="$(jq -r '.existing_repo // ""' "${DECISION_FILE}")"
+		[ -n "${EXISTING_REPO}" ] || EXISTING_REPO="${SELF_REPO}"
+		DUPLICATE_MATCH="$(jq -r '.match // "fingerprint"' "${DECISION_FILE}")"
+		OCCURRENCE_FILE="${RUNTIME_DIR}/occurrence.md"
+		python3 "${HEAL_PY}" compose-occurrence --payload-json "${PAYLOAD_FILE}" --intake-run-url "${RUN_URL}" > "${OCCURRENCE_FILE}"
+		if gh_retry gh api "repos/${EXISTING_REPO}/issues/${EXISTING}/comments" -F body=@"${OCCURRENCE_FILE}" >/dev/null 2>&1; then
+			log "duplicate existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} source=${SOURCE_LABEL} match=${DUPLICATE_MATCH}"
+		else
+			log "warn duplicate_comment_failed existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
+		fi
+		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} matches open heal issue ${EXISTING_URL:-#${EXISTING}} (recorded as another occurrence)." "DEBUG" >/dev/null 2>&1 || true
+		exit 0
+		;;
+	escalate)
+		PRIOR_ISSUE="$(jq -r '.prior_issue // ""' "${DECISION_FILE}")"
+		PRIOR_REPO="$(jq -r '.prior_repo // ""' "${DECISION_FILE}")"
+		[ -n "${PRIOR_REPO}" ] || PRIOR_REPO="${SELF_REPO}"
+		if [[ "${PRIOR_ISSUE}" =~ ^[0-9]+$ ]]; then
+			ensure_label_exists "${ESCALATED_LABEL}" "${PRIOR_REPO}" || true
+			gh_retry gh issue edit "${PRIOR_ISSUE}" --repo "${PRIOR_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${PRIOR_ISSUE} repo=${PRIOR_REPO}"
+		fi
+		log "escalate reason=lineage_cap gen=${GEN} max=${MAX_DEPTH} root=${ROOT} fp=${FP} source=${SOURCE_LABEL} prior_issue=${PRIOR_ISSUE:-none} prior_repo=${PRIOR_REPO}"
+		tg_send_msg "Workflow failure heal hit the lineage cap (generation ${GEN} > ${MAX_DEPTH}) for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}'). The auto-heal chain has been stopped; a human should look at this."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+		exit 0
+		;;
+	budget_exhausted)
+		REASON="$(jq -r '.reason // "budget"' "${DECISION_FILE}")"
+		log "skip reason=budget_exhausted detail=${REASON} open=$(jq -r '.open_count' "${DECISION_FILE}") today=$(jq -r '.today_count' "${DECISION_FILE}") source=${SOURCE_LABEL}"
+		tg_send_msg "Workflow failure heal budget exhausted (${REASON}); report from ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}') was NOT filed. Close or resolve open ${HEAL_LABEL} issues to resume."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		exit 0
+		;;
+	open)
+		;;
+	*)
+		log "error unknown_budget_action action=${ACTION}"
+		exit 1
+		;;
+esac
+
+# --- Source checkout at the release SHA the failing run used ---------------
+
+_git_fetch_diagnosis_ref()
+{
+	local diagnosis_ref="$1"
+	local diagnosis_auth_header=""
+	if [ -n "${GH_TOKEN:-}" ]; then
+		diagnosis_auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+		GIT_CONFIG_COUNT=1 \
+			GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+			GIT_CONFIG_VALUE_0="${diagnosis_auth_header}" \
+			git fetch --quiet --depth 1 origin "${diagnosis_ref}" >/dev/null 2>&1
+	else
+		git fetch --quiet --depth 1 origin "${diagnosis_ref}" >/dev/null 2>&1
+	fi
+}
+
+DIAG_SHA="${WRAPPER_SHA}"
+if [ "${SOURCE_KIND}" = "workflow_run" ]; then
+	DIAG_SHA="${HEAD_SHA}"
+fi
+HEAL_SOURCE_DIR="${RUNTIME_DIR}/heal_src"
+HEAL_SOURCE_NOTE="unavailable (diagnose against the working directory)"
+if [ "${SOURCE_CHECKOUT,,}" != "false" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	DIAG_REF="${DIAG_SHA}"
+	if [ -z "${DIAG_REF}" ]; then
+		DIAG_REF="${TARGET_BRANCH_DEFAULT}"
+		[ "${SOURCE_KIND}" != "workflow_run" ] || DIAG_REF="${HEAD_BRANCH:-${TARGET_BRANCH_DEFAULT}}"
+	fi
+	if _git_fetch_diagnosis_ref "${DIAG_REF}" \
+		&& git worktree add --quiet --detach "${HEAL_SOURCE_DIR}" FETCH_HEAD >/dev/null 2>&1; then
+		HEAL_SOURCE_NOTE="${HEAL_SOURCE_DIR} (coding-workflows at ${DIAG_REF})"
+		log "source_checkout ref=${DIAG_REF} path=${HEAL_SOURCE_DIR}"
+	else
+		log "warn source_checkout_failed ref=${DIAG_REF}; diagnosing against the working directory"
+	fi
+fi
+
+# --- "Is this already fixed?" context ---------------------------------------
+#
+# Branch progress: one `GET repos/<self>/compare/<failing sha>...<branch>` call.
+# CLAUDE.md §15 audit: the jobs, job-log, heal-issue-list and branch-existence
+# calls in this script carry no commit history, so none of them can say whether
+# the branch moved past the code that failed. Reference per report kind: a
+# release run or a review/autofix run in this repo -> its head SHA vs its
+# branch; a consumer report -> its wrapper release pin vs the heal target
+# branch. Fail open: without a usable response the model is told progress is
+# unavailable, and an `already-fixed` answer is then downgraded.
+#
+# Earlier heals: rendered from ${ISSUES_FILE} (already fetched for the budget
+# decision), so no extra API call.
+
+PROGRESS_SHA=""
+PROGRESS_BRANCH=""
+if [ "${SOURCE_KIND}" = "workflow_run" ] || { [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; }; then
+	PROGRESS_SHA="${HEAD_SHA}"
+	PROGRESS_BRANCH="${HEAD_BRANCH}"
+elif [ -n "${WRAPPER_SHA}" ]; then
+	PROGRESS_SHA="${WRAPPER_SHA}"
+	PROGRESS_BRANCH="${TARGET_BRANCH_DEFAULT}"
+fi
+PROGRESS_COMPARE_FILE="${RUNTIME_DIR}/branch_compare.json"
+PROGRESS_FILE="${RUNTIME_DIR}/branch_progress.json"
+PROGRESS_REASON=""
+: > "${PROGRESS_COMPARE_FILE}"
+if [ -z "${PROGRESS_SHA}" ] || [ -z "${PROGRESS_BRANCH}" ]; then
+	PROGRESS_REASON="no_reference_sha"
+elif ! gh_api_json_to_file "${PROGRESS_COMPARE_FILE}" gh api --method GET "repos/${SELF_REPO}/compare/${PROGRESS_SHA}...${PROGRESS_BRANCH}" 2>/dev/null; then
+	PROGRESS_REASON="compare_fetch_failed"
+fi
+if ! python3 "${HEAL_PY}" branch-progress --compare-json "${PROGRESS_COMPARE_FILE}" --failed-sha "${PROGRESS_SHA:-none}" --branch "${PROGRESS_BRANCH:-none}" --reason "${PROGRESS_REASON}" > "${PROGRESS_FILE}" 2>/dev/null \
+	|| ! jq -e 'type == "object"' "${PROGRESS_FILE}" >/dev/null 2>&1; then
+	printf '{"available": false, "reason": "branch_progress_failed"}\n' > "${PROGRESS_FILE}"
+fi
+log "branch_progress available=$(jq -r '.available' "${PROGRESS_FILE}") branch=${PROGRESS_BRANCH:-none} sha=${PROGRESS_SHA:-none} ahead_by=$(jq -r '.ahead_by // "none"' "${PROGRESS_FILE}") reason=$(jq -r '.reason // "none"' "${PROGRESS_FILE}")"
+# Branch tip checkout (git fetch, no API call) so the model can diff the code
+# that failed against the code that runs now; the working directory is the
+# intake's own checkout, which is not the progress branch for every report.
+HEAL_BRANCH_TIP_DIR="${RUNTIME_DIR}/heal_branch_tip"
+HEAL_BRANCH_TIP_NOTE="unavailable"
+PROGRESS_TIP_SHA="$(jq -r 'if .available == true and (.ahead_by // 0) > 0 then .tip_sha else "" end' "${PROGRESS_FILE}" 2>/dev/null || echo "")"
+if [ -n "${PROGRESS_TIP_SHA}" ] && [ "${SOURCE_CHECKOUT,,}" != "false" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	if _git_fetch_diagnosis_ref "${PROGRESS_TIP_SHA}" \
+		&& git worktree add --quiet --detach "${HEAL_BRANCH_TIP_DIR}" FETCH_HEAD >/dev/null 2>&1; then
+		HEAL_BRANCH_TIP_NOTE="${HEAL_BRANCH_TIP_DIR} (coding-workflows ${PROGRESS_BRANCH} at ${PROGRESS_TIP_SHA})"
+		log "branch_tip_checkout ref=${PROGRESS_TIP_SHA} branch=${PROGRESS_BRANCH} path=${HEAL_BRANCH_TIP_DIR}"
+	else
+		log "warn branch_tip_checkout_failed ref=${PROGRESS_TIP_SHA} branch=${PROGRESS_BRANCH}"
+	fi
+fi
+LINEAGE_FILE="${RUNTIME_DIR}/heal_lineage.txt"
+python3 "${HEAL_PY}" lineage-context --issues-json "${ISSUES_FILE}" --fingerprint "${FP}" --root "${ROOT}" > "${LINEAGE_FILE}" 2>/dev/null \
+	|| printf '(earlier heal issues unavailable)\n' > "${LINEAGE_FILE}"
+
+# --- Crash ownership (self-repo review/autofix failures) -------------------
+
+# Who changed the file the review/autofix run crashed in: the PR itself (its
+# changed files travel in the report), its base branch relative to main (the
+# intake's own `git diff` on two depth-1 fetches, no GitHub API call), or
+# neither. The facts go to the model; the routing below only honours a
+# self-inflicted token the facts back. Fail open: any git failure -> none.
+_git_fetch_ownership_refs()
+{
+	local ownership_auth_header=""
+	if [ -n "${GH_TOKEN:-}" ]; then
+		ownership_auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+		GIT_CONFIG_COUNT=1 \
+			GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+			GIT_CONFIG_VALUE_0="${ownership_auth_header}" \
+			git fetch --quiet --depth 1 origin "$@" >/dev/null 2>&1
+	else
+		git fetch --quiet --depth 1 origin "$@" >/dev/null 2>&1
+	fi
+}
+
+CRASH_OWNERSHIP="none"
+OWNERSHIP_FACTS_FILE=""
+PIPELINE_OWNERSHIP_FILES=""
+if [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" != "false" ] \
+	&& [ "${SOURCE_KIND}" = "autofix_failure" ] \
+	&& [ "${SOURCE_REPO}" = "${SELF_REPO}" ] \
+	&& [ -n "${PAYLOAD_CRASH_FILE}" ]; then
+	BASE_CHANGED_FILES_FILE="${RUNTIME_DIR}/base_changed_files.txt"
+	: > "${BASE_CHANGED_FILES_FILE}"
+	OWNERSHIP_BASE_NOTE="not compared"
+	if [ -z "${PAYLOAD_BASE_BRANCH}" ] || [ "${PAYLOAD_BASE_BRANCH}" = "main" ]; then
+		# A PR against main has no base-branch changes to own the crash.
+		OWNERSHIP_BASE_NOTE="base is main"
+	elif [ "${PAYLOAD_BASE_BRANCH}" = "${TARGET_BRANCH_DEFAULT}" ]; then
+		# Never route a heal fix to the stable line through this path.
+		OWNERSHIP_BASE_NOTE="base is ${TARGET_BRANCH_DEFAULT}; not compared"
+	elif ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		log "warn crash_ownership_base_diff_failed reason=no_git_checkout base=${PAYLOAD_BASE_BRANCH}"
+		OWNERSHIP_BASE_NOTE="unavailable (no git checkout)"
+	elif _git_fetch_ownership_refs "+refs/heads/main:refs/remotes/origin/main" "+refs/heads/${PAYLOAD_BASE_BRANCH}:refs/remotes/origin/${PAYLOAD_BASE_BRANCH}" \
+		&& git diff --name-only "refs/remotes/origin/main" "refs/remotes/origin/${PAYLOAD_BASE_BRANCH}" > "${BASE_CHANGED_FILES_FILE}" 2>/dev/null; then
+		OWNERSHIP_BASE_NOTE="$(wc -l < "${BASE_CHANGED_FILES_FILE}" | tr -d ' ') file(s) differ between main and ${PAYLOAD_BASE_BRANCH}"
+	else
+		log "warn crash_ownership_base_diff_failed reason=fetch_or_diff_failed base=${PAYLOAD_BASE_BRANCH}"
+		: > "${BASE_CHANGED_FILES_FILE}"
+		OWNERSHIP_BASE_NOTE="unavailable (fetch or diff failed)"
+	fi
+	CRASH_OWNERSHIP="$(python3 "${HEAL_PY}" classify-crash-ownership --payload-json "${PAYLOAD_FILE}" --base-changed-files "${BASE_CHANGED_FILES_FILE}" 2>/dev/null || echo none)"
+	case "${CRASH_OWNERSHIP}" in
+		pr|base|none) ;;
+		*) CRASH_OWNERSHIP="none" ;;
+	esac
+	CRASH_FILE_IN_PR_DIFF="no"
+	if jq -e --arg f "${PAYLOAD_CRASH_FILE}" '(.changed_files // []) | index($f) != null' "${PAYLOAD_FILE}" >/dev/null 2>&1; then
+		CRASH_FILE_IN_PR_DIFF="yes"
+	fi
+	OWNERSHIP_FACTS_FILE="${RUNTIME_DIR}/ownership_facts.md"
+	{
+		echo "## Ownership facts"
+		echo
+		echo "- Crash file: ${PAYLOAD_CRASH_FILE}"
+		echo "- Ownership: ${CRASH_OWNERSHIP}"
+		echo "- Pull request head: ${HEAD_BRANCH:-unknown} @ ${HEAD_SHA:-unknown}"
+		echo "- Pull request base: ${PAYLOAD_BASE_BRANCH:-unknown} (${OWNERSHIP_BASE_NOTE})"
+		echo "- Script ref the run staged: ${PAYLOAD_SCRIPT_REF:-unknown}"
+		echo "- Crash file in the pull request diff: ${CRASH_FILE_IN_PR_DIFF}"
+	} > "${OWNERSHIP_FACTS_FILE}"
+	log "crash_ownership=${CRASH_OWNERSHIP} crash_file=${PAYLOAD_CRASH_FILE} base=${PAYLOAD_BASE_BRANCH:-unknown} source=${SOURCE_LABEL}"
+elif [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" != "false" ] \
+	&& [ "${SOURCE_KIND}" = "autofix_failure" ] \
+	&& [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+	# No crash file: some self-inflicted failures never name one (PR #4376's
+	# sandbox made every model process exit with systemd status 226 before it
+	# wrote anything). Second basis: the run staged the PR head's own scripts
+	# and the PR changes pipeline files. Only `pr` is derived here; base
+	# ownership still needs a crash file. Fail open: helper error -> none.
+	PIPELINE_OWNERSHIP_OUTPUT="$(python3 "${HEAL_PY}" classify-pipeline-ownership --payload-json "${PAYLOAD_FILE}" 2>/dev/null || echo none)"
+	PIPELINE_OWNERSHIP="$(printf '%s\n' "${PIPELINE_OWNERSHIP_OUTPUT}" | head -n 1)"
+	if [ "${PIPELINE_OWNERSHIP}" = "pr" ]; then
+		CRASH_OWNERSHIP="pr"
+		PIPELINE_OWNERSHIP_FILES="$(printf '%s\n' "${PIPELINE_OWNERSHIP_OUTPUT}" | tail -n +2)"
+		OWNERSHIP_FACTS_FILE="${RUNTIME_DIR}/ownership_facts.md"
+		{
+			echo "## Ownership facts"
+			echo
+			echo "- Crash file: none (the evidence names no file)"
+			echo "- Ownership: pr"
+			echo "- Ownership basis: pipeline files (the run staged the pull request head's own scripts, and the pull request changes files the review/autofix pipeline executes)"
+			echo "- Pull request head: ${HEAD_BRANCH:-unknown} @ ${HEAD_SHA:-unknown}"
+			echo "- Pull request base: ${PAYLOAD_BASE_BRANCH:-unknown}"
+			echo "- Script ref the run staged: ${PAYLOAD_SCRIPT_REF:-unknown}"
+			echo "- Pipeline files the pull request changes:"
+			printf '%s\n' "${PIPELINE_OWNERSHIP_FILES}" | sed 's/^/  - /'
+		} > "${OWNERSHIP_FACTS_FILE}"
+		log "crash_ownership=pr crash_file=none basis=pipeline_files files=$(printf '%s\n' "${PIPELINE_OWNERSHIP_FILES}" | wc -l | tr -d ' ') base=${PAYLOAD_BASE_BRANCH:-unknown} source=${SOURCE_LABEL}"
+	fi
+fi
+
+# --- Run the diagnosis model -----------------------------------------------
+
+PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
+DIAG_FILE="${RUNTIME_DIR}/diagnosis.md"
+DIAGNOSIS_FALLBACK_REASON="produced no output"
+: > "${DIAG_FILE}"
+
+{
+	echo "=== SYSTEM INSTRUCTIONS ==="
+	cat unattended_system_instructions.md 2>/dev/null || true
+	echo
+	if [ -f agents.md ]; then
+		echo "=== REPO ARCHITECTURE (coding-workflows) ==="
+		cat agents.md
+		echo
+	fi
+	if [ -f scripts/render_prompt.sh ]; then
+		bash scripts/render_prompt.sh "${PROMPT_FILE_SRC}" 2>/dev/null || cat "${PROMPT_FILE_SRC}"
+	else
+		cat "${PROMPT_FILE_SRC}" 2>/dev/null || true
+	fi
+	echo
+	echo "=== FAILURE CONTEXT ==="
+	echo "HEAL_SOURCE_DIR: ${HEAL_SOURCE_NOTE}"
+	echo "HEAL_BRANCH_TIP_DIR: ${HEAL_BRANCH_TIP_NOTE}"
+	echo "Source repository: ${SOURCE_REPO}"
+	echo "Report kind: ${SOURCE_KIND}"
+	if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+		echo "Failed review/autofix run on pull request #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
+		echo "URL: ${ISSUE_URL}"
+		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
+		echo "Failure reason: ${FAILURE_REASON}"
+		echo "Consecutive failed review runs on this PR: ${FAILURE_STREAK:-1}"
+		echo "PR labels: $(_pf '.labels | join(", ")')"
+	elif [ -n "${ISSUE_NUMBER}" ]; then
+		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
+		echo "URL: ${ISSUE_URL}"
+		echo "Escalation label: ${LABEL}"
+		echo "Other labels: $(_pf '.labels | join(", ")')"
+	else
+		echo "Failed workflow: ${PAYLOAD_WORKFLOW_NAME} (conclusion: $(_pf '.conclusion // "unknown"'))"
+		echo "Branch: ${HEAD_BRANCH:-unknown}  Head SHA: ${HEAD_SHA:-unknown}"
+	fi
+	[ -z "${WRAPPER_SHA}" ] || echo "Consumer wrapper release pin: ${WRAPPER_SHA}"
+	echo
+	if [ -n "${ISSUE_NUMBER}" ]; then
+		echo "--- Issue / PR body excerpt (UNTRUSTED) ---"
+		_pf '.issue_excerpt'
+		echo
+		echo "--- Latest comments excerpt (UNTRUSTED) ---"
+		_pf '.comments_excerpt'
+		echo
+	fi
+	if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+		echo "--- Failure evidence from the reporting run (UNTRUSTED) ---"
+		cat "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || true
+		echo
+	fi
+	echo "=== BRANCH PROGRESS SINCE THE FAILING SHA ==="
+	python3 "${HEAL_PY}" render-branch-progress --summary-json "${PROGRESS_FILE}" 2>/dev/null || echo "(branch progress unavailable)"
+	echo
+	echo "=== EARLIER HEAL ISSUES FOR THIS FAILURE (UNTRUSTED) ==="
+	cat "${LINEAGE_FILE}" 2>/dev/null || true
+	echo
+	if [ -n "${OWNERSHIP_FACTS_FILE}" ] && [ -s "${OWNERSHIP_FACTS_FILE}" ]; then
+		cat "${OWNERSHIP_FACTS_FILE}"
+		echo
+	fi
+	echo "=== FAILED RUN LOGS (UNTRUSTED) ==="
+	if [ "${SUMMARY_COUNT}" -gt 0 ]; then
+		while IFS=$'\t' read -r run_url job_name workflow_name failing_step log_file; do
+			echo "--- run ${run_url} | workflow: ${workflow_name} | job: ${job_name} | failing step: ${failing_step:-unknown} ---"
+			cat "${log_file}" 2>/dev/null || echo "(log unavailable)"
+			echo
+		done < <(jq -r '.[] | [.url, .job_name, .workflow_name, .failing_step, .log_file] | @tsv' "${SUMMARIES_FILE}")
+	else
+		echo "(no failed run could be linked to this escalation; diagnose from the issue context and the escalation label semantics)"
+	fi
+} > "${PROMPT_FILE}"
+
+if command -v codex >/dev/null 2>&1; then
+	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
+		codex --ask-for-approval never \
+		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
+		-c include_apply_patch_tool=false \
+		-c 'shell_environment_policy.ignore_default_excludes=false' \
+		-c 'shell_environment_policy.filters.OPENROUTER_API_KEY="exclude"' \
+		exec --skip-git-repo-check \
+		--model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
+		--sandbox read-only \
+		< "${PROMPT_FILE}" \
+		> "${DIAG_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+		:
+	else
+		log "warn codex_exec_nonzero"
+		DIAGNOSIS_FALLBACK_REASON="failed (codex exited non-zero)"
+		: > "${DIAG_FILE}"
+	fi
+else
+	log "warn codex_unavailable; filing raw context only"
+	DIAGNOSIS_FALLBACK_REASON="could not run (codex unavailable)"
+fi
+
+if [ ! -s "${DIAG_FILE}" ]; then
+	{
+		echo "## Classification"
+		echo
+		echo "inconclusive"
+		echo
+		echo "## Summary"
+		echo
+		echo "Automated diagnosis ${DIAGNOSIS_FALLBACK_REASON}. The raw failure context is included below for follow-up."
+		echo
+		echo "## Evidence"
+		echo
+		echo '```'
+		if [ "${#LOG_FILES[@]}" -gt 0 ]; then
+			head -200 "${LOG_FILES[0]}" 2>/dev/null || echo "(context unavailable)"
+		else
+			echo "(no failed run logs were linked)"
+		fi
+		echo '```'
+	} > "${DIAG_FILE}"
+fi
+
+CLASSIFICATION="$(python3 "${HEAL_PY}" parse-classification --diagnosis-file "${DIAG_FILE}" 2>/dev/null || echo "inconclusive")"
+log "classification=${CLASSIFICATION} source=${SOURCE_LABEL} fp=${FP} gen=${GEN}"
+
+# An `already-fixed` answer suppresses the issue, so it has to be checkable:
+# the `## Fixed by` section must cite a commit that landed on the branch after
+# the failing SHA. Anything less is filed as `inconclusive`, with a note.
+ALREADY_FIXED_COMMITS=""
+if [ "${CLASSIFICATION}" = "already-fixed" ]; then
+	ALREADY_FIXED_CHECK_FILE="${RUNTIME_DIR}/already_fixed_check.json"
+	python3 "${HEAL_PY}" check-already-fixed --diagnosis-file "${DIAG_FILE}" --summary-json "${PROGRESS_FILE}" > "${ALREADY_FIXED_CHECK_FILE}" 2>/dev/null \
+		|| printf '{"ok": false, "reason": "check_failed", "commits": []}\n' > "${ALREADY_FIXED_CHECK_FILE}"
+	if jq -e '.ok == true' "${ALREADY_FIXED_CHECK_FILE}" >/dev/null 2>&1; then
+		ALREADY_FIXED_COMMITS="$(jq -r '[.commits[] | .[0:12]] | join(",")' "${ALREADY_FIXED_CHECK_FILE}")"
+		log "already_fixed_verified commits=${ALREADY_FIXED_COMMITS} branch=${PROGRESS_BRANCH} source=${SOURCE_LABEL} fp=${FP}"
+	else
+		ALREADY_FIXED_REJECT_REASON="$(jq -r '.reason // "check_failed"' "${ALREADY_FIXED_CHECK_FILE}" 2>/dev/null || echo check_failed)"
+		log "warn already_fixed_unverified reason=${ALREADY_FIXED_REJECT_REASON} source=${SOURCE_LABEL} fp=${FP}; filing as inconclusive"
+		CLASSIFICATION="inconclusive"
+		{
+			echo "> **Heal intake note:** the diagnosis below classified this failure as \`already-fixed\`, but the claim could not be verified (\`${ALREADY_FIXED_REJECT_REASON}\`): it must cite, under \`## Fixed by\`, a commit that landed on the branch after the failing SHA. It was filed as \`inconclusive\` instead. Confirm whether the failure still reproduces on the current branch before planning a fix."
+			echo
+			cat "${DIAG_FILE}"
+		} > "${DIAG_FILE}.tmp" && mv "${DIAG_FILE}.tmp" "${DIAG_FILE}"
+	fi
+fi
+
+# A self-inflicted token is routed as such only when the ownership computed
+# above backs it (a crash file in the PR or base diff, or, with no crash file,
+# pipeline files the PR changes); otherwise (routing disabled, consumer report,
+# ownership none or the other side) it takes today's workflow-defect route.
+case "${CLASSIFICATION}" in
+	pr-self-inflicted|base-self-inflicted)
+		SELF_INFLICTED_EXPECTED="pr"
+		[ "${CLASSIFICATION}" = "pr-self-inflicted" ] || SELF_INFLICTED_EXPECTED="base"
+		SELF_INFLICTED_REMAP_REASON=""
+		if [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" = "false" ]; then
+			SELF_INFLICTED_REMAP_REASON="routing_disabled"
+		elif [ "${CRASH_OWNERSHIP}" != "${SELF_INFLICTED_EXPECTED}" ]; then
+			SELF_INFLICTED_REMAP_REASON="ownership_${CRASH_OWNERSHIP}"
+		fi
+		if [ -n "${SELF_INFLICTED_REMAP_REASON}" ]; then
+			log "classification_remapped from=${CLASSIFICATION} to=workflow-defect reason=${SELF_INFLICTED_REMAP_REASON} source=${SOURCE_LABEL} fp=${FP}"
+			CLASSIFICATION="workflow-defect"
+		fi
+		;;
+esac
+
+# --- Route -----------------------------------------------------------------
+
+_branch_exists()
+{
+	local repo="$1" branch="$2"
+	local encoded_branch=""
+	encoded_branch="$(printf '%s' "${branch}" | jq -sRr @uri)"
+	[ -n "${encoded_branch}" ] || return 1
+	gh_retry gh api "repos/${repo}/branches/${encoded_branch}" >/dev/null 2>&1
+}
+
+_comment_on_source()
+{
+	local body_file="$1"
+	[ -n "${ISSUE_NUMBER}" ] || return 0
+	gh_retry gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F body=@"${body_file}" >/dev/null 2>&1 \
+		|| log "warn source_comment_failed source=${SOURCE_LABEL}"
+}
+
+_open_issue()
+{
+	local repo="$1" target_branch="$2" integration_branch="${3:-}"
+	local title_file="${RUNTIME_DIR}/issue_title.txt" body_file="${RUNTIME_DIR}/issue_body.md"
+	local label_args=(--label "${HEAL_LABEL}")
+	python3 "${HEAL_PY}" compose-issue \
+		--payload-json "${PAYLOAD_FILE}" \
+		--diagnosis-file "${DIAG_FILE}" \
+		--run-summaries-json "${SUMMARIES_FILE}" \
+		--fingerprint "${FP}" \
+		--gen "${GEN}" \
+		--root "${ROOT}" \
+		--classification "${CLASSIFICATION}" \
+		--target-branch "${target_branch}" \
+		--integration-branch "${integration_branch}" \
+		--max-depth "${MAX_DEPTH}" \
+		--intake-run-url "${RUN_URL}" \
+		--title-out "${title_file}" \
+		--body-out "${body_file}"
+	local title
+	title="$(head -1 "${title_file}")"
+	if [ "${repo}" != "${SELF_REPO}" ]; then
+		ensure_label_exists "${HEAL_LABEL}" "${repo}" || true
+	fi
+	if [[ "${integration_branch}" =~ ^orchestrator/project-[0-9]+$ ]]; then
+		# Same lineage convention as the review-blocked judge's
+		# merge_with_followup issues: the orchestrator treats it as a child.
+		ensure_label_exists "ai:orchestrator-managed" "${repo}" || true
+		label_args+=(--label "ai:orchestrator-managed")
+	fi
+	local issue_url
+	issue_url="$(gh_retry gh issue create --repo "${repo}" --title "${title}" --body-file "${body_file}" "${label_args[@]}" 2>/dev/null || echo '')"
+	if [ -z "${issue_url}" ]; then
+		log "error issue_create_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
+		tg_send_msg "Workflow failure heal FAILED to open an issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+		return 1
+	fi
+	NEW_ISSUE_URL="${issue_url}"
+	return 0
+}
+
+NEW_ISSUE_URL=""
+case "${CLASSIFICATION}" in
+	workflow-defect|inconclusive)
+		TARGET_BRANCH="${TARGET_BRANCH_DEFAULT}"
+		TARGET_BRANCH_SOURCE="default"
+		if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAD_BRANCH}" ]; then
+			TARGET_BRANCH="${HEAD_BRANCH}"
+			TARGET_BRANCH_SOURCE="failed_run_branch"
+		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ] && [ -n "${HEAD_BRANCH}" ]; then
+			# A review/autofix run in this repo executes the pull request's own
+			# workflow code (review_autofix.yml resolves SCRIPT_REF to
+			# github.sha here), so the defect it hit lives on that PR's branch
+			# and may not exist on the stable line at all. A fix aimed at
+			# stable cannot unblock the PR and would drag the PR's unreleased
+			# changes into stable, so the fix targets the PR's head branch.
+			TARGET_BRANCH="${HEAD_BRANCH}"
+			TARGET_BRANCH_SOURCE="source_pr_head"
+		fi
+		if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
+			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
+				log "warn source_pr_branch_missing branch=${TARGET_BRANCH}; falling back to ${TARGET_BRANCH_DEFAULT}"
+				TARGET_BRANCH="${TARGET_BRANCH_DEFAULT}"
+				TARGET_BRANCH_SOURCE="default"
+				if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
+					log "warn target_branch_missing branch=${TARGET_BRANCH}; issue will target the default branch"
+					TARGET_BRANCH=""
+				fi
+			else
+				log "warn target_branch_missing branch=${TARGET_BRANCH}; issue will target the default branch"
+				TARGET_BRANCH=""
+			fi
+		fi
+		_open_issue "${SELF_REPO}" "${TARGET_BRANCH}" || exit 1
+		log "created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} target_branch=${TARGET_BRANCH:-default} fp=${FP} gen=${GEN} root=${ROOT} source=${SOURCE_LABEL} target_branch_source=${TARGET_BRANCH_SOURCE}"
+		HOTFIX_NOTE=""
+		if [ -n "${TARGET_BRANCH}" ] && [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
+			HOTFIX_NOTE=" on this pull request's own branch \`${TARGET_BRANCH}\`"
+		elif [ -n "${TARGET_BRANCH}" ]; then
+			HOTFIX_NOTE=" as a hotfix on \`${TARGET_BRANCH}\`"
+		fi
+		{
+			echo "<!-- workflow-failure-heal:outcome -->"
+			echo "Workflow failure heal opened ${NEW_ISSUE_URL} in \`${SELF_REPO}\` (classification \`${CLASSIFICATION}\`, generation ${GEN}/${MAX_DEPTH}). The fix will ship through the normal pipeline${HOTFIX_NOTE}."
+		} > "${RUNTIME_DIR}/source_comment.md"
+		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
+		tg_send_msg "Workflow failure heal opened ${NEW_ISSUE_URL} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}', classification ${CLASSIFICATION}, generation ${GEN}/${MAX_DEPTH}). The pipeline will pick it up." "DEBUG" >/dev/null 2>&1 || true
+		;;
+	consumer-app-defect)
+		if [ -z "${ISSUE_NUMBER}" ]; then
+			# A release run has no consumer; keep the diagnosis in this repo.
+			_open_issue "${SELF_REPO}" "${HEAD_BRANCH:-}" || exit 1
+			log "created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
+		else
+			_open_issue "${SOURCE_REPO}" "" || exit 1
+			log "created issue=${NEW_ISSUE_URL} repo=${SOURCE_REPO} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
+			{
+				echo "<!-- workflow-failure-heal:outcome -->"
+				echo "Workflow failure heal classified this as a defect in this repository and opened ${NEW_ISSUE_URL} for the pipeline to fix."
+			} > "${RUNTIME_DIR}/source_comment.md"
+			_comment_on_source "${RUNTIME_DIR}/source_comment.md"
+		fi
+		tg_send_msg "Workflow failure heal opened ${NEW_ISSUE_URL} (consumer-side defect) for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')." "DEBUG" >/dev/null 2>&1 || true
+		;;
+	pr-self-inflicted)
+		# The crash is in a file this PR changed: the fix belongs in the PR
+		# itself, so the diagnosis goes to the PR (for the review-blocked
+		# judge and the author) and no heal issue is opened.
+		{
+			echo "**Workflow failure heal: this failure is caused by this pull request's own changes**"
+			echo "<!-- workflow-failure-heal:outcome -->"
+			echo
+			if [ -n "${PAYLOAD_CRASH_FILE}" ]; then
+				echo "The review/autofix run crashed in \`${PAYLOAD_CRASH_FILE}\`, which this pull request changes (classification \`${CLASSIFICATION}\`). Fix it on this branch; no heal issue was opened."
+			else
+				echo "The review/autofix run executed this pull request's own scripts and failed without naming a file. This pull request changes pipeline files it runs (classification \`${CLASSIFICATION}\`): $(printf '%s\n' "${PIPELINE_OWNERSHIP_FILES}" | sed 's/.*/`&`/' | paste -sd ',' - | sed 's/,/, /g'). Fix it on this branch; no heal issue was opened."
+			fi
+			echo
+			cat "${DIAG_FILE}"
+			echo
+			echo "Heal intake run: ${RUN_URL}"
+		} > "${RUNTIME_DIR}/source_comment.md"
+		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
+		log "no_issue classification=${CLASSIFICATION} source=${SOURCE_LABEL} fp=${FP} crash_file=${PAYLOAD_CRASH_FILE}"
+		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} fails in ${PAYLOAD_CRASH_FILE:-pipeline files}, which the pull request itself changes; diagnosis posted on the PR, no issue opened."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}" "DEBUG" >/dev/null 2>&1 || true
+		;;
+	base-self-inflicted)
+		# The crash is in a file the PR's base branch changed relative to main
+		# and the PR did not: the fix belongs on that base branch. The branch
+		# was just fetched by the ownership check, so it exists.
+		_open_issue "${SELF_REPO}" "${PAYLOAD_BASE_BRANCH}" "${PAYLOAD_BASE_BRANCH}" || exit 1
+		log "created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} target_branch=${PAYLOAD_BASE_BRANCH} fp=${FP} gen=${GEN} root=${ROOT} source=${SOURCE_LABEL} target_branch_source=base_branch crash_file=${PAYLOAD_CRASH_FILE}"
+		{
+			echo "<!-- workflow-failure-heal:outcome -->"
+			echo "Workflow failure heal opened ${NEW_ISSUE_URL} in \`${SELF_REPO}\` (classification \`${CLASSIFICATION}\`, generation ${GEN}/${MAX_DEPTH}). The run crashed in \`${PAYLOAD_CRASH_FILE}\`, which the base branch \`${PAYLOAD_BASE_BRANCH}\` changed and this pull request did not; the fix will ship through the normal pipeline on \`${PAYLOAD_BASE_BRANCH}\`."
+		} > "${RUNTIME_DIR}/source_comment.md"
+		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
+		tg_send_msg "Workflow failure heal opened ${NEW_ISSUE_URL} on base branch ${PAYLOAD_BASE_BRANCH} for ${SOURCE_LABEL} (crash in ${PAYLOAD_CRASH_FILE}, classification ${CLASSIFICATION}, generation ${GEN}/${MAX_DEPTH})." "DEBUG" >/dev/null 2>&1 || true
+		;;
+	consumer-config|transient)
+		{
+			echo "<!-- workflow-failure-heal:outcome -->"
+			echo "Workflow failure heal classified this escalation as \`${CLASSIFICATION}\`; no fix issue was opened."
+			echo
+			echo "<details><summary>Automated diagnosis</summary>"
+			echo
+			cat "${DIAG_FILE}"
+			echo
+			echo "</details>"
+			echo
+			echo "Heal intake run: ${RUN_URL}"
+		} > "${RUNTIME_DIR}/source_comment.md"
+		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
+		SUMMARY_LINE="$(sed -n '/^## Summary/,/^## /p' "${DIAG_FILE}" | sed '1d;/^## /d' | tr '\n' ' ' | head -c 400)"
+		log "no_issue classification=${CLASSIFICATION} source=${SOURCE_LABEL} fp=${FP}"
+		if [ "${CLASSIFICATION}" = "consumer-config" ]; then
+			tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} needs an operator (repository configuration), no code fix applies. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+		else
+			tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} looks transient, no issue opened. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}" "DEBUG" >/dev/null 2>&1 || true
+		fi
+		;;
+	already-fixed)
+		{
+			echo "<!-- workflow-failure-heal:outcome -->"
+			echo "Workflow failure heal classified this failure as \`already-fixed\`: \`${PROGRESS_BRANCH}\` gained commit(s) ${ALREADY_FIXED_COMMITS//,/, } after the failing SHA \`${PROGRESS_SHA}\`, and the diagnosis attributes the fix to them. No fix issue was opened."
+			if [ "${PROGRESS_SHA}" = "${WRAPPER_SHA}" ] && [ -n "${WRAPPER_SHA}" ]; then
+				echo
+				echo "This repository's workflow wrappers are pinned to the older release; the next wrapper sync to \`${PROGRESS_BRANCH}\` picks up the fix."
+			fi
+			echo
+			echo "<details><summary>Automated diagnosis</summary>"
+			echo
+			cat "${DIAG_FILE}"
+			echo
+			echo "</details>"
+			echo
+			echo "Heal intake run: ${RUN_URL}"
+		} > "${RUNTIME_DIR}/source_comment.md"
+		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
+		SUMMARY_LINE="$(sed -n '/^## Summary/,/^## /p' "${DIAG_FILE}" | sed '1d;/^## /d' | tr '\n' ' ' | head -c 400)"
+		log "no_issue classification=${CLASSIFICATION} fixed_by=${ALREADY_FIXED_COMMITS} branch=${PROGRESS_BRANCH} source=${SOURCE_LABEL} fp=${FP}"
+		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}') is already fixed on ${PROGRESS_BRANCH} by ${ALREADY_FIXED_COMMITS}; no issue opened. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "DEBUG" >/dev/null 2>&1 || true
+		;;
+	*)
+		log "error unknown_classification value=${CLASSIFICATION}"
+		exit 1
+		;;
+esac

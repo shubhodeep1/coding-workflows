@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Review skips now require complete, unprotected PR file evidence.** Both small-diff and documentation-only candidates run the existing paginated file lookup and verify it against the PR's changed-file count. Agent instructions, automation files, and root build configuration cannot bypass review even when materiality advice is disabled; unavailable or truncated file lists also run review.

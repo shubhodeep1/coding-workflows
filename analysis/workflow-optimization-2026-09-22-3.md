@@ -1,0 +1,531 @@
+## Executive Summary
+
+- **Move CI invariants to a fast preflight.** CI failed 29/33 runs (87.9%); 22 failed `Script-workflow cross-reference` and seven `Inventory parity`. Nine deep dives repeated the same missing `scripts/helper.sh` reference only after 1,991–2,563 seconds. Estimated recovery: **~10–40 minutes per failed run, up to ~14 runner-hours/window**. **Confidence: high.**
+- **Stop same-head review reruns.** PR #4259 at head `f9d7196...` failed four times with `editor_empty_noop`; the three repeats after the first consumed **14,672 seconds and 51.3M reported tokens**. Estimated saving: **58–99 minutes per suppressed rerun**. **Confidence: high.**
+- **Preflight the editor’s isolated credentials.** Run `35755050146` spent 5,451.6 seconds in reviewer models before failing because `OPENROUTER_API_KEY` was absent from editor isolation. The final summary incorrectly classified this as `empty_noop`. **Confidence: high.**
+- **Telemetry is double-counting aggregate and split logs.** Run `35755050146` duplicated one `SEMBLE_QUERY` and one `CONTEXT_BUDGET_WARN`; CI run `35758949049` duplicated four contract-test fallbacks. Reported counts are therefore inflated. **Confidence: high.**
+- **Orchestration is reliable but expensive.** `orchestrate_poll` succeeded 74/75 runs, but p50 was 304 seconds. Run `35767039713` spent 45.2 seconds fetching all branches and about 101 seconds on two AI-memory pushes. **Confidence: high.**
+- **Prompt caching is useful but prompt pressure remains.** Broad telemetry recorded 87.6M cache-read tokens, approximately 76.3% of prompt-plus-cache-read volume, but `cache_hit_rate` is null and six logical context warnings reached 71.6–97.7% of model windows. **Confidence: medium** due incomplete usage coverage.
+
+## Speed Optimizations
+
+1. **Critical path: run static CI invariants first**
+   - **Evidence:** 22 cross-reference failures and seven inventory failures; sampled cross-reference checks themselves completed in under a second after ~33–43 minutes of prior work.
+   - **Root cause:** deterministic repository-shape checks run late in a monolithic lint job.
+   - **Exact change:** create an initial `static-preflight` job, or move `check_workflow_script_refs.py` and inventory parity immediately after checkout.
+   - **Savings:** 10–40 minutes per invalid run.
+   - **Risk:** low; preserve the existing checks unchanged.
+
+2. **Critical path: same-head terminal failure circuit**
+   - **Evidence:** runs `35728735316`, `35737368348`, `35748016396`, and `35755050146` repeatedly processed PR #4259 at the same SHA.
+   - **Root cause:** `editor_empty_noop` does not suppress future sweeps for an unchanged head.
+   - **Exact change:** persist a terminal marker keyed by PR, head SHA, editor configuration fingerprint, and failure class. Skip after the first confirmed non-transient failure; clear on head/config changes or force dispatch.
+   - **Savings:** 58–99 minutes per suppressed run.
+   - **Risk:** low with fail-open marker reads and an operator override.
+
+3. **Critical path: reuse one AI-memory checkout per run**
+   - **Evidence:** poll run `35767039713` spent 50.6 seconds recording start and 50.2 seconds recording completion. Review run `35755050146` spent another 217 seconds on candidate/failure memory steps.
+   - **Root cause:** each memory operation clones/pushes independently.
+   - **Exact change:** queue run events locally and commit/push once during finalization; reuse one checkout when an immediate start event remains necessary.
+   - **Savings:** roughly 50–200 seconds per active AI run.
+   - **Risk:** medium; flush queued failure events in `always()` cleanup.
+
+4. **Critical path: narrow orchestrator checkout**
+   - **Evidence:** run `35767039713` spent 45.2 seconds fetching every branch.
+   - **Exact change:** fetch only the default branch, state-snapshot branch, and issue branches actually referenced by the cycle.
+   - **Savings:** about 40–45 seconds per poll; potentially ~50 minutes across 75 runs.
+   - **Risk:** medium; retain an on-demand fetch fallback.
+
+5. **Micro-optimization: stop repeatedly probing unavailable live logs**
+   - **Evidence:** release run `35696603462` made 275 failed live-log fetches over approximately one hour.
+   - **Exact change:** after three failures, use a five-minute live-log cooldown while continuing status polling.
+   - **Savings:** limited wall-clock benefit but about **95% fewer failed live-log requests**.
+   - **Risk:** low.
+
+## Cost Optimizations
+
+1. **Suppress unchanged-head review failures**
+   - Five telemetry-backed editor failures consumed **71.1M reported OpenRouter tokens**, subject to duplicate-log inflation.
+   - The three repeated `f9d7196...` runs alone reported 51.3M tokens.
+   - **Estimated saving:** tens of millions of tokens per recurring incident.
+   - **Quality risk:** none when keyed to unchanged head and configuration.
+
+2. **Make reviewer health treat repeated `unknown` failures as actionable**
+   - Across 11 deep review summaries:
+     - `google_gemini-3_1-flash-lite`: 2 successes, 9 failures.
+     - `z-ai_glm-5_2`: 2 successes, 9 failures.
+     - Qwen and xAI: 11/11 successes each.
+     - DeepSeek: 10/11; MiniMax: 9/11 with 19 attempts.
+   - **Exact change:** open the existing health circuit after three consecutive unknown/empty-usage failures, while retaining at least three healthy reviewers.
+   - **Estimated saving:** up to ~30% of reviewer attempts in the sampled runs.
+   - **Quality risk:** medium; use adaptive quarantine rather than permanent removal.
+
+3. **Reduce prompt expansion before lowering model quality**
+   - Run `35755050146` assembled a 555,486-byte editor prompt: 302,033 bytes static plus 253,059 bytes editor body.
+   - **Exact change:** deduplicate instructions, move dynamic metadata after a stable prefix, cap repeated logs/diffs, and reference artifacts instead of embedding them repeatedly.
+   - **Estimated saving:** 10–20% of uncached prompt tokens.
+   - **Quality risk:** low if evidence blocks and output contracts remain intact.
+
+4. **Keep Semble; fix measurement before tuning it**
+   - Assembled telemetry reports 25 queries and 294,083 bytes with zero runtime fallbacks. Deep-dive unique queries were small—approximately 14 KB for reviewer context and 7–9 KB for overflow context.
+   - Semble is adding targeted context at sub-second latency, not driving the 500+ KB prompts.
+   - All reported fallbacks were contract tests, not runtime failures.
+   - Serena recorded zero queries/probes and was disabled in sampled recent runs; efficiency cannot be assessed.
+
+5. **Do not downgrade editor reasoning to mask deterministic failures**
+   - `xhigh` editor reasoning is expensive, but missing credentials and unchanged-head no-ops are the primary waste.
+   - Only consider `high`/`medium` for retry attempts after fixing classification and circuit-breaking.
+   - **Quality risk:** high if changed prematurely.
+
+## Reliability Improvements
+
+1. **Fix the broken `implement.yml` reference and add preflight logging**
+   - Emit `CI_PREFLIGHT_V1 check=workflow_script_refs outcome=... missing_count=... elapsed_ms=...`.
+   - Expected impact: eliminate 22 deterministic failures and expose recurrence within a minute.
+   - Rollback: restore original job ordering; check semantics remain unchanged.
+
+2. **Differentiate editor infrastructure failure from valid no-op**
+   - Run `35755050146` failed with missing editor-isolation credentials but finalized as `editor_empty_noop`.
+   - Add `EDITOR_ATTEMPT_V1` with model, attempt, exit class/code, stdout/stderr/summary bytes, elapsed time, isolated-key-present boolean, and dirty-worktree state.
+   - Preflight the isolated environment before reviewer fanout.
+   - Fail closed for missing credentials; fail open only for optional diagnostics.
+
+3. **Deduplicate telemetry at source**
+   - Add a stable `event_id` to `SEMBLE_*`, `SERENA_*`, usage, context-warning, and memory lines.
+   - Alternatively, skip aggregate job logs when split step logs are available.
+   - Expected impact: accurate cost, fallback, warning, and call counts without changing workflow behavior.
+
+4. **Repair AI-memory failure recording**
+   - Five sampled review failures emitted both `record-candidate` and `record-run-event` with `ok:false, fail_open:true`, losing the most valuable failure evidence.
+   - Add `reason`, `error_class`, checkout/push timings, and retry outcome.
+   - Keep workflows fail-open, but upload a compact local failure artifact when the memory push fails.
+
+5. **Instrument metadata-integrity failures**
+   - Run `35729893830` failed at `Collect PR metadata`: “Could not publish the linked-issue metadata integrity digest.”
+   - Add digest destination, response class, attempt count, and whether core PR metadata remained valid.
+   - Retry once; only fail open if the digest is auxiliary and core metadata passes validation.
+
+6. **Classify runner termination separately**
+   - Implement run `35739823689` ended on a runner shutdown signal.
+   - Emit `RUNNER_TERMINATION_V1 phase=implement productive_commit=false`.
+   - Safely re-dispatch once only when no commit/push occurred.
+
+7. **Policy signals**
+   - `BREAK_GLASS`: zero—no evidence of rubric/policy override pressure.
+   - `CONTEXT_BUDGET_WARN`: seven reported, six logical after deduplication. These indicate prompt-size risk, not policy pressure.
+   - Semble: 44 reported fallbacks, approximately 40 unique; all were `context=contract-test`. Runtime fallback count was zero.
+
+## AI Memory Health
+
+- **Retrieval:** 12 logical deep-dive retrieves; 12 selected records—**100% hit rate**.
+- **Budget use:** average 1,405.9 estimated tokens against a 1,416.7-token average budget—**99.2% utilization**, leaving little headroom.
+- **Keyword methods:** 11 `llm`, one `plain`, zero `none`.
+- **No zero-record or disabled retrieves** were observed.
+- **Writes:** four operations needed two push attempts. Five failed review runs lost both candidate and run-event writes through fail-open behavior.
+- **Healthy fail-open:** `finalize-task` in run `35766419516` reported `reason=no_linked_issues`; this is a valid no-op.
+- **Recommendation:** target 85–90% retrieval-budget utilization, reuse one memory checkout, and log explicit write failure reasons. This preserves retrieval quality while reducing latency and making lost failure learning visible.
+
+## GH API Call Audit
+
+- **Production aggregate call counts are not emitted**, so endpoint-level totals and rate-limit utilization remain a material data gap.
+- **Largest observed redundancy:** run `35696603462` attempted 275 unavailable live-log fetches. A cooldown would cut this to roughly 15 attempts.
+- **Positive hygiene:** `issue_pr_status` uses a batched GraphQL lookup; scheduled `cancel_on_pr_close` resolves PR states through aliased GraphQL batches. This follows the repository rules in `agents.md` to use `gh_retry`, batching, and cycle-local caches.
+- **Known test-only call profiles:** conflict repair exercised 13 calls when fixed, 11 when still conflicted, and one when already mergeable.
+- **No real rate-limit event was found** in sampled logs; HTTP 429 matches were comments/test fixtures, not emitted failures.
+- **Required logging:** instrument `gh_retry` with `GH_API_CALL_V1 endpoint_group method attempt status elapsed_ms batch_size cache_hit rate_remaining rate_reset`. Avoid logging URLs containing sensitive query data.
+- **Expected reduction:** live-log cooldown ~95%; enforcing cycle-local reuse for active-run and PR-state lookups should remove repeated per-item calls, but current telemetry cannot quantify the remainder.
+
+## Prompt Cache & Memory System
+
+- Broad telemetry: 27.23M prompt, 1.16M completion, 87.63M cache-read, and 0.16M cache-write tokens across 194 calls; 25 calls lacked usage data.
+- Derived broad cache-read share is approximately **76.3%**; selected deep logs were approximately **79.9%**. The official aggregate `cache_hit_rate` remains null.
+- Explicit sampled rates ranged from 0% to 81.6%, indicating fragmented coverage and substantial per-run variance.
+- Six logical context warnings included:
+  - `35701080313`: 125,098/128,000 tokens, ratio 0.9773.
+  - `35755050146`: 160,947/200,000, ratio 0.8047.
+  - `35737368348`: ratio 0.7923.
+- **Fragmentation causes:** very large dynamic diff/review blocks, repeated logs, run-specific paths and metadata, and dynamic material preceding reusable instructions.
+- **Recommendations:**
+  1. Stable system/rubric/policy prefix first.
+  2. Dynamic PR metadata, paths, timestamps, and logs last.
+  3. Hash and reference unchanged static context rather than re-embedding it.
+  4. Cap memory retrieval below 90% of budget.
+  5. Emit cache status for every call, including unavailable/unsupported reason.
+- Expected impact: 10–20% fewer uncached tokens, lower latency, and fewer context-limit failures.
+
+## Orchestrator Health
+
+- `orchestrate_poll`: 75 runs, 74 successes, one cancellation; p50 304 seconds and p95 708 seconds.
+- Run `35767039713` successfully initialized Semble from unavailable to available/indexed, processed issue #4255, found no fresh review run, completed a conflict sweep with zero fixes, and persisted start/end memory events.
+- Recent autofix sweeps correctly suppressed duplicate dispatches for active PRs #4259, #4276, and #4280.
+- Liveness concern: cancel-cleanup repeatedly preserved three active runs without PR linkage but logged only the count.
+- Add:
+  - `POLL_ISSUE_V1 issue phase decision reason elapsed_ms gh_calls dispatches`.
+  - IDs/workflow/head refs for unlinked active runs.
+  - Separate setup, issue-processing, conflict-sweep, snapshot, and memory-push timers.
+- Track: same-head terminal skips, stalled issues by phase, active-run age, conflict-recovery count, judge invocations, and memory-push latency.
+
+## Pipeline Flow Bottlenecks
+
+| Stage | Evidence | Dominant overhead | Priority fix |
+|---|---|---|---|
+| Clarify | p50 1s; mostly skipped/no-op runs | Event fan-out noise | Retain fast gating |
+| Plan | p50 1s, p95 383s | Occasional model execution | No immediate change |
+| Implement | p95 830s; run `35755460053` took 2,768s with stall recovery | Model compute, queueing, recovery | Classify stalls and runner shutdowns |
+| Review/autofix | p95 6,067s; 11 editor-step failures | Reviewer fanout, same-head reruns, editor isolation | Highest AI-path priority |
+| CI | p50 2,030s; 29/33 failed | Late deterministic checks | Highest fleet priority |
+| Orchestrate poll | p50 304s | Full fetch, API processing, two memory pushes | Narrow fetch and batch memory |
+| Validate/refresh | 475s / 1,066s | Test compute | Optimize after CI/review |
+| Release gate | 6,759s sampled run | Cross-workflow waits and failed live-log probes | Backoff probes; preserve functional coverage |
+
+Queueing is also material: run `35760389805` waited about 130 seconds for a hosted runner, while review run `35753213375` was cancelled after 3,161 seconds before its first step.
+
+## Per-Repo Breakdown
+
+### shubhodeep1/coding-workflows
+
+- **Top bottlenecks:** CI p50 33.8 minutes; review p95 101.1 minutes; release validation 112.7 minutes; poll p50 5.1 minutes.
+- **Top failure modes:** missing workflow script reference, inventory drift, repeated editor no-op, editor-isolation credential failure, metadata-integrity publication failure.
+- **Highest cost drivers:** six-model reviewer fanout, same-head reruns, 500+ KB prompts, repeated memory pushes.
+- **Top three actions:**
+  1. Add CI static preflight and fix `scripts/helper.sh` reference.
+  2. Add same-head editor-failure suppression plus isolated editor preflight.
+  3. Add source event IDs and shared AI-memory/GH API instrumentation.
+
+## Metrics Appendix
+
+### Outcomes
+
+| Metric | Value |
+|---|---:|
+| Total runs | 1,000 |
+| Success | 333 (33.3%) |
+| Failure | 44 (4.4%) |
+| Cancelled | 14 (1.4%) |
+| Other/skipped | 609 |
+| Terminal success rate | 85.2% |
+| Global p50 / p95 | 6s / 2,493s |
+| Success sampling rate | 7% |
+
+### Key workflow families
+
+| Family | Runs | Success | Failure | Cancelled | p50 | p95 |
+|---|---:|---:|---:|---:|---:|---:|
+| CI | 33 | 4 | 29 | 0 | 2,030s | 2,557s |
+| Review/autofix | 111 | 85 | 14 | 10 | 280s | 6,067s |
+| Implement | 138 | 8 | 1 | 3 | 1s | 830s |
+| Orchestrate poll | 75 | 74 | 0 | 1 | 304s | 708s |
+| Test/mark stable | 1 | 1 | 0 | 0 | 6,759s | 6,759s |
+
+### Cost and cache telemetry
+
+| Metric | Assembled value |
+|---|---:|
+| Codex tokens / calls | 2,648,329 / 22 |
+| OpenRouter prompt tokens | 27,232,049 |
+| Completion tokens | 1,164,545 |
+| Cache-read tokens | 87,630,146 |
+| Cache-write tokens | 160,141 |
+| Total tokens | 116,024,756 |
+| OpenRouter calls | 194 |
+| Usage available / unavailable | 169 / 25 |
+| `cache_hit_rate` | null |
+| Derived cache-read share | ~76.3% |
+| `wall_clock_p50_ms` / `p99_ms` | 15,000 / 6,739,200 |
+| `break_glass_count` | 0 |
+| Reported / logical context warnings | 7 / 6 |
+
+### Failure points
+
+| Failure point | Count |
+|---|---:|
+| CI / Script-workflow cross-reference | 22 |
+| Review / Apply fixes with editor model | 11 |
+| CI / Inventory parity | 7 |
+| Review / Collect PR metadata | 3 |
+| Implement job | 1 |
+
+### MCP telemetry
+
+| Server/target | Queries | Bytes | Fallbacks | Probe OK / failed / skipped |
+|---|---:|---:|---:|---:|
+| Semble, assembled total | 25 | 294,083 | 44 reported; runtime 0 | Not emitted |
+| Semble `reviewer-context`, deep deduplicated | 11 | 158,487 | 0 | Not emitted |
+| Semble `overflow`, deep deduplicated | 5 | 39,957 | ~40 contract-test-only | Not emitted |
+| Serena | 0 | 0 | 0 | 0 / 0 / 0 |
+
+No other MCP servers were observed.
+
+### GH API evidence
+
+| Signal | Value |
+|---|---:|
+| Production aggregate call count | Not emitted |
+| Failed live-log probes, run `35696603462` | 275 |
+| Conflict test calls: fixed / unresolved / not needed | 13 / 11 / 1 |
+| Observed production rate-limit events | 0 |
+| Primary gap | Endpoint, cache-hit, retry, and quota telemetry absent |
+
+**Material data gap:** aggregate marker counts can be inflated when the same source event appears in both an aggregate job log and a split step log.
+
+## Deep Audit — Workflows & Scripts (2026-09-22)
+
+### Section 1: Bug & Correctness Sweep
+
+Audit coverage: 50 workflows, 85 shell scripts, and 57 Python scripts. Bash syntax, Python AST parsing, and YAML linting passed. No actionable SC2086/SC2046 findings, direct issue-body shell interpolation, or secret logging was found.
+
+#### BUG-001 — Integration-ref API reads lack transient-failure handling
+
+- **File:** `scripts/resolve_integration_ref.sh:51-69`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** `get_issue_body` and `branch_exists` call raw `gh api` under `set -euo pipefail`. A transient 5xx, rate limit, or network failure therefore aborts plan/implement branch resolution immediately; `branch_exists` converts every non-404 failure into exit 2 without first applying the repository’s reset-aware retry policy.
+- **Recommended fix:** Source `scripts/gh_helpers.sh` and use `gh_retry`/`gh_retry_to_file`. Preserve 404 as “branch absent,” but retry transient failures before failing closed.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001 — Fallback linked-issue labels are fetched one issue at a time
+
+- **File:** `.github/workflows/review_autofix.yml:1208-1227`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** When linked issue numbers come from the PR text fallback, each issue enters the loop with `labels: null`, causing one `gh issue view` call per issue. Current read count is **N**; an aliased GraphQL request could reduce this to **ceil(N/50)**.
+- **Recommended fix:** Prefetch labels for all fallback issue numbers before the loop, extending the `_fetch_candidate_issue_details_graphql` alias-and-cache pattern from `scripts/orchestrate_poll_process.sh`. Keep workflow dispatch and label-removal mutations unchanged.
+
+#### BATCH-002 — Security advisory follow-up state reads are per-item
+
+- **File:** `scripts/orchestrate_poll_process.sh:5964-6028`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** The final-merge follow-up sweep issues one state/labels GET for each unchecked issue, then one comments GET for each blocked issue. For **N** unchecked issues and **B** blocked issues, the current read count is **N+B**. State/labels can be batched, reducing it to **ceil(N/50)+B**.
+- **Recommended fix:** Add a cycle-local aliased GraphQL prefetch keyed by issue number, following `_fetch_candidate_issue_details_graphql`. Retain paginated per-issue comment reads because marker bodies and pagination are required.
+
+#### API-001 — No-op ancestry performs two API reads per hop in two implementations
+
+- **Files:** `.github/workflows/implement.yml:4314-4332`; `scripts/orchestrate_poll_process.sh:12866-12897`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** Both ancestry walkers separately fetch the current issue body and parent comments for every hop. Current maximum is **2T** calls for depth **T**—four calls at the default depth of two. The implement path already has the current issue body cached. [NEEDS VERIFICATION]
+- **Recommended fix:** Create a shared helper accepting an optional cached initial body. Query each parent’s body and comments together via GraphQL, with REST pagination fallback when `pageInfo.hasNextPage` is true. Projected count: **T** for implement and **T–T+1** for the poller. Model it after `gh_pr_with_all_comments` in `gh_helpers.sh`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Release-tag publication logic has three independently maintained paths
+
+- **Files:** `.github/workflows/mark-stable.yml:678-831`; `.github/workflows/test-and-mark-stable.yml:5573-5726`; `scripts/mark-stable.sh:1-110`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** The two workflow blocks are byte-equivalent 8,910-character implementations of tag publication, verification, stale-tip checks, and partial-release recovery. `scripts/mark-stable.sh` separately implements the same operation with different safeguards, creating drift risk in a release-critical path.
+- **Recommended fix:** Move the canonical logic into `scripts/release_tag_helpers.sh`, exposing `publish_release_tags <version> <source-branch> <tested-sha>`. Make both workflows and `scripts/mark-stable.sh` call it, preserving existing CLI and log identifiers.
+
+#### DUP-002 — Context-budget warning helper is copied three times
+
+- **Files:** `scripts/review_apply_fixes.sh:164-202`; `scripts/review_rb_judge.sh:256-294`; `scripts/review_run_reviewers.sh:69-107`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `emit_context_budget_warn_for_prompt` is identical in all three scripts, including Python import fallback and output handling.
+- **Recommended fix:** Move it to `scripts/cost_audit_helpers.sh` with signature `emit_context_budget_warn_for_prompt <phase> <prompt-path> <model>`, then source that module from all three callers.
+
+#### DUP-003 — Codex runtime-resolution helpers are repeated across model paths
+
+- **Files:** `scripts/review_apply_fixes.sh:680-710`; `scripts/review_conflict_resolve.sh:150-171,209-269`; `scripts/review_rb_judge.sh:168-182`; `scripts/review_run_reviewers.sh:308-338`; `scripts/validate_process.sh:2890-2911`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** Asset resolution, thread-reuse enablement, ledger-helper resolution, and stall-state parsing have identical or near-identical implementations in three or more files.
+- **Recommended fix:** Add `scripts/codex_runtime_helpers.sh` owning:
+  - `resolve_codex_runtime_asset <repo-path>`
+  - `codex_thread_reuse_enabled`
+  - `resolve_ledger_substate_helper`
+  - `read_codex_stall_guard_state <status-file>`
+
+  Keep existing function names as compatibility wrappers where necessary.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Support-staging block is within 674 characters of the hard limit
+
+- **File:** `.github/workflows/implement.yml:981-1337`
+- **Severity:** High
+- **Category:** `expression-limit`
+- **Description:** The interpolated `run:` body is approximately **20,326 characters**, leaving only **674 characters** before GitHub’s 21,000-character template-expression limit. Routine additions can make the workflow unloadable.
+- **Recommended fix:** Extract the block into `scripts/implement_stage_workflow_support.sh`, or extend `scripts/stage_workflow_support.sh` with an implement/self-repository ledger mode. Pass expression values through step-local environment variables.
+
+#### EXPR-002 — Commit preflight block has limited growth headroom
+
+- **File:** `.github/workflows/implement.yml:3218-3524`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The interpolated body is approximately **17,313 characters**, leaving **3,687 characters** of headroom. It combines temporary-index construction, artifact filtering, destructive-delete checks, staged-support restoration, and scope enforcement.
+- **Recommended fix:** Extract it to `scripts/implement_preflight_commit_guard.sh`, sharing staging and guard primitives with `scripts/implement_commit_changes.sh`.
+
+#### EXPR-003 — Workflow-analysis prompt steps remain growth-prone inline templates
+
+- **File:** `.github/workflows/workflow-log-analysis.yml:881-1139,1529-1745,2033-2247`
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:** The three interpolated analysis blocks measure approximately **13,245**, **10,903**, and **10,880** characters, leaving **7,755**, **10,097**, and **10,120** characters respectively. They are below the threshold today but contain large inline prompt and orchestration literals likely to grow.
+- **Recommended fix:** Move stable prompt text under `prompts/` and reduce each workflow step to artifact preparation plus `scripts/render_prompt.sh` invocation.
+
+No workflow exceeds 800 KB. The largest, `review_autofix.yml`, is approximately 505,283 characters. The largest `if:` expression measured 794 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001 — Phase-failure evidence engine is not wired into production paths
+
+- **File:** `scripts/orchestrate_lib.py:1709-1760,1816-2014,2017-2115`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `evaluate_phase_failure_resume` and `resolve_label_repair_evidence` are implemented using the marker parser and evidence selector, but no workflow or production script calls either function. The active poller uses other `orchestrate_lib.py` entry points instead.
+- **Recommended fix:** Either wire these helpers into stall recovery and label reconciliation behind the documented feature gates, or isolate them as reserved APIs. Preserve exported names if removal would affect external consumers.
+
+#### SHELL-001 — Branch-rebuild diagnostics are computed but never consumed
+
+- **File:** `scripts/orchestrate_poll_process.sh:9183-9259`
+- **Severity:** Low
+- **Category:** `shellcheck`
+- **Description:** `BRANCH_REBUILD_SKIP_REASON` is assigned on every eligibility rejection and `BRANCH_REBUILD_LAST_REBUILD_AT` is populated from audit state, but neither variable is read afterward. ShellCheck reports both as unused, and operators lose the detailed reason already calculated.
+- **Recommended fix:** Emit both values in the caller’s skip telemetry or return a structured eligibility result. Remove the assignments only if the diagnostics are intentionally unnecessary.
+
+No `TODO`, `FIXME`, `HACK`, or `XXX` markers were present in the audited scope. Focused shell tests for events, transcript archives, reminders, log prefixes, watchdog budgets, and worktree registry behavior passed.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | EXPR-001 |
+| Medium | 5 | BUG-001, BATCH-001, BATCH-002, DUP-001, EXPR-002 |
+| Low | 6 | API-001, DUP-002, DUP-003, EXPR-003, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 3–4 | Medium |
+| Code modularization | 8–10 | Medium |
+| Expression size reduction | 3–5 | Medium |
+| Medium/Low fixes | 4–6 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-22)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is directly implementable; `NEEDS_VERIFICATION` requires the listed checks; `RISKY_SKIP` must not be automated because pagination, poller, retry, or race-sensitive semantics are involved.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Collapse duplicate final-PR fallback reads
+
+- **Safety tag:** `RISKY_SKIP`
+- **Calls:** `scripts/orchestrate_poll_process.sh:10240` and `scripts/orchestrate_poll_process.sh:10241`, within `finalize_integration_merge_if_needed`.
+- **Current call count:** 2
+- **Proposed call count:** 1
+- **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{final_pr}`
+- **Evidence:**
+  ```bash
+  existing_pr_state="$(gh_retry _safe_gh_jq ".../pulls/${final_pr}" --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq ".../pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+- **Proposed fix:** Fetch one compact object such as `{state, merged: (.merged_at != null)}` and derive both variables locally. Preserve the existing `final_pr_json_snapshot` fast path.
+- **Safety rationale:** Although the calls are adjacent with identical endpoint, auth, and retry behavior, every consolidation inside `orchestrate_poll_process.sh` is explicitly race-sensitive and therefore `RISKY_SKIP`.
+- **Downstream signal:** Do not auto-implement; manually verify that a single failed response preserves the existing fail-closed final-merge behavior and cycle-local snapshot contract.
+
+#### MERGE-002 — Fetch issue title and body together in reissue paths
+
+- **Safety tag:** `RISKY_SKIP`
+- **Calls:** `scripts/orchestrate_poll_process.sh:13731-13733` in `execute_stall_recovery_action`; `scripts/orchestrate_poll_process.sh:16413-16421` in `run_standalone_stall_recovery`; `scripts/orchestrate_poll_process.sh:21397-21399` in the main implementation-failed sweep.
+- **Current call count:** 6
+- **Proposed call count:** 3
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence:**
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.title // ""' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+- **Proposed fix:** Add a documented `_issue_title_body_json` helper returning `{title,body}` in one call, then parse both fields locally at all three sites.
+- **Safety rationale:** Each pair is adjacent without an intervening mutation, but all three are poller or stall-recovery paths, which mandates `RISKY_SKIP`.
+- **Downstream signal:** Do not auto-implement; manually confirm that merging the calls does not remove the current partial-success behavior when only one field lookup succeeds.
+
+#### MERGE-003 — Derive bounded clarify context from the full comment fetch
+
+- **Safety tag:** `RISKY_SKIP`
+- **Calls:** `.github/workflows/clarify.yml:479` and `.github/workflows/clarify.yml:481-484`, in the `Fetch issue comments` step.
+- **Current call count:** 2 logical calls when semantic caching is enabled
+- **Proposed call count:** 1 logical call on the successful path
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`
+- **Evidence:**
+  ```bash
+  gh_retry gh api ".../comments?...&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+  gh_retry gh api --paginate --slurp \
+    ".../comments?...&per_page=100" | jq ... > "${THREAD_HISTORY_FILE}"
+  ```
+- **Proposed fix:** When semantic caching is enabled, fetch the paginated response once, write its first 50 comments to `ISSUE_COMMENTS_FILE`, and render the full response into `THREAD_HISTORY_FILE`. Retain the bounded call as fallback if pagination fails.
+- **Safety rationale:** The calls have different pagination behavior, and the consolidation touches a paginated API path, requiring `RISKY_SKIP`.
+- **Downstream signal:** Do not auto-implement; manually test ordering and output with over 100 comments, malformed pages, and mid-pagination failure.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Reuse marker body returned by the merge-train comments listing
+
+- **Safety tag:** `RISKY_SKIP`
+- **Calls:** `scripts/review_merge_train.sh:257-261` in `_mt_find_marker_comment_id` and `scripts/review_merge_train.sh:275-287` in `_mt_upsert_comment`.
+- **Current call count:** 2 reads when an existing marker is found
+- **Proposed call count:** 1 read
+- **Endpoints:** `GET /repos/{owner}/{repo}/issues/{pr}/comments?per_page=100`; `GET /repos/{owner}/{repo}/issues/comments/{comment_id}`
+- **Evidence:**
+  ```bash
+  gh_retry gh api --paginate ".../issues/${pr}/comments?per_page=100" \
+    --jq "... | .id" | tail -n 1
+
+  existing_body="$(gh_retry gh api \
+    ".../issues/comments/${existing_id}" --jq '.body' ...)"
+  ```
+- **Proposed fix:** Add `_mt_find_marker_comment_json` returning the latest marker’s `{id,body}` from the listing. Keep `_mt_find_marker_comment_id` as a compatibility wrapper and let `_mt_upsert_comment` accept the cached body.
+- **Safety rationale:** The body is already present in the listing response, but the source call is paginated and page-order semantics must remain unchanged.
+- **Downstream signal:** Do not auto-implement; manually verify latest-marker selection across pages, duplicate markers, and list-call failure behavior.
+
+#### REUSE-002 — Persist failure-path PR metadata across adjacent workflow steps
+
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Calls:** `.github/workflows/review_autofix.yml:7265-7283` and `.github/workflows/review_autofix.yml:7326-7331`.
+- **Current call count:** Up to 2
+- **Proposed call count:** 1 when the first lookup succeeds
+- **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{pr_number}`
+- **Evidence:**
+  ```bash
+  pr_meta="$(gh_retry _safe_gh_jq ".../pulls/${PR_NUMBER}" ...)"
+
+  PR_DATA="$(gh_retry gh api ".../pulls/${PR_NUMBER}" \
+    --jq '.title + " " + (.body // "")' ...)"
+  ```
+- **Proposed fix:** Persist the validated first payload to `FAILURE_PR_META_FILE`; have the next step consult `PR_META_FILE`, then this failure cache, then retain the current live fallback.
+- **Safety rationale:** The endpoint and token match and no workflow mutation intervenes, but the calls cross workflow-step boundaries and currently provide independent retry opportunities.
+- **Downstream signal:** Verify failures before and after runtime initialization, ensure the cache path always exists, and confirm a failed first lookup still executes the second live fallback.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- BATCH-001: `NEEDS_VERIFICATION` — confirm batched label pagination remains complete beyond 100 labels and retain per-issue fallback on incomplete GraphQL nodes.
+- BATCH-002: `RISKY_SKIP` — the candidate is inside `orchestrate_poll_process.sh`; paginated comment reads must remain separate and manual race review is required.
+- API-001: `RISKY_SKIP` — the poller implementation and paginated comment traversal trigger mandatory manual review despite the valid cached-initial-body optimization.
+
+### Summary Counts
+
+Counts include net-new findings and reviewed Section 2 cross-references.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-002, BATCH-001 |
+| RISKY_SKIP | 6 | MERGE-001, MERGE-002, MERGE-003, REUSE-001, BATCH-002, API-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
