@@ -5,13 +5,25 @@
   "entry_id": "processed_command_4477_5835130410_approved",
   "issue_number": 4477,
   "metadata": {
+    "branch": "ai/issue-4477",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "changelog.d/4477-review-worktree-transfer.md",
+      "scripts/review_untrusted_sandbox.sh",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 4477,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4477",
+    "pr_number": 4478,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4478",
+    "run_attempt": "1",
+    "run_id": "36155680195",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36155680195"
   },
   "run_attempt": 1,
   "run_id": "36155680195",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-25T15:41:56Z",
+  "status": "completed",
+  "timestamp": "2026-09-25T15:55:02Z",
   "workflow": "implement"
 }
