@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4431,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4431\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4434\",\"pr_number\":4434,\"branch\":\"ai/issue-4431\",\"run_id\":\"36084871177\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/36084871177\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"README.md\",\"agents.md\",\"changelog.d/4431-protect-deterministic-review-skip.md\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "73711d346a91388720f37bab3cd66e6446b8bc01117722308e8d426921469ab9",
+  "lineage": {
+    "issue_number": 4431,
+    "parent_ids": [],
+    "pr_number": 4434,
+    "run_id": "36084871177",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36084871177",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4434"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260925022256_92c2669217",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4431,
+    "level": "run",
+    "pr_number": 4434,
+    "run_id": "36084871177"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4431: https://github.com/shubhodeep1/coding-workflows/pull/4434",
+  "timestamps": {
+    "created_at": "2026-09-25T02:22:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
