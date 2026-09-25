@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `cce9d60b92991577fbe13352c6c638f761c9c5a5`. Integration branch metadata is empty; no mismatch is established. The auto-answer maps to no clarification questions.\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/e2e_smoke_canary.txt`\nScope-mode justification: The complete change is a one-line replacement in the existing file. No shortcut, new interface, or broader change is warranted.\n\n## Automation and wiring\n- **Change type:** Modify an existing file only; no script or supervisor.\n- **Existing entry point:** `.github/workflows/test-and-mark-stable.yml`, triggered by `workflow_dispatch`, already creates and checks smoke canary issues. No wiring change.\n- **Database gate and future-removal registry:** Not applicable.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` **only**. Replace `run_id: 26151428977` with `run_id: alt-36078283644`; preserve the other two lines and the final newline.\n\n## Functions, data structures, and API/interface changes\nNone. The canary remains a three-line text file.\n\n## Decisions\n### D1 \u2014 Replace the run ID in place\n- **Chosen:** Edit only the existing canary file.\n- **Alternatives considered:** Change the spec template or smoke workflow.\n- **Why:** The requested value is specific to this issue; changing the generator would alter future smoke runs and violate the one-file constraint.\n\n## Security considerations\nNo new endpoint, authorization surface, or trust boundary is introduced. Treat the issue-supplied run ID as data: write only the specified literal text, with no command interpolation or extra content.\n\n## Risks and edge cases\nThe file currently has three lines and a trailing newline. Verify that replacement leaves exactly the requested three lines, including the trailing newline, and no other changed paths.\n\n## Testing considerations\nCompare the file byte-for-byte against the specified text and check `git diff --name-only` contains only `tests/e2e_smoke_canary.txt`. No pinned-toolchain validator is needed for this text-only change.\n\n## Pre-execution self-check\nThe target exists, the requested replacement is fully specified, and the plan respects the one-file constraint.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "90e573d69f8e489b40f0498e732e539be2198fa654c4d20328a84b84c103a2a3",
+  "lineage": {
+    "issue_number": 4421,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36078643766",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36078643766",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4421"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925004535_5527d723b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4421,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36078643766"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4421",
+  "timestamps": {
+    "created_at": "2026-09-25T00:45:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
