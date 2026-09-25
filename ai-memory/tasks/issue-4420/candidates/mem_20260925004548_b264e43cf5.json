@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends the existing issue \u2192 plan \u2192 approval \u2192 implement pipeline\nScope-mode justification: The request specifies one existing file and its complete replacement content. No broader change improves correctness; the smallest safe implementation is to overwrite that file only.\n\n## Automation and execution\n- **Code change:** Modify existing code/data only; no new script, directory, or supervisor.\n- **Entry point:** The existing `.github/workflows/implement.yml` `/approved` trigger.\n- **Database gate:** Not applicable.\n\n## Planning ref\n`main` at `cce9d60b92991577fbe13352c6c638f761c9c5a5`. No integration branch was specified, so no mismatch is established.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` **only**. It is tracked and currently has a different `run_id`.\n\n## Functions or modules to implement\nNone. Overwrite the entire file with exactly:\n```text\nstatus: ok\nrun_id: 36078283644\nupdated-by: ai-pipeline\n```\nInclude one newline after the final line.\n\n## Data structures affected\nOnly the canary\u2019s plain-text contents.\n\n## API/interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the canary in place\n- **Chosen:** Overwrite the existing tracked file; change no other paths.\n- **Alternatives considered:** Append the new lines or add a test or changelog fragment.\n- **Why:** Appending would violate the exact-content requirement, and additional files would violate the one-file constraint.\n\n## Security considerations\nNo new trust boundary, endpoint, authorization surface, or external input is introduced. Treat the supplied text as the exact replacement data; do not execute the example shell command as untrusted input or include credentials.\n\n## Risks and edge cases\n- An extra line, missing final newline, or unchanged old `run_id` fails the requirement.\n- No factual conflict was found between the issue and the inspected file.\n\n## Testing considerations\nCompare the file byte-for-byte with `printf 'status: ok\\nrun_id: 36078283644\\nupdated-by: ai-pipeline\\n'`; verify `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`. No broader test run is needed for a text-only replacement.\n\n## Pre-execution self-check\nThe clarification response maps to \u201cno questions needed\u201d; the target exists, the replacement bytes are specified, and implementation requires no missing input.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b205329ad3a118379f7804a7b9e740844a48acd98ec6a52bfd411cd5219150dd",
+  "lineage": {
+    "issue_number": 4420,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36078662855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36078662855",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4420"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925004548_b264e43cf5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4420,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36078662855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4420",
+  "timestamps": {
+    "created_at": "2026-09-25T00:45:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
