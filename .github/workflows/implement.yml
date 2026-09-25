@@ -184,6 +184,11 @@ jobs:
             echo "Issue #${ISSUE_NUMBER} is closed. Skipping implementation steps."
             echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+          elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null; then
+            # Claimed by the Claude issue implementer (scripts/claude_issue_route.py).
+            echo "Issue #${ISSUE_NUMBER} is claimed by the Claude issue implementer (ai:claude). Skipping implementation steps."
+            echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=claude_routed outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
           elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} already has ai:implementing label. Another implement run is in progress. Skipping."
             echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=already_implementing outcome=skip issue=${ISSUE_NUMBER}"

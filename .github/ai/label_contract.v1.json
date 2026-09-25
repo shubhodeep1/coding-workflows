@@ -208,6 +208,22 @@
     "ai:workflow-heal-escalated": {
       "color": "b60205",
       "description": "Workflow failure heal chain hit the lineage cap; needs human attention"
+    },
+    "ai:claude": {
+      "color": "7057ff",
+      "description": "Standalone issue implemented by Claude Code (claimed by the Claude issue implementer)"
+    },
+    "ai:codex": {
+      "color": "0e8a16",
+      "description": "Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
+    },
+    "ai:claude-handoff-failed": {
+      "color": "b60205",
+      "description": "Claude issue handoff failed; comment /reclarify to retry or add ai:codex to switch"
+    },
+    "ai:claude-blocked": {
+      "color": "b60205",
+      "description": "Claude issue session stopped on a hard blocker; see the latest issue comment"
     }
   },
   "phase_groups": [

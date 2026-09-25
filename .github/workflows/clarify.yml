@@ -221,7 +221,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py claude_issue_route.py claude_issue_handoff.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -412,6 +412,10 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
           RUN_ID: ${{ github.run_id }}
+          # Standalone issues default to the Claude issue implementer; set the
+          # repo variable to `codex` to keep the Codex clarify → plan →
+          # implement pipeline. Per-issue `ai:codex` / `ai:claude` labels win.
+          AI_ISSUE_IMPLEMENTER: ${{ vars.AI_ISSUE_IMPLEMENTER || 'claude' }}
         run: |
           set -euo pipefail
           LABELS_CSV="$(jq -r '[(.labels // [])[]?.name] | join(",")' "${ISSUE_META_FILE}")"
@@ -460,6 +464,38 @@ jobs:
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}"
           fi
 
+          # Implementer routing (scripts/claude_issue_route.py). Only an issue
+          # that would otherwise run Codex clarify is routed: closed,
+          # untrusted, and orchestrator fast-path issues keep the gates above.
+          # A routing error falls back to the Codex pipeline (pre-routing
+          # behaviour) with a warning, so issues are never dropped.
+          ISSUE_IMPLEMENTER="codex"
+          ISSUE_IMPLEMENTER_REASON="not_routed"
+          SKIP_SECURITY_PASS="false"
+          if [ "${SKIP_CODEX}" != "true" ]; then
+            if ROUTE_JSON="$(python3 scripts/claude_issue_route.py route --issue-json "${ISSUE_META_FILE}" --implementer-var "${AI_ISSUE_IMPLEMENTER}")"; then
+              ISSUE_IMPLEMENTER="$(printf '%s' "${ROUTE_JSON}" | jq -r '.implementer')"
+              ISSUE_IMPLEMENTER_REASON="$(printf '%s' "${ROUTE_JSON}" | jq -r '.reason')"
+              SKIP_SECURITY_PASS="$(printf '%s' "${ROUTE_JSON}" | jq -r '.skip_security_pass')"
+            else
+              ISSUE_IMPLEMENTER="codex"
+              ISSUE_IMPLEMENTER_REASON="route_error"
+              echo "::warning::claude_issue_route.py failed for issue #${ISSUE_NUMBER}; falling back to the Codex pipeline"
+            fi
+            if [ "${ISSUE_IMPLEMENTER_REASON}" = "invalid_repo_var_default" ]; then
+              echo "::warning::AI_ISSUE_IMPLEMENTER='${AI_ISSUE_IMPLEMENTER}' is not 'claude' or 'codex'; using the default (claude)"
+            fi
+            if [ "${ISSUE_IMPLEMENTER}" = "claude" ]; then
+              SKIP_CODEX="true"
+              echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=claude_routed outcome=handoff issue=${ISSUE_NUMBER} route_reason=${ISSUE_IMPLEMENTER_REASON}"
+            fi
+          fi
+          RELEASE_CLAUDE_CLAIM="false"
+          if [ "${ISSUE_IMPLEMENTER}" = "codex" ] && [ "${ISSUE_IMPLEMENTER_REASON}" != "not_routed" ] && [ "${IS_CLOSED}" != "true" ] && \
+            jq -e '[(.labels // [])[]?.name] | index("ai:claude") != null' "${ISSUE_META_FILE}" >/dev/null; then
+            RELEASE_CLAUDE_CLAIM="true"
+          fi
+
           # Only a verified orchestrator fast path may post its automatic /answer.
           if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && \
             { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
@@ -472,8 +508,41 @@ jobs:
           echo "is_forced_reclarify=${IS_FORCED_RECLARIFY}" >> "$GITHUB_OUTPUT"
           echo "is_closed=${IS_CLOSED}" >> "$GITHUB_OUTPUT"
           echo "skip_codex=${SKIP_CODEX}" >> "$GITHUB_OUTPUT"
+          echo "issue_implementer=${ISSUE_IMPLEMENTER}" >> "$GITHUB_OUTPUT"
+          echo "issue_implementer_reason=${ISSUE_IMPLEMENTER_REASON}" >> "$GITHUB_OUTPUT"
+          echo "skip_security_pass=${SKIP_SECURITY_PASS}" >> "$GITHUB_OUTPUT"
+          echo "release_claude_claim=${RELEASE_CLAUDE_CLAIM}" >> "$GITHUB_OUTPUT"
 
-          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX}"
+          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX} issue_implementer=${ISSUE_IMPLEMENTER} implementer_reason=${ISSUE_IMPLEMENTER_REASON}"
+
+      - name: Release Claude claim on switch to Codex
+        if: steps.clarify_route.outputs.release_claude_claim == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          # A Codex route on an issue that still carries the ai:claude claim
+          # (the user added `ai:codex` and commented /reclarify) hands it back
+          # to Codex: drop the claim so plan / implement / stall recovery act
+          # on it again.
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai%3Aclaude" >/dev/null 2>&1 || true
+          echo "CLAUDE_ISSUE_HANDOFF released issue=${ISSUE_NUMBER} reason=${{ steps.clarify_route.outputs.issue_implementer_reason }}"
+
+      - name: Claude issue handoff
+        if: steps.clarify_route.outputs.issue_implementer == 'claude' && steps.clarify_route.outputs.is_closed != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          CLAUDE_ISSUE_TRIGGER: ${{ github.event_name == 'issue_comment' && 'reclarify' || 'opened' }}
+          CLAUDE_ISSUE_ROUTE_REASON: ${{ steps.clarify_route.outputs.issue_implementer_reason }}
+          CLAUDE_ISSUE_SKIP_SECURITY_PASS: ${{ steps.clarify_route.outputs.skip_security_pass }}
+          CLAUDE_ISSUE_UPSTREAM_REPO: ${{ vars.CLAUDE_ISSUE_UPSTREAM_REPO || 'shubhodeep1/coding-workflows' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          bash scripts/claude_issue_handoff.sh
 
       - name: Detect smoke test and tune LLM settings
         run: |
