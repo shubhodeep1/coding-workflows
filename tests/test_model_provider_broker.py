@@ -680,6 +680,30 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 		def close(self) -> None:
 			pass
 
+	# The relayed upstream Content-Length (and a broker rejection's) lets the
+	# client finish reading before the handler's finally block settles the
+	# reservation. post() waits until every admitted request is settled so
+	# the budget assertions never race the handler thread.
+	admitted_requests = 0
+	settled_requests = 0
+	original_reserve_request = state.reserve_request
+	original_settle_request = state.settle_request
+
+	def counting_reserve_request(*args: object, **kwargs: object) -> bool:
+		nonlocal admitted_requests
+		admitted = original_reserve_request(*args, **kwargs)
+		if admitted:
+			admitted_requests += 1
+		return admitted
+
+	def counting_settle_request(*args: object, **kwargs: object) -> None:
+		nonlocal settled_requests
+		original_settle_request(*args, **kwargs)
+		settled_requests += 1
+
+	state.reserve_request = counting_reserve_request  # type: ignore[method-assign]
+	state.settle_request = counting_settle_request  # type: ignore[method-assign]
+
 	original_connection = module.http.client.HTTPSConnection
 	original_usage_scan_tail_bytes = module.USAGE_SCAN_TAIL_BYTES
 	module.http.client.HTTPSConnection = _FakeConnection  # type: ignore[misc]
@@ -697,10 +721,15 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 			try:
 				with urllib.request.urlopen(request, timeout=5) as response:
 					response.read()
-					return response.status
+					status = response.status
 			except urllib.error.HTTPError as error:
 				error.read()
-				return error.code
+				status = error.code
+			deadline = time.monotonic() + 5
+			while settled_requests < admitted_requests and time.monotonic() < deadline:
+				time.sleep(0.01)
+			assert settled_requests == admitted_requests, "broker handler did not settle its reservation"
+			return status
 
 		usage_stream = (
 			b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
@@ -708,18 +737,8 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 			b"data: [DONE]\n\n"
 		)
 		streamed_request: dict[str, object] = {"model": "openai/test-model", "messages": [], "stream": True}
-		def wait_for_settlement(expected_output_tokens: int) -> None:
-			# A response with Content-Length (a broker rejection or a relayed
-			# upstream error) reaches the client before the handler's finally
-			# block settles the reservation; only EOF-terminated bodies imply
-			# settlement. Wait briefly instead of racing the handler thread.
-			deadline = time.monotonic() + 5
-			while state.output_tokens_reserved != expected_output_tokens and time.monotonic() < deadline:
-				time.sleep(0.01)
-
 		fail_connection_construction = True
 		assert post(streamed_request) == 502
-		wait_for_settlement(0)
 		assert state.output_tokens_reserved == 0, "connection setup failure must release its reservation"
 		assert state.input_tokens_reserved == 0
 		assert state.cost_usd_reserved == 0
@@ -740,7 +759,6 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 
 		scripted.append((429, b'{"error":{"message":"rate limited"}}', "application/json"))
 		assert post(streamed_request) == 429
-		wait_for_settlement(50)
 		assert state.output_tokens_reserved == 50, "an upstream error generated nothing and settles to zero"
 
 		module.USAGE_SCAN_TAIL_BYTES = 128
