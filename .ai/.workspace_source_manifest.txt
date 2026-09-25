@@ -167,6 +167,7 @@ changelog.d/4440-implement-plan-auto-decisions.md
 changelog.d/4451-pin-security-audit-support.md
 changelog.d/4452-validate-target-ref-sandbox.md
 changelog.d/4453-claude-fixer-verdict-verification.md
+changelog.d/4469-validate-hook-output-boundary.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md

@@ -21,6 +21,7 @@ MAX_FILES = 5000
 EXCLUDED = {".git", ".ai", ".codex", ".opencode", ".serena", ".venv", ".review-venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", ".tox", ".nox", "dist", "build", "coverage", ".next", ".turbo", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials"}
 ROOT_FILES = {"README.md", "agents.md", "AGENTS.md", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "pyproject.toml", "requirements.txt", "setup.cfg", "pytest.ini", "tox.ini", "go.mod", "Cargo.toml"}
 SUFFIXES = {".py", ".sh", ".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx", ".cts", ".mts", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql", ".lock", ".cfg", ".ini"}
+WORKSPACE_SOURCE_MANIFEST = ".ai/.workspace_source_manifest.txt"
 
 
 def git_env(manifest):
@@ -31,10 +32,12 @@ def git_env(manifest):
 		"GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
 
 
-def allowed(name):
+def allowed(name, manifest_allowed=False):
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
 		return False
+	if manifest_allowed and name == WORKSPACE_SOURCE_MANIFEST:
+		return True
 	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return False
 	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
@@ -71,7 +74,7 @@ def fingerprint(path):
 	return [hashlib.sha256(data).hexdigest(), mode]
 
 
-def enumerate_workspace(root):
+def enumerate_workspace(root, manifest_allowed=False):
 	count = 0
 	total = 0
 	entries = 0
@@ -82,6 +85,13 @@ def enumerate_workspace(root):
 			if entries > 10000:
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
+			if rel == Path(".") and child == ".ai" and manifest_allowed:
+				if (Path(directory) / child).is_symlink():
+					raise ValueError("unsafe workspace directory")
+				continue
+			if rel == Path(".ai"):
+				dirs.remove(child)
+				continue
 			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child != ".github"):
 				dirs.remove(child)
 				continue
@@ -92,7 +102,7 @@ def enumerate_workspace(root):
 			if entries > 10000:
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
-			if not allowed(name):
+			if not allowed(name, manifest_allowed):
 				# Build products and cached dependencies are not editor output.
 				if name in ROOT_FILES or rel == Path("."):
 					raise ValueError("unsafe workspace result path")
@@ -106,14 +116,14 @@ def enumerate_workspace(root):
 
 
 def snapshot(host, workspace, manifest):
-	paths = set()
 	env = git_env(manifest)
-	for cmd in (["git", "ls-files", "-z"], ["git", "ls-files", "--others", "--exclude-standard", "-z"]):
-		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=env).split(b"\0") if p)
+	tracked_paths = {p.decode("utf-8") for p in subprocess.check_output(["git", "ls-files", "-z"], cwd=host, env=env).split(b"\0") if p}
+	untracked_paths = {p.decode("utf-8") for p in subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=host, env=env).split(b"\0") if p}
+	manifest_allowed = os.environ.get("IS_WORKFLOW_SOURCE_REPO") == "true" and WORKSPACE_SOURCE_MANIFEST in tracked_paths
 	baseline = {}
 	total = 0
-	for name in sorted(paths):
-		if not allowed(name):
+	for name in sorted(tracked_paths | untracked_paths):
+		if not allowed(name, manifest_allowed):
 			continue
 		if (host / name).is_symlink():
 			continue  # Existing tracked symlinks are not in the editor snapshot.
@@ -141,7 +151,8 @@ def snapshot(host, workspace, manifest):
 
 def transfer(host, workspace, manifest):
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = dict((name, (data, mode)) for name, data, mode in enumerate_workspace(workspace))
+	manifest_allowed = os.environ.get("IS_WORKFLOW_SOURCE_REPO") == "true" and WORKSPACE_SOURCE_MANIFEST in baseline
+	results = dict((name, (data, mode)) for name, data, mode in enumerate_workspace(workspace, manifest_allowed))
 	changes = []
 	# Even an untouched result must not conceal a host-side update made since
 	# the snapshot (including a write by another workflow process).
@@ -154,7 +165,7 @@ def transfer(host, workspace, manifest):
 		new = results.get(name)
 		if new is not None and old == [hashlib.sha256(new[0]).hexdigest(), new[1]]:
 			continue
-		if not allowed(name):
+		if not allowed(name, manifest_allowed):
 			raise ValueError("unsafe result path")
 		host_file = checked_path(host, name)
 		if old is None and (host_file.exists() or host_file.is_symlink()):
@@ -183,7 +194,8 @@ def transfer(host, workspace, manifest):
 def refresh(host, workspace, manifest):
 	"""Discard PR build-backend source writes before giving the writer access."""
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = dict((name, (data, mode)) for name, data, mode in enumerate_workspace(workspace))
+	manifest_allowed = os.environ.get("IS_WORKFLOW_SOURCE_REPO") == "true" and WORKSPACE_SOURCE_MANIFEST in baseline
+	results = dict((name, (data, mode)) for name, data, mode in enumerate_workspace(workspace, manifest_allowed))
 	for name, old in baseline.items():
 		host_file = checked_path(host, name)
 		if not host_file.exists() or fingerprint(host_file) != old:

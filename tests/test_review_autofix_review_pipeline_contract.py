@@ -7420,20 +7420,25 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		source = root / "isolated" / "source"
 		source.mkdir(parents=True)
 		(host / "scripts").mkdir(parents=True)
+		(host / ".ai").mkdir()
+		(host / ".ai/.workspace_source_manifest.txt").write_text("scripts/app.py\n")
+		(host / ".ai/untracked.txt").write_text("host only\n")
 		(host / ".git-credentials").write_text("private-sentinel")
 		(host / "scripts/app.py").write_text("before\n")
 		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
 			(host / f"scripts/module{module_suffix}").write_text("before\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
-		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts", ".ai/.workspace_source_manifest.txt"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
 				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
-				env={**os.environ, "GIT_DIR": str(host / ".git"), "GIT_WORK_TREE": str(host)},
+				env={**os.environ, "GIT_DIR": str(host / ".git"), "GIT_WORK_TREE": str(host), "IS_WORKFLOW_SOURCE_REPO": "true"},
 				capture_output=True, text=True, check=False,
 			)
 		assert run("snapshot").returncode == 0
+		assert (source / ".ai/.workspace_source_manifest.txt").read_text() == "scripts/app.py\n"
+		assert not (source / ".ai/untracked.txt").exists()
 		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
 			assert (source / f"scripts/module{module_suffix}").read_text() == "before\n"
 		assert subprocess.run(["git", "-C", str(host), "rev-parse", "HEAD"], env=_git_clean_env(), capture_output=True).returncode != 0
@@ -7441,14 +7446,21 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		assert "private-sentinel" not in (source / ".git" / "config").read_text()
 		(source / "scripts/app.py").write_text("backend write\n")
 		(source / "scripts/backend.py").write_text("untrusted build output\n")
+		(source / ".ai/.workspace_source_manifest.txt").write_text("backend write\n")
 		assert run("refresh").returncode == 0
 		assert (source / "scripts/app.py").read_text() == "before\n"
+		assert (source / ".ai/.workspace_source_manifest.txt").read_text() == "scripts/app.py\n"
 		assert not (source / "scripts/backend.py").exists()
 		(source / "scripts/app.py").write_text("after\n")
 		(source / "scripts/new.py").write_text("new\n")
+		(source / ".ai/.workspace_source_manifest.txt").write_text("scripts/app.py\nscripts/new.py\n")
+		(source / ".ai/editor-created.txt").write_text("excluded\n")
 		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
 			(source / f"scripts/module{module_suffix}").write_text("after\n")
 		assert run("transfer").returncode == 0
+		assert (host / ".ai/.workspace_source_manifest.txt").read_text() == "scripts/app.py\nscripts/new.py\n"
+		assert subprocess.run(["git", "diff", "--exit-code", "--", ".ai/.workspace_source_manifest.txt"], cwd=host, env=_git_clean_env(), capture_output=True).returncode == 1
+		assert not (host / ".ai/editor-created.txt").exists()
 		assert (host / "scripts/app.py").read_text() == "after\n"
 		assert (host / "scripts/new.py").read_text() == "new\n"
 		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
@@ -7463,6 +7475,38 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		(source / "scripts/new.py").symlink_to("/etc/passwd")
 		assert run("transfer").returncode != 0
 		assert (host / "scripts/new.py").read_text() == "new\n"
+		(source / "scripts/new.py").unlink()
+		(source / "scripts/new.py").write_text("new\n")
+		(source / ".ai/.workspace_source_manifest.txt").unlink()
+		(source / ".ai/.workspace_source_manifest.txt").symlink_to("/etc/passwd")
+		assert run("transfer").returncode != 0
+		assert (host / ".ai/.workspace_source_manifest.txt").read_text() == "scripts/app.py\nscripts/new.py\n"
+
+		# Neither a consumer's tracked manifest nor a source repo's untracked
+		# manifest may open the otherwise excluded .ai traversal.
+		for source_repo, tracked in (("false", True), ("true", False)):
+			case_host = root / f"host-{source_repo}"
+			case_source = root / f"isolated-{source_repo}" / "source"
+			case_source.mkdir(parents=True)
+			(case_host / ".ai").mkdir(parents=True)
+			(case_host / ".ai/.workspace_source_manifest.txt").write_text("before\n")
+			subprocess.run(["git", "init", "-q", str(case_host)], env=_git_clean_env(), check=True)
+			if tracked:
+				subprocess.run(["git", "add", ".ai/.workspace_source_manifest.txt"], cwd=case_host, env=_git_clean_env(), check=True)
+			case_manifest = case_source.parent / "baseline.json"
+			case_env = {**os.environ, "IS_WORKFLOW_SOURCE_REPO": source_repo}
+			def run_case(action: str) -> subprocess.CompletedProcess[str]:
+				return subprocess.run(
+					[sys.executable, str(workspace_helper), action, str(case_host), str(case_source), str(case_manifest)],
+					env=case_env, capture_output=True, text=True, check=False,
+				)
+			assert run_case("snapshot").returncode == 0
+			assert not (case_source / ".ai").exists()
+			assert run_case("refresh").returncode == 0
+			(case_source / ".ai").mkdir()
+			(case_source / ".ai/.workspace_source_manifest.txt").write_text("editor created\n")
+			assert run_case("transfer").returncode == 0
+			assert (case_host / ".ai/.workspace_source_manifest.txt").read_text() == "before\n"
 
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:
