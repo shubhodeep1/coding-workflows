@@ -214,8 +214,7 @@ def test_validate_workflow_lists_semble_support_files_in_helper_manifest() -> No
 	required_support_scripts = _manifest_string_array("required_scripts")
 	optional_support_scripts = _manifest_string_array("optional_preserve_scripts_after_schemas")
 	required_snippets = [
-		'helper_path="${helper_stage_dir}/scripts/stage_workflow_support.sh"',
-		'bash "${helper_path}" validate --manifest "${manifest_path}"',
+		'"${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"',
 		"scripts/install_semble.sh",
 		"scripts/semble_helpers.sh",
 		"scripts/build_semble_wrapper.sh",

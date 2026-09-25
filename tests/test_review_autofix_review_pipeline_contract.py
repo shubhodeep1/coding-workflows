@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import http.client
 import importlib.util
 import io
 import json
@@ -14,8 +15,10 @@ import subprocess
 import tempfile
 import textwrap
 import sys
+import threading
 import time
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -384,6 +387,7 @@ def _run_collect_pr_check_runs_harness(
 	check_runs_responses: list[dict[str, object]] | None = None,
 	check_runs_autofix_enabled: str = "true",
 	self_run_id: str = "",
+	exclude_self_from_context: str = "false",
 	wait_timeout_secs: str = "300",
 	poll_interval_secs: str = "20",
 	log_tail_bytes: str = "0",
@@ -424,6 +428,7 @@ def _run_collect_pr_check_runs_harness(
 			"CHECK_RUNS_LOG_TAIL_BYTES": log_tail_bytes,
 			"GH_RETRY_MAX_ATTEMPTS": gh_retry_max_attempts,
 			"SELF_RUN_ID": self_run_id,
+			"CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT": exclude_self_from_context,
 		})
 
 		result = subprocess.run(
@@ -2867,8 +2872,8 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" 1 config_writer_missing' in summariser
 	assert 'opencode_emit_failure_alert review_summariser reviewer' in summariser
 	assert 'opencode_strip_ansi < "${tmp_stdout}"' in summariser
-	assert 'opencode_run_cmd "$@"' in apply_fixes
-	assert 'writer\n    "${editor_attempt_model}"' in apply_fixes
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in apply_fixes
+	assert '"${editor_attempt_model}"' in apply_fixes
 	assert 'opencode_emit_failure_alert review_apply_fixes writer' in apply_fixes
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in apply_fixes
 	assert 'failure_class=config_writer_missing' in apply_fixes
@@ -3318,6 +3323,34 @@ def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusio
 	assert "Check-run context sha256:" in result["stdout"]
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
 	assert any("--paginate" in call and "--slurp" in call and "/check-runs?per_page=100" in call for call in call_texts)
+
+
+def test_post_review_snapshot_ignores_only_its_own_incomplete_check() -> None:
+	runs = [
+		{"id": 1, "name": "review / codex-agent", "status": "in_progress", "details_url": "https://github.com/owner/repo/actions/runs/777/job/1"},
+		{"id": 2, "name": "ci", "status": "completed", "conclusion": "success"},
+	]
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, self_run_id="777", exclude_self_from_context="true",
+		check_runs_responses=[{"json": [{"check_runs": runs}]}],
+	)
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 1\n" in result["context_text"]
+	assert "incomplete_count: 0\n" in result["context_text"]
+
+
+def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="0",
+		check_runs_responses=[{"json": [{"check_runs": [
+			{"id": 1, "name": "ci", "status": "pending"},
+			{"id": 2, "name": "lint", "status": "completed", "conclusion": "startup_failure"},
+			{"id": 3, "name": "unknown", "status": "completed", "conclusion": None},
+		]}]}],
+	)
+	assert "collection_status: timeout\n" in result["context_text"]
+	assert "incomplete_count: 2\n" in result["context_text"]
+	assert "failed_count: 1\n" in result["context_text"]
 
 
 def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:
@@ -4338,6 +4371,82 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert "SEVERITY: high` by default" in prompt_text
 
 
+def test_gate_protects_executable_configuration_from_both_skip_routes() -> None:
+	# Run the real gate body with the existing mocked /pulls/{n}/files
+	# harness. The doc-only branch needs a large change under docs/; the
+	# small-diff branch also accepts root and nested paths outside docs/.
+	from test_workflow_failure_heal import SHA_A, _run_gate
+
+	base_pr = {
+		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A},
+		"labels": [], "additions": 1, "deletions": 1, "changed_files": 1,
+		"mergeable": True, "mergeable_state": "clean", "title": "test", "body": "",
+	}
+	protected_paths = (
+		"Dockerfile", "src/DOCKERFILE.prod", "apps/dev.Dockerfile", "docs/Dockerfile-prod",
+		"nested/Containerfile", "docker-compose.yml", "docs/.dockerignore", "docs/DOCKER-COMPOSE-prod.YML",
+		"docs/compose.override.yaml", "docs/Compose.yaml", "docs/Makefile",
+		"docs/build.gradle.kts", "docs/Taskfile.yml", "docs/pytest.config.py", "docs/BUILD.bazel",
+		"docs/custom.json", "docs/build.rules.toml", "docs/requirements-dev.txt",
+		"docs/.npmrc", "docs/test.sh",
+	)
+	for materiality in ("false", "true"):
+		for path in protected_paths:
+			with tempfile.TemporaryDirectory(prefix="gate-executable-") as tmp_name:
+				# Large docs/ changes qualify only via the doc-only route;
+				# other paths qualify only via the small-diff route.
+				additions = 400 if path.startswith("docs/") else 1
+				result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+					"pr": {**base_pr, "additions": additions, "deletions": additions},
+					"file_pages": [[{"filename": path, "status": "modified"}]],
+				}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": materiality})
+				assert result.returncode == 0, (path, result.stderr)
+				assert outputs["deterministic_skip"] == "false" and outputs["should_run"] == "true", (path, result.stdout)
+				assert "protected_suppressed=true" in result.stdout, (path, result.stdout)
+				assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1, path
+
+	# A rename out of an executable configuration is still protected, even
+	# when only the new filename looks like ordinary documentation.
+	for additions, destination, source in (
+		(1, "docs/guide.md", "src/DOCKERFILE.prod"),
+		(400, "docs/guide.md", "docs/compose.override.yaml"),
+	):
+		with tempfile.TemporaryDirectory(prefix="gate-executable-rename-") as tmp_name:
+			result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+				"pr": {**base_pr, "additions": additions, "deletions": additions},
+				"file_pages": [[{"filename": destination, "previous_filename": source, "status": "renamed"}]],
+			}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+			assert result.returncode == 0, result.stderr
+			assert outputs["should_run"] == "true" and outputs["deterministic_skip"] == "false", result.stdout
+			assert "protected_suppressed=true" in result.stdout
+			assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1
+
+	for additions, path, expected_reason in (
+		(400, "docs/guide.md", "docs_only"),
+		(400, "docs/docker-compose.md", "docs_only"),
+		(1, "src/widget.py", "small_diff"),
+	):
+		with tempfile.TemporaryDirectory(prefix="gate-benign-skip-") as tmp_name:
+			result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+				"pr": {**base_pr, "additions": additions, "deletions": additions},
+				"file_pages": [[{"filename": path, "status": "modified"}]],
+			}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+			assert result.returncode == 0, (path, result.stderr)
+			assert outputs["deterministic_skip"] == "true" and outputs["should_run"] == "false", (path, result.stdout)
+			assert outputs["det_skip_reason"] == expected_reason, path
+			assert "protected_suppressed=false" in result.stdout, path
+			assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1, path
+	with tempfile.TemporaryDirectory(prefix="gate-incomplete-files-") as tmp_name:
+		result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+			"pr": {**base_pr, "changed_files": 2},
+			"file_pages": [[{"filename": "Dockerfile", "status": "modified"}]],
+		}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+		assert result.returncode == 0, result.stderr
+		assert outputs["deterministic_skip"] == "false" and outputs["should_run"] == "true", result.stdout
+		assert "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE" in result.stdout
+		assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1
+
+
 def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers() -> None:
 	workflow = _workflow_text()
 	stage_helper = _stage_helper_text()
@@ -4919,7 +5028,7 @@ def test_reviewer_filter_stat_harness_handles_brace_expansion_renames() -> None:
 def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
 	stage_helper = _stage_helper_text()
 	apply_fixes = _apply_fixes_text()
-	assert "review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh" in stage_helper
+	assert "review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh" in stage_helper
 	parse_idx = apply_fixes.index('if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then')
 	verify_idx = apply_fixes.index('if verify_script="$(resolve_support_script review_reject_verify.sh)"; then')
 	ledger_idx = apply_fixes.index('if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then')
@@ -6346,14 +6455,21 @@ def _run_dependency_install_step(
 	*,
 	pytest_importable: bool,
 ) -> dict[str, str]:
-	"""Execute the dependency-install step body against a synthetic repo.
+	"""Execute the container's dependency-install body against a synthetic repo.
 
 	`pip` and `python3` are stubbed on PATH so nothing is really installed:
 	the `python3` stub reports pytest importability from `pytest_importable`
 	and records every invocation.  Returns the step's stdout/stderr under
 	"output" and the recorded stub invocations under "calls".
 	"""
-	script = _step_run_script("Install project dependencies (best-effort)")
+	workflow_step = _step_run_script("Install project dependencies (best-effort)")
+	assert 'review_untrusted_sandbox.sh" prepare' in workflow_step
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	script = helper.split('--workdir /source "${image}" /bin/bash -c \'\n', 1)[1].split("\n\t\t' ||", 1)[0]
+	# The isolation helper creates the venv before this body executes; the
+	# unit stub supplies pip/python3 on PATH without installing packages.
+	script = script.replace('python3 -m venv --system-site-packages /source/.review-venv || exit 1', ':')
+	script = script.replace('export PATH=/source/.review-venv/bin:$PATH', ':')
 	with tempfile.TemporaryDirectory(prefix="autofix-dep-install-") as td:
 		root = Path(td)
 		repo = root / "repo"
@@ -7240,13 +7356,15 @@ def main() -> int:
 	test_editor_preflight_step_wiring()
 	test_main_pinned_scripts_add_no_runtime_output_over_main()
 	test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop()
+	test_stage_step_backfills_missing_model_catalog_rows_from_main()
+	test_stage_step_model_catalog_backfill_fails_open()
+	test_review_isolation_wiring_and_model_relay()
+	test_review_isolation_workspace_transfer_and_hostile_paths()
+	test_review_isolation_traverses_only_allowed_github_directories()
+	test_review_relay_accepts_only_configured_chat_model()
+	test_review_relay_main_preserves_invoked_mode()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
 
 
 def _run_model_catalog_backfill(tmp: Path, staged_catalog: dict | str, main_catalog: dict | str | None) -> tuple[subprocess.CompletedProcess[str], Path]:
@@ -7308,3 +7426,178 @@ def test_stage_step_model_catalog_backfill_fails_open() -> None:
 	stage = _step_block("Stage workflow support files")
 	assert "MODEL_CATALOG_BACKFILL added=0 source=workflow_commit" in stage
 	assert ".codex-workflow-src-main/scripts/codex_model_catalog.json" not in stage
+
+
+def test_review_isolation_wiring_and_model_relay() -> None:
+	step = _step_block("Install project dependencies (best-effort)")
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	stage = _stage_helper_text()
+	assert 'review_untrusted_sandbox.sh" prepare' in step
+	assert "pip install" not in step and "npm ci" not in step
+	assert "--network none --read-only --cap-drop ALL" in helper
+	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run' in helper
+	assert '--mount "type=bind,src=${root}/source,dst=/source"' in helper
+	assert '--mount "type=bind,src=${workspace}' not in helper
+	assert '--env OPENROUTER_API_KEY=isolated-placeholder' in helper
+	assert 'review_untrusted_workspace.py" transfer' in helper
+	assert ': > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"' in helper
+	assert 'if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then' in _apply_fixes_text()
+	assert 'review_sandbox/Dockerfile' in stage
+	assert '"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in _workflow_text()
+	broker = (REPO_ROOT / "scripts/clarify_openrouter_broker.py").read_text(encoding="utf-8")
+	assert 'REVIEW_PATH = "/api/v1/chat/completions"' in broker
+	assert '"review-broker"' in broker and '"review-bridge"' in broker
+	assert 'self.server.model' in broker
+
+
+def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / ".git-credentials").write_text("private-sentinel")
+		(host / "scripts/app.py").write_text("before\n")
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			(host / f"scripts/module{module_suffix}").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**os.environ, "GIT_DIR": str(host / ".git"), "GIT_WORK_TREE": str(host)},
+				capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			assert (source / f"scripts/module{module_suffix}").read_text() == "before\n"
+		assert subprocess.run(["git", "-C", str(host), "rev-parse", "HEAD"], env=_git_clean_env(), capture_output=True).returncode != 0
+		assert not (source / ".git-credentials").exists()
+		assert "private-sentinel" not in (source / ".git" / "config").read_text()
+		(source / "scripts/app.py").write_text("backend write\n")
+		(source / "scripts/backend.py").write_text("untrusted build output\n")
+		assert run("refresh").returncode == 0
+		assert (source / "scripts/app.py").read_text() == "before\n"
+		assert not (source / "scripts/backend.py").exists()
+		(source / "scripts/app.py").write_text("after\n")
+		(source / "scripts/new.py").write_text("new\n")
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			(source / f"scripts/module{module_suffix}").write_text("after\n")
+		assert run("transfer").returncode == 0
+		assert (host / "scripts/app.py").read_text() == "after\n"
+		assert (host / "scripts/new.py").read_text() == "new\n"
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			assert (host / f"scripts/module{module_suffix}").read_text() == "after\n"
+		# A later retry has an updated baseline; a concurrent host edit does not.
+		(host / "scripts/app.py").write_text("host changed\n")
+		(source / "scripts/app.py").write_text("isolated changed\n")
+		assert run("transfer").returncode != 0
+		assert (host / "scripts/app.py").read_text() == "host changed\n"
+		(host / "scripts/app.py").write_text("after\n")
+		(source / "scripts/new.py").unlink()
+		(source / "scripts/new.py").symlink_to("/etc/passwd")
+		assert run("transfer").returncode != 0
+		assert (host / "scripts/new.py").read_text() == "new\n"
+
+
+def test_review_isolation_traverses_only_allowed_github_directories() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		for subdir in ("workflows", "actions"):
+			(host / ".github" / subdir).mkdir(parents=True)
+			(host / ".github" / subdir / "example.yml").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		assert run("refresh").returncode == 0
+		(source / ".github/workflows/example.yml").write_text("after\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
+		(source / ".github/ai").mkdir()
+		(source / ".github/ai/untrusted.yml").write_text("untrusted\n")
+		assert run("transfer").returncode != 0
+		assert not (host / ".github/ai/untrusted.yml").exists()
+
+
+def test_review_relay_accepts_only_configured_chat_model() -> None:
+	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
+	assert spec and spec.loader
+	broker_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(broker_module)
+	seen = []
+
+	class Upstream:
+		def __init__(self, _host, **_kwargs):
+			pass
+
+		def request(self, method, path, body, headers):
+			seen.append((method, path, json.loads(body)["model"], headers["Authorization"]))
+
+		def getresponse(self):
+			class Response:
+				status = 200
+				def getheader(self, _name, default):
+					return default
+				def read1(self, _size):
+					return b""
+			return Response()
+
+		def close(self):
+			pass
+
+	with tempfile.TemporaryDirectory() as td, mock.patch.object(broker_module.http.client, "HTTPSConnection", Upstream):
+		server = broker_module.UnixHTTPServer(str(Path(td) / "broker.sock"), broker_module.Relay)
+		server.mode = "review-broker"
+		server.model = "openai/gpt-6-sol"
+		server.api_key = "test-only-key"
+		thread = threading.Thread(target=server.serve_forever, daemon=True)
+		thread.start()
+		try:
+			for path, model, status in (("/api/v1/responses", "openai/gpt-6-sol", 400),
+				("/api/v1/chat/completions", "other/model", 400),
+				("/api/v1/chat/completions", "openai/gpt-6-sol", 200)):
+				conn = broker_module.UnixHTTPConnection(str(Path(td) / "broker.sock"))
+				# The rejected route closes before reading a body; send no body
+				# there to avoid a client-side BrokenPipe race on a Unix socket.
+				body = None if path == "/api/v1/responses" else json.dumps({"model": model})
+				conn.request("POST", path, body, {"Content-Type": "application/json"})
+				assert conn.getresponse().status == status
+				conn.close()
+		finally:
+			server.shutdown()
+			server.server_close()
+			thread.join(timeout=2)
+	assert seen == [("POST", "/api/v1/chat/completions", "openai/gpt-6-sol", "Bearer test-only-key")]
+
+
+def test_review_relay_main_preserves_invoked_mode() -> None:
+	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
+	assert spec and spec.loader
+	broker_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(broker_module)
+	with mock.patch.object(broker_module, "UnixHTTPServer") as broker_class, \
+		mock.patch.object(broker_module.http.server, "HTTPServer") as bridge_class, \
+		mock.patch.object(broker_module.os, "chmod"), \
+		mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-only-key"}):
+		for mode in ("broker", "bridge", "review-broker", "review-bridge"):
+			with mock.patch.object(broker_module.sys, "argv", ["broker", mode, "/unused.sock"]):
+				broker_module.main()
+			server = broker_class.return_value if mode.endswith("broker") else bridge_class.return_value
+			assert server.mode == mode
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

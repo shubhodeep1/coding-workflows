@@ -27,8 +27,7 @@ def _helper_text() -> str:
 def test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets() -> None:
 	wf = _workflow_text()
 	required_snippets = [
-		'helper_path="${helper_stage_dir}/scripts/stage_workflow_support.sh"',
-		'bash "${helper_path}" validate --manifest "${manifest_path}"',
+		'"${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"',
 		"UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}",
 		"scripts/assemble_prompt.sh",
 		"scripts/render_prompt.py",
@@ -171,7 +170,7 @@ def test_validate_workflow_bootstraps_codex_heartbeat_support() -> None:
 		"CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}",
 		"UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}",
 		"scripts/codex_heartbeat.sh",
-		'helper_path="${helper_stage_dir}/scripts/stage_workflow_support.sh"',
+		'"${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"',
 	):
 		assert snippet in wf
 

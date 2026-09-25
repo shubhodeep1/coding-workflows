@@ -603,21 +603,18 @@ run_editor_codex_attempt() {
   local editor_opencode_config="${RUNTIME_DIR}/editor_opencode.json"
   local editor_opencode_serena="off"
   local editor_workspace
-  local editor_path
   local -a editor_opencode_cmd
   local -a stall_guard_args
   editor_workspace="$(pwd)"
 
-  if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-    editor_opencode_serena="on"
-  fi
+  # Serena's host executable/config is not available inside the isolated
+  # workspace. Keep the writer's tool surface local to that workspace.
   if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
     --role writer \
     --model "${editor_attempt_model}" \
     --project-path "${editor_workspace}" \
     --config-path "${editor_opencode_config}" \
-    --serena "${editor_opencode_serena}" \
-    --provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"; then
+    --serena "${editor_opencode_serena}"; then
     opencode_emit_failure_alert review_apply_fixes writer "${editor_attempt_model}" 1 config_generation || true
     return 79
   fi
@@ -626,31 +623,13 @@ run_editor_codex_attempt() {
     return 79
   fi
   chmod 0444 "${editor_opencode_config}" || return 79
-  editor_path="${EDITOR_CODEX_PATH:-${PATH}}"
   editor_opencode_cmd=(
-    sudo -n -u "${EDITOR_ISOLATION_USER}" --
-    env -i
-    "HOME=${EDITOR_ISOLATION_HOME}"
-    "TMPDIR=${EDITOR_ISOLATION_TMP}"
-    "XDG_CACHE_HOME=${EDITOR_ISOLATION_HOME}/.cache"
-    "XDG_CONFIG_HOME=${EDITOR_ISOLATION_HOME}/.config"
-    "XDG_DATA_HOME=${EDITOR_ISOLATION_HOME}/.local/share"
-    "PATH=${editor_path}"
-    "LANG=${LANG:-C.UTF-8}"
-    "LC_ALL=${LC_ALL:-C.UTF-8}"
-    "USER=${EDITOR_ISOLATION_USER}"
-    "LOGNAME=${EDITOR_ISOLATION_USER}"
-    "OPENROUTER_API_KEY=${MODEL_PROVIDER_BROKER_TOKEN}"
-    bash --noprofile --norc -c
-    # shellcheck disable=SC2016
-    'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-    opencode-editor
-    "${OPENCODE_HELPERS_PATH}"
-    writer
+    bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run
+    "${prompt_file}"
+    "${stdout_file}"
     "${editor_attempt_model}"
     "${EDITOR_REASONING_EFFORT}"
     "${editor_opencode_config}"
-    "${editor_workspace}"
   )
 
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
@@ -667,11 +646,13 @@ run_editor_codex_attempt() {
     if [ -n "${process_group_file}" ]; then
       stall_guard_args+=(--process-group-file "${process_group_file}")
     fi
-    exec "${CODEX_STALL_GUARD_HELPER}" "${stall_guard_args[@]}" \
+    OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY:-${OPENROUTER_API_KEY:-}}" \
+      exec "${CODEX_STALL_GUARD_HELPER}" "${stall_guard_args[@]}" \
       -- "${editor_opencode_cmd[@]}" < "${prompt_file}" 2>"${stderr_target}"
   fi
 
-  exec "${editor_opencode_cmd[@]}" < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
+  OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY:-${OPENROUTER_API_KEY:-}}" \
+    exec "${editor_opencode_cmd[@]}" < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
 }
 
 emit_context_budget_warn_for_prompt() {
@@ -2313,10 +2294,12 @@ _hb_tmpdir=""
 _hb_fifo=""
 MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${MODEL_EDITOR_FALLBACK:+,${MODEL_EDITOR_FALLBACK}}" opencode_model_provider_broker_start
 trap 'editor_isolation_exit_trap $?' EXIT
-if ! setup_editor_isolation; then
-  echo "::error::Editor isolation prerequisites could not be established; refusing ambient-privilege fallback." >&2
-  exit 80
-fi
+# The writer runs in the disposable review sandbox (review_untrusted_sandbox.sh:
+# no checkout Git metadata, credentials, runner command files or network
+# beyond the model relay), so the unprivileged-identity launch
+# (setup_editor_isolation) no longer wraps it. The sandbox fails closed when
+# its prerequisites are missing; cleanup_editor_isolation stays a no-op
+# unless setup_editor_isolation was armed.
 
 # Match only standalone OpenAI-style refusal lines, not incidental prose in
 # an otherwise-valid structured summary (for example an Ignored suggestions
@@ -2346,10 +2329,6 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     echo "PR #${PR_NUMBER} was closed/merged — skipping editor."
     echo "PR_CLOSED=true" >> "$GITHUB_ENV"
     exit 0
-  fi
-  if [ "${EDITOR_ISOLATION_ACTIVE}" != "true" ] && ! setup_editor_isolation; then
-    echo "::error::Editor isolation could not be re-established for attempt ${attempt}; refusing ambient-privilege fallback." >&2
-    exit 80
   fi
 
   now_epoch="$(date +%s)"
@@ -2419,7 +2398,9 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   codex_pid_file="$(mktemp /tmp/codex_pid_editor.XXXXXX)"
   stall_status_file="$(mktemp /tmp/editor_stall_status.XXXXXX)"
   process_group_file=""
-  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+  # The process-group ledger proves an unprivileged-identity editor stopped;
+  # it applies only when setup_editor_isolation armed that identity.
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ] && [ "${EDITOR_ISOLATION_ACTIVE}" = "true" ]; then
     process_group_file="$(mktemp "${RUNTIME_DIR}/editor_process_group.XXXXXX")"
     chmod 0600 -- "${process_group_file}"
     EDITOR_ISOLATION_PROCESS_GROUP_FILE="${process_group_file}"
@@ -2622,6 +2603,10 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   fi
   if ! cleanup_editor_isolation; then
     exit 80
+  fi
+  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
+    echo "::error::Review sandbox result transfer was incomplete; refusing editor fallback." >&2
+    exit 1
   fi
 
   editor_clean_output="${tmp_output}.ansi-clean"
