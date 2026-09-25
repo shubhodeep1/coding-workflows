@@ -811,6 +811,7 @@ def _run_poller(
 	enable_security_pass: str = "false",
 	security_audit_payload: dict | None = None,
 	security_audit_exit_code: int = 0,
+	poison_project_support: bool = False,
 	capture_telegram_calls: bool = False,
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
@@ -896,6 +897,20 @@ def _run_poller(
 		runtime_dir = tmp / "runtime"
 		store_file = tmp / "gh_store.json"
 		_make_poller_sandbox(sandbox)
+		project_support_marker = tmp / "project-support-executed"
+		if poison_project_support:
+			# Commit a malicious integration tree; the trusted main bundle is
+			# frozen later, before the poller's integration checkout.
+			subprocess.run(["git", "-C", str(sandbox), "checkout", "orchestrator/project-192"], check=True, capture_output=True, env=_git_test_env())
+			for name in ("security_audit.sh", "codex_heartbeat.sh", "write_codex_config.sh"):
+				(sandbox / "scripts" / name).write_text(f'#!/usr/bin/env bash\ntouch "{project_support_marker}"\nexit 71\n', encoding="utf-8")
+			for name in ("orchestrate_lib.py", "ai_memory_lib.py"):
+				(sandbox / "scripts" / name).write_text(f'from pathlib import Path\nPath({str(project_support_marker)!r}).touch()\nraise RuntimeError("project code executed")\n', encoding="utf-8")
+			for name in ("codex_model_catalog.json", "security_audit_fp_exclusions.json"):
+				(sandbox / "scripts" / name).write_text("not json\n", encoding="utf-8")
+			subprocess.run(["git", "-C", str(sandbox), "add", "scripts"], check=True, capture_output=True, env=_git_test_env())
+			subprocess.run(["git", "-C", str(sandbox), "commit", "--quiet", "-m", "poison project support"], check=True, capture_output=True, env=_git_test_env())
+			subprocess.run(["git", "-C", str(sandbox), "checkout", "main"], check=True, capture_output=True, env=_git_test_env())
 		sandbox_sha_aliases = {
 			"__integration_head__": subprocess.run(
 				["git", "-C", str(sandbox), "rev-parse", "refs/heads/orchestrator/project-192"],
@@ -1145,6 +1160,17 @@ def _run_poller(
 				encoding="utf-8",
 			)
 			mock_security_audit.chmod(0o755)
+		# The trusted bundle is frozen outside the project checkout before the
+		# integration branch can overwrite its executable support files.
+		trusted_support_dir = tmp / "poller-support-test"
+		shutil.copytree(sandbox / "scripts", trusted_support_dir / "scripts")
+		shutil.copytree(sandbox / "prompts", trusted_support_dir / "prompts")
+		trusted_support_sha = "a" * 40
+		(trusted_support_dir / ".support_sha").write_text(trusted_support_sha + "\n", encoding="utf-8")
+		for name in ("ai_memory_lib.py", "orchestrate_lib.py", "render_prompt.py", "assemble_prompt.sh", "security_audit_causality.py"):
+			shutil.copy2(REPO_ROOT / "scripts" / name, trusted_support_dir / "scripts" / name)
+		shutil.copy2(REPO_ROOT / "scripts" / "codex_model_catalog.json", trusted_support_dir / "scripts" / "codex_model_catalog.json")
+		shutil.copy2(REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json", trusted_support_dir / "scripts" / "security_audit_fp_exclusions.json")
 
 		def _comment_entry(raw_comment: str | dict, comment_id: int, issue_num: int) -> dict:
 			if isinstance(raw_comment, dict):
@@ -3431,6 +3457,8 @@ sys.exit(proc.returncode)
 			{
 				"HOME": str(home_dir),
 				"RUNTIME_DIR": str(runtime_dir),
+				"POLLER_TRUSTED_SUPPORT_DIR": str(trusted_support_dir),
+				"POLLER_TRUSTED_SUPPORT_SHA": trusted_support_sha,
 				"STATE_FILE": str(runtime_dir / "state.json"),
 				"JUDGE_PROMPT_FILE": str(runtime_dir / "judge_prompt.txt"),
 				"JUDGE_OUTPUT_FILE": str(runtime_dir / "judge_output.txt"),
@@ -3503,6 +3531,7 @@ sys.exit(proc.returncode)
 			)
 
 		result = json.loads(store_file.read_text(encoding="utf-8"))
+		result["project_support_executed"] = project_support_marker.exists()
 		tracking_issue = result["issues"][str(tracking_num)]
 		state_path = runtime_dir / "state.json"
 		result["latest_state"] = _extract_latest_state(tracking_issue["comments"])
@@ -7700,6 +7729,63 @@ def test_security_pass_waive_command_in_fixing_state_persists_without_reset() ->
 	]
 	assert len(ack_comments) == 1
 	assert "The active security-pass fix cycle continues" in ack_comments[0]
+
+
+def test_security_pass_ignores_integration_checkout_executable_support() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		poison_project_support=True,
+	)
+	assert result["security_audit_capture"] is not None
+	assert result["security_audit_capture"]["diff_head"] != result["security_audit_capture"]["diff_base"]
+	assert result["latest_state"]["security_pass_status"] == "passed"
+	assert result["project_support_executed"] is False
+
+
+def test_security_pass_rejects_untrusted_or_missing_support_bundle(tmp_path: Path) -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	resolver = _extract_bash_function(script, "poller_trusted_support_file() {")
+	trusted_root = tmp_path / "poller-support-test"
+	(trusted_root / "scripts").mkdir(parents=True)
+	(trusted_root / "scripts" / "security_audit.sh").write_text("trusted", encoding="utf-8")
+	trusted_sha = "a" * 40
+	(trusted_root / ".support_sha").write_text(trusted_sha + "\n", encoding="utf-8")
+	forged_root = tmp_path / "project"
+	(forged_root / "scripts").mkdir(parents=True)
+	(forged_root / "scripts" / "security_audit.sh").write_text("untrusted", encoding="utf-8")
+	for candidate, expected in ((trusted_root, True), (forged_root, False), (tmp_path / "poller-support-missing", False)):
+		proc = subprocess.run(
+			["bash", "-c", f'{resolver}\npoller_trusted_support_file scripts/security_audit.sh'],
+			capture_output=True, text=True,
+			env={**_git_test_env(), "RUNNER_TEMP": str(tmp_path), "POLLER_TRUSTED_SUPPORT_DIR": str(candidate), "POLLER_TRUSTED_SUPPORT_SHA": trusted_sha, "BASH_ENV": ""},
+		)
+		assert (proc.returncode == 0) is expected
+		if expected:
+			assert proc.stdout.strip() == str(trusted_root / "scripts" / "security_audit.sh")
+	(trusted_root / ".support_sha").write_text("b" * 40 + "\n", encoding="utf-8")
+	proc = subprocess.run(
+		["bash", "-c", f'{resolver}\npoller_trusted_support_file scripts/security_audit.sh'],
+		capture_output=True, text=True,
+		env={**_git_test_env(), "RUNNER_TEMP": str(tmp_path), "POLLER_TRUSTED_SUPPORT_DIR": str(trusted_root), "POLLER_TRUSTED_SUPPORT_SHA": trusted_sha, "BASH_ENV": ""},
+	)
+	assert proc.returncode != 0
+	(trusted_root / ".support_sha").write_text(trusted_sha + "\n", encoding="utf-8")
+	(trusted_root / "scripts" / "security_audit.sh").unlink()
+	(trusted_root / "scripts" / "security_audit.sh").symlink_to(forged_root / "scripts" / "security_audit.sh")
+	proc = subprocess.run(
+		["bash", "-c", f'{resolver}\npoller_trusted_support_file scripts/security_audit.sh'],
+		capture_output=True, text=True,
+		env={**_git_test_env(), "RUNNER_TEMP": str(tmp_path), "POLLER_TRUSTED_SUPPORT_DIR": str(trusted_root), "POLLER_TRUSTED_SUPPORT_SHA": trusted_sha, "BASH_ENV": ""},
+	)
+	assert proc.returncode != 0
 
 
 def test_security_pass_invalid_engine_output_fails_closed() -> None:

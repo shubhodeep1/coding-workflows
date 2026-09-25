@@ -128,6 +128,34 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 		assert asset in wf
 
 
+def test_poller_audit_support_is_sha_bound_and_frozen_outside_checkout() -> None:
+	wf = _workflow()
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'branch_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"' in wf
+	assert "'.protected // false'" in wf
+	assert 'gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable' in wf
+	assert 'git/tags/${support_sha}' in wf
+	assert 'echo "SCRIPT_REF=${support_sha}"' in wf
+	assert wf.count('git -C .codex-workflow-src rev-parse HEAD)" = "${SCRIPT_REF}"') == 2
+	assert "Checkout workflow support source fallback" not in wf
+	assert "Checkout workflow support source fallback for gh retry" not in wf
+	assert 'mktemp -d "${RUNNER_TEMP%/}/poller-support-' in wf
+	assert 'echo "POLLER_TRUSTED_SUPPORT_DIR=${trusted_support_root}"' in wf
+	for relative_asset in (
+		"security_audit.sh", "codex_heartbeat.sh", "write_codex_config.sh",
+		"ai_memory_lib.py", "orchestrate_lib.py", "openrouter_prompt_cache.py",
+		"semantic_cache.py", "memory_injection_patterns.py", "codex_model_catalog.json",
+		"security_audit_fp_exclusions.json", "render_prompt.py",
+	):
+		assert relative_asset in wf
+	assert 'SECURITY_AUDIT_SUPPORT_DIR="${POLLER_TRUSTED_SUPPORT_DIR}"' in poller
+	assert 'SECURITY_AUDIT_FP_EXCLUSIONS="${trusted_security_exclusions}"' in poller
+	assert '--catalog-path "${trusted_security_catalog}"' in poller
+	assert 'python3 -I - "${PWD}" "${STATE_FILE}" "${TRACKING_NUM}" "${trusted_python_dir}"' in poller
+	assert "PYTHONPATH=\"${PWD}/scripts" not in poller
+	assert "sys.path.insert(0, 'scripts')" not in poller
+
+
 def test_security_pass_recovery_log_prefixes_are_registered() -> None:
 	agents_text = AGENTS_MD.read_text(encoding="utf-8")
 	for prefix in (

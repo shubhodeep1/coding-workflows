@@ -11,6 +11,42 @@
 
 set -euo pipefail
 
+# Set by the verified support staging step. A missing export deliberately
+# resolves outside any usable bundle; never substitute the project checkout.
+POLLER_TRUSTED_SUPPORT_DIR="${POLLER_TRUSTED_SUPPORT_DIR:-${RUNNER_TEMP:-/nonexistent}/poller-support-unavailable}"
+POLLER_TRUSTED_SUPPORT_SHA="${POLLER_TRUSTED_SUPPORT_SHA:-}"
+poller_trusted_support_file() {
+  local relative_path="$1" root resolved
+  [[ "${POLLER_TRUSTED_SUPPORT_DIR}" = /* ]] || return 1
+  root="$(realpath -e -- "${POLLER_TRUSTED_SUPPORT_DIR}" 2>/dev/null)" || return 1
+  [[ "${root}" = "${RUNNER_TEMP:-/nonexistent}"/poller-support-* ]] || return 1
+  [[ "${POLLER_TRUSTED_SUPPORT_SHA}" =~ ^[0-9a-f]{40}$ && ! -L "${root}/.support_sha" ]] || return 1
+  [ "$(cat "${root}/.support_sha" 2>/dev/null)" = "${POLLER_TRUSTED_SUPPORT_SHA}" ] || return 1
+  resolved="$(realpath -e -- "${root}/${relative_path}" 2>/dev/null)" || return 1
+  [[ "${resolved}" = "${root}/${relative_path}" && -f "${resolved}" ]] || return 1
+  printf '%s\n' "${resolved}"
+}
+
+poller_trusted_python_dir() {
+  poller_trusted_support_file scripts/ai_memory_lib.py >/dev/null || return 1
+  poller_trusted_support_file scripts/orchestrate_lib.py >/dev/null || return 1
+  poller_trusted_support_file scripts/openrouter_prompt_cache.py >/dev/null || return 1
+  poller_trusted_support_file scripts/semantic_cache.py >/dev/null || return 1
+  poller_trusted_support_file scripts/memory_injection_patterns.py >/dev/null || return 1
+  printf '%s/scripts\n' "${POLLER_TRUSTED_SUPPORT_DIR}"
+}
+
+poller_trusted_python() {
+  poller_trusted_support_file scripts/orchestrate_lib.py >/dev/null || return 1
+  PYTHONDONTWRITEBYTECODE=1 python3 -I "$@"
+}
+
+poller_trusted_orchestrate_lib() {
+  local trusted_lib
+  trusted_lib="$(poller_trusted_support_file scripts/orchestrate_lib.py)" || return 1
+  PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_lib}" "$@"
+}
+
 # ---------------------------------------------------------------
 # Helper: Telegram (tracked via tg_helpers.sh)
 # ---------------------------------------------------------------
@@ -447,6 +483,7 @@ emit_judge_lessons_learned_records() {
   local pr_number="${3:-}"
   local judge_json="${4:-}"
   local telemetry_json=""
+  local trusted_python_dir
 
   if ! is_truthy "${AI_MEMORY_ENABLED:-true}" || ! is_truthy "${LESSONS_LEARNED_ENABLED:-true}"; then
     return 0
@@ -455,16 +492,20 @@ emit_judge_lessons_learned_records() {
   if ! command -v python3 >/dev/null 2>&1; then
     return 0
   fi
+  trusted_python_dir="$(poller_trusted_python_dir)" || {
+    echo "::warning::${source_name} lessons-learned write failed; trusted support unavailable" >&2
+    return 0
+  }
 
   telemetry_json="$(printf '%s\n' "${judge_json}" | {
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${PWD}" "${source_name}" "${issue_number}" "${pr_number}" <<'PY'
+    python3 -I - "${PWD}" "${source_name}" "${issue_number}" "${pr_number}" "${trusted_python_dir}" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, sys.argv[5])
 from ai_memory_lib import persist_memory_operation, record_lessons_learned, resolve_memory_root_dir
 
 
@@ -557,7 +598,9 @@ record_orchestrator_lesson_event() {
     return 0
   fi
   # The project checkout is untrusted; use the support-ref copy staged outside it.
-  if [ ! -f "${RUNTIME_DIR:-}/orchestrate_lib.py" ] || ! PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_DIR}/orchestrate_lib.py" append-lesson-event \
+  local trusted_lesson_lib
+  trusted_lesson_lib="$(poller_trusted_support_file scripts/orchestrate_lib.py)" || trusted_lesson_lib=""
+  if [ -z "${trusted_lesson_lib}" ] || ! PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_lesson_lib}" append-lesson-event \
     --state-file "${STATE_FILE}" --event-json "${event_json}" >/dev/null; then
     echo "::warning::tracking #${TRACKING_NUM:-?}: could not record orchestrator lesson event; continuing fail-open" >&2
   fi
@@ -655,6 +698,7 @@ lesson_event_json_for_stall() {
 # AI_MEMORY_ENABLED / LESSONS_LEARNED_ENABLED; fail-open; no GitHub API calls.
 emit_orchestrator_completion_lessons() {
   local telemetry_json=""
+  local trusted_python_dir
 
   if ! is_truthy "${AI_MEMORY_ENABLED:-true}" || ! is_truthy "${LESSONS_LEARNED_ENABLED:-true}"; then
     return 0
@@ -665,16 +709,20 @@ emit_orchestrator_completion_lessons() {
   if ! command -v python3 >/dev/null 2>&1; then
     return 0
   fi
+  trusted_python_dir="$(poller_trusted_python_dir)" || {
+    echo "::warning::orchestrator completion lessons write failed; trusted support unavailable" >&2
+    return 0
+  }
 
   telemetry_json="$(
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${PWD}" "${STATE_FILE}" "${TRACKING_NUM}" <<'PY' 2>&1
+    python3 -I - "${PWD}" "${STATE_FILE}" "${TRACKING_NUM}" "${trusted_python_dir}" <<'PY' 2>&1
 import json
 import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, sys.argv[4])
 from ai_memory_lib import persist_memory_operation, record_lessons_learned, resolve_memory_root_dir
 from orchestrate_lib import build_completion_lessons
 
@@ -2854,7 +2902,7 @@ refresh_validation_dispatch_wave_gate() {
     ahead_by="0"
   fi
 
-  wave_status="$(python3 scripts/orchestrate_lib.py check-wave-status \
+  wave_status="$(poller_trusted_orchestrate_lib check-wave-status \
     --state-file "${STATE_FILE}" \
     --labels-json "${labels_json}" \
     --issue-states-json "${issue_states_json}" \
@@ -3160,7 +3208,7 @@ PY
 	}
 
 	if jq -e '(.project_body_snapshot // "") != ""' "${STATE_FILE}" >/dev/null 2>&1; then
-		if ! python3 scripts/orchestrate_lib.py render-tracking-body \
+		if ! poller_trusted_orchestrate_lib render-tracking-body \
 			--state-file "${STATE_FILE}" > "${desired_body_file}" 2>"${render_err_file}"; then
 			render_err="$(tr '\n' ' ' < "${render_err_file}" 2>/dev/null | head -c 512 || true)"
 			echo "::warning::[tracking-body-sync] failed to render tracking body for issue #${TRACKING_NUM}: ${render_err:-unknown error}" >&2
@@ -3202,7 +3250,7 @@ PY
 		if [ -z "${current_hash}" ]; then
 			current_hash="$(sha256sum "${template_body_file}" 2>/dev/null | awk '{print $1}' || true)"
 		fi
-		if ! python3 scripts/orchestrate_lib.py render-tracking-body \
+		if ! poller_trusted_orchestrate_lib render-tracking-body \
 			--state-file "${STATE_FILE}" \
 			--template-body-file "${template_body_file}" > "${desired_body_file}" 2>"${render_err_file}"; then
 			render_err="$(tr '\n' ' ' < "${render_err_file}" 2>/dev/null | head -c 512 || true)"
@@ -6700,7 +6748,13 @@ security_pass_exhaustion_judge() {
     echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=rounds_exhausted rounds=${judge_rounds} cap=${MAX_SECURITY_PASS_JUDGE_ROUNDS}"
     return 1
   fi
-  if [ ! -f prompts/mode-judge-security-pass-exhaustion.txt ] || [ ! -f scripts/write_codex_config.sh ]; then
+  local trusted_judge_config trusted_judge_heartbeat trusted_judge_renderer trusted_judge_prompt trusted_judge_catalog
+  trusted_judge_config="$(poller_trusted_support_file scripts/write_codex_config.sh)" || return 1
+  trusted_judge_heartbeat="$(poller_trusted_support_file scripts/codex_heartbeat.sh)" || return 1
+  trusted_judge_renderer="$(poller_trusted_support_file scripts/render_prompt.sh)" || return 1
+  trusted_judge_prompt="$(poller_trusted_support_file prompts/mode-judge-security-pass-exhaustion.txt)" || return 1
+  trusted_judge_catalog="$(poller_trusted_support_file scripts/codex_model_catalog.json)" || return 1
+  if [ ! -f "${trusted_judge_prompt}" ]; then
     echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=prompt_unavailable"
     return 1
   fi
@@ -6774,7 +6828,7 @@ security_pass_exhaustion_judge() {
     echo
     echo "=== SECURITY PASS EXHAUSTION JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-security-pass-exhaustion.txt
+    SEMBLE_PREFETCH="${semble_prefetch}" bash "${trusted_judge_renderer}" "${trusted_judge_prompt}"
     echo
     echo "=== SECURITY PASS EXHAUSTION DIAGNOSTICS JSON ==="
     echo
@@ -6782,7 +6836,7 @@ security_pass_exhaustion_judge() {
   } > "${prompt_file}"
 
   effective_judge_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"
-  if ! bash scripts/write_codex_config.sh --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" >/dev/null 2>"${error_file}"; then
+  if ! bash "${trusted_judge_config}" --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" --catalog-path "${trusted_judge_catalog}" >/dev/null 2>"${error_file}"; then
     echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=codex_config_failed"
     return 1
   fi
@@ -6798,7 +6852,7 @@ security_pass_exhaustion_judge() {
       printf '%s\n' "${MOCK_SECURITY_PASS_JUDGE_JSON}" > "${output_file}"
     else
       sanitize_codex_prompt_file "${prompt_file}"
-      bash scripts/codex_heartbeat.sh \
+      bash "${trusted_judge_heartbeat}" \
         --phase "orchestrate-security-pass-judge" \
         --stdout-file "${output_file}" \
         --stderr-file "${error_file}" \
@@ -7072,6 +7126,7 @@ run_security_pass_inline() {
   local prior_security_status current_integration_ref current_head_sha current_default_ref merge_base_sha
   local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model security_pass_advisory_backlog_file
   local required_security_asset security_pass_policy_changed="false"
+  local trusted_security_config trusted_security_heartbeat trusted_security_audit trusted_security_catalog trusted_security_exclusions
 
   prior_security_status="$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
   if [ -z "${integration_branch}" ]; then
@@ -7128,11 +7183,22 @@ run_security_pass_inline() {
     prompts/mode-security-audit.txt \
     prompts/_templates/mode-security-audit.txt \
     prompts/references/security-money-lens.txt; do
-    if [ ! -f "${required_security_asset}" ]; then
+    if ! poller_trusted_support_file "${required_security_asset}" >/dev/null; then
       security_pass_fail_closed "engine_unavailable" "Required security-pass asset ${required_security_asset} is unavailable." "${prior_security_status}"
       return 1
     fi
   done
+  for required_security_asset in scripts/render_prompt.sh scripts/render_prompt.py scripts/assemble_prompt.sh scripts/security_audit_causality.py scripts/untrusted_process_sandbox.sh scripts/ai_memory_lib.py scripts/orchestrate_lib.py scripts/codex_model_catalog.json; do
+    if ! poller_trusted_support_file "${required_security_asset}" >/dev/null; then
+      security_pass_fail_closed "engine_unavailable" "Required security-pass asset ${required_security_asset} is unavailable." "${prior_security_status}"
+      return 1
+    fi
+  done
+  trusted_security_config="$(poller_trusted_support_file scripts/write_codex_config.sh)"
+  trusted_security_heartbeat="$(poller_trusted_support_file scripts/codex_heartbeat.sh)"
+  trusted_security_audit="$(poller_trusted_support_file scripts/security_audit.sh)"
+  trusted_security_catalog="$(poller_trusted_support_file scripts/codex_model_catalog.json)"
+  trusted_security_exclusions="$(poller_trusted_support_file scripts/security_audit_fp_exclusions.json)"
 
   if [ -n "${verified_analysis_ref}" ]; then
     if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}"; then
@@ -7372,12 +7438,14 @@ run_security_pass_inline() {
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
 
   effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"
-  if ! bash scripts/write_codex_config.sh --model "${effective_security_model}" --reasoning xhigh >/dev/null 2>"${audit_error_file}"; then
+  if ! bash "${trusted_security_config}" --model "${effective_security_model}" --reasoning xhigh --catalog-path "${trusted_security_catalog}" >/dev/null 2>"${audit_error_file}"; then
     security_pass_fail_closed "engine_unavailable" "The security-pass model configuration could not be prepared." "${prior_security_status}"
     return 1
   fi
 
   if ! SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
+    SECURITY_AUDIT_SUPPORT_DIR="${POLLER_TRUSTED_SUPPORT_DIR}" \
+    SECURITY_AUDIT_FP_EXCLUSIONS="${trusted_security_exclusions}" \
     SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
     SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
     SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
@@ -7391,10 +7459,10 @@ run_security_pass_inline() {
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
     WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
-    bash scripts/codex_heartbeat.sh \
+    bash "${trusted_security_heartbeat}" \
       --phase "orchestrate-security-pass" \
       --stderr-file "${audit_error_file}" \
-      -- bash scripts/security_audit.sh "${context_file}"; then
+      -- bash "${trusted_security_audit}" "${context_file}"; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
     return 1
   fi
@@ -13312,7 +13380,7 @@ prime_phase_concurrency_snapshot() {
   fi
   rm -f "${actions_runs_blob_file}" 2>/dev/null || true
   rm -f "${actions_runs_fetch_err_file}" 2>/dev/null || true
-  caps_cmd=(python3 scripts/orchestrate_lib.py concurrency-caps --caps-path "${caps_path}" --threshold-minutes "${STALL_THRESHOLD_MINUTES:-120}")
+  caps_cmd=(poller_trusted_orchestrate_lib concurrency-caps --caps-path "${caps_path}" --threshold-minutes "${STALL_THRESHOLD_MINUTES:-120}")
   if [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ]; then
     caps_cmd+=(--implementing-threshold-minutes "${STALL_THRESHOLD_IMPLEMENTING_MINUTES}")
   fi
@@ -14055,9 +14123,9 @@ recovery_action_for_phase() {
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
-import sys
-sys.path.insert(0, 'scripts')
+  action="$(poller_trusted_python - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import resolve_stall_recovery_action
 
 phase = sys.argv[1]
@@ -14087,9 +14155,9 @@ normalize_stall_recovery_action() {
   local candidate_action="${3:-}"
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
-import sys
-sys.path.insert(0, 'scripts')
+  action="$(poller_trusted_python - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import resolve_effective_stall_recovery_action
 
 phase = sys.argv[1]
@@ -16635,9 +16703,9 @@ run_standalone_stall_recovery() {
     phase=""
     _standalone_latch_label=""
     _standalone_phase_resolve_rc=0
-    IFS=$'\t' read -r phase _standalone_latch_label < <(python3 - "$labels_json" <<'PY'
-import json, sys
-sys.path.insert(0, 'scripts')
+    IFS=$'\t' read -r phase _standalone_latch_label < <(poller_trusted_python - "$labels_json" <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import determine_phase, stall_recovery_latch_label
 labels = json.loads(sys.argv[1])
 print(f"{determine_phase(labels)}\t{stall_recovery_latch_label(labels) or ''}")
@@ -16736,9 +16804,9 @@ PY
     if [ "${phase}" = "ai:done" ]; then
       effective_max_recoveries="${MAX_STALL_RECOVERIES_DONE}"
     fi
-    threshold_minutes="$(python3 - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
-import json, sys
-sys.path.insert(0, 'scripts')
+    threshold_minutes="$(poller_trusted_python - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import DEFAULT_PHASE_STALL_THRESHOLDS
 phase = sys.argv[1]
 fallback = int(sys.argv[2])
@@ -17593,9 +17661,9 @@ REISSUE_EOF
 # Read the impl_noop_count for a local_id from the state file.
 get_impl_noop_count() {
   local lid="$1"
-  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -c "
+  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" poller_trusted_python -c "
 import json, os, sys
-sys.path.insert(0, 'scripts')
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import get_impl_noop_count
 
 with open(os.environ['STATE_FILE']) as f:
@@ -17612,9 +17680,9 @@ except (TypeError, ValueError):
 # Increment the impl_noop_count for a local_id in the state file.
 bump_impl_noop_count() {
   local lid="$1"
-  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -c "
+  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" poller_trusted_python -c "
 import json, os, sys
-sys.path.insert(0, 'scripts')
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import increment_impl_noop_count
 
 with open(os.environ['STATE_FILE']) as f:
@@ -18456,7 +18524,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # ReconstructionUnsafeError when the body marks completed work the issue
     # map cannot account for) is surfaced in the log instead of discarded.
     REBUILD_ERR_FILE="${RUNTIME_DIR}/rebuild_err_${TRACKING_NUM}.txt"
-    if python3 scripts/orchestrate_lib.py rebuild-state \
+    if poller_trusted_orchestrate_lib rebuild-state \
       --body-file "${REBUILD_BODY_FILE}" \
       --issue-map-json "${ISSUE_MAP_JSON}" \
       --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>"${REBUILD_ERR_FILE}"; then
@@ -20384,7 +20452,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # Update issue phase timestamps for stall tracking
   # ---------------------------------------------------------------
   STATE_HASH_BEFORE="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
-  python3 scripts/orchestrate_lib.py update-timestamps \
+  poller_trusted_orchestrate_lib update-timestamps \
     --state-file "${STATE_FILE}" \
     --labels-json "${LABELS_JSON}" || true
   STATE_HASH_AFTER="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
@@ -20401,7 +20469,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # backpressure, and the staleness alert all reuse the same compare result.
   check_integration_branch_staleness "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH:-}" "${CWS_AHEAD_BY}" || true
 
-  WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
+  WAVE_STATUS="$(poller_trusted_orchestrate_lib check-wave-status \
     --state-file "${STATE_FILE}" \
     --labels-json "${LABELS_JSON}" \
     --issue-states-json "${ISSUE_STATES_JSON}" \
@@ -22309,7 +22377,7 @@ ${RB_FIX_DESC}
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
       done
 
-      WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
+      WAVE_STATUS="$(poller_trusted_orchestrate_lib check-wave-status \
         --state-file "${STATE_FILE}" \
         --labels-json "${LABELS_JSON}")"
       WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
@@ -22842,7 +22910,7 @@ fi
     fi
     _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
 
-    STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
+    STALLS_JSON="$(poller_trusted_orchestrate_lib check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
 
     STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
@@ -22962,9 +23030,9 @@ fi
           STALL_STATE_CHANGED=true
 
           if [ "${STALL_RECOVERY_SHOULD_INCREMENT}" = "true" ] && [ -n "${STALL_LOCAL_ID}" ] && [ "${STALL_LOCAL_ID}" != "null" ]; then
-            python3 -c "
-import json, time, sys
-sys.path.insert(0, 'scripts')
+            poller_trusted_python -c "
+import json, time, os, sys
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import increment_stall_recovery
 
 with open('${STATE_FILE}') as f:

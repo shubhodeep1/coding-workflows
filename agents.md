@@ -1157,6 +1157,15 @@ when the bounded fix-cycle budget is exhausted.
 
 ### Credentialless model and trusted Git boundary
 
+- The scheduled poller resolves protected `main` (source repo) or peels the
+  consumer's `stable` tag once per run, checks out and verifies that commit,
+  and freezes its audit scripts, prompt dependencies, policy/catalog, and
+  lesson libraries in a private `RUNNER_TEMP/poller-support-*` directory.
+  `run_security_pass_inline` and its exhaustion judge execute that bundle,
+  not files replaced by the integration checkout. Python lesson and stall
+  imports use isolated interpreter paths into the same bundle; absent support
+  blocks a new audit but lets lesson bookkeeping fail open. No moving-ref or
+  project-checkout fallback is allowed for those executables.
 - `scripts/untrusted_process_sandbox.sh` is the mandatory boundary for planner,
   implementation diagnosis, reviewer/editor, resolver, poller judge, and
   security-audit model processes.
