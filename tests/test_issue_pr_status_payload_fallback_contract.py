@@ -18,8 +18,15 @@ def test_issue_status_stages_complete_transitive_support_closure() -> None:
 	text = _workflow_text()
 	assert "gh_helpers.sh emit_event.sh emit_event.py" in text
 	assert "ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py memory_injection_patterns.py" in text
-	assert "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true" in text
-	assert "AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true" in text
+	# issue_pr_status.yml stages support through the shared
+	# stage_workflow_support.sh immutable-bundle helper rather than writing
+	# GH_HELPERS_STRICT_IMMUTABLE_SUPPORT/AI_MEMORY_STRICT_IMMUTABLE_SUPPORT
+	# into $GITHUB_ENV itself -- that helper is what emits both, always,
+	# whenever it stages a bundle.
+	assert 'bash ".codex-workflow-src/scripts/stage_workflow_support.sh" immutable-bundle' in text
+	stager_text = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
+	assert "GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true" in stager_text
+	assert "AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true" in stager_text
 
 
 def _step_script(step_name: str) -> str:

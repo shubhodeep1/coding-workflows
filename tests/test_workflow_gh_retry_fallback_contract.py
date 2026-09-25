@@ -26,7 +26,7 @@ def test_gh_helpers_strict_mode_forbids_checkout_local_event_fallback() -> None:
 	assert strict_index < fallback_index
 	assert "gh_helpers.sh resolved outside immutable support directory" in text
 	assert "strict immutable-support mode requires sibling emit_event.sh" in text
-	assert "python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); from ai_memory_lib import make_record_id" in text
+	assert "_gh_helpers_run_isolated_python -- -c 'import sys; sys.path.insert(0, sys.argv[1]); from ai_memory_lib import make_record_id" in text
 	assert 'PYTHONPATH="${helper_dir}' not in text
 TARGET_STEPS = (
 	(".github/workflows/clarify.yml", "Fetch issue metadata"),

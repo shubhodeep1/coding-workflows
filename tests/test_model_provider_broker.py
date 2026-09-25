@@ -281,9 +281,7 @@ def test_broker_connection_admission_is_bounded_and_recovers() -> None:
 
 def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	for relative_path in (
-		".github/workflows/clarify.yml",
 		".github/workflows/orchestrate.yml",
-		".github/workflows/orchestrate_clarify_respond.yml",
 		"scripts/run_plan_codex.sh",
 	):
 		text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
@@ -294,6 +292,23 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 			assert "${{ fromJSON(toJSON(job)).workflow_repository }}" in text
 			assert "${{ fromJSON(toJSON(job)).workflow_sha }}" in text
 			assert ".codex-workflow-src-main" not in text
+	# clarify.yml and orchestrate_clarify_respond.yml are secret-free by a
+	# different mechanism: they run Codex through
+	# scripts/clarify_isolated_run.sh, which shells out to a docker
+	# --network none sandbox and a host-side scripts/clarify_openrouter_broker.py,
+	# instead of the in-workflow model_provider_broker_start/exec launcher.
+	# The identity/no-moving-ref-fallback hardening still applies to them.
+	for relative_path in (
+		".github/workflows/clarify.yml",
+		".github/workflows/orchestrate_clarify_respond.yml",
+	):
+		text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+		assert "clarify_isolated_run.sh" in text
+		assert "clarify_openrouter_broker.py" in text
+		assert "model_provider_broker_start" not in text
+		assert "${{ fromJSON(toJSON(job)).workflow_repository }}" in text
+		assert "${{ fromJSON(toJSON(job)).workflow_sha }}" in text
+		assert ".codex-workflow-src-main" not in text
 	workflow_log = (REPO_ROOT / ".github/workflows/workflow-log-analysis.yml").read_text(encoding="utf-8")
 	assert workflow_log.count("model_provider_broker_exec_sanitized bash scripts/codex_heartbeat.sh") == 4
 	assert workflow_log.count("model_provider_broker_exec_unprivileged nobody") >= 4
@@ -370,12 +385,15 @@ def test_model_facing_workflows_export_broker_price_policy() -> None:
 		"MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE": "0.10",
 		"MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE": "1",
 	}
+	# clarify.yml and orchestrate_clarify_respond.yml run Codex through
+	# scripts/clarify_isolated_run.sh (docker --network none, host-side
+	# scripts/clarify_openrouter_broker.py) rather than the in-workflow
+	# model_provider_broker_start/exec launcher, so they never wire these
+	# MODEL_PROVIDER_BROKER_MAX_* price env vars.
 	for workflow_name in (
 		"check_failure_triage.yml",
-		"clarify.yml",
 		"implement.yml",
 		"orchestrate.yml",
-		"orchestrate_clarify_respond.yml",
 		"orchestrate_poll.yml",
 		"plan.yml",
 		"review_autofix.yml",
@@ -629,6 +647,14 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 	fail_upstream_request = False
 
 	class _FakeConnection:
+		# http.client.HTTPConnection subclasses carry these class attributes;
+		# urllib.request.HTTPSHandler.__init__ reads them directly off
+		# http.client.HTTPSConnection when no explicit debuglevel/context is
+		# given, so a stand-in used to monkeypatch that slot must provide
+		# them too.
+		debuglevel = 0
+		_http_vsn = 11
+
 		def __init__(self, *_args: object, **_kwargs: object) -> None:
 			if fail_connection_construction:
 				raise OSError("connection setup failed")
@@ -882,6 +908,12 @@ def test_brokered_requests_settle_input_and_cost_from_upstream_usage() -> None:
 	scripted: list[tuple[int, bytes, str]] = []
 
 	class _FakeConnection:
+		# See the identical comment in test_brokered_stream_settles_budget_from_upstream_usage:
+		# HTTPSHandler.__init__ reads these class attributes off whatever
+		# object stands in for http.client.HTTPSConnection.
+		debuglevel = 0
+		_http_vsn = 11
+
 		def __init__(self, *_args: object, **_kwargs: object) -> None:
 			pass
 
@@ -1016,12 +1048,15 @@ def test_broker_launcher_and_workflows_wire_budget_policy() -> None:
 		"MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS": "1677721600",
 		"MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD": "",
 	}
+	# clarify.yml and orchestrate_clarify_respond.yml run Codex through
+	# scripts/clarify_isolated_run.sh (docker --network none, host-side
+	# scripts/clarify_openrouter_broker.py) rather than the in-workflow
+	# model_provider_broker_start/exec launcher, so they never wire these
+	# MODEL_PROVIDER_BROKER_MAX_* budget env vars.
 	for workflow_name in (
 		"check_failure_triage.yml",
-		"clarify.yml",
 		"implement.yml",
 		"orchestrate.yml",
-		"orchestrate_clarify_respond.yml",
 		"orchestrate_poll.yml",
 		"plan.yml",
 		"review_autofix.yml",

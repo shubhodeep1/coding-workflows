@@ -3054,7 +3054,7 @@ def test_reviewers_failed_names_the_failure_before_the_editor_flags() -> None:
 			result = subprocess.run(
 				["bash", str(SCRIPTS_DIR / "review_autofix_step_iteration_summary.sh")],
 				capture_output=True, text=True, check=False,
-				env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp), "GITHUB_STEP_SUMMARY": str(tmp / "summary.md"), "GITHUB_ENV": str(tmp / "env"), "RUNTIME_DIR": str(tmp), "PYTHONDONTWRITEBYTECODE": "1", **flags},
+				env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp), "GITHUB_STEP_SUMMARY": str(tmp / "summary.md"), "GITHUB_ENV": str(tmp / "env"), "RUNTIME_DIR": str(tmp), "SUPPORT_SCRIPTS_DIR": str(SCRIPTS_DIR), "PYTHONDONTWRITEBYTECODE": "1", **flags},
 			)
 			summary_lines = [line for line in result.stdout.splitlines() if line.startswith("REVIEW_AUTOFIX_RUN_SUMMARY_V1 ")]
 			assert summary_lines, result.stdout + result.stderr

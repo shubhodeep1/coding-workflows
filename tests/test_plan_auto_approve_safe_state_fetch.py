@@ -113,6 +113,9 @@ def test_auto_approve_checks_live_author_before_posting() -> None:
 				"FETCH_FAIL": str(fetch_fails).lower(),
 				"POST_LOG": str(post_log),
 				"AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true",
+				# The step sources gh_helpers.sh from the immutable support
+				# bundle; point it at the fake gh_helpers.sh staged above.
+				"SUPPORT_SCRIPTS_DIR": str(tmp_path / "scripts"),
 			})
 			result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, text=True, capture_output=True, check=True)
 			assert f"auto_approved={str(approved).lower()}" in output_path.read_text(encoding="utf-8"), (issue, result.stdout, result.stderr)

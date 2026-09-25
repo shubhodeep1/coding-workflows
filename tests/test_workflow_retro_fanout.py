@@ -229,6 +229,20 @@ def _run_fanout(
 				"WORKFLOW_LOG_REPORT_FILE": str(report_file),
 				"CONSUMER_REPOS_FILE": str(roster_file),
 				"CODEX_RETRY_BACKOFF_BASE_SECS": "1",
+				# model_provider_broker_prepare_codex_writer() looks for an
+				# existing config at ${CODEX_HOME:-$HOME/.codex}/config.toml
+				# to carry forward before rewriting its provider base_url.
+				# Point it at a directory that never exists so the test
+				# never depends on (or is broken by) whatever is sitting in
+				# the real machine's $HOME/.codex.
+				"CODEX_HOME": str(tmp_path / "codex-home-unused"),
+				# model_provider_broker_start()'s ready/pid/rejections files
+				# default to ${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}. In real CI
+				# RUNNER_TEMP is always a per-job unique directory; locally it
+				# is unset, which would make concurrent broker instances
+				# (parallel test workers, or another session on the same
+				# machine) collide on plain /tmp. Give each run its own.
+				"RUNNER_TEMP": str(tmp_path / "runner-temp"),
 			}
 		)
 		env.update(extra_env or {})

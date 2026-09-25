@@ -81,21 +81,28 @@ def test_header_prompt_exists() -> None:
 
 
 def test_clarify_sandbox_support_has_main_snapshot_fallback() -> None:
-	"""The sandbox must be staged from the same support refs as the runner."""
+	"""The sandbox must be staged from the same immutable support checkout as the runner.
+
+	clarify.yml stages from a single pinned ``.codex-workflow-src`` checkout and
+	hard-fails when a required file is missing there -- there is no
+	``.codex-workflow-src-main`` moving-ref fallback (that pattern was replaced
+	by the immutable support bundle hardening).
+	"""
 	clarify = (WORKFLOW_DIR / "clarify.yml").read_text(encoding="utf-8")
 	assert 'src=".codex-workflow-src/scripts/${f}"' in clarify
-	assert '.codex-workflow-src-main/scripts/${f}' in clarify
+	assert '.codex-workflow-src-main' not in clarify
 	assert 'sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"' in clarify
-	assert '.codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile' in clarify
 	assert 'echo "::error::Missing clarification sandbox Dockerfile"' in clarify
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in clarify
 
 
 def test_clarify_respond_isolates_every_model_call() -> None:
 	respond = (WORKFLOW_DIR / "orchestrate_clarify_respond.yml").read_text(encoding="utf-8")
-	assert "orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do" in respond
+	# Staging list order is not semantic -- assert the three model-call
+	# support files are staged together, in whatever order the list uses.
+	assert "clarify_isolated_run.sh clarify_openrouter_broker.py orchestrate_parse_and_post_answer.sh" in respond
 	assert 'sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"' in respond
-	assert '.codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile' in respond
+	assert '.codex-workflow-src-main' not in respond
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in respond
 	assert 'printf \'%s\\n\' "${_fetched_scripts[@]}" clarify_sandbox/ .gitignore' in respond
 	assert "--sandbox danger-full-access" not in respond

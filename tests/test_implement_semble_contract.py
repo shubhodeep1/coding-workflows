@@ -192,7 +192,7 @@ def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 
 def test_targeted_file_context_receives_semble_inputs() -> None:
 	codex_block = _step_run_text("Run Codex implementation")
-	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/targeted_file_context.py"' in codex_block
+	assert '_gh_helpers_run_isolated_python -- "${SUPPORT_SCRIPTS_DIR}/targeted_file_context.py"' in codex_block
 	assert '--semble-bin "$(command -v semble 2>/dev/null || true)"' in codex_block
 	assert '--semble-index "${SEMBLE_INDEX_PATH}"' in codex_block
 	assert '--semble-max-chunks "6"' in codex_block
@@ -215,7 +215,7 @@ def test_repair_prompt_appends_bounded_semble_context() -> None:
 def test_diagnose_prompt_appends_bounded_semble_context() -> None:
 	diagnose = _diagnose_text()
 	assert 'source "${DIAGNOSE_SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"' in diagnose
-	assert 'python3 - "${FAILED_STEP_NAME}" "${CAPTURE_FILE}" "${output_file}"' in diagnose
+	assert '_gh_helpers_run_isolated_python -- - "${FAILED_STEP_NAME}" "${CAPTURE_FILE}" "${output_file}"' in diagnose
 	assert '::warning::Failed to build diagnose Semble query' in diagnose
 	assert 'DIAGNOSE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/implement_diagnose_semble_query.txt"' in diagnose
 	assert 'build_diagnose_semble_query "${DIAGNOSE_SEMBLE_QUERY_FILE}"' in diagnose

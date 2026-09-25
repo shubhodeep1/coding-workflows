@@ -527,8 +527,8 @@ def test_cycle_skips_when_the_gate_stays_busy_for_the_whole_budget() -> None:
 def test_cancelled_smoke_gate_is_a_skip_not_a_failure() -> None:
 	seq = [
 		[],
-		[{"id": 500, "status": "in_progress", "conclusion": None, "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
-		[{"id": 500, "status": "completed", "conclusion": "cancelled", "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}],
+		[{"id": 500, "status": "in_progress", "conclusion": None, "head_branch": "main", "head_sha": TIP, "display_title": GATE_DISPLAY_TITLE, "created_at": "2026-09-19T00:00:01Z"}],
+		[{"id": 500, "status": "completed", "conclusion": "cancelled", "head_branch": "main", "head_sha": TIP, "display_title": GATE_DISPLAY_TITLE, "created_at": "2026-09-19T00:00:01Z"}],
 	]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": seq})

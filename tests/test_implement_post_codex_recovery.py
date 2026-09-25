@@ -1990,19 +1990,37 @@ def test_editor_launches_drop_staged_support_ledger_env() -> None:
 	the post-editor reinstall failed closed. tests/conftest.py strips the same
 	variables, but a review-blocked baseline branch checks out an older
 	conftest.py, so the launch line has to scrub them itself.
+
+	The isolated-writer hardening wraps the launch in CODEX_STALL_GUARD_HELPER
+	(process-group-supervised, per the writer-isolation contract), so the
+	scrub is no longer the line immediately above the launch -- it is still
+	inside the same unbroken backslash-continuation prefix chain that ends in
+	the launch line, which is what actually matters: the scrub is applied to
+	the process that execs codex_thread_reuse.sh.
 	"""
-	for step_name, launch_line in (
-		("Run Codex implementation", "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?"),
-		("Attempt post-Codex syntax repair", "bash scripts/codex_thread_reuse.sh direct-run; then"),
-	):
+	launch_line_re = re.compile(
+		r'^-- bash "\$\{SUPPORT_SCRIPTS_DIR\}/codex_thread_reuse\.sh" direct-run \|\| \w+=\$\?$'
+	)
+	for step_name in ("Run Codex implementation", "Attempt post-Codex syntax repair"):
 		script_lines = _extract_run_script(step_name).splitlines()
-		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]
+		launch_indexes = [idx for idx, line in enumerate(script_lines) if launch_line_re.match(line.strip())]
 		assert len(launch_indexes) == 1, (step_name, launch_indexes)
-		preceding = script_lines[launch_indexes[0] - 1].strip()
-		assert preceding == EDITOR_LEDGER_ENV_SCRUB, (step_name, preceding)
-		# The scrub sits inside the CODEX_THREAD_REUSE_* prefix assignment chain,
-		# so the helper still receives its own configuration.
-		assert script_lines[launch_indexes[0] - 2].rstrip().endswith("\\"), step_name
+		# Walk back up the unbroken backslash-continuation chain feeding the
+		# launch line until the ledger scrub is found, or the chain breaks.
+		idx = launch_indexes[0] - 1
+		found_scrub = False
+		found_stall_guard = False
+		while idx >= 0:
+			line = script_lines[idx].strip()
+			if line == EDITOR_LEDGER_ENV_SCRUB:
+				found_scrub = True
+			if line == '"${CODEX_STALL_GUARD_HELPER}" \\':
+				found_stall_guard = True
+			if not script_lines[idx].rstrip().endswith("\\"):
+				break
+			idx -= 1
+		assert found_scrub, (step_name, "ledger scrub not found in launch's continuation chain")
+		assert found_stall_guard, (step_name, "stall guard supervisor not found in launch's continuation chain")
 	assert _workflow_text().count(EDITOR_LEDGER_ENV_SCRUB) == 2
 
 

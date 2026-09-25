@@ -22,14 +22,14 @@ REQUIRED_SNIPPETS = (
 	"build_semble_wrapper.sh",
 	"uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78",
 	"- name: Install semble",
-	"bash scripts/install_semble.sh",
+	'bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"',
 	"- name: Build semble index",
 	"SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index",
 	"SEMBLE_INDEX_AVAILABLE=false",
 	# Inline `semble index . --out` was unreachable on pinned semble 0.1.3
 	# (no index/query CLI surface); the BM25 wrapper builder owns the index
 	# build now and writes SEMBLE_INDEX_AVAILABLE=true on success itself.
-	"bash scripts/build_semble_wrapper.sh",
+	'bash "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"',
 	"env.SEMBLE_ENABLED == 'true'",
 )
 
