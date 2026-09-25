@@ -562,6 +562,25 @@ def test_review_apply_fixes_fallback_distinguishes_refusal() -> None:
 		"Recoverable-failure fallback must keep its dedicated Runtime failure "
 		"path instead of collapsing into the refusal branch."
 	)
+	assert 'elif [ "${editor_partial_finalize_reason}" = "sandbox_initialization_failure" ]; then' in text
+	assert "Runtime failure path:\n- editor workspace guard sandbox initialization failed before editor launch" in text
+
+
+def test_review_apply_fixes_snapshot_failure_stops_before_editor_launch() -> None:
+	text = _review_apply_fixes_text()
+	snapshot_start = text.index("if run_editor_workspace_guard snapshot")
+	launch_start = text.index('emit_editor_substate "LaunchingAgentProcess"', snapshot_start)
+	snapshot_block = text[snapshot_start:launch_start]
+	assert 'editor_partial_finalize_reason="sandbox_initialization_failure"' in snapshot_block
+	assert 'sanitize_editor_workspace_guard_stderr' in snapshot_block
+	assert 'editor_attempt_${attempt}.err' in snapshot_block
+	assert any(line.strip() == "break" for line in snapshot_block.splitlines())
+	assert "run_editor_codex_attempt" not in snapshot_block
+	assert '--runtime-dir "${editor_workspace_guard_runtime}"' in text
+	assert '--runtime-dir "${RUNTIME_DIR}"' not in text
+	assert 'local diagnostic_limit="2048"' in text
+	assert 'text = text.replace(value, "<redacted-path>")' in text
+	assert 'text = " ".join(text.replace("`", "\'").split())' in text
 
 
 def test_review_apply_fixes_centralizes_refusal_regex() -> None:
@@ -978,8 +997,8 @@ def test_noop_warning_refusal_branch_preserves_poller_literal() -> None:
 	force-merge)."""
 	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
 	body_prefix = f'BODY="{NOOP_WARNING_LITERAL}'
-	assert block.count(body_prefix) == 3, (
-		f"All three branches (refusal, recoverable failure, generic) must keep "
+	assert block.count(body_prefix) == 4, (
+		f"All four branches (refusal, sandbox initialization, recoverable failure, generic) must keep "
 		f"{body_prefix!r} so the poller recovery sweep still detects "
 		f"noop PRs. Found {block.count(body_prefix)} matching BODY assignment(s)."
 	)
@@ -1003,6 +1022,8 @@ def test_noop_warning_generic_branch_preserved() -> None:
 
 RECOVERABLE_FAILURE_SENTINEL_TEXT = "partial finalize requested after a recoverable editor failure"
 RECOVERABLE_FAILURE_VALIDATOR_NOTICE = "::notice::Editor stopped after a recoverable failure on every attempt"
+SANDBOX_INITIALIZATION_SENTINEL_TEXT = "editor workspace guard sandbox initialization failed before editor launch"
+SANDBOX_INITIALIZATION_VALIDATOR_NOTICE = "::notice::Editor workspace guard sandbox initialization failed before editor launch"
 VALIDATOR_STEP_NAME = "Validate editor no-op disposition"
 
 
@@ -1028,6 +1049,8 @@ def test_validator_sets_editor_noop_recoverable_failure_alongside_suspicious() -
 	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
 	assert 'EDITOR_NOOP_RECOVERABLE_FAILURE="false"' in block
 	assert 'echo "EDITOR_NOOP_RECOVERABLE_FAILURE=${EDITOR_NOOP_RECOVERABLE_FAILURE}" >> "$GITHUB_ENV"' in block
+	assert 'EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE="false"' in block
+	assert 'echo "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE=${EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE}" >> "$GITHUB_ENV"' in block
 	assert 'echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"' in block
 	assert 'echo "EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL}" >> "$GITHUB_ENV"' in block
 
@@ -1084,6 +1107,7 @@ def test_validator_gate_runs_for_editor_partial_finalize_without_validation_tail
 	gate_cases = (
 		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure"}, True),
 		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "refusal"}, True),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "sandbox_initialization_failure"}, True),
 		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline"}, False),
 		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "reviewers", "AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure"}, False),
 		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "true", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "reviewers", "AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline"}, True),
@@ -1130,12 +1154,20 @@ def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> Non
 			"Regression fingerprint:\n- unavailable (partial finalize after safety-policy refusal)\n\n"
 			f"Runtime failure path:\n- {REFUSAL_SENTINEL_TEXT}\n"
 		),
+		"sandbox": (
+			"Changes made:\n- none (editor workspace guard sandbox initialization failed before editor launch)\n\n"
+			"Review file issue audit:\n- none (editor did not launch because its workspace guard could not initialize)\n\n"
+			"Regression fingerprint:\n- unavailable (partial finalize after sandbox initialization failure)\n\n"
+			f"Runtime failure path:\n- {SANDBOX_INITIALIZATION_SENTINEL_TEXT}\n"
+		),
 	}
 	expectations = {
-		("recoverable", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
-		("refusal", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
-		("recoverable", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
-		("refusal", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
+		("recoverable", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true", "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE": "false"},
+		("refusal", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false", "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE": "false"},
+		("sandbox", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false", "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE": "true"},
+		("recoverable", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true", "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE": "false"},
+		("refusal", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false", "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE": "false"},
+		("sandbox", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false", "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE": "true"},
 	}
 	for (name, reviewers_successful), expected_exports in expectations.items():
 		case_label = f"{name}@reviewers={reviewers_successful}"
@@ -1168,9 +1200,28 @@ def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> Non
 		if name == "recoverable":
 			assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE in result.stdout, case_label
 			assert REFUSAL_VALIDATOR_NOTICE not in result.stdout, case_label
-		else:
+		elif name == "refusal":
 			assert REFUSAL_VALIDATOR_NOTICE in result.stdout, case_label
 			assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE not in result.stdout, case_label
+		else:
+			assert SANDBOX_INITIALIZATION_VALIDATOR_NOTICE in result.stdout, case_label
+			assert REFUSAL_VALIDATOR_NOTICE not in result.stdout, case_label
+			assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE not in result.stdout, case_label
+
+
+def test_noop_warning_step_branches_on_sandbox_initialization_failure() -> None:
+	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
+	assert '"${EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE:-false}" = "true"' in block
+	assert "Editor sandbox initialization failed: #${PR_NUMBER}" in block
+	assert "The mandatory workspace guard failed before the editor launched." in block
+	assert "no unsandboxed fallback was attempted" in block
+	assert "Sanitized initialization error:" in block
+	sandbox_start = block.index('elif [ "${EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE:-false}" = "true" ]; then')
+	recoverable_start = block.index('elif [ "${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}" = "true" ]; then')
+	sandbox_branch = block[sandbox_start:recoverable_start]
+	assert "editor_attempt_*.err" in sandbox_branch
+	assert "grep -aE '^Error: '" in sandbox_branch
+	assert "cut -c1-240" in sandbox_branch
 
 
 def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_path: Path) -> None:

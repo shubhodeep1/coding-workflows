@@ -197,6 +197,14 @@ def _is_ignored(workspace: Path, relative: str) -> bool:
     return result.returncode == 0
 
 
+def _is_python_startup_path(path_parts: tuple[str, ...]) -> bool:
+    startup_module_names = {"sitecustomize", "usercustomize"}
+    return any(
+        path_part in startup_module_names or path_part.partition(".")[0] in startup_module_names
+        for path_part in path_parts
+    ) or path_parts[-1].endswith(".pth")
+
+
 def _changed_rows(
     before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]
 ) -> list[dict[str, str]]:
@@ -289,7 +297,7 @@ def reconcile(args: argparse.Namespace) -> int:
         previous = before.get(relative)
         reason = ""
         path_parts = _safe_relative(relative).parts
-        if path_parts[-1] in {"sitecustomize.py", "usercustomize.py"} or path_parts[-1].endswith(".pth"):
+        if _is_python_startup_path(path_parts):
             reason = "python-startup-path"
         elif any(
             part.startswith(".") and not (index == 0 and part == ".github")

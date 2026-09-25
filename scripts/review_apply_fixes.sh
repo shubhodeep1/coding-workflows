@@ -767,6 +767,125 @@ request_editor_partial_finalize() {
   fi
 }
 
+run_editor_workspace_guard() {
+  local guard_action="$1"
+  shift
+
+  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+    --role workspace-guard --workspace "${PWD}" --runtime-dir "${editor_workspace_guard_runtime}" \
+    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" \
+    "${guard_action}" "$@"
+}
+
+sanitize_editor_workspace_guard_stderr() {
+  local source_path="$1"
+  local destination_path="$2"
+  local diagnostic_limit="2048"
+  local redaction_path
+  local -a redaction_paths=()
+
+  for redaction_path in \
+    "${PWD}" \
+    "${GITHUB_WORKSPACE:-}" \
+    "${RUNNER_WORKSPACE:-}" \
+    "${RUNNER_TEMP:-}" \
+    "${RUNTIME_DIR:-}"; do
+    if [ -n "${redaction_path}" ] && [[ "${redaction_path}" = /* ]]; then
+      redaction_paths+=("${redaction_path}")
+    fi
+  done
+
+  if ! /usr/bin/python3 -I -S - \
+    "${source_path}" "${destination_path}" "${diagnostic_limit}" "${redaction_paths[@]}" \
+    2>/dev/null <<'PY'
+import re
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+limit = int(sys.argv[3])
+redactions = sorted(set(filter(None, sys.argv[4:])), key=len, reverse=True)
+
+try:
+	with source.open("rb") as handle:
+		handle.seek(0, 2)
+		size = handle.tell()
+		handle.seek(max(0, size - 65536))
+		text = handle.read(65536).decode("utf-8", errors="replace")
+except OSError:
+	text = ""
+
+text = re.sub(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))", "", text)
+for value in redactions:
+	text = text.replace(value, "<redacted-path>")
+text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text)
+text = " ".join(text.replace("`", "'").split())
+if len(text) > limit:
+	text = "[truncated] " + text[-limit:]
+if not text:
+	text = "workspace guard emitted no diagnostic"
+destination.write_text(text + "\n", encoding="utf-8")
+PY
+  then
+    printf '%s\n' "workspace guard diagnostic sanitization failed" > "${destination_path}"
+  fi
+}
+
+initialize_editor_workspace_guard_runtime() {
+  local runtime_base
+  local runtime_base_resolved
+  local runtime_created_path
+  local runtime_mode
+  local workspace_resolved
+
+  if [ -n "${RUNNER_TEMP:-}" ]; then
+    runtime_base="${RUNNER_TEMP}"
+  elif [ "${GITHUB_ACTIONS:-false}" = "true" ]; then
+    editor_workspace_guard_runtime_error="RUNNER_TEMP is unavailable in GitHub Actions"
+    return 1
+  else
+    runtime_base="${TMPDIR:-/tmp}"
+  fi
+
+  if [[ "${runtime_base}" != /* ]] || [ ! -d "${runtime_base}" ] || [ ! -w "${runtime_base}" ]; then
+    editor_workspace_guard_runtime_error="trusted temporary runtime base is unavailable"
+    return 1
+  fi
+  runtime_base_resolved="$(cd "${runtime_base}" 2>/dev/null && pwd -P)" || {
+    editor_workspace_guard_runtime_error="trusted temporary runtime base could not be resolved"
+    return 1
+  }
+  workspace_resolved="$(pwd -P)"
+
+  runtime_created_path="$(umask 077 && mktemp -d "${runtime_base_resolved%/}/review-editor-workspace-guard.XXXXXX" 2>/dev/null)" || {
+    editor_workspace_guard_runtime=""
+    editor_workspace_guard_runtime_error="could not create the trusted workspace-guard runtime"
+    return 1
+  }
+  editor_workspace_guard_runtime="$(cd "${runtime_created_path}" 2>/dev/null && pwd -P)" || {
+    rm -rf -- "${runtime_created_path}" 2>/dev/null || true
+    editor_workspace_guard_runtime=""
+    editor_workspace_guard_runtime_error="trusted workspace-guard runtime could not be resolved"
+    return 1
+  }
+  case "${editor_workspace_guard_runtime}/" in
+    "${workspace_resolved}/"*)
+      rm -rf -- "${editor_workspace_guard_runtime}" 2>/dev/null || true
+      editor_workspace_guard_runtime=""
+      editor_workspace_guard_runtime_error="trusted workspace-guard runtime resolved inside the model-writable workspace"
+      return 1
+      ;;
+  esac
+  runtime_mode="$(stat -c '%a' "${editor_workspace_guard_runtime}" 2>/dev/null || true)"
+  if [ "${runtime_mode}" != "700" ]; then
+    rm -rf -- "${editor_workspace_guard_runtime}" 2>/dev/null || true
+    editor_workspace_guard_runtime=""
+    editor_workspace_guard_runtime_error="trusted workspace-guard runtime permissions are not mode 0700"
+    return 1
+  fi
+}
+
 AUTOFIX_ITERATION="${AUTOFIX_ITERATION:-}"
 if [ -z "${AUTOFIX_ITERATION}" ]; then
   autofix_count=0
@@ -1802,7 +1921,9 @@ JOB_TIMEOUT_SECS=$(( REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED * 60 ))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 _hb_tmpdir=""
 _hb_fifo=""
-trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EXIT
+editor_workspace_guard_runtime=""
+editor_workspace_guard_runtime_error=""
+trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true; [ -n "${editor_workspace_guard_runtime:-}" ] && rm -rf -- "${editor_workspace_guard_runtime}" 2>/dev/null || true' EXIT
 
 # Match only standalone OpenAI-style refusal lines, not incidental prose in
 # an otherwise-valid structured summary (for example an Ignored suggestions
@@ -1825,6 +1946,13 @@ if nag_reminder_enabled; then
   fi
 fi
 editor_silent_rounds=0
+if ! initialize_editor_workspace_guard_runtime; then
+  printf 'Error: editor workspace guard sandbox initialization failed before editor launch: %s\n' \
+    "${editor_workspace_guard_runtime_error:-unknown initialization failure}" \
+    > "${PREVIOUS_REVIEWS_DIR}/editor_attempt_1.err"
+  editor_partial_finalize_reason="sandbox_initialization_failure"
+  attempt=$((editor_max_attempts + 1))
+fi
 while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # Early exit if PR was closed/merged (detected by reviewer or editor watchdog)
   if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
@@ -1880,6 +2008,32 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 
   tmp_output="$(mktemp)"
   tmp_err="$(mktemp)"
+
+  editor_workspace_manifest="${editor_workspace_guard_runtime}/post-agent-editor-${attempt}.manifest.json"
+  editor_workspace_paths="${editor_workspace_guard_runtime}/post-agent-editor-${attempt}.paths.txt"
+  editor_workspace_report="${editor_workspace_guard_runtime}/post-agent-editor-${attempt}.report.json"
+  editor_workspace_quarantine="${editor_workspace_guard_runtime}/post-agent-editor-${attempt}.quarantine"
+  editor_workspace_guard_raw_stderr="${editor_workspace_guard_runtime}/post-agent-editor-${attempt}.snapshot.stderr.raw"
+  editor_workspace_guard_sanitized_stderr="${editor_workspace_guard_runtime}/post-agent-editor-${attempt}.snapshot.stderr"
+  editor_workspace_guard_rc=0
+  if run_editor_workspace_guard snapshot \
+    --workspace "${PWD}" --manifest "${editor_workspace_manifest}" \
+    2> "${editor_workspace_guard_raw_stderr}"; then
+    :
+  else
+    editor_workspace_guard_rc=$?
+    sanitize_editor_workspace_guard_stderr \
+      "${editor_workspace_guard_raw_stderr}" "${editor_workspace_guard_sanitized_stderr}"
+    editor_workspace_guard_detail="$(cat "${editor_workspace_guard_sanitized_stderr}" 2>/dev/null || printf '%s' 'sanitized diagnostic unavailable')"
+    printf 'Error: editor workspace guard sandbox initialization failed before editor launch (status %s): %s\n' \
+      "${editor_workspace_guard_rc}" "${editor_workspace_guard_detail}" > "${tmp_err}"
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+    rm -f "${editor_workspace_guard_raw_stderr}" "${editor_workspace_guard_sanitized_stderr}" "${tmp_output}" "${tmp_err}"
+    emit_editor_substate "Failed" "${attempt}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err"
+    editor_partial_finalize_reason="sandbox_initialization_failure"
+    break
+  fi
+  rm -f "${editor_workspace_guard_raw_stderr}" "${editor_workspace_guard_sanitized_stderr}"
 
   # ── Heartbeat file for progress tracking ──
   hb_file="$(mktemp /tmp/heartbeat_editor.XXXXXX)"
@@ -2010,14 +2164,6 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     fi
   fi
   emit_editor_substate "BuildingPrompt" "${attempt}"
-  editor_workspace_manifest="${RUNTIME_DIR}/post-agent-editor-${attempt}.manifest.json"
-  editor_workspace_paths="${RUNTIME_DIR}/post-agent-editor-${attempt}.paths.txt"
-  editor_workspace_report="${RUNTIME_DIR}/post-agent-editor-${attempt}.report.json"
-  editor_workspace_quarantine="${RUNTIME_DIR}/post-agent-editor-${attempt}.quarantine"
-  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
-    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
-    --workspace "${PWD}" --manifest "${editor_workspace_manifest}"
   # Run OpenCode: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   emit_editor_substate "LaunchingAgentProcess" "${attempt}"
   emit_editor_substate "InitializingSession" "${attempt}"
@@ -2076,9 +2222,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
 
-  if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
-    --role workspace-guard --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
-    -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" reconcile \
+  if ! run_editor_workspace_guard reconcile \
     --workspace "${PWD}" --manifest "${editor_workspace_manifest}" \
     --quarantine-dir "${editor_workspace_quarantine}" \
     --changed-paths-out "${editor_workspace_paths}" --report "${editor_workspace_report}"; then
@@ -2547,6 +2691,33 @@ Runtime failure path:
 - model refused (safety filter)
 __EDITOR_SUMMARY__
     echo "Editor returned a safety-policy refusal; continuing with partial-finalize summary."
+  elif [ "${editor_partial_finalize_reason}" = "sandbox_initialization_failure" ]; then
+    cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
+Changes made:
+- none (editor workspace guard sandbox initialization failed before editor launch)
+
+Change status:
+- not-edited
+
+Already satisfied (suggested but already present):
+- none (editor did not launch because its workspace guard could not initialize)
+
+Ignored suggestions (with short reason):
+- partial finalize requested after editor workspace guard sandbox initialization failed
+
+Reviewer files processed:
+- none (editor did not launch because its workspace guard could not initialize)
+
+Review file issue audit:
+- none (editor did not launch because its workspace guard could not initialize)
+
+Regression fingerprint:
+- unavailable (partial finalize after sandbox initialization failure)
+
+Runtime failure path:
+- editor workspace guard sandbox initialization failed before editor launch
+__EDITOR_SUMMARY__
+    echo "Editor workspace guard sandbox initialization failed; continuing with partial-finalize summary."
   else
     cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
 Changes made:

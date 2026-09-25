@@ -21,7 +21,12 @@ _opencode_alert_field()
 
 opencode_strip_ansi()
 {
-	python3 -c 'import re, sys; data = sys.stdin.buffer.read(); pattern = rb"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|[P^_].*?\x1b\\|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])"; sys.stdout.buffer.write(re.sub(pattern, b"", data, flags=re.DOTALL))'
+	(
+		cd /tmp
+		env -i HOME=/tmp PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+			PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -c \
+			'import re, sys; data = sys.stdin.buffer.read(); pattern = rb"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|[P^_].*?\x1b\\|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])"; sys.stdout.buffer.write(re.sub(pattern, b"", data, flags=re.DOTALL))'
+	)
 }
 
 opencode_run_cmd()

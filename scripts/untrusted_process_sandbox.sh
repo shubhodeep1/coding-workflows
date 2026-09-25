@@ -69,6 +69,32 @@ resolve_namespace_control_root()
 	printf '%s\n' "${resolved_root}"
 }
 namespace_control_root="$(resolve_namespace_control_root)"
+guard_git_dir=""
+if [ "${role}" = workspace-guard ] && { [ -n "${GIT_DIR:-}" ] || [ -n "${GIT_WORK_TREE:-}" ]; }; then
+	[[ -n "${GIT_DIR:-}" && -n "${GIT_WORK_TREE:-}" ]] \
+		|| { echo "untrusted_process_sandbox: workspace-guard requires a complete Git context" >&2; exit 1; }
+	[[ -d "${GIT_DIR}" && -d "${GIT_WORK_TREE}" ]] \
+		|| { echo "untrusted_process_sandbox: workspace-guard Git context is unavailable" >&2; exit 1; }
+	guard_git_dir="$(cd "${GIT_DIR}" && pwd -P)"
+	guard_work_tree="$(cd "${GIT_WORK_TREE}" && pwd -P)"
+	guard_runtime_dir="$(cd "${runtime_dir}" && pwd -P)"
+	case "${guard_git_dir}" in
+		"${workspace}"|"${workspace}/"*|"${guard_runtime_dir}"|"${guard_runtime_dir}/"*)
+			echo "untrusted_process_sandbox: workspace-guard Git metadata must be external and read-only" >&2; exit 1 ;;
+	esac
+	case "${workspace}" in
+		"${guard_git_dir}/"*) echo "untrusted_process_sandbox: workspace-guard Git metadata contains the workspace" >&2; exit 1 ;;
+	esac
+	case "${guard_runtime_dir}" in
+		"${guard_git_dir}/"*) echo "untrusted_process_sandbox: workspace-guard Git metadata contains the runtime" >&2; exit 1 ;;
+	esac
+	[ "${guard_work_tree}" = "${workspace}" ] \
+		|| { echo "untrusted_process_sandbox: workspace-guard Git worktree does not match workspace" >&2; exit 1; }
+	guard_git_top="$(GIT_DIR="${guard_git_dir}" GIT_WORK_TREE="${workspace}" git rev-parse --show-toplevel 2>/dev/null)" \
+		|| { echo "untrusted_process_sandbox: workspace-guard Git metadata is unusable" >&2; exit 1; }
+	[ "$(cd "${guard_git_top}" && pwd -P)" = "${workspace}" ] \
+		|| { echo "untrusted_process_sandbox: workspace-guard Git metadata targets another worktree" >&2; exit 1; }
+fi
 provider_required=true
 case "${role}" in
 	validator|workspace-guard)
@@ -314,6 +340,9 @@ while IFS= read -r -d '' nested_git_entry; do
 		fi
 	fi
 done < <(find "${workspace}" -xdev -name .git -print0 2>/dev/null)
+if [ -n "${guard_git_dir}" ]; then
+	append_git_metadata_path "${guard_git_dir}"
+fi
 
 sandbox_path="${PATH}"
 if [ "${provider_required}" != true ]; then
@@ -342,12 +371,15 @@ fi
 runtime_output_names=()
 runtime_output_destinations=()
 runtime_output_mirrors=()
+if [ -n "${guard_git_dir}" ]; then
+	common_env+=("GIT_DIR=${guard_git_dir}" "GIT_WORK_TREE=${workspace}")
+fi
 while IFS='=' read -r environment_name environment_value; do
 	case "${environment_name}" in
 		CODEX_THREAD_REUSE_RUNTIME_DIR|RUNTIME_DIR)
 			;;
 		CODEX_THREAD_REUSE_OUTPUT_FILE|CODEX_THREAD_REUSE_LOG_FILE|CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE|CODEX_THREAD_REUSE_STATUS_FILE)
-			if [ -n "${environment_value}" ]; then
+			if [ "${role}" != workspace-guard ] && [ -n "${environment_value}" ]; then
 				mkdir -p "$(dirname "${environment_value}")"
 				touch "${environment_value}"
 				[ ! -L "${environment_value}" ] \

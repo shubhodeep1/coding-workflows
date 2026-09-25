@@ -727,12 +727,21 @@ when the bounded fix-cycle budget is exhausted.
 - `scripts/post_agent_workspace_guard.py` snapshots every worktree object
   independently of Git ignore rules before a writer model starts. Immediately
   after the complete model process group exits, its credentialless
-  `workspace-guard` pass quarantines ignored, hidden, symlink, special, or
-  otherwise unauthorized changes before output parsing or privileged
-  validation; authorized new regular files are preserved and emitted in the
-  complete changed-path manifest. Post-agent Python validators run through the
+  `workspace-guard` pass quarantines ignored, hidden, symlink, special, Python
+  startup module/package, or otherwise unauthorized changes before output
+  parsing or privileged validation; authorized new regular files are preserved
+  and emitted in the complete changed-path manifest. Any snapshot or reconcile
+  failure terminates that writer flow and latches workflow failure tails closed.
+  Shared output normalization also runs credentiallessly with isolated no-site
+  Python from `/tmp`. Post-agent Python validators run through the
   provider-free `validator` sandbox role as `/usr/bin/python3 -I -S`, from an
   external working directory with no credentials or network access.
+- The review editor creates workspace-guard manifests, reports, changed-path
+  output, quarantine data, and sanitized snapshot diagnostics in a mode-0700
+  helper runtime beneath `RUNNER_TEMP`, independent of the workflow's inherited
+  `RUNTIME_DIR`. A snapshot initialization failure stops before OpenCode starts,
+  requests partial finalize with `sandbox_initialization_failure`, and keeps the
+  namespace sandbox mandatory; there is no unsandboxed fallback.
 - `scripts/model_provider_proxy.py` derives a non-empty model allowlist from
 	trusted configuration and defaults to 64 requests, one concurrent request,
 	65,536 output tokens, and USD 25 cumulative spend. It reserves worst-case
