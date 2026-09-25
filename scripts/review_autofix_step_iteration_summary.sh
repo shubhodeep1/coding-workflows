@@ -542,7 +542,10 @@ if previous_reviews_dir is not None:
 editor_attempt_count = max(editor_attempt_numbers) if editor_attempt_numbers else 0
 editor_summary_exists = file_exists(editor_summary_file)
 
-if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
+if bool_env("AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED"):
+    editor_phase_state = "completed"
+    editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "failed", "failure_class": "workspace_guard_rejected"}
+elif bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
     editor_phase_state = "completed"
     editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "failed", "failure_class": "empty_noop"}
 elif bool_env("EDITOR_CHANGES_LOST"):
@@ -697,6 +700,8 @@ else:
 
 
 def determine_finalize_reason() -> str:
+    if bool_env("AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED"):
+        return "editor_workspace_guard_rejected"
     if bool_env("PR_CLOSED"):
         return "pr_closed"
     if bool_env("AUTOFIX_STALE_BASE_SKIP"):

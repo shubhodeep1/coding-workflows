@@ -4409,6 +4409,11 @@ jobs:
               echo "::warning::Editor produced no summary on first iteration — retrying once after ${_instep_retry_sleep}s before falling through to noop-comment path."
               sleep "${_instep_retry_sleep}"
               bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" || {
+                if [ "${AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED:-false}" = "true" ] ||
+                   grep -qx 'AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED=true' "${GITHUB_ENV}"; then
+                  echo "::error::Editor in-step retry was rejected by the workspace guard."
+                  exit 78
+                fi
                 echo "::warning::Editor in-step retry also failed; downstream noop-comment path will fire."
               }
             fi
@@ -4525,7 +4530,7 @@ jobs:
             python:3.12-slim /review-venv/bin/python -m pytest "${review_python_test_targets[@]}"
 
       - name: Commit changes
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         id: commit_changes
         env:
           LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
@@ -4623,13 +4628,58 @@ jobs:
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Post editor summary comment
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          if [ "${AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED:-false}" = "true" ]; then
+            echo "::error::Editor workspace guard rejected a worktree change; review publication is blocked."
+            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            GUARD_DETAILS="Guard report unavailable or invalid; see the failure-log artifact."
+            for guard_report_file in "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*_guard_report.json; do
+              if [ -f "${guard_report_file}" ] && [ ! -L "${guard_report_file}" ] \
+                  && [ "$(stat -c %s "${guard_report_file}" 2>/dev/null)" -le 1048576 ]; then
+                GUARD_DETAILS="$(PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S - "${guard_report_file}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as guard_comment_file:
+              guard_comment_report = json.load(guard_comment_file)
+          if not isinstance(guard_comment_report, dict) or guard_comment_report.get("schema_version") != "post_agent_workspace_report.v1":
+              raise ValueError("invalid guard report")
+          guard_comment_rows = guard_comment_report.get("rejected")
+          if not isinstance(guard_comment_rows, list):
+              raise ValueError("invalid rejected rows")
+          for guard_comment_row in guard_comment_rows[:10]:
+              if not isinstance(guard_comment_row, dict) or any(not isinstance(guard_comment_row.get(field), str) for field in ("path", "change", "reason")):
+                  raise ValueError("invalid rejected row")
+              guard_comment_fields = [json.dumps(guard_comment_row[field][:160], ensure_ascii=True) for field in ("path", "change", "reason")]
+              print("- path={} change={} reason={}".format(*guard_comment_fields))
+          if not guard_comment_rows:
+              print("Guard returned no rejected rows; reconciliation failed closed.")
+          PY
+                )" || GUARD_DETAILS="Guard report unavailable or invalid; see the failure-log artifact."
+                break
+              fi
+            done
+            GUARD_BODY="$(cat <<EOF
+          **AI review/autofix editor workspace guard rejected a change — not retrying as empty output**
+
+          The editor workspace guard rejected a worktree change. The editor stopped before output parsing or retry; no editor fix from this attempt may be published. See the guard report and per-attempt transcript in the failure-log artifact. Workflow-failure review-blocked handling remains active.
+
+          Rejected paths (up to 10; JSON-escaped values):
+          ${GUARD_DETAILS}
+
+          [View workflow run](${RUN_URL}) for details.
+          EOF
+          )"
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${GUARD_BODY}" >/dev/null 2>&1 || echo "::warning::Failed to post editor workspace guard comment on PR #${PR_NUMBER} (exit=$?)."
+            exit 1
+          fi
 
           # Empty-editor-output short-circuit.
           #
@@ -5767,7 +5817,7 @@ jobs:
         # `${AUTOFIX_SKIP_SELF_TRIGGERED:-false}`, so the default is `false`
         # and the [ai-autofix] synchronize is NOT skipped). The autofix loop now actually "keeps going
         # until there are no edits" instead of converging on a stale head.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -5791,7 +5841,7 @@ jobs:
         # head f11d6dc while editor commit 005824e was still local) and the
         # docstring at scripts/review_commit_changes.sh:32-41 for the same
         # rationale that already governs EDITOR_CHANGES_LOST at :3315-3326.
-        if: "success() && env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true' && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        if: "success() && env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true' && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -6198,7 +6248,7 @@ jobs:
         # are pushed together AFTER labeling and auto-merge are configured.
         # This avoids a concurrency self-cancel race where the synchronize
         # event from an earlier push would kill subsequent steps.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
@@ -7379,7 +7429,7 @@ jobs:
           fi
 
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && (env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' || env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED == 'true') && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -7449,7 +7499,7 @@ jobs:
         # reported as the step that failed the job — the job's red status
         # already reflects the original failure that triggered this path.
         continue-on-error: true
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && (env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' || env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED == 'true') && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -7474,7 +7524,7 @@ jobs:
             --run-id "${{ github.run_id }}"
 
       - name: Post review-blocked comment on PR (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && (env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' || env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED == 'true') && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -7665,6 +7715,7 @@ jobs:
           if [ -d "${PREVIOUS_REVIEWS_DIR:-}" ]; then
             for f in "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.txt \
                      "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err \
+                     "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*_guard_report.json \
                      "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*_changes_lost.txt \
                      "${PREVIOUS_REVIEWS_DIR}"/review_*.txt \
                      "${PREVIOUS_REVIEWS_DIR}"/review_*.log \
