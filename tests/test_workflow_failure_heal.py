@@ -609,6 +609,72 @@ def test_budget_decision_matrix() -> None:
 	assert heal.budget_decision([pr], fp=fp, now=now)["action"] == "open"
 
 
+def _sourced_heal_issue(number: int, *, state: str, fp: str, source: str, gen: int = 1, root: str | None = None, repository: str | None = None) -> dict:
+	issue = _heal_issue(number, state=state, fp=fp, gen=gen, root=root)
+	issue["body"] += f"\n<!-- {heal.MARKER_PREFIX}source={source} -->"
+	if repository:
+		issue["repository"] = repository
+	return issue
+
+
+def test_heal_fix_branch_issue() -> None:
+	assert heal.heal_fix_branch_issue("ai/issue-4411") == 4411
+	for branch in (None, "", "main", "ai/issue-", "ai/issue-12-retry", "orchestrator/project-12", "xai/issue-12"):
+		assert heal.heal_fix_branch_issue(branch) is None
+
+
+def test_budget_decision_keys_review_failures_on_source_pr() -> None:
+	# PR #4348 opened #4392, #4409 and #4416 (two of them open at once): the
+	# evidence of every failed run differed, so did the fingerprint, and the
+	# fingerprint was the only duplicate key.
+	now = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)
+	fp = "1" * 64
+	other = "2" * 64
+	root = "3" * 64
+	key = f"{SELF_REPO}#4348"
+
+	# Q1: an open heal issue from the same PR is a duplicate whatever its fingerprint.
+	open_same_pr = _sourced_heal_issue(4409, state="open", fp=other, source=key, repository=SELF_REPO)
+	dup = heal.budget_decision([open_same_pr], fp=fp, source_key=key, now=now)
+	assert dup["action"] == "duplicate" and dup["match"] == "source" and dup["existing_issue"] == 4409
+	# Without a source key (every non-autofix report) the source marker is ignored.
+	assert heal.budget_decision([open_same_pr], fp=fp, now=now)["action"] == "open"
+	# A fingerprint duplicate still wins over a source duplicate.
+	fp_dup = heal.budget_decision([open_same_pr, _heal_issue(4500, state="open", fp=fp)], fp=fp, source_key=key, now=now)
+	assert fp_dup["match"] == "fingerprint" and fp_dup["existing_issue"] == 4500
+	# Another PR's heal issue and an invalid key never match.
+	assert heal.budget_decision([open_same_pr], fp=fp, source_key=f"{SELF_REPO}#4349", now=now)["action"] == "open"
+	assert heal.budget_decision([open_same_pr], fp=fp, source_key="not a key", now=now)["action"] == "open"
+
+	# Q3: a closed heal issue from the same PR continues its lineage.
+	closed_same_pr = _sourced_heal_issue(4392, state="closed", fp=other, source=key, gen=2, root=root, repository=SELF_REPO)
+	again = heal.budget_decision([closed_same_pr], fp=fp, source_key=key, now=now)
+	assert again == {"action": "open", "gen": 3, "root": root, "open_count": 0, "today_count": 0}
+	capped = heal.budget_decision([dict(closed_same_pr, body=closed_same_pr["body"].replace("gen=2", "gen=3"))], fp=fp, source_key=key, now=now)
+	assert capped["action"] == "escalate" and capped["gen"] == 4 and capped["prior_issue"] == 4392 and capped["prior_repo"] == SELF_REPO
+
+	# Q2: a failure on the fix PR of heal issue #4338 (branch ai/issue-4338)
+	# continues #4338's lineage, open or closed.
+	for state in ("open", "closed"):
+		healed = _sourced_heal_issue(4338, state=state, fp=other, source=f"{SELF_REPO}#4323", gen=2, root=root, repository=SELF_REPO)
+		linked = heal.budget_decision([healed], fp=fp, source_key=key, linked_heal_issue=4338, now=now)
+		assert linked["action"] == "open" and linked["gen"] == 3 and linked["root"] == root
+		deeper = dict(healed, body=healed["body"].replace("gen=2", "gen=3"))
+		escalated = heal.budget_decision([deeper], fp=fp, source_key=key, linked_heal_issue=4338, now=now)
+		assert escalated["action"] == "escalate" and escalated["prior_issue"] == 4338
+	# The linked issue must live in the PR's repository.
+	elsewhere = _sourced_heal_issue(4338, state="closed", fp=other, source="x/y#1", gen=3, repository=CONSUMER_REPO)
+	assert heal.budget_decision([elsewhere], fp=fp, source_key=key, linked_heal_issue=4338, now=now)["gen"] == 1
+	# The deepest candidate across fingerprint, source and link decides.
+	mixed = [
+		_heal_issue(10, state="closed", fp=fp, gen=1),
+		_sourced_heal_issue(11, state="closed", fp=other, source=key, gen=2, root=root, repository=SELF_REPO),
+	]
+	assert heal.budget_decision(mixed, fp=fp, source_key=key, now=now)["gen"] == 3
+	# An inherited source generation (issue reports) still takes precedence.
+	assert heal.budget_decision(mixed, fp=fp, source_key=key, source_gen=1, source_root=other, now=now)["gen"] == 2
+
+
 def test_parse_classification_variants() -> None:
 	assert heal.parse_classification("## Classification\n\nworkflow-defect\n\n## Summary\nx") == "workflow-defect"
 	assert heal.parse_classification("## Classification\n`consumer-config`\n") == "consumer-config"
@@ -1525,6 +1591,38 @@ def test_intake_autofix_failure_opens_upstream_issue_with_reason_fingerprint() -
 	assert any(c["path"] == f"repos/{CONSUMER_REPO}/issues/4174/comments" for c in state_after["comments_posted"])
 	# A consumer PR ran the released workflows, so its fix stays a stable hotfix.
 	assert "target_branch_source=default" in result.stdout
+
+
+def test_intake_autofix_failure_deduplicates_on_source_pull_request() -> None:
+	state = _intake_state(jobs={"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}, job_logs={"9001": "2026-09-21T01:49:26.000Z ##[error]Process completed with exit code 1.\n"})
+	state["heal_issues"] = [_sourced_heal_issue(31, state="open", fp="9" * 64, source=f"{CONSUMER_REPO}#4174")]
+	result, state_after, _ = _run_intake(_autofix_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=31" in result.stdout and "match=source" in result.stdout
+	assert "issues_created" not in state_after
+	assert any(c["path"] == f"repos/{SELF_REPO}/issues/31/comments" for c in state_after["comments_posted"])
+	assert not any("codex" in " ".join(call) for call in state_after["calls"])
+
+
+def test_intake_autofix_failure_on_heal_fix_pr_continues_lineage() -> None:
+	# The fixture PR's head branch is ai/issue-4173: the fix PR of heal issue #4173.
+	jobs = {"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}
+	job_logs = {"9001": "2026-09-21T01:49:26.000Z ##[error]Process completed with exit code 1.\n"}
+	root = "8" * 64
+	healed = _sourced_heal_issue(4173, state="closed", fp="9" * 64, source=f"{CONSUMER_REPO}#4100", gen=2, root=root)
+	state = _intake_state(jobs=jobs, job_logs=job_logs, heal_issues_by_repo={SELF_REPO: [], CONSUMER_REPO: [healed]})
+	result, state_after, _ = _run_intake(_autofix_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	assert f"{heal.MARKER_PREFIX}gen=3" in created["body"] and f"{heal.MARKER_PREFIX}root={root}" in created["body"]
+
+	capped = dict(healed, body=healed["body"].replace("gen=2", "gen=3"))
+	state = _intake_state(jobs=jobs, job_logs=job_logs, heal_issues_by_repo={SELF_REPO: [], CONSUMER_REPO: [capped]})
+	result, state_after, _ = _run_intake(_autofix_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL escalate reason=lineage_cap gen=4 max=3" in result.stdout
+	assert "issues_created" not in state_after
+	assert ["4173", "--repo", CONSUMER_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 
 
 def _self_repo_autofix_payload() -> dict:

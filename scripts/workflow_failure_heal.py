@@ -178,6 +178,10 @@ _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _REPO_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
 _ORCHESTRATOR_BRANCH_RE = re.compile(r"^orchestrator/project-([0-9]+)$")
+# The implement pipeline's branch for issue N; a PR on it is the fix PR for N.
+_HEAL_FIX_BRANCH_RE = re.compile(r"^ai/issue-([0-9]+)$")
+# `source=` marker value of a heal issue filed from an issue / PR report.
+_SOURCE_KEY_RE = re.compile(r"^(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#[0-9]+$")
 # `bash: /path/to/scripts/<name>: line N: ...` (a shell guard or syntax error
 # in a staged script) -> scripts/<name>.
 _CRASH_SCRIPT_LINE_RE = re.compile(r"(?:^|[\s/])scripts/(?P<name>[A-Za-z0-9_.-]+): line [0-9]+:")
@@ -785,6 +789,12 @@ def orchestrator_tracking_issue(branch: Any) -> int | None:
 	return _positive_int(match.group(1)) if match else None
 
 
+def heal_fix_branch_issue(branch: Any) -> int | None:
+	"""Return ``N`` for the implement pipeline's ``ai/issue-<N>`` branch, else None."""
+	match = _HEAL_FIX_BRANCH_RE.match(str(branch or ""))
+	return _positive_int(match.group(1)) if match else None
+
+
 def validate_payload(payload: Any) -> dict[str, Any]:
 	"""Validate + normalise an incoming payload. Raises ValueError when unusable.
 
@@ -1318,13 +1328,28 @@ def budget_decision(
 	max_open: int = DEFAULT_MAX_OPEN_ISSUES,
 	max_per_day: int = DEFAULT_MAX_ISSUES_PER_DAY,
 	now: datetime | None = None,
+	source_key: str | None = None,
+	linked_heal_issue: int | None = None,
 ) -> dict[str, Any]:
 	"""Decide what to do with a fingerprinted failure given the heal issue list.
 
 	``issues`` is the GitHub issue list for label ``ai:workflow-heal`` in any
 	state (pull requests are ignored). Decision order: duplicate (an open heal
-	issue already carries this fingerprint) → escalate (lineage cap) →
-	budget_exhausted (open-issue or per-day cap) → open.
+	issue already carries this fingerprint, or ``source_key``) → escalate
+	(lineage cap) → budget_exhausted (open-issue or per-day cap) → open.
+
+	``source_key`` (``owner/repo#N``, review/autofix reports only) is the pull
+	request the report is about. The failure evidence of one PR differs from
+	run to run, so its fingerprint does too; matching the heal issue's
+	``source=`` marker keeps one PR to one open heal issue (``match: source``
+	in the duplicate decision), and a closed heal issue from the same PR
+	continues its lineage. ``linked_heal_issue`` is the heal issue the PR
+	fixes (its head branch is ``ai/issue-<N>``, see
+	``heal_fix_branch_issue``), looked up in ``source_key``'s repository in
+	any state; the report continues that issue's lineage, so a heal fix PR
+	whose own review keeps failing reaches the lineage cap instead of opening
+	a fresh generation-1 heal issue each round. Neither changes the decision
+	when ``source_gen`` is given.
 	"""
 	now = now or _utc_now()
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1332,6 +1357,28 @@ def budget_decision(
 	created_today = 0
 	prior_same_fp: list[tuple[int, int, str, str]] = []
 	duplicate: dict[str, Any] | None = None
+	source_duplicate: dict[str, Any] | None = None
+	# Closed heal issues from the same source PR, and the heal issue that PR fixes.
+	prior_source_lineage: list[tuple[int, int, str, str]] = []
+	source_key_match = _SOURCE_KEY_RE.match(str(source_key or ""))
+	source_key = source_key if source_key_match else None
+	linked_heal_repo = source_key_match.group("repo") if source_key_match else ""
+	if not source_key:
+		linked_heal_issue = None
+
+	def _preferred_duplicate(current: dict[str, Any] | None, candidate: dict[str, Any]) -> dict[str, Any]:
+		if current is None:
+			return candidate
+		candidate_repository = candidate.get("repository") if is_valid_repo_slug(candidate.get("repository")) else ""
+		current_repository = current.get("repository") if is_valid_repo_slug(current.get("repository")) else ""
+		candidate_preferred_repo = bool(preferred_repo and candidate_repository == preferred_repo)
+		current_preferred_repo = bool(preferred_repo and current_repository == preferred_repo)
+		if candidate_preferred_repo and not current_preferred_repo:
+			return candidate
+		if candidate_preferred_repo == current_preferred_repo and candidate_repository == current_repository and (_positive_int(candidate.get("number")) or 0) > (_positive_int(current.get("number")) or 0):
+			return candidate
+		return current
+
 	for issue in issues:
 		if not isinstance(issue, dict) or issue.get("pull_request"):
 			continue
@@ -1344,26 +1391,30 @@ def budget_decision(
 		created = _parse_iso(issue.get("created_at"))
 		if created is not None and created >= day_start:
 			created_today += 1
+		same_source = bool(source_key) and markers.get("source") == source_key
+		is_linked_heal_issue = linked_heal_issue is not None and number == linked_heal_issue and issue_repository in (linked_heal_repo, "")
 		if state == "open":
 			open_issues.append(issue)
 			if markers.get("fp") == fp:
-				if duplicate is None:
-					duplicate = issue
-				else:
-					duplicate_repository = duplicate.get("repository") if is_valid_repo_slug(duplicate.get("repository")) else ""
-					candidate_preferred_repo = bool(preferred_repo and issue_repository == preferred_repo)
-					duplicate_preferred_repo = bool(preferred_repo and duplicate_repository == preferred_repo)
-					if candidate_preferred_repo and not duplicate_preferred_repo:
-						duplicate = issue
-					elif candidate_preferred_repo == duplicate_preferred_repo and issue_repository == duplicate_repository and number > (_positive_int(duplicate.get("number")) or 0):
-						duplicate = issue
+				duplicate = _preferred_duplicate(duplicate, issue)
+			elif same_source:
+				source_duplicate = _preferred_duplicate(source_duplicate, issue)
+			elif is_linked_heal_issue:
+				prior_source_lineage.append((_positive_int(markers.get("gen")) or 1, number, markers.get("root") or fp, issue_repository))
 		elif markers.get("fp") == fp:
 			gen = _positive_int(markers.get("gen")) or 1
 			prior_same_fp.append((gen, number, markers.get("root") or fp, issue_repository))
+		elif same_source or is_linked_heal_issue:
+			prior_source_lineage.append((_positive_int(markers.get("gen")) or 1, number, markers.get("root") or fp, issue_repository))
 
+	duplicate_match = "fingerprint"
+	if duplicate is None and source_duplicate is not None:
+		duplicate = source_duplicate
+		duplicate_match = "source"
 	if duplicate is not None:
 		return {
 			"action": "duplicate",
+			"match": duplicate_match,
 			"existing_issue": _positive_int(duplicate.get("number")),
 			"existing_url": sanitize_text(duplicate.get("html_url"), 300),
 			"existing_repo": duplicate.get("repository") if is_valid_repo_slug(duplicate.get("repository")) else "",
@@ -1380,9 +1431,9 @@ def budget_decision(
 	if source_gen is not None:
 		gen = source_gen + 1
 		root = source_root or fp
-	elif prior_same_fp:
-		prior_same_fp.sort()
-		prior_gen, prior_issue, prior_root, prior_repo = prior_same_fp[-1]
+	elif prior_same_fp or prior_source_lineage:
+		prior_lineage = sorted(prior_same_fp + prior_source_lineage)
+		prior_gen, prior_issue, prior_root, prior_repo = prior_lineage[-1]
 		gen = prior_gen + 1
 		root = prior_root
 	if gen > max_depth:
@@ -1584,8 +1635,9 @@ def compose_issue_body(
 	parts.append("")
 	parts.append(
 		f"_Filed by the workflow failure heal intake. Lineage generation {gen} (cap {max_depth}); "
-		"the chain escalates to a human at the cap. Re-reports with the same fingerprint are recorded "
-		"as occurrence comments on this issue while it stays open._"
+		"the chain escalates to a human at the cap. Re-reports with the same fingerprint (or, for a "
+		"review/autofix failure, from the same pull request) are recorded as occurrence comments on "
+		"this issue while it stays open._"
 	)
 	return "\n".join(parts) + "\n"
 
@@ -1995,6 +2047,8 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		max_depth=args.max_depth,
 		max_open=args.max_open,
 		max_per_day=args.max_per_day,
+		source_key=args.source_key or None,
+		linked_heal_issue=heal_fix_branch_issue(args.source_head_branch),
 	)
 	_write_json(decision)
 	return 0
@@ -2189,6 +2243,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--max-open", type=int, default=DEFAULT_MAX_OPEN_ISSUES)
 	p.add_argument("--max-per-day", type=int, default=DEFAULT_MAX_ISSUES_PER_DAY)
+	p.add_argument("--source-key", default="", help="owner/repo#N of the reported pull request (review/autofix reports)")
+	p.add_argument("--source-head-branch", default="", help="head branch of that pull request; ai/issue-<N> links heal issue N")
 	p.set_defaults(func=_cmd_budget)
 
 	p = sub.add_parser("parse-classification", help="Read the classification token from the diagnosis")
