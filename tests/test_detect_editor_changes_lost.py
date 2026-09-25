@@ -400,8 +400,8 @@ def test_apply_fixes_contains_editor_input_authority_contract() -> None:
 
 def test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback() -> None:
 	contents = APPLY_FIXES_SH.read_text(encoding="utf-8")
-	assert 'opencode_run_cmd "$@"' in contents
-	assert 'writer\n    "${editor_attempt_model}"' in contents
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in contents
+	assert '"${prompt_file}"\n    "${stdout_file}"\n    "${editor_attempt_model}"' in contents
 	assert '--model "${editor_attempt_model}"' in contents
 	assert "CODEX_THREAD_REUSE_ENABLED requested; OpenCode editor uses the fresh full-prompt path." in contents
 	assert "|^Changes made:" in contents

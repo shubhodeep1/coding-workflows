@@ -16,6 +16,7 @@ import sys
 
 MAX_BODY = 8 * 1024 * 1024
 PROVIDER_PATH = "/api/v1/responses"
+REVIEW_PATH = "/api/v1/chat/completions"
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -48,11 +49,11 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		# hosts, or user-supplied authorization headers cross the boundary.
 		length = self.headers.get("Content-Length", "")
 		if (
-			self.path != PROVIDER_PATH
+			self.path != (REVIEW_PATH if self.server.mode in ("review-broker", "review-bridge") else PROVIDER_PATH)
 			or self.headers.get("Transfer-Encoding")
 			or (
 				self.headers.get("Authorization") != "Bearer isolated-placeholder"
-				if self.server.mode == "bridge"
+				if self.server.mode in ("bridge", "review-bridge")
 				else self.headers.get("Authorization") is not None
 			)
 			or self.headers.get("Proxy-Authorization")
@@ -66,7 +67,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		body = self.rfile.read(int(length))
 		if len(body) != int(length):
 			return self._reject(400)
-		if self.server.mode == "broker":
+		if self.server.mode in ("broker", "review-broker"):
 			try:
 				request = json.loads(body)
 			except (UnicodeError, ValueError):
@@ -76,15 +77,15 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		connection = None
 		headers_sent = False
 		try:
-			if self.server.mode == "broker":
+			if self.server.mode in ("broker", "review-broker"):
 				connection = http.client.HTTPSConnection("openrouter.ai", timeout=600, context=ssl.create_default_context())
-				connection.request("POST", PROVIDER_PATH, body, {
+				connection.request("POST", self.path, body, {
 					"Content-Type": "application/json",
 					"Authorization": "Bearer " + self.server.api_key,
 				})
 			else:
 				connection = UnixHTTPConnection(self.server.socket_path)
-				connection.request("POST", PROVIDER_PATH, body, {"Content-Type": "application/json"})
+				connection.request("POST", self.path, body, {"Content-Type": "application/json"})
 			response = connection.getresponse()
 			self.send_response_only(response.status)
 			self.send_header("Content-Type", response.getheader("Content-Type", "application/json"))
@@ -114,21 +115,21 @@ class Relay(http.server.BaseHTTPRequestHandler):
 
 
 def main():
-	if len(sys.argv) != 3 or sys.argv[1] not in ("broker", "bridge"):
+	if len(sys.argv) != 3 or sys.argv[1] not in ("broker", "bridge", "review-broker", "review-bridge"):
 		raise SystemExit(2)
-	if sys.argv[1] == "broker":
+	if sys.argv[1] in ("broker", "review-broker"):
 		key = os.environ.get("OPENROUTER_API_KEY", "")
 		model = os.environ.get("CLARIFY_MODEL", "openai/gpt-6-sol")
 		if not key or "\n" in key or "\r" in key or not model:
 			raise SystemExit(2)
 		server = UnixHTTPServer(sys.argv[2], Relay)
-		server.mode = "broker"
+		server.mode = sys.argv[1]
 		server.api_key = key
 		server.model = model
 		os.chmod(sys.argv[2], 0o600)  # The container uses the host UID to connect.
 	else:
 		server = http.server.HTTPServer(("127.0.0.1", 8765), Relay)
-		server.mode = "bridge"
+		server.mode = sys.argv[1]
 		server.socket_path = sys.argv[2]
 	with server:
 		server.serve_forever()
