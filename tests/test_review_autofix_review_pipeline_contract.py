@@ -7299,6 +7299,9 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	assert ': > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"' in helper
 	assert 'if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then' in _apply_fixes_text()
 	assert 'review_sandbox/Dockerfile' in stage
+	assert 'if [ ! -f "${src}" ] || [ -L "${src}" ]; then' in stage
+	assert '[ -L ".codex-workflow-src/scripts/review_sandbox" ]' in stage
+	assert '[ -L ".codex-workflow-src/scripts/review_sandbox/Dockerfile" ]' in stage
 	assert '"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in _workflow_text()
 	broker = (REPO_ROOT / "scripts/clarify_openrouter_broker.py").read_text(encoding="utf-8")
 	assert 'REVIEW_PATH = "/api/v1/chat/completions"' in broker
