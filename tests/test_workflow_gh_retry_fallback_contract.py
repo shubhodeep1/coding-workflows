@@ -194,8 +194,8 @@ def test_safe_fetch_steps_define_canonical_safe_gh_jq_fallback() -> None:
 def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallback() -> None:
 	for relative_path in BOOTSTRAPPED_GH_HELPER_WORKFLOWS:
 		text = _workflow_text(relative_path)
-		assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in text
-		assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in text
+		assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}" in text
+		assert "WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}" in text
 		assert "SCRIPT_REF=stable" not in text
 		assert ".codex-workflow-src-main" not in text
 		assert "Checkout workflow support source fallback" not in text

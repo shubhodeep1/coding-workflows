@@ -73,8 +73,8 @@ def test_issue_pr_status_support_bootstrap_is_immutable_and_fail_closed() -> Non
 	verify_step = _step_script("Ensure workflow support source checkout")
 	stage_step = _step_script("Fetch memory helper scripts")
 
-	assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in text
-	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in text
+	assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}" in text
+	assert "WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}" in text
 	assert 'if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "${wf_source}" ]; then' in text
 	assert '[[ "${WORKFLOW_DEFINITION_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]' in text
 	assert 'echo "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" >> "$GITHUB_ENV"' in text

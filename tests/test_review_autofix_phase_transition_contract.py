@@ -125,9 +125,9 @@ def test_post_merge_jobs_use_only_immutable_workflow_support() -> None:
 		start = text.index(f"  {job_name}:")
 		next_job = text.find(f"\n  {next_job_name}:", start + 3)
 		job = text[start:] if next_job == -1 else text[start:next_job]
-		assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in job
-		assert "WORKFLOW_SUPPORT_REF: ${{ job.workflow_sha }}" in job
-		assert "ref: ${{ job.workflow_sha }}" in job
+		assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}" in job
+		assert "WORKFLOW_SUPPORT_REF: ${{ fromJSON(toJSON(job)).workflow_sha }}" in job
+		assert "ref: ${{ fromJSON(toJSON(job)).workflow_sha }}" in job
 		assert "continue-on-error: true" not in job
 		assert "'stable'" not in job
 		assert "job.workflow_sha is not an immutable 40-character commit SHA" in job

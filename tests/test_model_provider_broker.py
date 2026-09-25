@@ -291,8 +291,8 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 		assert "model_provider_broker_exec_unprivileged nobody" in text
 		assert "--sandbox read-only" in text
 		if relative_path.startswith(".github/workflows/"):
-			assert "${{ job.workflow_repository }}" in text
-			assert "${{ job.workflow_sha }}" in text
+			assert "${{ fromJSON(toJSON(job)).workflow_repository }}" in text
+			assert "${{ fromJSON(toJSON(job)).workflow_sha }}" in text
 			assert ".codex-workflow-src-main" not in text
 	workflow_log = (REPO_ROOT / ".github/workflows/workflow-log-analysis.yml").read_text(encoding="utf-8")
 	assert workflow_log.count("model_provider_broker_exec_sanitized bash scripts/codex_heartbeat.sh") == 4
@@ -314,7 +314,7 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	assert "model_provider_broker_finish_isolated_writer && model_provider_broker_stop" not in implement_workflow
 	assert "writer_isolation_verify_process_group_stopped" in implement_workflow
 	assert "model_provider_broker_exec_unprivileged nobody codex" in implement_workflow
-	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in implement_workflow
+	assert "WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}" in implement_workflow
 	assert "SCRIPT_REF=stable" not in implement_workflow
 	assert ".codex-workflow-src-main" not in implement_workflow
 	assert 'model_catalog_path: "scripts/codex_model_catalog.json"' in implement_workflow
@@ -354,7 +354,7 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 		"check_failure_triage.yml",
 	):
 		workflow_text = (REPO_ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
-		assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in workflow_text
+		assert "WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}" in workflow_text
 		assert "SCRIPT_REF=stable" not in workflow_text
 		assert "Checkout workflow support source fallback" not in workflow_text
 	helpers_text = (REPO_ROOT / "scripts" / "codex_helpers.sh").read_text(encoding="utf-8")

@@ -184,8 +184,8 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		checkout_resolver_idx = wf.find(checkout_resolver_step) if checkout_resolver_step else -1
 		checkout_ref_idx = wf.find(checkout_ref)
 		resolver_block = wf[resolver_idx:checkout_ref_idx]
-		assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in resolver_block
-		assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in resolver_block
+		assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}" in resolver_block
+		assert "WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}" in resolver_block
 		assert 'resolver_ref="${WORKFLOW_DEFINITION_SHA,,}"' in resolver_block
 		assert 'git -C "${resolver_stage_primary}" init --quiet' in resolver_block
 		assert 'fetch --quiet --depth 1 origin "${resolver_ref}"' in resolver_block

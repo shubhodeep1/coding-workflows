@@ -107,8 +107,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
-          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
         run: |
           set -euo pipefail
           issue_number="${TRACKING_ISSUE:-}"
@@ -213,8 +213,8 @@ jobs:
 
       - name: Validate runtime action source
         env:
-          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
         run: |
           set -euo pipefail
           if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "shubhodeep1/coding-workflows" ]; then
@@ -230,7 +230,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ job.workflow_sha }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-runtime
           fetch-depth: 1
@@ -248,8 +248,8 @@ jobs:
       - name: Fetch workflow support files
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"

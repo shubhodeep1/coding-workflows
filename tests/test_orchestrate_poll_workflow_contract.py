@@ -54,8 +54,8 @@ def test_stall_recovery_prompt_is_bootstrapped_from_immutable_workflow_source() 
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt; do" in wf
 	assert "src=\".codex-workflow-src/prompts/${pf}\"" in wf
-	assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in wf
-	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in wf
+	assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}" in wf
+	assert "WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}" in wf
 	assert "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" in wf
 	assert "SCRIPT_REF=stable" not in wf
 	assert ".codex-workflow-src-main" not in wf

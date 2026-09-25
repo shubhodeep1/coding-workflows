@@ -25,8 +25,8 @@ jobs:
       - name: Resolve workflow support ref
         shell: bash
         env:
-          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
