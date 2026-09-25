@@ -80,7 +80,7 @@ def _prepare_case(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 		"source = pathlib.Path(mount.split(',')[1].split('=', 1)[1])\n"
 		"work = source.parent / 'fake-work'\n"
 		"shutil.copytree(source, work)\n"
-		"(work / 'docker_invocation.json').write_text(json.dumps({'args': args, 'env': sorted(os.environ)}))\n"
+		"(source.parent.parent / 'docker_invocation.json').write_text(json.dumps({'args': args, 'env': sorted(os.environ)}))\n"
 		"hook = next(arg.split('=', 1)[1] for i, arg in enumerate(args) if args[i-1:i] == ['--env'] and arg.startswith('VALIDATE_HOOK_NAME='))\n"
 		"env = {'HOME': '/tmp', 'PATH': os.environ['PATH'], 'VALIDATE_HOOK_NAME': hook}\n"
 		"rc = subprocess.run(['bash', f'.github/ai/workspace_hooks/validate/{hook}.sh'], cwd=work, env=env, stdout=sys.stderr).returncode\n"
@@ -246,14 +246,14 @@ def test_hook_executes_in_workspace_path(tmp_path: Path) -> None:
 		workspace_path,
 		"validate",
 		"before_run",
-		"#!/usr/bin/env bash\npwd -P > hook_pwd.txt\n",
+		"#!/usr/bin/env bash\nmkdir -p validation/hook-output/before_run\npwd -P > validation/hook-output/before_run/hook_pwd.txt\n",
 	)
 
 	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "before_run")
 	assert result.returncode == 0, result.stderr
 	# The fake Docker runner uses the screened copy as its cwd; production
 	# mounts the same copy at /workspace rather than the host workspace.
-	assert (workspace_path / "hook_pwd.txt").read_text(encoding="utf-8").strip().endswith("/fake-work")
+	assert (workspace_path / "validation/hook-output/before_run/hook_pwd.txt").read_text(encoding="utf-8").strip().endswith("/fake-work")
 
 
 def test_before_run_failure_is_fatal_and_emits_bounded_tail(tmp_path: Path) -> None:
@@ -333,22 +333,106 @@ def test_validate_hook_has_no_credentials_or_git_and_writes_back(tmp_path: Path)
 	(workspace_path / ".git").mkdir()
 	(workspace_path / ".git" / "config").write_text("secret", encoding="utf-8")
 	(workspace_path / ".env").write_text("secret", encoding="utf-8")
-	(workspace_path / "existing.txt").write_text("old", encoding="utf-8")
+	output_dir = workspace_path / "validation" / "hook-output" / "before_run"
+	output_dir.mkdir(parents=True)
+	(output_dir / "existing.txt").write_text("old", encoding="utf-8")
+	(output_dir / "removed.txt").write_text("obsolete", encoding="utf-8")
 	_write_hook(workspace_path, "validate", "before_run", "#!/usr/bin/env bash\n"
 		"[ -z \"${GH_TOKEN:-}\" ] && [ -z \"${GIT_DIR:-}\" ] && [ ! -e .git/config ] && [ ! -e .env ] || exit 9\n"
-		"printf 'new' > existing.txt\nchmod +x existing.txt\n")
+		"printf 'new' > validation/hook-output/before_run/existing.txt\n"
+		"printf 'added' > validation/hook-output/before_run/added.txt\n"
+		"rm validation/hook-output/before_run/removed.txt\n")
 	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "before_run",
 		GH_TOKEN="sensitive-test-token", GIT_DIR="/sensitive/host/git")
 	assert result.returncode == 0, result.stderr
-	assert (workspace_path / "existing.txt").read_text(encoding="utf-8") == "new"
-	assert (workspace_path / "existing.txt").stat().st_mode & 0o111
-	args = json.loads((workspace_path / "docker_invocation.json").read_text(encoding="utf-8"))
+	assert (output_dir / "existing.txt").read_text(encoding="utf-8") == "new"
+	assert (output_dir / "added.txt").read_text(encoding="utf-8") == "added"
+	assert not (output_dir / "removed.txt").exists()
+	assert not (output_dir / "added.txt").stat().st_mode & 0o111
+	args = json.loads((runner_temp / "docker_invocation.json").read_text(encoding="utf-8"))
 	assert args["args"][args["args"].index("--network") + 1] == "none"
 	assert "--cap-drop" in args["args"] and "--read-only" in args["args"]
 	assert "--tmpfs" in args["args"] and any("/workspace:" in arg for arg in args["args"])
 	assert "dst=/source,readonly" in str(args["args"])
 	assert "GH_TOKEN" not in args["env"] and "GIT_DIR" not in args["env"]
 	assert "sensitive-test-token" not in str(args)
+
+
+def test_validate_hook_rejects_disallowed_mutations_without_partial_replay(tmp_path: Path) -> None:
+	cases = (
+		("replace_script", "printf 'attacker' > scripts/validate_process.sh", "scripts/validate_process.sh"),
+		("create_script", "mkdir -p scripts; printf 'attacker' > scripts/new_helper.sh", "scripts/new_helper.sh"),
+		("change_hook", "printf 'attacker' > .github/ai/workspace_hooks/validate/after_run.sh", ".github/ai/workspace_hooks/validate/after_run.sh"),
+		("change_harness", "printf 'attacker' > validation/harness.txt", "validation/harness.txt"),
+		("change_config", "printf 'attacker' > pytest.ini", "pytest.ini"),
+		("delete_script", "rm scripts/validate_process.sh", "scripts/validate_process.sh"),
+		("mode_only", "chmod +x scripts/validate_process.sh", "scripts/validate_process.sh"),
+		("executable_data", "chmod +x validation/hook-output/before_run/safe.txt", "validation/hook-output/before_run/safe.txt"),
+		("wrong_hook", "mkdir -p validation/hook-output/after_run; printf 'attacker' > validation/hook-output/after_run/other.txt", "validation/hook-output/after_run/other.txt"),
+		("nested_output", "mkdir -p validation/hook-output/before_run/nested; printf 'attacker' > validation/hook-output/before_run/nested/other.txt", "validation/hook-output/before_run/nested/other.txt"),
+	)
+	for label, command, attacked_file in cases:
+		case_path = tmp_path / label
+		case_path.mkdir()
+		repo_root, helper_path, workspace_path, runner_temp = _prepare_case(case_path)
+		if label in ("replace_script", "delete_script", "mode_only"):
+			protected = workspace_path / attacked_file
+			protected.parent.mkdir(parents=True, exist_ok=True)
+			protected.write_text("original", encoding="utf-8")
+		elif label == "change_hook":
+			protected = _write_hook(workspace_path, "validate", "after_run", "original")
+		elif label in ("change_harness", "change_config"):
+			protected = workspace_path / attacked_file
+			protected.parent.mkdir(parents=True, exist_ok=True)
+			protected.write_text("original", encoding="utf-8")
+		else:
+			protected = workspace_path / attacked_file
+		output_dir = workspace_path / "validation" / "hook-output" / "before_run"
+		output_dir.mkdir(parents=True)
+		(output_dir / "safe.txt").write_text("original", encoding="utf-8")
+		_write_hook(workspace_path, "validate", "before_run", "#!/usr/bin/env bash\n"
+			"printf 'updated' > validation/hook-output/before_run/safe.txt\n"
+			"printf 'new' > validation/hook-output/before_run/new.txt\n"
+			f"{command}\n")
+		result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "before_run")
+		assert result.returncode == 125, (label, result.stderr)
+		assert (output_dir / "safe.txt").read_text(encoding="utf-8") == "original"
+		assert not (output_dir / "new.txt").exists()
+		if protected.exists():
+			assert protected.read_text(encoding="utf-8") == "original"
+			assert not protected.stat().st_mode & 0o111
+		else:
+			assert label in ("create_script", "wrong_hook", "nested_output")
+
+
+def test_validate_hook_rejects_executable_data_and_unsafe_host_target(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	_write_hook(workspace_path, "validate", "after_run", "#!/usr/bin/env bash\n"
+		"mkdir -p validation/hook-output/after_run\n"
+		"printf 'untrusted' > validation/hook-output/after_run/data.txt\n"
+		"chmod +x validation/hook-output/after_run/data.txt\n")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "after_run")
+	assert result.returncode == 125, result.stderr
+	assert not (workspace_path / "validation/hook-output/after_run/data.txt").exists()
+	# A pre-existing symlink at the destination cannot redirect output replay.
+	output_dir = workspace_path / "validation/hook-output/after_run"
+	output_dir.mkdir(parents=True)
+	(output_dir / "data.txt").symlink_to(tmp_path / "outside.txt")
+	_write_hook(workspace_path, "validate", "after_run", "#!/usr/bin/env bash\n"
+		"mkdir -p validation/hook-output/after_run\n"
+		"printf 'untrusted' > validation/hook-output/after_run/data.txt\n")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "after_run")
+	assert result.returncode == 125, result.stderr
+	assert not (tmp_path / "outside.txt").exists()
+	# A symlinked parent must not redirect even a newly created allowed file.
+	(output_dir / "data.txt").unlink()
+	output_dir.rmdir()
+	outside_dir = tmp_path / "outside"
+	outside_dir.mkdir()
+	output_dir.symlink_to(outside_dir, target_is_directory=True)
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "after_run")
+	assert result.returncode == 125, result.stderr
+	assert not (outside_dir / "data.txt").exists()
 
 
 def test_validate_hook_rejects_symlink_result_and_missing_sandbox(tmp_path: Path) -> None:
@@ -405,6 +489,8 @@ def main() -> int:
 		test_before_run_sigkill_timeout_reports_timeout,
 		test_nonfatal_hooks_log_and_continue,
 		test_validate_hook_has_no_credentials_or_git_and_writes_back,
+		test_validate_hook_rejects_disallowed_mutations_without_partial_replay,
+		test_validate_hook_rejects_executable_data_and_unsafe_host_target,
 		test_validate_hook_rejects_symlink_result_and_missing_sandbox,
 	):
 		_run_tmp_path_case(case_fn)
