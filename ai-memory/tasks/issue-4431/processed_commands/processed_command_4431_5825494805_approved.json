@@ -5,13 +5,28 @@
   "entry_id": "processed_command_4431_5825494805_approved",
   "issue_number": 4431,
   "metadata": {
+    "branch": "ai/issue-4431",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/4431-protect-deterministic-review-skip.md",
+      "tests/test_review_autofix_review_pipeline_contract.py",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 4431,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4431",
+    "pr_number": 4434,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4434",
+    "run_attempt": "1",
+    "run_id": "36084871177",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36084871177"
   },
   "run_attempt": 1,
   "run_id": "36084871177",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-25T02:08:25Z",
+  "status": "completed",
+  "timestamp": "2026-09-25T02:23:48Z",
   "workflow": "implement"
 }
