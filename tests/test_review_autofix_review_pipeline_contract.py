@@ -454,7 +454,11 @@ def _step_block(step_name: str) -> str:
 				if indent == step_indent:
 					end = j
 					break
-		return "\n".join(lines[idx:end])
+		block = "\n".join(lines[idx:end])
+		step_script = re.search(r'bash "\$\{SUPPORT_SCRIPTS_DIR\}/(review_autofix_step_[^"/]+\.sh)"', block)
+		if step_script:
+			block += "\n" + (REPO_ROOT / "scripts" / step_script.group(1)).read_text(encoding="utf-8")
+		return block
 	raise AssertionError(f"Step not found in workflow: {step_name}")
 
 
@@ -478,6 +482,9 @@ def _job_block(job_name: str) -> str:
 
 def _step_run_script(step_name: str) -> str:
 	block_lines = _step_block(step_name).splitlines()
+	step_script = re.search(r'bash "\$\{SUPPORT_SCRIPTS_DIR\}/(review_autofix_step_[^"/]+\.sh)"', "\n".join(block_lines))
+	if step_script:
+		return (REPO_ROOT / "scripts" / step_script.group(1)).read_text(encoding="utf-8")
 	run_idx = -1
 	run_indent = -1
 	for idx, line in enumerate(block_lines):
@@ -498,6 +505,21 @@ def _step_run_script(step_name: str) -> str:
 
 	script = textwrap.dedent("\n".join(script_lines)).strip("\n")
 	return script + ("\n" if script else "")
+
+
+def test_extracted_step_scripts_use_workflow_support_ref() -> None:
+	stage = _step_block("Stage workflow support files")
+	stage_helper = _stage_helper_text()
+	assert 'step_script_ref_root=".codex-workflow-src-main"' in stage
+	assert 'if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then' in stage
+	assert 'if [ ! -f "${step_script_ref_root}/scripts/${step_script_support_file}" ]; then' in stage
+	assert 'install -m 0755 "${step_script_ref_root}/scripts/${step_script_support_file}" "${SUPPORT_SCRIPTS_DIR}/${step_script_support_file}"' in stage
+	assert stage.index('install -m 0755 "${step_script_ref_root}/scripts/${step_script_support_file}"') < stage.index('for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}')
+	for script_name in (
+		"review_autofix_step_initialize_runtime.sh", "review_autofix_step_detect_merge_conflicts.sh",
+		"review_autofix_step_partial_finalize.sh", "review_autofix_step_iteration_summary.sh",
+	):
+		assert script_name in stage_helper.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0]
 
 
 def _extract_review_autofix_timeout_minutes(workflow_text: str) -> tuple[int, int]:
@@ -4247,7 +4269,7 @@ def test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cl
 	collect_block = _step_block("Collect local slop-scan findings")
 	cleanup_block = _step_block("Remove slop-scan runtime artifact")
 
-	assert 'echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"' in workflow
+	assert 'echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"' in _step_block("Initialize runtime workspace")
 	assert "continue-on-error: true" in collect_block
 	assert 'write_slop_scan_sentinel "disabled"' in collect_block
 	assert 'write_slop_scan_sentinel "scan_error"' in collect_block
@@ -4499,8 +4521,8 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	gate_block = _step_block("Evaluate review gate")
 	prompt_text = (REPO_ROOT / "prompts" / "review-consolidator.txt").read_text(encoding="utf-8")
 
-	assert "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json" in workflow
-	assert "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md" in workflow
+	assert "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json" in _step_block("Initialize runtime workspace")
+	assert "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md" in _step_block("Initialize runtime workspace")
 	assert "REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_helper
@@ -6922,7 +6944,25 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			]
 
 
+def test_review_autofix_extracted_steps_are_staged_and_under_size_limit() -> None:
+	workflow_text = _workflow_text()
+	assert WORKFLOW.stat().st_size < 430_000
+	for step_name, script_name in (
+		("Initialize runtime workspace", "review_autofix_step_initialize_runtime.sh"),
+		("Detect merge conflicts", "review_autofix_step_detect_merge_conflicts.sh"),
+		("Post partial finalize comment and persist runtime marker", "review_autofix_step_partial_finalize.sh"),
+		("Append review pipeline iteration summary", "review_autofix_step_iteration_summary.sh"),
+	):
+		assert f'bash "${{SUPPORT_SCRIPTS_DIR}}/{script_name}"' in _step_block(step_name)
+		assert script_name in workflow_text.split("REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-", 1)[1].split("REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS:", 1)[0]
+		script_path = REPO_ROOT / "scripts" / script_name
+		assert script_path.is_file()
+		assert "${{" not in script_path.read_text(encoding="utf-8")
+	assert 'for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do' in _step_block("Stage workflow support files")
+
+
 def main() -> int:
+	test_review_autofix_extracted_steps_are_staged_and_under_size_limit()
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
 	test_review_preflight_missing_opencode_binary_emits_classified_error()

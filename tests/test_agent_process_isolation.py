@@ -676,6 +676,55 @@ def test_sandbox_rejects_private_tmp_namespace_control_root() -> None:
 		assert "namespace control root cannot be beneath private temporary storage" in result.stderr
 
 
+def test_sandbox_rejects_inaccessible_namespace_control_root() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		control_root = root / "control"
+		workspace.mkdir()
+		runtime.mkdir()
+		control_root.mkdir()
+		control_root.chmod(0)
+		try:
+			environment = os.environ.copy()
+			environment.update({"RUNNER_TEMP": str(control_root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1"})
+			result = subprocess.run(
+				[
+					"bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+					"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S", "-c", "print('unreachable')",
+				],
+				env=environment, capture_output=True, text=True, check=False,
+			)
+			assert result.returncode == 1
+			assert "namespace control root is unavailable" in result.stderr
+		finally:
+			control_root.chmod(0o700)
+
+
+def test_sandbox_rejects_special_objects_in_external_writable_tree() -> None:
+	with tempfile.TemporaryDirectory(dir=REPO_ROOT.parent) as control_directory:
+		control_root = Path(control_directory)
+		workspace = control_root / "workspace"
+		runtime = control_root / "runtime"
+		validator_output = runtime / "validator-output"
+		workspace.mkdir()
+		validator_output.mkdir(parents=True)
+		os.mkfifo(validator_output / "blocked-fifo")
+		environment = os.environ.copy()
+		environment.update({"RUNNER_TEMP": str(control_root)})
+		result = subprocess.run(
+			[
+				"bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+				"--runtime-dir", str(runtime), "--writable-output-dir", str(validator_output),
+				"--", "/usr/bin/python3", "-I", "-S", "-c", "print('unreachable')",
+			],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 1
+		assert "external writable tree contains an unsupported object" in result.stderr
+
+
 def test_production_sandbox_starts_with_private_tmp_runtime() -> None:
 	require_smoke = os.environ.get("REQUIRE_PRODUCTION_SANDBOX_SMOKE") == "1"
 	runner_temp_value = os.environ.get("RUNNER_TEMP", "")

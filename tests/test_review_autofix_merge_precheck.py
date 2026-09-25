@@ -39,7 +39,11 @@ def _section(start_marker: str, end_marker: str) -> str:
     assert start != -1, f"Expected section start marker: {start_marker!r}"
     end = wf.find(end_marker, start)
     assert end != -1, f"Expected section end marker after {start_marker!r}: {end_marker!r}"
-    return wf[start:end]
+    section = wf[start:end]
+    step_script = re.search(r'bash "\$\{SUPPORT_SCRIPTS_DIR\}/(review_autofix_step_[^"/]+\.sh)"', section)
+    if step_script:
+        section += "\n" + (REPO_ROOT / "scripts" / step_script.group(1)).read_text(encoding="utf-8")
+    return section
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +72,7 @@ def test_known_ci_artifacts_removed_before_git_reset_in_detect_step():
     )
     # Match the actual git command (not a comment line) by requiring a newline
     # immediately before the indented command.
-    reset_match = re.search(r"\n\s+git reset --hard HEAD\s*\n", detect_step)
+    reset_match = re.search(r"\n[ \t]*git reset --hard HEAD\s*\n", detect_step)
     rm_pos = detect_step.find(FULL_RM_LINE)
     assert rm_pos != -1, (
         f"Expected {FULL_RM_LINE!r} to appear in the Detect merge conflicts step"
@@ -206,7 +210,7 @@ def test_pre_editor_stale_base_gate_skipped_after_early_short_circuit():
 def test_pre_merge_diagnostics_present():
     """The workflow must emit git status --porcelain and the untracked file list
     before running git merge --no-commit, so future triage is straightforward."""
-    wf = _workflow()
+    wf = _detect_step()
     assert "=== pre-merge working tree state ===" in wf, (
         "Expected '=== pre-merge working tree state ===' diagnostic header "
         "before git merge --no-commit"
@@ -227,7 +231,7 @@ def test_exit_128_classified_as_error_not_no_conflicts():
     """When git merge exits 128 (dirty/untracked working tree), the workflow
     must log a clear ::error:: message and NOT fall through to the misleading
     'No merge conflicts detected' path."""
-    wf = _workflow()
+    wf = _detect_step()
     assert '[ "${merge_exit}" -eq 128 ]' in wf, (
         "Expected explicit exit-128 check '[ \"${merge_exit}\" -eq 128 ]' "
         "in the failure-classification block"
@@ -276,7 +280,7 @@ def test_late_detect_merge_conflicts_step_preserved():
 def test_merge_conflict_env_var_set_on_exit_128():
     """When exit 128 is detected, MERGE_CONFLICT=true must still be written to
     GITHUB_ENV so downstream steps behave as if there were a conflict."""
-    wf = _workflow()
+    wf = _detect_step()
     # The MERGE_CONFLICT=true assignment must appear after the exit-128 check
     # and before exit 0 in that branch.
     idx_128 = wf.find("::error::Merge precheck failed (exit 128)")
@@ -480,7 +484,7 @@ def test_retry_exit_128_classifier_requires_retry_evidence():
 def test_all_merge_probes_share_the_promisor_recovery():
     """Both merge probes in review_autofix.yml must carry the recovery — a probe
     without it misreads a lazy-fetch failure as a merge outcome."""
-    wf = _workflow()
+    wf = _workflow() + "\n" + (REPO_ROOT / "scripts" / "review_autofix_step_detect_merge_conflicts.sh").read_text(encoding="utf-8")
     pre_review_step = _section(
         "- name: Pre-review deterministic merge-topology gate",
         "\n      - name: Run reviewer models",

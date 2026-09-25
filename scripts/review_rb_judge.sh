@@ -1603,10 +1603,10 @@ fi
 # `[ -z "${JUDGE_JSON}" ]` check fires `JUDGE_JSON: unbound variable`
 # under `set -u` and aborts the whole review_autofix job.
 JUDGE_JSON=""
-JUDGE_JSON="$(PYTHONDONTWRITEBYTECODE=1 python3 -c "
+JUDGE_JSON="$(cat "${RB_JUDGE_OUTPUT}" | run_review_rb_validator_python -c '
 import json, re, sys
 
-raw = open('${RB_JUDGE_OUTPUT}', 'r').read()
+raw = sys.stdin.read()
 
 try:
     data = json.loads(raw.strip())
@@ -1615,17 +1615,17 @@ try:
 except json.JSONDecodeError:
     pass
 
-cleaned = re.sub(r'\`\`\`(?:json)?\s*', '', raw)
-cleaned = re.sub(r'\`\`\`\s*$', '', cleaned, flags=re.MULTILINE)
+cleaned = re.sub(r"\`\`\`(?:json)?\s*", "", raw)
+cleaned = re.sub(r"\`\`\`\s*$", "", cleaned, flags=re.MULTILINE)
 
 brace_depth = 0
 start = None
 for i, ch in enumerate(cleaned):
-    if ch == '{':
+    if ch == "{":
         if brace_depth == 0:
             start = i
         brace_depth += 1
-    elif ch == '}':
+    elif ch == "}":
         brace_depth -= 1
         if brace_depth == 0 and start is not None:
             candidate = cleaned[start:i+1]
@@ -1636,9 +1636,9 @@ for i, ch in enumerate(cleaned):
             except json.JSONDecodeError:
                 start = None
 
-print('Could not parse review-blocked judge JSON', file=sys.stderr)
+print("Could not parse review-blocked judge JSON", file=sys.stderr)
 sys.exit(1)
-" 2>/dev/null || echo "")"
+' 2>/dev/null || echo "")"
 
 if [ -z "${JUDGE_JSON:-}" ]; then
   echo "::warning::Could not parse review-blocked judge output — needs human intervention."
@@ -2042,7 +2042,8 @@ __EDIT_DISCIPLINE__
         --workspace "${PWD}" --manifest "${rb_fix_workspace_manifest}" \
         --quarantine-dir "${rb_fix_workspace_quarantine}" \
         --changed-paths-out "${rb_fix_workspace_paths}" --report "${rb_fix_workspace_report}"; then
-        rb_fix_rc=78
+		echo "::error::Review-blocked fix workspace guard rejected PR #${PR_NUMBER}; aborting before output parsing or publication."
+		exit 78
       fi
       if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix OpenCode" )"; then
         :
@@ -2514,13 +2515,13 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         RB_FOLLOWUP_INTEGRATION_BRANCH=""
         RB_FOLLOWUP_PARENT_DECLARED_DEFAULT="false"
         if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
-          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | run_review_rb_validator_python -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
 print(m.group(1).strip() if m else "")
 ' 2>/dev/null || echo "")"
-          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | run_review_rb_validator_python -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE)

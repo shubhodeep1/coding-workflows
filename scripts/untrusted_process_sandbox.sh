@@ -53,7 +53,8 @@ resolve_namespace_control_root()
 	esac
 	[ -d "${configured_root}" ] \
 		|| { echo "untrusted_process_sandbox: namespace control root is unavailable" >&2; exit 1; }
-	resolved_root="$(cd "${configured_root}" && pwd -P)"
+	resolved_root="$(cd "${configured_root}" && pwd -P)" \
+		|| { echo "untrusted_process_sandbox: namespace control root is unavailable" >&2; exit 1; }
 	case "${resolved_root}" in
 		/tmp|/tmp/*|/var/tmp|/var/tmp/*)
 			echo "untrusted_process_sandbox: namespace control root cannot be beneath private temporary storage" >&2
@@ -452,8 +453,8 @@ case "${role}" in
 		;;
 esac
 if [ -n "${external_writable_destination}" ]; then
-	if find "${external_writable_destination}" -type l -print -quit 2>/dev/null | grep -q .; then
-		echo "untrusted_process_sandbox: external writable tree cannot contain symlinks" >&2
+	if find "${external_writable_destination}" ! -type d ! -type f -print -quit 2>/dev/null | grep -q .; then
+		echo "untrusted_process_sandbox: external writable tree contains an unsupported object" >&2
 		exit 1
 	fi
 	sandbox_external_writable_root="${sandbox_runtime}/external-writable"
@@ -586,8 +587,8 @@ if ! sync_runtime_outputs; then
 	sandbox_command_rc=1
 fi
 if [ -n "${sandbox_external_writable_root}" ]; then
-	if find "${sandbox_external_writable_root}" -type l -print -quit 2>/dev/null | grep -q .; then
-		echo "untrusted_process_sandbox: sandbox writable tree failed symlink validation" >&2
+	if find "${sandbox_external_writable_root}" ! -type d ! -type f -print -quit 2>/dev/null | grep -q .; then
+		echo "untrusted_process_sandbox: sandbox writable tree failed regular-file validation" >&2
 		sandbox_command_rc=1
 	else
 		cp -a -- "${sandbox_external_writable_root}/." "${external_writable_destination}/" \
