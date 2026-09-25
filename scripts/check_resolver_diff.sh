@@ -163,8 +163,30 @@ fi
 # anchors preserve every byte outside the original marker spans; clean paths
 # are compared by mode and Git blob ID against an independent merge-tree.
 if [ -n "${CONFLICT_SPANS}" ] || [ -n "${CLEAN_MANIFEST}" ]; then
+	(
+		if [ -n "${POST_AGENT_VALIDATION_SANDBOX:-}" ]; then
+			if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "${RUNNER_TEMP}" ] ||
+				! validator_root="$(realpath -e -- "${RUNNER_TEMP}" 2>/dev/null)" ||
+				[ "${validator_root}" != "${RUNNER_TEMP%/}" ] ||
+				[[ "${validator_root}" == /tmp || "${validator_root}" == /tmp/* || "${validator_root}" == /var/tmp || "${validator_root}" == /var/tmp/* ]]; then
+				echo "::error::check_resolver_diff.sh: canonical RUNNER_TEMP outside private tmp is required for isolated validation" >&2
+				exit 1
+			fi
+			validator_manifest_dir="$(mktemp -d "${validator_root}/resolver-validator.XXXXXXXX")" || exit 1
+			trap 'rm -f -- "${validator_manifest_dir}/conflicted" "${validator_manifest_dir}/spans" "${validator_manifest_dir}/clean"; rmdir -- "${validator_manifest_dir}"' EXIT
+			cp -- "${CONFLICTED_SET}" "${validator_manifest_dir}/conflicted" || exit 1
+			CONFLICTED_SET="${validator_manifest_dir}/conflicted"
+			if [ -n "${CONFLICT_SPANS}" ]; then
+				cp -- "${CONFLICT_SPANS}" "${validator_manifest_dir}/spans" || exit 1
+				CONFLICT_SPANS="${validator_manifest_dir}/spans"
+			fi
+			if [ -n "${CLEAN_MANIFEST}" ]; then
+				cp -- "${CLEAN_MANIFEST}" "${validator_manifest_dir}/clean" || exit 1
+				CLEAN_MANIFEST="${validator_manifest_dir}/clean"
+			fi
+		fi
 	run_isolated_validator_python - \
-		"${REPO_ROOT}" "${CONFLICTED_SET}" "${CONFLICT_SPANS}" "${CLEAN_MANIFEST}" <<'PY'
+		"${REPO_ROOT}" "${CONFLICTED_SET}" "${CONFLICT_SPANS}" "${CLEAN_MANIFEST}" <<'PY' || exit 1
 import base64
 import json
 import os
@@ -265,6 +287,7 @@ if clean_manifest_path is not None:
 		if blob_result.returncode != 0 or actual_mode != expected_mode or actual_blob != expected_blob:
 			fail(f"resolver changed deterministically merged content: {path_name}")
 PY
+	) || exit 1
 fi
 
 # ---------------------------------------------------------------------------

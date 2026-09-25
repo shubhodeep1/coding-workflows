@@ -530,6 +530,7 @@ def test_resolver_stages_strict_validation_manifests_outside_private_tmp() -> No
 			"CONFLICT_SPANS_FILE": str(spans), "CLEAN_MERGE_MANIFEST_FILE": str(clean_manifest),
 			"POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR": str(staging),
 			"SUPPORT_SCRIPTS_DIR": str(fake_support), "RUNTIME_DIR": str(original),
+			"RUNNER_TEMP": str(visible),
 			"GITHUB_ENV": str(env_file), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1", "PWD": str(repo),
 		})
 
@@ -544,7 +545,7 @@ def test_resolver_stages_strict_validation_manifests_outside_private_tmp() -> No
 		accepted = validate()
 		assert accepted.returncode == 0, accepted.stderr
 		assert "private tmp input" not in accepted.stderr
-		unavailable_originals = subprocess.run(
+		validated_originals = subprocess.run(
 			[
 				"bash", str(RESOLVER_GUARD), "--repo-root", str(repo),
 				"--conflicted-set", str(conflicted), "--touched-set", str(touched),
@@ -554,8 +555,8 @@ def test_resolver_stages_strict_validation_manifests_outside_private_tmp() -> No
 			cwd=repo, env={**environment, "POST_AGENT_VALIDATION_SANDBOX": str(validator)},
 			capture_output=True, text=True, check=False,
 		)
-		assert unavailable_originals.returncode != 0
-		assert "private tmp input" in unavailable_originals.stderr
+		assert validated_originals.returncode == 0, validated_originals.stderr
+		assert "private tmp input" not in validated_originals.stderr
 		assert conflicted.read_text(encoding="utf-8") == "conflict.txt\n"
 		assert touched.read_text(encoding="utf-8") == "conflict.txt\n"
 		conflict.write_text("tampered\nresolved\nsuffix\n", encoding="utf-8")
@@ -575,6 +576,120 @@ def test_resolver_stages_strict_validation_manifests_outside_private_tmp() -> No
 		assert "Resolver boundary manifest missing" not in validate().stdout
 		assert "Could not stage resolver validation manifests" in validate().stdout
 		assert "CONFLICT_RESOLVED=false" in env_file.read_text(encoding="utf-8")
+
+
+def test_resolver_strict_manifests_are_visible_to_isolated_validator() -> None:
+	with tempfile.TemporaryDirectory(dir="/tmp") as directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as runner_directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		(workspace / "conflicted.txt").write_text("resolved\n", encoding="utf-8")
+		(workspace / "clean.txt").write_text("merged\n", encoding="utf-8")
+		clean_blob = subprocess.check_output(
+			["git", "-C", str(workspace), "hash-object", "clean.txt"], text=True,
+		).strip()
+		conflicted = root / "conflicted-set.txt"
+		touched = root / "touched-set.txt"
+		spans = root / "spans.json"
+		clean = root / "clean.tsv"
+		conflicted.write_text("conflicted.txt\n", encoding="utf-8")
+		touched.write_text("conflicted.txt\n", encoding="utf-8")
+		spans.write_text(json.dumps({"conflicted.txt": {
+			"mode": "100644", "anchors": ["", "Cg=="],
+		}}), encoding="utf-8")
+		clean.write_text(f"100644\t{clean_blob}\tclean.txt\n", encoding="utf-8")
+		wrapper = Path(runner_directory) / "validator-wrapper.sh"
+		wrapper.write_text(
+			'#!/usr/bin/env bash\n'
+			'for manifest in "${@: -3}"; do\n'
+			'  case "$manifest" in /tmp/*|/var/tmp/*) exit 44 ;; esac\n'
+			'done\n'
+			'exec bash "$ACTUAL_SANDBOX" "$@"\n', encoding="utf-8",
+		)
+		wrapper.chmod(0o700)
+		environment = os.environ.copy()
+		environment.update({
+			"ACTUAL_SANDBOX": str(SANDBOX),
+			"POST_AGENT_VALIDATION_SANDBOX": str(wrapper),
+			"POST_AGENT_VALIDATION_RUNTIME_DIR": runner_directory,
+			"RUNNER_TEMP": runner_directory,
+			"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		command = [
+			"bash", str(RESOLVER_GUARD), "--repo-root", str(workspace),
+			"--conflicted-set", str(conflicted), "--touched-set", str(touched),
+			"--conflict-spans", str(spans), "--clean-manifest", str(clean),
+			"--strict-manifests",
+		]
+
+		def run_guard() -> subprocess.CompletedProcess[str]:
+			result = subprocess.run(command, env=environment, capture_output=True, text=True)
+			assert list(Path(runner_directory).glob("resolver-validator.*")) == []
+			return result
+
+		valid = run_guard()
+		assert valid.returncode == 0, valid.stderr
+		spans.write_text(json.dumps({"conflicted.txt": {
+			"mode": "100644", "anchors": ["T1RIRVI=", "Cg=="],
+		}}), encoding="utf-8")
+		invalid_spans = run_guard()
+		assert invalid_spans.returncode != 0
+		assert "resolver changed content outside conflict spans" in invalid_spans.stderr
+		spans.write_text(json.dumps({"conflicted.txt": {
+			"mode": "100644", "anchors": ["", "Cg=="],
+		}}), encoding="utf-8")
+		(workspace / "clean.txt").write_text("tampered\n", encoding="utf-8")
+		invalid_clean = run_guard()
+		assert invalid_clean.returncode != 0
+		assert "resolver changed deterministically merged content" in invalid_clean.stderr
+		environment["RUNNER_TEMP"] = directory
+		blocked = run_guard()
+		assert blocked.returncode != 0
+		assert "canonical RUNNER_TEMP outside private tmp is required" in blocked.stderr
+		environment["RUNNER_TEMP"] = runner_directory
+		(workspace / "clean.txt").write_text("merged\n", encoding="utf-8")
+		mock_bin = Path(runner_directory) / "mock-bin"
+		mock_bin.mkdir()
+		mock_cp = mock_bin / "cp"
+		mock_cp.write_text("#!/usr/bin/env bash\nexit 44\n", encoding="utf-8")
+		mock_cp.chmod(0o700)
+		environment["PATH"] = f"{mock_bin}:{environment['PATH']}"
+		failed_staging = run_guard()
+		assert failed_staging.returncode != 0
+
+
+def test_review_blocked_judge_parser_reads_tmp_output_via_stdin() -> None:
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	parser = poller.split("      # Parse judge output\n", 1)[1].split(
+		'\n      if [ -z "${RB_JUDGE_JSON}" ]; then', 1,
+	)[0]
+	assert 'raw = sys.stdin.read()' in parser
+	assert '< "${RB_JUDGE_OUTPUT_FILE}"' in parser
+	with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+		output = Path(directory) / "judge.json"
+		output.write_text('```json\n{"action": "merge"}\n```\n', encoding="utf-8")
+		command = (
+			'set -euo pipefail\n'
+			'run_poller_isolated_python() { shift; /usr/bin/python3 -I -S "$@"; }\n'
+			+ parser + '\nprintf "%s" "$RB_JUDGE_JSON"\n'
+		)
+		result = subprocess.run(
+			["bash", "-c", command],
+			env={**os.environ, "RB_JUDGE_OUTPUT_FILE": str(output)},
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert json.loads(result.stdout) == {"action": "merge"}
+		output.write_text("not JSON\n", encoding="utf-8")
+		invalid = subprocess.run(
+			["bash", "-c", command],
+			env={**os.environ, "RB_JUDGE_OUTPUT_FILE": str(output)},
+			capture_output=True, text=True, check=False,
+		)
+		assert invalid.returncode == 0
+		assert invalid.stdout == ""
 
 
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
@@ -599,6 +714,8 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 				"GH_PAT": "synthetic-gh-pat",
 				"GITHUB_ENV": str(root / "github-env"),
 				"GITHUB_OUTPUT": str(root / "github-output"),
+				"GIT_DIR": str(REPO_ROOT / ".git"),
+				"GIT_WORK_TREE": str(REPO_ROOT),
 				"MODEL_PROVIDER_CREDENTIAL_FILE": str(credential),
 				"RUNTIME_DIR": str(root),
 				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
@@ -622,6 +739,7 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 		for forbidden_name in (
 			"BASH_ENV", "ENV", "GH_TOKEN", "GH_PAT", "GITHUB_TOKEN", "GITHUB_ENV",
 			"GITHUB_OUTPUT", "GITHUB_PATH", "GITHUB_STATE", "SSH_AUTH_SOCK", "OPENROUTER_API_KEY",
+			"GIT_DIR", "GIT_WORK_TREE",
 		):
 			assert forbidden_name not in isolated_environment
 		assert isolated_environment["SANDBOX_PROVIDER_TOKEN"] == "sandbox-proxy"
@@ -688,14 +806,16 @@ def test_sandbox_systemd_unit_reports_namespace_failures() -> None:
 
 def test_workspace_guard_rejects_private_tmp_paths_before_execution() -> None:
 	with tempfile.TemporaryDirectory(dir="/tmp") as runtime_directory, \
-		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory:
+		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as workspace_directory:
 		runner_temp_root = Path(runner_temp_directory).resolve()
 		runtime_root = Path(runtime_directory).resolve()
+		subprocess.run(["git", "init", "-q", workspace_directory], check=True)
 		environment = os.environ.copy()
 		environment.pop("POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256", None)
 		environment.update({"RUNNER_TEMP": str(runner_temp_root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1"})
 		command = [
-			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(REPO_ROOT),
+			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", workspace_directory,
 			"--runtime-dir", str(runner_temp_root), "--", "/usr/bin/python3", "-I", "-S",
 			"-c", "print('guard launched')",
 		]
@@ -720,14 +840,16 @@ def test_workspace_guard_rejects_private_tmp_paths_before_execution() -> None:
 
 def test_workspace_guard_rejects_symlinked_output_and_invalid_executable() -> None:
 	with tempfile.TemporaryDirectory(dir="/tmp") as runtime_directory, \
-		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory:
+		tempfile.TemporaryDirectory(dir=Path.home()) as runner_temp_directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as workspace_directory:
 		runner_temp_root = Path(runner_temp_directory).resolve()
+		subprocess.run(["git", "init", "-q", workspace_directory], check=True)
 		redirect = runner_temp_root / "redirect"
 		redirect.symlink_to(runtime_directory, target_is_directory=True)
 		environment = os.environ.copy()
 		environment.update({"RUNNER_TEMP": str(runner_temp_root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1"})
 		command = [
-			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(REPO_ROOT),
+			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", workspace_directory,
 			"--runtime-dir", str(runner_temp_root), "--", "/usr/bin/python3", "-I", "-S",
 			"-c", "print('guard launched')", "--report", str(redirect / "report.json"),
 		]
@@ -840,7 +962,7 @@ def test_workspace_guard_rejects_invalid_external_git_and_keeps_other_roles_isol
 					invalid_environment[name] = value
 			blocked = subprocess.run(command, env=invalid_environment, capture_output=True, text=True)
 			assert blocked.returncode != 0
-			assert "invalid workspace guard Git context" in blocked.stderr
+			assert "workspace guard" in blocked.stderr
 			assert not blocked.stdout
 		redirect = root / "metadata-link"
 		redirect.symlink_to(repository / ".git", target_is_directory=True)
@@ -886,6 +1008,72 @@ def test_workspace_guard_rejects_invalid_external_git_and_keeps_other_roles_isol
 		assert json.loads(model.stdout) == [None, None]
 
 
+def test_workspace_guard_external_git_context_keeps_ignore_classification() -> None:
+	with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		git_dir = root / "metadata"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", "--separate-git-dir", str(git_dir), str(workspace)], check=True)
+		(workspace / ".gitignore").write_text("*.ignored\n", encoding="utf-8")
+		(workspace / ".git").unlink()
+		environment = os.environ.copy()
+		environment.update({
+			"GIT_DIR": str(git_dir), "GIT_WORK_TREE": str(workspace),
+			"RUNTIME_DIR": str(runtime), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		manifest = runtime / "manifest.json"
+		command = [
+			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(workspace),
+			"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S",
+			str(WORKSPACE_GUARD),
+		]
+		snapshot = subprocess.run(
+			command + ["snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			env=environment, capture_output=True, text=True,
+		)
+		assert snapshot.returncode == 0, snapshot.stderr
+		(workspace / "safe.txt").write_text("safe\n", encoding="utf-8")
+		quarantine = runtime / "quarantine"
+		reconcile_args = command + [
+			"reconcile", "--workspace", str(workspace), "--manifest", str(manifest),
+			"--quarantine-dir", str(quarantine), "--changed-paths-out", str(runtime / "changed.txt"),
+			"--report", str(runtime / "report.json"),
+		]
+		safe_reconciled = subprocess.run(reconcile_args, env=environment, capture_output=True, text=True)
+		assert safe_reconciled.returncode == 0, safe_reconciled.stderr
+		assert (workspace / "safe.txt").read_text(encoding="utf-8") == "safe\n"
+		snapshot = subprocess.run(
+			command + ["snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			env=environment, capture_output=True, text=True,
+		)
+		assert snapshot.returncode == 0, snapshot.stderr
+		(workspace / "payload.ignored").write_text("blocked\n", encoding="utf-8")
+		reconciled = subprocess.run(reconcile_args, env=environment, capture_output=True, text=True)
+		assert reconciled.returncode == 20, reconciled.stderr
+		assert (workspace / "safe.txt").read_text(encoding="utf-8") == "safe\n"
+		assert not (workspace / "payload.ignored").exists()
+		assert (quarantine / "payload.ignored").read_text(encoding="utf-8") == "blocked\n"
+		assert "git ignore classification failed" not in reconciled.stderr
+
+		for invalid_context in (
+			{"GIT_DIR": "", "GIT_WORK_TREE": ""},
+			{"GIT_WORK_TREE": ""},
+			{"GIT_DIR": str(root / "missing")},
+			{"GIT_WORK_TREE": str(root)},
+		):
+			blocked = subprocess.run(
+				reconcile_args, env=environment | invalid_context, capture_output=True, text=True,
+			)
+			assert blocked.returncode != 0
+			assert "workspace guard" in blocked.stderr
+
+		assert 'InaccessiblePaths=${protected_git_path}' in SANDBOX.read_text(encoding="utf-8")
+		assert 'ReadOnlyPaths=${protected_git_path}' in SANDBOX.read_text(encoding="utf-8")
+
+
 def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	module_text = PROXY.read_text(encoding="utf-8")
 	assert '"POST": {"/chat/completions", "/responses", "/embeddings"}' in module_text
@@ -901,7 +1089,7 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "implement-repair|diagnose|reviewer" in sandbox_text
 	assert 'find "${workspace}" -xdev -name .git -print0' in sandbox_text
 	assert 'InaccessiblePaths=${protected_git_path}' in sandbox_text
-	assert "GIT_DIR|GIT_WORK_TREE" not in sandbox_text
+	assert 'common_env+=("GIT_DIR=${guard_git_dir}" "GIT_WORK_TREE=${workspace}")' in sandbox_text
 	assert "ThreadingHTTPServer" not in module_text
 	assert "class BoundedHTTPServer" in module_text
 	assert "ThreadPoolExecutor" in module_text
@@ -1098,6 +1286,8 @@ def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
 	assert "GH_PAT: ${{ secrets.GH_PAT }}" not in commit_step
 	assert "refusing retry or partial-work salvage" in implement
 	assert implement.count('echo "POST_AGENT_WORKSPACE_GUARD_FAILED=true" >> "$GITHUB_ENV"') >= 4
+	assert '::error::Post-agent workspace guard rejected repair attempt ${attempt} after model failure;' in implement
+	assert '::error::Post-agent workspace guard rejected repair attempt ${attempt};' in implement
 	assert implement.count("env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true'") >= 12
 	assert "Review-blocked fix workspace guard rejected" in (
 		REPO_ROOT / "scripts" / "review_rb_judge.sh"
@@ -1105,12 +1295,18 @@ def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
 	assert (
 		REPO_ROOT / "scripts" / "review_rb_judge.sh"
 	).read_text(encoding="utf-8").count("| run_review_rb_validator_python -c '") >= 2
-	assert "terminating the poller before output parsing" in (
-		REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
-	).read_text(encoding="utf-8")
+	poller_process = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	for guard_failure in ("Review-blocked workspace snapshot failed for PR", "Review-blocked workspace guard rejected PR"):
+		failure_branch = poller_process.split(guard_failure, 1)[1].split("\n          fi", 1)[0]
+		assert "break" in failure_branch and "exit 78" not in failure_branch
+	assert 'if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then' in poller_process
+	assert 'rb_cleanup_combined_workspace\n        continue' in poller_process
 	assert 'RB_JUDGE_JSON="$(run_poller_isolated_python "${PWD}" -c "' in (
 		REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 	).read_text(encoding="utf-8")
+	resolver_process = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	resolver_failure_branch = resolver_process.split("workspace_safety_violation; aborting before output parsing.", 1)[1].split("fi", 1)[0]
+	assert 'emit_conflict_resolver_substate "Failed" "${attempt}"' in resolver_failure_branch
 	for guarded_script_name, guard_rejection_message in (
 		("review_apply_fixes.sh", "aborting before output parsing or retry"),
 		("review_conflict_resolve.sh", "aborting before output parsing"),

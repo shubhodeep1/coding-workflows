@@ -1951,6 +1951,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     --quarantine-dir "${resolver_workspace_quarantine}" \
     --changed-paths-out "${resolver_workspace_paths}" --report "${resolver_workspace_report}"; then
     echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation; aborting before output parsing."
+    emit_conflict_resolver_substate "Failed" "${attempt}"
     exit 78
   fi
   resolver_clean_output="${tmp_output}.ansi-clean"
