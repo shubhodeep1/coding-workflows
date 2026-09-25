@@ -7802,6 +7802,11 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
 	stage = _stage_helper_text()
 	assert 'review_untrusted_sandbox.sh" prepare' in step
+	assert 'if [ "${WORKSPACE_PATH+x}" ]; then' in helper
+	assert 'workspace="${WORKSPACE_PATH}"' in helper
+	assert 'workspace="${GITHUB_WORKSPACE:-$PWD}"' in helper
+	assert '"${root}/workspace-identity"' in helper
+	assert 'cmp -s "${root}/workspace-identity"' in helper
 	assert "pip install" not in step and "npm ci" not in step
 	assert "--network none --read-only --cap-drop ALL" in helper
 	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run' in helper
@@ -7824,9 +7829,14 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		root = Path(td)
 		host = root / "host"
+		runner_checkout = root / "runner-checkout"
 		source = root / "isolated" / "source"
 		source.mkdir(parents=True)
 		(host / "scripts").mkdir(parents=True)
+		(runner_checkout / "scripts").mkdir(parents=True)
+		(runner_checkout / "scripts/app.py").write_text("runner checkout\n")
+		subprocess.run(["git", "init", "-q", str(runner_checkout)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=runner_checkout, env=_git_clean_env(), check=True)
 		(host / ".git-credentials").write_text("private-sentinel")
 		(host / "scripts/app.py").write_text("before\n")
 		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
@@ -7857,6 +7867,7 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 			(source / f"scripts/module{module_suffix}").write_text("after\n")
 		assert run("transfer").returncode == 0
 		assert (host / "scripts/app.py").read_text() == "after\n"
+		assert (runner_checkout / "scripts/app.py").read_text() == "runner checkout\n"
 		assert (host / "scripts/new.py").read_text() == "new\n"
 		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
 			assert (host / f"scripts/module{module_suffix}").read_text() == "after\n"
@@ -7870,6 +7881,74 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		(source / "scripts/new.py").symlink_to("/etc/passwd")
 		assert run("transfer").returncode != 0
 		assert (host / "scripts/new.py").read_text() == "new\n"
+		assert (runner_checkout / "scripts/app.py").read_text() == "runner checkout\n"
+
+		# Exercise the shell boundary without Docker: the fake container edits
+		# only its isolated mount; the real snapshot/transfer helper publishes it.
+		fake_bin = root / "bin"
+		fake_bin.mkdir()
+		fake_docker = fake_bin / "docker"
+		fake_docker.write_text(textwrap.dedent("""\
+			#!/usr/bin/env bash
+			if [ "$1" = build ]; then
+				printf 'sha256:%064d\\n' 0
+			elif [ "$1" = run ]; then
+				for arg in "$@"; do
+					case "$arg" in
+						type=bind,src=*,dst=/source)
+							source="${arg#type=bind,src=}"; source="${source%,dst=/source}" ;;
+						esac
+					done
+				case " $* " in
+						*' --network none '*) printf 'sandbox change\\n' > "${source}/scripts/app.py" ;;
+					esac
+			fi
+			"""), encoding="utf-8")
+		fake_docker.chmod(0o755)
+		prompt = root / "prompt.txt"
+		prompt.write_text("edit the file\n")
+		config = root / "config.json"
+		config.write_text(json.dumps({"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}}, "model": "openrouter/openai/gpt-6-sol"}))
+		env_file = root / "github-env"
+		sandbox = REPO_ROOT / "scripts/review_untrusted_sandbox.sh"
+		env = _git_clean_env({
+			"PATH": f"{fake_bin}:{os.environ['PATH']}",
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RUNNER_TEMP": str(root), "RUNTIME_DIR": str(root),
+			"GITHUB_ENV": str(env_file), "GITHUB_WORKSPACE": str(runner_checkout),
+			"WORKSPACE_PATH": str(host), "OPENROUTER_API_KEY": "test-placeholder",
+		})
+		def sandbox_call(action: str, *, sandbox_env: dict[str, str] = env) -> subprocess.CompletedProcess[str]:
+			args = ["bash", str(sandbox), action]
+			if action == "run":
+				args.extend([str(prompt), str(root / "output"), "openai/gpt-6-sol", "high", str(config)])
+			return subprocess.run(args, env=sandbox_env, cwd=runner_checkout, capture_output=True, text=True, check=False)
+		assert sandbox_call("prepare").returncode == 0
+		prepared_root = env_file.read_text().strip().split("=", 1)[1]
+		run_env = {**env, "REVIEW_SANDBOX_ROOT": prepared_root}
+		assert sandbox_call("run", sandbox_env={**run_env, "WORKSPACE_PATH": str(root / "missing")}).returncode != 0
+		assert sandbox_call("run", sandbox_env={**run_env, "WORKSPACE_PATH": ""}).returncode != 0
+		assert sandbox_call("run", sandbox_env={**run_env, "WORKSPACE_PATH": str(runner_checkout)}).returncode != 0
+		redirected = root / "redirected"
+		redirected.symlink_to(runner_checkout, target_is_directory=True)
+		assert sandbox_call("run", sandbox_env={**run_env, "WORKSPACE_PATH": str(redirected)}).returncode != 0
+		assert (host / "scripts/app.py").read_text() == "after\n"
+		assert (runner_checkout / "scripts/app.py").read_text() == "runner checkout\n"
+		assert sandbox_call("run", sandbox_env=run_env).returncode == 0
+		assert (host / "scripts/app.py").read_text() == "sandbox change\n"
+		assert (runner_checkout / "scripts/app.py").read_text() == "runner checkout\n"
+		assert sandbox_call("cleanup", sandbox_env=run_env).returncode == 0
+		assert sandbox_call("prepare", sandbox_env={**env, "WORKSPACE_PATH": str(root / "missing")}).returncode != 0
+
+		# Legacy callers without WORKSPACE_PATH still use GITHUB_WORKSPACE.
+		fallback_env = {key: value for key, value in env.items() if key != "WORKSPACE_PATH"}
+		assert sandbox_call("prepare", sandbox_env=fallback_env).returncode == 0
+		fallback_root = env_file.read_text().splitlines()[-1].split("=", 1)[1]
+		fallback_run_env = {**fallback_env, "REVIEW_SANDBOX_ROOT": fallback_root}
+		assert sandbox_call("run", sandbox_env=fallback_run_env).returncode == 0
+		assert (runner_checkout / "scripts/app.py").read_text() == "sandbox change\n"
+		assert (host / "scripts/app.py").read_text() == "sandbox change\n"
+		assert sandbox_call("cleanup", sandbox_env=fallback_run_env).returncode == 0
 
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:

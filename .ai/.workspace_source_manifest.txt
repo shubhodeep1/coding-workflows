@@ -143,6 +143,7 @@ analysis/workflow-optimization-2026-09-24.md
 analysis/workflow-optimization-2026-09-25.md
 changelog.d/.gitkeep
 changelog.d/3576-security-audit-uncapped-followups.md
+changelog.d/4139-poller-trusted-support.md
 changelog.d/4139-security-agent-isolation.md
 changelog.d/4139-security-pass-cycle-3-isolation.md
 changelog.d/4139-security-pass-hardening.md
