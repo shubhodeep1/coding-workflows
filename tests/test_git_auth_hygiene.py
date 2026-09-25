@@ -276,7 +276,8 @@ def test_review_support_uses_only_the_immutable_workflow_definition_sha() -> Non
 	assert "github.sha" not in resolve_block
 	assert 'SCRIPT_REF=stable' not in resolve_block
 	assert ".codex-workflow-src-main" not in workflow_text
-	assert "Install project dependencies (best-effort)" not in workflow_text
+	# PR-declared dependencies install only inside the disposable review sandbox.
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare' in workflow_text
 
 	stage_text = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
 	review_stage = stage_text[: stage_text.index("\nWORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT=")]
@@ -288,9 +289,9 @@ def test_editor_launch_uses_unprivileged_empty_environment_and_protected_sentine
 	launch_start = editor_text.index("editor_opencode_cmd=(")
 	launch_end = editor_text.index("\n  )", launch_start)
 	launch_block = editor_text[launch_start:launch_end]
-	assert 'sudo -n -u "${EDITOR_ISOLATION_USER}" --' in launch_block
-	assert "env -i" in launch_block
-	assert '"OPENROUTER_API_KEY=${MODEL_PROVIDER_BROKER_TOKEN}"' in launch_block
+	# The writer runs in the disposable review sandbox; its relay keeps the
+	# provider key on the host (review_untrusted_sandbox.sh).
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in launch_block
 	for forbidden_name in ("GITHUB_ENV", "GITHUB_OUTPUT", "BASH_ENV", "GIT_DIR", "GH_TOKEN", "GH_PAT", "TG_BOT_SECRET"):
 		assert forbidden_name not in launch_block
 	assert "setup_editor_isolation" in editor_text

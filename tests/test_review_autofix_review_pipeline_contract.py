@@ -2878,8 +2878,10 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in apply_fixes
 	assert 'failure_class=config_writer_missing' in apply_fixes
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in apply_fixes
-	assert '"OPENROUTER_API_KEY=${MODEL_PROVIDER_BROKER_TOKEN}"' in apply_fixes
-	assert '--provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"' in apply_fixes
+	# The editor runs in review_untrusted_sandbox.sh behind the budgeted
+	# review relay (clarify_openrouter_broker.py review-broker).
+	assert 'review_untrusted_sandbox.sh" run' in apply_fixes
+	assert "--provider-base-url" not in apply_fixes
 	assert "model_provider_broker_stop || echo" in apply_fixes
 	assert "model_provider_broker_stop || original_rc=80" not in apply_fixes
 	assert 'opencode_run_cmd "$@"' in consolidate
@@ -5644,6 +5646,7 @@ def test_review_partial_finalize_comment_and_marker_report_withheld_state() -> N
 def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 	for step_name in (
 		"Pre-editor stale-base gate",
+		"Install project dependencies (best-effort)",
 		"Switch reasoning effort for editor",
 		"Setup Serena for editor",
 		"Apply fixes with editor model",
@@ -5656,7 +5659,6 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 		assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in block, (
 			f"step should skip during partial finalize: {step_name}"
 		)
-	assert "Install project dependencies (best-effort)" not in _workflow_text()
 	for step_name in (
 		"Run interim judge",
 		"Synthesize behavioural smoke",
@@ -6515,29 +6517,56 @@ def _run_dependency_install_step(
 
 
 def test_dependency_install_bootstraps_pytest_when_pyproject_declares_it() -> None:
-	workflow = _workflow_text()
-	assert "- name: Install project dependencies (best-effort)" not in workflow
-	assert "python3 -m pip install pytest" not in workflow
+	"""A tool-only pyproject must still leave pytest importable for the editor.
+
+	`pip install -e .` exits 0 on a pyproject.toml that carries no [project]
+	table (setuptools builds an UNKNOWN-0.0.0 package), so the pre-existing
+	`install_failed` guard never fires and pytest silently stays missing.
+	"""
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
+	assert "pytest is not importable" in result["output"], result["output"]
 
 
 def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
-	workflow = _workflow_text()
-	assert "pip install -r requirements.txt" not in workflow
-	assert 'pip install -e ".[dev]"' not in workflow
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert (
+		"::warning::pytest is declared by this repository but could not be installed"
+		in result["output"]
+	), result["output"]
 
 
 def test_dependency_install_bootstraps_pytest_for_nested_conftest() -> None:
-	assert "pytest_bootstrap_wanted" not in _workflow_text()
+	result = _run_dependency_install_step(
+		{"tests/conftest.py": ""},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
 
 
 def test_dependency_install_skips_pytest_bootstrap_when_already_importable() -> None:
-	assert 'python3 -c "import pytest"' not in _workflow_text()
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
+		pytest_importable=True,
+	)
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "already importable" in result["output"], result["output"]
 
 
 def test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos() -> None:
-	workflow = _workflow_text()
-	assert "npm ci --ignore-scripts" not in workflow
-	assert "yarn install --frozen-lockfile --ignore-scripts" not in workflow
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.ruff]\nline-length = 100\n"},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
 
 
 def test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha() -> None:

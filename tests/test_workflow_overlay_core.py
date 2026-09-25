@@ -326,7 +326,7 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 		assert "load_workflow_overlay.py" in workflow_text, workflow_path
 		assert "workflow_overlay.v1.json" in workflow_text, workflow_path
 		if workflow_path.name == "validate.yml":
-			assert 'bash "${helper_path}" validate --manifest "${manifest_path}"' in workflow_text
+			assert 'bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"' in workflow_text
 			assert "WORKFLOW.md overlay is opt-in by file presence" in stage_helper_text
 			assert '--github-env "${GITHUB_ENV}"' in stage_helper_text
 		else:
@@ -349,7 +349,7 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 	assert 'bash "${helper}"' in review_autofix_text
 	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"' in stage_helper_text
 	assert '--schema-path "${SUPPORT_AI_MEMORY_DIR}/schemas/workflow_overlay.v1.json"' in stage_helper_text
-	assert 'bash "${helper_path}" validate --manifest "${manifest_path}"' in (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text(encoding="utf-8")
+	assert 'bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"' in (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text(encoding="utf-8")
 	for snippet in (
 		'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"',
 		'--repo-root "${REPO_ROOT}"',
