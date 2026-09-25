@@ -2063,6 +2063,14 @@ run reviews the merged head. Nothing else changes: the same resolver, the same
 resolve) is what let the editor's commit itself collide with a base that moved
 during the 35–96 minute reviewer pass (coding-workflows #4031 round 2).
 
+In this repository, `scripts/review_conflict_resolve.sh` checks each resolver
+attempt against a pre-attempt worktree and merge-index snapshot. If an attempt
+edits outside the captured conflicted paths, the runner logs the paths, restores
+and verifies the full pre-attempt state, then retries with scope-specific feedback
+within the existing attempt limit. An unsafe or unverifiable restore stops the
+run without committing; the final `check_resolver_diff.sh` gate still runs on an
+accepted attempt. Consumer-repository resolver runs keep their existing path.
+
 **Merge train** (`MERGE_TRAIN_ENABLED`, default `true`;
 `scripts/review_merge_train.sh`). Runs as the `Merge-train gate` step just
 before the topology gate, only for heads matching `ai/issue-*` and only when
