@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan\n\nPlanning ref: `118d7e405ba97dff8e6e01917626ebede183f6d8` on `ai/issue-4469`; this matches the integration branch metadata. The clarification was auto-answered because no questions were needed.\n\n**Automation:** Extend the existing review workspace helper; add no script, supervisor, database operation, or manual step. The existing `.github/workflows/internal-review.yml` `pull_request` trigger calls `review_autofix.yml`, which already invokes the helper. No workflow wiring change is planned.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/review_untrusted_workspace.py::allowed`, `enumerate_workspace`, `snapshot`, and the existing transfer contract test.  \nScope-mode justification: Limit the change to the reported tracked manifest and its regression coverage. The complete path\u2014snapshot, refresh, transfer, and exclusion checks\u2014belongs in this fix rather than a transfer-only shortcut. This follows `unattended_system_instructions.md` \u00a76: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n### Files likely to change\n- `scripts/review_untrusted_workspace.py` \u2014 narrowly admit `.ai/.workspace_source_manifest.txt`.\n- `tests/test_review_autofix_review_pipeline_contract.py` \u2014 extend `test_review_isolation_workspace_transfer_and_hostile_paths`.\n\n### Functions and data structures\n- In `snapshot`, distinguish Git-tracked paths from untracked paths. Permit the exact manifest path only when it is tracked **and** the existing `IS_WORKFLOW_SOURCE_REPO` flag is `true`; retain the normal handling of other paths.\n- Pass that permission through `allowed` and `enumerate_workspace` for snapshot, refresh, and transfer. Traverse `.ai` only when the tracked manifest was captured in the host-side baseline. Keep every other `.ai` path excluded.\n- The baseline JSON gains the manifest entry only when eligible. Its format, file limits, symlink checks, and host-baseline checks remain unchanged.\n\n### API/interface changes\nNo external API, workflow input, environment variable, or output-format change. Reuse `IS_WORKFLOW_SOURCE_REPO`, which `stage_workflow_support.sh` already exports.\n\n## Decisions\n\n### D1 \u2014 Authorize the manifest through the snapshot baseline\n- **Chosen:** Require source-repo identity and Git tracking at snapshot time; require the resulting baseline entry for later traversal and transfer.\n- **Alternatives considered:** Allow all `.ai` files, allow the manifest by filename alone, or relax the changes-lost guard.\n- **Why:** A source-repo flag alone would also admit an untracked file created in the sandbox. The baseline ties transfer to the one host file that passed the tracked-file and safety checks.\n\n## Security considerations\n\nThe trust boundary is the isolated editor workspace \u2192 host checkout. No new endpoint or authorization surface is introduced; eligibility is limited to the existing source-repo identity plus a tracked host file. Continue rejecting unsafe path components, symlinks, unsafe file types and modes, oversized files, and concurrent host edits. An editor-created `.ai` file, a consumer-repo manifest, or a replacement symlink must not be copied to the host. Do not weaken the changes-lost detector.\n\n### Risks and edge cases\n- `.ai/.workspace_source_manifest.txt` is both Git-tracked and listed in `.gitignore` on this ref; an untracked copy must not gain the exception.\n- Both directory traversal and file filtering currently exclude `.ai`; changing only one would leave the fix ineffective.\n- Review executes helpers from a verified workflow-support commit. The PR-head edit will not affect review runs until it lands in the trusted support ref; do not work around that boundary by executing the PR copy.\n- The issue\u2019s exclusion diagnosis agrees with the inspected code. Full failing-run transfer traces were not supplied, so the regression test must establish the causal path directly.\n\n### Testing considerations\nExtend the named test to stage a manifest in a scratch host repository, run snapshot \u2192 refresh \u2192 transfer, edit the isolated manifest, and assert a host Git diff. Assert that other `.ai` content remains excluded, and that a consumer-repo or untracked manifest is not transferred. Retain hostile-path and concurrent-host-change assertions. Run the new regression against the reported head **before** the fix to demonstrate failure, then against the fix to demonstrate success; record both results in the PR. Run the focused review-pipeline contract test and applicable Python lint on the repository\u2019s installed toolchain.\n\n### Pre-execution self-check\nThe two-file change has an existing automation entry point and test pattern; no clarification or external input is required. No files were modified during planning.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "946609c8dc3b337d48922966604d6bf37ee3f3a4e14ba43b07bd0231ff84e707",
+  "lineage": {
+    "issue_number": 4482,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36168057030",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36168057030",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4482"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925174158_a5d7d90ed3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4482,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36168057030"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4482",
+  "timestamps": {
+    "created_at": "2026-09-25T17:41:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
