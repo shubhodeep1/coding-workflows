@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/review_conflict_resolve.sh`\u2019s retry-base snapshot, touched-path accounting, and `scripts/check_resolver_diff.sh` guard.  \nScope-mode justification: The complete fix must restore out-of-scope edits before retrying, not merely move the rejection earlier. That remains within the requested resolver and test scope. Per `unattended_system_instructions.md` \u00a76, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed; a retry against a contaminated tree is not a correct recovery.\n\n## Automation and execution\n- Extend an existing script; introduce no new script or supervisor. The existing `.github/workflows/internal-review.yml` `pull_request` `opened`/`synchronize`/`reopened`/`ready_for_review` path calls `review_autofix.yml`, which already invokes the resolver. No scheduler wiring, database gate, or future-removal registry entry is needed.\n- Planning ref: `claude/friendly-tesla-9ox6ci` at `05542cdc6529db0113ee0d80fdd9b77d713c7640`; it matches the integration-branch metadata.\n\n## Files likely to change\n- `scripts/review_conflict_resolve.sh` \u2014 capture sufficient pre-attempt state, detect touched paths before accepting an attempt, and restore or fail closed.\n- `tests/test_review_conflict_resolve_retry_prelude_render.py` \u2014 extend the existing retry tests with recovered-violation and unsafe-restore cases.\n\n## Functions and modules\n- Extend `_restore_attempt_base` and the existing retry loop. Reuse the `PRE_RESOLVER_STATE_FILE` tracked-file hashes and pre-existing untracked-path list, and the post-loop `RESOLVER_TOUCHED_FILE` comparison pattern, to calculate **attempt-relative** changes. Preserve recoverable baseline bytes and modes where the index cannot reconstruct them; verify restored content, modes, and path presence against the pre-attempt snapshot.\n- Before the soft-validation success `break`, compare attempt-touched paths with `CONFLICTED_PATHS_FILE`. Log violating paths and mark the attempt failed. Remove newly created out-of-scope paths only when the snapshot proves they were absent; restore changed pre-existing paths, including allowed conflict paths, before another attempt. If the snapshot, path identity, index state, restoration, or verification is unsafe or unavailable, exit nonzero without committing.\n- Keep the final `check_resolver_diff.sh` invocation unchanged. Keep scope failure distinct from marker/fingerprint failure in retry diagnostics; do not claim fingerprint violations when none were measured.\n\n## Data structures affected\n- Extend the existing runtime-directory attempt snapshot with the pre-attempt path/content/mode information needed for safe restoration. Do not change persisted PR state, identifiers, or output formats.\n\n## API/interface changes\nNone. No new GitHub calls, environment variables, endpoints, or external-service contracts.\n\n## Decisions\n### D1 \u2014 Retry only from a verified baseline\n- **Chosen:** Treat an out-of-conflict edit as a rejected attempt; retry within the existing three-attempt limit only after complete, verified restoration.\n- **Alternatives considered:** Leave rejection at the final gate; retry after restoring only allowlisted files; relax the conflicted-set check.\n- **Why:** The current allowlist snapshot restores only in-scope files, so either shortcut could carry an out-of-scope edit into a later attempt. The final hard gate remains defense in depth.\n\n## Security considerations\nThe resolver\u2019s model output is untrusted repository input; the captured conflicted set is its write boundary. Validate snapshot and touched paths before filesystem operations, reject ambiguous or unsafe restoration rather than deleting a possibly pre-existing file, and detect unexpected index mutations. No new authorized endpoint is exposed. Abuse cases include a model creating an out-of-scope workflow file, changing an auto-merged file, or leaving an edit behind while appearing to resolve every conflict marker.\n\n## Risks and edge cases\n- The diagnosis is consistent with this checkout: the soft-success `break` precedes touched-path computation and the final guard. The proposed recovery has **not** landed on this planning ref.\n- `PRE_RESOLVER_STATE_FILE` records hashes, not necessarily recoverable bytes for dirty tracked files. Capture a restorable baseline before invocation; do not assume a hash alone permits restoration.\n- Cover deleted or newly created files, executable-bit changes, pre-existing untracked files, and staged/index changes. On exhaustion or unsafe restore, preserve the existing failure/no-commit behavior.\n\n## Testing considerations\nExtend the existing retry test pattern with a temporary Git repository: attempt one makes an out-of-scope edit but passes marker/fingerprint soft checks; verified restoration permits attempt two to succeed. Separately, make restoration unsafe and assert a nonzero exit, no second model attempt, and no merge-resolve commit. Assert the final hard guard still runs on accepted output. Run the focused tests and `bash -n` on the edited script, then relevant resolver contract tests.\n\n## Pre-execution self-check\nThe requested files and existing retry mechanisms were inspected; the ref matches metadata, the fix has an automated entry point, and no external input is required. Planning only: no repository files were modified or validators run.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f1332efe0b4f74d0827148197253645785b19d2f87898d5fbc3d581ac9f1ccd5",
+  "lineage": {
+    "issue_number": 4459,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36117410920",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36117410920",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4459"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925092045_9902150f9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4459,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36117410920"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4459",
+  "timestamps": {
+    "created_at": "2026-09-25T09:20:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
