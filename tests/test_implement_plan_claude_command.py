@@ -108,3 +108,12 @@ def test_review_commands_list_auto_decisions_without_asking():
 			assert "## Auto-Decisions Review" in body, path
 			assert "`claude/implement-plan-<slug>-decision-changes`" in body, path
 			assert "no Q/A question is asked about any entry" in body, path
+
+
+def test_live_state_still_accepts_decision_review_replies(text):
+	assert "the LIVE stop does not apply to a `change AD-<n> → <letter>` or `confirm` reply" in text
+	for path in REVIEW_COMMANDS:
+		if path.name == "deploy-activate.md":
+			body = _flat(path)
+			assert "`Status: LIVE` report LIVE and stop unless the current reply changes an auto-decision" in body, path
+			assert "`Status: LIVE` just report LIVE and stop unless the current reply changes an auto-decision" in body, path
