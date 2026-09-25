@@ -7171,9 +7171,9 @@ def _step_explicit_env_names(step_name: str) -> list[str]:
 def test_editor_preflight_step_wiring() -> None:
 	preflight = _step_block('"Preflight: Verify required files before reviewer invocation"')
 	editor_env = _step_explicit_env_names("Apply fixes with editor model")
-	assert editor_env == ["GH_TOKEN", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
+	assert editor_env == ["BASH_ENV", "ENV", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
 	editor = _step_block("Apply fixes with editor model")
-	for name in editor_env:
+	for name in ("REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"):
 		line = next(line.strip() for line in editor.splitlines() if line.strip().startswith(f"{name}:"))
 		assert line in preflight, name
 	assert "REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}" in preflight
@@ -7246,7 +7246,8 @@ def test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop() -> None
 	text = _stage_helper_text()
 	start = text.index("for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do")
 	loop = text[start:text.index("\ndone\n", start)]
-	assert 'src=".codex-workflow-src/scripts/${f}"' in loop
+	assert 'main_primary_bootstrap_root=".codex-workflow-src"' in text
+	assert 'src="${main_primary_bootstrap_root}/scripts/${f}"' in loop
 	assert '.codex-workflow-src-main' not in loop
 
 

@@ -142,14 +142,10 @@ analysis/workflow-optimization-2026-09-24-2.md
 analysis/workflow-optimization-2026-09-24.md
 analysis/workflow-optimization-2026-09-25.md
 changelog.d/.gitkeep
-changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
-changelog.d/3965-security-pass-loop-convergence.md
-changelog.d/4134-auto-apply-analysis-and-stable-release.md
 changelog.d/4139-security-agent-isolation.md
 changelog.d/4139-security-pass-cycle-3-isolation.md
 changelog.d/4139-security-pass-hardening.md
 changelog.d/4143-security-pass-line-ownership-poller.md
-changelog.d/4161-smoke-test-telegram-silencing.md
 changelog.d/4173-security-pass-integrity-hardening.md
 changelog.d/4290-security-boundary-hardening.md
 changelog.d/4305-editor-checksum-and-gate-retry-queueing.md
@@ -178,7 +174,6 @@ changelog.d/implement-plan-failed-run-blocks.md
 changelog.d/noop-sweep-fingerprint-cap-skip.md
 changelog.d/post-push-pr-status-check-in.md
 changelog.d/review-autofix-workflow-size-limit.md
-changelog.d/security-audit-concurrency-deadlock.md
 changelog.d/security-pass-line-ownership-engine.md
 codex.md
 docs/INVENTORY.md

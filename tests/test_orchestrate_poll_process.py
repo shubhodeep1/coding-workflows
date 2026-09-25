@@ -2929,7 +2929,6 @@ for jq_argument in "$@"; do
 		esac
 	fi
 done
-fi
 if [ "${MOCK_SECURITY_PASS_ADVISORY_STATE_PERSIST_FAIL:-false}" = "true" ]; then
 	for jq_argument in "$@"; do
 		case "${jq_argument}" in

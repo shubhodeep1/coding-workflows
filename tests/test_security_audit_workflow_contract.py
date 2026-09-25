@@ -709,6 +709,7 @@ def test_security_audit_deduplicates_canonical_crlf_followup() -> None:
 				}],
 			],
 		}
+		state["api_responses"] = [[state["issue_list_responses"][1]]]
 		proc, final_state = _run_security_audit(
 			state,
 			codex_output=json.dumps([finding]),
@@ -975,7 +976,20 @@ def test_security_audit_files_every_new_finding_and_dedupes_across_pages() -> No
 	count as a follow-up.
 	"""
 	finding_ids = [f"uncapped-finding-{index}" for index in range(1, 6)]
-	codex_output = json.dumps([_finding_payload(finding_id) for finding_id in finding_ids], ensure_ascii=True)
+	finding_categories = (
+		"A01:2021-Broken Access Control",
+		"A02:2021-Cryptographic Failures",
+		"A03:2021-Injection",
+		"A04:2021-Insecure Design",
+		"A05:2021-Security Misconfiguration",
+	)
+	codex_output = json.dumps(
+		[
+			_finding_payload(finding_id, file_path="file_b.py", category=finding_categories[index - 1])
+			for index, finding_id in enumerate(finding_ids, 1)
+		],
+		ensure_ascii=True,
+	)
 	first_page = [
 		{
 			"number": 100 + index,
@@ -1008,7 +1022,26 @@ def test_security_audit_files_every_new_finding_and_dedupes_across_pages() -> No
 	state = _security_audit_tracker_state()
 	state["api_responses"] = [[first_page, second_page]]
 	state["next_issue_number"] = 9500
-	proc, final_state = _run_security_audit(state, codex_output=codex_output)
+	with tempfile.TemporaryDirectory(prefix="security-audit-uncapped-") as fixture_td:
+		repo_dir, _first_sha, head_sha = _git_fixture_repo(Path(fixture_td))
+		waiver_match_key = _fixture_waiver_key(
+			repo_dir, head_sha, "file_b.py", 1, "A05:2021-Security Misconfiguration",
+		)
+		second_page[0]["body"] = (
+			"<!-- ai:security-finding:uncapped-finding-5 -->\n"
+			f"<!-- ai:security-waiver-key:{waiver_match_key} -->\n"
+			"Refs #9000\n\n---\n**Generated security advisory metadata**\n"
+			"- Schema: `generated-security-advisory.v1`\n"
+			f"- Waiver match key: `{waiver_match_key}`\n"
+			f"- Audited commit: `{head_sha}`\n"
+			"- Cited file: `file_b.py`\nfiles_touched:\n  - file_b.py\n"
+		)
+		proc, final_state = _run_security_audit(
+			state,
+			codex_output=codex_output,
+			extra_env={"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT)},
+			cwd=repo_dir,
+		)
 
 	assert proc.returncode == 0, proc.stderr
 	assert "tracker=#9000 findings=5 followups_created=4" in proc.stdout
