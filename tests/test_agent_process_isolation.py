@@ -474,6 +474,120 @@ def test_resolver_python_syntax_validation_is_read_only() -> None:
 		assert not (workspace / "__pycache__").exists()
 
 
+def test_resolver_strict_manifests_are_visible_to_isolated_validator() -> None:
+	with tempfile.TemporaryDirectory(dir="/tmp") as directory, \
+		tempfile.TemporaryDirectory(dir=Path.home()) as runner_directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		(workspace / "conflicted.txt").write_text("resolved\n", encoding="utf-8")
+		(workspace / "clean.txt").write_text("merged\n", encoding="utf-8")
+		clean_blob = subprocess.check_output(
+			["git", "-C", str(workspace), "hash-object", "clean.txt"], text=True,
+		).strip()
+		conflicted = root / "conflicted-set.txt"
+		touched = root / "touched-set.txt"
+		spans = root / "spans.json"
+		clean = root / "clean.tsv"
+		conflicted.write_text("conflicted.txt\n", encoding="utf-8")
+		touched.write_text("conflicted.txt\n", encoding="utf-8")
+		spans.write_text(json.dumps({"conflicted.txt": {
+			"mode": "100644", "anchors": ["", "Cg=="],
+		}}), encoding="utf-8")
+		clean.write_text(f"100644\t{clean_blob}\tclean.txt\n", encoding="utf-8")
+		wrapper = Path(runner_directory) / "validator-wrapper.sh"
+		wrapper.write_text(
+			'#!/usr/bin/env bash\n'
+			'for manifest in "${@: -3}"; do\n'
+			'  case "$manifest" in /tmp/*|/var/tmp/*) exit 44 ;; esac\n'
+			'done\n'
+			'exec bash "$ACTUAL_SANDBOX" "$@"\n', encoding="utf-8",
+		)
+		wrapper.chmod(0o700)
+		environment = os.environ.copy()
+		environment.update({
+			"ACTUAL_SANDBOX": str(SANDBOX),
+			"POST_AGENT_VALIDATION_SANDBOX": str(wrapper),
+			"POST_AGENT_VALIDATION_RUNTIME_DIR": runner_directory,
+			"RUNNER_TEMP": runner_directory,
+			"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		command = [
+			"bash", str(RESOLVER_GUARD), "--repo-root", str(workspace),
+			"--conflicted-set", str(conflicted), "--touched-set", str(touched),
+			"--conflict-spans", str(spans), "--clean-manifest", str(clean),
+			"--strict-manifests",
+		]
+
+		def run_guard() -> subprocess.CompletedProcess[str]:
+			result = subprocess.run(command, env=environment, capture_output=True, text=True)
+			assert list(Path(runner_directory).glob("resolver-validator.*")) == []
+			return result
+
+		valid = run_guard()
+		assert valid.returncode == 0, valid.stderr
+		spans.write_text(json.dumps({"conflicted.txt": {
+			"mode": "100644", "anchors": ["T1RIRVI=", "Cg=="],
+		}}), encoding="utf-8")
+		invalid_spans = run_guard()
+		assert invalid_spans.returncode != 0
+		assert "resolver changed content outside conflict spans" in invalid_spans.stderr
+		spans.write_text(json.dumps({"conflicted.txt": {
+			"mode": "100644", "anchors": ["", "Cg=="],
+		}}), encoding="utf-8")
+		(workspace / "clean.txt").write_text("tampered\n", encoding="utf-8")
+		invalid_clean = run_guard()
+		assert invalid_clean.returncode != 0
+		assert "resolver changed deterministically merged content" in invalid_clean.stderr
+		environment["RUNNER_TEMP"] = directory
+		blocked = run_guard()
+		assert blocked.returncode != 0
+		assert "canonical RUNNER_TEMP outside private tmp is required" in blocked.stderr
+		environment["RUNNER_TEMP"] = runner_directory
+		(workspace / "clean.txt").write_text("merged\n", encoding="utf-8")
+		mock_bin = Path(runner_directory) / "mock-bin"
+		mock_bin.mkdir()
+		mock_cp = mock_bin / "cp"
+		mock_cp.write_text("#!/usr/bin/env bash\nexit 44\n", encoding="utf-8")
+		mock_cp.chmod(0o700)
+		environment["PATH"] = f"{mock_bin}:{environment['PATH']}"
+		failed_staging = run_guard()
+		assert failed_staging.returncode != 0
+
+
+def test_review_blocked_judge_parser_reads_tmp_output_via_stdin() -> None:
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	parser = poller.split("      # Parse judge output\n", 1)[1].split(
+		'\n      if [ -z "${RB_JUDGE_JSON}" ]; then', 1,
+	)[0]
+	assert 'raw = sys.stdin.read()' in parser
+	assert '< "${RB_JUDGE_OUTPUT_FILE}"' in parser
+	with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+		output = Path(directory) / "judge.json"
+		output.write_text('```json\n{"action": "merge"}\n```\n', encoding="utf-8")
+		command = (
+			'set -euo pipefail\n'
+			'run_poller_isolated_python() { shift; /usr/bin/python3 -I -S "$@"; }\n'
+			+ parser + '\nprintf "%s" "$RB_JUDGE_JSON"\n'
+		)
+		result = subprocess.run(
+			["bash", "-c", command],
+			env={**os.environ, "RB_JUDGE_OUTPUT_FILE": str(output)},
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert json.loads(result.stdout) == {"action": "merge"}
+		output.write_text("not JSON\n", encoding="utf-8")
+		invalid = subprocess.run(
+			["bash", "-c", command],
+			env={**os.environ, "RB_JUDGE_OUTPUT_FILE": str(output)},
+			capture_output=True, text=True, check=False,
+		)
+		assert invalid.returncode == 0
+		assert invalid.stdout == ""
+
+
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		root = Path(directory)

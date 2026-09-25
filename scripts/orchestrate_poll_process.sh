@@ -20651,7 +20651,7 @@ ${FOLLOWUP_BLOCK_REASON}"
       RB_JUDGE_JSON="$(run_poller_isolated_python "${PWD}" -c "
 import json, re, sys
 
-raw = open('${RB_JUDGE_OUTPUT_FILE}', 'r').read()
+raw = sys.stdin.read()
 
 try:
     data = json.loads(raw.strip())
@@ -20683,7 +20683,7 @@ for i, ch in enumerate(cleaned):
 
 print('Could not parse review-blocked judge JSON', file=sys.stderr)
 sys.exit(1)
-" 2>/dev/null || echo "")"
+" < "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || echo "")"
 
       if [ -z "${RB_JUDGE_JSON}" ]; then
         echo "::warning::Could not parse review-blocked judge output for #${rb_issue}"

@@ -227,6 +227,7 @@ changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/4342-sandbox-state-outside-private-tmp.md
 changelog.d/4379-followup-metadata-and-merged-label-race.md
 changelog.d/4390-workspace-guard-private-tmp.md
+changelog.d/4407-workspace-guard-external-git.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/codex-blocked-verdict-bail.md
