@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **PR build code and review editor commands no longer run in the credential-bearing checkout.** Review dependency installation and the OpenCode writer run in a disposable, restricted container. A fixed-path model relay retains the provider key on the host; only validated edits return to the checkout. Missing isolation prerequisites stop the editor instead of falling back to host execution.

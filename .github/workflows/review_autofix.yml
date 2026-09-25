@@ -4671,128 +4671,8 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         run: |
           set -euo pipefail
-          # Install project dependencies so the editor can validate fixes
-          # (e.g., run vitest, tsc, pytest). Best-effort: failures here do
-          # not block the workflow.
-          install_failed=false
-          if [ -f package-lock.json ]; then
-            echo "Found package-lock.json — running npm ci"
-            npm ci --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f yarn.lock ]; then
-            echo "Found yarn.lock — running yarn install"
-            yarn install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f pnpm-lock.yaml ]; then
-            echo "Found pnpm-lock.yaml — running pnpm install"
-            npx pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f package.json ]; then
-            echo "Found package.json (no lockfile) — running npm install"
-            npm install --ignore-scripts 2>&1 || install_failed=true
-          fi
-          if [ -f requirements.txt ] || { [ -f pyproject.toml ] && [ ! -f package.json ]; }; then
-            echo "Preparing Python dependencies in a disposable secretless container"
-            review_dependency_git_mask="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-dependency-git.XXXXXX")"
-            review_dependency_suffix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${RANDOM}"
-            review_dependency_network="review-dependency-${review_dependency_suffix}"
-            review_dependency_proxy="review-dependency-proxy-${review_dependency_suffix}"
-            review_dependency_installer="review-dependency-installer-${review_dependency_suffix}"
-            review_dependency_volume="review-python-${review_dependency_suffix}"
-            review_dependency_cleanup()
-            {
-              docker rm -f "${review_dependency_installer}" "${review_dependency_proxy}" >/dev/null 2>&1 || true
-              docker network rm "${review_dependency_network}" >/dev/null 2>&1 || true
-              rm -rf -- "${review_dependency_git_mask}"
-            }
-            review_dependency_proxy_ready()
-            {
-              for review_dependency_proxy_probe_attempt in $(seq 1 30); do
-                timeout 2 docker exec "${review_dependency_proxy}" python -c "import socket; socket.create_connection(('127.0.0.1', 8080), 1).close()" >/dev/null 2>&1 && return 0
-                sleep 0.5
-              done
-              return 1
-            }
-            trap review_dependency_cleanup EXIT
-            trap 'exit 1' HUP INT TERM
-            python_install_command='python -m venv /review-venv'
-            if [ -f requirements.txt ]; then
-              python_install_command="${python_install_command} && /review-venv/bin/pip install -r requirements.txt"
-            else
-              python_install_command="${python_install_command} && (/review-venv/bin/pip install '.[dev]' || /review-venv/bin/pip install .)"
-            fi
-            python_install_command="${python_install_command} && /review-venv/bin/pip install pytest"
-            if ! docker volume create "${review_dependency_volume}" >/dev/null \
-                || ! docker network create --internal "${review_dependency_network}" >/dev/null \
-                || ! docker run --rm --network "${review_dependency_network}" --read-only --cap-drop ALL --cap-add CHOWN \
-                  --volume "${review_dependency_volume}:/review-venv" \
-                  python:3.12-slim chown "$(id -u):$(id -g)" /review-venv \
-                || ! docker run --detach --rm --name "${review_dependency_proxy}" \
-                  --network bridge --read-only --cap-drop ALL --security-opt no-new-privileges \
-                  --volume "${SUPPORT_SCRIPTS_DIR}/package_download_proxy.py:/package_download_proxy.py:ro" \
-                  python:3.12-slim python /package_download_proxy.py \
-                || ! review_dependency_proxy_ready \
-                || ! docker network connect --alias dependency-proxy \
-                  "${review_dependency_network}" "${review_dependency_proxy}" \
-                || ! docker run --rm --name "${review_dependency_installer}" \
-                --network "${review_dependency_network}" \
-                --read-only --cap-drop ALL --security-opt no-new-privileges \
-                --tmpfs /tmp:rw,nosuid,nodev,size=512m \
-                --user "$(id -u):$(id -g)" \
-                --env HOME=/tmp/agent-home \
-                --env HTTP_PROXY=http://dependency-proxy:8080 \
-                --env HTTPS_PROXY=http://dependency-proxy:8080 \
-                --env http_proxy=http://dependency-proxy:8080 \
-                --env https_proxy=http://dependency-proxy:8080 \
-                --env PIP_DISABLE_PIP_VERSION_CHECK=1 \
-                --volume "${PWD}:/workspace:ro" \
-                --volume "${review_dependency_git_mask}:/workspace/.git:ro" \
-                --volume "${review_dependency_volume}:/review-venv" \
-                --workdir /workspace \
-                python:3.12-slim sh -ceu "${python_install_command}"; then
-              install_failed=true
-              docker volume rm -f "${review_dependency_volume}" >/dev/null 2>&1 || true
-            else
-              {
-                echo "REVIEW_PYTHON_DEPENDENCY_VOLUME=${review_dependency_volume}"
-              } >> "$GITHUB_ENV"
-            fi
-            review_dependency_cleanup
-            trap - EXIT HUP INT TERM
-          fi
-          if [ "${install_failed}" = "true" ]; then
-            echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
-          fi
-          # The Python branch above can report success while installing
-          # nothing.  A pyproject.toml that carries only a tool table (for
-          # example `[tool.pytest.ini_options]`) has no `[project]` table, so
-          # setuptools' legacy fallback builds an `UNKNOWN-0.0.0` package,
-          # `pip install -e .` exits 0, `install_failed` stays false, and no
-          # warning is emitted -- yet pytest is still not importable.  The
-          # editor then cannot run the repository's pytest suites and
-          # improvises no-install import shims instead, which is exactly what
-          # every autofix round on PR #4029 reported. Probe the prepared
-          # interpreter only in the credentialless validation container;
-          # never import from the PR checkout on the privileged host.
-          pytest_bootstrap_wanted=false
-          if [ -f pytest.ini ] || [ -f conftest.py ] || [ -f tests/conftest.py ]; then
-            pytest_bootstrap_wanted=true
-          elif [ -f pyproject.toml ] && grep -q '^\[tool\.pytest\.ini_options\]' pyproject.toml 2>/dev/null; then
-            pytest_bootstrap_wanted=true
-          elif [ -f setup.cfg ] && grep -q '^\[tool:pytest\]' setup.cfg 2>/dev/null; then
-            pytest_bootstrap_wanted=true
-          elif [ -f tox.ini ] && grep -q '^\[pytest\]' tox.ini 2>/dev/null; then
-            pytest_bootstrap_wanted=true
-          fi
-          if [ "${pytest_bootstrap_wanted}" = "true" ]; then
-            if [ -n "${REVIEW_PYTHON_DEPENDENCY_VOLUME:-}" ] && timeout 30 docker run --rm \
-              --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-              --tmpfs /tmp:rw,nosuid,nodev,size=64m \
-              --volume "${REVIEW_PYTHON_DEPENDENCY_VOLUME}:/review-venv:ro" \
-              --workdir /tmp python:3.12-slim /review-venv/bin/python -I -c 'import pytest' >/dev/null 2>&1; then
-              echo "Repository declares pytest configuration and pytest is already importable."
-            else
-              echo "::warning::pytest is not importable from the safely prepared environment; refusing privileged host installation."
-              echo "::warning::pytest is declared by this repository but could not be installed; the editor cannot run its pytest suites and will fall back to ad-hoc validation."
-            fi
-          fi
+          # A failed install is best-effort; a failed isolation boundary is not.
+          bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
 
       - name: Switch reasoning effort for editor
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
@@ -4984,6 +4864,10 @@ jobs:
               }
             fi
           fi
+
+      - name: Clean up isolated review workspace
+        if: always() && env.REVIEW_SANDBOX_ROOT != ''
+        run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
 
       - name: Remove slop-scan runtime artifact
         if: always()

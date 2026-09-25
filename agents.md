@@ -64,6 +64,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   The review editor's disposable Docker workspace admits `.cjs`, `.mjs`,
+   `.cts`, and `.mts` alongside other source extensions for snapshot and
+   validated transfer. Its isolation helpers must already exist in the
+   verified workflow support commit; a PR's own copies are review data,
+   not executable support, so review fails closed until that commit lands.
    **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on PRs whose
    head ref starts with `claude/implement-plan-` the reviewer panel runs as
    usual, but the GPT editor, conflict resolver, push / re-trigger tail and
