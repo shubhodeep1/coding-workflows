@@ -1682,7 +1682,7 @@ jobs:
 
       - name: Prepare host Git credential
         env:
-          REVIEW_GIT_TOKEN: ${{ github.token }}
+          REVIEW_GIT_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           umask 077

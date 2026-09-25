@@ -365,6 +365,16 @@ if [ "${provider_required}" = true ]; then
 else
 	common_env+=("POST_AGENT_ARTIFACT_DIR=${runtime_dir}")
 fi
+if [ "${role}" = workspace-guard ] && [ -n "${GIT_DIR:-}" ]; then
+	# The writable workspace can be a copy without .git; only the guard needs
+	# the host checkout's metadata to classify paths against Git ignore rules.
+	[ -n "${GIT_WORK_TREE:-}" ] && [ -d "${GIT_WORK_TREE}" ] \
+		&& [ "$(cd "${GIT_WORK_TREE}" && pwd -P)" = "${workspace}" ] \
+		&& [[ "${GIT_DIR}" = /* ]] && [ -f "${GIT_DIR}/HEAD" ] || {
+		echo "untrusted_process_sandbox: workspace Git context is invalid" >&2; exit 1;
+	}
+	common_env+=("GIT_DIR=${GIT_DIR}" "GIT_WORK_TREE=${workspace}")
+fi
 runtime_write_paths=()
 while IFS='=' read -r environment_name environment_value; do
 	case "${environment_name}" in
@@ -566,7 +576,9 @@ if [ "${role}" = workspace-guard ] && [ "${guard_action}" = reconcile ] && [ "${
 	done
 	if [ -n "${guard_manifest}" ] && [ -f "${guard_manifest}" ]; then
 		/usr/bin/python3 -I -S "${4}" dispose --workspace "${workspace}" --manifest "${guard_manifest}" || \
-			echo "untrusted_process_sandbox: workspace disposal failed" >&2
+			echo "::error::untrusted_process_sandbox: workspace disposal failed; contaminated workspace remains at ${workspace}" >&2
+	else
+		echo "::error::untrusted_process_sandbox: workspace disposal skipped; manifest unavailable and contaminated workspace remains at ${workspace}" >&2
 	fi
 fi
 exit "${sandbox_unit_rc}"

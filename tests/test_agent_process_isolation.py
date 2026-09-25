@@ -144,6 +144,50 @@ def test_guard_disposal_refuses_mismatched_snapshot_identity() -> None:
 		assert workspace.is_dir()
 
 
+def test_workspace_guard_uses_external_git_metadata_without_exposing_it_to_validator() -> None:
+	with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+		root = Path(directory)
+		source = root / "source"
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir(mode=0o700)
+		subprocess.run(["git", "init", "-q", str(source)], check=True)
+		(workspace / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
+		assert not (workspace / ".git").exists()
+		environment = os.environ.copy()
+		environment.update({
+			"GIT_DIR": str(source / ".git"), "GIT_WORK_TREE": str(workspace),
+			"RUNNER_TEMP": str(root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		manifest = runtime / "manifest.json"
+		base = ["bash", str(SANDBOX), "--workspace", str(workspace), "--runtime-dir", str(runtime)]
+		snapshot = subprocess.run(
+			base + ["--role", "workspace-guard", "--guard-action", "snapshot", "--",
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot",
+				"--workspace", str(workspace), "--manifest", str(manifest)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert snapshot.returncode == 0, snapshot.stderr
+		(workspace / "ignored.tmp").write_text("ignore me\n", encoding="utf-8")
+		reconcile = subprocess.run(
+			base + ["--role", "workspace-guard", "--guard-action", "reconcile", "--",
+				"/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile",
+				"--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(runtime / "quarantine"),
+				"--changed-paths-out", str(runtime / "changed"), "--report", str(runtime / "report")],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert reconcile.returncode == 20, reconcile.stderr
+		assert json.loads((runtime / "report").read_text(encoding="utf-8"))["rejected"][0]["reason"] == "ignored-path"
+		validator = subprocess.run(
+			base + ["--role", "validator", "--", "/usr/bin/python3", "-I", "-S", "-c",
+				"import os; assert 'GIT_DIR' not in os.environ and 'GIT_WORK_TREE' not in os.environ"],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert validator.returncode == 0, validator.stderr
+
+
 def test_resolver_checker_and_validator_metadata_are_not_from_checkout() -> None:
 	resolver = RESOLVER_GUARD.read_text(encoding="utf-8")
 	sandbox = SANDBOX.read_text(encoding="utf-8")
@@ -169,7 +213,7 @@ def test_git_token_is_not_job_wide_and_sandbox_masks_credential(workflow_name: s
 	job_env = workflow_text.split("      PYTHONSAFEPATH: '1'\n", 1)[1].split("    steps:\n", 1)[0]
 	assert "REVIEW_GIT_TOKEN:" not in job_env
 	assert "${REVIEW_GIT_CREDENTIAL_DIR}/token" in job_env
-	assert "REVIEW_GIT_TOKEN: ${{ github.token }}" in workflow_text
+	assert "REVIEW_GIT_TOKEN: ${{ secrets.GH_PAT }}" in workflow_text
 	assert "umask 077" in workflow_text
 	assert "REVIEW_GIT_CREDENTIAL_DIR=${credential_dir}" in workflow_text
 	assert 'rm -rf -- "${REVIEW_GIT_CREDENTIAL_DIR}"' in workflow_text
@@ -650,6 +694,31 @@ def test_private_tmp_units_exchange_guard_artifacts() -> None:
 				env=isolated_env, capture_output=True, text=True, check=False,
 			)
 			assert no_credentials_or_network.returncode == 0, no_credentials_or_network.stderr
+		(workspace / "sitecustomize.py").write_text("raise RuntimeError('startup executed')\n", encoding="utf-8")
+		(workspace / "bad\x01name").write_text("invalid\n", encoding="utf-8")
+		failed_reconcile = subprocess.run(
+			base + ["--guard-action", "reconcile", "--", "/usr/bin/python3", "-I", "-S",
+				str(WORKSPACE_GUARD), "reconcile", "--workspace", str(workspace), "--manifest", str(manifest),
+				"--quarantine-dir", str(artifacts / "quarantine"), "--report", str(report),
+				"--changed-paths-out", str(paths)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert failed_reconcile.returncode != 0
+		assert "POST_AGENT_WORKSPACE_DISPOSED" in failed_reconcile.stderr
+		assert not workspace.exists()
+		assert list(root.glob("post-agent-rejected-*/workspace/sitecustomize.py"))
+		workspace.mkdir()
+		missing_manifest = artifacts / "missing-manifest.json"
+		missing_result = subprocess.run(
+			base + ["--guard-action", "reconcile", "--", "/usr/bin/python3", "-I", "-S",
+				str(WORKSPACE_GUARD), "reconcile", "--workspace", str(workspace),
+				"--manifest", str(missing_manifest), "--quarantine-dir", str(artifacts / "quarantine"),
+				"--report", str(report), "--changed-paths-out", str(paths)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert missing_result.returncode != 0
+		assert "::error::untrusted_process_sandbox: workspace disposal skipped; manifest unavailable" in missing_result.stderr
+		assert workspace.is_dir()
 
 
 def test_resolver_python_syntax_validation_is_read_only() -> None:
@@ -862,7 +931,7 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "implement-repair|diagnose|reviewer" in sandbox_text
 	assert 'find "${workspace}" -xdev -name .git -print0' in sandbox_text
 	assert 'InaccessiblePaths=${protected_git_path}' in sandbox_text
-	assert "GIT_DIR|GIT_WORK_TREE" not in sandbox_text
+	assert 'if [ "${role}" = workspace-guard ] && [ -n "${GIT_DIR:-}" ]; then' in sandbox_text
 	assert "ThreadingHTTPServer" not in module_text
 	assert "class BoundedHTTPServer" in module_text
 	assert "ThreadPoolExecutor" in module_text

@@ -81,7 +81,7 @@ jobs:
     steps:
       - name: Create runtime workspace
         env:
-          REVIEW_GIT_TOKEN: ${{ github.token }}
+          REVIEW_GIT_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           umask 077

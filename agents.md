@@ -738,8 +738,11 @@ when the bounded fix-cycle budget is exhausted.
   Validator units cannot read checkout, linked, or nested Git metadata; workflow
   reference validation runs a staged checker outside the writable checkout.
   Review and poller checkouts do not persist Git credentials; a host-scoped
-  credential helper supplies the repository's short-lived GitHub token only
+  credential helper supplies the repository's `GH_PAT` only
   to trusted Git calls and is not passed into model or validator units.
+  The workspace guard alone receives validated `GIT_DIR` / `GIT_WORK_TREE`
+  for ignore classification when the model-writable copy has no `.git` entry;
+  other sandbox roles remain without that Git context.
   Security-pass cross-file ownership keeps non-Python content additions
   blocking for access-control findings, but a Python-only mode change does
   not count as a new cross-language route.
