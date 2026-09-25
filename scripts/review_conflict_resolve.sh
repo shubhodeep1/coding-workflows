@@ -2383,15 +2383,22 @@ if [ -n "$(git status --porcelain)" ]; then
             old_exec="${diff_b}"
             diff_path="${diff_c}"
             [ -z "${diff_path}" ] && continue
-            if [ ! -e "${diff_path}" ]; then
+            if [ ! -e "${diff_path}" ] && [ ! -L "${diff_path}" ]; then
               printf '%s\n' "${diff_path}" >> "${RESOLVER_TOUCHED_FILE}"
               continue
             fi
-            new_sha="$(git hash-object -- "${diff_path}" 2>/dev/null || true)"
-            if [ -x "${diff_path}" ]; then
-              new_exec=1
-            else
+            # A symlink is compared by its link text, matching the snapshot, so a
+            # link whose target file changed is not reported as touched.
+            if [ -L "${diff_path}" ]; then
+              new_sha="$(printf '%s' "$(readlink -- "${diff_path}")" | git hash-object --stdin 2>/dev/null || true)"
               new_exec=0
+            else
+              new_sha="$(git hash-object -- "${diff_path}" 2>/dev/null || true)"
+              if [ -x "${diff_path}" ]; then
+                new_exec=1
+              else
+                new_exec=0
+              fi
             fi
             if { [ -n "${new_sha}" ] && [ "${new_sha}" != "${old_sha}" ]; } || [ "${new_exec}" != "${old_exec}" ]; then
               printf '%s\n' "${diff_path}" >> "${RESOLVER_TOUCHED_FILE}"
