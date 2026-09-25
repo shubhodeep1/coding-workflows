@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **Claude-fixer verdicts no longer enable auto-merge without a fresh independent review.**
+
+Verdict convergence now requires a dedicated bot login configured with `CLAUDE_FIXER_VERDICT_BOT_LOGIN` (empty by default), a verdict bound to the latest workflow-owned hand-off's head, round and SHA-256 consensus-ledger digest, and a new reviewer-panel run. Only a clean review with a fresh `ready` check-run snapshot for the same head can enable auto-merge. Repeated findings block the PR for intervention instead of repeating same-head verdict cycles. Operators must privately provision the bot's issue-comment write credentials and confirm that its comment is posted as the bot; a collaborator comment or a Claude Code Web proxy-authored comment is not accepted. Existing v1 markers remain readable but cannot authorize convergence alone.
