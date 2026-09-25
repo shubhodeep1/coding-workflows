@@ -708,8 +708,18 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 			b"data: [DONE]\n\n"
 		)
 		streamed_request: dict[str, object] = {"model": "openai/test-model", "messages": [], "stream": True}
+		def wait_for_settlement(expected_output_tokens: int) -> None:
+			# A response with Content-Length (a broker rejection or a relayed
+			# upstream error) reaches the client before the handler's finally
+			# block settles the reservation; only EOF-terminated bodies imply
+			# settlement. Wait briefly instead of racing the handler thread.
+			deadline = time.monotonic() + 5
+			while state.output_tokens_reserved != expected_output_tokens and time.monotonic() < deadline:
+				time.sleep(0.01)
+
 		fail_connection_construction = True
 		assert post(streamed_request) == 502
+		wait_for_settlement(0)
 		assert state.output_tokens_reserved == 0, "connection setup failure must release its reservation"
 		assert state.input_tokens_reserved == 0
 		assert state.cost_usd_reserved == 0
@@ -730,6 +740,7 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 
 		scripted.append((429, b'{"error":{"message":"rate limited"}}', "application/json"))
 		assert post(streamed_request) == 429
+		wait_for_settlement(50)
 		assert state.output_tokens_reserved == 50, "an upstream error generated nothing and settles to zero"
 
 		module.USAGE_SCAN_TAIL_BYTES = 128
