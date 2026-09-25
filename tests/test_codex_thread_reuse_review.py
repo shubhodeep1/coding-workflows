@@ -195,7 +195,8 @@ def test_review_conflict_resolve_contains_thread_reuse_wiring() -> None:
 	text = REVIEW_CONFLICT_RESOLVE.read_text(encoding="utf-8")
 	assert 'CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"' in text
 	assert 'CODEX_THREAD_REUSE_HELPER=""' in text
-	assert '"scripts/codex_thread_reuse.sh"' in text
+	assert '"scripts/codex_thread_reuse.sh"' not in text
+	assert '".codex-workflow-src/scripts/codex_thread_reuse.sh"' in text
 	assert "resolve_conflict_thread_reuse_asset()" in text
 	assert "conflict_thread_reuse_enabled()" in text
 	assert "render_conflict_thread_reuse_continuation()" in text

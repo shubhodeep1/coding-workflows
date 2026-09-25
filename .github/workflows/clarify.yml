@@ -13,18 +13,11 @@ name: AI Clarify (Reusable)
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE || '10' }}
-  MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE || '30' }}
-  MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE || '0.10' }}
-  MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE || '1' }}
-  MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS || '16777216' }}
-  MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS || '1677721600' }}
-  MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD || '' }}
 
 jobs:
   clarify:
     if: >-
-      (github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) ||
+      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -40,14 +33,14 @@ jobs:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
-      MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
-      # Defaults to xhigh to match the repo-wide gpt-5.6-sol reasoning-level
+      MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+      # Defaults to high to match the repo-wide gpt-6-sol reasoning-level
       # policy. The smoke override below intentionally drops reasoning to
       # `low` for the bait-line smoke fixture; production runs honour the
-      # xhigh default unless overridden via vars.THINKING_LEVEL_CLARIFY.
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'xhigh' }}
+      # high default unless overridden via vars.THINKING_LEVEL_CLARIFY.
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'high' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_CLARIFY || 'low' }}
-      THINKING_LEVEL_CLARIFY_ORCHESTRATOR: ${{ vars.THINKING_LEVEL_CLARIFY_ORCHESTRATOR || 'xhigh' }}
+      THINKING_LEVEL_CLARIFY_ORCHESTRATOR: ${{ vars.THINKING_LEVEL_CLARIFY_ORCHESTRATOR || 'high' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
 
@@ -215,7 +208,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-            for f in gh_helpers.sh emit_event.sh emit_event.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh model_provider_broker.py; do
+            for f in gh_helpers.sh emit_event.sh emit_event.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
@@ -224,6 +217,16 @@ jobs:
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
+
+          # The image build context is fixed support code, never the issue checkout.
+          mkdir -p scripts/clarify_sandbox
+          sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"
+          if [ ! -f "${sandbox_src}" ]; then
+            echo "::error::Missing clarification sandbox Dockerfile"
+            exit 1
+          fi
+          install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile
+
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
           # #3043 refactor.  main ships a self-contained bash render_prompt.sh
@@ -286,7 +289,7 @@ jobs:
             {
               echo "# Auto-generated by coding-workflows — DO NOT EDIT"
               echo "# Prevents runtime-fetched support scripts from being committed."
-              printf '%s\n' "${_fetched_scripts[@]}" .gitignore
+              printf '%s\n' "${_fetched_scripts[@]}" clarify_sandbox/ .gitignore
             } > scripts/.gitignore
           fi
 
@@ -354,6 +357,7 @@ jobs:
         id: clarify_route
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -383,13 +387,33 @@ jobs:
             IS_CLOSED="true"
           fi
 
+          # The event predicate is an early filter; use the already-fetched
+          # GitHub issue metadata before any automatic /answer is posted.
+          ISSUE_AUTHOR_TRUSTED="false"
+          if [ "${EVENT_NAME}" = "issues" ] && [ "${EVENT_ACTION}" = "opened" ]; then
+            if jq -e '(.user.type == "User" and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))) or (.user.type == "Bot" and .user.login == "github-actions[bot]")' "${ISSUE_META_FILE}" >/dev/null; then
+              ISSUE_AUTHOR_TRUSTED="true"
+            fi
+          fi
+
           SKIP_CODEX="false"
           if [ "${IS_CLOSED}" = "true" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}"
+          elif [ "${EVENT_NAME}" = "issues" ] && [ "${EVENT_ACTION}" = "opened" ] && [ "${ISSUE_AUTHOR_TRUSTED}" != "true" ]; then
+            SKIP_CODEX="true"
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=untrusted_issue_author outcome=skip issue=${ISSUE_NUMBER}"
           elif [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_FORCED_RECLARIFY}" != "true" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}"
+          fi
+
+          # Only a verified orchestrator fast path may post its automatic /answer.
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && \
+            { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
+            echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "orchestrator_fast_path=false" >> "$GITHUB_OUTPUT"
           fi
 
           echo "is_orchestrator_managed=${IS_ORCHESTRATOR_MANAGED}" >> "$GITHUB_OUTPUT"
@@ -402,7 +426,18 @@ jobs:
       - name: Detect smoke test and tune LLM settings
         run: |
           set -euo pipefail
-          if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+          # Match every `[E2E <variant>]` fixture title the release gate
+          # creates, not just `[E2E Smoke Test]`. The gate builds four
+          # shapes (test-and-mark-stable.yml:544, 2661, 4664, 4942) and the
+          # old literal `\[E2E Smoke Test\]` pattern matched only two:
+          # `[E2E Clarify Negative Test]` has a different middle token, and
+          # `[E2E Smoke Test alt-model]` has no `]` directly after `Test`.
+          # The negative-test fixture therefore sent a CRITICAL
+          # "Clarification required" Telegram alert on every release run.
+          # Anchored at `^` so a production issue that merely mentions a
+          # fixture tag mid-title is not mistaken for the fixture itself;
+          # real AI issue titles never begin with `[E2E `.
+          if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
             echo "🔬 Smoke test detected — switching to low reasoning effort"
             echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             # Suppress per-phase Telegram alerts from this clarify run; the
@@ -445,7 +480,7 @@ jobs:
           fi
 
       - name: Set clarification phase label
-        if: steps.clarify_route.outputs.is_closed != 'true'
+        if: steps.clarify_route.outputs.is_closed != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' || steps.clarify_route.outputs.orchestrator_fast_path == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -465,7 +500,7 @@ jobs:
           fi
 
       - name: Orchestrator-managed fast path
-        if: steps.clarify_route.outputs.skip_codex == 'true' && steps.clarify_route.outputs.is_closed != 'true'
+        if: steps.clarify_route.outputs.orchestrator_fast_path == 'true' && steps.clarify_route.outputs.skip_codex == 'true' && steps.clarify_route.outputs.is_closed != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -730,6 +765,7 @@ jobs:
         run: |
           set -euo pipefail
           sed -i -E "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}\"/" ~/.codex/config.toml
+          echo "MODEL_REASONING_EFFORT=${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}" >> "$GITHUB_ENV"
 
       - name: Run Codex
         id: run_codex
@@ -737,14 +773,9 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY || '15' }}
+          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
         run: |
           set -euo pipefail
-
-            source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
-            model_provider_broker_start
-            trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
-            configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
-              model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${configured_reasoning}" "$(pwd)"
 
           # Source sanitize_codex_prompt_file (best-effort) so invalid
           # UTF-8 in the prompt cannot deterministically kill every
@@ -928,7 +959,7 @@ jobs:
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex clarify attempt ${attempt}/${max_attempts}..."
-                if model_provider_broker_exec_unprivileged nobody codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+            if bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify succeeded on attempt ${attempt}."
                 break
@@ -1104,7 +1135,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           BLOCKED_REASON: ${{ steps.parse_codex.outputs.blocked_reason }}
         run: |
           set -euo pipefail
@@ -1231,7 +1262,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
@@ -1328,7 +1359,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"

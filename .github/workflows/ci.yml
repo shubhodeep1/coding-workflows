@@ -321,6 +321,7 @@ jobs:
           python3 -m py_compile scripts/workflow_retro.py
           python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
+          python3 -m py_compile scripts/workflow_failure_heal.py
           # Phase 4b smoke-test fixture (only run from
           # test-and-mark-stable.yml). py_compile catches syntax-level
           # breakage (parse errors, indentation) early in CI; it does
@@ -382,6 +383,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_serena_stats_emit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
 
       - name: Memory maintenance extraction contract tests
         run: |
@@ -409,6 +411,26 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
 
+      - name: PR status check-in reminder hook tests (CLAUDE.md §26)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_check_in_reminder.py
+
+      - name: Check-in status helper tests (/implement-plan-claude, CLAUDE.md §26)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status.py
+
+      - name: /implement-plan-claude command contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py
+
+      - name: Implement-plan lessons ingestion + conformance-stage contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ingest_implement_plan_lessons.py
+
       - name: Orchestrate lib unit tests
         run: |
           set -euo pipefail
@@ -419,6 +441,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
+
+      - name: Orchestrator completion lessons + lesson retrieval tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_completion_lessons.py
 
       - name: Integration-ahead-by gate regression tests
         run: |
@@ -438,6 +465,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+
+      - name: Workflow failure heal contract and driver tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_pr_reconcile.py
 
       - name: Plan-archival completeness lint unit tests
         # P6 from docs/postmortems/2026-05-18-project-2734-stall.md.
@@ -658,6 +690,13 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
+
+      - name: Review autofix step-script contract and workflow file size guard tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
 
       - name: Review consolidator reject-verifier contract test
         run: |
@@ -834,6 +873,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_plan_polling_guard.py
 
+      - name: Test-and-mark-stable review-blocked budget contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_review_blocked_budget.py
+
       - name: Test-and-mark-stable closed-PR single-fetch regression test
         run: |
           set -euo pipefail
@@ -843,6 +887,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py
+
+      - name: Test-and-mark-stable phantom review-run filter test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_phantom_review_run_filter.py
 
       - name: Mark-stable release-tag refspec contract test
         run: |

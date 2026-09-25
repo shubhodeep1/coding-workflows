@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import urllib.error
@@ -19,6 +20,7 @@ from scripts import memory_maintenance_extract_learnings as extractor
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WF_PATH = REPO_ROOT / ".github" / "workflows" / "memory_maintenance.yml"
+RELEASE_WF_PATH = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 
 
 def _workflow_text() -> str:
@@ -48,6 +50,37 @@ def test_extraction_workflow_is_automatic_short_and_fail_open() -> None:
 	assert "exit 0" in extraction_step[disabled_notice_index:helper_index]
 	assert f"{extractor.MODEL_EXTRACTION_FAILURE_EXIT})" in extraction_step
 	assert "Repository learnings model extraction failed; continuing without extraction" in extraction_step
+
+
+def test_memory_maintenance_timeout_hierarchy() -> None:
+	memory_workflow = yaml.safe_load(_workflow_text())
+	release_workflow = yaml.safe_load(RELEASE_WF_PATH.read_text(encoding="utf-8"))
+	child_timeout_minutes = memory_workflow["jobs"]["memory_maintenance"]["timeout-minutes"]
+	orphan_job = release_workflow["jobs"]["orphan-workflows-test"]
+	dispatch_steps = [
+		step
+		for step in orphan_job["steps"]
+		if step.get("id") == "dispatch_memory_maintenance"
+	]
+	assert len(dispatch_steps) == 1
+	dispatch_step = dispatch_steps[0]
+	registration_timeout_match = re.search(
+		r"--registration-timeout-secs\s+(\d+)", dispatch_step["run"]
+	)
+	assert registration_timeout_match is not None
+	registration_timeout_seconds = int(registration_timeout_match.group(1))
+	watcher_timeout_match = re.search(
+		r"--completion-timeout-secs\s+(\d+)", dispatch_step["run"]
+	)
+	assert watcher_timeout_match is not None
+	watcher_timeout_seconds = int(watcher_timeout_match.group(1))
+	dispatch_timeout_minutes = dispatch_step["timeout-minutes"]
+	orphan_timeout_minutes = orphan_job["timeout-minutes"]
+
+	assert child_timeout_minutes >= 20
+	assert registration_timeout_seconds + child_timeout_minutes * 60 < watcher_timeout_seconds
+	assert watcher_timeout_seconds < dispatch_timeout_minutes * 60
+	assert dispatch_timeout_minutes < orphan_timeout_minutes
 
 
 def test_empty_source_writes_empty_artifacts_without_render_or_request(
@@ -244,7 +277,7 @@ def test_success_preserves_discovery_request_normalization_and_telemetry(
 	assert request_call["request"].get_header("Authorization") == "Bearer super-secret-api-key"
 	assert request_call["request"].get_header("Content-type") == "application/json"
 	assert request_body == {
-		"model": "openai/gpt-5.6-luna",
+		"model": "openai/gpt-6-luna",
 		"messages": [{"role": "user", "content": "rendered prompt"}],
 		"temperature": 0.0,
 		"max_tokens": 1200,

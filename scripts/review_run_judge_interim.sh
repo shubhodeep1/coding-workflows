@@ -278,7 +278,7 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>
 	exit 0
 fi
 if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
-	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" 1 config_writer_missing || true
+	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-6-sol}" 1 config_writer_missing || true
 	judge_interim_log_fail "config_writer_missing" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
 	exit 0
 fi
@@ -287,15 +287,15 @@ JUDGE_INTERIM_OPENCODE_CONFIG="${RUNTIME_DIR}/judge_interim_opencode.json"
 JUDGE_INTERIM_OPENCODE_WORKSPACE="$(pwd)"
 if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
 	--role reviewer \
-	--model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
+	--model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
 	--project-path "${JUDGE_INTERIM_OPENCODE_WORKSPACE}" \
 	--config-path "${JUDGE_INTERIM_OPENCODE_CONFIG}" \
 	--serena off; then
-	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" 1 config_generation || true
+	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-6-sol}" 1 config_generation || true
 	judge_interim_log_fail "config_generation" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
 	exit 0
 fi
-if ! opencode_require_bootstrap review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
+if ! opencode_require_bootstrap review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-6-sol}" \
 	"${JUDGE_INTERIM_OPENCODE_CONFIG}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
 	judge_interim_log_fail "opencode_bootstrap" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
 	exit 0
@@ -309,7 +309,7 @@ judge_interim_opencode_cmd=(
 	opencode-judge-interim
 	"${OPENCODE_HELPERS_PATH}"
 	reviewer
-	"${MODEL_EDITOR:-openai/gpt-5.6-sol}"
+	"${MODEL_EDITOR:-openai/gpt-6-sol}"
 	"${JUDGE_INTERIM_REASONING}"
 	"${JUDGE_INTERIM_OPENCODE_CONFIG}"
 	"${JUDGE_INTERIM_OPENCODE_WORKSPACE}"
@@ -336,7 +336,7 @@ else
 	rm -f "${judge_interim_clean_stderr}"
 fi
 if [ "${cmd_rc}" -ne 0 ]; then
-	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" "${cmd_rc}" invocation_failed || true
+	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-6-sol}" "${cmd_rc}" invocation_failed || true
 fi
 
 remaining_count=""

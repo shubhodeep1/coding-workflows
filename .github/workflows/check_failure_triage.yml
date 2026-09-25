@@ -67,6 +67,7 @@ jobs:
     outputs:
       check_name_key: ${{ steps.hash_check_name.outputs.check_name_key }}
       same_repo: ${{ steps.hash_check_name.outputs.same_repo }}
+      smoke_pr: ${{ steps.hash_check_name.outputs.smoke_pr }}
     steps:
       - name: Validate inputs, hash check name, and verify PR origin
         id: hash_check_name
@@ -144,6 +145,17 @@ jobs:
             echo "::error::Unable to determine PR head repository"
             exit 1
           fi
+          # Smoke-fixture detection from the same PR payload (no extra API
+          # call). implement.yml labels the test-and-mark-stable smoke PR
+          # `e2e-smoke-test`; the triage job below then runs with
+          # ALERT_MSG_LEVEL=SILENT so the gate's single pass/fail message
+          # is the only Telegram notification. Triage itself still runs.
+          if jq -e '[.labels[]?.name] | index("e2e-smoke-test") != null' "${pr_payload}" >/dev/null 2>&1; then
+            echo "::notice::PR #${PR_NUMBER} carries the e2e-smoke-test label; Telegram alerts from this triage are silenced."
+            echo "smoke_pr=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "smoke_pr=false" >> "$GITHUB_OUTPUT"
+          fi
           if [ "${head_repo}" != "${REPOSITORY}" ]; then
             echo "same_repo=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Skipping check-failure triage for fork PR #${PR_NUMBER} (head repo: ${head_repo})."
@@ -180,8 +192,8 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GITHUB_REPOSITORY: ${{ github.repository }}
-      MODEL_EDITOR: ${{ vars.WORKFLOW_CHECK_TRIAGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CHECK_TRIAGE || 'xhigh' }}
+      MODEL_EDITOR: ${{ vars.WORKFLOW_CHECK_TRIAGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CHECK_TRIAGE || 'high' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_CHECK_TRIAGE || 'low' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       CHECK_FAILURE_TRIAGE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_ENABLED || 'true' }}
@@ -189,6 +201,12 @@ jobs:
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      # Job-level override of the workflow-level default: a PR carrying the
+      # `e2e-smoke-test` label (test-and-mark-stable fixture) runs triage
+      # with every Telegram send suppressed. SILENT > CRITICAL in
+      # tg_helpers.sh, so scripts/check_failure_triage.sh and the
+      # failure-notify step below both go quiet.
+      ALERT_MSG_LEVEL: ${{ needs.derive_check_name_key.outputs.smoke_pr == 'true' && 'SILENT' || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
     steps:
       - name: Log trigger context
         env:

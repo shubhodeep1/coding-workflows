@@ -112,7 +112,7 @@ def test_dependency_fallback_prefers_main_then_script_ref_checkout() -> None:
 			workflow_source_repo=False,
 		)
 		assert result.returncode == 0
-		assert result.stdout.strip() == str(main_helper)
+		assert result.stdout.strip() == str(branch_helper)
 
 	with tempfile.TemporaryDirectory() as tmp:
 		workspace_root = Path(tmp)
@@ -145,8 +145,8 @@ def test_dependency_fallback_gates_workspace_scripts_and_fails_closed() -> None:
 			workspace_root,
 			workflow_source_repo=True,
 		)
-		assert source_result.returncode == 0
-		assert source_result.stdout.strip() == str(workspace_helper)
+		assert source_result.returncode == 1
+		assert source_result.stdout == ""
 
 	with tempfile.TemporaryDirectory() as tmp:
 		missing_result = _run_resolver_dependency_fallback(

@@ -40,7 +40,7 @@ name: AI Orchestrate (Reusable)
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
+  MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
   MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE || '10' }}
   MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE || '30' }}
   MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE || '0.10' }}
@@ -48,10 +48,10 @@ env:
   MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS || '16777216' }}
   MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS || '1677721600' }}
   MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD || '' }}
-  # Defaults to xhigh to match the repo-wide gpt-5.6-sol reasoning-level
+  # Defaults to high to match the repo-wide gpt-6-sol reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_ORCHESTRATE.
-  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_ORCHESTRATE || 'xhigh' }}
-  # gpt-5.6-sol paths default to low verbosity per agents.md model table.
+  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_ORCHESTRATE || 'high' }}
+  # gpt-6-sol paths default to low verbosity per agents.md model table.
   # Output is structured JSON (`orchestrate_decomposition.v1` schema), which
   # is not verbosity-sensitive — the schema controls shape regardless. Low
   # keeps free-form text in `project_summary` / issue bodies concise and
@@ -1485,7 +1485,7 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"

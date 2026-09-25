@@ -106,7 +106,7 @@ if [ -z "${MODEL_PROVIDER_BROKER_TOKEN:-}" ] || [ -z "${MODEL_PROVIDER_BROKER_BA
 	export MODEL_PROVIDER_BROKER_AGENT_HOME
 	model_provider_broker_start
 	SELF_HEAL_STARTED_MODEL_PROVIDER_BROKER="true"
-	model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR:-openai/gpt-5.6-sol}" "${MODEL_REASONING_EFFORT:-xhigh}" "$(pwd)"
+	model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR:-openai/gpt-6-sol}" "${MODEL_REASONING_EFFORT:-high}" "$(pwd)"
 fi
 CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_stall_guard.sh"

@@ -27,7 +27,8 @@ name: Promote main to stable
 #
 #   1. detect a code change on `main` since the `stable` tag (non-code paths
 #      such as analysis/, docs/ and most *.md do not count), hold while a
-#      cycle is in flight or already ran for this tip;
+#      cycle is in flight, already ran for this tip, or already failed on it
+#      PROMOTE_CYCLE_MAX_ATTEMPTS times;
 #   2. run test-and-mark-stable.yml in gate_only mode on `main` (the smoke
 #      gate) and wait for it;
 #   3. dispatch the PROVING apply-analysis run (one analysis doc) with the
@@ -116,8 +117,8 @@ jobs:
   cycle:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    # The smoke gate alone can take ~2-3h; the script's own wait cap is
-    # PROMOTE_CYCLE_GATE_WAIT_SECS (default 5h) and this job cap sits above it.
+    # The smoke gate alone can take ~2-3h. The default 30m idle wait plus 5h
+    # smoke wait leaves 10m for setup and cleanup under this job cap.
     timeout-minutes: 340
     permissions:
       contents: read
@@ -137,7 +138,10 @@ jobs:
           ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
           PROMOTE_CYCLE_ENABLED: ${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}
           PROMOTE_CYCLE_MIN_DOCS: ${{ vars.PROMOTE_CYCLE_MIN_DOCS || '2' }}
+          PROMOTE_CYCLE_MAX_ATTEMPTS: ${{ vars.PROMOTE_CYCLE_MAX_ATTEMPTS || '3' }}
           PROMOTE_CYCLE_GATE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}
+          PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}
+          PROMOTE_CYCLE_GATE_POLL_SECS: ${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
           COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
         run: |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Consolidate N reviewer outputs from one review pass into a single findings
-# ledger via OpenCode (model: openai/gpt-5.6-luna, reasoning: medium).
+# ledger via OpenCode (model: openai/gpt-6-luna, reasoning: medium).
 #
 # Invoked twice per review run:
 #   --prefix pass1  --output ${CROSS_POLLINATION_FILE}  → feeds pass-2 reviewers
@@ -21,7 +21,7 @@
 #   PREVIOUS_REVIEWS_DIR              dir holding <prefix>_*.txt
 #   RUNTIME_DIR                       dir for temp OpenCode config + logs
 #   SUPPORT_SCRIPTS_DIR               helper scripts (for gh_helpers.sh)
-#   XPOLL_SUMMARISER_MODEL            default: openai/gpt-5.6-luna
+#   XPOLL_SUMMARISER_MODEL            default: openai/gpt-6-luna
 #   XPOLL_SUMMARISER_REASONING        default: medium
 #   XPOLL_SUMMARISER_LINES_PER_REVIEWER  target lines per reviewer section (default 160)
 #   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS   per-attempt timeout (default 2400)
@@ -70,7 +70,7 @@ if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
 	source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 fi
 
-SUMMARISER_MODEL="${XPOLL_SUMMARISER_MODEL:-openai/gpt-5.6-luna}"
+SUMMARISER_MODEL="${XPOLL_SUMMARISER_MODEL:-openai/gpt-6-luna}"
 summariser_helpers_alert_model="$(printf '%s' "${SUMMARISER_MODEL}" | LC_ALL=C tr -c 'A-Za-z0-9_.:/+-' '_')"
 if [ -z "${summariser_helpers_alert_model}" ]; then
 	summariser_helpers_alert_model="unknown"

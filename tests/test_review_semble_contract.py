@@ -198,7 +198,14 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert "assemble_prompt.sh" in required_bootstrap_line
 	assert "render_prompt.py" not in required_bootstrap_line
 	assert "render_prompt.py" not in optional_bootstrap_line
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in stage_helper
+	# The workflow-failure-heal reporter and its Python helper ride the same
+	# optional loop so the review workflow's failure path can report without a
+	# consumer wrapper change; a consumer whose stable ref predates them just
+	# skips the report step.
+	assert (
+		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
+		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"'
+	) in stage_helper
 	assert (
 		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
 		"    codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh\n"
@@ -208,7 +215,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert "REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-\n    render_prompt.py" in workflow
 	assert "for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do" in stage_step_block
 	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then' in stage_step_block
-	assert 'Backfilled _nag_reminders.txt from immutable support source ${SCRIPT_REF}.' in stage_step_block
+	assert 'Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it).' in stage_step_block
 	assert 'for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}; do' in preflight_block
 	assert 'check_required_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
 	assert 'for f in ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do' in preflight_block
@@ -253,6 +260,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'reviewer_nag_counter_for_attempt=$((reviewer_silent_rounds + 1))' in reviewers
 	assert 'reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_nag_counter_for_attempt}")"' in reviewers
 	assert 'if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then' in reviewers
+	assert 'echo "LINKED_ISSUE_METADATA_FILE=${RUNTIME_DIR}/linked_issue_metadata.json"' in init_block
 	assert 'echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"' in init_block
 	assert 'echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"' in init_block
 	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"' in init_block
@@ -288,7 +296,7 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	# index build now and writes SEMBLE_INDEX_AVAILABLE=true on success.
 	assert 'wrapper_script=""' in index_block
 	assert 'wrapper_script="${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"' in index_block
-	assert 'wrapper_script="scripts/build_semble_wrapper.sh"' in index_block
+	assert 'wrapper_script="scripts/build_semble_wrapper.sh"' not in index_block
 	assert 'bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true' in index_block
 	assert "build_semble_wrapper: Semble wrapper unavailable:" in index_block
 	assert '"${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}"' not in index_block

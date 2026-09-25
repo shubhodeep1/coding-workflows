@@ -53,6 +53,19 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/workflow_failure_heal_report.sh` + `scripts/workflow_failure_heal_autofix_report.sh` + `scripts/workflow_failure_heal_intake.sh` + `scripts/workflow_failure_heal.py` + `.github/workflows/workflow_failure_heal.yml` + `.github/workflows/workflow-failure-heal-intake.yml`
+
+- **Introduced in:** #4165 (2026-09-20)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view workflow-failure-heal-intake.yml -R shubhodeep1/coding-workflows` confirms the `repository_dispatch` (`workflow-failure-heal`) and `workflow_run` entry points still exist and still run `scripts/workflow_failure_heal_intake.sh`.
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:workflow-heal"` returns `[]` (no heal issue is waiting on the pipeline), or a replacement heal path owns those issues.
+  - `rg -n 'ai-workflow-failure-heal.yml' workflow-templates/profiles/full.txt agents.md` shows the consumer wrapper is no longer delivered, i.e. consumers have been moved off the report path first.
+  - `rg -n 'workflow_failure_heal_autofix_report.sh' .github/workflows/review_autofix.yml scripts/stage_workflow_support.sh` shows the review/autofix failure reporter step and its staging entry have been removed first.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
 ### `scripts/promote_main_cycle.sh` + `scripts/apply_analysis_on_main.sh` + the `cycle` job of `.github/workflows/promote-main-to-stable.yml`
 
 - **Introduced in:** #4134 (2026-09-19)

@@ -382,10 +382,16 @@ def test_promote_workflow_cycle_job_runs_the_cycle_script_daily() -> None:
 	assert "concurrency" not in wf, "workflow-level concurrency would queue promotions behind a waiting cycle"
 	cycle = wf["jobs"]["cycle"]
 	assert cycle["if"] == "github.event_name == 'schedule'"
+	assert cycle["timeout-minutes"] == 340
 	assert "concurrency" not in cycle, "job-level concurrency would queue a later scheduled tick"
 	run_step = next(s for s in cycle["steps"] if "run" in s)
 	assert "bash scripts/promote_main_cycle.sh" in run_step["run"]
 	assert run_step["env"]["PROMOTE_CYCLE_ENABLED"] == "${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_GATE_WAIT_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_GATE_POLL_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_MAX_ATTEMPTS"] == "${{ vars.PROMOTE_CYCLE_MAX_ATTEMPTS || '3' }}"
+	assert 18000 + 1800 < cycle["timeout-minutes"] * 60
 	assert run_step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT || github.token }}"
 	assert run_step["env"]["ORCHESTRATOR_STATE_AUTH_KEYRING"] == "${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}"
 	promote = wf["jobs"]["promote"]
@@ -470,6 +476,8 @@ def test_release_job_is_serialised_and_refuses_a_stale_tip() -> None:
 		assert "git rebase" not in changelog["run"], workflow
 		assert "RELEASE_STALE_TIP" in changelog["run"], workflow
 		assert 'git reset --hard "${RELEASE_TESTED_SHA}"' in changelog["run"], workflow
+		assert 'git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"' in changelog["run"], workflow
+		assert 'git ls-remote origin "refs/heads/${SOURCE_BRANCH}"' in changelog["run"], workflow
 		tag_step = next(step for step in release["steps"] if step.get("name") == "Tag version and update stable pointer")
 		assert tag_step["env"]["SOURCE_BRANCH"] == "${{ needs.source.outputs.branch }}", workflow
 		run = tag_step["run"]

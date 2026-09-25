@@ -36,7 +36,10 @@
 #   --web-search        live
 #   --catalog-path      $(pwd)/scripts/codex_model_catalog.json
 #                       (skipped from the TOML if the file does not exist;
-#                        a ::warning:: is emitted in that case)
+#                        a ::warning:: is emitted in that case; a relative
+#                        path is resolved against $(pwd) before it is
+#                        written, because codex resolves a relative
+#                        model_catalog_json against CODEX_HOME)
 #   --project-path      $(pwd)
 #   --config-path       ${HOME}/.codex/config.toml
 #   --allow-elevation   auto
@@ -156,6 +159,16 @@ fi
 if [ -z "${_catalog_path}" ]; then
 	_catalog_path="$(pwd)/scripts/codex_model_catalog.json"
 fi
+# Anchor a relative --catalog-path to the caller's cwd (the same base the
+# `[ -f ]` existence check below uses). Codex resolves a relative
+# model_catalog_json against CODEX_HOME, not the cwd, so writing it
+# verbatim makes every `codex exec` die at startup with
+# "Error: No such file or directory (os error 2)" — the security-audit
+# failure since PR #3575 passed "./scripts/codex_model_catalog.json".
+case "${_catalog_path}" in
+	/*) ;;
+	*) _catalog_path="$(pwd)/${_catalog_path#./}" ;;
+esac
 if [ -z "${_project_path}" ]; then
 	_project_path="$(pwd)"
 fi

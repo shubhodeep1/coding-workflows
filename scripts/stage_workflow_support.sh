@@ -8,6 +8,14 @@ WORKFLOW_SOURCE_REPO="${WORKFLOW_SOURCE_REPO:-shubhodeep1/coding-workflows}"
 CURRENT_REPOSITORY="${CURRENT_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 SCRIPT_REF="${SCRIPT_REF:-unknown}"
 
+# The caller verifies this immutable workflow checkout before running us.
+# Never stage executable support from the reviewed worktree or a moving ref.
+if [[ ! "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] ||
+   [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF}" ]; then
+  echo "::error::Unverified workflow support checkout." >&2
+  exit 1
+fi
+
 if [ -z "${RUNNER_TEMP:-}" ] || [ -z "${GITHUB_RUN_ID:-}" ] || [ -z "${GITHUB_RUN_ATTEMPT:-}" ] || [ -z "${GITHUB_ENV:-}" ]; then
   echo "::error::stage_workflow_support.sh requires RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, and GITHUB_ENV."
   exit 1
@@ -42,10 +50,9 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh emit_event.sh emit_event.py pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py cost_audit.py codex_helpers.sh model_provider_broker.py codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh editor_isolation_preflight.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_conflict_actuate.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh"
-# Immutable-source bootstrap scripts. The workflow checkout is pinned to
-# job.workflow_sha, so executable support must never fall back to a mutable
-# branch snapshot or the PR checkout.
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh emit_event.sh emit_event.py pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py cost_audit.py codex_helpers.sh model_provider_broker.py codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh editor_isolation_preflight.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_conflict_actuate.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh"
+# Keep this registry for compatibility, but all runtime files now come from
+# the same verified workflow commit as the required bootstrap scripts.
 #
 # render_prompt.py validates arbitrary embedded PR-diff text before every
 # reviewer/editor call. Keep it in this compatibility-named list so it is
@@ -61,11 +68,15 @@ MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py orchestrate_s
 # that depend on these must themselves tolerate absence.  Keep
 # this list empty unless a genuinely optional helper is added;
 # the default should always be "required".
-OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
+# workflow_failure_heal.py + workflow_failure_heal_autofix_report.sh: the
+# review/autofix failure reporter (README "Workflow Failure Heal"). Optional so
+# a consumer pinned to a release that predates them still bootstraps; the
+# reporting step skips with a stable log line when they are absent.
+OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then
-    echo "::error::Required bootstrap script '${f}' is missing from immutable support source ${SCRIPT_REF} in ${wf_source}. Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the workflow-definition commit."
+    echo "::error::Required bootstrap script '${f}' is missing from verified support commit ${SCRIPT_REF}." >&2
     exit 1
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
@@ -73,8 +84,13 @@ done
 for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then
-    echo "::warning::Immutable-source bootstrap script '${f}' is unavailable at ${SCRIPT_REF}; downstream features relying on this helper will be unavailable."
-    continue
+    echo "::error::Required workflow support script '${f}' is missing from verified support commit ${SCRIPT_REF}." >&2
+    exit 1
+  fi
+  # Keep the established divergence diagnostic, but never execute the PR
+  # copy: the compared worktree bytes are review data only.
+  if [ "${IS_WORKFLOW_SOURCE_REPO}" = "true" ] && [ -f "scripts/${f}" ] && ! cmp -s "scripts/${f}" "${src}"; then
+    echo "::notice::STAGE_MAIN_PINNED_DIVERGENCE script=${f} script_ref=${SCRIPT_REF:-unknown}"
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
@@ -142,7 +158,8 @@ catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
 if [ -f "${catalog_src}" ]; then
   install -m 0644 "${catalog_src}" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
 else
-  echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
+  echo "::error::Model catalog is missing from verified support commit ${SCRIPT_REF}." >&2
+  exit 1
 fi
 
 if [ ! -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ]; then

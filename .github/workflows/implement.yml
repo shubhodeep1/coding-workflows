@@ -23,7 +23,7 @@ env:
   MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD || '' }}
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
-  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
+  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
   # Capacity-fallback editor model. On the final implement attempt the retry
   # loop points CODEX_THREAD_REUSE_MODEL at this slug, which sits in a
   # different OpenRouter/OpenAI per-model TPM bucket than the primary, so a
@@ -31,8 +31,8 @@ env:
   # issue #3515 / run 28640359211, observed when gpt-5.4 was the primary) can
   # be ridden out without a model change on the earlier attempts. Set to the
   # primary slug (or clear it) to disable the switch.
-  MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5' }}
-  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
+  MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.6-sol' }}
+  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'high' }}
   REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
@@ -41,15 +41,15 @@ env:
   # MODEL_DIAGNOSE drives the post-Codex diagnose step
   # (scripts/implement_diagnose_post_codex_failure.sh). Per the OpenAI
   # prompt guide that step is research/synthesis, not coding. The implement
-  # editor and the diagnose step now share the gpt-5.6-sol default; the separate
+  # editor and the diagnose step now share the gpt-6-sol default; the separate
   # env var is preserved so operators can route diagnose to a different model
   # (e.g. a cheaper mini variant) without affecting the editor.
-  MODEL_DIAGNOSE: ${{ vars.WORKFLOW_DIAGNOSE_MODEL || 'openai/gpt-5.6-sol' }}
-  MODEL_DIAGNOSE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_DIAGNOSE || 'xhigh' }}
-  # Defaults to xhigh to match the repo-wide gpt-5.6-sol reasoning-level
+  MODEL_DIAGNOSE: ${{ vars.WORKFLOW_DIAGNOSE_MODEL || 'openai/gpt-6-sol' }}
+  MODEL_DIAGNOSE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_DIAGNOSE || 'high' }}
+  # Defaults to high to match the repo-wide gpt-6-sol reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_IMPLEMENT_REPAIR if
   # repair runs need a different effort than the main editor.
-  MODEL_REPAIR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT_REPAIR || 'xhigh' }}
+  MODEL_REPAIR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT_REPAIR || 'high' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
@@ -137,6 +137,56 @@ jobs:
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
           ISSUE_STATE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.state // "open"')"
           ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -c '[.labels[]?.name]')"
+          # Early smoke-fixture detection. The "Telegram duplicate PR
+          # notification" step runs before the main "Detect smoke test and
+          # silence Telegram alerts" step below, so it needs the SILENT
+          # threshold exported here (same `^\[E2E ` pattern; the later step
+          # re-exports it and IS_SMOKE_TEST once ISSUE_TITLE is in the job
+          # env). Every Telegram step reads `env.ALERT_MSG_LEVEL` first so
+          # this value takes effect.
+          ISSUE_TITLE_PRECHECK="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
+          IS_SMOKE_PARENT="false"
+          if printf '%s' "${ISSUE_TITLE_PRECHECK}" | grep -qiE '^\[E2E '; then
+            echo "🔬 Smoke test detected at precheck — suppressing per-phase Telegram alerts"
+            echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+          else
+            # Orchestrator-managed children carry NO fixture marker: the
+            # gate's orchestrate-decompose-test job hands a
+            # `[E2E Orchestrate Smoke <run_id>]` project description to the
+            # decomposer, which writes the child titles itself (e.g.
+            # "Update E2E smoke canary A for run 35672590166"). No title
+            # pattern can match those, so fall back to the parent tracking
+            # issue's title -- the same signal plan.yml and
+            # orchestrate_clarify_respond.yml use.
+            #
+            # This matters beyond alert noise: IS_SMOKE_TEST is what gates
+            # the atomic `force-review` + `e2e-smoke-test` labels at
+            # `gh pr create` below, and review_autofix.yml now treats that
+            # label as its primary smoke signal. Without this fallback a
+            # decomposed child's PR would carry no label and the whole
+            # downstream chain would misclassify it.
+            #
+            # Resolved once here and exported, so the main detect step
+            # below reuses it instead of issuing a second lookup: one extra
+            # API call per implement run at most, and only when the title
+            # check missed and a `Tracking issue: #N` ref is present
+            # (CLAUDE.md §15). Fails open -- an unreachable or unparseable
+            # parent leaves alerts enabled and the labels off rather than
+            # mislabelling a real project's PR.
+            SMOKE_TRACKING_NUM="$(printf '%s' "${ISSUE_BODY}" | sed -n 's/.*Tracking issue: #\([0-9][0-9]*\).*/\1/p' | head -n1)"
+            if [ -n "${SMOKE_TRACKING_NUM:-}" ]; then
+              SMOKE_TRACKING_TITLE=""
+              if SMOKE_TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${SMOKE_TRACKING_NUM}" 2>/dev/null)"; then
+                SMOKE_TRACKING_TITLE="$(printf '%s' "${SMOKE_TRACKING_PAYLOAD}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+              fi
+              if printf '%s' "${SMOKE_TRACKING_TITLE}" | grep -qiE '^\[Orchestrator\] E2E '; then
+                echo "🔬 Smoke orchestrator parent (#${SMOKE_TRACKING_NUM}) detected at precheck — suppressing per-phase Telegram alerts"
+                echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+                IS_SMOKE_PARENT="true"
+              fi
+            fi
+          fi
+          echo "IS_SMOKE_PARENT=${IS_SMOKE_PARENT}" >> "$GITHUB_ENV"
           if [ "${ISSUE_STATE}" = "closed" ]; then
             echo "Issue #${ISSUE_NUMBER} is closed. Skipping implementation steps."
             echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}"
@@ -338,7 +388,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           duplicate_notice_immutable_support_manifest="${RUNNER_TEMP}/duplicate-notice-immutable-support-manifest.json"
@@ -627,8 +677,19 @@ jobs:
               emit(status="issue-author-untrusted")
               raise SystemExit(0)
 
+          # The machine-generated footer is the last block the review-blocked
+          # judge writes, but stall recovery (scripts/orchestrate_poll_process.sh
+          # close_and_reissue) and the no-op / post-Codex re-issue paths copy the
+          # body verbatim and append their own "---" + "Re-issued from #N"
+          # trailer after it. The metadata block therefore ends at the first
+          # horizontal rule that follows the footer header, or at the end of the
+          # body when nothing was appended. Trailing prose that is not separated
+          # by a rule still fails closed below. Incident: #4242 (re-issued from
+          # #4227 by stall recovery) lost its prior_pr_baseline_branch override
+          # with "review-blocked reissue metadata footer is incomplete" in
+          # implement runs 35656715219 and 35668070395.
           metadata_footer_match = re.search(
-              r"(?:^|\n)---\n\*\*Review-blocked reissue metadata\*\*\n(?P<block>.*)\Z",
+              r"(?:^|\n)---\n\*\*Review-blocked reissue metadata\*\*\n(?P<block>.*?)(?:\n---\n.*)?\Z",
               issue_body,
               re.DOTALL,
           )
@@ -1532,17 +1593,29 @@ jobs:
           # skip-merge job in review_autofix.yml will otherwise enable
           # auto-merge before the e2e gate's bait-injection phase has
           # a chance to push (race observed in run 25150961704).
-          # Match both the regular fixture title `[E2E Smoke Test]` and
-          # the alt-model variant `[E2E Smoke Test alt-model]`. The
-          # original `\[E2E Smoke Test\]` pattern (literal `]` after
+          # Match every `[E2E <variant>]` fixture title the release gate
+          # creates. The original `\[E2E Smoke Test\]` pattern (literal `]` after
           # `Test`) silently never matched the alt-model title, so the
           # alt-model implement never silenced Telegram, never set
           # IS_SMOKE_TEST, and never reached the alt-model override
-          # branch added below. Use `\[E2E Smoke Test\b` so any token
-          # boundary after `Test` (closing bracket, space + sub-tag, …)
-          # qualifies; AI issue titles in production never start with
-          # `[E2E Smoke Test`, so broadening is safe.
-          if echo "${ISSUE_TITLE}" | grep -qiE '\[E2E Smoke Test\b'; then
+          # branch added below. `\[E2E Smoke Test\b` fixed that one
+          # variant but still missed `[E2E Clarify Negative Test]`, whose
+          # middle token differs, so use `^\[E2E ` instead: it covers all
+          # four shapes the gate builds (test-and-mark-stable.yml:544,
+          # 2661, 4664, 4942) and any future `[E2E <variant>]` fixture.
+          #
+          # Anchoring at `^` also narrows one false positive the previous
+          # unanchored pattern had: a production issue titled e.g.
+          # "Fix [E2E Smoke Test] flake" was treated as the fixture itself
+          # and silenced. Real AI issue titles never begin with `[E2E `,
+          # so the fixture path is now exact. The alt-model sub-tag check
+          # further below stays on its own narrower literal.
+          # `IS_SMOKE_PARENT` is resolved once by the "Precheck approval
+          # phase label" step above (orchestrator children have no fixture
+          # marker in their own title); reused here rather than repeating
+          # the parent lookup, so the run issues one extra API call at most.
+          if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E ' \
+             || [ "${IS_SMOKE_PARENT:-false}" = "true" ]; then
             echo "🔬 Smoke test detected — suppressing per-phase Telegram alerts"
             echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
             echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"
@@ -1552,7 +1625,7 @@ jobs:
             # manifestations of upstream Codex CLI / OpenRouter flakiness
             # (low → unprefixed MCP calls; xhigh → announce-without-invoke
             # patterns) on the legacy editor default. The current
-            # default (gpt-5.6-sol, as gpt-5.5 before it) is steadier across reasoning levels but the
+            # default (gpt-6-sol, as gpt-5.6-sol and gpt-5.5 before it) is steadier across reasoning levels but the
             # rationale stands: keep smoke and production on the same knobs
             # so any breakage on the smoke fixture is also visible to real
             # implements rather than masked by a smoke-only override.
@@ -2598,6 +2671,19 @@ jobs:
               attempt_model="${MODEL_EDITOR_FALLBACK}"
               echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
             fi
+            # The editor never needs the self-repo staged-support ledger paths
+            # ("Stage workflow support files" exports them into $GITHUB_ENV for
+            # the restore / reinstall / commit steps of this job). Drop them
+            # from the editor's environment so a pytest run the editor starts
+            # to validate its own change cannot write fixture paths into the
+            # live run's ledgers: implement runs 35614385686, 35628923735,
+            # 35642366131, 35656715219 and 35668070395 (issues #4227 / #4242,
+            # project #4139) each finished the edit and then failed the
+            # post-editor reinstall with IMPLEMENT_STAGED_SUPPORT_BASE_MISSING
+            # path=scripts/helper.sh. tests/conftest.py strips the same
+            # variables on main, but a review-blocked baseline branch or an
+            # unsynced integration branch checks out an older conftest.py, so
+            # the workflow side has to hold on its own.
             implement_process_group_file="$(mktemp "${RUNTIME_DIR}/implement-process-group.XXXXXX")"
             chmod 0600 "${implement_process_group_file}"
             MODEL_PROVIDER_BROKER_ISOLATED_PROCESS_GROUP_FILE="${implement_process_group_file}"
@@ -2615,6 +2701,7 @@ jobs:
               CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
               CODEX_THREAD_REUSE_STALL_GUARD_HELPER="" \
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
+              env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               "${CODEX_STALL_GUARD_HELPER}" \
                 --phase implement \
                 --status-file "${attempt_stall_status_file}" \
@@ -3545,18 +3632,18 @@ jobs:
           fi
 
           # Repair phases honour MODEL_REPAIR_REASONING_EFFORT (default
-          # "xhigh"), separate from the editor's MODEL_REASONING_EFFORT so
+          # "high"), separate from the editor's MODEL_REASONING_EFFORT so
           # operators can drop repair effort independently of the main
           # editor. Patch ~/.codex/config.toml in-place so `codex exec`
           # honors it (the CLI has no --reasoning-effort flag). Validate
           # against the known set first; fall back with a warning on a
           # typo.
-          REPAIR_REASONING="${MODEL_REPAIR_REASONING_EFFORT:-xhigh}"
+          REPAIR_REASONING="${MODEL_REPAIR_REASONING_EFFORT:-high}"
           case "${REPAIR_REASONING}" in
             xhigh|high|medium|low|none) ;;
             *)
-              echo "::warning::Invalid MODEL_REPAIR_REASONING_EFFORT='${REPAIR_REASONING}'. Falling back to 'xhigh'."
-              REPAIR_REASONING="xhigh"
+              echo "::warning::Invalid MODEL_REPAIR_REASONING_EFFORT='${REPAIR_REASONING}'. Falling back to 'high'."
+              REPAIR_REASONING="high"
               ;;
           esac
           repair_provider_api_key="${OPENROUTER_API_KEY}"
@@ -3886,6 +3973,7 @@ jobs:
             MODEL_PROVIDER_BROKER_ISOLATED_PROCESS_GROUP_FILE="${repair_process_group_file}"
             MODEL_PROVIDER_BROKER_ISOLATED_WRITER_LAUNCHED="true"
             export MODEL_PROVIDER_BROKER_ISOLATED_PROCESS_GROUP_FILE MODEL_PROVIDER_BROKER_ISOLATED_WRITER_LAUNCHED
+            # Same ledger scrub as the implementation launch above.
             CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${REPAIR_PROMPT_FILE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${REPAIR_OUTPUT_FILE}" \
@@ -3898,6 +3986,7 @@ jobs:
               CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
               CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
               CODEX_THREAD_REUSE_STALL_GUARD_HELPER="" \
+              env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               "${CODEX_STALL_GUARD_HELPER}" \
                 --phase implement_repair \
                 --process-group-file "${repair_process_group_file}" \
@@ -4131,6 +4220,7 @@ jobs:
           SVB_ALLOWLIST: ${{ steps.preflight_destructive_guard.outputs.scope_violation_allowlist || steps.commit_changes.outputs.scope_violation_allowlist }}
           SSB_REASON: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict || steps.commit_changes.outputs.staged_support_rebase_conflict }}
           SSB_FILES: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict_files || steps.commit_changes.outputs.staged_support_rebase_conflict_files }}
+          SSB_AUTO_RELEASE_SAFE: ${{ steps.commit_changes.outputs.staged_support_auto_release_safe }}
         run: |
           set -euo pipefail
           bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"
@@ -5234,7 +5324,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # Diagnose is research/synthesis (parse stderr+diff, emit JSON)
-          # rather than coding. Editor and diagnose now share the gpt-5.6-sol
+          # rather than coding. Editor and diagnose now share the gpt-6-sol
           # default; the separate MODEL_DIAGNOSE override is preserved so
           # operators can route diagnose to a different model (e.g. a
           # cheaper mini variant) without affecting the editor. The script
@@ -5342,7 +5432,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/tg_helpers.sh" ]; then

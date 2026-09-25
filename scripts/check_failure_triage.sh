@@ -15,7 +15,7 @@
 #      generation exceeds CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH the chain is
 #      stopped and escalated to a human instead of opening yet another issue.
 #   3. Collects the failing check-run logs (collect_pr_check_runs_context.py),
-#      runs the diagnosis model (codex / openai/gpt-5.6-sol by default), and opens
+#      runs the diagnosis model (codex / openai/gpt-6-sol by default), and opens
 #      a GitHub issue describing the failure + root cause + suggested fix.
 #
 # The opened issue is a normal issue, so the existing clarify -> plan ->
@@ -40,7 +40,7 @@
 # Optional env (have defaults):
 #   CHECK_FAILURE_TRIAGE_ENABLED             "false" to disable; default on
 #   CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH   max auto-fix generations (default 3)
-#   MODEL_EDITOR                             diagnosis model (default openai/gpt-5.6-sol)
+#   MODEL_EDITOR                             diagnosis model (default openai/gpt-6-sol)
 #   MODEL_VERBOSITY                          codex verbosity (default low)
 #   CHECK_RUNS_WAIT_TIMEOUT_SECS             context collector wait (default 60)
 #   CHECK_TRIAGE_SELF_CHECK_NAME_FRAGMENT    self-loop guard fragment
@@ -328,14 +328,14 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 if command -v codex >/dev/null 2>&1; then
 	MODEL_PROVIDER_BROKER_AGENT_HOME="${RUNTIME_DIR}/model-provider-agent-home"
 	export MODEL_PROVIDER_BROKER_AGENT_HOME
-	MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR:-openai/gpt-5.6-sol}" model_provider_broker_start
+	MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR:-openai/gpt-6-sol}" model_provider_broker_start
 	trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
-	model_provider_broker_prepare_codex_writer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" "${MODEL_REASONING_EFFORT:-xhigh}" "$(pwd)"
+	model_provider_broker_prepare_codex_writer "${MODEL_EDITOR:-openai/gpt-6-sol}" "${MODEL_REASONING_EFFORT:-high}" "$(pwd)"
 	if model_provider_broker_exec_sanitized codex --ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
 		-c include_apply_patch_tool=true \
 		exec --skip-git-repo-check \
-		--model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
+		--model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
 		--sandbox read-only \
 		< "${PROMPT_FILE}" \
 		> "${DIAG_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then

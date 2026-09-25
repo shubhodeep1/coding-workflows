@@ -11,7 +11,7 @@ removed the offline fallback) and whether the v0.113+ trust prompt fires
 (codex#14345). Pin the contract here so a future edit to the helper that
 drops one of those keys fails CI loudly.
 
-All tests use the `openai/gpt-5.4` slug (the former capacity-fallback; the fallback is now gpt-5.5 and the primary default is gpt-5.6-sol). The legacy
+All tests use the `openai/gpt-5.4` slug (the former capacity-fallback; the fallback is now gpt-5.6-sol and the primary default is gpt-6-sol). The legacy
 `openai/gpt-5.3-codex` slug was retired from the catalog after the
 2026-05-07 12:41 / 12:42 E2E smoke runs confirmed it shared the same
 announce-without-emit failure mode as gpt-5.4 (so the alt-model canary
@@ -35,17 +35,28 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WRITE_CODEX_CONFIG = REPO_ROOT / "scripts" / "write_codex_config.sh"
 
 
-def _run(args: list[str], env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+	args: list[str],
+	env_overrides: dict[str, str] | None = None,
+	cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
 	full_env = os.environ.copy()
 	# Strip ambient context that would otherwise auto-elevate. Tests opt
 	# into elevation explicitly via env_overrides or --allow-elevation.
-	for k in ("GITHUB_ACTIONS", "VALIDATE_FORCE_FULL_ACCESS"):
+	for k in (
+		"BASH_ENV",
+		"ENV",
+		"GITHUB_ACTIONS",
+		"VALIDATE_FORCE_FULL_ACCESS",
+		"WORKSPACE_PATH",
+	):
 		full_env.pop(k, None)
 	if env_overrides:
 		full_env.update(env_overrides)
 	return subprocess.run(
 		["bash", str(WRITE_CODEX_CONFIG), *args],
 		env=full_env,
+		cwd=cwd,
 		text=True,
 		capture_output=True,
 		check=False,
@@ -295,6 +306,37 @@ def test_helper_rejects_project_paths_needing_toml_escape() -> None:
 		_expect_reject('has\ttab', "tab")
 		_expect_reject('has\x01control', "control-byte SOH (0x01)")
 		_expect_reject('has\x7fdel', "control-byte DEL (0x7F)")
+
+
+def test_helper_absolutizes_relative_catalog_path() -> None:
+	"""A relative --catalog-path MUST be written as an absolute path
+	anchored to the caller's cwd. Codex resolves a relative
+	model_catalog_json against CODEX_HOME, so the verbatim relative path
+	made every `codex exec` in the security-audit workflow die with
+	"Error: No such file or directory (os error 2)" (the workflow passed
+	"./scripts/codex_model_catalog.json" from PR #3575 onward).
+	"""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td).resolve()
+		(tmp / "scripts").mkdir()
+		catalog = tmp / "scripts" / "codex_model_catalog.json"
+		catalog.write_text('{"models": []}', encoding="utf-8")
+		for relative_catalog_arg in ("./scripts/codex_model_catalog.json", "scripts/codex_model_catalog.json"):
+			cfg = tmp / "config.toml"
+			result = _run(
+				[
+					"--model", "openai/gpt-5.4",
+					"--reasoning", "low",
+					"--catalog-path", relative_catalog_arg,
+					"--project-path", str(tmp),
+					"--config-path", str(cfg),
+				],
+				cwd=tmp,
+			)
+			assert result.returncode == 0, f"helper failed: {result.stderr}"
+			body = _read_config(cfg)
+			assert f'model_catalog_json = "{catalog}"' in body, body
+			assert "::warning::" not in result.stderr, result.stderr
 
 
 def test_helper_quotes_project_path_with_spaces() -> None:
