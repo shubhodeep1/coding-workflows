@@ -1559,14 +1559,14 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PYTHONSAFEPATH: '1'
       PYTHONPATH: ''
-      REVIEW_GIT_TOKEN: ${{ github.token }}
       GIT_CONFIG_COUNT: '1'
       GIT_CONFIG_KEY_0: credential.helper
       GIT_CONFIG_VALUE_0: >-
         !f() { [ "$1" = get ] || exit 1; host=""; while IFS= read -r line; do
         case "$line" in host=*) host="${line#host=}" ;; esac; done;
-        [ "$host" = "${GITHUB_SERVER_URL#https://}" ] && [ -n "$REVIEW_GIT_TOKEN" ] || exit 1;
-        printf 'username=x-access-token\npassword=%s\n' "$REVIEW_GIT_TOKEN"; }; f
+        [ "$host" = "${GITHUB_SERVER_URL#https://}" ] && [ -n "${REVIEW_GIT_CREDENTIAL_DIR:-}" ] || exit 1;
+        IFS= read -r token < "${REVIEW_GIT_CREDENTIAL_DIR}/token" || [ -n "$token" ] || exit 1;
+        [ -n "$token" ] && printf 'username=x-access-token\npassword=%s\n' "$token"; }; f
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
       # Review-pipeline knobs: mirror the landed script defaults so repo-var
@@ -1679,6 +1679,17 @@ jobs:
 
       - name: Show disk usage (post free-disk-space)
         run: df -h /
+
+      - name: Prepare host Git credential
+        env:
+          REVIEW_GIT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [ -n "${REVIEW_GIT_TOKEN:-}" ] || exit 1
+          credential_dir="$(mktemp -d "${RUNNER_TEMP%/}/review-git-credential-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
+          printf '%s\n' "${REVIEW_GIT_TOKEN}" > "${credential_dir}/token"
+          echo "REVIEW_GIT_CREDENTIAL_DIR=${credential_dir}" >> "$GITHUB_ENV"
 
       - name: Checkout repo
         uses: actions/checkout@v5
@@ -7181,6 +7192,9 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          if [[ "${REVIEW_GIT_CREDENTIAL_DIR:-}" =~ ^${RUNNER_TEMP}/review-git-credential-[0-9]+-[0-9]+\.[A-Za-z0-9]+$ ]]; then
+            rm -rf -- "${REVIEW_GIT_CREDENTIAL_DIR}"
+          fi
           if [ -n "${REVIEW_PYTHON_DEPENDENCY_VOLUME:-}" ]; then
             docker volume rm -f "${REVIEW_PYTHON_DEPENDENCY_VOLUME}" >/dev/null 2>&1 || true
           fi

@@ -1738,7 +1738,7 @@ def finding_is_project_owned(finding: dict[str, object]) -> bool:
 				elif diff_line.startswith("rename to "):
 					if not diff_line[10:].endswith((".py", ".md", ".txt", ".rst")):
 						cross_file_non_python_added = True
-				elif diff_line.startswith(("Binary files ", "GIT binary patch", "new mode ", "deleted file mode ")):
+				elif diff_line.startswith(("Binary files ", "GIT binary patch", "deleted file mode ")):
 					cross_file_non_python_added = True
 				elif diff_line.startswith(("+", "-")) and not diff_line.startswith(("+++", "---")):
 					if not current_diff_path or not current_diff_path.endswith((".py", ".md", ".txt", ".rst")):

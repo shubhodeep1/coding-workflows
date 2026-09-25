@@ -1451,7 +1451,7 @@ def test_security_audit_cross_file_deleted_guard_keeps_sink_blocking(
 	assert payload["advisory_findings"] == []
 
 
-@pytest.mark.parametrize("route_name", ("gateway.js", "gateway.yml", "README.md"))
+@pytest.mark.parametrize("route_name", ("gateway.js", "gateway.yml", "README.md", "mode-only"))
 def test_security_audit_cross_language_route_addition_blocks_base_owned_sink(route_name: str) -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-cross-language-") as fixture_td:
 		tmp_path = Path(fixture_td)
@@ -1480,8 +1480,12 @@ def test_security_audit_cross_language_route_addition_blocks_base_owned_sink(rou
 		base_sha = fixture_git("rev-parse", "HEAD")
 		with (repo_dir / "views.py").open("a", encoding="utf-8") as handle:
 			handle.write("FILLER_21 = 21\n")
-		(repo_dir / route_name).write_text("new route\n", encoding="utf-8")
-		fixture_git("add", route_name, "views.py")
+		if route_name == "mode-only":
+			(repo_dir / "views.py").chmod(0o755)
+			fixture_git("add", "views.py")
+		else:
+			(repo_dir / route_name).write_text("new route\n", encoding="utf-8")
+			fixture_git("add", route_name, "views.py")
 		fixture_git("commit", "-q", "-m", "route")
 		head_sha = fixture_git("rev-parse", "HEAD")
 		finding = _finding_payload("base-owned-sink", file_path="views.py", category="A01: Broken Access Control")
@@ -1501,7 +1505,7 @@ def test_security_audit_cross_language_route_addition_blocks_base_owned_sink(rou
 		)
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
-	assert [row["finding_id"] for row in payload["findings"]] == ([] if route_name.endswith(".md") else ["base-owned-sink"])
+	assert [row["finding_id"] for row in payload["findings"]] == ([] if route_name.endswith(".md") or route_name == "mode-only" else ["base-owned-sink"])
 
 
 def test_security_audit_unrelated_control_deletion_does_not_block_base_owned_sink() -> None:

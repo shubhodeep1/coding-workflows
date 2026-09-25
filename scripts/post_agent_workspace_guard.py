@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -167,12 +168,22 @@ def dispose(args: argparse.Namespace) -> int:
 	if manifest_path == workspace or workspace in manifest_path.parents:
 		raise GuardError("manifest must be outside the workspace")
 	_load_manifest(manifest_path, workspace)
-	quarantine_root = Path(tempfile.mkdtemp(prefix="post-agent-rejected-", dir=workspace.parent))
 	try:
-		os.rename(workspace, quarantine_root / "workspace")
-	except OSError:
-		quarantine_root.rmdir()
-		raise
+		quarantine_root = Path(tempfile.mkdtemp(prefix="post-agent-rejected-", dir=workspace.parent))
+	except OSError as quarantine_error:
+		if quarantine_error.errno != errno.ENOSPC:
+			raise
+		# A same-directory rename may succeed even when no space remains for mkdir.
+		quarantine_root = workspace.parent / f"post-agent-rejected-{os.urandom(16).hex()}"
+		if quarantine_root.exists() or quarantine_root.is_symlink():
+			raise GuardError("quarantine destination already exists")
+		os.rename(workspace, quarantine_root)
+	else:
+		try:
+			os.rename(workspace, quarantine_root / "workspace")
+		except OSError:
+			quarantine_root.rmdir()
+			raise
 	print("POST_AGENT_WORKSPACE_DISPOSED", file=sys.stderr)
 	return 0
 

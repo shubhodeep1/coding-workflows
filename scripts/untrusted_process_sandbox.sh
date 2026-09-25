@@ -477,6 +477,13 @@ credential_inaccessible_entry="${credential_file} "
 if sandbox_path_is_private_tmp "${credential_file}"; then
 	credential_inaccessible_entry=""
 fi
+if [ -n "${REVIEW_GIT_CREDENTIAL_DIR:-}" ]; then
+	[ -d "${REVIEW_GIT_CREDENTIAL_DIR}" ] && [ ! -L "${REVIEW_GIT_CREDENTIAL_DIR}" ] \
+		|| { echo "untrusted_process_sandbox: Git credential directory is unavailable" >&2; exit 1; }
+	if ! sandbox_path_is_private_tmp "${REVIEW_GIT_CREDENTIAL_DIR}"; then
+		credential_inaccessible_entry+="${REVIEW_GIT_CREDENTIAL_DIR} "
+	fi
+fi
 systemd_run=(systemd-run)
 sandbox_journal_cmd=(journalctl)
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import argparse
+import errno
 import importlib.util
 import http.client
 import json
@@ -18,6 +20,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -98,6 +101,28 @@ def test_guard_disposes_workspace_after_inventory_error() -> None:
 		assert list(root.glob("post-agent-rejected-*/workspace/sitecustomize.py"))
 
 
+def test_guard_disposes_workspace_when_quarantine_mkdir_runs_out_of_space(monkeypatch: pytest.MonkeyPatch) -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		manifest = root / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "sitecustomize.py").write_text("raise RuntimeError('startup executed')\n", encoding="utf-8")
+		guard_module = runpy.run_path(str(WORKSPACE_GUARD))
+
+		def fail_quarantine_mkdir(*args: object, **kwargs: object) -> str:
+			raise OSError(errno.ENOSPC, "No space left on device")
+
+		monkeypatch.setattr(guard_module["tempfile"], "mkdtemp", fail_quarantine_mkdir)
+		assert guard_module["dispose"](argparse.Namespace(workspace=str(workspace), manifest=str(manifest))) == 0
+		assert not workspace.exists()
+		assert list(root.glob("post-agent-rejected-*/sitecustomize.py"))
+
+
 def test_guard_disposal_refuses_mismatched_snapshot_identity() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		root = Path(directory)
@@ -136,6 +161,48 @@ def test_resolver_checker_and_validator_metadata_are_not_from_checkout() -> None
 	assert 'GIT_CONFIG_KEY_0: credential.helper' in review
 	assert 'persist-credentials: false' in review
 	assert 'python3 -c "import pytest"' not in review
+
+
+@pytest.mark.parametrize("workflow_name", ("review_autofix.yml", "orchestrate_poll.yml"))
+def test_git_token_is_not_job_wide_and_sandbox_masks_credential(workflow_name: str) -> None:
+	workflow_text = (REPO_ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+	job_env = workflow_text.split("      PYTHONSAFEPATH: '1'\n", 1)[1].split("    steps:\n", 1)[0]
+	assert "REVIEW_GIT_TOKEN:" not in job_env
+	assert "${REVIEW_GIT_CREDENTIAL_DIR}/token" in job_env
+	assert "REVIEW_GIT_TOKEN: ${{ github.token }}" in workflow_text
+	assert "umask 077" in workflow_text
+	assert "REVIEW_GIT_CREDENTIAL_DIR=${credential_dir}" in workflow_text
+	assert 'rm -rf -- "${REVIEW_GIT_CREDENTIAL_DIR}"' in workflow_text
+	assert 'credential_inaccessible_entry+="${REVIEW_GIT_CREDENTIAL_DIR} "' in SANDBOX.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("workflow_name", ("review_autofix.yml", "orchestrate_poll.yml"))
+def test_git_credential_helper_reads_private_file_only(workflow_name: str) -> None:
+	workflow_document = yaml.safe_load((REPO_ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8"))
+	job_name = "codex-agent" if workflow_name == "review_autofix.yml" else "poll"
+	helper_command = workflow_document["jobs"][job_name]["env"]["GIT_CONFIG_VALUE_0"]
+	with tempfile.TemporaryDirectory() as credential_dir_path:
+		(Path(credential_dir_path) / "token").write_text("synthetic-git-token\n", encoding="utf-8")
+		git_environment = os.environ.copy()
+		git_environment.update({
+			"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper",
+			"GIT_CONFIG_VALUE_0": helper_command, "GIT_CONFIG_GLOBAL": "/dev/null",
+			"GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+			"GITHUB_SERVER_URL": "https://github.com", "REVIEW_GIT_CREDENTIAL_DIR": credential_dir_path,
+		})
+		credential_result = subprocess.run(
+			["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
+			env=git_environment, capture_output=True, text=True, check=False,
+		)
+		assert credential_result.returncode == 0, credential_result.stderr
+		assert "password=synthetic-git-token" in credential_result.stdout
+		(Path(credential_dir_path) / "token").unlink()
+		denied_result = subprocess.run(
+			["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
+			env=git_environment, capture_output=True, text=True, check=False,
+		)
+		assert denied_result.returncode != 0
+		assert "synthetic-git-token" not in denied_result.stdout
 
 
 def test_workspace_guard_restores_authorized_new_regular_file() -> None:
