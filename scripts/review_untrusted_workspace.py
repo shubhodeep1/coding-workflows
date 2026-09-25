@@ -85,7 +85,7 @@ def enumerate_workspace(root):
 			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child != ".github"):
 				dirs.remove(child)
 				continue
-			if not allowed(name + "/placeholder.py") or (Path(directory) / child).is_symlink():
+			if (name != ".github" and not allowed(name + "/placeholder.py")) or (Path(directory) / child).is_symlink():
 				raise ValueError("unsafe workspace directory")
 		for child in files:
 			entries += 1

@@ -7357,6 +7357,35 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		assert (host / "scripts/new.py").read_text() == "new\n"
 
 
+def test_review_isolation_traverses_only_allowed_github_directories() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		for subdir in ("workflows", "actions"):
+			(host / ".github" / subdir).mkdir(parents=True)
+			(host / ".github" / subdir / "example.yml").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], check=True)
+		subprocess.run(["git", "add", ".github"], cwd=host, check=True)
+		manifest = root / "isolated" / "baseline.json"
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		assert run("refresh").returncode == 0
+		(source / ".github/workflows/example.yml").write_text("after\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
+		(source / ".github/ai").mkdir()
+		(source / ".github/ai/untrusted.yml").write_text("untrusted\n")
+		assert run("transfer").returncode != 0
+		assert not (host / ".github/ai/untrusted.yml").exists()
+
+
 def test_review_relay_accepts_only_configured_chat_model() -> None:
 	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
 	assert spec and spec.loader
