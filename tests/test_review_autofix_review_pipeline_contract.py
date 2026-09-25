@@ -3063,6 +3063,8 @@ def test_summariser_missing_opencode_helpers_emits_classified_error() -> None:
 def test_review_soft_deadline_budget_contract_is_wired() -> None:
 	init_step_block = _step_block("Initialize runtime workspace")
 	for expected in (
+		'[[ "${RUNNER_TEMP:-}" != /* ]]',
+		'mktemp -d "${RUNNER_TEMP%/}/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX"',
 		'review_soft_deadline_minutes="${REVIEW_SOFT_DEADLINE_MINUTES:-210}"',
 		'review_soft_deadline_minutes_raw="${review_soft_deadline_minutes}"',
 		"Invalid REVIEW_SOFT_DEADLINE_MINUTES=",
@@ -3104,6 +3106,7 @@ def test_review_soft_deadline_budget_contract_is_wired() -> None:
 		'editor_partial_finalize_reason="soft_deadline"',
 		'editor_partial_finalize_reason="refusal"',
 		'editor_partial_finalize_reason="recoverable_failure"',
+		'editor_partial_finalize_reason="sandbox_initialization_failure"',
 		'AUTOFIX_PARTIAL_FINALIZE_PHASE=editor',
 	):
 		assert expected in apply_fixes_text, f"missing editor budget wiring: {expected}"
@@ -5452,6 +5455,11 @@ def test_review_pipeline_summary_classifies_editor_noop_recoverable_failure() ->
 	the pre-existing `unexpected_noop` / `editor_noop_suspicious` values stay
 	the fallback for runs without either specific flag (CLAUDE.md §6)."""
 	editor_noop_cases = {
+		"sandbox_initialization_failure": (
+			{"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
+			"sandbox_initialization_failure",
+			"editor_noop_suspicious",
+		),
 		"recoverable_failure": (
 			{"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
 			"recoverable_failure",
@@ -5511,6 +5519,27 @@ def test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reas
 	assert summary["partial_finalize_validation_tail_can_complete"] is False
 	assert summary["finalize_reason"] == "partial_finalize"
 	assert summary["slot_results"]["editor"]["failure_class"] == "recoverable_failure"
+	assert summary["slot_results"]["editor"]["status"] == "failed"
+
+
+def test_review_pipeline_summary_sandbox_failure_keeps_partial_finalize_reason_precedence() -> None:
+	summary = _run_review_pipeline_summary_step_harness(
+		extra_env={
+			"EDITOR_NOOP_SUSPICIOUS": "true",
+			"EDITOR_NOOP_REFUSAL": "false",
+			"EDITOR_NOOP_RECOVERABLE_FAILURE": "false",
+			"EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REASON": "sandbox_initialization_failure",
+			"AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor",
+			"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+		},
+	)["summary"]
+	assert summary["partial_finalize"] is True
+	assert summary["partial_finalize_reason"] == "sandbox_initialization_failure"
+	assert summary["partial_finalize_validation_tail_can_complete"] is False
+	assert summary["finalize_reason"] == "partial_finalize"
+	assert summary["slot_results"]["editor"]["failure_class"] == "sandbox_initialization_failure"
 	assert summary["slot_results"]["editor"]["status"] == "failed"
 
 
@@ -5733,7 +5762,7 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 			f"step should stay available only when the partial-finalize validation tail can complete: {step_name}"
 		)
 	validator_block = _step_block("Validate editor no-op disposition")
-	assert "(env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))" in validator_block
+	assert "(env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'sandbox_initialization_failure'))" in validator_block
 
 
 def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:

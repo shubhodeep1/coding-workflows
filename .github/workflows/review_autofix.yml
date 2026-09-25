@@ -2008,7 +2008,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          RUNTIME_DIR="/tmp/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
+          if [[ "${RUNNER_TEMP:-}" != /* ]] || [ ! -d "${RUNNER_TEMP}" ] || [ ! -w "${RUNNER_TEMP}" ]; then
+            echo "::error::RUNNER_TEMP must be an available absolute writable directory." >&2
+            exit 1
+          fi
+          RUNTIME_DIR="$(umask 077 && mktemp -d "${RUNNER_TEMP%/}/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
           PREVIOUS_REVIEWS_DIR="${RUNTIME_DIR}/previous_reviews"
           RUNTIME_CONTEXT_DIR="${RUNTIME_DIR}/runtime_context"
           job_start_epoch="$(date +%s)"
@@ -4991,10 +4995,11 @@ jobs:
         # so leaving the env var unset on these runs does not relax any
         # auto-merge safety.
         # The disposition checks are cheap and must still classify refusal and
-        # recoverable editor failures when too little hard-timeout headroom
-        # remains for the full validation/publish tail. Soft-deadline and
-        # reviewer-phase partial finalizes retain the existing skip behavior.
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true' || (env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))) && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
+        # recoverable editor failures and pre-launch sandbox initialization
+        # failures when too little hard-timeout headroom remains for the full
+        # validation/publish tail. Soft-deadline and reviewer-phase partial
+        # finalizes retain the existing skip behavior.
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true' || (env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'sandbox_initialization_failure'))) && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         run: |
           set -euo pipefail
 
@@ -5017,6 +5022,11 @@ jobs:
           # claimed no changes needed" wording, which is wrong for this
           # case: the editor never produced output at all.
           EDITOR_NOOP_RECOVERABLE_FAILURE="false"
+          # Additive pre-launch sandbox-initialization signal. This stays
+          # distinct from provider/model failures because the editor process
+          # was never launched and retrying it cannot bypass the mandatory
+          # workspace guard.
+          EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE="false"
 
           if [ ! -s "${EDITOR_SUMMARY_FILE:-}" ]; then
             echo "::warning::Editor summary file is missing or empty — editor never produced output."
@@ -5078,6 +5088,17 @@ jobs:
               EDITOR_NOOP_RECOVERABLE_FAILURE="true"
             fi
 
+            # ── Check 1d: Detect pre-launch workspace-guard failure ──
+            # The editor helper writes this sentinel only when the mandatory
+            # sandboxed workspace snapshot cannot initialize. No model process
+            # ran, so classify it independently and keep all publication paths
+            # fail closed even when zero reviewers completed.
+            if grep -qiE 'editor workspace guard sandbox initialization failed before editor launch' "${EDITOR_SUMMARY_FILE}"; then
+              echo "::notice::Editor workspace guard sandbox initialization failed before editor launch — no editor process was started."
+              EDITOR_NOOP_SUSPICIOUS="true"
+              EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE="true"
+            fi
+
             # ── Check 2: Reviewer audit sanity ──
             # When reviewer execution succeeded (REVIEWERS_SUCCESSFUL > 0)
             # but the editor claims no changes, verify the audit section has
@@ -5106,6 +5127,7 @@ jobs:
           echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
           echo "EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL}" >> "$GITHUB_ENV"
           echo "EDITOR_NOOP_RECOVERABLE_FAILURE=${EDITOR_NOOP_RECOVERABLE_FAILURE}" >> "$GITHUB_ENV"
+          echo "EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE=${EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
         # The pre-review gate above only short-circuits deterministic stale/
@@ -7208,6 +7230,32 @@ jobs:
             BODY+=$'\n'
             BODY+="Auto-merge has been **blocked**."
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+          elif [ "${EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE:-false}" = "true" ]; then
+            sandbox_initialization_error=""
+            if [ -n "${PREVIOUS_REVIEWS_DIR:-}" ] && [ -d "${PREVIOUS_REVIEWS_DIR}" ]; then
+              sandbox_error_file="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
+              if [ -n "${sandbox_error_file}" ] && [ -s "${sandbox_error_file}" ]; then
+                sandbox_initialization_error="$(grep -aE '^Error: ' "${sandbox_error_file}" | tail -n 1 | tr -d '\r\140' | cut -c1-240 || true)"
+              fi
+            fi
+            [ -n "${sandbox_initialization_error}" ] || sandbox_initialization_error="sanitized diagnostic unavailable — see the editor step log of the linked run"
+            MSG="⚠️ Editor sandbox initialization failed: #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="The mandatory workspace guard failed before the editor launched. ${sandbox_initialization_error}"
+            MSG+=$'\n'
+            MSG+="Auto-merge blocked. This is an infrastructure failure; no unsandboxed fallback was attempted."
+            MSG+=$'\n'
+            MSG+="PR: ${PR_URL}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+
+            BODY="⚠️ **Editor no-op suspicious** — the mandatory workspace guard failed before the editor launched, so no fix was attempted this pass."
+            BODY+=$'\n\n'
+            BODY+="Sanitized initialization error: \`${sandbox_initialization_error}\`"
+            BODY+=$'\n\n'
+            BODY+="Auto-merge has been **blocked**. The sandbox remains mandatory; inspect the editor step log of the linked run before re-dispatching."
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
           elif [ "${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}" = "true" ]; then
             # Every editor attempt failed and review_apply_fixes.sh wrote
             # the recoverable_failure partial-finalize summary (validator
@@ -8305,12 +8353,15 @@ jobs:
           elif bool_env("EDITOR_NOOP_SUSPICIOUS"):
               editor_phase_state = "completed"
               # Additive classification (CLAUDE.md §6): "refusal" keeps
-              # precedence, "recoverable_failure" is new for the
+              # precedence, sandbox initialization is classified before
+              # provider/model recovery failures, "recoverable_failure" is for the
               # EDITOR_NOOP_RECOVERABLE_FAILURE flag set by the validator's
               # Check 1c (every editor attempt failed, no editor output),
               # and "unexpected_noop" stays the fallback value unchanged.
               if bool_env("EDITOR_NOOP_REFUSAL"):
                   editor_noop_failure_class = "refusal"
+              elif bool_env("EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE"):
+                  editor_noop_failure_class = "sandbox_initialization_failure"
               elif bool_env("EDITOR_NOOP_RECOVERABLE_FAILURE"):
                   editor_noop_failure_class = "recoverable_failure"
               else:

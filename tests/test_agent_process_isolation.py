@@ -474,6 +474,130 @@ def test_resolver_python_syntax_validation_is_read_only() -> None:
 		assert not (workspace / "__pycache__").exists()
 
 
+def test_workspace_guard_uses_only_workspace_matched_external_git_context() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		git_dir = root / "metadata"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(
+			["git", "init", "-q", "--separate-git-dir", str(git_dir), str(workspace)],
+			check=True,
+		)
+		(workspace / ".git").unlink()
+		(workspace / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+		environment = os.environ.copy()
+		environment.update({
+			"GIT_DIR": str(git_dir), "GIT_WORK_TREE": str(workspace),
+			"RUNTIME_DIR": str(runtime), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+
+		def sandbox_run(role: str, *command: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				["bash", str(SANDBOX), "--role", role, "--workspace", str(workspace),
+				 "--runtime-dir", str(runtime), "--", *command],
+				env=environment if env is None else env,
+				capture_output=True, text=True, check=False,
+			)
+
+		manifest = runtime / "manifest.json"
+		guard_command = ("/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD))
+		snapshot = sandbox_run(
+			"workspace-guard", *guard_command, "snapshot", "--workspace", str(workspace),
+			"--manifest", str(manifest),
+		)
+		assert snapshot.returncode == 0, snapshot.stderr
+		(workspace / "ordinary.txt").write_text("ordinary\n", encoding="utf-8")
+		accepted = sandbox_run(
+			"workspace-guard", *guard_command, "reconcile", "--workspace", str(workspace),
+			"--manifest", str(manifest), "--quarantine-dir", str(runtime / "accepted-quarantine"),
+			"--changed-paths-out", str(runtime / "accepted-changes"), "--report", str(runtime / "accepted.json"),
+		)
+		assert accepted.returncode == 0, accepted.stderr
+		assert (workspace / "ordinary.txt").read_text(encoding="utf-8") == "ordinary\n"
+		assert json.loads((runtime / "accepted.json").read_text(encoding="utf-8"))["restored"] == ["ordinary.txt"]
+
+		(workspace / ".git").write_text(f"gitdir: {root / 'forged-metadata'}\n", encoding="utf-8")
+		(workspace / "ignored.txt").write_text("ignored\n", encoding="utf-8")
+		rejected = sandbox_run(
+			"workspace-guard", *guard_command, "reconcile", "--workspace", str(workspace),
+			"--manifest", str(manifest), "--quarantine-dir", str(runtime / "rejected-quarantine"),
+			"--changed-paths-out", str(runtime / "rejected-changes"), "--report", str(runtime / "rejected.json"),
+		)
+		assert rejected.returncode == 20, rejected.stderr
+		assert not (workspace / "ignored.txt").exists()
+		assert (runtime / "rejected-quarantine" / "ignored.txt").is_file()
+		assert not (workspace / ".git").exists()
+		assert "ignored-path" in [
+			row["reason"] for row in json.loads((runtime / "rejected.json").read_text(encoding="utf-8"))["rejected"]
+		]
+
+		inspect_environment = ("/usr/bin/python3", "-I", "-S", "-c",
+			"import json,os; print(json.dumps([os.getenv('GIT_DIR'),os.getenv('GIT_WORK_TREE')]))")
+		for role in ("validator", "plan"):
+			if role == "plan":
+				config = root / "config"
+				config.mkdir()
+				(config / "config.toml").write_text('model = "openai/gpt-5.6-sol"\n', encoding="utf-8")
+				credential = root / "provider-token"
+				credential.write_text("synthetic", encoding="utf-8")
+				command = ["bash", str(SANDBOX), "--role", role, "--workspace", str(workspace),
+					"--config-format", "codex", "--config", str(config), "--runtime-dir", str(runtime),
+					"--", *inspect_environment]
+				environment["MODEL_PROVIDER_CREDENTIAL_FILE"] = str(credential)
+				result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
+			else:
+				result = sandbox_run(role, *inspect_environment)
+			assert result.returncode == 0, result.stderr
+			assert json.loads(result.stdout) == [None, None]
+
+		for invalid_environment in (
+			{**environment, "GIT_WORK_TREE": ""},
+			{**environment, "GIT_DIR": ""},
+			{**environment, "GIT_WORK_TREE": str(root)},
+			{**environment, "GIT_DIR": str(runtime)},
+			{**environment, "GIT_DIR": str(workspace)},
+		):
+			invalid = sandbox_run("workspace-guard", *inspect_environment, env=invalid_environment)
+			assert invalid.returncode != 0
+
+		sandbox_text = SANDBOX.read_text(encoding="utf-8")
+		assert 'append_git_metadata_path "${guard_git_dir}"' in sandbox_text
+		assert '--property="ReadOnlyPaths=${protected_git_path}"' in sandbox_text
+
+
+def test_workspace_guard_keeps_in_tree_git_discovery_without_pair() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		manifest = runtime / "manifest.json"
+		environment = {key: value for key, value in os.environ.items()
+			if key not in {"GIT_DIR", "GIT_WORK_TREE"}}
+		environment["UNTRUSTED_PROCESS_SANDBOX_TEST_MODE"] = "1"
+		command = ["bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(workspace),
+			"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD)]
+		snapshot = subprocess.run(
+			[*command, "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert snapshot.returncode == 0, snapshot.stderr
+		(workspace / "ordinary.txt").write_text("ordinary\n", encoding="utf-8")
+		reconcile = subprocess.run(
+			[*command, "reconcile", "--workspace", str(workspace), "--manifest", str(manifest),
+			 "--quarantine-dir", str(runtime / "quarantine"), "--changed-paths-out", str(runtime / "changed"),
+			 "--report", str(runtime / "report.json")],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert reconcile.returncode == 0, reconcile.stderr
+		assert (workspace / "ordinary.txt").read_text(encoding="utf-8") == "ordinary\n"
+
+
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		root = Path(directory)
@@ -536,11 +660,12 @@ def test_provider_proxy_has_a_narrow_route_allowlist() -> None:
 	assert "-/var/run/docker.sock" in sandbox_text
 	assert "_runner_file_commands" in sandbox_text
 	assert "IPAddressDeny=any" in sandbox_text
+	assert "PrivateTmp=yes" in sandbox_text
 	assert "summary|audit" in sandbox_text
 	assert "implement-repair|diagnose|reviewer" in sandbox_text
 	assert 'find "${workspace}" -xdev -name .git -print0' in sandbox_text
 	assert 'InaccessiblePaths=${protected_git_path}' in sandbox_text
-	assert "GIT_DIR|GIT_WORK_TREE" not in sandbox_text
+	assert 'if [ -n "${guard_git_dir}" ]; then' in sandbox_text
 	assert "ThreadingHTTPServer" not in module_text
 	assert "class BoundedHTTPServer" in module_text
 	assert "ThreadPoolExecutor" in module_text
@@ -751,6 +876,17 @@ def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
 	resolver_guard = RESOLVER_GUARD.read_text(encoding="utf-8")
 	assert "ast.parse" in resolver_guard
 	assert "-m py_compile" not in resolver_guard
+
+
+def test_review_editor_workspace_guard_runtime_is_independent_of_legacy_tmp_runtime() -> None:
+	review_apply = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	assert 'runtime_base="${RUNNER_TEMP}"' in review_apply
+	assert 'mktemp -d "${runtime_base_resolved%/}/review-editor-workspace-guard.XXXXXX"' in review_apply
+	assert 'trusted workspace-guard runtime resolved inside the model-writable workspace' in review_apply
+	assert '--runtime-dir "${editor_workspace_guard_runtime}"' in review_apply
+	assert '--runtime-dir "${RUNTIME_DIR}"' not in review_apply
+	assert 'runtime_mode="$(stat -c \'%a\' "${editor_workspace_guard_runtime}"' in review_apply
+	assert 'if [ "${runtime_mode}" != "700" ]; then' in review_apply
 
 
 def test_trusted_git_writer_never_executes_repository_hooks() -> None:

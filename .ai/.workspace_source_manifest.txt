@@ -224,6 +224,7 @@ changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/4290-security-boundary-hardening.md
 changelog.d/433-readme-wrapper-predicate-examples.md
+changelog.d/4338-review-editor-sandbox-init.md
 changelog.d/4379-followup-metadata-and-merged-label-race.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
@@ -240,6 +241,7 @@ changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md
 changelog.d/orchestrator-security-pass-phase-2-audit-engine.md
 changelog.d/orchestrator-security-pass-phase-3-dark-launch.md
 changelog.d/orchestrator-security-pass-phase-4-default-on.md
+changelog.d/post-agent-python-startup-isolation.md
 changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
 changelog.d/security-audit-concurrency-deadlock.md
@@ -517,6 +519,7 @@ scripts/orchestrate_parse_and_post_answer.sh
 scripts/orchestrate_poll_process.sh
 scripts/orchestrate_state_v2.py
 scripts/package_download_proxy.py
+scripts/post_agent_workspace_guard.py
 scripts/post_review_comment.sh
 scripts/pr_checks_lib.sh
 scripts/promote_main_cycle.sh
