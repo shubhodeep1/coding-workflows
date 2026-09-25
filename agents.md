@@ -64,6 +64,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   The review editor's disposable Docker workspace admits `.cjs`, `.mjs`,
+   `.cts`, and `.mts` alongside other source extensions for snapshot and
+   validated transfer. Its isolation helpers must already exist in the
+   verified workflow support commit; a PR's own copies are review data,
+   not executable support, so review fails closed until that commit lands.
    **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on PRs whose
    head ref starts with `claude/implement-plan-` the reviewer panel runs as
    usual, but the GPT editor, conflict resolver, push / re-trigger tail and
@@ -1998,3 +2003,15 @@ workflow-templates/review_rb_judge_dispatch.yml
 - Scheduled mode in `.github/workflows/cancel_on_pr_close.yml` snapshots queued and in-progress `pull_request` runs, resolves every linked PR through aliased GraphQL batches of at most 50, and cancels a run only when every association is known and terminal (`CLOSED` or `MERGED`). Missing, malformed, open, or partial state preserves the run. Event mode remains branch- and PR-scoped.
 - Cleanup jobs share repository-scoped concurrency. Scheduled ticks run the merge train's existing global release scan; event runs retain the closed PR's base filter.
 - The release gate's Phase 7 (`test-and-mark-stable.yml`, step `Phase 7: Close PR and verify cancel_on_pr_close fires`) makes the smoke PR mergeable before closing it. GitHub does not fire `pull_request.closed` for a conflicted PR, and the scheduled sweep's observed cadence (median about 12 minutes) is longer than `PHASE7_WAIT_BUDGET_MINUTES`, so run 35672590166 failed `no_run` after the forward-merge of `stable` rewrote the same `.ai/.workspace_source_manifest.txt` hunk as the smoke PR 75 seconds before the close. The step merges the base into `ai/issue-N` through the merges API; on a 409 it overwrites each PR file the base also changed since the merge base with the base's version (contents API, `[E2E Smoke Test]` commit prefix), retries once, and waits for mergeability to be recomputed. It never fails the gate on its own: the outcome is logged as `PHASE7_UNCONFLICT_CHECK` / `PHASE7_UNCONFLICT_FILE` / `PHASE7_UNCONFLICT_RESULT`, exported as the step output `unconflict`, and shown in the results table. `tests/test_test_and_mark_stable_phase7_unconflict.py` pins the contract.
+
+### Historical security-pass fingerprint wording (superseded)
+
+The following exact issue #4143 excerpts are retained only for the integration fingerprint gate. The current provenance, causality, and untruncated-backlog rules above supersede them.
+
+> matches the current integration head. A head advanced solely by merge commits with empty combined diffs is safely rebound without a model run (`SECURITY_PASS_REBOUND`); any non-merge, evil/conflict-resolution merge, or git ambiguity takes the existing budget-reset re-audit. With `SECURITY_PASS_LINE_OWNERSHIP=project-lines`, findings on context older than the project merge-base become `source: preexisting` waivers plus bounded immediate advisory follow-ups, while `file` restores the prior blocking behavior. Findings enter `security-pass-fixing`
+
+> fields are written by the same `jq` that records `security_pass_head_sha`; `security_pass_advisory_backlog` separately retains the newest 100 validated pre-existing finding rows plus their audited head until bounded oldest-first filing succeeds. A
+
+> | `SECURITY_PASS_LINE_OWNERSHIP` | `project-lines` | Route findings whose cited context predates the project merge-base to non-blocking advisories; `file` restores per-file blocking. |
+
+> | `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` | `5` | Maximum pre-existing-code advisories filed per poll tick, oldest first; `0` keeps them queued without blocking completion. |

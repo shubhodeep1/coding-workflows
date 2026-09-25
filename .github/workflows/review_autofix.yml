@@ -4671,23 +4671,14 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         run: |
           set -euo pipefail
-          # Install project dependencies so the editor can validate fixes
-          # (e.g., run vitest, tsc, pytest). Best-effort: failures here do
-          # not block the workflow.
+          # A failed install is best-effort; a failed isolation boundary is not.
+          bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+
+      - name: Prepare Python validation dependencies (isolated)
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
+        run: |
+          set -euo pipefail
           install_failed=false
-          if [ -f package-lock.json ]; then
-            echo "Found package-lock.json — running npm ci"
-            npm ci --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f yarn.lock ]; then
-            echo "Found yarn.lock — running yarn install"
-            yarn install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f pnpm-lock.yaml ]; then
-            echo "Found pnpm-lock.yaml — running pnpm install"
-            npx pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f package.json ]; then
-            echo "Found package.json (no lockfile) — running npm install"
-            npm install --ignore-scripts 2>&1 || install_failed=true
-          fi
           if [ -f requirements.txt ] || { [ -f pyproject.toml ] && [ ! -f package.json ]; }; then
             echo "Preparing Python dependencies in a disposable secretless container"
             review_dependency_git_mask="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-dependency-git.XXXXXX")"
@@ -4984,6 +4975,10 @@ jobs:
               }
             fi
           fi
+
+      - name: Clean up isolated review workspace
+        if: always() && env.REVIEW_SANDBOX_ROOT != ''
+        run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
 
       - name: Remove slop-scan runtime artifact
         if: always()

@@ -22690,3 +22690,6 @@ def test_security_pass_poller_delegates_waiver_causality_to_shared_helper() -> N
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+# Historical issue #4143 fingerprint (superseded by normalized advisory payload):
+# payload["advisory_findings"] = list(advisory_findings or [])

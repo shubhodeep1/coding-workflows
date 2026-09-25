@@ -233,9 +233,8 @@ run_editor_codex_attempt() {
   local -a editor_opencode_cmd
   editor_workspace="$(pwd)"
 
-  if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-    editor_opencode_serena="on"
-  fi
+  # Serena's host executable/config is not available inside the isolated
+  # workspace. Keep the writer's tool surface local to that workspace.
   if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
     --role writer \
     --model "${editor_attempt_model}" \
@@ -250,16 +249,12 @@ run_editor_codex_attempt() {
     return 79
   fi
   editor_opencode_cmd=(
-    bash -c
-    # shellcheck disable=SC2016
-    'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-    opencode-editor
-    "${OPENCODE_HELPERS_PATH}"
-    writer
+    bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run
+    "${prompt_file}"
+    "${stdout_file}"
     "${editor_attempt_model}"
     "${EDITOR_REASONING_EFFORT}"
     "${editor_opencode_config}"
-    "${editor_workspace}"
   )
 
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
@@ -2184,6 +2179,10 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # already exited is the expected outcome on every watchdog-kill path.
   kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
+  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
+    echo "::error::Review sandbox result transfer was incomplete; refusing editor fallback." >&2
+    exit 1
+  fi
 
   if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
     --role workspace-guard --guard-action reconcile --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
