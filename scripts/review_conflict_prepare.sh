@@ -890,11 +890,20 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
   # paths appear once per index stage (1/2/3) in `git ls-files -z`.
   # We only need to hash each working-tree file once.
   while IFS= read -r -d '' snap_path; do
-    [ -f "${snap_path}" ] || continue
+    [ -f "${snap_path}" ] || [ -L "${snap_path}" ] || continue
     snap_exec=0
-    [ -x "${snap_path}" ] && snap_exec=1
+    if [ -L "${snap_path}" ]; then
+      # Hash a symlink as git stores it (its link text), never the file it
+      # points to: workflow-templates/CLAUDE.md -> ../CLAUDE.md otherwise
+      # "changes" whenever CLAUDE.md does, and the touched-set check rejects
+      # a correct resolution as out-of-scope (PR #4443, run 36120214576).
+      snap_sha="$(printf '%s' "$(readlink -- "${snap_path}")" | git hash-object --stdin)"
+    else
+      [ -x "${snap_path}" ] && snap_exec=1
+      snap_sha="$(git hash-object -- "${snap_path}")"
+    fi
     printf 'T\t%s\t%s\t%s\n' \
-      "$(git hash-object -- "${snap_path}")" \
+      "${snap_sha}" \
       "${snap_exec}" \
       "${snap_path}" >> "${PRE_RESOLVER_STATE_FILE}"
   done < <(git ls-files -z | sort -zu)

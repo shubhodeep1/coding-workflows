@@ -234,6 +234,43 @@ jobs:
             --catalog-path "${GITHUB_WORKSPACE}/scripts/codex_model_catalog.json"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
+      - name: Resolve trusted security audit exclusions
+        env:
+          AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
+          AUDIT_EXCLUSIONS_CONFIG: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}
+        run: |
+          set -euo pipefail
+          # Preserve the audit script's disabled-run behavior: no catalog is
+          # needed when it exits before loading exclusions.
+          case "${AUDIT_ENABLED,,}" in
+            1|true|yes|on) ;;
+            *) exit 0 ;;
+          esac
+          # The audit-data checkout is nested inside the support checkout.
+          # Resolve both the spelling and the destination before handing the
+          # catalog to the audit script, which otherwise prefers audit-data.
+          support_root="$(realpath -e -- "${GITHUB_WORKSPACE}")"
+          if [[ "${AUDIT_EXCLUSIONS_CONFIG}" = /* ]]; then
+            catalog_candidate="${AUDIT_EXCLUSIONS_CONFIG}"
+          else
+            catalog_candidate="${support_root}/${AUDIT_EXCLUSIONS_CONFIG}"
+          fi
+          if [[ "${catalog_candidate}" == *$'\n'* || "${catalog_candidate}" == *$'\r'* ]] ||
+             [[ "${catalog_candidate}" == "${support_root}/audit-data" || "${catalog_candidate}" == "${support_root}/audit-data/"* ]] ||
+             ! catalog_path="$(realpath -e -- "${catalog_candidate}" 2>/dev/null)" ||
+             [[ "${catalog_path}" != "${support_root}/"* || "${catalog_path}" == "${support_root}/audit-data/"* ]] ||
+             [ ! -f "${catalog_path}" ]; then
+            echo "::error::Security audit exclusion catalog must be a regular file in trusted support (not audit data)."
+            exit 1
+          fi
+          catalog_relative="${catalog_path#"${support_root}/"}"
+          if ! git -C "${support_root}" ls-files --error-unmatch -- "${catalog_relative}" >/dev/null 2>&1 ||
+             ! git -C "${support_root}" diff --quiet HEAD -- "${catalog_relative}"; then
+            echo "::error::Security audit exclusion catalog is not unchanged tracked support content."
+            exit 1
+          fi
+          echo "SECURITY_AUDIT_FP_EXCLUSIONS=${catalog_path}" >> "$GITHUB_ENV"
+
       - name: Run security audit
         working-directory: ./audit-data
         env:
@@ -244,7 +281,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
           SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
-          SECURITY_AUDIT_FP_EXCLUSIONS: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}
           SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}
           SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}
         run: |

@@ -188,6 +188,9 @@ changelog.d/4432-isolate-review-pr-execution.md
 changelog.d/4438-implement-plan-claude-fixer-project-branch.md
 changelog.d/4439-audit-plans-implement-plan-claude-gate.md
 changelog.d/4440-implement-plan-auto-decisions.md
+changelog.d/4451-pin-security-audit-support.md
+changelog.d/4452-validate-target-ref-sandbox.md
+changelog.d/4453-claude-fixer-verdict-verification.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
