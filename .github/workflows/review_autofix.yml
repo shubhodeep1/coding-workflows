@@ -4677,7 +4677,7 @@ jobs:
           [View workflow run](${RUN_URL}) for details.
           EOF
           )"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${GUARD_BODY}" >/dev/null 2>&1 || true
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${GUARD_BODY}" >/dev/null 2>&1 || echo "::warning::Failed to post editor workspace guard comment on PR #${PR_NUMBER} (exit=$?)."
             exit 1
           fi
 

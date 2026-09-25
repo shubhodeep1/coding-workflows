@@ -21,6 +21,7 @@ For the issue → PR pipeline state machine and the full command vocabulary, see
 
 An editor workspace-guard rejection fails the review/autofix run instead of scheduling an empty-output retry; no editor change from that attempt is committed or merged. The PR comment lists up to 10 rejected paths, change types, and reasons when a valid guard report is available. Inspect the run's `codex-review-autofix-failure-logs-*` artifact for the editor transcript, stderr, and full bounded guard report; missing or invalid reports are called out in the comment. The workflow-failure review-blocked handling remains active for open PRs.
 The `REVIEW_AUTOFIX_RUN_SUMMARY_V1` editor slot reports `workspace_guard_rejected`, with finalize reason `editor_workspace_guard_rejected`, even if the same run also set the empty-noop flag.
+If the guard-specific PR comment cannot be posted, the workflow logs a warning with the POST exit status and still fails the run; use the failure-log artifact for the diagnosis.
 
 ### Memory System
 

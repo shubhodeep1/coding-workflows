@@ -1355,6 +1355,15 @@ def test_editor_workspace_guard_failure_workflow_routing(tmp_path: Path) -> None
 			assert "Guard report unavailable or invalid" in comment
 		assert "AUTOFIX_EDITOR_EMPTY_NOOP" not in github_env.read_text(encoding="utf-8")
 
+	(support_dir / "gh_helpers.sh").write_text('gh_retry() { return 4; }\n', encoding="utf-8")
+	result = subprocess.run(["bash", "-euo", "pipefail", "-c", summary_script], env={
+		"PATH": os.environ["PATH"], "SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED": "true", "GITHUB_ENV": str(github_env),
+		"PR_NUMBER": "4413", "PREVIOUS_REVIEWS_DIR": str(previous_reviews),
+	}, capture_output=True, text=True, check=False)
+	assert result.returncode == 1, result.stderr
+	assert "::warning::Failed to post editor workspace guard comment on PR #4413 (exit=4)." in result.stdout
+
 	retry_start = editor_step.index('bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" || {')
 	retry_end = editor_step.index('\n              }', retry_start) + len('\n              }')
 	retry_script = editor_step[retry_start:retry_end]
