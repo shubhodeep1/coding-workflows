@@ -6603,7 +6603,8 @@ def test_dependency_install_never_bootstraps_pytest_on_the_privileged_host() -> 
 		{"pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert 'review_untrusted_sandbox.sh" prepare' in _step_run_script("Install project dependencies (best-effort)")
+	assert "python3 -m pip install pytest" not in result["calls"], result["calls"]
 	assert "refusing privileged host installation" in result["output"], result["output"]
 
 
@@ -6619,6 +6620,13 @@ def test_dependency_install_container_uses_allowlisted_network_proxy() -> None:
 	assert '--volume "${review_dependency_git_mask}:/workspace/.git:ro"' in step
 	assert "trap review_dependency_cleanup EXIT" in step
 	assert "docker rm -f" in step
+	install_step = _step_run_script("Install project dependencies (best-effort)")
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'review_untrusted_sandbox.sh" prepare' in install_step
+	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run' in helper
+	assert '--mount "type=bind,src=${root}/source,dst=/source"' in helper
+	assert '--mount "type=bind,src=${workspace}' not in helper
+	assert "trap 'env -i" in helper
 	assert "GH_TOKEN" not in step
 	assert "GH_PAT" not in step
 
@@ -6628,7 +6636,7 @@ def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
 		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "python3 -m pip install pytest" not in result["calls"], result["calls"]
 	assert (
 		"::warning::pytest is declared by this repository but could not be installed"
 		in result["output"]
@@ -6640,7 +6648,7 @@ def test_dependency_install_does_not_host_install_pytest_for_nested_conftest() -
 		{"tests/conftest.py": ""},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "python3 -m pip install pytest" not in result["calls"], result["calls"]
 	assert "refusing privileged host installation" in result["output"], result["output"]
 
 
@@ -7489,12 +7497,14 @@ def main() -> int:
 
 def test_review_python_dependencies_never_enter_host_path() -> None:
 	workflow = WORKFLOW.read_text(encoding="utf-8")
-	install_block = _step_block("Prepare Python validation dependencies (isolated)")
-	assert ".ai/review-venv" not in install_block
-	assert 'echo "PATH=' not in install_block
-	assert 'echo "VIRTUAL_ENV=' not in install_block
-	assert "docker volume create" in install_block
-	assert '"${review_dependency_volume}:/review-venv"' in install_block
+	install_block = _step_block("Install project dependencies (best-effort)")
+	python_validation_block = _step_block("Prepare Python validation dependencies (isolated)")
+	assert ".ai/review-venv" not in python_validation_block
+	assert 'echo "PATH=' not in python_validation_block
+	assert 'echo "VIRTUAL_ENV=' not in python_validation_block
+	assert 'review_untrusted_sandbox.sh" prepare' in install_block
+	assert "pip install" not in install_block
+	assert '"${review_dependency_volume}:/review-venv"' in python_validation_block
 	validation_block = _step_block("Validate Python changes in secretless container")
 	assert "--network none" in validation_block
 	assert '"${PWD}:/workspace:ro"' in validation_block
