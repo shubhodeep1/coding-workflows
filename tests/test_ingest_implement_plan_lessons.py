@@ -85,6 +85,17 @@ def test_parse_lessons_without_section_returns_nothing() -> None:
 	assert ingest.parse_lessons("# Log\n\n## Notes\n- [source:security] not a lesson\n") == []
 
 
+def test_parse_lessons_ignores_the_auto_decisions_section() -> None:
+	# CLAUDE.md §28: auto-decisions sit next to the lessons and must never reach memory.
+	markdown = (
+		"# Log\n\n## Auto-decisions\n"
+		"- AD-1 [phase 1/2, 2026-09-25] Which default? — Picked: A — off. Status: pending review\n"
+		"- [source:plan-deviation] looks like a lesson but is under Auto-decisions\n\n"
+		"## Lessons\n- [source:security] real lesson\n"
+	)
+	assert [item["text"] for item in ingest.parse_lessons(markdown)] == ["real lesson"]
+
+
 def test_parse_lessons_preserves_parentheses_in_file_paths() -> None:
 	markdown = (
 		"## Lessons\n"
