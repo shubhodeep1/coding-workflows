@@ -4281,6 +4281,16 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert 'AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality' in gate_block
 	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in gate_block
 	assert 'PR_FILES_JSON="${pr_files_json}" python3 - <<\'PY\'' in gate_block
+	assert 'changed_files: .changed_files' in gate_block
+	assert 'FILES_SKIP_SUPPRESSED="true"' in gate_block
+	assert 'PROTECTED_SKIP_SUPPRESSED="true"' in gate_block
+	assert 'reason=protected_path' in gate_block
+	assert 'length < 3000' in gate_block
+	assert '(.previous_filename | valid_path)' in gate_block
+	assert gate_block.count('gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files"') == 1
+	assert gate_block.index('PROTECTED_SKIP_SUPPRESSED="false"') < gate_block.index('AGENTS_MD_MATERIALITY_ENABLED:-0')
+	assert '&& [ "${FILES_SKIP_SUPPRESSED}" != "true" ]' in gate_block
+	assert '&& [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ]' in gate_block
 	assert "=== BEGIN UNTRUSTED AGENTS MD MATERIALITY RESULT ===" in prompt_text
 	assert "SEVERITY: high` by default" in prompt_text
 

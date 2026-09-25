@@ -408,6 +408,8 @@ jobs:
           #     CHANGELOG*, docs/**.
           #   * OR total additions ≤ AUTOFIX_SKIP_MAX_ADDITIONS (default 10)
           #     AND total deletions ≤ AUTOFIX_SKIP_MAX_DELETIONS (default 10).
+          # Both branches require a complete /files list with no protected
+          # instruction, automation, or root configuration paths.
           # Override per PR: title contains [force-review] OR PR has the
           # `force-review` label — skip is bypassed and full review runs.
           # When the gate fires, the sibling `deterministic-skip-merge` job
@@ -455,6 +457,7 @@ jobs:
           pr_labels=""
           pr_additions=""
           pr_deletions=""
+          pr_changed_files=""
           pr_mergeable=""
           pr_mergeable_state=""
           pr_head_sha_gate=""
@@ -482,12 +485,10 @@ jobs:
             # labels (force-review override check below), per-PR
             # additions/deletions totals (deterministic-skip size check), and
             # mergeable/mergeable_state (deterministic-skip conflict
-            # suppression below). The /pulls/{n} endpoint already exposes all
-            # of these; using them avoids a paginated /files call on the
-            # small-diff branch and adds no new API call for the conflict
-            # check.
+            # suppression below), and changed_files (to verify the paginated
+            # path list before either skip branch can run).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
@@ -496,6 +497,7 @@ jobs:
               pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
               pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
               pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
+              pr_changed_files="$(printf '%s' "${_pr_gate}" | jq -r '.changed_files | if type == "number" and . == floor then tostring else "" end' 2>/dev/null || echo "")"
               pr_mergeable="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable // ""' 2>/dev/null || echo "")"
               pr_mergeable_state="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable_state // ""' 2>/dev/null || echo "")"
               if [ -z "$(printf '%s' "${pr_title_cached}" | tr -d '[:space:]')" ]; then
@@ -1007,33 +1009,43 @@ jobs:
                 SMALL_DIFF="true"
               fi
 
-              # Doc-only check: only reach for the paginated /files API if
-              # (a) the operator hasn't disabled the doc-only branch AND
-              # (b) the cheap size check did not already qualify the PR.
-              # /files is the only call where filenames are available;
-              # /pulls/{n} does not include them.
+              # Even a size-qualified PR needs path evidence: a two-line
+              # instruction change must never bypass review. Fetch once for
+              # both branches and reuse the same list for materiality.
               DOC_ONLY="false"
               file_count=""
               pr_files_json=""
-              if [ "${SMALL_DIFF}" != "true" ] && [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
+              FILES_SKIP_SUPPRESSED="false"
+              PROTECTED_SKIP_SUPPRESSED="false"
+              if [ "${SMALL_DIFF}" = "true" ] || [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
                 # `gh api --paginate --jq '[…]'` emits one JSON array per
                 # page. Without `jq -s 'add // []'` the concatenated output
-                # is not a single valid JSON document and downstream jq
-                # silently falls back to 0/empty — which on a >1-page PR
-                # would erroneously evaluate as doc-only. Slurp + add
-                # merges all pages into one array. JSON parse failure
-                # treats the lookup as unavailable (fail-open below).
-                pr_files_json=""
-                if ! pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+                # is not one document. pipefail rejects a failed page;
+                # length must match the authenticated PR's changed_files.
+                if ! pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename, previous_filename: .previous_filename, status: .status}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
                   pr_files_json=""
                 fi
-
-                if [ -n "${pr_files_json}" ] && [ "${pr_files_json}" != "[]" ]; then
-                  file_count="$(printf '%s' "${pr_files_json}" | jq 'length' 2>/dev/null || echo 0)"
-                  if [ "${file_count}" != "0" ]; then
+                # Missing, malformed, partial, or capped API evidence never
+                # authorizes a skip. Validate rename sources and destinations.
+                if [[ "${pr_changed_files}" =~ ^[1-9][0-9]*$ ]] \
+                  && [ -n "${pr_files_json}" ] \
+                  && printf '%s' "${pr_files_json}" | jq -e --argjson expected "${pr_changed_files}" '
+                    def valid_path:
+                      type == "string" and length > 0 and
+                      (startswith("/") | not) and (contains("\\") | not) and
+                      (test("[[:cntrl:]]") | not) and
+                      (split("/") | all(. != "" and . != "." and . != ".."));
+                    type == "array" and length > 0 and length < 3000 and
+                    length == $expected and length == ([.[].filename] | unique | length) and
+                    all(.[]; type == "object" and (.filename | valid_path) and
+                      (.previous_filename == null or (.previous_filename | valid_path)) and
+                      (.status | type == "string" and length > 0) and
+                      (.status != "renamed" or (.previous_filename | valid_path)))
+                  ' >/dev/null 2>&1; then
+                  file_count="${pr_changed_files}"
+                  if [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
                     DOC_ONLY="true"
                     while IFS= read -r fname; do
-                      [ -n "${fname}" ] || continue
                       base="${fname##*/}"
                       lc_fname="${fname,,}"
                       lc_base="${base,,}"
@@ -1054,8 +1066,29 @@ jobs:
                       break
                     done < <(printf '%s' "${pr_files_json}" | jq -r '.[].filename' 2>/dev/null || true)
                   fi
+                  while IFS= read -r fname; do
+                    lc_fname="${fname,,}"
+                    lc_base="${lc_fname##*/}"
+                    case "${lc_base}" in
+                      agents.md|claude.md|unattended_system_instructions.md)
+                        PROTECTED_SKIP_SUPPRESSED="true" ;;
+                    esac
+                    case "${lc_fname}" in
+                      .github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*|validation/*|ai-memory/*|db/contracts/*)
+                        PROTECTED_SKIP_SUPPRESSED="true" ;;
+                    esac
+                    # Root build, dependency and lint configuration already
+                    # recognized by the materiality classifier.
+                    if [ "${lc_fname}" = "${lc_base}" ]; then
+                      case "${lc_base}" in
+                        package.json|pyproject.toml|cargo.toml|go.mod|go.work|makefile|.editorconfig|turbo.json|pytest.ini|tox.ini|noxfile.py|*.config.js|*.config.cjs|*.config.mjs|*.config.ts|package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|cargo.lock|poetry.lock|uv.lock|go.sum|pipfile|pipfile.lock|requirements*.txt|constraints*.txt|.eslintrc*|eslint.config.*|.prettierrc*|.stylelintrc*|stylelint.config.*|ruff.toml|.ruff.toml|.flake8|pylintrc|biome.json|biome.jsonc)
+                          PROTECTED_SKIP_SUPPRESSED="true" ;;
+                      esac
+                    fi
+                  done < <(printf '%s' "${pr_files_json}" | jq -r '.[] | .filename, (.previous_filename // empty)' 2>/dev/null)
                 else
-                  echo "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE pr=${PR_NUMBER} — /files fetch failed or empty, doc-only check inconclusive."
+                  FILES_SKIP_SUPPRESSED="true"
+                  echo "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE pr=${PR_NUMBER} — /files missing, invalid, truncated, or inconsistent with changed_files; running review."
                 fi
               fi
 
@@ -1069,6 +1102,10 @@ jobs:
                 candidate_skip_reason="small_diff"
               fi
 
+              if [ "${candidate_skip}" = "true" ] && [ "${PROTECTED_SKIP_SUPPRESSED}" = "true" ]; then
+                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=protected_path pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
+              fi
+
               MATERIALITY_SKIP_SUPPRESSED="false"
               case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
                 1|true|yes|on)
@@ -1080,15 +1117,7 @@ jobs:
                   # visible here and fails open for helper-only signals such as
                   # repo-verified new top-level directories.
                   if [ "${candidate_skip}" = "true" ]; then
-                    if [ -z "${pr_files_json}" ] || [ "${pr_files_json}" = "[]" ]; then
-                      if pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
-                        file_count="$(printf '%s' "${pr_files_json}" | jq 'length' 2>/dev/null || echo "${file_count:-0}")"
-                      else
-                        pr_files_json=""
-                      fi
-                    fi
-
-                    if [ -n "${pr_files_json}" ] && [ "${pr_files_json}" != "[]" ]; then
+                    if [ "${FILES_SKIP_SUPPRESSED}" != "true" ]; then
                       # Mirror the helper's visible path rules here so the gate
                       # only suppresses deterministic skip when the helper would
                       # later classify the diff medium/high from PR file paths
@@ -1301,14 +1330,16 @@ jobs:
               fi
 
               if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
-                && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ]; then
+                && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${FILES_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ]; then
                 DETERMINISTIC_SKIP="true"
                 DET_SKIP_REASON="${candidate_skip_reason}"
                 SHOULD_RUN="false"
                 SKIP_REASON="deterministic_skip_${candidate_skip_reason}"
               fi
 
-              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-skipped} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED}"
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-unavailable} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED} files_suppressed=${FILES_SKIP_SUPPRESSED} protected_suppressed=${PROTECTED_SKIP_SUPPRESSED}"
             fi
           fi
 

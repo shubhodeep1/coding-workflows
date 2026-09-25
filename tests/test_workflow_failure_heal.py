@@ -2169,7 +2169,13 @@ elif path.endswith("/comments"):
 		sys.exit(1)
 	emit(data["comments"])
 elif path.endswith("/files"):
-	emit([{"filename": "scripts/big_change.sh"}])
+	if data.get("files_fail"):
+		sys.exit(1)
+	pages = data.get("file_pages", [[{"filename": "scripts/big_change.sh", "status": "modified"}]])
+	for index, page in enumerate(pages):
+		emit(page)
+		if data.get("files_fail_after_page") == index:
+			sys.exit(1)
 elif "/pulls/" in path:
 	emit(data["pr"])
 else:
@@ -2198,7 +2204,7 @@ def _run_gate(tmp: Path, *, comments: list[dict], event_name: str = "workflow_di
 	state = {
 		"login": CAP_AUTHOR,
 		"comments": api_comments,
-		"pr": {"state": "open", "merged": False, "head": {"ref": "ai/issue-4255", "sha": SHA_A}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "AI implementation for issue #4255", "body": "Fixes #4255"},
+		"pr": {"state": "open", "merged": False, "head": {"ref": "ai/issue-4255", "sha": SHA_A}, "labels": [], "additions": 400, "deletions": 50, "changed_files": 1, "mergeable": True, "mergeable_state": "clean", "title": "AI implementation for issue #4255", "body": "Fixes #4255"},
 	}
 	state.update(state_overrides or {})
 	state_file.write_text(json.dumps(state), encoding="utf-8")
@@ -2246,6 +2252,86 @@ def _run_gate(tmp: Path, *, comments: list[dict], event_name: str = "workflow_di
 
 def _comment_calls(state: dict) -> int:
 	return sum(1 for call in state["calls"] if any(str(arg).endswith("/comments") for arg in call))
+
+
+def test_gate_requires_complete_unprotected_file_evidence_for_both_skip_routes() -> None:
+	for small in (True, False):
+		pr = {"state": "open", "merged": False, "head": {"ref": "ai/issue-4255", "sha": SHA_A}, "labels": [],
+			"additions": 1 if small else 400, "deletions": 1 if small else 50,
+			"changed_files": 1, "mergeable": True, "mergeable_state": "clean", "title": "test", "body": ""}
+		for name, files, expected in (
+			("benign_docs", [{"filename": "docs/guide.md", "status": "modified"}], True),
+			("agents", [{"filename": "nested/AGENTS.md", "status": "modified"}], False),
+			("instructions", [{"filename": "docs/unattended_system_instructions.md", "status": "modified"}], False),
+			("claude", [{"filename": "CLAUDE.md", "status": "modified"}], False),
+			("workflow", [{"filename": ".github/workflows/review.yml", "status": "modified"}], False),
+			("script", [{"filename": "scripts/gate.sh", "status": "modified"}], False),
+			("root_config", [{"filename": "pyproject.toml", "status": "modified"}], False),
+			("renamed", [{"filename": "docs/guide.md", "previous_filename": "scripts/gate.sh", "status": "renamed"}], False),
+		):
+			with tempfile.TemporaryDirectory(prefix=f"heal-gate-{name}-") as tmp_name:
+				result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={"pr": pr, "file_pages": [files]},
+					extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+				assert result.returncode == 0, (name, result.stderr)
+				assert (outputs["deterministic_skip"] == "true") == expected, (name, small, result.stdout)
+				assert outputs["should_run"] == ("false" if expected else "true"), name
+				if expected:
+					assert outputs["det_skip_reason"] == "docs_only"
+					assert outputs["head_sha"] == SHA_A
+				else:
+					assert "protected_suppressed=true" in result.stdout, name
+				assert sum(1 for call in state["calls"] if any(str(arg).endswith("/files") for arg in call)) == 1, name
+
+		# A harmless small code change still qualifies, even with doc-only disabled.
+		if small:
+			with tempfile.TemporaryDirectory(prefix="heal-gate-small-code-") as tmp_name:
+				result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={"pr": pr,
+					"file_pages": [[{"filename": "src/widget.py", "status": "modified"}]]},
+					extra_env={"AUTOFIX_SKIP_DOC_ONLY": "false", "AGENTS_MD_MATERIALITY_ENABLED": "false"})
+				assert result.returncode == 0 and outputs["det_skip_reason"] == "small_diff", result.stdout + result.stderr
+				assert sum(1 for call in state["calls"] if any(str(arg).endswith("/files") for arg in call)) == 1
+			for protected_file in ("AGENTS.md", "scripts/gate.sh"):
+				with tempfile.TemporaryDirectory(prefix="heal-gate-materiality-enabled-") as tmp_name:
+					result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={"pr": pr,
+						"file_pages": [[{"filename": protected_file, "status": "modified"}]]},
+						extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "true"})
+					assert result.returncode == 0 and outputs["should_run"] == "true", result.stdout + result.stderr
+					assert outputs["deterministic_skip"] == "false" and "protected_suppressed=true" in result.stdout
+					assert sum(1 for call in state["calls"] if any(str(arg).endswith("/files") for arg in call)) == 1
+
+	# Two pages must be joined before classifying a doc-only change.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-pages-") as tmp_name:
+		pr["changed_files"] = 2
+		result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={"pr": pr,
+			"file_pages": [[{"filename": "docs/one.md", "status": "modified"}], [{"filename": "docs/two.md", "status": "modified"}]]},
+			extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+		assert result.returncode == 0 and outputs["det_skip_reason"] == "docs_only", result.stdout + result.stderr
+		assert sum(1 for call in state["calls"] if any(str(arg).endswith("/files") for arg in call)) == 1
+
+
+def test_gate_rejects_missing_or_incomplete_file_evidence() -> None:
+	base_pr = {"state": "open", "merged": False, "head": {"ref": "ai/issue-4255", "sha": SHA_A}, "labels": [],
+		"additions": 1, "deletions": 1, "changed_files": 1, "mergeable": True, "mergeable_state": "clean", "title": "test", "body": ""}
+	for name, overrides in (
+		("api_error", {"files_fail": True}),
+		("pagination_error", {"file_pages": [[{"filename": "docs/guide.md", "status": "modified"}]], "files_fail_after_page": 0}),
+		("empty", {"file_pages": [[]]}),
+		("malformed", {"file_pages": [[{"filename": None, "status": "modified"}]]}),
+		("missing_rename_source", {"file_pages": [[{"filename": "docs/guide.md", "status": "renamed"}]]}),
+		("invalid_filename", {"file_pages": [[{"filename": "../docs/guide.md", "status": "modified"}]]}),
+		("duplicate_filename", {"pr": {**base_pr, "changed_files": 2}, "file_pages": [[{"filename": "docs/guide.md", "status": "modified"}] * 2]}),
+		("missing_count", {"pr": {key: value for key, value in base_pr.items() if key != "changed_files"}}),
+		("count_mismatch", {"pr": {**base_pr, "changed_files": 2}}),
+		("file_ceiling", {"pr": {**base_pr, "changed_files": 3000},
+			"file_pages": [[{"filename": f"docs/{i}.md", "status": "modified"} for i in range(3000)]]}),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-{name}-") as tmp_name:
+			result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={"pr": base_pr, **overrides},
+				extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+			assert result.returncode == 0, (name, result.stderr)
+			assert outputs["should_run"] == "true" and outputs["deterministic_skip"] == "false", (name, result.stdout)
+			assert "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE" in result.stdout, name
+			assert sum(1 for call in state["calls"] if any(str(arg).endswith("/files") for arg in call)) == 1, name
 
 
 def test_gate_stops_a_head_with_three_identical_failure_markers() -> None:
