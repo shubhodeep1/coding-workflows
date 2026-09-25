@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `cb6c395081b010e9cbe4cd32864b2475603f867c` on `stable`; integration-branch metadata also says `stable`. The clarification response was an automatic `/answer`; no Q-ID answers or unresolved questions remain.\n\nScope-mode: Hold Scope\nReuse-audit: extends `run_template_validation_harness_renderer` and the existing validation workflow dependency-install step\nScope-mode justification: Keep the requested fix within the existing workflow, renderer entry point, and regression-test file, plus the required changelog fragment. Checking both setup outcome and imports is the complete fix rather than merely correcting the `printf` diagnostic; it adds no dependency or public interface. This follows \u00a76\u2019s Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed ordering.\n\n## Automation wiring\n- **Existing code only:** extend `.github/workflows/validate.yml` and `scripts/validate_process.sh`; no new script, supervisor, or database operation.\n- **Entry point:** the reusable workflow runs through `.github/workflows/internal-validate.yml` (`workflow_dispatch`) and the consumer `workflow-templates/ai-validate.yml` wrapper (`workflow_dispatch`). The existing `.github/workflows/internal-orchestrate-poll.yml` `*/5 * * * *` schedule can dispatch validation; no new trigger is needed.\n- **Removal registry:** not applicable.\n\n## Files likely to change\n- `.github/workflows/validate.yml` \u2014 give the dependency-install step an ID, probe imports with its `python3`, and pass its success outcome to the existing `Run validation process` step.\n- `scripts/validate_process.sh` \u2014 before invoking the renderer, reject failed setup or imports using the resolved `python3_bin`; change the option-like probe `printf` to `printf --`; keep the existing exit-14 reporting path, making its summary accurate when preflight, rather than the subprocess, failed.\n- `tests/test_validate_workflow_validate_bootstrap.py` \u2014 add workflow-contract and executable regression coverage.\n- `changelog.d/4481-validation-renderer-dependency-preflight.md` \u2014 record the observable failure-handling change. Do not edit `CHANGELOG.md`.\n\n## Functions or modules to implement\nExtend `run_template_validation_harness_renderer`, not the renderer or a parallel bootstrap mechanism. After its existing asset and Python-version checks, fail before renderer invocation if workflow dependency setup was unsuccessful or `yaml`, `jsonschema`, and `jinja2` cannot be imported by `python3_bin`. Log a bounded, useful diagnostic and return 14 so the current tracking comment, `harness_error` status, artifact collection, alert, and outcome enforcement remain active. Preserve the existing missing-asset and Python-version return codes.\n\n## Data structures affected\nNo persistent schema changes. One internal step outcome is conveyed to the script by `VALIDATION_RENDERER_DEPENDENCIES_READY`; default it in the script for direct callers, which must still run the import check. Existing validation status and metadata shapes remain unchanged.\n\n## API/interface changes\nNo public API, workflow input, label, or log-prefix change. The step-to-script environment flag is internal. Keep the install command and add a same-interpreter import probe after it; do not turn installation failure into a successful step or skip downstream failure reporting.\n\n## Decisions\n### D1 \u2014 Guard the renderer at its invocation point\n- **Chosen:** Check workflow setup outcome and actual imports before the existing renderer call, returning through exit 14 on failure.\n- **Alternatives considered:** Gate `Run validation process` out in YAML; rely solely on `pip install` exit status; rely solely on the renderer\u2019s current missing-dependency error.\n- **Why:** The `always()` validation step can run after installation fails, while skipping it would lose its established issue/status reporting. An import check also detects packages installed somewhere the executing interpreter cannot see.\n\n### D2 \u2014 Preserve the current failure classifier\n- **Chosen:** Use the existing exit-14 `harness_error` path with accurate preflight diagnostics.\n- **Alternatives considered:** Add a new status or suppress the renderer failure.\n- **Why:** Existing poller and reporting consumers already understand this path.\n\n## Security considerations\nThe workflow installs packages and executes a staged renderer in the checked-out workspace; it introduces no endpoint or authorization change. Use fixed module names in the import probe, never interpolate issue or PR text into Python or shell source, and avoid printing environment values or credentials in diagnostics. Treat failed or skipped dependency setup as not ready; an attacker-controlled or otherwise broken environment must not turn an absent import into a successful validation result.\n\n## Risks and edge cases\n- `pip install` may succeed while imports fail; both conditions need coverage. A skipped or failed install must not reach rendering even if packages happen to be present.\n- Direct script callers lack the new workflow flag; its default must preserve their existing route while the import probe still protects them.\n- The reported log line 2127 does not match the option-like `printf` at line 2044 on this planning ref. The exact helper revision used in that run and its install-step output are unavailable; verify the fix against the current `stable` code, without treating either proposed cause as proven.\n\n## Testing considerations\nIn `tests/test_validate_workflow_validate_bootstrap.py`, assert the install/import-probe and outcome-to-script wiring. Execute the **actual extracted shell function** in a temporary fixture with a controlled `python3`: simulate unavailable PyYAML while marking any renderer invocation. Assert exit 14, a dependency diagnostic, and no renderer marker. Add failed-setup-with-imports-available and successful-setup/imports cases, and assert the environment-probe log has no `printf` option error. The missing-PyYAML case must fail on planning HEAD and pass after the edit; record both runs in the PR. Then run shell syntax checking and the focused bootstrap/template-mode tests before broader CI.\n\n## Pre-execution self-check\nThe affected files and reusable path exist on the matching `stable` ref; the plan needs no credential or undecided branch. Budget: approximately 45 minutes. No repository files were changed during planning; four unrelated worktree modifications were already present and must be left intact.\n\nPLAN_SELF_CHECK: WARNING: Failed-job logs and dependency-install output are unavailable, so the original package-install failure versus interpreter visibility cannot be distinguished.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e32d8a8b2adbc16564e45e67c0ecf6002cee535c385914456f855ed28b2331fc",
+  "lineage": {
+    "issue_number": 4481,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36166505925",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36166505925",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4481"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925172648_9eaba1ca47",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4481,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36166505925"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4481",
+  "timestamps": {
+    "created_at": "2026-09-25T17:26:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
