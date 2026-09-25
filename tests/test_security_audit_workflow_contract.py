@@ -65,6 +65,16 @@ if args[:2] == ["issue", "list"]:
 	print(json.dumps(response))
 	sys.exit(0)
 
+if args[:1] == ["api"]:
+	# The follow-up dedupe reads every `ai:security` issue with
+	# `gh api --paginate --slurp repos/<repo>/issues`; responses are lists of pages.
+	state.setdefault("api_args", []).append(args)
+	responses = state.setdefault("api_responses", [])
+	response = responses.pop(0) if responses else []
+	save()
+	print(json.dumps(response))
+	sys.exit(0)
+
 if args[:2] == ["issue", "create"]:
 	state.setdefault("issue_create_args", []).append(args)
 	body_file = first_value("--body-file")
@@ -521,8 +531,8 @@ def test_security_audit_incremental_scope_drops_out_of_scope_findings() -> None:
 						"url": "https://github.com/owner/repo/issues/9000",
 					}
 				],
-				[],
 			],
+			"api_responses": [[[]]],
 		}
 		proc, final_state = _run_security_audit(
 			state,
@@ -659,7 +669,7 @@ def test_security_audit_redacts_credential_shaped_path_context() -> None:
 
 def test_security_audit_success_path_retains_codex_and_tracker_behavior() -> None:
 	state = _security_audit_tracker_state()
-	state["issue_list_responses"].append([])
+	state["api_responses"] = [[[]]]
 	proc, final_state = _run_security_audit(state)
 
 	assert proc.returncode == 0, proc.stderr
@@ -729,47 +739,130 @@ def test_security_audit_filters_findings_and_caps_followups() -> None:
 		ensure_ascii=True,
 	)
 	state = {
-		"issue_list_responses": [
-			[],
+		"issue_list_responses": [[]],
+		"api_responses": [
 			[
-				{
-					"number": 42,
-					"title": "[security-audit] existing-finding: high scripts/example.py:10",
-					"body": "<!-- ai:security-finding:existing-finding -->\nRefs #9100\n",
-					"createdAt": _iso_utc_for_current_week(day_offset=0),
-					"url": "https://github.com/owner/repo/issues/42",
-				},
-				{
-					"number": 43,
-					"title": "[security-audit] existing-finding-two: high scripts/example.py:20",
-					"body": "<!-- ai:security-finding:existing-finding-two -->\nRefs #9100\n",
-					"createdAt": _iso_utc_for_current_week(day_offset=1),
-					"url": "https://github.com/owner/repo/issues/43",
-				},
-			],
+				[
+					{
+						"number": 42,
+						"title": "[security-audit] existing-finding: high scripts/example.py:10",
+						"body": "<!-- ai:security-finding:existing-finding -->\nRefs #9100\n",
+						"created_at": _iso_utc_for_current_week(day_offset=0),
+						"html_url": "https://github.com/owner/repo/issues/42",
+					},
+					{
+						"number": 43,
+						"title": "[security-audit] existing-finding-two: high scripts/example.py:20",
+						"body": "<!-- ai:security-finding:existing-finding-two -->\nRefs #9100\n",
+						"created_at": _iso_utc_for_current_week(day_offset=1),
+						"html_url": "https://github.com/owner/repo/issues/43",
+					},
+				]
+			]
 		],
 		"next_issue_number": 9100,
 	}
 	proc, final_state = _run_security_audit(state, codex_output=codex_output)
 
 	assert proc.returncode == 0, proc.stderr
-	assert "tracker=#9100 findings=2 followups_created=1" in proc.stdout
+	# Two follow-ups already exist this UTC week; under the removed weekly cap
+	# of 3 only one new issue would have been filed. Both findings are filed.
+	assert "tracker=#9100 findings=2 followups_created=2" in proc.stdout
 	codex_args = final_state.get("codex_calls", [[]])[0]
 	assert "--sandbox" in codex_args
 	assert codex_args[codex_args.index("--sandbox") + 1] == "read-only"
 	assert len(final_state.get("label_create_args", [])) == 2
-	assert len(final_state.get("issue_create_args", [])) == 2
+	assert len(final_state.get("issue_create_args", [])) == 3
 	tracker_create_args = final_state["issue_create_args"][0]
 	assert "ai:security-audit" in tracker_create_args
-	followup_create_args = final_state["issue_create_args"][1]
-	assert "ai:security" in followup_create_args
-	assert "high-finding-one" in "\n".join(final_state.get("issue_comment_bodies", []))
-	assert "high-finding-two" in "\n".join(final_state.get("issue_comment_bodies", []))
-	assert "low-confidence-finding" not in "\n".join(final_state.get("issue_comment_bodies", []))
-	assert "excluded-finding" not in "\n".join(final_state.get("issue_comment_bodies", []))
-	assert "invalid-path" not in "\n".join(final_state.get("issue_comment_bodies", []))
-	assert any("high-finding-one" in body for body in final_state.get("issue_create_bodies", []))
-	assert not any("high-finding-two" in body for body in final_state.get("issue_create_bodies", [])[1:])
+	for followup_create_args in final_state["issue_create_args"][1:]:
+		assert "ai:security" in followup_create_args
+	comment_bodies = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "high-finding-one" in comment_bodies
+	assert "high-finding-two" in comment_bodies
+	assert "low-confidence-finding" not in comment_bodies
+	assert "excluded-finding" not in comment_bodies
+	assert "invalid-path" not in comment_bodies
+	assert "New follow-up issues planned this run: 2" in comment_bodies
+	assert "weekly cap" not in comment_bodies
+	assert "this UTC week" not in comment_bodies
+	followup_bodies = final_state.get("issue_create_bodies", [])[1:]
+	assert any("high-finding-one" in body for body in followup_bodies)
+	assert any("high-finding-two" in body for body in followup_bodies)
+
+
+def test_security_audit_files_every_new_finding_and_dedupes_across_pages() -> None:
+	"""Regression for tracker #3576 (run 35996690244): 5 findings, 3 issues.
+
+	Every surviving finding without a marked follow-up gets its own issue, no
+	matter how many follow-ups already exist this week. The dedupe reads every
+	page of `ai:security` issues, and a pull request carrying a marker does not
+	count as a follow-up.
+	"""
+	finding_ids = [f"uncapped-finding-{index}" for index in range(1, 6)]
+	codex_output = json.dumps([_finding_payload(finding_id) for finding_id in finding_ids], ensure_ascii=True)
+	first_page = [
+		{
+			"number": 100 + index,
+			"title": f"[security-audit] this-week-{index}: high scripts/example.py:{index}",
+			"body": f"<!-- ai:security-finding:this-week-{index} -->\nRefs #9000\n",
+			"created_at": _iso_utc_for_current_week(day_offset=0),
+			"html_url": f"https://github.com/owner/repo/issues/{100 + index}",
+		}
+		for index in range(3)
+	]
+	first_page.append(
+		{
+			"number": 150,
+			"title": "PR that quotes a finding marker",
+			"body": "<!-- ai:security-finding:uncapped-finding-4 -->\n",
+			"created_at": _iso_utc_for_current_week(day_offset=0),
+			"html_url": "https://github.com/owner/repo/pull/150",
+			"pull_request": {"url": "https://api.github.com/repos/owner/repo/pulls/150"},
+		}
+	)
+	second_page = [
+		{
+			"number": 7,
+			"title": "[security-audit] uncapped-finding-5: high scripts/security_audit.sh:1",
+			"body": "<!-- ai:security-finding:uncapped-finding-5 -->\nRefs #9000\n",
+			"created_at": "2025-01-06T10:00:00Z",
+			"html_url": "https://github.com/owner/repo/issues/7",
+		}
+	]
+	state = _security_audit_tracker_state()
+	state["api_responses"] = [[first_page, second_page]]
+	state["next_issue_number"] = 9500
+	proc, final_state = _run_security_audit(state, codex_output=codex_output)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "tracker=#9000 findings=5 followups_created=4" in proc.stdout
+	followup_bodies = final_state.get("issue_create_bodies", [])
+	assert len(followup_bodies) == 4
+	for finding_id in finding_ids[:4]:
+		assert sum(f"<!-- ai:security-finding:{finding_id} -->" in body for body in followup_bodies) == 1
+	assert not any("uncapped-finding-5" in body for body in followup_bodies)
+	comment_bodies = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "New follow-up issues planned this run: 4" in comment_bodies
+	assert "Findings skipped because a marked follow-up issue already exists: 1" in comment_bodies
+	assert "weekly cap" not in comment_bodies
+	assert "this UTC week" not in comment_bodies
+	api_args = final_state.get("api_args", [])
+	assert len(api_args) == 1
+	assert "repos/owner/repo/issues" in api_args[0]
+	assert "--paginate" in api_args[0]
+	assert "--slurp" in api_args[0]
+	assert "labels=ai:security" in api_args[0]
+	assert "state=all" in api_args[0]
+	for issue_list_args in final_state.get("issue_list_args", []):
+		assert "ai:security" not in issue_list_args
+
+
+def test_security_audit_script_has_no_followup_count_cap() -> None:
+	script_text = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert "MAX_FOLLOWUP_ISSUES_PER_WEEK" not in script_text
+	assert "remaining_weekly_capacity" not in script_text
+	assert "--limit 200" not in script_text
 
 
 def test_security_audit_findings_json_filters_without_github_side_effects() -> None:
@@ -1407,8 +1500,8 @@ def test_security_audit_explicit_diff_range_precedes_tracker_marker() -> None:
 						"url": "https://github.com/owner/repo/issues/9000",
 					}
 				],
-				[],
 			],
+			"api_responses": [[[]]],
 		}
 		proc, final_state = _run_security_audit(
 			state,
