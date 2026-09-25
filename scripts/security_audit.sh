@@ -1054,7 +1054,8 @@ if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
 	if ! WAIVED_FINDINGS_COUNT="$(python3 - \
 		"${SECURITY_AUDIT_WAIVED_FINDINGS}" \
 		"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
-		"${WAIVED_FINDINGS_PROMPT_FILE}" 2> "${WAIVED_FINDINGS_ERROR_FILE}" <<'PY'
+		"${WAIVED_FINDINGS_PROMPT_FILE}" \
+		"${SECURITY_AUDIT_LINE_OWNERSHIP}" 2> "${WAIVED_FINDINGS_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -1065,6 +1066,7 @@ from pathlib import Path, PurePosixPath
 waived_findings_path = Path(sys.argv[1])
 normalized_path = Path(sys.argv[2])
 prompt_path = Path(sys.argv[3])
+ownership_mode = sys.argv[4]
 
 try:
 	waived_findings = json.loads(waived_findings_path.read_text(encoding="utf-8"))
@@ -1093,6 +1095,11 @@ prompt_lines: list[str] = []
 for index, finding in enumerate(waived_findings):
 	if not isinstance(finding, dict):
 		raise SystemExit(f"waived finding #{index} must be an object")
+	# An automatic line-ownership advisory is not an explicit risk acceptance.
+	# In per-file mode it must never enter the prompt or the suppression filter.
+	if (ownership_mode == "file"
+		and finding.get("source") == "preexisting" and finding.get("waived_by") == "line-ownership"):
+		continue
 	finding_id = text_field(finding, "finding_id")
 	if not finding_id:
 		raise SystemExit(f"waived finding #{index} is missing its finding_id")

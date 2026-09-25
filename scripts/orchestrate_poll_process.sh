@@ -1650,6 +1650,7 @@ if ! [[ "${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" =~ ^[0-9]+$ ]] \
   echo "::warning::SECURITY_PASS_OWNERSHIP_CONTEXT_LINES must be an integer from 0 to 50; defaulting to 3"
   SECURITY_PASS_OWNERSHIP_CONTEXT_LINES="3"
 fi
+SECURITY_PASS_OWNERSHIP_CONTEXT_LINES="$((10#${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}))"
 
 # Retain the exported setting for compatibility; pre-existing advisories are
 # now all attempted on the audit tick, including when the old cap is zero.
@@ -5014,6 +5015,16 @@ ensure_security_pass_state_fields() {
     | .security_pass_last_audited_sha = (
       if (.security_pass_last_audited_sha | type) == "string" then .security_pass_last_audited_sha else "" end
     )
+    | .security_pass_audited_ownership = (
+      if .security_pass_audited_ownership == "project-lines" or .security_pass_audited_ownership == "file"
+      then .security_pass_audited_ownership else "" end
+    )
+    | .security_pass_audited_context_lines = (
+      if (.security_pass_audited_context_lines | type) == "number"
+        and (.security_pass_audited_context_lines | floor) == .security_pass_audited_context_lines
+        and .security_pass_audited_context_lines >= 0 and .security_pass_audited_context_lines <= 50
+      then .security_pass_audited_context_lines else null end
+    )
     | .security_pass_reported_findings = (
       if (.security_pass_reported_findings | type) == "array" then
         .security_pass_reported_findings
@@ -5158,9 +5169,18 @@ ensure_security_pass_state_fields() {
 security_pass_current_head_is_valid() {
   local integration_head_sha="$1"
   [ -n "${integration_head_sha}" ] || return 1
+  security_pass_policy_matches_current || return 1
   jq -e --arg head_sha "${integration_head_sha}" '
     .security_pass_status == "passed"
     and .security_pass_head_sha == $head_sha
+  ' "${STATE_FILE}" >/dev/null 2>&1
+}
+
+security_pass_policy_matches_current() {
+  jq -e --arg ownership "${SECURITY_PASS_LINE_OWNERSHIP}" \
+    --argjson context "${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" '
+    .security_pass_audited_ownership == $ownership
+    and .security_pass_audited_context_lines == $context
   ' "${STATE_FILE}" >/dev/null 2>&1
 }
 
@@ -5177,6 +5197,8 @@ security_pass_rebind_if_no_new_project_lines() {
   local merge_base_sha="$2"
   local default_ref="$3"
   local last_audited_sha default_sha expected_tree head_tree merge_tree_output commits_file commit_sha parents_line
+
+  security_pass_policy_matches_current || return 1
 
   last_audited_sha="$(jq -r '.security_pass_last_audited_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
   [ -n "${last_audited_sha}" ] || return 1
@@ -6032,7 +6054,7 @@ security_pass_apply_waivers_to_findings() {
 	local current_waiver_head causality_helper
 	current_waiver_head="$(git rev-parse HEAD 2>/dev/null || true)"
 	causality_helper="scripts/security_audit_causality.py"
-	if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${current_waiver_head}" "${causality_helper}" <<'PY'
+  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${current_waiver_head}" "${causality_helper}" "${SECURITY_PASS_LINE_OWNERSHIP}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -6045,10 +6067,16 @@ findings_path = Path(sys.argv[1])
 state_path = Path(sys.argv[2])
 current_head_sha = sys.argv[3]
 causality_helper = Path(sys.argv[4])
+ownership_mode = sys.argv[5]
 
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
-waivers = [row for row in state.get("security_pass_waived_findings", []) if isinstance(row, dict)]
+waivers = [
+	row for row in state.get("security_pass_waived_findings", [])
+	if isinstance(row, dict)
+	and not (row.get("source") == "preexisting" and row.get("waived_by") == "line-ownership"
+		and ownership_mode == "file")
+]
 
 
 def waiver_for(finding: dict) -> str | None:
@@ -6131,9 +6159,19 @@ security_pass_record_waivers() {
     ))) as $waiver_rows
     | if ($waiver_rows | length) != (($waivers[0] // []) | length) then error("invalid waiver_match_key") else . end
     | (.security_pass_waived_findings // []) as $existing
+    | (.security_pass_followup_issues // []) as $followups
     | ($waiver_rows | map(.waiver_match_key)) as $keys
     | .security_pass_waived_findings = (
-        [$existing[] | select(((.waiver_match_key // "") | IN($keys[])) | not)] + $waiver_rows
+        [$existing[] | select(((.waiver_match_key // "") | IN($keys[])) | not)]
+        + [$waiver_rows[] as $row
+          | ([$existing[] | select(.waiver_match_key == $row.waiver_match_key)] | last) as $old
+          | ([$followups[] | select(.waiver_match_key == $row.waiver_match_key) | .issue] | last) as $filed_issue
+          | if $row.source == "preexisting" and $row.waived_by == "line-ownership" then
+              if $old.source == "judge" or $old.source == "operator" then $old
+              else $row | .issue = (if ($filed_issue | type) == "number" then $filed_issue else ($old.issue // null) end)
+              end
+            else $row
+            end]
       )
     | .security_pass_reported_findings = (
         [(.security_pass_reported_findings // [])[] | select(((.waiver_match_key // "") | IN($keys[])) | not)]
@@ -6375,6 +6413,10 @@ security_pass_file_advisory_findings() {
   local head_sha="$2"
   local pending_json row_json finding_json finding_id waiver_match_key audited_head_sha justification attempt_key
   local queued_count routed_count filed_count=0 filed_issues
+
+  # A queued automatic advisory from an older policy is not authorization to file it.
+  [ "${SECURITY_PASS_LINE_OWNERSHIP}" != "file" ] || return 0
+  security_pass_policy_matches_current || return 0
 
   pending_json="$(jq -c '.security_pass_advisory_backlog // []' "${STATE_FILE}" 2>/dev/null || echo '[]')"
 
@@ -7028,7 +7070,7 @@ run_security_pass_inline() {
   local verified_recheck_refspec="${5:-}"
   local prior_security_status current_integration_ref current_head_sha current_default_ref merge_base_sha
   local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model security_pass_advisory_backlog_file
-  local required_security_asset
+  local required_security_asset security_pass_policy_changed="false"
 
   prior_security_status="$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
   if [ -z "${integration_branch}" ]; then
@@ -7058,6 +7100,16 @@ run_security_pass_inline() {
   if [ -z "${current_head_sha}" ]; then
     security_pass_fail_closed "engine_unavailable" "The integration head commit could not be resolved for read-only analysis." "${prior_security_status}"
     return 1
+  fi
+  if ! security_pass_policy_matches_current && jq -e '
+    (.security_pass_last_audited_sha // "") != ""
+    or (.security_pass_head_sha // "") != ""
+    or .security_pass_status == "passed"
+    or any((.security_pass_waived_findings // [])[];
+      .source == "preexisting" and .waived_by == "line-ownership")
+    or ((.security_pass_advisory_backlog // []) | length > 0)
+  ' "${STATE_FILE}" >/dev/null 2>&1; then
+    security_pass_policy_changed="true"
   fi
   if security_pass_current_head_is_valid "${current_head_sha}"; then
     security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
@@ -7123,7 +7175,8 @@ run_security_pass_inline() {
   # commits may have landed after that audit. `security_pass_cycle` bounds
   # persistent findings, so start a fresh fix budget before the mandatory
   # re-audit. Completion still requires a clean SHA-bound result at this head.
-  if [ "${prior_security_status}" = "passed" ]; then
+  if [ "${prior_security_status}" = "passed" ] \
+    && [ "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" != "${current_head_sha}" ]; then
     if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
       && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
       echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
@@ -7169,6 +7222,12 @@ run_security_pass_inline() {
       security_pass_audit_scope_reason="last_audited_sha_not_ancestor_of_head"
     fi
   fi
+  if [ "${security_pass_policy_changed}" = "true" ]; then
+    # Policy changes invalidate incremental classification even when HEAD is unchanged.
+    security_pass_audit_since_sha=""
+    security_pass_audit_scope_mode="full"
+    security_pass_audit_scope_reason="ownership_policy_changed"
+  fi
   security_pass_prior_findings_file="${RUNTIME_DIR}/security_pass_prior_findings_${TRACKING_NUM}.json"
   rm -f "${security_pass_prior_findings_file}"
   security_pass_prior_findings_count="$(jq -r '.security_pass_reported_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
@@ -7188,10 +7247,18 @@ run_security_pass_inline() {
   # the same suppression on the result (security_pass_apply_waivers_to_findings).
   security_pass_waived_findings_file="${RUNTIME_DIR}/security_pass_waived_findings_${TRACKING_NUM}.json"
   rm -f "${security_pass_waived_findings_file}"
-  security_pass_waived_findings_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  security_pass_waived_findings_count="$(jq -r --arg ownership "${SECURITY_PASS_LINE_OWNERSHIP}" --arg changed "${security_pass_policy_changed}" '
+    [.security_pass_waived_findings[]? | select(
+      ((.source == "preexisting" and .waived_by == "line-ownership")
+        and ($ownership == "file" or $changed == "true")) | not)] | length
+  ' "${STATE_FILE}" 2>/dev/null || echo 0)"
   [[ "${security_pass_waived_findings_count}" =~ ^[0-9]+$ ]] || security_pass_waived_findings_count=0
   if [ "${security_pass_waived_findings_count}" -gt 0 ]; then
-    if ! jq '.security_pass_waived_findings // []' "${STATE_FILE}" > "${security_pass_waived_findings_file}" 2>/dev/null; then
+    if ! jq --arg ownership "${SECURITY_PASS_LINE_OWNERSHIP}" --arg changed "${security_pass_policy_changed}" '
+      [.security_pass_waived_findings[]? | select(
+        ((.source == "preexisting" and .waived_by == "line-ownership")
+          and ($ownership == "file" or $changed == "true")) | not)]
+    ' "${STATE_FILE}" > "${security_pass_waived_findings_file}" 2>/dev/null; then
       rm -f "${security_pass_waived_findings_file}"
       security_pass_waived_findings_count=0
       echo "::warning::Could not export the waived security-pass findings for tracking issue #${TRACKING_NUM}; the audit runs without them and the poller re-applies the waivers to its result."
@@ -7399,6 +7466,26 @@ run_security_pass_inline() {
     return 1
   fi
 
+  if [ "${SECURITY_PASS_LINE_OWNERSHIP}" = "file" ] \
+    && ! jq -e '(.advisory_findings // []) | length == 0' "${findings_file}" >/dev/null 2>&1; then
+    security_pass_fail_closed "engine_unavailable" "The file-ownership audit returned non-blocking advisories." "${prior_security_status}"
+    return 1
+  fi
+
+  if [ "${security_pass_policy_changed}" = "true" ]; then
+    # Only a successful, head-verified audit can retire the old classification.
+    # Filed follow-ups stay in security_pass_followup_issues for deduplication.
+    if ! jq '
+      .security_pass_waived_findings = [(.security_pass_waived_findings // [])[]
+        | select((.source == "preexisting" and .waived_by == "line-ownership") | not)]
+      | .security_pass_advisory_backlog = []
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      rm -f "${STATE_FILE}.tmp"
+      security_pass_fail_closed "policy_reconcile_failed" "The previous ownership classification could not be retired." "${prior_security_status}"
+      return 1
+    fi
+  fi
+
   security_pass_apply_waivers_to_findings "${findings_file}"
   finding_count="$(jq -r '.findings | length' "${findings_file}")"
   completed_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}")"
@@ -7463,7 +7550,6 @@ run_security_pass_inline() {
       return 1
     fi
     echo "SECURITY_PASS_ADVISORY_ROUTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} count=${security_pass_advisory_count} ids=$(printf '%s' "${security_pass_advisory_waivers}" | jq -r 'map(.finding_id) | join(",")')"
-    security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
   fi
   # Record the audited head as the base of the next delta re-audit and
   # remember every blocking finding so the next audit verifies it instead of
@@ -7472,12 +7558,15 @@ run_security_pass_inline() {
   # commits.  Long free-text fields are trimmed so state stays bounded.  The
   # current cycle's fix-cycle diff entry is remembered the same way so the
   # next re-audit carries it over once (security_pass_fix_touched_files).
-  jq --arg head_sha "${current_head_sha}" --argjson findings_count "${finding_count}" \
+  jq --arg head_sha "${current_head_sha}" --arg ownership "${SECURITY_PASS_LINE_OWNERSHIP}" \
+    --argjson context "${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" --argjson findings_count "${finding_count}" \
     --argjson cycle "$((completed_cycles + 1))" --slurpfile audit_result "${findings_file}" \
     --argjson fix_cycle_entry "${security_pass_fix_cycle_current_entry:-null}" \
     --argjson fix_cycle_current "${security_pass_fix_cycle_current:-0}" '
     .security_pass_head_sha = $head_sha
     | .security_pass_last_audited_sha = $head_sha
+    | .security_pass_audited_ownership = $ownership
+    | .security_pass_audited_context_lines = $context
     | .security_pass_status = (if $findings_count == 0 then "passed" else "blocked" end)
     | .security_pass_fix_touched_files = (
         if $findings_count == 0 then []
@@ -7513,6 +7602,10 @@ run_security_pass_inline() {
         end
       )
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  if [ "${security_pass_advisory_count}" -gt 0 ]; then
+    security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+  fi
 
   if [ "${finding_count}" -eq 0 ]; then
     jq '.status = "in_progress" | .security_pass_active_fix_issues = []' \

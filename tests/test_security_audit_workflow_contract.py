@@ -2307,6 +2307,40 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	assert "Never report an accepted finding again" not in prompt
 
 
+def test_security_audit_file_mode_ignores_only_automatic_line_ownership_waivers() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-file-waiver-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, _, head_sha = _git_fixture_repo_three_commits(tmp_path)
+		waived_path = tmp_path / "waived.json"
+		output_path = tmp_path / "findings.json"
+		waived_path.write_text(json.dumps([
+			{"finding_id": "automatic", "source": "preexisting", "waived_by": "line-ownership",
+			 "file": "file_b.py", "line": 1, "audited_head_sha": head_sha},
+			{"finding_id": "explicit", "source": "operator", "waived_by": "maintainer",
+			 "file": "file_c.py", "line": 1, "audited_head_sha": head_sha},
+		]), encoding="utf-8")
+		for ownership_setting in ({"SECURITY_AUDIT_LINE_OWNERSHIP": "file"}, {}):
+			proc, final_state = _run_security_audit(
+				{}, codex_output=json.dumps([_finding_payload("automatic", file_path="file_b.py")]),
+				cwd=repo_dir,
+				extra_env={
+					"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+					"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+					"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+					"SECURITY_AUDIT_DIFF_BASE": first_sha,
+					"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+					"SECURITY_AUDIT_WAIVED_FINDINGS": str(waived_path),
+					**ownership_setting,
+				},
+			)
+			assert proc.returncode == 0, proc.stderr
+			assert [row["finding_id"] for row in json.loads(final_state["security_audit_findings_output"])["findings"]] == ["automatic"]
+			prompt = final_state["codex_stdin"][0]
+			assert "`automatic` |" not in prompt
+			assert "`explicit` |" in prompt
+			assert "waived-findings=1" in proc.stdout
+
+
 def test_security_audit_waived_findings_fail_closed_on_malformed_input() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-waived-bad-") as fixture_td:
 		tmp_path = Path(fixture_td)
