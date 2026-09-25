@@ -89,10 +89,18 @@ Exactly one token on its own line, chosen from:
 - `base-self-inflicted` -- the failing run executed scripts from the pull
   request head; the crash is in a file the base branch changed relative to
   main and the pull request did not. The fix belongs on that base branch.
+For review/autofix runs whose `script_ref` is the trusted workflow commit
+rather than the PR head, a matching script path in the PR/base diff does not
+establish ownership: do not attribute a runtime-helper crash to that diff.
 Use `pr-self-inflicted` or `base-self-inflicted` ONLY when the failure
 context contains an `## Ownership facts` block and that block reports
 ownership `pr` (for `pr-self-inflicted`) or `base` (for
 `base-self-inflicted`), and the evidence confirms the crash is in that file.
+When the block reports `Ownership basis: pipeline files` (no crash file), use
+`pr-self-inflicted` only if the evidence shows the whole pipeline failing the
+same way, for example every reviewer slot, the summariser and the editor
+exiting with one exit code and no output, and the listed pipeline files are a
+plausible cause. A failure that only some slots hit points elsewhere.
 Without the block, or when it reports `none`, choose among the other tokens.
 
 ## Summary
