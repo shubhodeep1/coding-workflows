@@ -1677,13 +1677,19 @@ so once in the report and stop; do not poll in a loop.
 When the hand-back wakes the pushing session, it first runs
 `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py
 --repo <owner>/<repo> --pr <n> --terminal-only` itself (the Routine
-carries no verdict) and deletes the fired Routine (`delete_trigger`,
-ignoring not-found):
+carries no verdict). Then, in this order, it renames the checker (its id
+is in this session's arming report) to
+`PR #<n> <state> — handed to <this session's id>` and archives it
+(`archive_session`), and only then deletes the fired Routine
+(`delete_trigger`, ignoring not-found). The order matters: the checker's
+10-minute check (§26.C step 5) reads a missing Routine as a failed
+hand-back, so the checker must be gone before the Routine is. The wake
+itself proves the hand-back arrived, so that check is no longer needed;
+its leftover reminder is removed by the sweep.
 
 - **Terminal** → write the report below and finish as described after it.
 - **Still open** → the checker stopped renewing the Routine for 7 days.
-  Archive the old checker (its id is in this session's arming report) and
-  re-arm from §26.B step 1: a new hand-back Routine, then a fresh checker
+  Re-arm from §26.B step 1: a new hand-back Routine, then a fresh checker
   with its id.
 - **Read failed** → say so in one line and re-arm the same way, so the
   next wake retries.
@@ -1699,12 +1705,7 @@ the task's outcome:
 - when no next steps exist, say plainly that the pushing session can be
   closed safely.
 
-Then it renames the checker (the id from its arming report) to
-`PR #<n> <merged | closed> — handed to <this session's id>` and archives
-it (`archive_session`); the wake itself proves the hand-back arrived, so
-the checker's pending 10-minute check is no longer needed, and its
-leftover reminder is removed by the sweep. It runs the stale Routine
-sweep (§26.G), renames itself
+Then it runs the stale Routine sweep (§26.G), renames itself
 (`set_session_title`, with its own id from
 `session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}` in Bash rather than a
 `get_session` call) to
