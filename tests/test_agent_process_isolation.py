@@ -654,6 +654,142 @@ def test_workspace_guard_rejects_symlinked_output_and_invalid_executable() -> No
 		assert "workspace guard executable integrity check failed" in mismatched.stderr
 
 
+def test_workspace_guard_reconciles_copied_workspace_with_external_git() -> None:
+	with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+		root = Path(directory)
+		repository = root / "repository"
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		repository.mkdir()
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(repository)], check=True)
+		(repository / ".gitignore").write_text("*.ignored\n", encoding="utf-8")
+		(workspace / ".gitignore").write_text("*.ignored\n", encoding="utf-8")
+		assert not (workspace / ".git").exists()
+		environment = os.environ.copy()
+		environment.update({
+			"GIT_DIR": str(repository / ".git"), "GIT_WORK_TREE": str(workspace),
+			"RUNNER_TEMP": str(runtime), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		manifest = runtime / "manifest.json"
+		def run_guard(*guard_arguments: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				["bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(workspace),
+				 "--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S",
+				 str(WORKSPACE_GUARD), *guard_arguments],
+				env=environment, capture_output=True, text=True, check=False,
+			)
+
+		snapshot = run_guard("snapshot", "--workspace", str(workspace), "--manifest", str(manifest))
+		assert snapshot.returncode == 0, snapshot.stderr
+		(workspace / "allowed.txt").write_text("safe\n", encoding="utf-8")
+		changed = runtime / "changed.txt"
+		report = runtime / "report.json"
+		quarantine = runtime / "quarantine"
+		guard_arguments = (
+			"reconcile", "--workspace", str(workspace), "--manifest", str(manifest),
+			"--quarantine-dir", str(quarantine), "--changed-paths-out", str(changed),
+			"--report", str(report),
+		)
+		accepted = run_guard(*guard_arguments)
+		assert accepted.returncode == 0, accepted.stderr
+		assert (workspace / "allowed.txt").read_text(encoding="utf-8") == "safe\n"
+		assert json.loads(report.read_text(encoding="utf-8"))["restored"] == ["allowed.txt"]
+		assert run_guard("snapshot", "--workspace", str(workspace), "--manifest", str(manifest)).returncode == 0
+		(workspace / "blocked.ignored").write_text("bad\n", encoding="utf-8")
+		reconcile = run_guard(*guard_arguments)
+		assert reconcile.returncode == 20, reconcile.stderr
+		assert (workspace / "allowed.txt").read_text(encoding="utf-8") == "safe\n"
+		assert not (workspace / "blocked.ignored").exists()
+		assert (quarantine / "blocked.ignored").is_file()
+		assert json.loads(report.read_text(encoding="utf-8"))["rejected"][0]["reason"] == "ignored-path"
+		assert "blocked.ignored" in changed.read_text(encoding="utf-8").splitlines()
+
+
+def test_workspace_guard_rejects_invalid_external_git_and_keeps_other_roles_isolated() -> None:
+	with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+		root = Path(directory)
+		repository = root / "repository"
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		repository.mkdir()
+		workspace.mkdir()
+		runtime.mkdir()
+		subprocess.run(["git", "init", "-q", str(repository)], check=True)
+		environment = os.environ.copy()
+		environment.update({
+			"GIT_DIR": str(repository / ".git"), "GIT_WORK_TREE": str(workspace),
+			"RUNNER_TEMP": str(runtime), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		command = [
+			"bash", str(SANDBOX), "--role", "workspace-guard", "--workspace", str(workspace),
+			"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S", "-c",
+			"import json,os; print(json.dumps([os.getenv('GIT_DIR'), os.getenv('GIT_WORK_TREE')]))",
+		]
+		allowed = subprocess.run(command, env=environment, capture_output=True, text=True)
+		assert allowed.returncode == 0, allowed.stderr
+		assert json.loads(allowed.stdout) == [str(repository / ".git"), str(workspace)]
+		for git_dir, work_tree in (
+			(None, str(workspace)),
+			(str(repository / ".git"), None),
+			(str(repository / ".git"), str(repository)),
+			(str(repository / ".git" / "missing"), str(workspace)),
+		):
+			invalid_environment = environment.copy()
+			for name, value in (("GIT_DIR", git_dir), ("GIT_WORK_TREE", work_tree)):
+				if value is None:
+					invalid_environment.pop(name, None)
+				else:
+					invalid_environment[name] = value
+			blocked = subprocess.run(command, env=invalid_environment, capture_output=True, text=True)
+			assert blocked.returncode != 0
+			assert "workspace guard" in blocked.stderr
+			assert not blocked.stdout
+		redirect = root / "metadata-link"
+		redirect.symlink_to(repository / ".git", target_is_directory=True)
+		environment["GIT_DIR"] = str(redirect)
+		blocked = subprocess.run(command, env=environment, capture_output=True, text=True)
+		assert blocked.returncode != 0
+		assert "invalid workspace guard Git context" in blocked.stderr
+		with tempfile.TemporaryDirectory(dir="/tmp") as private_directory:
+			private_repository = Path(private_directory) / "repository"
+			private_repository.mkdir()
+			subprocess.run(["git", "init", "-q", str(private_repository)], check=True)
+			environment["GIT_DIR"] = str(private_repository / ".git")
+			blocked = subprocess.run(command, env=environment, capture_output=True, text=True)
+			assert blocked.returncode != 0
+			assert "sandbox_private_tmp_path role=workspace-guard" in blocked.stderr
+		environment["GIT_DIR"] = str(repository / ".git")
+		in_workspace_command = command.copy()
+		in_workspace_command[in_workspace_command.index("--workspace") + 1] = str(repository)
+		in_workspace_environment = environment.copy()
+		in_workspace_environment.pop("GIT_DIR")
+		in_workspace_environment.pop("GIT_WORK_TREE")
+		in_workspace = subprocess.run(in_workspace_command, env=in_workspace_environment, capture_output=True, text=True)
+		assert in_workspace.returncode == 0, in_workspace.stderr
+		assert json.loads(in_workspace.stdout) == [None, None]
+		validator_command = command.copy()
+		validator_command[validator_command.index("workspace-guard")] = "validator"
+		validator = subprocess.run(validator_command, env=environment, capture_output=True, text=True)
+		assert validator.returncode == 0, validator.stderr
+		assert json.loads(validator.stdout) == [None, None]
+		config = root / "codex"
+		config.mkdir()
+		(config / "config.toml").write_text('model = "openai/gpt-5.6-sol"\n', encoding="utf-8")
+		credential = root / "credential"
+		credential.write_text("synthetic-provider-token", encoding="utf-8")
+		environment["MODEL_PROVIDER_CREDENTIAL_FILE"] = str(credential)
+		model_command = command.copy()
+		model_command[model_command.index("workspace-guard")] = "plan"
+		model_command[model_command.index("--runtime-dir"):model_command.index("--")] = [
+			"--config-format", "codex", "--config", str(config), "--runtime-dir", str(runtime),
+		]
+		model = subprocess.run(model_command, env=environment, capture_output=True, text=True)
+		assert model.returncode == 0, model.stderr
+		assert json.loads(model.stdout) == [None, None]
+
+
 def test_workspace_guard_external_git_context_keeps_ignore_classification() -> None:
 	with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
 		root = Path(directory)

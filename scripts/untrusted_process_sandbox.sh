@@ -294,6 +294,28 @@ append_git_metadata_path()
 	git_metadata_paths+=("${candidate_path}")
 }
 
+guard_git_dir=""
+if [ "${role}" = workspace-guard ] && { [ -n "${GIT_DIR:-}" ] || [ -n "${GIT_WORK_TREE:-}" ]; }; then
+	if [ -z "${GIT_DIR:-}" ] || [ -z "${GIT_WORK_TREE:-}" ] \
+		|| [ "${GIT_WORK_TREE}" != "${workspace}" ] \
+		|| [ "${GIT_DIR}" != "$(realpath -e -- "${GIT_DIR}" 2>/dev/null)" ] \
+		|| [ ! -d "${GIT_DIR}" ]; then
+		echo "untrusted_process_sandbox: invalid workspace guard Git context" >&2
+		exit 1
+	fi
+	guard_git_dir="${GIT_DIR}"
+	if [ "$(git -C "${workspace}" rev-parse --absolute-git-dir 2>/dev/null)" != "${guard_git_dir}" ] \
+		|| [ "$(git -C "${workspace}" rev-parse --show-toplevel 2>/dev/null)" != "${workspace}" ]; then
+		echo "untrusted_process_sandbox: workspace guard Git repository mismatch" >&2
+		exit 1
+	fi
+	if sandbox_path_is_private_tmp "${guard_git_dir}"; then
+		echo "untrusted_process_sandbox: sandbox_private_tmp_path role=${role} path=${guard_git_dir}" >&2
+		exit 1
+	fi
+	append_git_metadata_path "${guard_git_dir}"
+fi
+
 for git_path_query in --absolute-git-dir --git-common-dir; do
 	if discovered_git_path="$(git -C "${workspace}" rev-parse "${git_path_query}" 2>/dev/null)"; then
 		append_git_metadata_path "${discovered_git_path}"
@@ -340,7 +362,7 @@ common_env=(
 if [ "${provider_required}" = true ]; then
 	common_env+=("SANDBOX_PROVIDER_TOKEN=sandbox-proxy")
 fi
-if [ -n "${guard_git_dir}" ]; then
+if [ "${role}" = workspace-guard ] && [ -n "${guard_git_dir}" ]; then
 	common_env+=("GIT_DIR=${guard_git_dir}" "GIT_WORK_TREE=${workspace}")
 fi
 runtime_write_paths=()
