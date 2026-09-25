@@ -108,11 +108,11 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 			checkout_resolver_step = "- name: Resolve checkout ref"
 			checkout_resolver_id = "id: checkout_ref"
 		else:
-			# validate.yml also accepts an explicit `target_ref` input
-			# (/implement-plan-claude project branches), which wins over the
-			# tracking issue's integration branch.
+			# validate.yml authorizes an explicit `target_ref` against a
+			# project PR and pins its head SHA, which wins over the tracking
+			# issue's integration branch.
 			ref_expression = (
-				"inputs.target_ref || steps.refctx.outputs.ref || github.event.repository.default_branch"
+				"steps.authorized_target.outputs.sha || steps.refctx.outputs.ref || github.event.repository.default_branch"
 				if workflow_name == "validate.yml"
 				else "steps.refctx.outputs.ref || github.event.repository.default_branch"
 			)
