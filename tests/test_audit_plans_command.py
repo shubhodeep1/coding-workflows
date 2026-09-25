@@ -42,6 +42,8 @@ def test_gate_enumerates_implement_plan_claude_from_logs_and_prs(step6):
 	assert "head **or** base branch starts with `claude/implement-plan-`" in step6
 	# Both branch shapes: per-phase branches and the single project branch.
 	assert "`claude/implement-plan-<slug>-phase-<n>`" in step6
+	assert "`claude/implement-plan-<slug>-validation-fix-<k>`" in step6
+	assert "`claude/implement-plan-<slug>-complete`" in step6
 	assert "the project branch `claude/implement-plan-<slug>`" in step6
 	# A new project's first PR carries the log before the default branch does.
 	assert "take `<slug>` from the `docs/implement-plan/<slug>.md` path in the PR's changed files" in step6
@@ -56,6 +58,8 @@ def test_post_phase_stages_count_the_whole_plan(step6):
 	# Q2: once every phase is ticked, unpredictable fix PRs land on the plan's files.
 	assert "once every phase is ticked" in step6
 	assert "**every file the plan declares**" in step6
+	assert "regardless of `Stage:`" in step6
+	assert "With no default-branch log, count every file of a uniquely identified source plan" in step6
 
 
 def test_in_flight_plans_are_set_aside(step6, text):
@@ -63,6 +67,8 @@ def test_in_flight_plans_are_set_aside(step6, text):
 	assert "**Set aside plans that are already in flight.**" in step6
 	assert step6.index("**Set aside plans that are already in flight.**") < step6.index("**Screen the remaining candidates")
 	assert "**In-flight plans are never candidates.**" in text
+	assert "PR-only project's slug uniquely matches a plan filename" in step6
+	assert "if no unique source plan matches, do not guess" in step6
 
 
 def test_in_flight_implement_plan_claude_plans_are_never_archived(text):
@@ -70,6 +76,7 @@ def test_in_flight_implement_plan_claude_plans_are_never_archived(text):
 	step7 = text[text.index("7. **Archive verified-complete plans.**"):text.index("8. **Sweep the removal registry.**")]
 	assert "**Never archive the source plan of an in-flight `/implement-plan-claude` project**" in step7
 	assert "Not archived — in flight" in text
+	assert "defer archiving until ownership can be verified" in text
 
 
 def test_degraded_mode_still_screens_against_logs(step6):
@@ -79,4 +86,6 @@ def test_degraded_mode_still_screens_against_logs(step6):
 
 def test_report_names_implement_plan_claude_blockers(text):
 	assert "In-flight /implement-plan-claude work:" in text
+	assert "log not on default branch, stage unknown" in text
+	assert "PR #M, slug unknown" in text
 	assert "blocked by <issue #N / PR #M / implement-plan <slug>> on <path(s)>" in text
