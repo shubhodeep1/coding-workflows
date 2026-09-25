@@ -931,7 +931,7 @@ files changed since the last audited commit stay in scope, plus the files
 cited by `security_pass_reported_findings`, which travel to the engine as
 `SECURITY_AUDIT_PRIOR_FINDINGS` (the engine re-emits persisting findings under
 the same `finding_id` and reports remaining instances of the same class). Both
-fields are written by the same `jq` that records `security_pass_head_sha`; `security_pass_advisory_backlog` retains every validated pre-existing finding row plus its audited head until bounded severity/confidence-ordered filing succeeds. A
+fields are written by the same `jq` that records `security_pass_head_sha`; `security_pass_advisory_backlog` retains every validated pre-existing finding row plus its audited head until uncapped severity/confidence-ordered filing succeeds. Failed or unconfirmed creates remain queued for the next tick. A
 clean pass empties the blocking memory, `/re-security-pass` and the
 `ENABLE_SECURITY_PASS=false` release path clear both. Legacy `passed` state
 without the pointer falls back to `security_pass_head_sha`. A pointer that
@@ -1838,7 +1838,7 @@ depend on it.
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
 | `SECURITY_PASS_LINE_OWNERSHIP` | `project-lines` | Route only blame- and causal-diff-proven base-owned findings to advisories; deleted guards and ambiguous control-flow changes remain blocking. `file` restores per-file blocking. |
 | `SECURITY_PASS_OWNERSHIP_CONTEXT_LINES` | `3` | Surrounding lines used for project-line ownership classification (0-50). |
-| `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` | `5` | Maximum advisories filed per poll tick from the untruncated severity/confidence-ordered state queue; `0` keeps them queued without blocking completion. |
+| `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` | `5` | Deprecated compatibility input; ignored even at `0`. Every eligible pre-existing advisory is attempted on the audit tick; failures stay queued for retry without blocking completion. |
 
 ## Integration-sync verifier + bootstrap contract
 

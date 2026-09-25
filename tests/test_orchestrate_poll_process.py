@@ -1874,15 +1874,22 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 			i += 2
 			continue
 		i += 1
-	if title.startswith('[security-pass] Advisory:') and __import__('os').environ.get('MOCK_SECURITY_PASS_ADVISORY_CREATE_FAIL') == 'true':
-		save()
-		print('forced advisory create failure', file=sys.stderr)
-		sys.exit(1)
+	if title.startswith('[security-pass] Advisory:'):
+		store.setdefault('advisory_create_attempts', []).append(title)
+		fail_id = __import__('os').environ.get('MOCK_SECURITY_PASS_ADVISORY_CREATE_FAIL_ID', '')
+		if (__import__('os').environ.get('MOCK_SECURITY_PASS_ADVISORY_CREATE_FAIL') == 'true'
+				or (fail_id and fail_id in title)):
+			save()
+			print('forced advisory create failure', file=sys.stderr)
+			sys.exit(1)
 	next_num = store.get('next_issue_number', 900)
 	store['next_issue_number'] = next_num + 1
 	store['issues'][str(next_num)] = {'labels': list(labels), 'comments': [], 'body': body, 'closed': False, 'title': title}
 	store.setdefault('created_issues', []).append({'number': next_num, 'title': title, 'labels': list(labels)})
 	save()
+	lost_id = __import__('os').environ.get('MOCK_SECURITY_PASS_ADVISORY_CREATE_LOST_ID', '')
+	if title.startswith('[security-pass] Advisory:') and lost_id and lost_id in title:
+		sys.exit(1)
 	print(f'https://github.com/owner/repo/issues/{next_num}')
 	sys.exit(0)
 
@@ -4497,7 +4504,7 @@ def test_security_pass_ownership_controls_reach_engine_and_invalid_values_fall_b
 	assert capture["ownership_context_lines"] == "3"
 	assert "ownership=project-lines context=3" in combined_log
 	assert "SECURITY_PASS_LINE_OWNERSHIP must be project-lines or file" in combined_log
-	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_CAP must be a non-negative integer" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_CAP must be a non-negative integer" not in combined_log
 
 
 def test_security_pass_file_ownership_mode_is_forwarded_unchanged() -> None:
@@ -4602,10 +4609,129 @@ def test_security_pass_advisory_only_result_passes_and_files_immediate_followup(
 	)
 
 
-def test_security_pass_advisory_cap_zero_and_create_failure_leave_nonblocking_backlog() -> None:
-	for env_overrides in (
-		{"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "0"},
-		{"MOCK_SECURITY_PASS_ADVISORY_CREATE_FAIL": "true"},
+def test_security_pass_audit_files_all_six_advisories_even_with_zero_legacy_cap() -> None:
+	state = _base_state(status="security-pass")
+	state["integration_branch"] = "orchestrator/project-192"
+	advisories = []
+	for index in range(6):
+		finding = _security_pass_test_finding()
+		finding["finding_id"] = f"ADVISORY-{index}"
+		finding["line"] = index + 1
+		finding["waiver_match_key"] = _test_waiver_key(finding)
+		advisories.append(finding)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_additive_payload(advisory_findings=advisories),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "0"},
+	)
+
+	assert result["latest_state"]["security_pass_status"] == "passed"
+	assert result["latest_state"]["security_pass_advisory_backlog"] == []
+	assert len(result["advisory_create_attempts"]) == 6
+	assert [row["issue"] for row in result["latest_state"]["security_pass_followup_issues"]] == list(range(900, 906))
+	assert len(result["created_issues"]) == 6
+	assert "(0 still queued)" in result["stdout"] + " ".join(
+		comment["body"] for comment in result["issues"]["192"]["comments"]
+	)
+
+
+def test_security_pass_advisory_batch_retries_only_failed_row_next_tick() -> None:
+	state = _base_state(status="security-pass")
+	state["integration_branch"] = "orchestrator/project-192"
+	advisories = []
+	for index in range(3):
+		finding = _security_pass_test_finding()
+		finding["finding_id"] = f"ADVISORY-{index}"
+		finding["line"] = index + 1
+		finding["waiver_match_key"] = _test_waiver_key(finding)
+		advisories.append(finding)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_additive_payload(advisory_findings=advisories),
+		issue_labels={10: ["ai:planning"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_ADVISORY_CREATE_FAIL_ID": "ADVISORY-1"},
+	)
+	assert len(result["advisory_create_attempts"]) == 3
+	assert len(result["created_issues"]) == 2
+	assert "ADVISORY-2" in result["created_issues"][-1]["title"]
+	assert [row["finding_id"] for row in result["latest_state"]["security_pass_advisory_backlog"]] == ["ADVISORY-1"]
+
+	# Each fixture run creates a fresh Git repo; remap its head to simulate the
+	# same immutable integration commit on the next scheduled poll.
+	retry_state = {
+		**result["latest_state"], "status": "security-pass",
+		"security_pass_head_sha": "__integration_head__",
+		"security_pass_last_audited_sha": "__integration_head__",
+	}
+	retry = _run_poller(
+		state=retry_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:planning"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert len(retry.get("advisory_create_attempts", [])) == 1
+	assert "ADVISORY-1" in retry["created_issues"][0]["title"]
+	assert retry["latest_state"]["security_pass_advisory_backlog"] == []
+
+
+def test_security_pass_lost_advisory_create_response_reconciles_without_duplicate() -> None:
+	state = _base_state(status="security-pass")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_additive_payload(advisory_findings=[_security_pass_test_finding()]),
+		issue_labels={10: ["ai:planning"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_ADVISORY_CREATE_LOST_ID": "SEC-TEST-1"},
+	)
+	assert len(result["advisory_create_attempts"]) == 1
+	assert len(result["created_issues"]) == 1
+	assert len(result["latest_state"]["security_pass_advisory_backlog"]) == 1
+	assert result["latest_state"]["security_pass_followup_issues"] == []
+	remote_issue = {"number": 900, "title": result["issues"]["900"]["title"], "body": result["issues"]["900"]["body"]}
+	retry_state = {
+		**result["latest_state"], "status": "security-pass",
+		"security_pass_head_sha": "__integration_head__",
+		"security_pass_last_audited_sha": "__integration_head__",
+	}
+	for remote_body, expected_create_count in (
+		(remote_issue["body"], 0),
+		(remote_issue["body"].replace("- Cited file: `scripts/example.py`", "- Cited file: `other.py`"), 1),
+	):
+		retry = _run_poller(
+			state=retry_state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload(),
+			issue_labels={10: ["ai:planning"]},
+			existing_branches=["main", "orchestrator/project-192"],
+			search_issue_items=[{**remote_issue, "body": remote_body, "state": "open"}],
+		)
+		assert len(retry.get("advisory_create_attempts", [])) == expected_create_count
+		assert retry["latest_state"]["security_pass_advisory_backlog"] == []
+		assert retry["latest_state"]["security_pass_followup_issues"][0]["issue"] == 900
+
+
+def test_security_pass_advisory_cap_zero_still_files_and_create_failure_leaves_nonblocking_backlog() -> None:
+	for env_overrides, expected_pending in (
+		({"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "0"}, 0),
+		({"MOCK_SECURITY_PASS_ADVISORY_CREATE_FAIL": "true"}, 1),
 	):
 		state = _base_state(status="security-pass")
 		state["integration_branch"] = "orchestrator/project-192"
@@ -4620,8 +4746,9 @@ def test_security_pass_advisory_cap_zero_and_create_failure_leave_nonblocking_ba
 			env_overrides=env_overrides,
 		)
 		assert result["latest_state"]["security_pass_status"] == "passed"
-		assert len(result["latest_state"]["security_pass_advisory_backlog"]) == 1
-		assert result.get("created_issues", []) == []
+		assert len(result["latest_state"]["security_pass_advisory_backlog"]) == expected_pending
+		assert len(result.get("created_issues", [])) == 1 - expected_pending
+		assert len(result.get("advisory_create_attempts", [])) == 1
 
 
 def test_security_pass_advisory_state_persist_failure_keeps_backlog() -> None:
@@ -4708,7 +4835,7 @@ def test_security_pass_blocking_comment_names_routed_advisory_followup() -> None
 	assert "1 finding(s) on pre-existing code were routed as non-blocking `ai:security` follow-ups: #900 (0 still queued)." in blocked_comment
 
 
-def test_security_pass_advisory_backlog_files_oldest_first_with_one_tick_cap() -> None:
+def test_security_pass_advisory_backlog_files_all_in_priority_order_despite_old_cap() -> None:
 	backlog = []
 	for finding_id in ("ADVISORY-OLD", "ADVISORY-NEW"):
 		row = _security_pass_test_finding()
@@ -4746,12 +4873,12 @@ def test_security_pass_advisory_backlog_files_oldest_first_with_one_tick_cap() -
 		env_overrides={"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "1"},
 	)
 
-	assert len(result["created_issues"]) == 1
+	assert len(result["created_issues"]) == 2
 	assert "ADVISORY-OLD" in result["created_issues"][0]["title"]
 	assert f"at `{'a' * 64}`" in result["issues"]["900"]["body"]
-	assert [row["finding_id"] for row in result["latest_state"]["security_pass_advisory_backlog"]] == ["ADVISORY-NEW"]
+	assert [row["finding_id"] for row in result["latest_state"]["security_pass_advisory_backlog"]] == []
 	assert any(
-		"1 finding(s) on pre-existing code were routed as non-blocking `ai:security` follow-ups: #900 (1 still queued)." in comment["body"]
+		"2 finding(s) on pre-existing code were routed as non-blocking `ai:security` follow-ups: #900, #901 (0 still queued)." in comment["body"]
 		for comment in result["issues"]["192"]["comments"]
 	)
 
@@ -4812,10 +4939,10 @@ def test_security_pass_advisory_backlog_drains_while_fix_issue_is_in_progress() 
 	)
 
 	assert result["latest_state"]["status"] == "security-pass-fixing"
-	assert len(result["created_issues"]) == 1
+	assert len(result["created_issues"]) == 2
 	assert "ADVISORY-OLD" in result["created_issues"][0]["title"]
-	assert result["latest_state"]["security_pass_followups_merge_checked"] == [900]
-	assert [row["finding_id"] for row in result["latest_state"]["security_pass_advisory_backlog"]] == ["ADVISORY-NEW"]
+	assert result["latest_state"]["security_pass_followups_merge_checked"] == [900, 901]
+	assert result["latest_state"]["security_pass_advisory_backlog"] == []
 
 
 def test_security_pass_advisory_backlog_normalization_is_safe_and_untruncated() -> None:
@@ -4840,7 +4967,7 @@ def test_security_pass_advisory_backlog_normalization_is_safe_and_untruncated() 
 		security_audit_payload=_security_audit_findings_payload(),
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
-		env_overrides={"SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "0"},
+		env_overrides={"MOCK_SECURITY_PASS_ADVISORY_CREATE_FAIL": "true", "SECURITY_PASS_ADVISORY_FOLLOWUP_CAP": "0"},
 	)
 
 	backlog = result["latest_state"]["security_pass_advisory_backlog"]
@@ -4848,6 +4975,7 @@ def test_security_pass_advisory_backlog_normalization_is_safe_and_untruncated() 
 	assert backlog[0]["finding_id"] == "ADVISORY-000"
 	assert backlog[-1]["finding_id"] == "ADVISORY-104"
 	assert all(row["finding_id"] != "UNSAFE" for row in backlog)
+	assert len(result.get("advisory_create_attempts", [])) == 105
 
 
 def test_security_pass_unusable_last_audited_sha_falls_back_to_full_range() -> None:

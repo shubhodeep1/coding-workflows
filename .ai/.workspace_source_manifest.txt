@@ -171,6 +171,7 @@ changelog.d/4431-protect-deterministic-review-skip.md
 changelog.d/4433-python-startup-boundaries.md
 changelog.d/4438-implement-plan-claude-fixer-project-branch.md
 changelog.d/4439-audit-plans-implement-plan-claude-gate.md
+changelog.d/4440-implement-plan-auto-decisions.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
@@ -612,6 +613,7 @@ tests/fixtures/review_pipeline/reviewer_bundle_override.txt
 tests/fixtures/review_pipeline/reviewer_bundle_tolerance.txt
 tests/fixtures/review_pipeline/reviewer_bundle_utf8_boundary_excerpt.txt
 tests/fixtures/review_prompt_hardening/phase_e_untrusted_payload.txt
+tests/fixtures/security_audit_default_findings.json
 tests/fixtures/selftest/node-hardhat-solidity/.ai/validate.yml
 tests/fixtures/selftest/node-hardhat-solidity/contracts/Counter.sol
 tests/fixtures/selftest/node-hardhat-solidity/hardhat.config.ts
