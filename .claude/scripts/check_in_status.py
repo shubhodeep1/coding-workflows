@@ -31,6 +31,14 @@ failed (the JSON then carries `error` and `done` is false).
     is older than --stuck-hours (default 6), AND no workflow run on the head
     branch is queued or in progress. With --terminal-only (the §26 status
     check-in) only merged / closed count.
+  * Claude-fixer PR (head ref starts with `claude/implement-plan-`, where
+    review_autofix.yml runs the reviewer panel but hands the fixes to the
+    Claude session): also done, with `state: review-round` or
+    `state: conflict`, when a trusted `ai:claude-fixer-handoff:v1` comment
+    names the current head and no `ai:claude-fixer-verdict:v1` comment
+    answers it yet; and done with `state: conflict` as soon as the PR is
+    conflicted with no workflow run active (no 6-hour wait: no review run
+    fires for a conflict the base branch caused).
   * Run: `status` is `completed` (any conclusion). `state` is `completed`
     only for a `success` conclusion and `failed` for any other, so a checker
     routes a failed run to its block stage.
@@ -39,7 +47,8 @@ failed (the JSON then carries `error` and `done` is false).
 API budget (CLAUDE.md §15): REST only, never GraphQL. PR mode issues 1 call
 (`pulls/N`), one call per 100 check runs when the PR is not conflicted, and
 at most 3 further calls when a failure is old (head commit, queued runs,
-in-progress runs). Run mode issues 1 call. Issues mode issues one call per
+in-progress runs). A Claude-fixer PR adds one call per 100 PR comments and,
+when conflicted, the 2 active-run reads. Run mode issues 1 call. Issues mode issues one call per
 issue; the checker lists at most the few follow-ups one security cycle opens.
 Every call goes through `gh api`, which in Claude Code on the web is
 authenticated by the session's agent proxy.
@@ -50,6 +59,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 import subprocess
 import sys
 
@@ -59,14 +69,21 @@ MERGED_ISSUE_LABEL = "ai:merged"
 SUCCESSFUL_RUN_CONCLUSIONS = ("success",)
 DEFAULT_STUCK_HOURS = 6.0
 MAX_PAGINATED_API_PAGES = 10
+# review_autofix.yml's Claude-fixer mode (CLAUDE_FIXER_HEAD_PREFIX there).
+CLAUDE_FIXER_HEAD_PREFIX = "claude/implement-plan-"
+TRUSTED_COMMENT_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
+FIXER_HANDOFF_RE = re.compile(
+	r"<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=([0-9a-f]{40}) round=(\d+) -->"
+)
+FIXER_VERDICT_RE = re.compile(r"<!-- ai:claude-fixer-verdict:v1 head=([0-9a-f]{40}) -->")
 
 
 class ReadError(Exception):
 	"""A `gh api` read failed; the checker reports it and retries next time."""
 
 
-def gh_api(path: str) -> object:
-	"""GET one REST path through `gh api` and return the decoded JSON."""
+def _gh_api_json(path: str) -> object:
+	"""GET one REST path through `gh api` and return the decoded JSON value."""
 	try:
 		proc = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=60)
 	except (OSError, subprocess.TimeoutExpired) as exc:
@@ -75,12 +92,35 @@ def gh_api(path: str) -> object:
 		detail = (proc.stderr or proc.stdout).strip().splitlines()
 		raise ReadError(f"gh api {path} failed: {detail[-1] if detail else f'exit {proc.returncode}'}")
 	try:
-		payload = json.loads(proc.stdout)
+		return json.loads(proc.stdout)
 	except ValueError as exc:
 		raise ReadError(f"gh api {path} returned invalid JSON") from exc
+
+
+def gh_api(path: str) -> object:
+	"""GET one REST path through `gh api` and return the decoded JSON object."""
+	payload = _gh_api_json(path)
 	if not isinstance(payload, dict):
 		raise ReadError(f"gh api {path} returned non-object JSON")
 	return payload
+
+
+def gh_api_list(path: str) -> list:
+	"""GET every 100-item page of a REST list endpoint and return the items.
+
+	One API call per page, at most MAX_PAGINATED_API_PAGES; raises `ReadError`
+	on a read failure, a non-array page, or a non-object item.
+	"""
+	items: list = []
+	for page_number in range(1, MAX_PAGINATED_API_PAGES + 1):
+		separator = "&" if "?" in path else "?"
+		page_items = _gh_api_json(f"{path}{separator}per_page=100&page={page_number}")
+		if not isinstance(page_items, list) or any(not isinstance(item, dict) for item in page_items):
+			raise ReadError(f"gh api {path} returned a non-array page")
+		items.extend(page_items)
+		if len(page_items) < 100:
+			return items
+	raise ReadError(f"gh api {path} pagination exceeded {MAX_PAGINATED_API_PAGES} pages")
 
 
 def _gh_api_paginated_object(path: str, list_key: str) -> dict:
@@ -138,6 +178,10 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 	head_sha = head.get("sha", "")
 	head_ref = head.get("ref", "")
 	conflicted = pr.get("mergeable_state") == "dirty"
+	if isinstance(head_ref, str) and head_ref.startswith(CLAUDE_FIXER_HEAD_PREFIX):
+		fixer_verdict = _check_claude_fixer_pr(repo, number, head_sha, head_ref, conflicted)
+		if fixer_verdict is not None:
+			return fixer_verdict
 	failed_checks: list[str] = []
 	if not conflicted:
 		runs = _gh_api_paginated_object(f"repos/{repo}/commits/{head_sha}/check-runs", "check_runs")
@@ -156,13 +200,62 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 	if age_hours < stuck_hours:
 		return {"done": False, "state": "open", "reason": f"PR #{number} has {problem}, head is {age_hours:.1f}h old (< {stuck_hours:g}h)"}
 
+	active = _active_run_count(repo, head_ref)
+	if active:
+		return {"done": False, "state": "open", "reason": f"PR #{number} has {problem}, but {active} workflow run(s) on {head_ref} are still queued or running"}
+	return {"done": True, "state": "stuck", "reason": f"PR #{number} stuck: {problem}, head {age_hours:.1f}h old, no workflow run active on {head_ref}"}
+
+
+def _active_run_count(repo: str, head_ref: str) -> int:
 	active = 0
 	for status in ("queued", "in_progress"):
 		listing = gh_api(f"repos/{repo}/actions/runs?branch={head_ref}&status={status}&per_page=1")
 		active += int(listing.get("total_count") or 0)
-	if active:
-		return {"done": False, "state": "open", "reason": f"PR #{number} has {problem}, but {active} workflow run(s) on {head_ref} are still queued or running"}
-	return {"done": True, "state": "stuck", "reason": f"PR #{number} stuck: {problem}, head {age_hours:.1f}h old, no workflow run active on {head_ref}"}
+	return active
+
+
+def _check_claude_fixer_pr(repo: str, number: int, head_sha: str, head_ref: str, conflicted: bool) -> dict | None:
+	"""Return the hand-off verdict for a Claude-fixer PR, or None to fall through.
+
+	The review workflow posts `ai:claude-fixer-handoff:v1` (findings or
+	conflict) for the head it reviewed; the stage session answers with
+	`ai:claude-fixer-verdict:v1` for that head when it found nothing left to
+	fix. Only comments from trusted author associations count, and only
+	markers naming the current head: a push supersedes every earlier round.
+	"""
+	if not head_sha:
+		raise ValueError("PR head sha is empty")
+	comments = gh_api_list(f"repos/{repo}/issues/{number}/comments")
+	latest_handoff = None
+	answered = False
+	for comment in comments:
+		if comment.get("author_association") not in TRUSTED_COMMENT_ASSOCIATIONS:
+			continue
+		body = comment.get("body") or ""
+		if not isinstance(body, str):
+			continue
+		for match in FIXER_HANDOFF_RE.finditer(body):
+			if match.group(2) == head_sha:
+				latest_handoff = (match.group(1), int(match.group(3)))
+		for match in FIXER_VERDICT_RE.finditer(body):
+			if match.group(1) == head_sha:
+				answered = True
+	if latest_handoff is not None and not answered:
+		kind, round_number = latest_handoff
+		state = "review-round" if kind == "findings" else "conflict"
+		detail = "reviewer findings" if kind == "findings" else "a merge conflict"
+		return {
+			"done": True,
+			"state": state,
+			"round": round_number,
+			"reason": f"PR #{number} review round {round_number}: {detail} on head {head_sha[:12]} handed to Claude",
+		}
+	if conflicted:
+		active = _active_run_count(repo, head_ref)
+		if active:
+			return {"done": False, "state": "open", "reason": f"PR #{number} has a merge conflict, but {active} workflow run(s) on {head_ref} are still queued or running"}
+		return {"done": True, "state": "conflict", "reason": f"PR #{number} has a merge conflict on head {head_sha[:12]} and no workflow run is active"}
+	return None
 
 
 def check_run(repo: str, run_id: int) -> dict:
