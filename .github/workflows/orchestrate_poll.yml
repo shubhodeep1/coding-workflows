@@ -409,11 +409,17 @@ jobs:
           # overwrite scripts/ and prompts/ but cannot write this directory.
           [ "${lesson_support_verified}" = true ] || exit 1
           trusted_support_root="$(mktemp -d "${RUNNER_TEMP%/}/poller-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
-          mkdir -p "${trusted_support_root}/scripts"
-          for f in security_audit.sh codex_heartbeat.sh write_codex_config.sh render_prompt.sh render_prompt.py assemble_prompt.sh security_audit_causality.py untrusted_process_sandbox.sh ai_memory_lib.py orchestrate_lib.py openrouter_prompt_cache.py semantic_cache.py memory_injection_patterns.py codex_model_catalog.json security_audit_fp_exclusions.json; do
+          mkdir -p "${trusted_support_root}/scripts" "${trusted_support_root}/ai-memory/schemas" "${trusted_support_root}/.github/ai"
+          for f in security_audit.sh codex_heartbeat.sh write_codex_config.sh render_prompt.sh render_prompt.py assemble_prompt.sh security_audit_causality.py untrusted_process_sandbox.sh ai_memory_lib.py orchestrate_lib.py openrouter_prompt_cache.py semantic_cache.py memory_injection_patterns.py codex_model_catalog.json security_audit_fp_exclusions.json orchestrate_state_v2.py ai_labels.py check_integration_pr_readiness.py worktree_gc.sh worktree_registry.sh repo_root.py ai_memory.py memory_helpers.sh tg_helpers.sh gh_helpers.sh emit_event.sh emit_event.py build_state_snapshot.py blocker_check.py task_state.py verify_integration_fingerprints.py validate_editor_audit.sh; do
             [ -f ".codex-workflow-src/scripts/${f}" ] && [ ! -L ".codex-workflow-src/scripts/${f}" ] || exit 1
             install -m 0600 ".codex-workflow-src/scripts/${f}" "${trusted_support_root}/scripts/${f}"
           done
+          for f in run_ledger_entry.v1.json state_snapshot.v1.json; do
+            [ -f ".codex-workflow-src/ai-memory/schemas/${f}" ] && [ ! -L ".codex-workflow-src/ai-memory/schemas/${f}" ] || exit 1
+            install -m 0600 ".codex-workflow-src/ai-memory/schemas/${f}" "${trusted_support_root}/ai-memory/schemas/${f}"
+          done
+          [ -f .codex-workflow-src/.github/ai/label_contract.v1.json ] && [ ! -L .codex-workflow-src/.github/ai/label_contract.v1.json ] || exit 1
+          install -m 0600 .codex-workflow-src/.github/ai/label_contract.v1.json "${trusted_support_root}/.github/ai/label_contract.v1.json"
           [ -d .codex-workflow-src/prompts ] && [ ! -L .codex-workflow-src/prompts ] || exit 1
           cp -R .codex-workflow-src/prompts "${trusted_support_root}/prompts"
           [ -z "$(find "${trusted_support_root}/prompts" -type l -print -quit)" ] || exit 1
@@ -855,7 +861,14 @@ jobs:
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
       - name: Run worktree registry GC
-        run: bash scripts/worktree_gc.sh
+        run: |
+          set -euo pipefail
+          [ -n "${POLLER_TRUSTED_SUPPORT_DIR:-}" ] && [ -n "${POLLER_TRUSTED_SUPPORT_SHA:-}" ] || exit 1
+          [ "$(cat "${POLLER_TRUSTED_SUPPORT_DIR}/.support_sha")" = "${POLLER_TRUSTED_SUPPORT_SHA}" ] || exit 1
+          for f in worktree_gc.sh worktree_registry.sh ai_memory.py ai_memory_lib.py; do
+            [ -f "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/${f}" ] && [ ! -L "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/${f}" ] || exit 1
+          done
+          WORKTREE_REGISTRY_ROOT="${GITHUB_WORKSPACE}" PYTHONSAFEPATH=1 bash "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/worktree_gc.sh"
 
       - name: Build state snapshot
         if: ${{ success() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
@@ -865,8 +878,11 @@ jobs:
           SNAPSHOT_DIR="${RUNTIME_DIR}/state-snapshot"
           mkdir -p "${SNAPSHOT_DIR}"
 
-          python3 scripts/build_state_snapshot.py \
+          [ -n "${POLLER_TRUSTED_SUPPORT_DIR:-}" ] && [ "$(cat "${POLLER_TRUSTED_SUPPORT_DIR}/.support_sha")" = "${POLLER_TRUSTED_SUPPORT_SHA:-}" ] || exit 1
+          [ -f "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/build_state_snapshot.py" ] && [ ! -L "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/build_state_snapshot.py" ] || exit 1
+          PYTHONDONTWRITEBYTECODE=1 python3 -I "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/build_state_snapshot.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
+            --schema-root "${POLLER_TRUSTED_SUPPORT_DIR}/ai-memory" \
             --tracking-issues-file "${RUNTIME_DIR}/tracking_issues.json" \
             --trackers-dir "${RUNTIME_DIR}/state_snapshot_trackers" \
             --actions-runs-file "${RUNTIME_DIR}/state_snapshot_actions_runs.json" \
@@ -936,7 +952,7 @@ jobs:
           cp "${SNAPSHOT_FILE}" "${PUBLISH_DIR}/state.json"
           cp "${SNAPSHOT_FILE}" "${PUBLISH_DIR}/snapshots/${TICK_SLUG}.json"
 
-          python3 - "${PUBLISH_DIR}/snapshots" "${HISTORY_DEPTH}" <<'PY'
+          PYTHONDONTWRITEBYTECODE=1 python3 -I - "${PUBLISH_DIR}/snapshots" "${HISTORY_DEPTH}" <<'PY'
           from pathlib import Path
           import sys
 
@@ -995,12 +1011,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f scripts/memory_helpers.sh ]; then
-            echo "::warning::memory helpers not found; skipping poll end event"
+          if [ -z "${POLLER_TRUSTED_SUPPORT_DIR:-}" ] || [ -z "${POLLER_TRUSTED_SUPPORT_SHA:-}" ] \
+            || [ "$(cat "${POLLER_TRUSTED_SUPPORT_DIR}/.support_sha" 2>/dev/null || true)" != "${POLLER_TRUSTED_SUPPORT_SHA}" ] \
+            || [ ! -f "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/memory_helpers.sh" ] \
+            || [ -L "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/memory_helpers.sh" ]; then
+            echo "::warning::verified memory helpers not found; skipping poll end event"
             exit 0
           fi
 
-          source scripts/memory_helpers.sh || true
+          export PYTHONSAFEPATH=1
+          source "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/memory_helpers.sh" || true
 
           if [ "${{ job.status }}" = "success" ]; then
             EVENT_STATUS="ok"
@@ -1035,12 +1055,23 @@ jobs:
           # tail; only the workflow name, failing step name, and run
           # URL are sent.
           set -uo pipefail
-          if [ ! -f scripts/tg_helpers.sh ]; then
-            echo "::warning::tg_helpers.sh not found; cannot send job-failure TG alert"
+          # This failure path must also work when support staging did not run.
+          # Never source a helper from the mutable project checkout.
+          support_dir="${POLLER_TRUSTED_SUPPORT_DIR:-}"
+          if [ -z "${support_dir}" ] || [ -z "${POLLER_TRUSTED_SUPPORT_SHA:-}" ] \
+            || [ "$(cat "${support_dir}/.support_sha" 2>/dev/null || true)" != "${POLLER_TRUSTED_SUPPORT_SHA}" ] \
+            || [ ! -f "${support_dir}/scripts/tg_helpers.sh" ] || [ -L "${support_dir}/scripts/tg_helpers.sh" ] \
+            || [ ! -f "${support_dir}/scripts/gh_helpers.sh" ] || [ -L "${support_dir}/scripts/gh_helpers.sh" ]; then
+            echo "::warning::Verified Telegram support unavailable; sending minimal checkout-independent failure alert"
+            if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
+              curl -fsS --max-time 15 -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+                --data-urlencode "chat_id=${TG_ADMIN_CHAT_ID}" \
+                --data-urlencode "text=Workflow failed: ${GITHUB_WORKFLOW:-orchestrate_poll}; run: ${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null 2>&1 || true
+            fi
             exit 0
           fi
           # shellcheck disable=SC1091
-          source scripts/tg_helpers.sh
+          source "${support_dir}/scripts/tg_helpers.sh"
 
           run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           workflow_name="${GITHUB_WORKFLOW:-orchestrate_poll}"

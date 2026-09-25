@@ -161,6 +161,28 @@ def _build_snapshot(*, memory_root: Path, tracker_export: dict[str, object] | No
 	)
 
 
+def test_snapshot_cli_uses_trusted_schema_without_losing_ledger_enrichment(tmp_path: Path) -> None:
+	data_root = _create_memory_root(tmp_path / "data")
+	trusted_root = _create_memory_root(tmp_path / "trusted")
+	(data_root / "schemas" / "state_snapshot.v1.json").write_text("not JSON", encoding="utf-8")
+	_write_run_ledger_entries(data_root, 501, [_run_substate_entry(run_id=501, substate="StreamingTurn", tokens={"input": 8, "output": 4})])
+	trackers_dir = tmp_path / "trackers"
+	trackers_dir.mkdir()
+	(trackers_dir / "3142.json").write_text(json.dumps(_tracker_export()), encoding="utf-8")
+	runs_file = tmp_path / "runs.json"
+	runs_file.write_text(json.dumps(_actions_runs_payload()), encoding="utf-8")
+	output_file = tmp_path / "snapshot.json"
+
+	assert build_state_snapshot.main([
+		"--repo-root", str(tmp_path), "--trackers-dir", str(trackers_dir),
+		"--actions-runs-file", str(runs_file), "--memory-root-dir", str(data_root),
+		"--schema-root", str(trusted_root), "--output-file", str(output_file),
+	]) == 0
+	running_entry = json.loads(output_file.read_text(encoding="utf-8"))["running"][0]
+	assert running_entry["substate"] == "StreamingTurn"
+	assert running_entry["tokens"] == {"input": 8, "output": 4, "total": 12}
+
+
 def _extract_function_body(script_text: str, function_name: str) -> str:
 	match = re.search(rf"^{function_name}\(\) \{{\n(?P<body>.*?)^\}}\n", script_text, re.MULTILINE | re.DOTALL)
 	assert match is not None, function_name
@@ -425,12 +447,12 @@ def test_poller_snapshot_exports_reuse_cached_data_without_new_api_calls() -> No
 def test_snapshot_workflow_artifact_steps_are_not_gated_on_has_work() -> None:
 	for step_name in ("Build state snapshot", "Upload state snapshot artifact"):
 		condition = _extract_workflow_step_if(step_name)
-		assert "always()" in condition
+		assert "success()" in condition
 		assert "env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false'" in condition
 		assert "steps.find_tracking.outputs.has_work == 'true'" not in condition
 
 	condition = _extract_workflow_step_if("Publish state snapshot branch")
-	assert "always()" in condition
+	assert "success()" in condition
 	assert "env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false'" in condition
 	assert "env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true'" in condition
 	assert "steps.find_tracking.outputs.has_work == 'true'" not in condition
