@@ -20,6 +20,7 @@ CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "security-audit.yml"
 INTERNAL_CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "internal-clarify.yml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "security_audit.sh"
+DEFAULT_FINDINGS_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "security_audit_default_findings.json"
 _SANITIZED_GIT_ENV_KEYS = ("BASH_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX")
 
 
@@ -941,6 +942,26 @@ def test_security_audit_filters_findings_and_caps_followups() -> None:
 	assert not any("high-finding-two" in body for body in final_state.get("issue_create_bodies", []))
 
 
+@pytest.mark.parametrize("ownership_mode", [None, "file"])
+def test_security_audit_default_findings_json_wire_format(
+	monkeypatch: pytest.MonkeyPatch, ownership_mode: str | None,
+) -> None:
+	monkeypatch.delenv("SECURITY_AUDIT_LINE_OWNERSHIP", raising=False)
+	with tempfile.TemporaryDirectory(prefix="security-audit-default-") as td:
+		output_path = Path(td) / "findings.json"
+		extra_env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+		}
+		if ownership_mode is not None:
+			extra_env["SECURITY_AUDIT_LINE_OWNERSHIP"] = ownership_mode
+		proc, final_state = _run_security_audit({}, extra_env=extra_env)
+
+	assert proc.returncode == 0, proc.stderr
+	assert final_state["security_audit_findings_output"].encode("utf-8") == DEFAULT_FINDINGS_FIXTURE.read_bytes()
+
+
 def test_security_audit_findings_json_filters_without_github_side_effects() -> None:
 	unsafe_display_id = "A08/guard-removal"
 	normalized_unsafe_display_id = "finding-" + hashlib.sha256(unsafe_display_id.encode("utf-8")).hexdigest()
@@ -1001,10 +1022,9 @@ def test_security_audit_findings_json_filters_without_github_side_effects() -> N
 		normalized_unsafe_display_id,
 		"low-survivor",
 	]
-	assert payload["advisory_findings"] == []
-	assert payload["verified_fixed_finding_ids"] == []
+	assert "advisory_findings" not in payload
+	assert "verified_fixed_finding_ids" not in payload
 	assert payload["counts"] == {
-		"advisory": 0,
 		"kept": 3,
 		"suppressed_excluded": 1,
 		"suppressed_invalid": 1,
@@ -2164,7 +2184,7 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 		"fresh-id-same-spot",
 		"waived-id-only",
 	]
-	assert payload["verified_fixed_finding_ids"] == ["missing-prior"]
+	assert "verified_fixed_finding_ids" not in payload
 	assert payload["counts"]["kept"] == 4
 	assert payload["counts"]["suppressed_waived"] == 0
 	assert "waived-findings=3 (provenance-key match only)" in proc.stdout

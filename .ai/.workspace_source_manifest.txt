@@ -227,6 +227,7 @@ changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/4342-sandbox-state-outside-private-tmp.md
 changelog.d/4379-followup-metadata-and-merged-label-race.md
 changelog.d/4391-post-agent-private-tmp.md
+changelog.d/4433-python-startup-boundaries.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/codex-blocked-verdict-bail.md
