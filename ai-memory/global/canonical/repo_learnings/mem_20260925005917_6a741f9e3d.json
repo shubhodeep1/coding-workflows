@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review-autofix behavior is split across shell step scripts and guarded by pipeline contract tests.",
   "timestamps": {
     "created_at": "2026-09-25T00:59:17Z",
