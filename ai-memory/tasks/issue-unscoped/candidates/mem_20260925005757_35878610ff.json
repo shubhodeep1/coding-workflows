@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "Multiple merged changes to sandboxing and workspace guards touched this shared script and its isolation tests. When changing how agents access temporary paths or Git/workspace context, check the centralized sandbox behavior and extend its process-isolation tests.",
+  "fingerprint": "1fe704c05232e6e4398e9c511322cbf0c57e5b859c9dace50081d2985dac02a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36079804889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36079804889",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4390",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4392",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4399",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4400",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4407",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4394",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4396",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4402",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4403",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4408"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260925005757_35878610ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Agent subprocess isolation is centralized in `scripts/untrusted_process_sandbox.sh` and covered by `tests/test_agent_process_isolation.py`.",
+  "timestamps": {
+    "created_at": "2026-09-25T00:57:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
