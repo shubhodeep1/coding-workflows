@@ -389,6 +389,7 @@ def _run_collect_pr_check_runs_harness(
 	check_runs_responses: list[dict[str, object]] | None = None,
 	check_runs_autofix_enabled: str = "true",
 	self_run_id: str = "",
+	exclude_self_from_context: str = "false",
 	wait_timeout_secs: str = "300",
 	poll_interval_secs: str = "20",
 	log_tail_bytes: str = "0",
@@ -429,6 +430,7 @@ def _run_collect_pr_check_runs_harness(
 			"CHECK_RUNS_LOG_TAIL_BYTES": log_tail_bytes,
 			"GH_RETRY_MAX_ATTEMPTS": gh_retry_max_attempts,
 			"SELF_RUN_ID": self_run_id,
+			"CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT": exclude_self_from_context,
 		})
 
 		result = subprocess.run(
@@ -3377,6 +3379,34 @@ def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusio
 	assert "Check-run context sha256:" in result["stdout"]
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
 	assert any("--paginate" in call and "--slurp" in call and "/check-runs?per_page=100" in call for call in call_texts)
+
+
+def test_post_review_snapshot_ignores_only_its_own_incomplete_check() -> None:
+	runs = [
+		{"id": 1, "name": "review / codex-agent", "status": "in_progress", "details_url": "https://github.com/owner/repo/actions/runs/777/job/1"},
+		{"id": 2, "name": "ci", "status": "completed", "conclusion": "success"},
+	]
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, self_run_id="777", exclude_self_from_context="true",
+		check_runs_responses=[{"json": [{"check_runs": runs}]}],
+	)
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 1\n" in result["context_text"]
+	assert "incomplete_count: 0\n" in result["context_text"]
+
+
+def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="0",
+		check_runs_responses=[{"json": [{"check_runs": [
+			{"id": 1, "name": "ci", "status": "pending"},
+			{"id": 2, "name": "lint", "status": "completed", "conclusion": "startup_failure"},
+			{"id": 3, "name": "unknown", "status": "completed", "conclusion": None},
+		]}]}],
+	)
+	assert "collection_status: timeout\n" in result["context_text"]
+	assert "incomplete_count: 2\n" in result["context_text"]
+	assert "failed_count: 1\n" in result["context_text"]
 
 
 def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:

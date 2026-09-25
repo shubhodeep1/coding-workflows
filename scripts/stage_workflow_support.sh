@@ -465,6 +465,13 @@ setup_context()
 			ORIGINAL_SCRIPT_REF="stable"
 		fi
 	fi
+	# Explicit targets must never select executable support from their checkout.
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		[[ "${ORIGINAL_SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] || {
+			echo "::error::Explicit validation requires an immutable support ref." >&2
+			exit 1
+		}
+	fi
 	RESOLVED_SCRIPT_REF="${ORIGINAL_SCRIPT_REF}"
 
 	IS_SELF_REPO="false"
@@ -496,7 +503,14 @@ checkout_support_ref()
 
 	rm -rf "${dest}"
 	mkdir -p "$(dirname "${dest}")"
-	if git clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
+	if [[ "${ref}" =~ ^[0-9a-f]{40}$ ]]; then
+		if git clone --quiet --no-tags --depth 1 --branch main "${remote_url}" "${dest}" 2>/dev/null &&
+		   git -C "${dest}" fetch --quiet --depth 1 origin "${ref}" 2>/dev/null &&
+		   git -C "${dest}" checkout --quiet --detach FETCH_HEAD 2>/dev/null &&
+		   [ "$(git -C "${dest}" rev-parse HEAD)" = "${ref}" ]; then
+			return 0
+		fi
+	elif git clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
 		return 0
 	fi
 	rm -rf "${dest}"
@@ -508,11 +522,11 @@ bootstrap_support_roots()
 	SUPPORT_PRIMARY_ROOT=""
 	SUPPORT_MAIN_ROOT=""
 
-	if [ "${IS_SELF_REPO}" = "true" ]; then
+	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
 	elif checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
 		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
-	elif checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/primary"; then
+	elif [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/primary"; then
 		echo "::warning::Support checkout ref ${ORIGINAL_SCRIPT_REF} is unavailable; using main."
 		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
 		RESOLVED_SCRIPT_REF="main"
@@ -533,6 +547,10 @@ copy_from_ref_or_local()
 	local require_remote="${3:-false}"
 	local allow_main_fallback="${4:-true}"
 	local source_path=""
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		require_remote="true"
+		allow_main_fallback="false"
+	fi
 
 	mkdir -p "$(dirname "${target_path}")"
 
@@ -668,7 +686,7 @@ stage_optional_preserve_entry()
 	local emit_notice="${4:-true}"
 	local tmp_path
 
-	if [ -f "${repo_path}" ]; then
+	if [ -f "${repo_path}" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		if [ "${executable}" = "true" ]; then
 			chmod +x "${repo_path}"
 		fi

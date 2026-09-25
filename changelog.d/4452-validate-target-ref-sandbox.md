@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Validation targets now require a trusted project PR, and validation hooks run without credentials.** Explicit project branches are authorized against an open, same-repository PR and checked out at its verified head SHA without storing the PAT in the checkout. All four optional validation workspace hooks run in a network-disabled container over a screened workspace copy, preventing branch-provided hooks from reading the runner's credentials or Git metadata.

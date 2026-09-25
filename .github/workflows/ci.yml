@@ -426,6 +426,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py
 
+      - name: CLAUDE.md section numbering guard (§6 identifiers)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_md_section_numbers.py
+
       - name: /audit-plans command contract tests
         run: |
           set -euo pipefail
@@ -550,6 +555,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py

@@ -78,17 +78,20 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->`
    comment for the `/implement-plan-claude` session, which fixes the round in
    one `[claude-autofix]` commit (counted toward `MAX_AUTOFIX_ITERATIONS`) or
-   answers with `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->` and a
-   `claude_fixer_converged_head=<sha>` dispatch; the gate verifies both
-   markers for that exact head (hand-off by the `GH_PAT` identity, verdict by
-   the PR author with OWNER / MEMBER / COLLABORATOR association). This requests
-   a fresh full reviewer pass; only complete clean raw review, a current head,
-   and settled checks let `claude-fixer-auto-merge` enable auto-merge. Zero
-   ledger entries and no failing check auto-merge in
-   the run; at the cap the PR itself is labelled `ai:review-blocked`; dispatch
-   re-runs on a head that already has a hand-off are skipped while awaiting
-   the verdict (`claude_fixer_awaiting_session`); after the verdict the sweep
-   retries incomplete reviews. `[claude-intervention]` and
+    asks a separately authenticated, dedicated bot to attest to the exact
+   ledger digest in an alongside v2 verdict. `CLAUDE_FIXER_VERDICT_BOT_LOGIN`
+   defaults empty, disabling verdict convergence; a collaborator's v1 verdict
+   never authorizes auto-merge. An accepted dispatch re-runs the reviewer
+   panel on the same head; only zero findings plus a fresh `ready`, same-head
+   check-run snapshot can enable head-bound auto-merge. Remaining findings
+   block the PR for intervention rather than another same-head verdict cycle.
+   The bot's comment keeps `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`
+   alongside the v2 digest marker; the session dispatches
+   `claude_fixer_converged_head=<sha>` for verification. Zero ledger entries
+   with a clean check snapshot auto-merge in the run; at the cap the PR itself
+   is labelled `ai:review-blocked`; dispatch
+    re-runs on a head that already has a hand-off are skipped
+    (`claude_fixer_awaiting_session`). `[claude-intervention]` and
    `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`
    and `[ai-merge-resolve]`. The consolidator / floor stages live inside the
    editor step, so they do not run in this mode.
@@ -191,6 +194,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
     `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
     `WORKFLOW_HEAL`.
+    A report whose failure reason is `identical_failure_cap`, or a generation
+    > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
+    intake never files it as `transient` (remaps to `inconclusive`,
+    `classification_remapped … reason=deterministic_failure`), and its issue
+    body forbids retry / backoff / re-run fixes and requires a regression test
+    that reproduces the failure. The review/autofix failure comment names the
+    failed step (one jobs-API call matched on `RUNNER_NAME`) and the first
+    specific `::error::` line of the captured stage stderr (including the
+    resolver's, `resolver_stage_stderr.txt`), redacted
+    (`failure-headline`, log prefix `AUTOFIX_FAILURE_HEADLINE`).
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -862,6 +875,16 @@ committing the corresponding file:
 - `.github/ai/workspace_hooks/<phase>/<hook>.sh` — executed by
   `scripts/run_workspace_hook.sh`. Supported hook names are `after_create`,
   `before_run`, `after_run`, and `before_remove`; missing files are a no-op.
+  Validate's four hooks run from trusted support in a tokenless, network-disabled
+  container against a bounded, screened workspace copy, never the host checkout
+  or its `.git`. Only non-executable, simple-name `.txt` data under
+  `validation/hook-output/<hook>/` may be replayed to the host; it must not be
+  sourced or executed. Any other changed or deleted path rejects the entire
+  replay as an isolation/transfer failure, stopping validation even for
+  nonfatal hooks. An explicit `validate.yml` `target_ref` requires exactly one open
+  trusted-author same-repo project PR targeting the default branch; checkout
+  pins and verifies that PR's SHA without persisting checkout credentials.
+  Empty `target_ref` retains integration/default selection.
 
 ## Workflow scenario traces
 
@@ -1499,6 +1522,7 @@ and shipped:
 - `sandbox_private_tmp_path`
 - `sandbox_namespace_setup_failed`
 - `opencode_agent_failure`
+- `AUTOFIX_FAILURE_HEADLINE`
 - `MODEL_CATALOG_BACKFILL`
 - `AUTOFIX_GATE_CLAUDE_FIXER`
 - `AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED`
@@ -1694,6 +1718,7 @@ LOG_PREFIX.name=sandbox_private_tmp_path
 LOG_PREFIX.name=sandbox_namespace_setup_failed
 LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
+LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
 LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF

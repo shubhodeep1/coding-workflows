@@ -139,6 +139,9 @@ def test_review_rounds_are_fixed_by_claude(text):
 	assert "<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<r> -->" in text
 	assert "`[claude-autofix] review round <r>: <summary>`" in text
 	assert "`<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`" in text
+	assert "<!-- ai:claude-fixer-verdict:v2 head=<sha> round=<r> ledger=<64hex> -->" in text
+	assert "CLAUDE_FIXER_VERDICT_BOT_LOGIN" in text
+	assert "one fresh reviewer panel on that head" in text
 	assert "-f claude_fixer_converged_head=<sha>" in text
 	assert "`[claude-merge-resolve] merge <base branch>`" in text
 	assert "`[claude-intervention] <summary>`" in text

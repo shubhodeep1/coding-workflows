@@ -375,10 +375,12 @@ def test_security_audit_workflow_has_required_triggers_and_checkout_contract() -
 	assert 'workflow_call:' in content
 	assert 'cron: "0 8 * * 0"' in content
 	assert 'uses: actions/checkout@v5' in content
-	# Scheduled runs and a bare dispatch still audit the default branch; the
-	# optional `ref` input only redirects /implement-plan-claude branch audits.
-	assert 'ref: ${{ inputs.ref || github.event.repository.default_branch }}' in content
-	# Full history is required by the incremental scope resolver.
+	# The audit branch is data, checked out by its verified commit in a nested
+	# checkout; the default branch still supplies a branch head, not a tag.
+	assert 'ref: ${{ env.AUDIT_DATA_SHA }}' in content
+	assert 'ref: ${{ inputs.ref || github.event.repository.default_branch }}' not in content
+	assert 'path: audit-data' in content
+	# Full target history is required by the incremental scope resolver.
 	assert 'fetch-depth: 0' in content
 
 
@@ -412,31 +414,386 @@ def test_branch_audit_does_not_import_checkout_json_module(tmp_path: Path) -> No
 
 def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
-	# Neither source nor consumer audits execute the target checkout's action.
-	assert 'path: audit-target' in content
-	assert 'path: .audit-support' in content
-	assert 'uses: ./.audit-support/.github/actions/install-codex' in content
-	assert 'uses: ./.github/actions/install-codex' not in content
+	# The local action must come from verified support, never the audit branch.
+	assert 'uses: ./.github/actions/install-codex' in content
 	assert 'uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable' not in content
-	assert 'branch_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"' in content
-	assert 'git/tags/${support_sha}' in content
-	assert 'git -C .audit-support rev-parse HEAD' in content
-	assert 'cd audit-target' in content
-	assert 'scripts/write_codex_config.sh' in content
+	assert 'bash "${GITHUB_WORKSPACE}/scripts/write_codex_config.sh"' in content
 	# The catalog path must be absolute in both source-repo and consumer runs:
 	# codex resolves a relative model_catalog_json against CODEX_HOME and
 	# exits with ENOENT (every run from 2026-07-05 to 2026-09-23 failed so).
-	assert '--catalog-path "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_model_catalog.json"' in content
+	assert '--catalog-path "${GITHUB_WORKSPACE}/scripts/codex_model_catalog.json"' in content
 	assert '--catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-.}/' not in content
 	assert 'OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}' in content
 	assert "SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}" in content
 	assert "SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}" in content
 	assert (
-		"SECURITY_AUDIT_FP_EXCLUSIONS: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}"
+		"AUDIT_EXCLUSIONS_CONFIG: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}"
 	) in content
+	assert 'echo "SECURITY_AUDIT_FP_EXCLUSIONS=${catalog_path}" >> "$GITHUB_ENV"' in content
+	assert "SECURITY_AUDIT_FP_EXCLUSIONS: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS" not in content
 	assert "SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}" in content
 	assert "SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}" in content
 	assert 'bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit.sh"' in content
+
+
+def _audit_workflow_step(name: str) -> dict:
+	import yaml
+
+	workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+	return next(step for step in workflow["jobs"]["security-audit"]["steps"] if step.get("name") == name)
+
+
+def _run_audit_workflow_resolution(
+	step_name: str, responses: dict, *, env_overrides: dict | None = None
+) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	"""Run only the pre-checkout shell, with API results supplied by the test."""
+	with tempfile.TemporaryDirectory(prefix="security-audit-resolution-") as td:
+		workspace = Path(td)
+		bin_dir = workspace / "bin"
+		bin_dir.mkdir()
+		_write_exec(
+			bin_dir / "gh",
+			"#!/usr/bin/env python3\n"
+			"import json, os, sys\n"
+			"responses = json.loads(os.environ['MOCK_API_RESPONSES'])\n"
+			"path = sys.argv[2] if sys.argv[1] == 'api' else ''\n"
+			"if path not in responses:\n\tsys.exit(1)\n"
+			"print(json.dumps(responses[path]))\n",
+		)
+		output_path = workspace / "output"
+		env_path = workspace / "env"
+		env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		env.update(
+			{
+				"GH_TOKEN": "test-token",
+				"GITHUB_REPOSITORY": "owner/consumer",
+				"GITHUB_WORKSPACE": str(workspace),
+				"GITHUB_OUTPUT": str(output_path),
+				"GITHUB_ENV": str(env_path),
+				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+				"MOCK_API_RESPONSES": json.dumps(responses),
+				"CALLER_REPOSITORY": "owner/consumer",
+				"WORKFLOW_JOB_JSON": json.dumps(
+					{
+						"workflow_repository": "shubhodeep1/coding-workflows",
+						"workflow_ref": "shubhodeep1/coding-workflows/.github/workflows/security-audit.yml@refs/tags/stable",
+					}
+				),
+				"AUDIT_TARGET_REF_INPUT": "",
+				"AUDIT_DEFAULT_BRANCH": "main",
+			}
+		)
+		env.update(env_overrides or {})
+		proc = subprocess.run(
+			["bash", "--noprofile", "--norc", "-e"],
+			input=_audit_workflow_step(step_name)["run"],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+		)
+		return (
+			proc,
+			output_path.read_text(encoding="utf-8") if output_path.exists() else "",
+			env_path.read_text(encoding="utf-8") if env_path.exists() else "",
+		)
+
+
+def test_security_audit_support_identity_fails_closed_and_pins_source_and_consumer() -> None:
+	source_repo = "shubhodeep1/coding-workflows"
+	support_sha = "a" * 40
+	other_sha = "b" * 40
+	source_identity = json.dumps({
+		"workflow_repository": source_repo,
+		"workflow_ref": f"{source_repo}/.github/workflows/security-audit.yml@refs/heads/feature/audit",
+	})
+	source_env = {"CALLER_REPOSITORY": source_repo, "WORKFLOW_JOB_JSON": source_identity}
+	main_api = f"repos/{source_repo}/branches/main"
+	proc, output, _ = _run_audit_workflow_resolution(
+		"Resolve trusted audit support commit",
+		{main_api: {"protected": True, "commit": {"sha": support_sha}}},
+		env_overrides=source_env,
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert output == f"support_sha={support_sha}\nprotected_main_sha={support_sha}\n"
+	for bad_branch in ({"protected": False, "commit": {"sha": support_sha}},
+	                   {"protected": True, "commit": {"sha": "invalid"}}):
+		proc, output, _ = _run_audit_workflow_resolution(
+			"Resolve trusted audit support commit", {main_api: bad_branch}, env_overrides=source_env
+		)
+		assert proc.returncode != 0 and not output
+	proc, output, _ = _run_audit_workflow_resolution(
+		"Resolve trusted audit support commit", {}, env_overrides=source_env
+	)
+	assert proc.returncode != 0 and not output
+	stable_api = f"repos/{source_repo}/git/ref/tags/stable"
+	proc, output, _ = _run_audit_workflow_resolution(
+		"Resolve trusted audit support commit", {stable_api: {"object": {"type": "commit", "sha": support_sha}}}
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert output == f"support_sha={support_sha}\n"
+	proc, output, _ = _run_audit_workflow_resolution(
+		"Resolve trusted audit support commit",
+		{stable_api: {"object": {"type": "tag", "sha": other_sha}},
+		 f"repos/{source_repo}/git/tags/{other_sha}": {"object": {"type": "commit", "sha": support_sha}}},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert output == f"support_sha={support_sha}\n"
+	proc, output, _ = _run_audit_workflow_resolution(
+		"Resolve trusted audit support commit",
+		{stable_api: {"object": {"type": "tag", "sha": other_sha}},
+		 f"repos/{source_repo}/git/tags/{other_sha}": {"object": {"type": "tag", "sha": "c" * 40}},
+		 f"repos/{source_repo}/git/tags/{'c' * 40}": {"object": {"type": "commit", "sha": support_sha}}},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert output == f"support_sha={support_sha}\n"
+	for bad_responses in ({}, {stable_api: {"object": {"type": "tag", "sha": other_sha}}},
+	                      {stable_api: {"object": {"type": "commit", "sha": "invalid"}}}):
+		proc, output, _ = _run_audit_workflow_resolution("Resolve trusted audit support commit", bad_responses)
+		assert proc.returncode != 0 and not output
+	pinned_env = {"WORKFLOW_JOB_JSON": json.dumps({
+		"workflow_repository": source_repo,
+		"workflow_ref": f"{source_repo}/.github/workflows/security-audit.yml@{support_sha}",
+	})}
+	proc, output, _ = _run_audit_workflow_resolution("Resolve trusted audit support commit", {}, env_overrides=pinned_env)
+	assert proc.returncode == 0, proc.stderr
+	assert output == f"support_sha={support_sha}\n"
+	for invalid_identity in (f"{source_repo}/.github/workflows/security-audit.yml@refs/heads/main",
+	                         f"other/repo/.github/workflows/security-audit.yml@{support_sha}"):
+		proc, output, _ = _run_audit_workflow_resolution(
+			"Resolve trusted audit support commit", {},
+			env_overrides={"WORKFLOW_JOB_JSON": json.dumps({
+				"workflow_repository": source_repo, "workflow_ref": invalid_identity,
+			})},
+		)
+		assert proc.returncode != 0 and not output
+
+
+def test_security_audit_target_resolution_requires_exact_branch_commit() -> None:
+	repo = "owner/consumer"
+	sha = "c" * 40
+	branch = "feature/audit"
+	branch_api = f"repos/{repo}/git/ref/heads/feature%2Faudit"
+	branch_env = {"AUDIT_TARGET_REF_INPUT": branch}
+	proc, _, variables = _run_audit_workflow_resolution(
+		"Resolve audit target", {branch_api: {"ref": f"refs/heads/{branch}", "object": {"type": "commit", "sha": sha}}},
+		env_overrides=branch_env,
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUDIT_BRANCH={branch}\n" in variables
+	assert f"AUDIT_DATA_SHA={sha}\n" in variables
+	for invalid_ref in ("refs/tags/feature/audit", "refs/heads/feature/audit/other"):
+		proc, _, variables = _run_audit_workflow_resolution(
+			"Resolve audit target", {branch_api: {"ref": invalid_ref, "object": {"type": "commit", "sha": sha}}},
+			env_overrides=branch_env,
+		)
+		assert proc.returncode != 0 and not variables
+	for invalid_input in ("-option", "../escape", "feature/audit\nINJECTED=true", "refs/tags/audit"):
+		proc, _, variables = _run_audit_workflow_resolution(
+			"Resolve audit target", {}, env_overrides={"AUDIT_TARGET_REF_INPUT": invalid_input}
+		)
+		assert proc.returncode != 0 and not variables
+	proc, _, variables = _run_audit_workflow_resolution("Resolve audit target", {}, env_overrides=branch_env)
+	assert proc.returncode != 0 and not variables
+	default_api = f"repos/{repo}/git/ref/heads/main"
+	proc, _, variables = _run_audit_workflow_resolution(
+		"Resolve audit target", {default_api: {"ref": "refs/heads/main", "object": {"type": "commit", "sha": sha}}}
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "AUDIT_BRANCH=main\n" in variables
+	assert "SECURITY_AUDIT_TARGET_REF=" not in variables
+	proc, _, variables = _run_audit_workflow_resolution(
+		"Resolve audit target", {}, env_overrides={
+			"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
+			"PROTECTED_MAIN_SHA": sha,
+		}
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUDIT_DATA_SHA={sha}\n" in variables
+
+
+def _run_audit_exclusions_resolution(
+	workspace: Path, configured: str, *, enabled: str = "true"
+) -> tuple[subprocess.CompletedProcess[str], str]:
+	env_path = workspace / "exclusions-env"
+	if env_path.exists():
+		env_path.unlink()
+	env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	env.update({
+		"GITHUB_WORKSPACE": str(workspace),
+		"GITHUB_ENV": str(env_path),
+		"AUDIT_EXCLUSIONS_CONFIG": configured,
+		"AUDIT_ENABLED": enabled,
+	})
+	proc = subprocess.run(
+		["bash", "--noprofile", "--norc", "-e"],
+		input=_audit_workflow_step("Resolve trusted security audit exclusions")["run"],
+		cwd=workspace,
+		env=env,
+		capture_output=True,
+		text=True,
+		encoding="utf-8",
+	)
+	return proc, env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+
+
+def _audit_exclusions_support_repo(workspace: Path) -> Path:
+	(workspace / "scripts").mkdir()
+	trusted = workspace / "scripts" / "security_audit_fp_exclusions.json"
+	trusted.write_bytes((REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json").read_bytes())
+	(workspace / "scripts" / "clean.json").write_text(
+		'{"schema_version":"security_audit_fp_exclusions.v1","rules":[]}', encoding="utf-8"
+	)
+	(workspace / "scripts" / "malformed.json").write_text("{invalid", encoding="utf-8")
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	for args in (
+		("init", "-q"),
+		("add", "scripts"),
+		("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-q", "-m", "support"),
+	):
+		subprocess.run(["git", *args], cwd=workspace, env=git_env, check=True, capture_output=True)
+	return trusted
+
+
+def test_security_audit_exclusions_resolution_accepts_only_unchanged_tracked_support() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-support-") as td:
+		workspace = Path(td)
+		trusted = _audit_exclusions_support_repo(workspace)
+		audit_data = workspace / "audit-data"
+		(audit_data / "scripts").mkdir(parents=True)
+		malicious = audit_data / "scripts" / "security_audit_fp_exclusions.json"
+		malicious.write_text(
+			json.dumps({"schema_version": "security_audit_fp_exclusions.v1", "rules": [
+				{"id": "all", "reason": "suppress everything"},
+			]}), encoding="utf-8"
+		)
+		(workspace / "scripts" / "escape.json").symlink_to(malicious)
+		(workspace / "scripts" / "outside.json").symlink_to(
+			REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json"
+		)
+		(workspace / "scripts" / "internal.json").symlink_to(trusted)
+
+		for configured, expected in (
+			("scripts/security_audit_fp_exclusions.json", trusted),
+			("scripts/clean.json", workspace / "scripts" / "clean.json"),
+			(str(trusted), trusted),
+			("scripts/internal.json", trusted),
+		):
+			proc, variables = _run_audit_exclusions_resolution(workspace, configured)
+			assert proc.returncode == 0, (configured, proc.stderr)
+			assert variables == f"SECURITY_AUDIT_FP_EXCLUSIONS={expected}\n"
+
+		for configured in (
+			"audit-data/scripts/security_audit_fp_exclusions.json",
+			"../audit-data/scripts/security_audit_fp_exclusions.json",
+			"audit-data/../scripts/security_audit_fp_exclusions.json",
+			"scripts/escape.json",
+			"scripts/outside.json",
+			str(malicious),
+			str(REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json"),
+			"scripts/missing.json",
+			"scripts",
+			"scripts/security_audit_fp_exclusions.json\nINJECTED=true",
+		):
+			proc, variables = _run_audit_exclusions_resolution(workspace, configured)
+			assert proc.returncode != 0 and not variables, configured
+			assert "::error::Security audit exclusion catalog" in proc.stdout
+			assert "INJECTED" not in proc.stdout + proc.stderr
+
+		# An untracked in-tree file or modified tracked file is not content
+		# from the verified support commit, even if its path stays in-tree.
+		untracked = workspace / "scripts" / "untracked.json"
+		untracked.write_text("{}", encoding="utf-8")
+		proc, variables = _run_audit_exclusions_resolution(workspace, "scripts/untracked.json")
+		assert proc.returncode != 0 and not variables
+		trusted.write_text("{}", encoding="utf-8")
+		proc, variables = _run_audit_exclusions_resolution(workspace, "scripts/security_audit_fp_exclusions.json")
+		assert proc.returncode != 0 and not variables
+		proc, variables = _run_audit_exclusions_resolution(workspace, "scripts/missing.json", enabled="false")
+		assert proc.returncode == 0 and not variables
+
+
+def test_security_audit_nested_data_cannot_replace_trusted_exclusions() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-trust-boundary-") as td:
+		workspace = Path(td)
+		trusted = _audit_exclusions_support_repo(workspace)
+		repo_dir, first_sha, head_sha = _git_fixture_repo(workspace / "audit-data")
+		malicious = repo_dir / "scripts" / "security_audit_fp_exclusions.json"
+		malicious.parent.mkdir()
+		malicious.write_text(json.dumps({
+			"schema_version": "security_audit_fp_exclusions.v1",
+			"rules": [{"id": "all", "reason": "suppress everything"}],
+		}), encoding="utf-8")
+		for configured, finding_id in (
+			("scripts/security_audit_fp_exclusions.json", "default-branch-finding"),
+			("scripts/clean.json", "explicit-branch-finding"),
+		):
+			proc, variables = _run_audit_exclusions_resolution(workspace, configured)
+			assert proc.returncode == 0, proc.stderr
+			catalog = variables.strip().split("=", 1)[1]
+			state = _security_audit_tracker_state()
+			state["api_responses"] = [[[]]]
+			proc, final_state = _run_security_audit(
+				state,
+				codex_output=json.dumps([_finding_payload(finding_id, file_path="file_b.py")]),
+				cwd=repo_dir,
+				extra_env={
+					"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+					"SECURITY_AUDIT_FP_EXCLUSIONS": catalog,
+					**({"SECURITY_AUDIT_TARGET_REF": "feature/audit"} if finding_id == "explicit-branch-finding" else {}),
+					**({"SECURITY_AUDIT_DIFF_BASE": first_sha, "SECURITY_AUDIT_DIFF_HEAD": head_sha} if finding_id == "explicit-branch-finding" else {}),
+				},
+			)
+			assert proc.returncode == 0, proc.stderr
+			assert f"tracker=#9000 findings=1 followups_created=1" in proc.stdout
+			assert finding_id in "\n".join(final_state.get("issue_create_bodies", []))
+
+		proc, variables = _run_audit_exclusions_resolution(workspace, "scripts/malformed.json")
+		assert proc.returncode == 0, proc.stderr
+		proc, final_state = _run_security_audit(
+			_security_audit_tracker_state(),
+			codex_output=json.dumps([_finding_payload("must-not-publish", file_path="file_b.py")]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_FP_EXCLUSIONS": variables.strip().split("=", 1)[1],
+			},
+		)
+		assert proc.returncode != 0
+		assert final_state.get("issue_comment_args", []) == []
+		assert final_state.get("issue_create_args", []) == []
+
+
+def test_security_audit_workflow_keeps_executable_support_outside_data_checkout() -> None:
+	steps = _audit_workflow_step
+	import yaml
+
+	workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+	all_steps = workflow["jobs"]["security-audit"]["steps"]
+	names = [step["name"] for step in all_steps]
+	assert names.index("Verify trusted audit support") < names.index("Resolve audit target")
+	assert names.index("Verify audit data and resolve scope") < names.index("Install Codex CLI")
+	support = steps("Checkout trusted audit support")["with"]
+	assert support["repository"] == "shubhodeep1/coding-workflows"
+	assert support["ref"] == "${{ steps.resolve_support.outputs.support_sha }}"
+	assert support["token"] == "${{ secrets.GH_PAT || github.token }}"
+	assert support["persist-credentials"] is False
+	data = steps("Checkout audit data")["with"]
+	assert data["ref"] == "${{ env.AUDIT_DATA_SHA }}"
+	assert data["path"] == "audit-data"
+	assert data["persist-credentials"] is False
+	assert data["fetch-depth"] == 0
+	assert "git rev-parse HEAD" in steps("Verify trusted audit support")["run"]
+	assert "git -C audit-data rev-parse HEAD" in steps("Verify audit data and resolve scope")["run"]
+	resolve = steps("Resolve audit target")
+	assert "${{" not in resolve["run"]
+	assert resolve["env"]["AUDIT_TARGET_REF_INPUT"] == "${{ inputs.ref || '' }}"
+	assert "git -C audit-data merge-base" in steps("Verify audit data and resolve scope")["run"]
+	assert names.index("Verify audit data and resolve scope") < names.index("Resolve trusted security audit exclusions") < names.index("Run security audit")
+	assert "${{" not in steps("Resolve trusted security audit exclusions")["run"]
+	assert steps("Run security audit")["working-directory"] == "./audit-data"
+	assert steps("Run security audit")["env"]["SECURITY_AUDIT_SUPPORT_DIR"] == "${{ github.workspace }}"
 
 
 def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> None:
@@ -2755,15 +3112,16 @@ def test_security_audit_workflow_declares_branch_audit_inputs_on_both_triggers()
 	# The input reaches the shell only through env (never interpolated into run:).
 	assert "${{" not in resolve["run"]
 	assert resolve["env"]["AUDIT_TARGET_REF_INPUT"] == "${{ inputs.ref || '' }}"
-	assert "SECURITY_AUDIT_TARGET_REF=" in resolve["run"]
-	assert "SECURITY_AUDIT_DIFF_BASE=" in resolve["run"]
+	scope = next(step for step in steps if step.get("name") == "Verify audit data and resolve scope")
+	assert "SECURITY_AUDIT_TARGET_REF=" in scope["run"]
+	assert "SECURITY_AUDIT_DIFF_BASE=" in scope["run"]
 
 
 def test_security_audit_support_resolution_rejects_untrusted_refs(tmp_path: Path) -> None:
 	import yaml
 
 	workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-	resolve = next(step for step in workflow["jobs"]["security-audit"]["steps"] if step.get("name") == "Resolve trusted audit support")
+	resolve = next(step for step in workflow["jobs"]["security-audit"]["steps"] if step.get("name") == "Resolve trusted audit support commit")
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	gh = bin_dir / "gh"
@@ -2776,7 +3134,6 @@ case "$*" in
 esac
 """, encoding="utf-8")
 	gh.chmod(0o755)
-	env_file = tmp_path / "env"
 	sha = "a" * 40
 	for repo, branch, ref, tag, succeeds in (
 		("shubhodeep1/coding-workflows", {"protected": True, "commit": {"sha": sha}}, {}, {}, True),
@@ -2784,14 +3141,16 @@ esac
 		("consumer/repo", {}, {"object": {"sha": "b" * 40, "type": "tag"}}, {"object": {"sha": sha, "type": "commit"}}, True),
 		("consumer/repo", {}, {"object": {"sha": "b" * 40, "type": "tree"}}, {}, False),
 	):
-		env_file.write_text("", encoding="utf-8")
+		output_file = tmp_path / "output"
+		output_file.write_text("", encoding="utf-8")
 		proc = subprocess.run(["bash", "-c", resolve["run"]], cwd=tmp_path, capture_output=True, text=True, env={
 			**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "GH_TOKEN": "test",
-			"GITHUB_ENV": str(env_file), "SECURITY_AUDIT_SOURCE_REPO": repo,
+			"GITHUB_OUTPUT": str(output_file), "CALLER_REPOSITORY": repo,
+			"WORKFLOW_JOB_JSON": json.dumps({"workflow_repository": "shubhodeep1/coding-workflows", "workflow_ref": "shubhodeep1/coding-workflows/.github/workflows/security-audit.yml@refs/heads/main" if repo == "shubhodeep1/coding-workflows" else "shubhodeep1/coding-workflows/.github/workflows/security-audit.yml@refs/tags/stable"}),
 			"MOCK_BRANCH": json.dumps(branch), "MOCK_REF": json.dumps(ref), "MOCK_TAG": json.dumps(tag),
 		})
 		assert (proc.returncode == 0) == succeeds, proc.stderr
-		assert (f"SECURITY_AUDIT_SUPPORT_SHA={sha}" in env_file.read_text(encoding="utf-8")) == succeeds
+		assert (f"support_sha={sha}" in output_file.read_text(encoding="utf-8")) == succeeds
 
 
 def test_security_audit_default_branch_followups_carry_no_integration_branch() -> None:

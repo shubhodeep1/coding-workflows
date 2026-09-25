@@ -58,124 +58,232 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - name: Checkout default branch
-        uses: actions/checkout@v5
-        with:
-          # Full history: the incremental scope resolver in
-          # scripts/security_audit.sh diffs HEAD against the last audited
-          # commit recorded on the tracker issue body.
-          fetch-depth: 0
-          ref: ${{ inputs.ref || github.event.repository.default_branch }}
-          path: audit-target
-          persist-credentials: false
-
-      - name: Resolve trusted audit support
+      - name: Resolve trusted audit support commit
+        id: resolve_support
         env:
+          WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          CALLER_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-          SECURITY_AUDIT_SOURCE_REPO: ${{ github.repository || '' }}
         run: |
           set -euo pipefail
-          # Neither target checkout nor the audit script has authenticated
-          # support identity metadata. Resolve it once before any support
-          # execution; tag-object reads only peel annotated release tags.
-          if [ "${SECURITY_AUDIT_SOURCE_REPO}" = "shubhodeep1/coding-workflows" ]; then
-            branch_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
-            [ "$(jq -r '.protected // false' <<< "${branch_json}")" = "true" ] || exit 1
-            support_sha="$(jq -r '.commit.sha // empty' <<< "${branch_json}")"
-          else
-            tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
-            support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
-            object_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
-            for _depth in 1 2 3; do
-              [ "${object_type}" = "tag" ] || break
-              [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
-              tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
-              support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
-              object_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
-            done
-            [ "${object_type}" = "commit" ] || exit 1
+          support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          source_ref='^shubhodeep1/coding-workflows/\.github/workflows/security-audit\.yml@refs/heads/[^[:space:]]+$'
+          stable_ref='^shubhodeep1/coding-workflows/\.github/workflows/security-audit\.yml@refs/tags/stable$'
+          consumer_pin='^shubhodeep1/coding-workflows/\.github/workflows/security-audit\.yml@[0-9a-f]{40}$'
+          if [ "${support_workflow_repository}" != "shubhodeep1/coding-workflows" ] ||
+             { [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] && [[ ! "${support_workflow_ref}" =~ ${source_ref} ]]; } ||
+             { [ "${CALLER_REPOSITORY}" != "shubhodeep1/coding-workflows" ] &&
+               [[ ! "${support_workflow_ref}" =~ ${stable_ref} ]] && [[ ! "${support_workflow_ref}" =~ ${consumer_pin} ]]; }; then
+            echo "::error::Security audit support workflow identity is unapproved."
+            exit 1
           fi
-          [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          echo "SECURITY_AUDIT_SUPPORT_SHA=${support_sha}" >> "$GITHUB_ENV"
+          if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+            # The event/workflow SHA can follow a dispatched source branch.
+            # No earlier step has read the protected main branch in this job.
+            if ! support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)" ||
+               ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
+              echo "::error::Security audit support main branch is not confirmed protected."
+              exit 1
+            fi
+            support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
+          elif [[ "${support_workflow_ref}" =~ ${consumer_pin} ]]; then
+            support_sha="${support_workflow_ref##*@}"
+          else
+            # No existing lookup in this job resolves the release tag. A
+            # commits/stable read is ambiguous when a branch shares its name.
+            if ! support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"; then
+              echo "::error::Security audit support stable tag is unavailable."
+              exit 1
+            fi
+            support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+            support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            for _depth in 1 2 3; do
+              [ "${support_tag_type}" = "tag" ] || break
+              [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              if ! support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"; then
+                echo "::error::Security audit support annotated tag is unavailable."
+                exit 1
+              fi
+              support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+              support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            done
+            if [ "${support_tag_type}" != "commit" ]; then
+              echo "::error::Security audit support stable tag is not a commit."
+              exit 1
+            fi
+          fi
+          if [[ ! "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Security audit support did not resolve to a commit SHA."
+            exit 1
+          fi
+          echo "support_sha=${support_sha}" >> "$GITHUB_OUTPUT"
+          if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+            echo "protected_main_sha=${support_sha}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Checkout trusted audit support
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ env.SECURITY_AUDIT_SUPPORT_SHA }}
+          ref: ${{ steps.resolve_support.outputs.support_sha }}
           token: ${{ secrets.GH_PAT || github.token }}
-          path: .audit-support
           persist-credentials: false
+          fetch-depth: 1
 
       - name: Verify trusted audit support
+        env:
+          SUPPORT_SHA: ${{ steps.resolve_support.outputs.support_sha }}
         run: |
           set -euo pipefail
-          [[ "${SECURITY_AUDIT_SUPPORT_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          [ "$(git -C .audit-support rev-parse HEAD)" = "${SECURITY_AUDIT_SUPPORT_SHA}" ] || exit 1
-          [ -f .audit-support/scripts/security_audit.sh ] || exit 1
-          echo "SECURITY_AUDIT_SUPPORT_DIR=${GITHUB_WORKSPACE}/.audit-support" >> "$GITHUB_ENV"
+          if [[ ! "${SUPPORT_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [ "$(git rev-parse HEAD 2>/dev/null)" != "${SUPPORT_SHA}" ] ||
+             [ "$(git rev-parse --show-toplevel 2>/dev/null)" != "${GITHUB_WORKSPACE}" ]; then
+            echo "::error::Security audit support checkout is not the approved commit."
+            exit 1
+          fi
 
       - name: Resolve audit target
         env:
           AUDIT_TARGET_REF_INPUT: ${{ inputs.ref || '' }}
           AUDIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PROTECTED_MAIN_SHA: ${{ steps.resolve_support.outputs.protected_main_sha }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
-          if [ -z "${AUDIT_TARGET_REF_INPUT}" ] || [ "${AUDIT_TARGET_REF_INPUT}" = "${AUDIT_DEFAULT_BRANCH}" ]; then
-            echo "SECURITY_AUDIT_TARGET: default branch ${AUDIT_DEFAULT_BRANCH}"
-            exit 0
-          fi
-          # fetch-depth: 0 above fetched every branch, so the default
-          # branch's remote-tracking ref is available for the merge-base.
-          if ! audit_diff_base="$(git -C audit-target merge-base "refs/remotes/origin/${AUDIT_DEFAULT_BRANCH}" HEAD)"; then
-            echo "::error::Could not compute the merge-base of ${AUDIT_TARGET_REF_INPUT} with ${AUDIT_DEFAULT_BRANCH}."
+          audit_branch="${AUDIT_TARGET_REF_INPUT:-${AUDIT_DEFAULT_BRANCH}}"
+          if [ -z "${AUDIT_DEFAULT_BRANCH}" ] ||
+             ! git check-ref-format --branch "${AUDIT_DEFAULT_BRANCH}" >/dev/null 2>&1 ||
+             ! git check-ref-format --branch "${audit_branch}" >/dev/null 2>&1 ||
+             [ -e "${GITHUB_WORKSPACE}/audit-data" ] || [ -L "${GITHUB_WORKSPACE}/audit-data" ]; then
+            echo "::error::Security audit branch or checkout path is invalid."
             exit 1
           fi
-          audit_diff_head="$(git -C audit-target rev-parse HEAD)"
-          echo "SECURITY_AUDIT_TARGET: branch ${AUDIT_TARGET_REF_INPUT} range ${audit_diff_base}..${audit_diff_head}"
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ] &&
+             [ "${audit_branch}" = "main" ] && [[ "${PROTECTED_MAIN_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            # The earlier protected-main lookup already supplied this exact
+            # branch head. On a missing cache value use the branch API below.
+            audit_sha="${PROTECTED_MAIN_SHA}"
+          else
+            # No other read supplies this head. Require a heads/ ref, never a
+            # tag or prefix match; URL-encode even valid slash-bearing names.
+            encoded_branch="$(jq -nr --arg ref "${audit_branch}" '$ref | @uri')"
+            if ! audit_ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${encoded_branch}")"; then
+              echo "::error::Security audit branch head is unavailable."
+              exit 1
+            fi
+            audit_ref="$(jq -r '.ref // ""' <<< "${audit_ref_json}")"
+            audit_type="$(jq -r '.object.type // ""' <<< "${audit_ref_json}")"
+            audit_sha="$(jq -r '.object.sha // ""' <<< "${audit_ref_json}")"
+            if [ "${audit_ref}" != "refs/heads/${audit_branch}" ] ||
+               [ "${audit_type}" != "commit" ] || [[ ! "${audit_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Security audit branch head is not an exact commit ref."
+              exit 1
+            fi
+          fi
           {
-            echo "SECURITY_AUDIT_TARGET_REF=${AUDIT_TARGET_REF_INPUT}"
+            echo "AUDIT_DATA_SHA=${audit_sha}"
+            echo "AUDIT_DEFAULT_BRANCH=${AUDIT_DEFAULT_BRANCH}"
+            echo "AUDIT_BRANCH=${audit_branch}"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout audit data
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AUDIT_DATA_SHA }}
+          path: audit-data
+          persist-credentials: false
+          # The incremental scope resolver needs the last audited commit and
+          # the default branch's remote-tracking ref for merge-base.
+          fetch-depth: 0
+
+      - name: Verify audit data and resolve scope
+        run: |
+          set -euo pipefail
+          if [ "$(git -C audit-data rev-parse --show-toplevel 2>/dev/null)" != "${GITHUB_WORKSPACE}/audit-data" ] ||
+             [ "$(git -C audit-data rev-parse HEAD 2>/dev/null)" != "${AUDIT_DATA_SHA}" ]; then
+            echo "::error::Security audit data checkout does not match the resolved branch head."
+            exit 1
+          fi
+          if [ "${AUDIT_BRANCH}" = "${AUDIT_DEFAULT_BRANCH}" ]; then
+            echo "SECURITY_AUDIT_TARGET: default branch ${AUDIT_DEFAULT_BRANCH} commit ${AUDIT_DATA_SHA}"
+            exit 0
+          fi
+          if ! audit_diff_base="$(git -C audit-data merge-base "refs/remotes/origin/${AUDIT_DEFAULT_BRANCH}" "${AUDIT_DATA_SHA}")"; then
+            echo "::error::Could not compute the security audit branch merge-base."
+            exit 1
+          fi
+          echo "SECURITY_AUDIT_TARGET: branch ${AUDIT_BRANCH} range ${audit_diff_base}..${AUDIT_DATA_SHA}"
+          {
+            echo "SECURITY_AUDIT_TARGET_REF=${AUDIT_BRANCH}"
             echo "SECURITY_AUDIT_DIFF_BASE=${audit_diff_base}"
-            echo "SECURITY_AUDIT_DIFF_HEAD=${audit_diff_head}"
+            echo "SECURITY_AUDIT_DIFF_HEAD=${AUDIT_DATA_SHA}"
           } >> "$GITHUB_ENV"
 
       - name: Install Codex CLI
-        uses: ./.audit-support/.github/actions/install-codex
+        uses: ./.github/actions/install-codex
 
       - name: Create Codex config
         run: |
           set -euo pipefail
           # The catalog path MUST be absolute: codex resolves a relative
           # model_catalog_json against CODEX_HOME (~/.codex) and exits with
-          # "No such file or directory (os error 2)". Both source and
-          # consumer runs use the verified absolute support checkout.
-          bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/write_codex_config.sh" \
+          # "No such file or directory (os error 2)".
+          bash "${GITHUB_WORKSPACE}/scripts/write_codex_config.sh" \
             --model "openai/gpt-6-sol" \
             --reasoning xhigh \
-            --catalog-path "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_model_catalog.json"
+            --catalog-path "${GITHUB_WORKSPACE}/scripts/codex_model_catalog.json"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
-      - name: Run security audit
+      - name: Resolve trusted security audit exclusions
         env:
+          AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
+          AUDIT_EXCLUSIONS_CONFIG: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}
+        run: |
+          set -euo pipefail
+          # Preserve the audit script's disabled-run behavior: no catalog is
+          # needed when it exits before loading exclusions.
+          case "${AUDIT_ENABLED,,}" in
+            1|true|yes|on) ;;
+            *) exit 0 ;;
+          esac
+          # The audit-data checkout is nested inside the support checkout.
+          # Resolve both the spelling and the destination before handing the
+          # catalog to the audit script, which otherwise prefers audit-data.
+          support_root="$(realpath -e -- "${GITHUB_WORKSPACE}")"
+          if [[ "${AUDIT_EXCLUSIONS_CONFIG}" = /* ]]; then
+            catalog_candidate="${AUDIT_EXCLUSIONS_CONFIG}"
+          else
+            catalog_candidate="${support_root}/${AUDIT_EXCLUSIONS_CONFIG}"
+          fi
+          if [[ "${catalog_candidate}" == *$'\n'* || "${catalog_candidate}" == *$'\r'* ]] ||
+             [[ "${catalog_candidate}" == "${support_root}/audit-data" || "${catalog_candidate}" == "${support_root}/audit-data/"* ]] ||
+             ! catalog_path="$(realpath -e -- "${catalog_candidate}" 2>/dev/null)" ||
+             [[ "${catalog_path}" != "${support_root}/"* || "${catalog_path}" == "${support_root}/audit-data/"* ]] ||
+             [ ! -f "${catalog_path}" ]; then
+            echo "::error::Security audit exclusion catalog must be a regular file in trusted support (not audit data)."
+            exit 1
+          fi
+          catalog_relative="${catalog_path#"${support_root}/"}"
+          if ! git -C "${support_root}" ls-files --error-unmatch -- "${catalog_relative}" >/dev/null 2>&1 ||
+             ! git -C "${support_root}" diff --quiet HEAD -- "${catalog_relative}"; then
+            echo "::error::Security audit exclusion catalog is not unchanged tracked support content."
+            exit 1
+          fi
+          echo "SECURITY_AUDIT_FP_EXCLUSIONS=${catalog_path}" >> "$GITHUB_ENV"
+
+      - name: Run security audit
+        working-directory: ./audit-data
+        env:
+          SECURITY_AUDIT_SUPPORT_DIR: ${{ github.workspace }}
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PYTHONDONTWRITEBYTECODE: "1"
           SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
           SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
-          SECURITY_AUDIT_FP_EXCLUSIONS: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}
           SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}
           SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}
         run: |
           set -euo pipefail
-          # Never let the audited tree supply the exclusion policy. Operator
-          # overrides are resolved against the verified support commit too.
-          if [[ "${SECURITY_AUDIT_FP_EXCLUSIONS}" != /* ]]; then
-            SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_SUPPORT_DIR}/${SECURITY_AUDIT_FP_EXCLUSIONS}"
-            export SECURITY_AUDIT_FP_EXCLUSIONS
-          fi
-          case "$(realpath -m -- "${SECURITY_AUDIT_FP_EXCLUSIONS}")" in
-            "${GITHUB_WORKSPACE}/audit-target"/*) echo "::error::Audit policy cannot come from the target checkout."; exit 1 ;;
-          esac
-          cd audit-target
           bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit.sh"
