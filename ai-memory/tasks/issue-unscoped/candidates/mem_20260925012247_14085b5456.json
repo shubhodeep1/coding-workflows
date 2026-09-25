@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_merge_precheck.py:45-52 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `_section` assertion is reported to check for a hardcoded absolute script path that does not match the workflow\u2019s `${SUPPORT_SCRIPTS_DIR}` reference, causing the test to fail.\n  WHY: The reviewers report that the expected path is absent from the raw workflow section, so the assertion raises and blocks the test module.\n- tests/test_review_autofix_merge_precheck.py:75 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The detect-step test passes `RESOLVER_TOUCHED_FILE` as an end marker, but the text assembled by `_workflow()` does not contain that marker.\n  WHY: `wf.find(end_marker, start)` returns -1, causing the section-boundary assertion to fail.\n- scripts/check_resolver_diff.sh: while IFS= read -r touched; do ... *.py) branch with `run_isolated_validator_python -c '...read_text...'` near the end of the file | severity=medium | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Python syntax validation is reported to fail when a touched `.py` path was deleted by the resolver.\n  WHY: `read_text` raises `FileNotFoundError` for the deleted path, while the cited test expects the deleted path to be accepted.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_merge_precheck.py:45-52 | severity=high | confidence=5\n  PROBLEM: The test assertion checks for a hardcoded absolute script path that is no longer present in the workflow step.\n  WHY: The workflow step uses `bash \"${SUPPORT_SCRIPTS_DIR}/{script_name}\"`, so the assertion fails because the expected absolute path is not found in the workflow section.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_merge_precheck.py:45-52 | severity=high | confidence=5\n  PROBLEM: The assertion checks for a literal hardcoded path with a `$/` prefix that does not exist in the workflow YAML.\n  WHY: The workflow step uses `bash \"${SUPPORT_SCRIPTS_DIR}/review_detect_merge_conflicts.sh\"` (or the pre-review topology script), so the asserted path is absent and raises `AssertionError`.\n- tests/test_review_autofix_merge_precheck.py:75 | severity=high | confidence=5\n  PROBLEM: The end marker `\"RESOLVER_TOUCHED_FILE\"` is not present in the concatenated text returned by `_workflow()`.\n  WHY: `wf.find(end_marker, start)` returns -1, so the upstream assertion `assert end != -1` fails.\n- scripts/check_resolver_diff.sh: while IFS= read -r touched; do ... *.py) branch with `run_isolated_validator_python -c '...read_text...'` near the end of the file | severity=medium | confidence=3\n  PROBLEM: If a `.py` path listed in the touched set no longer exists in the repo, the validator invocation raises `FileNotFoundError`.\n  WHY: The Python command exits non-zero for a missing path, but `test_resolver_syntax_validation_accepts_deleted_python_path` expects `returncode == 0` and `\"touched=1 conflicted=1\"` in stdout.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_merge_precheck.py:45-52 | severity=high | confidence=5\n  PROBLEM: The assertion checks for a hardcoded absolute runner path that does not exist in the workflow YAML.\n  WHY: The workflow YAML is read as raw text and contains `${SUPPORT_SCRIPTS_DIR}/{script_name}`, so the asserted path is absent and raises `AssertionError`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_review_autofix_merge_precheck.py:49 | severity=high | confidence=5\n  PROBLEM: The assertion checks for a hardcoded absolute runner path containing a specific CI run ID instead of the `${SUPPORT_SCRIPTS_DIR}` variable reference.\n  WHY: The workflow step contains `bash \"${SUPPORT_SCRIPTS_DIR}/review_detect_merge_conflicts.sh\"`, so the asserted literal path is absent and raises `AssertionError`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d597691c0657fad810c759d15e2c36335e8bc587fcae79d2130b3c5b6c2a9770",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4397,
+    "run_id": "36080429551",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36080429551",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925012247_14085b5456",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4397,
+    "run_id": "36080429551"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T01:22:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
