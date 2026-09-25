@@ -2030,7 +2030,8 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 		"${FILTER_SUMMARY_FILE}" \
 		"${ADVISORY_FINDINGS_FILE}" \
 		"${VERIFIED_FIXED_FINDING_IDS_FILE}" \
-		"${SECURITY_AUDIT_FINDINGS_OUT}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
+		"${SECURITY_AUDIT_FINDINGS_OUT}" \
+		"${SECURITY_AUDIT_LINE_OWNERSHIP}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -2044,6 +2045,7 @@ summary_path = Path(sys.argv[2])
 advisory_findings_path = Path(sys.argv[3])
 verified_fixed_finding_ids_path = Path(sys.argv[4])
 output_path = Path(sys.argv[5])
+ownership_mode = sys.argv[6]
 count_keys = (
 	"kept",
 	"advisory",
@@ -2085,14 +2087,19 @@ if counts["kept"] != len(findings):
 	raise SystemExit("security-audit findings packaging received a mismatched kept count")
 if counts["advisory"] != len(advisory_findings):
 	raise SystemExit("security-audit findings packaging received a mismatched advisory count")
+if ownership_mode not in ("file", "project-lines"):
+	raise SystemExit("security-audit findings packaging received invalid ownership mode")
 
 payload = {
 	"schema_version": "security_audit_findings.v1",
 	"findings": findings,
-	"advisory_findings": advisory_findings,
-	"verified_fixed_finding_ids": verified_fixed_finding_ids,
 	"counts": counts,
 }
+if ownership_mode == "project-lines":
+	payload["advisory_findings"] = advisory_findings
+	payload["verified_fixed_finding_ids"] = verified_fixed_finding_ids
+else:
+	del counts["advisory"]
 
 temporary_path: Path | None = None
 try:
