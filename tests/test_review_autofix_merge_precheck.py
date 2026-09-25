@@ -133,10 +133,7 @@ def test_pre_review_gate_preserves_pre_assembled_static_artifact():
         "- name: Pre-review deterministic merge-topology gate",
         "\n      - name: Run reviewer models",
     )
-    clean_cmd = (
-        "git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main "
-        "-e pre_assembled_static.txt"
-    )
+    clean_cmd = "git clean -ffdx -e .codex-workflow-src -e pre_assembled_static.txt"
     assert section.count(clean_cmd) >= 3, (
         "Expected every pre-review git clean invocation to preserve "
         "pre_assembled_static.txt for the later reviewer step"
@@ -197,7 +194,7 @@ def test_pre_editor_stale_base_gate_skipped_after_early_short_circuit():
     the older pre-editor stale-base gate should not perform redundant work."""
     pre_editor_step = _section(
         "- name: Pre-editor stale-base gate",
-        "\n      - name: Install project dependencies (best-effort)",
+        "\n      - name: Switch reasoning effort for editor",
     )
     assert "env.AUTOFIX_STALE_BASE_SKIP != 'true'" in pre_editor_step, (
         "Expected Pre-editor stale-base gate to skip when the early gate "

@@ -278,8 +278,16 @@ def test_validate_workflow_stages_workspace_helper_and_uses_workspace_paths() ->
 		"${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_issue }}\n"
 	)
 	prepare_runtime_step = _step(VALIDATE_WORKFLOW, "Prepare behavioural smoke runtime cache path")
-	assert 'mkdir -p "${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/"' in _step_run_text(VALIDATE_WORKFLOW, "Prepare behavioural smoke runtime cache path")
-	assert prepare_runtime_step.get("if") == "steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''"
+	prepare_runtime_text = _step_run_text(VALIDATE_WORKFLOW, "Prepare behavioural smoke runtime cache path")
+	# Runtime cache is isolated per PR number (a stale cross-PR runtime dir
+	# must never leak into a different PR's behavioural smoke run), so the
+	# directory is created under a pr-<number> subdirectory and the whole
+	# .ai/review_runtime tree is wiped first; the pr_number gate moved from
+	# the step-level `if:` into the bash body alongside that rm -rf.
+	assert 'workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"' in prepare_runtime_text
+	assert 'rm -rf "${workspace_root}/.ai/review_runtime"' in prepare_runtime_text
+	assert 'mkdir -p "${workspace_root}/.ai/review_runtime/pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}"' in prepare_runtime_text
+	assert prepare_runtime_step.get("if") == "steps.behavioural_smoke_gate.outputs.enabled == 'true'"
 	behavioural_smoke_restore_step = _step(VALIDATE_WORKFLOW, "Restore behavioural smoke runtime cache")
 	assert behavioural_smoke_restore_step.get("uses") == "actions/cache/restore@v5"
 	assert _step(VALIDATE_WORKFLOW, "Restore validate hints cache").get("with", {}).get("path") == (
@@ -292,7 +300,11 @@ def test_validate_workflow_stages_workspace_helper_and_uses_workspace_paths() ->
 	)
 	behavioural_smoke_stage_in_step = _step(VALIDATE_WORKFLOW, "Stage restored behavioural smoke runtime cache into workspace")
 	assert behavioural_smoke_stage_in_step.get("if") == behavioural_smoke_restore_step.get("if")
-	assert 'cp -a "${ledger_cache_staging_root}/.ai/review_runtime/." "${ledger_cache_workspace_root}/.ai/review_runtime/"' in _step_run_text(VALIDATE_WORKFLOW, "Stage restored behavioural smoke runtime cache into workspace")
+	stage_in_text = _step_run_text(VALIDATE_WORKFLOW, "Stage restored behavioural smoke runtime cache into workspace")
+	# The staged-in runtime dir is also pr-<number>-scoped, matching the
+	# "Prepare behavioural smoke runtime cache path" step above.
+	assert 'review_runtime_rel=".ai/review_runtime/pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}"' in stage_in_text
+	assert 'cp -a "${ledger_cache_staging_root}/${review_runtime_rel}/." "${ledger_cache_workspace_root}/${review_runtime_rel}/"' in stage_in_text
 	assert "${{ steps.workspace_state.outputs.workspace_path }}/validation/" in str(_step(VALIDATE_WORKFLOW, "Upload validation artifacts").get("with", {}).get("path"))
 
 

@@ -284,6 +284,7 @@ def _render_conflict_resolver_prompt(
 	env.pop("OLDPWD", None)
 	env.update({
 		"SUPPORT_PROMPTS_DIR": str(prompts_dir),
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 		"RUNTIME_DIR": str(runtime),
 		"CONFLICT_RESOLVER_PROMPT_FILE": str(prompt_file),
 		# Empty / non-orchestrator values so the integration-sync
@@ -311,13 +312,13 @@ def _render_conflict_resolver_prompt(
 
 	script_text = PREPARE_SCRIPT.read_text(encoding="utf-8")
 	lines = script_text.splitlines(keepends=True)
-	# Slice the prompt-render block: from the env-prefixed `PROMPT_TPL=...`
-	# line that drives the python one-liner through the end of the
-	# smoke-override post-processing block. Anchored on stable lines
-	# present in the committed script.
+	# Slice the prompt-render block: from the isolated-python launcher call
+	# that drives the python one-liner through the end of the smoke-override
+	# post-processing block. Anchored on stable lines present in the
+	# committed script.
 	start = next(
 		i for i, ln in enumerate(lines)
-		if ln.rstrip("\n") == 'PROMPT_TPL="${PROMPT_TPL}" \\'
+		if ln.rstrip("\n") == '_gh_helpers_run_isolated_python \\'
 	)
 	end = next(
 		i for i, ln in enumerate(lines[start:], start=start)
@@ -328,6 +329,7 @@ def _render_conflict_resolver_prompt(
 	block = (
 		'PROMPT_TPL="${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"\n'
 		"set -euo pipefail\n"
+		f'source "{REPO_ROOT / "scripts" / "gh_helpers.sh"}"\n'
 		+ "".join(lines[start:end])
 	)
 	subprocess.run(

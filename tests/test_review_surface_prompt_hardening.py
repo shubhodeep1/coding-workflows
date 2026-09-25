@@ -233,16 +233,18 @@ def _render_integration_conflict_prompt(tmp_p: Path, payload: str) -> str:
 	start = next(
 		i
 		for i in range(end, -1, -1)
-		if script_lines[i].lstrip().startswith("PROMPT_TPL=")
+		if script_lines[i].strip() == '_gh_helpers_run_isolated_python \\'
 	)
 	block = (
 		'PROMPT_TPL="${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"\n'
 		"set -euo pipefail\n"
+		f'source "{GH_HELPERS}"\n'
 		+ "".join(script_lines[start : end + 1])
 	)
 	env = os.environ.copy()
 	env.update({
 		"SUPPORT_PROMPTS_DIR": str(REPO_ROOT / "prompts"),
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 		"RUNTIME_DIR": str(runtime),
 		"CONFLICT_RESOLVER_PROMPT_FILE": str(prompt_file),
 		"TARGET_BRANCH": "orchestrator/project-9999",

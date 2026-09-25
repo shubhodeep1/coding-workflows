@@ -107,12 +107,29 @@ def _run_stage_chain(
 	*,
 	mock_bin_dir: Path | None,
 	consolidator_enabled: str,
+	support_scripts_dir: Path | None = None,
 ) -> dict[str, subprocess.CompletedProcess[str]]:
+	effective_support_dir = support_scripts_dir or (REPO_ROOT / "scripts")
+	if support_scripts_dir is not None:
+		# review_consolidate.sh now sources codex_helpers.sh unconditionally
+		# to reach the model-provider-broker isolation hardening. The real
+		# codex_helpers.sh requires OPENROUTER_API_KEY and a live broker
+		# process, so a caller that wants the mocked opencode binary to
+		# actually run (rather than fail open before ever reaching it)
+		# supplies a stub codex_helpers.sh that skips the broker.
+		shutil.copy2(REPO_ROOT / "scripts" / "gh_helpers.sh", effective_support_dir / "gh_helpers.sh")
+		shutil.copy2(REPO_ROOT / "scripts" / "opencode_helpers.sh", effective_support_dir / "opencode_helpers.sh")
+		(effective_support_dir / "codex_helpers.sh").write_text(
+			"model_provider_broker_start()\n{\n\texport MODEL_PROVIDER_BROKER_BASE_URL='http://127.0.0.1:1'\n}\n"
+			"model_provider_broker_stop()\n{\n\t:\n}\n"
+			"model_provider_broker_exec_sanitized()\n{\n\t\"$@\"\n}\n",
+			encoding="utf-8",
+		)
 	env = _isolated_test_env(
 		{
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"RUNTIME_DIR": str(runtime_dir),
-			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"SUPPORT_SCRIPTS_DIR": str(effective_support_dir),
 			"SUPPORT_PROMPTS_DIR": str(REPO_ROOT / "prompts"),
 			"PR_NUMBER": "4242",
 			"AUTOFIX_ITERATION": "1",
@@ -200,8 +217,16 @@ def test_chain_happy_path_with_mocked_consolidator() -> None:
 		runtime = _seed_workspace_repo(workspace)
 		mock_bin = workspace / "mock_bin"
 		_install_mock_opencode(mock_bin, consolidator_fixture="consolidator_well_formed.txt")
+		support_scripts_dir = workspace / "support"
+		support_scripts_dir.mkdir(parents=True, exist_ok=True)
 
-		results = _run_stage_chain(workspace, runtime, mock_bin_dir=mock_bin, consolidator_enabled="1")
+		results = _run_stage_chain(
+			workspace,
+			runtime,
+			mock_bin_dir=mock_bin,
+			consolidator_enabled="1",
+			support_scripts_dir=support_scripts_dir,
+		)
 		for stage, result in results.items():
 			assert result.returncode == 0, f"{stage} failed: {result.stderr}"
 

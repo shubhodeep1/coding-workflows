@@ -62,9 +62,13 @@ def test_codex_helpers_pass_rejections_file_and_expose_count_helpers() -> None:
 	assert "model_provider_broker_last_policy_rejection()" in helpers
 	# Only deterministic 4xx policy rejections count; relayed 502s do not.
 	assert """grep -cE '"status":[[:space:]]*4[0-9]{2}([^0-9]|$)' -- "${rejections_file}\"""" in helpers
-	# stop() cleans the file and the env var like the ready/pid files.
+	# stop() cleans the file and the env var like the ready/pid files: both the
+	# rm -f and the unset are unconditional (unlike the deferred-access-restore
+	# vars below), so MODEL_PROVIDER_BROKER_REJECTIONS_FILE rides in the same
+	# unconditional unset line as PID_FILE/READY_FILE rather than alongside
+	# ACL_CAPTURED (which is only unset when access restoration is not deferred).
 	assert '[ -z "${MODEL_PROVIDER_BROKER_REJECTIONS_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_REJECTIONS_FILE}"' in helpers
-	assert "unset MODEL_PROVIDER_BROKER_ACL_CAPTURED MODEL_PROVIDER_BROKER_REJECTIONS_FILE" in helpers
+	assert "unset MODEL_PROVIDER_BROKER_BASE_URL MODEL_PROVIDER_BROKER_TOKEN MODEL_PROVIDER_BROKER_PID_FILE MODEL_PROVIDER_BROKER_READY_FILE MODEL_PROVIDER_BROKER_REJECTIONS_FILE" in helpers
 
 
 def test_editor_loop_snapshots_rejections_before_each_attempt() -> None:

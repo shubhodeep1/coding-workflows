@@ -110,7 +110,7 @@ def test_empty_effective_prompt_is_guarded_before_launch() -> None:
 	assert '"${reviewer_effective_prompt_bytes}" -lt "${reviewer_base_prompt_bytes}"' in text, (
 		"the pre-launch guard should restore a non-empty but truncated attempt prompt"
 	)
-	command_start = text.find('reviewer_codex_cmd=(\n    bash -c')
+	command_start = text.find('reviewer_codex_cmd=(\n\tenv "OPENROUTER_API_KEY=')
 	assert command_start != -1, "expected the OpenCode command-array assignment"
 	command_block = text[command_start:launch]
 	assert 'opencode_run_cmd "$@"' in command_block

@@ -70,6 +70,7 @@ def _run_consolidator(
 	mock_output, mock_config_writer = _install_mock_opencode(mock_bin, FIXTURES / output_fixture_name, exit_code=codex_exit_code)
 	effective_support_dir = support_scripts_dir or (REPO_ROOT / "scripts")
 	if support_scripts_dir is not None:
+		shutil.copy2(REPO_ROOT / "scripts" / "gh_helpers.sh", effective_support_dir / "gh_helpers.sh")
 		shutil.copy2(REPO_ROOT / "scripts" / "opencode_helpers.sh", effective_support_dir / "opencode_helpers.sh")
 		(effective_support_dir / "codex_helpers.sh").write_text(
 			"model_provider_broker_start()\n{\n\texport MODEL_PROVIDER_BROKER_BASE_URL='http://127.0.0.1:1'\n}\n"
@@ -176,6 +177,7 @@ def _render_rb_judge_prompt(
 			f"source {shlex.quote(str(GH_HELPERS))}\n"
 			+ "\n\n".join(
 				[
+					_extract_shell_function(script_text, "review_rb_run_isolated_python"),
 					_extract_shell_function(script_text, "flag_enabled"),
 					_extract_shell_function(script_text, "append_review_rb_semble_query_section"),
 					_extract_shell_function(script_text, "render_review_rb_semble_prefetch"),
@@ -234,6 +236,9 @@ def _extract_shell_function(script_text: str, name: str) -> str:
 	start = None
 	for idx, line in enumerate(lines):
 		if line.startswith(f"{name}() {{"):
+			start = idx
+			break
+		if line == f"{name}()" and idx + 1 < len(lines) and lines[idx + 1] == "{":
 			start = idx
 			break
 	if start is None:
@@ -337,7 +342,13 @@ def test_prompts_and_workflow_wire_rereview_and_review_state_contract() -> None:
 
 
 def test_consolidator_injects_prior_round_decisions_and_logs_rereview_skip() -> None:
-	result, runtime_dir = _run_consolidator("phase_f_residual_suppressed.txt")
+	with tempfile.TemporaryDirectory(prefix="consolidator-prior-round-") as td:
+		support_scripts_dir = Path(td) / "support"
+		support_scripts_dir.mkdir(parents=True, exist_ok=True)
+		result, runtime_dir = _run_consolidator(
+			"phase_f_residual_suppressed.txt",
+			support_scripts_dir=support_scripts_dir,
+		)
 	assert result.returncode == 0, result.stderr
 
 	prompt = (runtime_dir / "review_consolidator_prompt.txt").read_text(encoding="utf-8")
@@ -385,7 +396,13 @@ def test_consolidator_does_not_treat_all_overrides_as_wontfix() -> None:
 
 
 def test_consolidator_allows_worsened_prior_issue_to_reemit() -> None:
-	result, runtime_dir = _run_consolidator("phase_f_worsened_reemit.txt")
+	with tempfile.TemporaryDirectory(prefix="consolidator-worsened-reemit-") as td:
+		support_scripts_dir = Path(td) / "support"
+		support_scripts_dir.mkdir(parents=True, exist_ok=True)
+		result, runtime_dir = _run_consolidator(
+			"phase_f_worsened_reemit.txt",
+			support_scripts_dir=support_scripts_dir,
+		)
 	assert result.returncode == 0, result.stderr
 
 	raw = (runtime_dir / "consolidator_raw.txt").read_text(encoding="utf-8")

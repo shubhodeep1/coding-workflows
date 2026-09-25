@@ -6874,7 +6874,7 @@ def test_editor_preflight_mode_covers_every_guard() -> None:
 	# commented-out guard or the comment text itself is not a guard.
 	guarded = text.replace("CODEX_STALL_GUARD_HELPER=", ': "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"\nCODEX_STALL_GUARD_HELPER=', 1)
 	assert _editor_preflight_guard_gaps(guarded) == {"OPENROUTER_API_KEY"}
-	covered = guarded.replace("\t\t# same change.\n\t)", "\t\t# same change.\n\t\tOPENROUTER_API_KEY\n\t)", 1)
+	covered = guarded.replace("\t\tGITHUB_ENV\n\t)", "\t\tGITHUB_ENV\n\t\tOPENROUTER_API_KEY\n\t)", 1)
 	assert covered != guarded
 	assert _editor_preflight_guard_gaps(covered) == set()
 
@@ -6899,23 +6899,43 @@ def test_editor_preflight_mode_reports_each_check_and_fails_fast() -> None:
 			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			"RUNTIME_DIR": str(runtime_dir),
 			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			# setup_editor_isolation() (always invoked on a real editor run)
+			# guards these three, so the preflight dry-run requires them too.
+			# GITHUB_WORKSPACE/GITHUB_ENV are ambient on every real Actions
+			# runner step; WORKSPACE_PATH is exported by an earlier step.
+			"WORKSPACE_PATH": str(tmp),
+			"GITHUB_WORKSPACE": str(tmp),
+			"GITHUB_ENV": str(tmp / "github_env"),
 		})
+		# CODEX_HELPERS_PATH is derived unconditionally from SUPPORT_SCRIPTS_DIR
+		# near the top of this script (and hard-required before --preflight can
+		# even dispatch), so a caller-supplied override no longer has any
+		# effect; drop any inherited value instead of asserting on it.
 		env.pop("CODEX_HELPERS_PATH", None)
 		ok = subprocess.run(["bash", str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
 		assert ok.returncode == 0, ok.stderr
-		assert ok.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=ok checks=4 failed=0"
-		for check in ("opencode_helpers", "opencode_config_writer", "opencode_binary", "runtime_dir"):
+		assert ok.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=ok checks=9 failed=0"
+		for check in (
+			"env_RUNTIME_DIR",
+			"env_WORKSPACE_PATH",
+			"env_GITHUB_WORKSPACE",
+			"env_GITHUB_ENV",
+			"opencode_helpers",
+			"opencode_config_writer",
+			"codex_helpers",
+			"opencode_binary",
+			"runtime_dir",
+		):
 			assert f"REVIEW_EDITOR_PREFLIGHT check={check} result=ok " in ok.stderr
 		assert list(runtime_dir.iterdir()) == [], "preflight must not write runtime files"
 
 		(bin_dir / "opencode").unlink()
 		env["PATH"] = str(bin_dir)
 		env["RUNTIME_DIR"] = str(tmp / "missing-runtime")
-		env["CODEX_HELPERS_PATH"] = str(tmp / "missing-codex-helpers.sh")
 		bad = subprocess.run([bash_executable, str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
 		assert bad.returncode == 1, bad.stderr
-		assert bad.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=fail checks=5 failed=3"
-		for check in ("codex_helpers", "opencode_binary", "runtime_dir"):
+		assert bad.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=fail checks=9 failed=2"
+		for check in ("opencode_binary", "runtime_dir"):
 			assert f"REVIEW_EDITOR_PREFLIGHT check={check} result=fail " in bad.stderr
 
 
@@ -6928,7 +6948,7 @@ def _step_explicit_env_names(step_name: str) -> list[str]:
 def test_editor_preflight_step_wiring() -> None:
 	preflight = _step_block('"Preflight: Verify required files before reviewer invocation"')
 	editor_env = _step_explicit_env_names("Apply fixes with editor model")
-	assert editor_env == ["GH_TOKEN", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
+	assert editor_env == ["OPENROUTER_API_KEY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
 	editor = _step_block("Apply fixes with editor model")
 	for name in editor_env:
 		line = next(line.strip() for line in editor.splitlines() if line.strip().startswith(f"{name}:"))
