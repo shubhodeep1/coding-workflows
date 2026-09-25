@@ -197,6 +197,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
 - `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
+- `scripts/review_autofix_step_claude_fixer_handoff.sh` — body of the review_autofix.yml "Hand review round to Claude session (Claude-fixer mode)" step (sourced by the step): posts the reviewer findings or the pre-review conflict for the `/implement-plan-claude` session on `claude/implement-plan-*` PRs, or exports `CLAUDE_FIXER_ZERO_FINDINGS=true` so the workflow's auto-merge step runs.
 - `scripts/review_autofix_step_detect_merge_conflicts.sh` — body of the review_autofix.yml "Detect merge conflicts" step (sourced by the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
 - `scripts/review_autofix_step_editor_uncommitted_changes.sh` — body of the review_autofix.yml "Detect editor-claimed-but-uncommitted changes" step (sourced by the step).
 - `scripts/review_autofix_step_iteration_summary.sh` — body of the review_autofix.yml "Append review pipeline iteration summary" step (sourced by the step; skips with a warning when the script cannot be found).

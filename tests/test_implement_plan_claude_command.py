@@ -60,4 +60,58 @@ def test_checker_is_sonnet_every_three_hours(text):
 	assert "`model: claude-sonnet-5`" in text
 	assert "claude-haiku-4-5-20251001" not in text
 	assert '`model: "haiku"`' not in text
-	assert "call send_later with delay_minutes 180" in text
+	assert "call send_later with delay_minutes 60" in text
+	assert "call send_later with delay_minutes 180" not in text
+
+
+def test_project_branch_and_draft_final_pr(text):
+	assert "3a. **Open the project branch and the draft final PR**" in text
+	assert "`claude/implement-plan-<slug>`" in text
+	assert "**`draft: true`**" in text
+	assert "mark it ready for review (`mcp__github__update_pull_request` with `draft: false`)" in text
+	assert "11a. **Final merge into the default branch**" in text
+	# Legacy projects (log on the default branch without a Project branch line)
+	# finish the way they started.
+	assert "**Legacy mode** when the log exists on the default branch without a `Project branch:` line" in text
+	assert "`git merge --no-edit origin/<default>`" in text
+
+
+def test_review_rounds_are_fixed_by_claude(text):
+	assert "7a. **Review round — Claude fixes what the reviewer panel found.**" in text
+	assert "<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<r> -->" in text
+	assert "`[claude-autofix] review round <r>: <summary>`" in text
+	assert "`<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`" in text
+	assert "-f claude_fixer_converged_head=<sha>" in text
+	assert "`[claude-merge-resolve] merge <base branch>`" in text
+	assert "`[claude-intervention] <summary>`" in text
+	assert "the workflow never runs the GPT review-blocked judge" in text
+	assert "if `state` is review-round / conflict use `<next stage on review round>`" in text
+
+
+def test_security_dispatch_targets_project_branch(text):
+	assert "`-f ref=claude/implement-plan-<slug>`" in text
+	# The audit files every finding (no weekly cap), so no bypass input exists.
+	assert "bypass_weekly_cap" not in text
+	assert "deferred_by_weekly_cap" not in text
+
+
+def test_convergence_dispatch_goes_straight_to_review_autofix_here(text):
+	# internal-review.yml pins review_autofix.yml@main; forwarding a new input
+	# through it made every run on the PR adding the input a startup_failure
+	# (run 36095647423).
+	assert "`gh workflow run review_autofix.yml -R <owner>/<repo> -f pr_number=<N> -f claude_fixer_converged_head=<sha>`" in text
+	assert "gh workflow run internal-review.yml" not in text
+
+
+def test_validation_dispatch_inputs(text):
+	assert "plus `-f pr_number=0` for `internal-validate.yml` only" in text
+	assert "`-f target_ref=claude/implement-plan-<slug>`" in text
+	assert "-f tracking_issue=0 -f pr_number=0" not in text
+
+
+def test_checker_starts_with_effort_low_then_one_shot_instructions(text):
+	assert "the prompt `/effort low` **and nothing else**" in text
+	assert "`create_trigger` with `persistent_session_id` = the checker's session id" in text
+	assert "**hourly check-in by a low-effort Sonnet checker session**" in text
+	assert "3-hourly" not in text
+	assert "every 3h" not in text
