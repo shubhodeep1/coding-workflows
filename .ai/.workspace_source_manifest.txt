@@ -146,12 +146,16 @@ changelog.d/4305-editor-checksum-summary-warning.md
 changelog.d/4327-review-failure-fingerprint-cap.md
 changelog.d/4329-heal-self-repo-pr-target-branch.md
 changelog.d/4332-terminal-resume-conflicts-and-catalog-backfill.md
+changelog.d/4342-heal-failed-runs-reviewer-failures-pr-reconcile.md
 changelog.d/4365-heal-self-inflicted-routing.md
 changelog.d/4367-implement-plan-conformance-and-lessons.md
 changelog.d/4368-heal-already-fixed-context.md
 changelog.d/4370-orchestrator-completion-lessons.md
 changelog.d/4372-gpt-6-model-refresh.md
 changelog.d/4375-review-editor-preflight.md
+changelog.d/4398-issue-author-provenance.md
+changelog.d/4399-trusted-review-support.md
+changelog.d/4400-clarify-isolation.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
 changelog.d/implement-plan-failed-run-blocks.md
@@ -368,6 +372,9 @@ scripts/check_resolver_diff.sh
 scripts/check_workflow_script_refs.py
 scripts/clarify_data_provision_guard.py
 scripts/clarify_informal_detect.py
+scripts/clarify_isolated_run.sh
+scripts/clarify_openrouter_broker.py
+scripts/clarify_sandbox/Dockerfile
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
 scripts/codex_model_catalog.json
@@ -505,6 +512,7 @@ scripts/watchdog_helpers.sh
 scripts/workflow_failure_heal.py
 scripts/workflow_failure_heal_autofix_report.sh
 scripts/workflow_failure_heal_intake.sh
+scripts/workflow_failure_heal_pr_reconcile.sh
 scripts/workflow_failure_heal_report.sh
 scripts/workflow_retro.py
 scripts/workflow_retro_fanout.sh
@@ -847,6 +855,7 @@ tests/test_verify_integration_fingerprints_post_capture_reintroduction.py
 tests/test_verify_integration_fingerprints_tiers.py
 tests/test_workflow_checkout_integration_ref_audit.py
 tests/test_workflow_failure_heal.py
+tests/test_workflow_failure_heal_pr_reconcile.py
 tests/test_workflow_file_size_limit.py
 tests/test_workflow_gh_retry_fallback_contract.py
 tests/test_workflow_log_analysis_failure_contract.py
