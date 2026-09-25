@@ -150,6 +150,8 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 	process_text = VALIDATE_PROCESS.read_text(encoding="utf-8")
 	function_text = process_text.split("run_template_validation_harness_renderer()\n{", 1)[1].split("\n}\n", 1)[0]
 	function_text = "run_template_validation_harness_renderer()\n{" + function_text + "\n}\n"
+	assert "VALIDATION_RENDERER_DEPENDENCIES_READY" in function_text
+	assert "import yaml, jsonschema, jinja2" in function_text
 	for setup_ready, imports_available, expected_status in (
 		("true", "false", 14),
 		("false", "true", 14),
