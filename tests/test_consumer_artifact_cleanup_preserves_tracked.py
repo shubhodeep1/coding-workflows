@@ -1,11 +1,24 @@
 #!/usr/bin/env python3
 """Consumer-repo artifact cleanup must never delete a repo-TRACKED path.
 
-Five sites clean workflow-staged artifacts out of a consumer repo's working
+Four sites clean workflow-staged artifacts out of a consumer repo's working
 tree before committing: the merge-conflict resolver and its prepare step,
-the review-blocked judge, the orchestrator poller, and the implement commit
-helper. Each cleanup feeds a later `git add -u` / `git add -A` staging pass,
-so a working-tree deletion is recorded in the commit as a real deletion.
+the review-blocked judge, and the implement commit helper. Each cleanup
+feeds a later `git add -u` / `git add -A` staging pass, so a working-tree
+deletion is recorded in the commit as a real deletion.
+
+The orchestrator poller's own inline review-blocked judge used to be a
+fifth site (its old "combined mode" ran codex and committed fixes directly,
+so it needed the same `_orch_cleanup_artifact` guard as the standalone
+`scripts/review_rb_judge.sh`). Combined mode was retired: the poller's judge
+is now decision-only, documented in `scripts/orchestrate_poll_process.sh` as
+never receiving a writable checkout and never applying or pushing changes
+directly, and its `fix` action only pushes a no-tree-change boundary commit
+before dispatching the real edit to `review_autofix.yml` (which runs the
+already-guarded `scripts/review_rb_judge.sh`). With no local write left to
+protect, `_orch_cleanup_artifact` was removed rather than kept as dead code;
+`test_poller_restores_bootstrap_overwrite` below pins the invariant that
+replaced it.
 
 The artifact names are not private to the pipeline. A consumer repo
 legitimately owns a root-level `agents.md` — CLAUDE.md §22.C and §24.F
@@ -41,7 +54,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CLEANUP_SITES = [
 	("scripts/review_conflict_resolve.sh", "_rs_cleanup_artifact", "agents.md", "pre_assembled_static.txt"),
 	("scripts/review_rb_judge.sh", "_rb_cleanup_artifact", "agents.md", "pre_assembled_static.txt"),
-	("scripts/orchestrate_poll_process.sh", "_orch_cleanup_artifact", "agents.md", "pre_assembled_static.txt"),
 	(
 		"scripts/review_conflict_prepare.sh",
 		"_conflict_prepare_cleanup_artifact",
@@ -172,37 +184,42 @@ def test_no_unguarded_agents_md_removal_remains() -> None:
 
 
 def test_poller_restores_bootstrap_overwrite() -> None:
-	"""Tracked support files overwritten by bootstrap return to HEAD content."""
-	block = _extract_cleanup_block("scripts/orchestrate_poll_process.sh", "_orch_cleanup_artifact")
-	for tracked_artifact in (
-		"scripts/git_ref_health_check.sh",
-		"scripts/tg_helpers.sh",
-		"scripts/codex_model_catalog.json",
-		".github/ai/orchestrate_schema.v1.json",
-	):
-		with tempfile.TemporaryDirectory(prefix="artifact-cleanup-") as raw_tmp:
-			repo = _make_consumer_repo(Path(raw_tmp), tracked_artifact)
-			expected = (repo / tracked_artifact).read_text(encoding="utf-8")
-			(repo / tracked_artifact).write_text("workflow support copy\n", encoding="utf-8")
+	"""The invariant that replaced the poller's `_orch_cleanup_artifact` guard.
 
-			subprocess.run(
-				["bash", "-euo", "pipefail", "-c", block],
-				cwd=repo,
-				check=True,
-				capture_output=True,
-				env=_temp_repo_env(),
-				text=True,
-			)
-
-			assert (repo / tracked_artifact).read_text(encoding="utf-8") == expected
-			assert _git(repo, "diff", "--name-only").strip() == ""
+	The old guard restored bootstrap-overwritten tracked support files
+	(scripts/git_ref_health_check.sh, scripts/tg_helpers.sh,
+	scripts/codex_model_catalog.json, .github/ai/orchestrate_schema.v1.json)
+	from HEAD after the poller's "combined mode" ran codex and committed
+	fixes to the working tree directly. Combined mode is gone: the
+	review-blocked judge is pinned decision-only (never a writable
+	checkout, never a direct commit/push — see the sourced comment below),
+	and its `fix` action pushes a no-tree-change boundary commit instead
+	of editing files locally. With no local write left, there is nothing
+	for a bootstrap-overwrite restore to guard, so `_orch_cleanup_artifact`
+	was removed rather than kept as dead code (see
+	tests/test_consumer_artifact_cleanup_preserves_tracked.py's module
+	docstring). This test pins the invariant that makes that safe: combined
+	mode is never turned back on without also reinstating the guard."""
+	poller_text = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert 'RB_COMBINED_MODE="false"' in poller_text, (
+		"scripts/orchestrate_poll_process.sh must pin RB_COMBINED_MODE to "
+		"false — the review-blocked judge must stay decision-only."
+	)
+	assert 'RB_COMBINED_MODE="true"' not in poller_text, (
+		"scripts/orchestrate_poll_process.sh must never flip RB_COMBINED_MODE "
+		"to true without reinstating the _orch_cleanup_artifact guard that "
+		"combined-mode direct commits used to need."
+	)
+	assert "The review-blocked judge is decision-only." in poller_text and "never applies or pushes changes directly" in poller_text, (
+		"scripts/orchestrate_poll_process.sh lost the decision-only documentation for the review-blocked judge"
+	)
 
 
 def test_implement_cleanup_preserves_tracked_static_context() -> None:
 	"""Implement cleanup restores a tracked static-context path from HEAD."""
 	text = (REPO_ROOT / "scripts/implement_commit_changes.sh").read_text(encoding="utf-8")
 	match = re.search(
-		r"^if git ls-files --error-unmatch -- pre_assembled_static\.txt\b.*?^fi$",
+		r'^if git cat-file -e "HEAD:pre_assembled_static\.txt".*?^fi$',
 		text,
 		flags=re.S | re.M,
 	)
