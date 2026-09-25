@@ -876,8 +876,11 @@ committing the corresponding file:
   `before_run`, `after_run`, and `before_remove`; missing files are a no-op.
   Validate's four hooks run from trusted support in a tokenless, network-disabled
   container against a bounded, screened workspace copy, never the host checkout
-  or its `.git`. Isolation/transfer errors stop validation even for nonfatal
-  hooks. An explicit `validate.yml` `target_ref` requires exactly one open
+  or its `.git`. Only non-executable, simple-name `.txt` data under
+  `validation/hook-output/<hook>/` may be replayed to the host; it must not be
+  sourced or executed. Any other changed or deleted path rejects the entire
+  replay as an isolation/transfer failure, stopping validation even for
+  nonfatal hooks. An explicit `validate.yml` `target_ref` requires exactly one open
   trusted-author same-repo project PR targeting the default branch; checkout
   pins and verifies that PR's SHA without persisting checkout credentials.
   Empty `target_ref` retains integration/default selection.

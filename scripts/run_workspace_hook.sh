@@ -245,17 +245,19 @@ PY
 		return 125
 	fi
 	# Validate the entire returned tree before changing the host workspace.
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace_path}" "${isolated_root}" <<'PY'
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace_path}" "${isolated_root}" "${hook}" <<'PY'
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import secrets
 import stat
 import sys
-import tempfile
 
 root = Path(sys.argv[1])
 stage_root = Path(sys.argv[2])
+hook_name = sys.argv[3]
 stage = stage_root / "returned"
 original = json.loads((stage_root / "manifest.json").read_text(encoding="utf-8"))
 excluded = {".git", ".ai", ".ssh", ".aws", ".config", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", "node_modules", "__pycache__", "secrets", "credentials"}
@@ -292,30 +294,83 @@ for current, dirs, files in os.walk(stage, followlinks=False):
 changes = {name: result for name, result in updates.items()
            if {"digest": hashlib.sha256(result[0]).hexdigest(), "mode": result[1]} != original.get(name)}
 deletions = set(original) - set(updates)
+# Only inert, hook-owned data may cross from the untrusted container into the
+# credentialed host workspace. Refuse the entire result before any replay.
+if hook_name not in ("after_create", "before_run", "after_run", "before_remove"):
+    raise SystemExit("validation hook name is invalid")
+allowed_prefix = f"validation/hook-output/{hook_name}/"
 for name in changes.keys() | deletions:
-    target = root / name
-    for parent in (root, *list(target.parents)[:-1]):
-        if parent == root:
-            continue
-        if parent.is_relative_to(root) and parent.is_symlink():
-            raise SystemExit("validation hook target parent is a symlink")
-    if target.is_symlink() or (target.exists() and not target.is_file()):
-        raise SystemExit("validation hook target is unsafe")
+    if not name.startswith(allowed_prefix) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.txt", name[len(allowed_prefix):]):
+        raise SystemExit("validation hook returned disallowed mutation")
+for data, guest_mode in changes.values():
+    if guest_mode & 0o111:
+        raise SystemExit("validation hook returned executable output")
 
-for name in deletions:
-    (root / name).unlink(missing_ok=True)
-for name, (data, guest_mode) in changes.items():
-    target = root / name
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=".validate-hook-", dir=target.parent)
+# Open every parent relative to the same workspace fd, rejecting symlinks at
+# preflight and again at mutation time. Dirfd operations also keep a parent
+# symlink swap from redirecting an unlink or atomic replacement outside it.
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+workspace_fd = os.open(root, directory_flags)
+def checked_parent(name, create=False):
+    parent_fd = os.dup(workspace_fd)
     try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(data)
-        os.chmod(temporary, guest_mode)
-        os.replace(temporary, target)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        for component in name.split("/")[:-1]:
+            try:
+                next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            except FileNotFoundError:
+                if not create:
+                    os.close(parent_fd)
+                    return None
+                os.mkdir(component, mode=0o755, dir_fd=parent_fd)
+                next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        return parent_fd
+    except BaseException:
+        os.close(parent_fd)
+        raise
+
+try:
+    for name in changes.keys() | deletions:
+        parent_fd = checked_parent(name)
+        if parent_fd is None:
+            continue
+        try:
+            try:
+                target_info = os.stat(name.rsplit("/", 1)[-1], dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(target_info.st_mode):
+                raise SystemExit("validation hook target is unsafe")
+        finally:
+            os.close(parent_fd)
+
+    for name in deletions:
+        parent_fd = checked_parent(name)
+        if parent_fd is None:
+            continue
+        try:
+            os.unlink(name.rsplit("/", 1)[-1], dir_fd=parent_fd)
+        finally:
+            os.close(parent_fd)
+    for name, (data, guest_mode) in changes.items():
+        parent_fd = checked_parent(name, create=True)
+        filename = name.rsplit("/", 1)[-1]
+        temporary = ".validate-hook-" + secrets.token_hex(16)
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+            os.chmod(temporary, guest_mode & 0o666, dir_fd=parent_fd, follow_symlinks=False)
+            os.replace(temporary, filename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+            os.close(parent_fd)
+finally:
+    os.close(workspace_fd)
 PY
 	then
 		cleanup_validate_isolation
