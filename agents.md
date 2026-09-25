@@ -864,6 +864,13 @@ committing the corresponding file:
 - `.github/ai/workspace_hooks/<phase>/<hook>.sh` — executed by
   `scripts/run_workspace_hook.sh`. Supported hook names are `after_create`,
   `before_run`, `after_run`, and `before_remove`; missing files are a no-op.
+  Validate's four hooks run from trusted support in a tokenless, network-disabled
+  container against a bounded, screened workspace copy, never the host checkout
+  or its `.git`. Isolation/transfer errors stop validation even for nonfatal
+  hooks. An explicit `validate.yml` `target_ref` requires exactly one open
+  trusted-author same-repo project PR targeting the default branch; checkout
+  pins and verifies that PR's SHA without persisting checkout credentials.
+  Empty `target_ref` retains integration/default selection.
 
 ## Workflow scenario traces
 
