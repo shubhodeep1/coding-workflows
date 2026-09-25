@@ -18,6 +18,10 @@ rm -f /tmp/_rb_judge_syntax_err
 
 set -euo pipefail
 
+if [ -n "${WORKSPACE_PATH:-}" ]; then
+  cd "${WORKSPACE_PATH}"
+fi
+
 verify_review_scope_guard_integrity()
 {
 	local scope_guard_path="${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"

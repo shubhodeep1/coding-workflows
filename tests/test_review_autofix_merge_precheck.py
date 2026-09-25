@@ -10,7 +10,9 @@ that failure classification is correct.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -510,3 +512,20 @@ def test_all_merge_probes_share_the_promisor_recovery():
         "probe + backfill retry, in each of the two merge-performing steps). A "
         "new probe must carry the promisor recovery too."
     )
+
+
+def test_review_model_helpers_enter_worktree_without_bash_env(tmp_path: Path):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    for script_name in (
+        "review_run_reviewers.sh", "review_apply_fixes.sh",
+        "review_conflict_resolve.sh", "review_rb_judge.sh",
+    ):
+        script = (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+        entry = script.split('if [ -n "${WORKSPACE_PATH:-}" ]; then', 1)[1].split("\nfi", 1)[0]
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", 'if [ -n "${WORKSPACE_PATH:-}" ]; then' + entry + "\nfi\npwd -P"],
+            cwd=tmp_path, env=dict(os.environ, WORKSPACE_PATH=str(worktree), BASH_ENV="", ENV=""),
+            capture_output=True, text=True, check=True,
+        )
+        assert result.stdout.strip() == str(worktree), script_name

@@ -776,6 +776,10 @@ when the bounded fix-cycle budget is exhausted.
   appended to host `PATH`, `PYTHONPATH`, or `VIRTUAL_ENV`; post-editor pytest
   runs only editor-changed Python test targets, with no network, read-only
   source and Git metadata, and unconditional volume cleanup.
+- The review workflow clears `BASH_ENV` for reviewer, editor, resolver, and
+  review-blocked judge steps. Their staged helpers explicitly enter
+  `WORKSPACE_PATH` before reading relative prompt files or publishing edits;
+  a missing worktree fails the step instead of reading the source checkout.
 - `scripts/security_audit_causality.py` emits
   `security_audit_causal_scope.v1` metadata for Python findings. A waiver is
   authoritative only when the shared audit/poller validator confirms its
