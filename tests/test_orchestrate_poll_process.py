@@ -3164,7 +3164,7 @@ from pathlib import Path
 store_path = Path(os.environ['GH_MOCK_STORE'])
 store = json.loads(store_path.read_text(encoding='utf-8'))
 args = sys.argv[1:]
-real_git = os.environ.get('REAL_GIT_BIN', 'git')
+real_git = os.environ.get('REAL_GIT_BIN') or '__REAL_GIT_FALLBACK__'
 
 if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and '--name-only' in args:
 	paths = list(store.get('merge_tree_conflict_paths', []))
@@ -3267,7 +3267,7 @@ if args and args[0] == 'fetch':
 
 proc = subprocess.run([real_git, *args])
 sys.exit(proc.returncode)
-''',
+'''.replace('__REAL_GIT_FALLBACK__', real_git),
 		)
 
 		_write_exec(
@@ -3351,7 +3351,7 @@ from pathlib import Path
 args = sys.argv[1:]
 if args[:2] == ["-I", "-B"]:
 	os.execv(sys.executable, [sys.executable, *args])
-real_python = os.environ.get("REAL_PYTHON_BIN", "python3")
+real_python = os.environ.get("REAL_PYTHON_BIN") or sys.executable
 store_path = Path(os.environ.get("GH_MOCK_STORE", ""))
 
 
@@ -4060,9 +4060,14 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 	assert capture["confidence_gate"] == "8"
 	assert capture["model"] == "openai/security-test-model"
 	assert capture["diff_base"] != capture["diff_head"]
-	assert "- Status: `running`" in capture["tracking_body"]
-	assert "- Status: `pending`" not in capture["tracking_body"]
+	# The engine receives the signed state's project snapshot as untrusted
+	# data (its sanitized launch no longer sees the mock issue store); the
+	# live tracking body is moved to `running` before the audit starts.
+	assert "=== BEGIN UNTRUSTED TRACKING ISSUE SNAPSHOT ===" in capture["tracking_body"]
 	assert "- Audited integration SHA: `none`" in capture["tracking_body"]
+	running_bodies = [call["body"] for call in result["issue_body_edit_calls"] if "- Status: `running`" in call["body"]]
+	assert running_bodies, result["issue_body_edit_calls"]
+	assert "- Status: `pending`" not in running_bodies[0]
 	rendered_body = result["issues"]["192"]["body"]
 	assert "- Status: `passed`" in rendered_body
 	assert f"- Audited integration SHA: `{capture['diff_head']}`" in rendered_body
@@ -9681,6 +9686,9 @@ def test_validation_dispatches_under_integration_drift_when_validation_enabled()
 	# validating arm — where PROJECT_COMPLETE is unset on entry — and still
 	# dispatches once the live wave gate is recomputed. ahead_by stays 5.
 	resumed = dict(first["latest_state"])
+	# The first tick signed state_auth over the unmodified state; drop it
+	# before hand-editing, or the poller rejects the copy as tampered.
+	resumed.pop("state_auth", None)
 	resumed["validation_last_dispatch_cycle"] = 0
 	resumed["validation_last_dispatch_ts"] = 0
 	second = _run_poller(
@@ -11451,6 +11459,9 @@ def test_final_merge_conflict_sets_merge_conflict_status():
 			"headRefName": "orchestrator/project-192",
 			"mergeable": False,
 			"mergeable_state": "dirty",
+			# Real PRs always carry a head SHA; the signed resolver retry-state
+			# lookup fails closed (defers the redispatch) without one.
+			"headSha": "5" * 40,
 		},
 	]
 	result = _run_poller(
@@ -12673,6 +12684,9 @@ def test_integration_stale_alert_window_clears_when_branch_catches_up():
 	assert cleared["state_on_disk"]["last_main_squash_at_utc"] >= now_epoch - 5
 
 	second_state = dict(cleared["state_on_disk"])
+	# The first tick signed state_auth over the unmodified state; drop it
+	# before hand-editing, or the poller rejects the copy as tampered.
+	second_state.pop("state_auth", None)
 	second_state["status"] = "in_progress"
 	second_state["last_main_squash_at_utc"] = int(time.time()) - (7 * 3600)
 	second_state["integration_stale_last_alerted_at_utc"] = None
@@ -23075,7 +23089,8 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in wf_body
 	assert (
 		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py orchestrate_state_v2.py review_conflict_resolve.sh '
-		'review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"'
+		'review_conflict_prepare.sh review_conflict_actuate.sh model_provider_broker.py render_prompt.py '
+		'opencode_helpers.sh write_opencode_config.sh"'
 	) in stage_helper_body
 	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in stage_helper_body
 	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in stage_helper_body
