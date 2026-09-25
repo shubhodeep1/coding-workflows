@@ -12,8 +12,11 @@ id it prints. The script never deletes anything itself.
 
 Input: `--triggers FILE`, a JSON file holding the `list_triggers` result
 (`{"data": [...]}`) or its bare `data` array, listed with
-`include_completed: true`. Only four fields of each Routine are read: `id`,
-`name`, `enabled`, `ended_reason`. Anything else may be left out.
+`include_completed: true`. When the result is too large for the context,
+the harness saves it to a file; pass that file as is. Only these fields of
+each Routine are read: `id`, `name`, `enabled`, `ended_reason`, and the
+prompt (`derived_state.prompt`, or a top-level `prompt`). Anything else may
+be left out.
 
 Output: one JSON object on stdout, e.g.
 
@@ -27,9 +30,14 @@ missing or not the expected JSON shape.
 
 Only Routines these flows create are ever eligible, matched by name:
 
-  * `PR #<n> status check-in…`                       (§26 checker reminders)
-  * `implement-plan <slug>: …`                       (/implement-plan-claude)
-  * `… <owner>/<repo>#<n> hand-back`                 (both flows' hand-back)
+  * `PR #<n> status check-in…`     (§26 checker reminders)
+  * `PR #<n> hand-back`            (§26 hand-back)
+  * `implement-plan <slug>: …`     (/implement-plan-claude, hand-back included)
+
+Routine names are capped at 60 characters and truncated with `…`, so a name
+never carries the repository. A hand-back is recognised by its prompt, which
+starts with `… hand-back for …` and names the PR URL
+(`https://github.com/<owner>/<repo>/pull/<n>`); the PR is read from there.
 
 Every other Routine counts as `not_ours` and is never named for deletion.
 An eligible Routine is named when either:
@@ -58,9 +66,12 @@ import sys
 
 DEFAULT_GRACE_HOURS = 24.0
 
-CHECK_IN_NAME_PATTERN = re.compile(r"^PR #\d+ status check-in")
+CHECK_IN_NAME_PATTERN = re.compile(r"^PR #\d+ (?:status check-in|hand-back)")
 IMPLEMENT_PLAN_NAME_PATTERN = re.compile(r"^implement-plan \S+: ")
-HAND_BACK_NAME_PATTERN = re.compile(r"(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?P<pr>\d+) hand-back$")
+HAND_BACK_PROMPT_PATTERN = re.compile(
+	r"hand-back for .*?https://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(?P<pr>\d+)",
+	re.IGNORECASE | re.DOTALL,
+)
 
 
 class RoutineReadError(Exception):
@@ -87,11 +98,16 @@ def gh_api(path: str) -> dict:
 
 def is_ours(name: str) -> bool:
 	"""Return True when `name` is a Routine one of the check-in flows creates."""
-	return bool(
-		CHECK_IN_NAME_PATTERN.search(name)
-		or IMPLEMENT_PLAN_NAME_PATTERN.search(name)
-		or HAND_BACK_NAME_PATTERN.search(name)
-	)
+	return bool(CHECK_IN_NAME_PATTERN.search(name) or IMPLEMENT_PLAN_NAME_PATTERN.search(name))
+
+
+def routine_prompt(routine: dict) -> str:
+	"""Return the Routine's prompt from `derived_state.prompt` or a top-level `prompt`."""
+	derived_state = routine.get("derived_state")
+	if isinstance(derived_state, dict) and isinstance(derived_state.get("prompt"), str):
+		return derived_state["prompt"]
+	prompt = routine.get("prompt")
+	return prompt if isinstance(prompt, str) else ""
 
 
 def _parse_time(value: object) -> dt.datetime:
@@ -141,7 +157,7 @@ def classify(routines: list[dict], grace_hours: float, now: dt.datetime) -> dict
 		if ended_reason:
 			to_delete.append({"id": routine_id, "name": name, "reason": f"ended: {ended_reason}"})
 			continue
-		hand_back = HAND_BACK_NAME_PATTERN.search(name)
+		hand_back = HAND_BACK_PROMPT_PATTERN.search(routine_prompt(routine))
 		if hand_back and routine.get("enabled") is True:
 			repo = hand_back.group("repo")
 			number = int(hand_back.group("pr"))

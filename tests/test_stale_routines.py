@@ -26,8 +26,23 @@ LONG_AGO = "2026-09-23T12:00:00Z"  # 48h before NOW
 RECENT = "2026-09-25T09:00:00Z"  # 3h before NOW
 
 
-def _routine(routine_id, name, enabled=True, ended_reason=""):
-	return {"id": routine_id, "name": name, "enabled": enabled, "ended_reason": ended_reason}
+PR_URL = "https://github.com/o/r/pull/12"
+SECTION_26_HAND_BACK_PROMPT = f"CLAUDE.md §26 hand-back for PR #12 ({PR_URL}): no verdict is attached."
+IMPLEMENT_PLAN_HAND_BACK_PROMPT = f"Hand-back for /implement-plan-claude docs/plans/s-plan.md, PR #12 ({PR_URL}): no verdict."
+
+
+def _routine(routine_id, name, enabled=True, ended_reason="", prompt=""):
+	return {
+		"id": routine_id,
+		"name": name,
+		"enabled": enabled,
+		"ended_reason": ended_reason,
+		"derived_state": {"prompt": prompt},
+	}
+
+
+def _hand_back(routine_id="trig_h", name="PR #12 hand-back", prompt=SECTION_26_HAND_BACK_PROMPT):
+	return _routine(routine_id, name, prompt=prompt)
 
 
 def _stub(monkeypatch, responses):
@@ -65,8 +80,9 @@ def _deleted_ids(result):
 		"PR #4438 status check-in: instructions",
 		"implement-plan heal-autofix: check-in",
 		"implement-plan heal-autofix: safety net",
-		"implement-plan heal-autofix: o/r#12 hand-back",
-		"PR o/r#12 hand-back",
+		"implement-plan heal-autofix: hand-back",
+		"implement-plan heal-deterministic-autofix-failures: safety…",
+		"PR #12 hand-back",
 	],
 )
 def test_ended_routines_of_ours_are_deleted(monkeypatch, tmp_path, capsys, name):
@@ -120,7 +136,7 @@ def test_pending_check_in_reminder_is_kept_without_api_calls(monkeypatch, tmp_pa
 
 def test_hand_back_for_long_merged_pr_is_deleted(monkeypatch, tmp_path, capsys):
 	calls = _stub(monkeypatch, {"repos/o/r/pulls/12": {"merged": True, "state": "closed", "merged_at": LONG_AGO}})
-	_, result = _run(tmp_path, capsys, [_routine("trig_h", "PR o/r#12 hand-back")])
+	_, result = _run(tmp_path, capsys, [_hand_back()])
 	assert _deleted_ids(result) == ["trig_h"]
 	assert "o/r#12 finished 48.0h ago" in result["delete"][0]["reason"]
 	assert calls == ["repos/o/r/pulls/12"]
@@ -128,32 +144,32 @@ def test_hand_back_for_long_merged_pr_is_deleted(monkeypatch, tmp_path, capsys):
 
 def test_hand_back_for_long_closed_pr_is_deleted(monkeypatch, tmp_path, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/12": {"merged": False, "state": "closed", "closed_at": LONG_AGO}})
-	_, result = _run(tmp_path, capsys, [_routine("trig_h", "implement-plan s: o/r#12 hand-back")])
+	_, result = _run(tmp_path, capsys, [_hand_back(name="implement-plan s: hand-back", prompt=IMPLEMENT_PLAN_HAND_BACK_PROMPT)])
 	assert _deleted_ids(result) == ["trig_h"]
 
 
 def test_hand_back_within_grace_is_kept(monkeypatch, tmp_path, capsys):
 	"""The checker may not have handed the verdict back yet."""
 	_stub(monkeypatch, {"repos/o/r/pulls/12": {"merged": True, "state": "closed", "merged_at": RECENT}})
-	_, result = _run(tmp_path, capsys, [_routine("trig_h", "PR o/r#12 hand-back")])
+	_, result = _run(tmp_path, capsys, [_hand_back()])
 	assert result["delete"] == [] and result["kept"] == 1
 
 
 def test_grace_hours_is_configurable(monkeypatch, tmp_path, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/12": {"merged": True, "state": "closed", "merged_at": RECENT}})
-	_, result = _run(tmp_path, capsys, [_routine("trig_h", "PR o/r#12 hand-back")], extra=("--grace-hours", "2"))
+	_, result = _run(tmp_path, capsys, [_hand_back()], extra=("--grace-hours", "2"))
 	assert _deleted_ids(result) == ["trig_h"]
 
 
 def test_hand_back_for_open_pr_is_kept(monkeypatch, tmp_path, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/12": {"merged": False, "state": "open"}})
-	_, result = _run(tmp_path, capsys, [_routine("trig_h", "PR o/r#12 hand-back")])
+	_, result = _run(tmp_path, capsys, [_hand_back()])
 	assert result["delete"] == [] and result["kept"] == 1
 
 
 def test_failed_pr_read_keeps_the_routine_and_reports_it(monkeypatch, tmp_path, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/12": sweep.RoutineReadError("gh api repos/o/r/pulls/12 failed: HTTP 403")})
-	code, result = _run(tmp_path, capsys, [_routine("trig_h", "PR o/r#12 hand-back")])
+	code, result = _run(tmp_path, capsys, [_hand_back()])
 	assert code == 0
 	assert result["delete"] == [] and result["kept"] == 1
 	assert "HTTP 403" in result["errors"][0]
@@ -161,7 +177,7 @@ def test_failed_pr_read_keeps_the_routine_and_reports_it(monkeypatch, tmp_path, 
 
 def test_one_read_per_distinct_hand_back_pr(monkeypatch, tmp_path, capsys):
 	calls = _stub(monkeypatch, {"repos/o/r/pulls/12": {"merged": False, "state": "open"}})
-	routines = [_routine("trig_1", "PR o/r#12 hand-back"), _routine("trig_2", "implement-plan s: o/r#12 hand-back")]
+	routines = [_hand_back("trig_1"), _hand_back("trig_2", "implement-plan s: hand-back", IMPLEMENT_PLAN_HAND_BACK_PROMPT)]
 	_run(tmp_path, capsys, routines)
 	assert calls == ["repos/o/r/pulls/12"]
 
@@ -171,7 +187,7 @@ def test_mixed_listing(monkeypatch, tmp_path, capsys):
 	routines = [
 		_routine("trig_fired", "PR #3 status check-in", enabled=False, ended_reason="run_once_fired"),
 		_routine("trig_live", "PR #4 status check-in"),
-		_routine("trig_hand", "PR o/r#12 hand-back"),
+		_hand_back("trig_hand"),
 		_routine("trig_user", "Auto-release/heal loop check (3-hourly)"),
 	]
 	_, result = _run(tmp_path, capsys, {"data": routines})
@@ -221,3 +237,40 @@ def test_claude_md_documents_the_sweep():
 
 def test_ci_runs_this_file():
 	assert "tests/test_stale_routines.py" in CI_WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_truncated_implement_plan_hand_back_is_still_recognised_by_its_prompt(monkeypatch, tmp_path, capsys):
+	"""Routine names are capped at 60 characters; the PR comes from the prompt."""
+	_stub(monkeypatch, {"repos/o/r/pulls/12": {"merged": True, "state": "closed", "merged_at": LONG_AGO}})
+	name = "implement-plan heal-deterministic-autofix-failures: hand-b…"
+	_, result = _run(tmp_path, capsys, [_hand_back(name=name, prompt=IMPLEMENT_PLAN_HAND_BACK_PROMPT)])
+	assert _deleted_ids(result) == ["trig_h"]
+
+
+def test_hand_back_after_verdict_update_is_still_recognised(monkeypatch, tmp_path, capsys):
+	"""The checker replaces the prompt with the verdict; it keeps the PR URL."""
+	_stub(monkeypatch, {"repos/o/r/pulls/12": {"merged": True, "state": "closed", "merged_at": LONG_AGO}})
+	prompt = f'CLAUDE.md §26 hand-back for PR #12 ({PR_URL}). Verdict: {{"done": true}}. Checker session: session_x.'
+	_, result = _run(tmp_path, capsys, [_hand_back(prompt=prompt)])
+	assert _deleted_ids(result) == ["trig_h"]
+
+
+def test_top_level_prompt_field_is_accepted(monkeypatch, tmp_path, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/12": {"merged": False, "state": "open"}})
+	routine = {"id": "trig_h", "name": "PR #12 hand-back", "enabled": True, "ended_reason": "", "prompt": SECTION_26_HAND_BACK_PROMPT}
+	calls_result = _run(tmp_path, capsys, [routine])[1]
+	assert calls_result["kept"] == 1
+
+
+def test_our_routine_without_a_hand_back_prompt_needs_no_read(monkeypatch, tmp_path, capsys):
+	calls = _stub(monkeypatch, {})
+	_, result = _run(tmp_path, capsys, [_routine("trig_s", "implement-plan s: safety net", prompt="Safety net for ...")])
+	assert result["kept"] == 1 and calls == []
+
+
+def test_raw_list_triggers_result_is_accepted(monkeypatch, tmp_path, capsys):
+	"""The harness may save the whole list_triggers result to a file; pass it as is."""
+	_stub(monkeypatch, {})
+	raw = {"data": [dict(_routine("trig_a", "PR #3 status check-in", enabled=False, ended_reason="run_once_fired"), cron_expression="", persist_session=True)], "has_more": False}
+	_, result = _run(tmp_path, capsys, raw)
+	assert _deleted_ids(result) == ["trig_a"]

@@ -1572,7 +1572,8 @@ needs the context only it holds:
 1. Create the **hand-back Routine**: `create_trigger` (Claude Code Remote
    MCP server) with `persistent_session_id` = this session's id (Bash:
    `echo "session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}"`), `run_once_at`
-   = now + 7 days, `name` = `PR <owner>/<repo>#<n> hand-back`,
+   = now + 7 days, `name` = `PR #<n> hand-back` (Routine names are capped
+   at 60 characters, so the PR URL in the prompt is what identifies it),
    `initiation: own_followup`, and `prompt` = `CLAUDE.md §26 hand-back
    for PR #<n> (<PR URL>): no verdict is attached, so the checker stopped
    renewing this Routine. Continue with CLAUDE.md §26.D (no-verdict
@@ -1749,17 +1750,20 @@ sweep runs in the sessions that create them, never in Actions:
 - **When**: before arming a check-in (§26.B step 0), after the terminal
   report (§26.D), and wherever `/implement-plan-claude` arms a wait.
 - **How**: `list_triggers` with `include_completed: true` and
-  `limit: 100`; write the `data` array (only `id`, `name`, `enabled`, and
-  `ended_reason` are needed) to a file in the scratchpad; run
+  `limit: 100`. The result is usually too large for the context and the
+  harness saves it to a file: pass that file as is. Otherwise write the
+  `data` array (only `id`, `name`, `enabled`, `ended_reason`, and
+  `derived_state.prompt` are needed) to a file in the scratchpad. Run
   `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/stale_routines.py
   --triggers <file>`; call `delete_trigger` on every id in its `delete`
   list, ignoring not-found. The script decides; the model does not pick
   Routines to delete. Later pages are left for later sweeps.
 - **What it deletes**: only Routines these flows create, matched by name
-  (`PR #<n> status check-in…`, `implement-plan <slug>: …`, and
-  `… <owner>/<repo>#<n> hand-back`), and only when they have ended
-  (`ended_reason` set) or are a hand-back whose PR merged or closed more
-  than 24 hours ago. A Routine the user paused, and every Routine with any
+  (`PR #<n> status check-in…`, `PR #<n> hand-back`, and
+  `implement-plan <slug>: …`), and only when they have ended
+  (`ended_reason` set) or are a hand-back (its prompt reads `… hand-back
+  for …` and names the PR URL) whose PR merged or closed more than 24
+  hours ago. A Routine the user paused, and every Routine with any
   other name, is never deleted.
 - **Budget and failure**: one REST read per distinct enabled hand-back PR
   (§15); a failed read keeps that Routine and lists it under `errors`. A

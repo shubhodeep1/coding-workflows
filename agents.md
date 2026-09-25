@@ -696,7 +696,7 @@ pushes a branch and a pull request exists for it, the session starts a
 Sonnet checker session (`create_session`, titled `PR #<n> status check-in`)
 and, before it, a **hand-back Routine** bound to itself (`create_trigger`
 with `persistent_session_id` = its own id, `run_once_at` = now + 7 days,
-named `PR <owner>/<repo>#<n> hand-back`). The checker runs
+named `PR #<n> hand-back`, with the PR URL in its prompt). The checker runs
 `.claude/scripts/check_in_status.py --terminal-only` (one REST read),
 renews the hand-back 7 days ahead, and re-arms itself with `send_later`
 every 180 minutes while the PR is open. Once the PR merges or closes it
@@ -734,12 +734,15 @@ It never handles CI, reviews, comments, or conflicts; that stays a direct
   `/implement-plan-claude` checker; `workflow-templates/.claude/scripts/`
   holds a byte-identical copy.
 - Stale Routine sweep (CLAUDE.md §26.G): `.claude/scripts/stale_routines.py`
-  reads a `list_triggers` result (`include_completed: true`) from a file and
+  reads a `list_triggers` result (`include_completed: true`) from a file (the
+  harness usually saves that large result to a file itself) and
   prints the Routine ids to delete; the session then calls `delete_trigger`
   on each. Only Routines the check-in flows create are eligible, by name
-  (`PR #<n> status check-in…`, `implement-plan <slug>: …`,
-  `… <owner>/<repo>#<n> hand-back`), and only when ended (`ended_reason`
-  set) or a hand-back whose PR finished more than 24 hours ago (one REST
+  (`PR #<n> status check-in…`, `PR #<n> hand-back`,
+  `implement-plan <slug>: …`), and only when ended (`ended_reason` set) or
+  a hand-back whose PR finished more than 24 hours ago. Routine names are
+  capped at 60 characters and truncated with `…`, so a hand-back and its
+  PR are identified from the PR URL in its prompt, not its name (one REST
   read per distinct hand-back PR; a failed read keeps the Routine). A
   user-paused Routine and any other name are never deleted. It runs before
   every §26 arming, after every §26 terminal report, and wherever
