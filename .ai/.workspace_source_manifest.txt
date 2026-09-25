@@ -178,6 +178,7 @@ changelog.d/4446-file-all-preexisting-security-advisories.md
 changelog.d/4455-security-pass-ownership-policy.md
 changelog.d/4464-security-pass-trust-boundaries.md
 changelog.d/4477-review-worktree-transfer.md
+changelog.d/4479-trusted-poller-postprocess.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md

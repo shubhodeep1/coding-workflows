@@ -52,11 +52,16 @@ is sha256(full state bytes BEFORE base64) — every chunk in a single
 write carries the same manifest, so torn writes are trivially detected
 (incomplete chain or hash mismatch -> chain skipped).
 
+Every V2 chunk, initial V1 state and standalone stall-state frame also
+requires a versioned HMAC trailer. The authenticated host verifies the
+API-reported comment author and binds the exact frame to the repository,
+issue and record kind before the payload is considered authoritative.
+
 Backward compatibility
 ----------------------
-This helper is ADDITIVE.  The bash caller falls back to the V1 reader if
-no complete V2 chain is found, so legacy V1 state comments keep working
-until the next write supersedes them.  The writer emits V2 even for
+The bash caller falls back to the V1 reader if no complete V2 chain is
+found, but only signed V1 comments are authoritative. Unsigned historical
+records are never blessed automatically. The writer emits V2 even for
 single-chunk payloads to keep the write path uniform.
 """
 
@@ -66,7 +71,9 @@ import argparse
 import base64
 import binascii
 import hashlib
+import hmac
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -97,6 +104,80 @@ V2_OPENER_RE = re.compile(
 	re.MULTILINE,
 )
 V2_CLOSER = "ORCHESTRATOR_STATE_V2 -->"
+AUTH_TRAILER_RE = re.compile(r"\n<!-- ORCHESTRATOR_STATE_AUTH_V1 mac=([0-9a-f]{64}) -->\Z")
+AUTH_TRAILER_SIZE = len("\n<!-- ORCHESTRATOR_STATE_AUTH_V1 mac=" + "0" * 64 + " -->")
+
+
+def _auth_key() -> bytes:
+	# The workflow credential is available only on the trusted host, never in
+	# issue comments, CLI arguments or diagnostics. Rotation invalidates old records.
+	token = os.environ.get("GH_TOKEN", "")
+	if not token:
+		raise ValueError("state authentication credential unavailable")
+	return hmac.digest(token.encode("utf-8"), b"orchestrator-comment-state/v1", "sha256")
+
+
+def _record_kind(body: str) -> str | None:
+	if body.startswith("<!-- ORCHESTRATOR_STATE_V2 part=") and body.endswith(V2_CLOSER):
+		return "tracking-v2"
+	if body.startswith("<!-- ORCHESTRATOR_STATE_V1\n") and body.endswith("\nORCHESTRATOR_STATE_V1 -->"):
+		return "tracking-v1"
+	if body.startswith("<!-- AI_STANDALONE_STALL_STATE_V1\n") and body.endswith("\nAI_STANDALONE_STALL_STATE_V1 -->"):
+		return "standalone-v1"
+	return None
+
+
+def _mac(repo: str, issue: int, kind: str, body: str) -> str:
+	if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or issue < 1:
+		raise ValueError("invalid state authentication scope")
+	message = json.dumps([repo, issue, kind, body], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+	return hmac.new(_auth_key(), message, hashlib.sha256).hexdigest()
+
+
+def sign_body(repo: str, issue: int, body: str) -> str:
+	kind = _record_kind(body)
+	if kind is None or AUTH_TRAILER_RE.search(body):
+		raise ValueError("invalid state comment frame")
+	signed = body + f"\n<!-- ORCHESTRATOR_STATE_AUTH_V1 mac={_mac(repo, issue, kind, body)} -->"
+	if len(signed.encode("utf-8")) > GITHUB_COMMENT_BODY_CAP:
+		raise ValueError("signed state comment exceeds size limit")
+	return signed
+
+
+def verified_body(repo: str, issue: int, login: str, comment: Any) -> str | None:
+	if not isinstance(comment, dict) or not login or not isinstance(comment.get("body"), str):
+		return None
+	user = comment.get("user")
+	if not isinstance(user, dict) or not isinstance(user.get("login"), str) or user["login"].casefold() != login.casefold():
+		return None
+	signed = comment["body"]
+	match = AUTH_TRAILER_RE.search(signed)
+	if not match or len(signed.encode("utf-8")) > GITHUB_COMMENT_BODY_CAP:
+		return None
+	body = signed[:match.start()]
+	kind = _record_kind(body)
+	if kind is None:
+		return None
+	return body if hmac.compare_digest(match.group(1), _mac(repo, issue, kind, body)) else None
+
+
+def cmd_sign(args: argparse.Namespace) -> int:
+	body = Path(args.body_file).read_text(encoding="utf-8")
+	sys.stdout.write(sign_body(args.repo, args.issue, body))
+	return 0
+
+
+def cmd_filter(args: argparse.Namespace) -> int:
+	comments = json.loads(Path(args.comments_json).read_text(encoding="utf-8"))
+	if not isinstance(comments, list):
+		raise ValueError("comments must be an array")
+	verified = []
+	for comment in comments:
+		body = verified_body(args.repo, args.issue, args.login, comment)
+		if body is not None:
+			verified.append({**comment, "body": body})
+	print(json.dumps(verified))
+	return 0
 
 
 def _frame(part: int, total: int, manifest: str, payload: bytes) -> bytes:
@@ -109,6 +190,7 @@ def _frame(part: int, total: int, manifest: str, payload: bytes) -> bytes:
 
 
 def cmd_pack(args: argparse.Namespace) -> int:
+	_auth_key()
 	state_path = Path(args.state_file)
 	if not state_path.exists():
 		print(f"state file not found: {state_path}", file=sys.stderr)
@@ -135,12 +217,15 @@ def cmd_pack(args: argparse.Namespace) -> int:
 		)
 		return 2
 	total = max(1, (len(encoded) + chunk_size - 1) // chunk_size)
+	if total > MAX_CHUNKS_PER_MANIFEST:
+		print("state exceeds maximum authenticated chunk count", file=sys.stderr)
+		return 2
 	out_dir = Path(args.out_dir)
 	out_dir.mkdir(parents=True, exist_ok=True)
 	files: list[str] = []
 	for i in range(1, total + 1):
 		slice_bytes = encoded[(i - 1) * chunk_size : i * chunk_size]
-		framed = _frame(i, total, manifest, slice_bytes)
+		framed = sign_body(args.repo, args.issue, _frame(i, total, manifest, slice_bytes).decode("ascii")).encode("utf-8")
 		if len(framed) > GITHUB_COMMENT_BODY_CAP:
 			# Should never happen with DEFAULT_CHUNK_SIZE, but guard just
 			# in case a caller passes a custom --chunk-size that's too
@@ -242,7 +327,9 @@ def cmd_extract(args: argparse.Namespace) -> int:
 	# complete chain that happened to use different chunk slicing.
 	active_chain_by_key: dict[tuple[str, int], dict[str, Any]] = {}
 	for c in reversed(comments):
-		body = (c or {}).get("body") or ""
+		body = verified_body(args.repo, args.issue, args.login, c)
+		if body is None:
+			continue
 		if "ORCHESTRATOR_STATE_V2" not in body:
 			continue
 		parsed = _try_parse_v2_chunk(body)
@@ -304,12 +391,28 @@ def main() -> int:
 	p_pack.add_argument("--state-file", required=True)
 	p_pack.add_argument("--out-dir", required=True)
 	p_pack.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
+	p_pack.add_argument("--repo", required=True)
+	p_pack.add_argument("--issue", required=True, type=int)
 	p_pack.set_defaults(func=cmd_pack)
+	p_sign = sub.add_parser("sign", help="Authenticate an existing state comment body")
+	p_sign.add_argument("--repo", required=True)
+	p_sign.add_argument("--issue", required=True, type=int)
+	p_sign.add_argument("--body-file", required=True)
+	p_sign.set_defaults(func=cmd_sign)
+	p_filter = sub.add_parser("filter", help="Keep only authenticated issue comments")
+	p_filter.add_argument("--repo", required=True)
+	p_filter.add_argument("--issue", required=True, type=int)
+	p_filter.add_argument("--login", required=True)
+	p_filter.add_argument("--comments-json", required=True)
+	p_filter.set_defaults(func=cmd_filter)
 	p_extract = sub.add_parser(
 		"extract",
 		help="Find the latest complete V2 chain in a paginated comments JSON array",
 	)
 	p_extract.add_argument("--comments-json", required=True)
+	p_extract.add_argument("--repo", required=True)
+	p_extract.add_argument("--issue", required=True, type=int)
+	p_extract.add_argument("--login", required=True)
 	p_extract.set_defaults(func=cmd_extract)
 	args = p.parse_args()
 	return args.func(args)

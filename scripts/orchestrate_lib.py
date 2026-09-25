@@ -3642,6 +3642,19 @@ def cmd_rebuild_state(args: argparse.Namespace) -> int:
 	issue_map_raw: dict[str, Any] = json.loads(args.issue_map_json)
 	issue_map = {k: int(v) for k, v in issue_map_raw.items()}
 	tracking_issue = int(args.tracking_issue)
+	if args.require_complete_first_wave:
+		# An absent authenticated comment is not evidence of a never-started
+		# project. Only the initial all-created Wave 1 case is safe to reset.
+		parsed = parse_tracking_body(body)
+		waves = parsed["waves"]
+		if not waves or not parsed["integration_branch"]:
+			raise ReconstructionUnsafeError("tracking body lacks wave or integration evidence")
+		ids = [issue["id"] for wave in waves for issue in wave]
+		first_wave_ids = {issue["id"] for issue in waves[0]}
+		if len(ids) != len(set(ids)) or set(issue_map) != first_wave_ids \
+			or len(set(issue_map.values())) != len(issue_map) or any(n < 1 for n in issue_map.values()) \
+			or any(issue["completed"] for wave in waves for issue in wave):
+			raise ReconstructionUnsafeError("initial wave evidence incomplete or project already advanced")
 
 	state = rebuild_tracking_state(body, issue_map, tracking_issue)
 	_print_json(state)
@@ -3855,6 +3868,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p_rebuild.add_argument("--body-file", required=True, help="Path to tracking issue body text file")
 	p_rebuild.add_argument("--issue-map-json", required=True, help='JSON: {"local_id": github_number, ...}')
 	p_rebuild.add_argument("--tracking-issue", required=True, help="Tracking issue number")
+	p_rebuild.add_argument("--require-complete-first-wave", action="store_true", help="Refuse ambiguous reconstruction without authenticated state")
 	p_rebuild.set_defaults(func=cmd_rebuild_state)
 
 	p_stalls = subparsers.add_parser("check-stalls", help="Detect stalled issues in current wave")
