@@ -64,6 +64,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   The review editor's disposable Docker workspace admits `.cjs`, `.mjs`,
+   `.cts`, and `.mts` alongside other source extensions for snapshot and
+   validated transfer. Its isolation helpers must already exist in the
+   verified workflow support commit; a PR's own copies are review data,
+   not executable support, so review fails closed until that commit lands.
    **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on PRs whose
    head ref starts with `claude/implement-plan-` the reviewer panel runs as
    usual, but the GPT editor, conflict resolver, push / re-trigger tail and
@@ -72,12 +77,18 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->`
    comment for the `/implement-plan-claude` session, which fixes the round in
    one `[claude-autofix]` commit (counted toward `MAX_AUTOFIX_ITERATIONS`) or
-   answers with `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->` and a
-   `claude_fixer_converged_head=<sha>` dispatch; the gate verifies both
-   markers for that exact head (hand-off by the `GH_PAT` identity, verdict by
-   an OWNER / MEMBER / COLLABORATOR) and the `claude-fixer-auto-merge` job
-   enables auto-merge. Zero ledger entries and no failing check auto-merge in
-   the run; at the cap the PR itself is labelled `ai:review-blocked`; dispatch
+   asks a separately authenticated, dedicated bot to attest to the exact
+   ledger digest in an alongside v2 verdict. `CLAUDE_FIXER_VERDICT_BOT_LOGIN`
+   defaults empty, disabling verdict convergence; a collaborator's v1 verdict
+   never authorizes auto-merge. An accepted dispatch re-runs the reviewer
+   panel on the same head; only zero findings plus a fresh `ready`, same-head
+   check-run snapshot can enable head-bound auto-merge. Remaining findings
+   block the PR for intervention rather than another same-head verdict cycle.
+   The bot's comment keeps `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`
+   alongside the v2 digest marker; the session dispatches
+   `claude_fixer_converged_head=<sha>` for verification. Zero ledger entries
+   with a clean check snapshot auto-merge in the run; at the cap the PR itself
+   is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
    (`claude_fixer_awaiting_session`). `[claude-intervention]` and
    `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`
@@ -204,15 +215,19 @@ Phases of the unattended pipeline (each is a separate workflow file under
     2/4/8/16 s backoff. Fire text is fixed keys only, with no issue prose.
     The routine starts an Opus session in the target repo running
     `/implement-issue-claude`: a single-phase plan
-    `docs/plans/issue-<N>-<topic>-plan.md` (header `Source issue:` +
-    `Security pass: run|skip`), branch `claude/implement-plan-<slug>-phase-1`,
-    PR body `Refs #N`, then `/implement-plan-claude` issue mode (the completion
-    PR carries `Fixes #N`). No-clash gates: `plan.yml` / `implement.yml`
+    `docs/plans/issue-<N>-<topic>-plan.md` (header `Source issue:`,
+    `Base branch:` from the issue's `Integration branch:` / `Target branch:`
+    line else the default branch, `Security pass: run|skip`), then continues
+    as `/implement-plan-claude` issue mode: project branch
+    `claude/implement-plan-<slug>` forked from the base branch, final PR into
+    it with `Fixes #N` (default base) or an explicit close + `ai:merged` after
+    the final merge (any other base; steps 12–13 skipped). No-clash gates: `plan.yml` / `implement.yml`
     (`AI_PHASE_GATE_V1 … reason=claude_routed outcome=skip`) and standalone
     stall recovery (`STALL_SKIP … reason=claude_routed`) ignore issues with
     `ai:claude` and no `ai:codex`. Failures label `ai:claude-handoff-failed`
-    (handoff / intake) or `ai:claude-blocked` (CLAUDE.md §28.C hard blocker in
-    the session). Both Claude commands act instead of asking (CLAUDE.md §28).
+    (handoff / intake) or `ai:claude-blocked` (a CLAUDE.md §28.C stop, asked
+    on the issue). Issue-mode sessions auto-decide every question, start-up
+    checks included (CLAUDE.md §28.A).
     Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
@@ -744,6 +759,23 @@ safety-net trigger and archive its checker together. The log's `## Lessons`
 section is ingested into AI memory on merge (see the
 Memory subsystem notes).
 
+Questions do not stall the chain (CLAUDE.md §28). After the start-up checks
+(step 0 permission mode, step 1 plan resolution, step 3 phase checklist),
+every intent or design question a stage would stop to ask is answered with
+its RECOMMENDED option. That covers plan ambiguity, edge cases the plan
+leaves open, and `/verify-activation` findings that need a decision; the
+chain passes `— unattended` to its conformance and activation runs. Each
+pick is recorded as an `AD-<n>` line in the log's `## Auto-decisions`
+section and listed in the PR that carries it. The step-12 activation report
+and the `/deploy-activate` opening message list every entry for human
+review without asking. A `change AD-<n> → <letter>` reply is implemented as
+one PR on `claude/implement-plan-<slug>-decision-changes`, and unchanged
+entries become `confirmed` at LIVE. Failure escalations still stop the
+chain at `BLOCKED`: used-up caps, security or validation runs that did not
+succeed, and terminal validation classes. So do §22.B / §23.C / §24.D
+operations. The AI orchestrator's own clarify auto-answer
+(`[auto-answered-by-orchestrator]`) is separate and unchanged.
+
 No field here changes what any consumer repo receives on the `@stable`
 sync: `.claude/commands/` is not part of the synced surface, and the
 template copies under `workflow-templates/.claude/commands/` have never
@@ -868,6 +900,13 @@ committing the corresponding file:
 - `.github/ai/workspace_hooks/<phase>/<hook>.sh` — executed by
   `scripts/run_workspace_hook.sh`. Supported hook names are `after_create`,
   `before_run`, `after_run`, and `before_remove`; missing files are a no-op.
+  Validate's four hooks run from trusted support in a tokenless, network-disabled
+  container against a bounded, screened workspace copy, never the host checkout
+  or its `.git`. Isolation/transfer errors stop validation even for nonfatal
+  hooks. An explicit `validate.yml` `target_ref` requires exactly one open
+  trusted-author same-repo project PR targeting the default branch; checkout
+  pins and verifies that PR's SHA without persisting checkout credentials.
+  Empty `target_ref` retains integration/default selection.
 
 ## Workflow scenario traces
 

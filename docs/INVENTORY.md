@@ -221,6 +221,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_run_judge_interim.sh` — Shell helper for review run judge interim.
 - `scripts/review_run_reviewers.sh` — Shell helper for review run reviewers.
 - `scripts/review_synthesise_smoke.sh` — Shell helper for review synthesise smoke.
+- `scripts/review_sandbox/Dockerfile` — Pinned, credential-free review dependency and editor image.
+- `scripts/review_untrusted_sandbox.sh` — Prepare the disposable review workspace and run the OpenCode writer without host credentials.
+- `scripts/review_untrusted_workspace.py` — Validate review snapshot paths, baselines and editor changes before transfer.
 - `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
 - `scripts/run_plan_codex.sh` — Plan-phase Codex runner extracted from workflow YAML.
 - `scripts/run_validation_repo_checks.sh` — Shell helper for run validation repo checks.

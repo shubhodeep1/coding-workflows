@@ -273,6 +273,7 @@ jobs:
       claude_branch_review: ${{ steps.evaluate.outputs.claude_branch_review }}
       claude_fixer: ${{ steps.evaluate.outputs.claude_fixer }}
       claude_fixer_converged: ${{ steps.evaluate.outputs.claude_fixer_converged }}
+      claude_fixer_verify: ${{ steps.evaluate.outputs.claude_fixer_verify }}
       force_full_review_tier: ${{ steps.evaluate.outputs.force_full_review_tier }}
       head_ref: ${{ steps.evaluate.outputs.head_ref }}
       head_sha: ${{ steps.evaluate.outputs.head_sha }}
@@ -449,6 +450,7 @@ jobs:
           # Claude-fixer mode (see the block below the self-triggered skip).
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           CLAUDE_FIXER_CONVERGED_HEAD: ${{ inputs.claude_fixer_converged_head || github.event.inputs.claude_fixer_converged_head || '' }}
+          CLAUDE_FIXER_VERDICT_BOT_LOGIN: ${{ vars.CLAUDE_FIXER_VERDICT_BOT_LOGIN || '' }}
           # Identical-failure fingerprint cap (see the block below the
           # terminal same-head skip). Default on, three identical failures on
           # one head; set REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false to stop
@@ -705,7 +707,7 @@ jobs:
             # shellcheck disable=SC2016
             if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
               -f per_page=100 \
-              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-"))) | {id: .id, author_login: (.user.login // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
+              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-"))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
               2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
               && [ -s "${gate_marker_comments_file}" ]; then
               gate_marker_fetch_state="ok"
@@ -719,13 +721,10 @@ jobs:
           # fixes to the Claude session that owns the PR instead of the GPT
           # editor / resolver (codex-agent step "Hand review round to Claude
           # session (Claude-fixer mode)"). The gate adds two things:
-          #   * claude_fixer_converged_head dispatch: the session found nothing
-          #     left to fix on that head. Accept it only when it names the
-          #     current head, a findings hand-off for that head was posted by
-          #     the GH_PAT identity, and a trusted collaborator's
-          #     ai:claude-fixer-verdict:v1 comment answers it; the sibling
-          #     claude-fixer-auto-merge job then enables auto-merge. Anything
-          #     else skips the run (claude_fixer_converged_unverified).
+          #   * claude_fixer_converged_head dispatch: authenticate a dedicated
+          #     bot verdict bound to the latest workflow-owned findings ledger.
+          #     This only authorizes a fresh reviewer run, NEVER auto-merge.
+          #     Anything else skips (claude_fixer_converged_unverified).
           #   * any other workflow_dispatch (sweep, continuation, orchestrator)
           #     on a head that already has a hand-off is skipped: the round
           #     waits on the session, and a rerun would only repeat the panel.
@@ -737,6 +736,7 @@ jobs:
           # GET /user plus one paginated GET /issues/{n}/comments at most.
           CLAUDE_FIXER="false"
           CLAUDE_FIXER_CONVERGED="false"
+          CLAUDE_FIXER_VERIFY="false"
           if [ "${CLAUDE_FIXER_ENABLED:-true}" != "false" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             case "${pr_head_ref}" in
               claude/implement-plan-*) CLAUDE_FIXER="true" ;;
@@ -757,21 +757,36 @@ jobs:
               claude_fixer_converged_detail="not_claude_fixer_pr"
             elif ! [[ "${CLAUDE_FIXER_CONVERGED_HEAD:-}" =~ ^[0-9a-f]{40}$ ]] || [ "${CLAUDE_FIXER_CONVERGED_HEAD:-}" != "${pr_head_sha_gate}" ]; then
               claude_fixer_converged_detail="stale_or_invalid_head current=${pr_head_sha_gate:-unknown}"
+            elif ! [[ "${CLAUDE_FIXER_VERDICT_BOT_LOGIN:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$ ]]; then
+              claude_fixer_converged_detail="bot_unconfigured"
             else
               gate_fetch_marker_comments
               if [ "${gate_marker_fetch_state}" != "ok" ]; then
                 claude_fixer_converged_detail="comments_${gate_marker_fetch_state}"
+              elif [ "${CLAUDE_FIXER_VERDICT_BOT_LOGIN,,}" = "${gate_marker_author_login,,}" ]; then
+                claude_fixer_converged_detail="bot_not_distinct"
               elif jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
-                  ([.[] | select((.id | type) == "number" and .author_login == $author and
-                    ((.body // "") | test("<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->")))] | max_by(.id)) as $latest_handoff |
-                  $latest_handoff != null and
-                  (($latest_handoff.body // "") | contains("<!-- ai:claude-fixer-handoff:v1 kind=findings head=" + $head + " ")) and
+                  any(.[]; .author_login == $author and
+                    ((.body // "") | split("\n") | index("<!-- ai:claude-fixer-verification:v1 head=" + $head + " result=unresolved -->") != null))
+                ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
+                claude_fixer_converged_detail="already_verified_unresolved"
+              elif jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" --arg bot "${CLAUDE_FIXER_VERDICT_BOT_LOGIN}" '
+                  def lines: (.body // "") | split("\n") | map(gsub("\r$"; ""));
+                  def handoff: any(lines[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->$"));
+                  def issued_handoff: ((.body // "") | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\\n"));
+                  ([.[] | select((.id | type) == "number" and .author_login == $author and issued_handoff and handoff)] | max_by(.id)) as $latest_handoff |
+                  ($latest_handoff | lines | map(select(test("^<!-- ai:claude-fixer-handoff:v1 kind=findings head=" + $head + " round=[0-9]+ -->$"))) | first // "" | capture(" round=(?<round>[0-9]+) -->$").round) as $round |
+                  ([($latest_handoff | lines[]) | select(test("^<!-- ai:claude-fixer-handoff:v2 head=" + $head + " round=" + $round + " ledger=[0-9a-f]{64} -->$"))] | first // "" | capture(" ledger=(?<digest>[0-9a-f]{64}) -->$").digest) as $digest |
+                  $latest_handoff != null and $round != null and $digest != null and
                   any(.[]; (.id | type) == "number" and .id > $latest_handoff.id and
-                    ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")) and
-                    ((.body // "") | contains("<!-- ai:claude-fixer-verdict:v1 head=" + $head + " -->")))
+                    .author_login == $bot and .author_type == "Bot" and
+                    (lines | index("<!-- ai:claude-fixer-verdict:v1 head=" + $head + " -->") != null) and
+                    (lines | index("<!-- ai:claude-fixer-verdict:v2 head=" + $head + " round=" + $round + " ledger=" + $digest + " -->") != null))
                 ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
                 CLAUDE_FIXER_CONVERGED="true"
-                SKIP_REASON="claude_fixer_converged"
+                CLAUDE_FIXER_VERIFY="true"
+                SHOULD_RUN="true"
+                SKIP_REASON=""
               else
                 claude_fixer_converged_detail="handoff_or_verdict_missing"
               fi
@@ -784,7 +799,9 @@ jobs:
             && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
             gate_fetch_marker_comments
             if [ "${gate_marker_fetch_state}" = "ok" ] && jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
-                any(.[]; .author_login == $author and ((.body // "") | test("<!-- ai:claude-fixer-handoff:v1 kind=[a-z]+ head=" + $head + " ")))
+                any(.[]; .author_login == $author and
+                  ((.body // "") | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\\n")) and
+                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->$"))))
               ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
               SHOULD_RUN="false"
               SKIP_REASON="claude_fixer_awaiting_session"
@@ -834,6 +851,7 @@ jobs:
           # the fingerprint cap below through gate_fetch_marker_comments.
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
+            && [ "${CLAUDE_FIXER_VERIFY}" != "true" ] \
             && [ "${AUTOFIX_SKIP_TERMINAL_SAME_HEAD:-true}" != "false" ] \
             && [ "${FORCE_RB_JUDGE:-false}" != "true" ] \
             && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -1077,7 +1095,7 @@ jobs:
           # See header env-block comment for full semantics.
           DETERMINISTIC_SKIP="false"
           DET_SKIP_REASON=""
-          if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+          if [ "${SHOULD_RUN}" = "true" ] && [ "${CLAUDE_FIXER}" != "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             FORCE_REVIEW="false"
             if printf "%s" "${PR_TITLE}" | grep -Fq "[force-review]"; then
               FORCE_REVIEW="true"
@@ -1171,6 +1189,14 @@ jobs:
                     esac
                     case "${lc_fname}" in
                       .github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*|validation/*|ai-memory/*|db/contracts/*)
+                        PROTECTED_SKIP_SUPPRESSED="true" ;;
+                    esac
+                    # Filenames are PR-controlled: executable build/test
+                    # entry points and configuration must not take either
+                    # deterministic skip route, even under docs/ or after
+                    # a rename away from a protected name.
+                    case "${lc_base}" in
+                      dockerfile|dockerfile.*|dockerfile-*|*.dockerfile|*.dockerfile.*|*.dockerfile-*|containerfile|containerfile.*|containerfile-*|*.containerfile|*.containerfile.*|*.containerfile-*|.dockerignore|.containerignore|compose.yml|compose.yaml|compose.*.yml|compose.*.yaml|compose-*.yml|compose-*.yaml|docker-compose.yml|docker-compose.yaml|docker-compose.*.yml|docker-compose.*.yaml|docker-compose-*.yml|docker-compose-*.yaml|makefile|makefile.*|gnumakefile|gnumakefile.*|justfile|justfile.*|taskfile|taskfile.*|rakefile|rakefile.*|jenkinsfile|jenkinsfile.*|cmakelists.txt|meson.build|meson_options.txt|pom.xml|build.xml|build.gradle*|settings.gradle*|gradlew|gradlew.bat|gulpfile.*|gruntfile.*|package.json|build|build.bazel|workspace|workspace.bazel|module.bazel|*.bazel|*.bzl|*.mk|*.cmake|*.gradle|*.gradle.kts|requirements*.txt|constraints*.txt|go.mod|go.sum|pipfile|pipfile.lock|*.lock|*.lockb|config|*.config|*.config.*|*.conf|*.ini|*.toml|*.yaml|*.yml|*.json|*.jsonc|*.properties|*.xml|*.tf|*.hcl|.*rc|.*rc.*|.env|.env.*|*.sh|*.bash|*.zsh|*.ps1|*.cmd|*.bat)
                         PROTECTED_SKIP_SUPPRESSED="true" ;;
                     esac
                     # Root build, dependency and lint configuration already
@@ -1458,6 +1484,7 @@ jobs:
           echo "claude_branch_review=${CLAUDE_BRANCH_REVIEW}" >> "${GITHUB_OUTPUT}"
           echo "claude_fixer=${CLAUDE_FIXER}" >> "${GITHUB_OUTPUT}"
           echo "claude_fixer_converged=${CLAUDE_FIXER_CONVERGED}" >> "${GITHUB_OUTPUT}"
+          echo "claude_fixer_verify=${CLAUDE_FIXER_VERIFY}" >> "${GITHUB_OUTPUT}"
           echo "force_full_review_tier=${FORCE_FULL_REVIEW_TIER}" >> "${GITHUB_OUTPUT}"
           # Propagate head ref so downstream jobs (deterministic-skip-merge)
           # can apply the same head-ref-keyed auto-merge suppressors without
@@ -1918,49 +1945,16 @@ jobs:
           # 4) Workflow run summary
           write_deterministic_skip_summary
 
-  # Claude-fixer mode convergence (gate output claude_fixer_converged): the
-  # /implement-plan-claude session found nothing left to fix on the reviewed
-  # head and dispatched claude_fixer_converged_head. The gate verified the
-  # hand-off and the verdict for that exact head; this job enables auto-merge
-  # through the same helper the codex-agent "Enable auto-merge on PR" step
-  # uses, bound to that head (--match-head-commit). No reviewer or editor
-  # model runs here.
+  # Retain the legacy job identifier for workflow consumers, but disable its
+  # direct gate-to-merge path. Convergence only authorizes codex-agent review;
+  # its fresh clean result uses the ordinary head-bound auto-merge step.
   claude-fixer-auto-merge:
     needs: gate
     runs-on: ubuntu-latest
-    if: ${{ needs.gate.outputs.claude_fixer_converged == 'true' }}
+    if: ${{ needs.gate.outputs.claude_fixer_verify == 'legacy_disabled' }}
     steps:
-      - name: Checkout auto-merge helper
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: ${{ needs.gate.outputs.review_support_sha }}
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-          sparse-checkout: |
-            scripts/review_enable_auto_merge.sh
-            scripts/gh_helpers.sh
-            scripts/emit_event.sh
-          sparse-checkout-cone-mode: false
-
-      - name: Enable auto-merge on the converged head
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
-          ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
-          FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
-          ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
-          INITIAL_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
-          REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
-        run: |
-          set -euo pipefail
-          if [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${REVIEW_SUPPORT_SHA}" ]; then
-            echo "::error::Unverified auto-merge helper checkout."
-            exit 1
-          fi
-          echo "CLAUDE_FIXER_AUTO_MERGE pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA}"
-          bash .codex-workflow-src/scripts/review_enable_auto_merge.sh
+      - name: Legacy direct convergence merge disabled
+        run: echo "CLAUDE_FIXER_AUTO_MERGE disabled; fresh review required"
 
   fingerprint-cap-block:
     # Outcome of the gate's identical-failure fingerprint cap: the same
@@ -2351,6 +2345,7 @@ jobs:
       # findings and no failing check still enable auto-merge here, and the
       # iteration cap + review-blocked judge still apply. See the gate.
       CLAUDE_FIXER_MODE: ${{ needs.gate.outputs.claude_fixer }}
+      CLAUDE_FIXER_VERIFICATION: ${{ needs.gate.outputs.claude_fixer_verify }}
       # No-PR claude-branch-review path overrides (push events on claude/**
       # without an open PR).  Read by "Collect PR metadata" and
       # "Checkout PR head branch" to synthesize PR_META_FILE / TARGET_BRANCH
@@ -4346,6 +4341,11 @@ jobs:
               ;;
           esac
 
+          # A verdict needs an independent full-head review, not a restored
+          # same-head partial run or an iteration-scoped replay of old output.
+          if [ "${CLAUDE_FIXER_VERIFICATION:-false}" = "true" ]; then
+            export AUTOFIX_RESUME_RESTORED=false AUTOFIX_RESUME_SHOULD_CONTINUE=false REVIEW_REVIEWER_ITERATION_SCOPING=0
+          fi
           reviewers_rc=0
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" || reviewers_rc=$?
 
@@ -4580,70 +4580,8 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         run: |
           set -euo pipefail
-          # Install project dependencies so the editor can validate fixes
-          # (e.g., run vitest, tsc, pytest). Best-effort: failures here do
-          # not block the workflow.
-          install_failed=false
-          if [ -f package-lock.json ]; then
-            echo "Found package-lock.json — running npm ci"
-            npm ci --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f yarn.lock ]; then
-            echo "Found yarn.lock — running yarn install"
-            yarn install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f pnpm-lock.yaml ]; then
-            echo "Found pnpm-lock.yaml — running pnpm install"
-            npx pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f package.json ]; then
-            echo "Found package.json (no lockfile) — running npm install"
-            npm install --ignore-scripts 2>&1 || install_failed=true
-          fi
-          if [ -f requirements.txt ]; then
-            echo "Found requirements.txt — running pip install"
-            pip install -r requirements.txt 2>&1 || install_failed=true
-          elif [ -f pyproject.toml ] && [ ! -f package.json ]; then
-            echo "Found pyproject.toml — running pip install"
-            pip install -e ".[dev]" 2>&1 || pip install -e . 2>&1 || install_failed=true
-          fi
-          if [ "${install_failed}" = "true" ]; then
-            echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
-          fi
-          # The Python branch above can report success while installing
-          # nothing.  A pyproject.toml that carries only a tool table (for
-          # example `[tool.pytest.ini_options]`) has no `[project]` table, so
-          # setuptools' legacy fallback builds an `UNKNOWN-0.0.0` package,
-          # `pip install -e .` exits 0, `install_failed` stays false, and no
-          # warning is emitted -- yet pytest is still not importable.  The
-          # editor then cannot run the repository's pytest suites and
-          # improvises no-install import shims instead, which is exactly what
-          # every autofix round on PR #4029 reported.  Bootstrap pytest
-          # explicitly whenever the repository declares pytest configuration
-          # and the interpreter the editor will use cannot import it.
-          # `python3 -m pip` (not bare `pip`) keeps the install and the
-          # importability probe on the same interpreter.
-          pytest_bootstrap_wanted=false
-          if [ -f pytest.ini ] || [ -f conftest.py ] || [ -f tests/conftest.py ]; then
-            pytest_bootstrap_wanted=true
-          elif [ -f pyproject.toml ] && grep -q '^\[tool\.pytest\.ini_options\]' pyproject.toml 2>/dev/null; then
-            pytest_bootstrap_wanted=true
-          elif [ -f setup.cfg ] && grep -q '^\[tool:pytest\]' setup.cfg 2>/dev/null; then
-            pytest_bootstrap_wanted=true
-          elif [ -f tox.ini ] && grep -q '^\[pytest\]' tox.ini 2>/dev/null; then
-            pytest_bootstrap_wanted=true
-          fi
-          if [ "${pytest_bootstrap_wanted}" = "true" ]; then
-            if python3 -c "import pytest" >/dev/null 2>&1; then
-              echo "Repository declares pytest configuration and pytest is already importable."
-            else
-              echo "Repository declares pytest configuration but pytest is not importable — installing pytest"
-              python3 -m pip install pytest 2>&1 || \
-                python3 -m pip install --user --break-system-packages pytest 2>&1 || true
-              if python3 -c "import pytest" >/dev/null 2>&1; then
-                echo "pytest bootstrap succeeded."
-              else
-                echo "::warning::pytest is declared by this repository but could not be installed; the editor cannot run its pytest suites and will fall back to ad-hoc validation."
-              fi
-            fi
-          fi
+          # A failed install is best-effort; a failed isolation boundary is not.
+          bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
 
       - name: Switch reasoning effort for editor
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
@@ -4834,6 +4772,10 @@ jobs:
               }
             fi
           fi
+
+      - name: Clean up isolated review workspace
+        if: always() && env.REVIEW_SANDBOX_ROOT != ''
+        run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
 
       - name: Remove slop-scan runtime artifact
         if: always()
@@ -5975,7 +5917,7 @@ jobs:
       # rarely link issues, and .claude/scripts/check_in_status.py routes a
       # PR labelled ai:review-blocked to the command's blocked-PR stage.
       - name: Label Claude-fixer PR review-blocked (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_FIXER_MODE == 'true'
+        if: success() && (steps.retrigger_guard.outputs.max_iterations_reached == 'true' || env.CLAUDE_FIXER_VERIFICATION_FAILED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_FIXER_MODE == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -5985,7 +5927,7 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           gh_retry gh label create "ai:review-blocked" --repo "${REPOSITORY}" --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" >/dev/null 2>&1 || true
           gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null
-          echo "CLAUDE_FIXER_REVIEW_BLOCKED pr=${PR_NUMBER} reason=max_autofix_iterations"
+          echo "CLAUDE_FIXER_REVIEW_BLOCKED pr=${PR_NUMBER} reason=${CLAUDE_FIXER_VERIFICATION_FAILED:-max_autofix_iterations}"
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'

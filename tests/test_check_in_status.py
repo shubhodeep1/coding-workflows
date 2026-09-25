@@ -192,16 +192,18 @@ def _fixer_pr(**overrides):
 	return _pr(head={"sha": FIXER_HEAD, "ref": FIXER_REF}, **overrides)
 
 
-def _comment(body, association="OWNER"):
-	return {"body": body, "author_association": association}
+def _comment(body, association="OWNER", login="workflow-bot", user_type="User"):
+	return {"body": body, "author_association": association, "user": {"login": login, "type": user_type}}
 
 
 def _handoff(kind="findings", head=FIXER_HEAD, round_number=1):
-	return f"## Review round\n<!-- ai:claude-fixer-handoff:v1 kind={kind} head={head} round={round_number} -->"
+	return (f"## Review round\n<!-- ai:claude-fixer-handoff:v1 kind={kind} head={head} round={round_number} -->\n"
+		f"<!-- ai:claude-fixer-handoff:v2 head={head} round={round_number} ledger={'a' * 64} -->")
 
 
 def _verdict(head=FIXER_HEAD):
-	return f"<!-- ai:claude-fixer-verdict:v1 head={head} -->\nNothing left to fix."
+	return (f"<!-- ai:claude-fixer-verdict:v1 head={head} -->\n"
+		f"<!-- ai:claude-fixer-verdict:v2 head={head} round=1 ledger={'a' * 64} -->\nNothing left to fix.")
 
 
 def _stub_fixer(monkeypatch, responses, comments):
@@ -230,16 +232,29 @@ def test_fixer_conflict_handoff_is_a_conflict_round(monkeypatch, capsys):
 
 
 def test_fixer_handoff_answered_by_verdict_keeps_waiting(monkeypatch, capsys):
+	monkeypatch.setenv("CLAUDE_FIXER_VERDICT_BOT_LOGIN", "dedicated-fixer[bot]")
 	_stub_fixer(
 		monkeypatch,
 		{
 			"repos/o/r/pulls/7": _fixer_pr(),
 			f"repos/o/r/commits/{FIXER_HEAD}/check-runs?per_page=100&page=1": {"check_runs": []},
 		},
-		[_comment(_handoff()), _comment(_verdict())],
+		[_comment(_handoff()), _comment(_verdict(), login="dedicated-fixer[bot]", user_type="Bot")],
 	)
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is False
+
+
+def test_forged_or_stale_verdict_never_hides_handoff(monkeypatch, capsys):
+	monkeypatch.setenv("CLAUDE_FIXER_VERDICT_BOT_LOGIN", "dedicated-fixer[bot]")
+	for verdict in (
+		_comment(_verdict(), login="dev", association="COLLABORATOR"),
+		_comment(_verdict(), login="dedicated-fixer[bot]", user_type="User"),
+		_comment(_verdict().replace("ledger=" + "a" * 64, "ledger=" + "b" * 64), login="dedicated-fixer[bot]", user_type="Bot"),
+	):
+		_stub_fixer(monkeypatch, {"repos/o/r/pulls/7": _fixer_pr()}, [_comment(_handoff()), verdict])
+		_, out = _run(["--pr", "7"], capsys)
+		assert out["done"] is True and out["state"] == "review-round"
 
 
 def test_fixer_handoff_instruction_cannot_answer_its_own_round(monkeypatch, capsys):

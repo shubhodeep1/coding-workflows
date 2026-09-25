@@ -33,6 +33,10 @@ If you are **not 100% certain** the outcome matches the user's expectations:
 **STOP. ASK. DO NOT PROCEED.** — even if the task looks trivial or the intent
 seems obvious.
 
+The one exception is §28: inside an unattended `/implement-plan-claude`
+project, a question is answered with its RECOMMENDED option, recorded, and
+listed for human review at the end instead of stopping the chain.
+
 ---
 
 ## §1. Core Priorities (Strict Order)
@@ -1547,8 +1551,7 @@ CI or review events, and never touches the PR. §25 and its
   slash command (`/seed-repo`, `/investigate-issue`, and the rest).
   `/implement-plan-claude` is the exception: its own Sonnet checker is the
   check-in for every PR it opens, so it arms no second one. The same holds
-  for `/implement-issue-claude`, which arms that same checker for its
-  phase PR.
+  for `/implement-issue-claude`, which hands its issue to that chain.
 - **One check-in per PR.** Arm it once the PR exists (right after
   `create_pull_request`, or right after the first push to an existing PR).
   If a check-in is already armed for that PR, a later push does not arm
@@ -1713,69 +1716,158 @@ broke the stable release gate (run 35903885958).
 
 ---
 
-## §28. Claude Issue & Plan Sessions Act Instead of Asking (MANDATORY)
+## §28. Unattended Auto-Decisions in `/implement-plan-claude` Projects (MANDATORY)
 
-This section applies in this repo and in every consumer repo that receives
-this file via the `@stable` sync. It covers every session that runs
-`/implement-issue-claude` (started by the Claude issue dispatcher routine for
-a standalone issue, or by hand) and every session of an
-`/implement-plan-claude` project — the session that first ran the command,
-each stage session, and each checker. Nobody is watching those sessions, so a
-question they ask stalls the project. Other slash commands and ordinary
-interactive sessions keep §0 and §2 unchanged, and so does the
-`/deploy-activate` session a finished project starts: it walks a human
-through deploy steps and waits for their output by design.
+A `/implement-plan-claude` project runs unattended: every stage after the
+first runs in a fresh session nobody is watching, so a §0/§2 stop would
+stall the project until a human noticed. Inside the scope below, a question
+the session would otherwise stop to ask is **answered with its RECOMMENDED
+option, recorded, and surfaced for human review at the end of the
+project**, so a human is needed only when the project is complete. This
+section applies in this repo and in every consumer repo that receives this
+file via the `@stable` sync.
 
-### A) Act and record
+### A) Scope
 
-In a covered session, §0 (Prime Directive), §2 (Always-On Ask-First Mode),
-§12.D, and every "stop and ask" step in those two command files are replaced
-by this rule: where an ambiguity would have produced a Q/A question, the
-session takes the option it would have marked `(RECOMMENDED)`, records that
-decision as an assumption, and continues. Assumptions go in the plan doc
-(`## Assumptions`), the progress log (`## Notes`), and the PR body, so a
-reviewer sees every judgement call. No covered session waits for a human
-answer.
+- A session running `/implement-plan-claude` **after its start-up checks**:
+  the invoking session once step 0 (permission mode), step 1 (resolving
+  the plan) and step 3 (building the phase checklist) are done, and every
+  `— resume.` stage session the chain starts.
+- A `/verify-activation` run whose `$ARGUMENTS` end with `— unattended`
+  (the chain passes that marker at its conformance and activation stages).
+- A session running `/implement-issue-claude` for a standalone issue, **from
+  its first step**. The Claude issue dispatcher routine starts it with
+  nobody at the keyboard, so its start-up checks are auto-decided too. The
+  issue fixes the plan, the plan it writes is always a single phase, and a
+  non-`auto` permission mode is recorded rather than asked. The
+  `/implement-plan-claude` chain it hands to runs in *issue mode*: every
+  stage of it is in scope, start-up checks included.
 
-### B) What still binds
+Nothing else: a standalone session, any other slash command, and
+`/implement-plan-ai` stay under §0/§2 unchanged. (The AI orchestrator
+already answers its own clarifications with the RECOMMENDED options in
+`plan.yml` / `clarify.yml`.)
 
-§6 (naming immutability — add aliases, never rename in place), §10 (MongoDB
-contracts), §19 (auto-close keyword discipline), §21 (merged-PR commit
-guard), §25 (no PR watching), §26, and §27 stay hard rules. The ask-first
-operations in §22.B, §23.C, and §24.D are never performed by a covered
-session, except the workflow dispatches a command's own file names as
-command-invoked (§23.C); needing one is a hard blocker (§28.C), never a
-guess.
+### B) What is auto-decided
 
-### C) Hard blockers
+Every question §0, §2, §12.D, or the command's own "stop and ask" rules
+would raise about **intent or design**: scope, behaviour, edge cases,
+interfaces, data, operations, an ambiguous or under-specified plan step,
+and a `/verify-activation` finding that "needs a decision" (a §12.D
+tradeoff, a documented-contract change, a §6/§10 item that has an
+alias-preserving or contract-updating option). Instead of stopping:
 
-A covered session stops, rather than guessing, only when:
+1. Write the question in the §2 format as usual: stable `Q`-ID, every
+   option, at least one marked `(RECOMMENDED)`.
+2. Take the RECOMMENDED option. With several marked on a single-choice
+   question, take the first; on a question stated as multi-select, take
+   every recommended option.
+3. Record it (§28.D) and continue with the work.
 
-- it would need an ask-first operation from §28.B;
-- a retry or cycle cap in its command file is exhausted;
-- a workflow the command dispatches fails before doing its job, or a
-  validation run ends in a terminal class (`harness_error`, `infeasible`,
-  `codex_failure`, or an unknown payload);
-- the work needs a secret, credential, or resource ID the session cannot
-  obtain with a self-serve read (§22.A, §23.A, §24.B).
+The RECOMMENDED option must itself obey the hard rules, because nobody
+reviews it before it ships: §1 priority order (the safer option wins
+when security is involved), §6 (never rename or remove an identifier in
+place; add the alias alongside), §10 (the `/db/contracts/*` update ships
+in the same PR), §5 (the smallest change that settles the question). If
+no option passes, the question is not auto-decidable and follows §28.C.
 
-On a hard blocker it sets the progress log to `Status: BLOCKED` with the
-blocker, posts **one** comment on the source issue (issue mode) or the plan's
-tracking issue (when it has one) naming the blocker, the options, and its
-recommendation, labels a source issue `ai:claude-blocked`, sends one
-`PushNotification`, and ends its turn. A human unblocks it by answering on
-the issue and re-running the command (for an issue: comment `/reclarify`).
+This is an explicit carve-out from §0 and §2 (including §2's
+"Forbidden: applying reasonable defaults without confirmation"), for the
+§28.A scope only.
 
-### D) Enforcement
+### C) Never auto-decided — still stop and ask
 
-Prose only: the two command files restate this rule at every former "ask"
-point, and `tests/test_implement_issue_claude_command.py` and
-`tests/test_implement_plan_claude_command.py` pin that text.
+- **Start-up checks** — step 0 (permission mode), step 1 (which plan), and
+  step 3 (a plan with no Phases section). The user is still at the
+  keyboard for those. Issue mode is the exception (§28.A): nobody is.
+- **Failure escalations** — a cap reached (blocked-PR interventions,
+  conformance runs, security cycles, validation cycles, verify-activation
+  cycles), a security or validation run that did not conclude `success`,
+  a terminal validation class (`harness_error`, `infeasible`,
+  `codex_failure`, unknown payload), a security follow-up closed without
+  a merged PR. These are failures, not clarifications: picking a
+  "recommended" way past them could skip the security pass or loop
+  forever. The chain stops at `Status: BLOCKED` and asks, as the command
+  describes. In issue mode nobody watches the session, so the ask is
+  delivered on the source issue: one comment naming the blocker, the
+  options, and the recommended one, the `ai:claude-blocked` label, and one
+  `PushNotification`. A human answers there and comments `/reclarify` to
+  resume.
+- **Ask-first operations** — §22.B (DigitalOcean mutations), §23.C
+  (destructive and administrative GitHub writes, merges included), and
+  §24.D (Cloudflare destructive and account-level writes). The chain never
+  performs them; a project that needs one lists it as an operator step,
+  and `/deploy-activate` walks the human through it.
+- A question with no option that satisfies §28.B's hard rules.
+
+### D) Recording
+
+Each auto-decision gets one entry in the `## Auto-decisions` section of the
+project's progress log, `docs/implement-plan/<slug>.md`:
+
+```md
+- AD-<n> [<stage>, <YYYY-MM-DD>] <question> — Picked: <letter> — <option>. Alternatives: <letter> — <option>; <letter> — <option>. Why: <one line>. Applied in: <PR #N | no code change>. Status: pending review
+```
+
+- `AD-<n>` numbers run across the whole project (the log's entries plus
+  any the `— resume.` block carries as uncommitted) and are never reused
+  or renumbered; they are identifiers under §6.
+- The entry rides the PR in flight with the rest of the log, and that PR's
+  body lists the same entries under `## Auto-decisions`, so reviewers see
+  what was decided without being asked.
+- A stage that records an entry but opens no PR writes it into its report
+  and into the `Uncommitted auto-decisions:` line of the `— resume.` block
+  it hands on; the next PR commits it.
+- Status moves from `pending review` to `confirmed (<date>)` or
+  `changed to <letter> (<date>, PR #N)` (§28.E); entries are never deleted.
+- Per-decision notifications are not sent. Stage reports carry a count
+  only; the full list is shown at the end (§28.E).
+
+### E) Human review at the end
+
+The list is **shown, never re-asked**:
+
+- The `/verify-activation` activation stage (`/implement-plan-claude` step
+  12) prints every entry under `Auto-decisions (for review)` in its
+  report, and its completion `PushNotification` carries the count.
+- `/deploy-activate` prints the same list in its opening message, next to
+  Step 1, without waiting on it.
+- In issue mode, the source issue's progress comment
+  (`<!-- ai:claude-issue-progress:v1 -->`) carries the same list when the
+  project completes, so the person who filed the issue sees it there.
+
+The human replies `change AD-<n> → <letter>` (or describes the change) in
+the final LIVE report session or in the `/deploy-activate` session, at any
+point. That session then:
+
+1. Implements every changed decision as **one** PR on
+   `claude/implement-plan-<slug>-decision-changes` from the default branch
+   (append `-2`, `-3`, … when a merged PR already used the name, §21),
+   under §12 rules, verified and tested like any fix, with the log entries
+   set to `changed to <letter> (<date>, PR #N)` in the same PR.
+2. Arms the §26 check-in for that PR.
+3. In `/deploy-activate`, holds the runbook at the current step until that
+   PR has merged (a deploy step can depend on the changed code), confirming
+   the merge with a read before emitting the next step.
+
+Entries left unchanged are marked `confirmed (<date>)` when `/deploy-activate`
+reaches LIVE, committed with its activation-log push. On the LIVE path
+(no `/deploy-activate`), a `confirm` reply does the same through a
+docs-only PR on the decision-changes branch; without a reply the entries
+stay `pending review`, which blocks nothing.
+
+### F) Interactive Sessions Only
+
+The unattended pipelines read `unattended_system_instructions.md` and
+never see this file. §28 changes nothing about the orchestrator's own
+clarify auto-answer (`[auto-answered-by-orchestrator]`), which keeps its
+own policy.
 
 ---
 
 ## FINAL REMINDER
 
-If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
+If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.** (Inside
+§28's scope: record the RECOMMENDED pick and continue.)
 
 Accuracy > speed. Safety > convenience. Backward compatibility is mandatory.

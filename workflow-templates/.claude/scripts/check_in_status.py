@@ -36,7 +36,9 @@ failed (the JSON then carries `error` and `done` is false).
     Claude session): also done, with `state: review-round` or
     `state: conflict`, when a trusted `ai:claude-fixer-handoff:v1` comment
     names the current head and no `ai:claude-fixer-verdict:v1` comment
-    answers it yet; and done with `state: conflict` as soon as the PR is
+    answers it yet (only a dedicated Bot comment bearing the matching head,
+    round, and ledger digest answers it, when CLAUDE_FIXER_VERDICT_BOT_LOGIN
+    is configured in the checker environment); and done with `state: conflict` as soon as the PR is
     conflicted with no workflow run active (no 6-hour wait: no review run
     fires for a conflict the base branch caused).
   * Run: `status` is `completed` (any conclusion). `state` is `completed`
@@ -59,6 +61,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import subprocess
 import sys
@@ -76,6 +79,14 @@ FIXER_HANDOFF_RE = re.compile(
 	r"<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=([0-9a-f]{40}) round=(\d+) -->"
 )
 FIXER_VERDICT_RE = re.compile(r"<!-- ai:claude-fixer-verdict:v1 head=([0-9a-f]{40}) -->")
+FIXER_HANDOFF_LEDGER_RE = re.compile(
+	r"^<!-- ai:claude-fixer-handoff:v2 head=([0-9a-f]{40}) round=(\d+) ledger=([0-9a-f]{64}) -->$",
+	re.MULTILINE,
+)
+FIXER_VERDICT_LEDGER_RE = re.compile(
+	r"^<!-- ai:claude-fixer-verdict:v2 head=([0-9a-f]{40}) round=(\d+) ledger=([0-9a-f]{64}) -->$",
+	re.MULTILINE,
+)
 
 
 class ReadError(Exception):
@@ -228,26 +239,43 @@ def _check_claude_fixer_pr(repo: str, number: int, head_sha: str, head_ref: str,
 	comments = gh_api_list(f"repos/{repo}/issues/{number}/comments")
 	latest_handoff = None
 	answered = False
+	# The bot login must be configured in the checker session as well as the
+	# workflow. A collaborator's head-only verdict never ends a review round.
+	fixer_bot_login = os.environ.get("CLAUDE_FIXER_VERDICT_BOT_LOGIN", "")
 	for comment in comments:
-		if comment.get("author_association") not in TRUSTED_COMMENT_ASSOCIATIONS:
-			continue
 		body = comment.get("body") or ""
 		if not isinstance(body, str):
 			continue
 		current_head_handoff = False
-		for match in FIXER_HANDOFF_RE.finditer(body):
-			if match.group(2) == head_sha:
-				latest_handoff = (match.group(1), int(match.group(3)))
+		if comment.get("author_association") in TRUSTED_COMMENT_ASSOCIATIONS:
+			for match in FIXER_HANDOFF_RE.finditer(body):
+				if match.group(2) != head_sha or match.group(0) not in body.splitlines():
+					continue
+				ledger_match = next((entry for entry in FIXER_HANDOFF_LEDGER_RE.finditer(body)
+					if entry.group(1) == head_sha and entry.group(2) == match.group(3)), None)
+				latest_handoff = (match.group(1), int(match.group(3)), ledger_match.group(3) if ledger_match else "")
 				answered = False
 				current_head_handoff = True
 				break
 		if current_head_handoff:
 			continue
-		for match in FIXER_VERDICT_RE.finditer(body):
-			if match.group(1) == head_sha:
-				answered = True
+		if not latest_handoff or not latest_handoff[2] or not fixer_bot_login:
+			continue
+		user = comment.get("user") or {}
+		if not isinstance(user, dict) or user.get("login") != fixer_bot_login or user.get("type") != "Bot":
+			continue
+		if any(match.group(1) == head_sha and match.group(0) in body.splitlines()
+			for match in FIXER_VERDICT_RE.finditer(body)):
+			for match in FIXER_VERDICT_LEDGER_RE.finditer(body):
+				if (match.group(1), int(match.group(2)), match.group(3)) == (head_sha, latest_handoff[1], latest_handoff[2]):
+					answered = True
+	if conflicted:
+		active = _active_run_count(repo, head_ref)
+		if active:
+			return {"done": False, "state": "open", "reason": f"PR #{number} has a merge conflict, but {active} workflow run(s) on {head_ref} are still queued or running"}
+		return {"done": True, "state": "conflict", "reason": f"PR #{number} has a merge conflict on head {head_sha[:12]} and no workflow run is active"}
 	if latest_handoff is not None and not answered:
-		kind, round_number = latest_handoff
+		kind, round_number, _ = latest_handoff
 		state = "review-round" if kind == "findings" else "conflict"
 		detail = "reviewer findings" if kind == "findings" else "a merge conflict"
 		return {
@@ -256,11 +284,6 @@ def _check_claude_fixer_pr(repo: str, number: int, head_sha: str, head_ref: str,
 			"round": round_number,
 			"reason": f"PR #{number} review round {round_number}: {detail} on head {head_sha[:12]} handed to Claude",
 		}
-	if conflicted:
-		active = _active_run_count(repo, head_ref)
-		if active:
-			return {"done": False, "state": "open", "reason": f"PR #{number} has a merge conflict, but {active} workflow run(s) on {head_ref} are still queued or running"}
-		return {"done": True, "state": "conflict", "reason": f"PR #{number} has a merge conflict on head {head_sha[:12]} and no workflow run is active"}
 	return None
 
 

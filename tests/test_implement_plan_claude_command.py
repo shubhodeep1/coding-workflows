@@ -10,6 +10,16 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 COMMAND = ROOT / ".claude" / "commands" / "implement-plan-claude.md"
 TEMPLATE_COMMAND = ROOT / "workflow-templates" / ".claude" / "commands" / "implement-plan-claude.md"
+CLAUDE_MD = ROOT / "CLAUDE.md"
+REVIEW_COMMANDS = [
+	ROOT / prefix / ".claude" / "commands" / name
+	for prefix in ("", "workflow-templates")
+	for name in ("verify-activation.md", "deploy-activate.md")
+]
+
+
+def _flat(path: Path) -> str:
+	return " ".join(path.read_text(encoding="utf-8").split())
 
 
 @pytest.fixture(scope="module")
@@ -64,6 +74,54 @@ def test_checker_is_sonnet_every_three_hours(text):
 	assert "call send_later with delay_minutes 180" not in text
 
 
+def test_claude_md_section_28_scopes_auto_decisions():
+	claude = _flat(CLAUDE_MD)
+	assert "## §28. Unattended Auto-Decisions in `/implement-plan-claude` Projects (MANDATORY)" in claude
+	# Start-up checks, failure escalations, and ask-first operations are never auto-decided.
+	assert "### C) Never auto-decided — still stop and ask" in claude
+	assert "§22.B (DigitalOcean mutations), §23.C" in claude
+	assert "`codex_failure`, unknown payload" in claude
+	# §0 and the final reminder point at the exception.
+	assert "The one exception is §28" in claude
+	assert "Inside §28's scope: record the RECOMMENDED pick and continue." in claude
+
+
+def test_chain_auto_decides_after_startup_checks(text):
+	assert "## Auto-Decisions" in text
+	assert "From the end of step 3 onward" in text
+	assert "Steps 0, 1, and 3 still ask" in text
+	assert "`docs/plans/<slug>-plan.md — scope conformance — unattended`" in text
+	assert "always ending with `— unattended` (§28)" in text
+	assert "## Auto-decisions - AD-<n> [<stage>, <YYYY-MM-DD>]" in text
+	assert "Uncommitted auto-decisions:" in text
+	# The old hard stop on plan ambiguity is gone.
+	assert "stop and ask (§0/§2) rather than shipping a guess" not in text
+
+
+def test_review_commands_list_auto_decisions_without_asking():
+	for path in REVIEW_COMMANDS:
+		body = _flat(path)
+		assert "`change AD-<n> → <letter>`" in body, path
+		if path.name == "verify-activation.md":
+			assert "## Unattended Runs" in body, path
+			assert "Auto-decisions (for review)" in body, path
+		else:
+			assert "## Auto-Decisions Review" in body, path
+			assert "`claude/implement-plan-<slug>-decision-changes`" in body, path
+			assert "no Q/A question is asked about any entry" in body, path
+
+
+def test_live_state_still_accepts_decision_review_replies(text):
+	assert "the LIVE stop does not apply to a `change AD-<n> → <letter>` or `confirm` reply" in text
+	for path in REVIEW_COMMANDS:
+		if path.name == "deploy-activate.md":
+			body = _flat(path)
+			assert "`Status: LIVE` report LIVE and stop unless the current reply changes an auto-decision" in body, path
+			assert "`Status: LIVE` just report LIVE and stop unless the current reply changes an auto-decision" in body, path
+			rules = body.split("## Rules", 1)[1]
+			assert "`Status: LIVE`, report LIVE and stop unless the current reply changes an auto-decision" in rules, path
+
+
 def test_project_branch_and_draft_final_pr(text):
 	assert "3a. **Open the project branch and the draft final PR**" in text
 	assert "`claude/implement-plan-<slug>`" in text
@@ -81,6 +139,9 @@ def test_review_rounds_are_fixed_by_claude(text):
 	assert "<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<r> -->" in text
 	assert "`[claude-autofix] review round <r>: <summary>`" in text
 	assert "`<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`" in text
+	assert "<!-- ai:claude-fixer-verdict:v2 head=<sha> round=<r> ledger=<64hex> -->" in text
+	assert "CLAUDE_FIXER_VERDICT_BOT_LOGIN" in text
+	assert "one fresh reviewer panel on that head" in text
 	assert "-f claude_fixer_converged_head=<sha>" in text
 	assert "`[claude-merge-resolve] merge <base branch>`" in text
 	assert "`[claude-intervention] <summary>`" in text
