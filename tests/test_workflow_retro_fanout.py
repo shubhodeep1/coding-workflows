@@ -212,6 +212,8 @@ def _run_fanout(
 		roster_file = tmp_path / "consumer_repos.json"
 		roster_file.write_text(json.dumps(consumer_repos), encoding="utf-8")
 
+		# RUNNER_TEMP holds the model broker pid/ready files; it must exist.
+		(tmp_path / "runner-temp").mkdir(exist_ok=True)
 		env = os.environ.copy()
 		env.update(
 			{

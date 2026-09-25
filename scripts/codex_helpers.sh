@@ -228,8 +228,14 @@ model_provider_broker_start()
 		"${broker_budget_args[@]}" \
 		"${broker_policy_args[@]}" &
 	broker_pid=$!
-	printf '%s\n' "${broker_pid}" > "${pid_file}"
-	chmod 0600 "${pid_file}"
+	# Without a pid file model_provider_broker_stop cannot find this broker,
+	# which would outlive the caller holding its stdout/stderr open.
+	if ! printf '%s\n' "${broker_pid}" > "${pid_file}" || ! chmod 0600 "${pid_file}"; then
+		kill -TERM "${broker_pid}" 2>/dev/null || true
+		wait "${broker_pid}" 2>/dev/null || true
+		echo "::error::model provider broker pid file ${pid_file} could not be written; stopped the broker" >&2
+		return 1
+	fi
 	ready_deadline=$((SECONDS + ${MODEL_PROVIDER_BROKER_READY_TIMEOUT_SECONDS:-10}))
 	while [ "${SECONDS}" -lt "${ready_deadline}" ]; do
 		if ! kill -0 "${broker_pid}" 2>/dev/null; then
