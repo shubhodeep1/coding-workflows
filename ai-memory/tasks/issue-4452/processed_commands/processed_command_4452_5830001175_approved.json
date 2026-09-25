@@ -5,13 +5,34 @@
   "entry_id": "processed_command_4452_5830001175_approved",
   "issue_number": 4452,
   "metadata": {
+    "branch": "ai/issue-4452",
+    "changed_files": [
+      ".claude/commands/implement-plan-claude.md",
+      ".github/workflows/validate.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/4452-validate-target-ref-sandbox.md",
+      "scripts/run_workspace_hook.sh",
+      "scripts/stage_workflow_support.sh",
+      "tests/test_validate_semble_contract.py",
+      "tests/test_validate_target_ref_input.py",
+      "tests/test_validate_workflow_validate_bootstrap.py",
+      "tests/test_workflow_checkout_integration_ref_audit.py",
+      "tests/test_workspace_hooks.py",
+      "workflow-templates/.claude/commands/implement-plan-claude.md"
+    ],
+    "issue_number": 4452,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4452",
+    "pr_number": 4463,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4463",
+    "run_attempt": "1",
+    "run_id": "36117943999",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36117943999"
   },
   "run_attempt": 1,
   "run_id": "36117943999",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-25T09:23:17Z",
+  "status": "completed",
+  "timestamp": "2026-09-25T09:50:09Z",
   "workflow": "implement"
 }
