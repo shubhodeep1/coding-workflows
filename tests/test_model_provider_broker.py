@@ -337,7 +337,7 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"' not in implement_workflow.split("- name: Telegram duplicate PR notification", 1)[1].split("- name: Exit when existing PR is found", 1)[0]
 	validate_workflow = (REPO_ROOT / ".github/workflows/validate.yml").read_text(encoding="utf-8")
 	validate_process = (REPO_ROOT / "scripts/validate_process.sh").read_text(encoding="utf-8")
-	assert "WORKFLOW_SUPPORT_REF=\"${helper_ref}\"" in validate_workflow
+	assert "WORKFLOW_SUPPORT_REF=\"${support_sha}\"" in validate_workflow
 	assert '"scripts/model_provider_broker.py"' in validate_workflow
 	assert "model_provider_broker_prepare_codex_readonly nobody" in validate_process
 	assert 'CODEX_THREAD_REUSE_REAL_CODEX="${VALIDATE_ISOLATED_CODEX_LAUNCHER}"' in validate_process
@@ -355,23 +355,32 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	assert "model_provider_broker_exec_sanitized" in retro_fanout
 	assert "--sandbox read-only" in retro_fanout
 	assert "workflow_log_output_contract.py" in retro_fanout
-	for review_script_name in ("review_apply_fixes.sh", "review_consolidate.sh", "review_rb_judge.sh"):
+	for review_script_name in ("review_consolidate.sh", "review_rb_judge.sh"):
 		review_script = (REPO_ROOT / "scripts" / review_script_name).read_text(encoding="utf-8")
 		assert "model_provider_broker_start" in review_script
 		assert "--provider-base-url" in review_script
 		assert "model_provider_broker_stop" in review_script
-	assert '"OPENROUTER_API_KEY=${MODEL_PROVIDER_BROKER_TOKEN}"' in (REPO_ROOT / "scripts/review_apply_fixes.sh").read_text(encoding="utf-8")
-	assert '"OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"' not in (REPO_ROOT / "scripts/review_apply_fixes.sh").read_text(encoding="utf-8")
+	# The editor runs in review_untrusted_sandbox.sh behind the budgeted
+	# clarify_openrouter_broker.py review relay, not the loopback broker.
+	apply_fixes = (REPO_ROOT / "scripts/review_apply_fixes.sh").read_text(encoding="utf-8")
+	assert 'review_untrusted_sandbox.sh" run' in apply_fixes
+	assert "--provider-base-url" not in apply_fixes
+	assert '"OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"' not in apply_fixes
 	for workflow_name in (
 		"cancel_on_pr_close.yml",
 		"sync_ai_labels.yml",
-		"security-audit.yml",
 		"check_failure_triage.yml",
 	):
 		workflow_text = (REPO_ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
 		assert "WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}" in workflow_text
 		assert "SCRIPT_REF=stable" not in workflow_text
 		assert "Checkout workflow support source fallback" not in workflow_text
+	# security-audit.yml resolves its support commit from the validated
+	# workflow identity (protected main, the stable tag, or a consumer SHA pin).
+	security_audit = (REPO_ROOT / ".github/workflows/security-audit.yml").read_text(encoding="utf-8")
+	assert "WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in security_audit
+	assert "SCRIPT_REF=stable" not in security_audit
+	assert "Checkout workflow support source fallback" not in security_audit
 	helpers_text = (REPO_ROOT / "scripts" / "codex_helpers.sh").read_text(encoding="utf-8")
 	assert "unshare --fork --pid --mount-proc --kill-child=KILL" in helpers_text
 	assert helpers_text.index('kill -TERM "${broker_pid}"') < helpers_text.index('setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}"')
@@ -388,12 +397,14 @@ def test_model_facing_workflows_export_broker_price_policy() -> None:
 	# clarify.yml and orchestrate_clarify_respond.yml run Codex through
 	# scripts/clarify_isolated_run.sh (docker --network none, host-side
 	# scripts/clarify_openrouter_broker.py) rather than the in-workflow
-	# model_provider_broker_start/exec launcher, so they never wire these
-	# MODEL_PROVIDER_BROKER_MAX_* price env vars.
+	# model_provider_broker_start/exec launcher; that relay applies the same
+	# MODEL_PROVIDER_BROKER_MAX_* budgets.
 	for workflow_name in (
 		"check_failure_triage.yml",
+		"clarify.yml",
 		"implement.yml",
 		"orchestrate.yml",
+		"orchestrate_clarify_respond.yml",
 		"orchestrate_poll.yml",
 		"plan.yml",
 		"review_autofix.yml",
