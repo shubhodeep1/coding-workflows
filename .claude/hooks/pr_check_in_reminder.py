@@ -29,7 +29,7 @@ whitespace-only input is treated as an empty object and allowed silently.
 
 The reminder is the §26 mechanism, not a §25 subscription: it tells the
 session to start a Sonnet checker session (`create_session`, re-armed with
-`send_later`) that hands the terminal verdict back through a scheduled
+`send_later`) that hands a terminal PR back through a scheduled
 Routine bound to the pushing session (`create_trigger` /
 `update_trigger`) so the pushing session writes the report, never to
 subscribe to PR activity, and the §25 guard keeps blocking
@@ -80,8 +80,9 @@ REMINDER = (
 	"(run .claude/scripts/check_in_status.py --terminal-only; while the PR "
 	"is open, update_trigger the hand-back 7 days ahead and re-arm with "
 	"send_later delay_minutes=180; on merged or closed, update_trigger the "
-	"hand-back to fire in 1 minute with the verdict so this session writes "
-	"the action-needed report, renames itself, and sends one "
+	"hand-back's run_once_at to 1 minute out, never its prompt, so this "
+	"session re-reads the PR state, writes the action-needed report, "
+	"renames itself, and sends one "
 	"PushNotification, then confirm delivery with get_trigger 10 minutes "
 	"later), and fallback next steps the checker reports itself only if the "
 	"hand-back fails. Never use fire_trigger for the hand-back: it starts a "

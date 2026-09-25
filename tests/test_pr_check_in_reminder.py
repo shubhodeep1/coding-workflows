@@ -151,7 +151,8 @@ def test_evaluate_reminds_after_pr_write_tools(tool_name):
 	assert "persistent_session_id = this session" in context
 	assert "run_once_at = now + 7 days" in context
 	assert "hand-back" in context
-	assert "this session writes the action-needed report" in context
+	assert "never its prompt" in context
+	assert "writes the action-needed report" in context
 	assert "Never use fire_trigger for the hand-back" in context
 	assert "stale_routines.py" in context
 
@@ -372,10 +373,12 @@ def test_claude_md_documents_the_rule():
 	# The pushing session, not the Sonnet checker, writes the terminal report.
 	assert "`persistent_session_id` = this session's id" in joined
 	assert "`run_once_at` = now + 7 days" in joined
-	assert "The pushing session writes the report when the hand-back wakes it" in joined
+	assert "When the hand-back wakes the pushing session, it first runs" in joined
+	assert "The pushing session writes the report (the checker writes it only in the §26.C step 5 fallback)" in joined
 	assert "(pushing session unreachable)" in joined
 	assert "`fire_trigger` is never used for it" in joined
-	assert "**No-verdict wake.**" in joined
+	assert "The checker changes only the Routine's `run_once_at`, never its prompt" in joined
+	assert "carries no verdict" in joined
 	assert (
 		"fails open with a `systemMessage` warning when the hook payload cannot be read, "
 		"is invalid or non-object JSON, or evaluation raises an internal exception."

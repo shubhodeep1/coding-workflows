@@ -1031,9 +1031,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > request it pushes; the checker runs `.claude/scripts/check_in_status.py` every
 > 3 hours (re-armed with `send_later`) without waking the pushing session.
 > Once the PR merges or closes, the checker pulls forward a scheduled Routine
-> bound to the pushing session with the verdict in it, and the pushing
-> session, which holds the context, reports the next steps (or that it can be
-> closed). The checker reports them itself only when that hand-back fails.
+> bound to the pushing session, which re-reads the PR state and, since it
+> holds the context, reports the next steps (or that it can be closed). The checker reports them itself only when that hand-back fails.
 > `.claude/scripts/stale_routines.py` sweeps the Routines these check-ins
 > leave behind (fired reminders, dead-session Routines, finished hand-backs)
 > each time one is armed or reported, and never touches any other Routine. It never subscribes to PR activity and never

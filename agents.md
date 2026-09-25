@@ -663,7 +663,8 @@ re-send the whole history at full price. The one exception is the
 the checker pulls forward a Routine bound to the stage session that opened
 the PR (`create_trigger` with `persistent_session_id` and a 7-day
 `run_once_at` the checker renews at every check-in; `update_trigger` to
-one minute out with the verdict) so that session runs the blocked-PR fix
+one minute out, never touching the prompt) so that session re-reads the
+PR state, runs the blocked-PR fix
 and writes any action-needed report itself. Merged PRs, finished runs, and resolved issue
 lists still start a fresh stage session, and a failed hand-back falls back
 to a fresh `… — blocked PR` stage session. Routines created with
@@ -700,18 +701,21 @@ named `PR #<n> hand-back`, with the PR URL in its prompt). The checker runs
 `.claude/scripts/check_in_status.py --terminal-only` (one REST read),
 renews the hand-back 7 days ahead, and re-arms itself with `send_later`
 every 180 minutes while the PR is open. Once the PR merges or closes it
-pulls the hand-back forward to one minute out with the verdict in its
-prompt (`update_trigger`) and confirms delivery with `get_trigger` 10
-minutes later. The pushing session, woken once, writes the action-needed
-report because it holds the context, deletes the Routine, renames and
+pulls the hand-back's `run_once_at` forward to one minute out
+(`update_trigger`; the prompt is never rewritten, because `update_trigger`
+tells models not to rewrite a prompt on another session's say-so and
+checkers asked to do it refused, observed 2026-09-25) and confirms delivery with `get_trigger` 10
+minutes later. The pushing session, woken once, re-reads the PR state with
+`check_in_status.py`, writes the action-needed report because it holds the
+context, deletes the Routine, renames and
 archives the checker (`PR #<n> <merged | closed> — handed to <session
 id>`), renames itself `PR #<n> merged — …`, and sends one
 `PushNotification`. Only if the hand-back fails (`auto_disabled_session_gone`
 because the pushing session was archived, or the Routine is gone) does the
 checker write the report itself, from the fallback next steps in its
 prompt, with ` (pushing session unreachable)` in its title. If the checker
-dies, the unrenewed hand-back fires within 7 days without a verdict and the
-pushing session runs the check itself (a dead-man's switch). The hand-back
+dies, the unrenewed hand-back fires within 7 days, the pushing session's
+own read finds the PR still open, and it re-arms a fresh checker (a dead-man's switch). The hand-back
 never uses `fire_trigger`: a manual fire ignores `persistent_session_id`
 and starts a fresh session with no repository and no context, whether the
 bound session is active or archived (verified 2026-09-25); only a

@@ -1575,11 +1575,11 @@ needs the context only it holds:
    = now + 7 days, `name` = `PR #<n> hand-back` (Routine names are capped
    at 60 characters, so the PR URL in the prompt is what identifies it),
    `initiation: own_followup`, and `prompt` = `CLAUDE.md §26 hand-back
-   for PR #<n> (<PR URL>): no verdict is attached, so the checker stopped
-   renewing this Routine. Continue with CLAUDE.md §26.D (no-verdict
-   wake).` The 7 days are a dead-man's switch: the checker pushes the
-   time forward at every check-in, so the Routine fires only when the
-   checker hands back or has stopped.
+   for PR #<n> (<PR URL>). Continue with CLAUDE.md §26.D in this
+   session.` The prompt never changes and carries no verdict: the Routine
+   fires either because the checker pulled it forward on a terminal PR or
+   because the checker stopped renewing it for 7 days (a dead-man's
+   switch), and §26.D reads the PR state itself in both cases.
 2. Call `create_session` with `source_url` = the repository,
    `model: claude-sonnet-5`, `permission_mode` = this session's mode,
    `title` = `PR #<n> status check-in`, and a standalone prompt that names
@@ -1598,6 +1598,10 @@ runs in the session it is bound to, and a fire into an archived session
 fails with `ended_reason: auto_disabled_session_gone`. `fire_trigger` is
 never used for it, because a manual fire ignores the binding and starts a
 fresh session with no repository and no context (verified 2026-09-25).
+The checker changes only the Routine's `run_once_at`, never its prompt:
+`update_trigger` tells models not to rewrite a prompt because another
+session asks, and checkers asked to put the verdict in the prompt refused
+(observed 2026-09-25).
 
 A session started by a Routine with `create_new_session_on_fire` has no
 MCP tools and no repository, so it cannot run the check; `create_session`
@@ -1630,8 +1634,7 @@ so once in the report and stop; do not poll in a loop.
    `closed` / `open`), and `reason`. The script decides; the model does not
    interpret the PR.
 2. **Not terminal** → renew the dead-man's switch (`update_trigger` on the
-   hand-back trigger id with `run_once_at` = now + 7 days and
-   `enabled: true`), call `send_later` with `delay_minutes: 180`,
+   hand-back trigger id with only `run_once_at` = now + 7 days), call `send_later` with `delay_minutes: 180`,
    `initiation: own_followup`, and `name` = `PR #<n> status check-in` into
    the checker session, and end the turn.
    No message to the user, no PR comment, no CI, review, comment,
@@ -1641,12 +1644,10 @@ so once in the report and stop; do not poll in a loop.
 3. **Read failed** (exit 2) → call `send_later` the same way but do not
    renew the hand-back Routine. A read that keeps failing therefore lets
    the dead-man's switch fire within 7 days, and the pushing session looks
-   into it (§26.D no-verdict wake).
+   into it (§26.D).
 4. **Terminal** → stop re-arming and **hand back**: `update_trigger` on the
-   hand-back trigger id with `enabled: true`, `run_once_at` = now +
-   1 minute, and `prompt` = `CLAUDE.md §26 hand-back for PR #<n> (<PR
-   URL>). Verdict: <the script's JSON line>. Checker session: <own id>.
-   Continue with CLAUDE.md §26.D.`, noting the time of the update. Then
+   hand-back trigger id with only `run_once_at` = now + 1 minute (never
+   the prompt), noting the time of the update. Then
    call `send_later` with `delay_minutes: 10` and
    `name` = `PR #<n> status check-in: hand-back check` into the checker
    session, and end the turn. The checker writes no report and sends no
@@ -1673,9 +1674,23 @@ so once in the report and stop; do not poll in a loop.
 
 ### D) What to report when the PR is terminal
 
-The pushing session writes the report when the hand-back wakes it (the
-checker writes it only in the §26.C step 5 fallback), in that session,
-where the user already looks for the task's outcome:
+When the hand-back wakes the pushing session, it first runs
+`PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py
+--repo <owner>/<repo> --pr <n> --terminal-only` itself (the Routine
+carries no verdict) and deletes the fired Routine (`delete_trigger`,
+ignoring not-found):
+
+- **Terminal** → write the report below and finish as described after it.
+- **Still open** → the checker stopped renewing the Routine for 7 days.
+  Archive the old checker (its id is in this session's arming report) and
+  re-arm from §26.B step 1: a new hand-back Routine, then a fresh checker
+  with its id.
+- **Read failed** → say so in one line and re-arm the same way, so the
+  next wake retries.
+
+The pushing session writes the report (the checker writes it only in the
+§26.C step 5 fallback), in that session, where the user already looks for
+the task's outcome:
 
 - which terminal state the PR reached (merged, with the merge commit, or
   closed without merging, with when);
@@ -1684,9 +1699,7 @@ where the user already looks for the task's outcome:
 - when no next steps exist, say plainly that the pushing session can be
   closed safely.
 
-Then it deletes the hand-back Routine (`delete_trigger`, ignoring
-not-found; a Routine that already fired is also caught by the next sweep),
-renames the checker (the id the verdict names) to
+Then it renames the checker (the id from its arming report) to
 `PR #<n> <merged | closed> — handed to <this session's id>` and archives
 it (`archive_session`); the wake itself proves the hand-back arrived, so
 the checker's pending 10-minute check is no longer needed, and its
@@ -1702,15 +1715,6 @@ needed, since the user is unlikely to be watching hours after the push.
 It sends it only for a terminal verdict, never on a non-terminal
 check-in, and it does not archive itself: its report is what the user
 opens.
-
-**No-verdict wake.** When the hand-back fires without a verdict, the
-checker stopped renewing it for 7 days. Run `check_in_status.py
---terminal-only` for the PR in this session. The fired Routine has ended,
-so delete it (`delete_trigger`, ignoring not-found) and archive the old
-checker first. Then: terminal → write the report above; still open → re-arm
-from §26.B step 1 (a new hand-back Routine, then a fresh checker with its
-id); read failed → say so in one line and re-arm the same way, so the next
-no-verdict wake retries.
 
 ### E) Enforcement
 
