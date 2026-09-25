@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5497-5499 | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: If `tee` cannot open the resolver stderr capture file, the resolver can receive SIGPIPE on its next stderr write and abort before completing.\n  WHY: The reviewers disagree on severity (NIT versus MAJOR); at the highest rating, this can leave conflict resolution incomplete and produce a misleading failure fingerprint.\n- tests/test_workflow_failure_heal.py:3109 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test relies on `failure_headline` redacting credentials and truncating to `FAILURE_HEADLINE_LIMIT`.\n  WHY: The implementation correctly truncates, but the reviewer says the test ensures the redaction logic is functional.\n- tests/test_codex_thread_reuse_core.py:567 | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The assertion for `helper_path=\"scripts/stage_workflow_support.sh\"` fails because the string is absent from `validate.yml`.\n  WHY: The lint job exits 1, blocking required checks and merge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The 65 existing test files touching these files pass (1,342 tests), except one: tests/test_workflow_overlay_core.py::test_target_workflows_stage_schema_and_invoke_loader. That test already fails on main at 56fcde4 (#4463 changed validate.yml) and is not touched by this PR.\"\n  expected_change_site: PR description's statement of pre-existing failures\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The actual CI failure is in a different test: `tests/test_codex_thread_reuse_core.py::test_validate_workflow_contains_thread_reuse_bootstrap` (assertion at line 567). The PR description names `test_workflow_overlay_core.py` as the only pre-existing failure, but the failing test is `test_codex_thread_reuse_core.py`. Either the PR description is outdated, or there is a second pre-existing failure that was not accounted for. The PR cannot merge until the actual failing test is either fixed or correctly documented as pre-existing.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:5499 | severity=low | confidence=[2]\n  PROBLEM: The process substitution `bash \"${RESOLVER_SCRIPT}\" 2> >(tee -a \"${RUNTIME_DIR}/resolver_stage_stderr.txt\" >&2)` creates a subprocess for `tee` whose stdin is a pipe from the resolver's stderr. If `tee` cannot open the target file (directory missing, disk full, permissions), it exits immediately, closing the pipe's read end.\n  WHY: The resolver then receives SIGPIPE on its next stderr write, which terminates the resolver with exit code 141 rather than letting it run to its intended exit code; the \"Assemble failure evidence\" step then fingerprints and names an incomplete failure.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal.py:3109 | severity=low | confidence=[5]\n  PROBLEM: The test relies on failure_headline redacting credentials and truncating to FAILURE_HEADLINE_LIMIT.\n  WHY: The implementation correctly truncates, but the test ensures the redaction logic is functional.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:5497 | severity=high | confidence=[3]\n  PROBLEM: The bash process substitution `>(tee -a \"${RUNTIME_DIR}/resolver_stage_stderr.txt\" >&2)` is not waited on by the parent shell. If `tee` cannot open the target file (directory missing, permission issue), the resolver's next stderr write receives SIGPIPE and aborts the resolver prematurely.\n  WHY: When the runtime directory is unavailable or the file cannot be written, stderr redirection fails silently and the resolver exits before completing, leading to a misleading failure fingerprint.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:5497 (`bash \"${RESOLVER_SCRIPT}\" 2> >(tee -a \"${RUNTIME_DIR}/resolver_stage_stderr.txt\" >&2)`) | severity=high | confidence=[3]\n  PROBLEM: Bash process substitution `>(tee ...)` is not waited on by the parent shell. If `tee` fails to open the target file (for example, if `RUNTIME_DIR` does not exist or is not writable), `tee` exits immediately and the resolver's next stderr write receives SIGPIPE, which can abort the resolver.\n  WHY: The resolver is the critical path for conflict resolution. A SIGPIPE on stderr aborts it mid-resolution, leaving the PR in a conflicted state with no resolver output and no useful failure fingerprint. The existing `RUNTIME_DIR` setup earlier in the workflow makes this unlikely in practice, but the redirect is unconditional \u2014 there is no guard that falls back to unredirected execution when the capture path is unavailable.\n- TASK_GAP\n  Requirement: \"The 65 existing test files touching these files pass (1,342 tests), except one: tests/test_workflow_overlay_core.py::test_target_workflows_stage_schema_and_invoke_loader. That test already fails on main at 56fcde4 (#4463 changed validate.yml) and is not touched by this PR.\"\n  Expected change site: PR description's statement of pre-existing failures\n  Evidence of absence: The actual CI failure is in a different test: `tests/test_codex_thread_reuse_core.py::test_validate_workflow_contains_thread_reuse_bootstrap` (assertion at line 567). The PR description names `test_workflow_overlay_core.py` as the only pre-existing failure, but the failing test is `test_codex_thread_reuse_core.py`. Either the PR description is outdated, or there is a second pre-existing failure that was not accounted for. The PR cannot merge until the actual failing test is either fixed or correctly documented as pre-existing.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_codex_thread_reuse_core.py:567 | severity=high | confidence=[5]\n  PROBLEM: Assertion fails (string absent from validate.yml; pre-existing).\n  WHY: lint job exits 1, blocking required checks/merge.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6b0c7134e0c336361fb7bb7400cad0972b72086925baa04f0e3dffbda30b78f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4476,
+    "run_id": "36150449439",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36150449439",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925154924_e7be5fdd81",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4476,
+    "run_id": "36150449439"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T15:49:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
