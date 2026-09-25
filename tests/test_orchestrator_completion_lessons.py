@@ -196,9 +196,11 @@ def _builders_script() -> str:
 
 
 def _run_bash(body: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+	child_env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})}
+	child_env.pop("BASH_ENV", None)
 	return subprocess.run(
 		["bash", "-c", body], cwd=str(cwd), capture_output=True, text=True,
-		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})},
+		env=child_env,
 	)
 
 
@@ -247,7 +249,7 @@ def poller_repo(tmp_path: Path) -> Path:
 	_git(work, "commit", "--quiet", "-m", "init")
 	_git(work, "push", "--quiet", "origin", "main")
 	(work / "scripts").mkdir()
-	for name in ("ai_memory_lib.py", "orchestrate_lib.py"):
+	for name in ("ai_memory_lib.py", "orchestrate_lib.py", "openrouter_prompt_cache.py", "semantic_cache.py", "memory_injection_patterns.py"):
 		shutil.copy2(SCRIPTS_DIR / name, work / "scripts" / name)
 	for extra in SCRIPTS_DIR.glob("*.py"):
 		if extra.name not in {"ai_memory_lib.py", "orchestrate_lib.py"}:
@@ -258,12 +260,23 @@ def poller_repo(tmp_path: Path) -> Path:
 
 def _emitter_script(state_file: Path) -> str:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	judge_start = script.index("emit_judge_lessons_learned_records() {")
+	judge_end = script.index("\n}\n\n# record_orchestrator_lesson_event", judge_start) + 3
+	trusted_support = state_file.parent / "poller-support-lessons"
+	(trusted_support / "scripts").mkdir(parents=True, exist_ok=True)
+	for name in ("ai_memory_lib.py", "orchestrate_lib.py", "openrouter_prompt_cache.py", "semantic_cache.py", "memory_injection_patterns.py"):
+		shutil.copy2(SCRIPTS_DIR / name, trusted_support / "scripts" / name)
+	(trusted_support / ".support_sha").write_text("a" * 40 + "\n", encoding="utf-8")
 	return (
 		"set -euo pipefail\n"
 		+ _extract_bash_function(script, "is_truthy() {")
+		+ _extract_bash_function(script, "poller_trusted_support_file() {")
+		+ _extract_bash_function(script, "poller_trusted_python_dir() {")
+		+ script[judge_start:judge_end]
 		+ _extract_bash_function(script, "record_orchestrator_lesson_event() {")
 		+ _extract_bash_function(script, "emit_orchestrator_completion_lessons() {")
 		+ f"STATE_FILE={str(state_file)!r}\nTRACKING_NUM=77\nRUNTIME_DIR={str(SCRIPTS_DIR)!r}\n"
+		+ f"RUNNER_TEMP={str(state_file.parent)!r}\nPOLLER_TRUSTED_SUPPORT_DIR={str(trusted_support)!r}\nPOLLER_TRUSTED_SUPPORT_SHA={'a' * 40!r}\n"
 	)
 
 
@@ -300,6 +313,38 @@ emit_orchestrator_completion_lessons
 	assert len(_memory_lessons(poller_repo)) == 1
 
 
+def test_judge_lessons_import_only_frozen_support(poller_repo: Path, tmp_path: Path) -> None:
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps(_state()), encoding="utf-8")
+	marker = tmp_path / "project-library-executed"
+	for name in ("ai_memory_lib.py", "orchestrate_lib.py"):
+		(poller_repo / "scripts" / name).write_text(
+			f"from pathlib import Path\nPath({str(marker)!r}).touch()\nraise RuntimeError('project library imported')\n",
+			encoding="utf-8",
+		)
+	judge_json = json.dumps({"lessons_learned": [{"lesson_kind": "project_retrospective", "lesson_text": "A judge lesson.", "tags": []}]})
+	result = _run_bash(
+		_emitter_script(state_file) + f"emit_judge_lessons_learned_records judge 77 '' {judge_json!r}\n",
+		poller_repo,
+	)
+	assert result.returncode == 0, result.stderr
+	assert '"phase":"judge"' in result.stderr
+	assert not marker.exists()
+	# The existing judge emitter's stdin-heredoc contract can fail open; the
+	# regression here is that it must never import the project replacement.
+	assert "AI_MEMORY_TELEMETRY" in result.stderr
+
+	missing = _run_bash(
+		_emitter_script(state_file)
+		+ f"POLLER_TRUSTED_SUPPORT_DIR={str(tmp_path / 'poller-support-missing')!r}\n"
+		+ f"emit_judge_lessons_learned_records judge 77 '' {judge_json!r}\n",
+		poller_repo,
+	)
+	assert missing.returncode == 0
+	assert "trusted support unavailable" in missing.stderr
+	assert not marker.exists()
+
+
 def test_record_orchestrator_lesson_event_preserves_diagnostic(tmp_path: Path) -> None:
 	state_file = tmp_path / "state.json"
 	state_file.write_text(json.dumps(_state()), encoding="utf-8")
@@ -322,7 +367,7 @@ def test_record_lesson_uses_external_support_not_project_script(poller_repo: Pat
 	assert result.returncode == 0, result.stderr
 	assert not (tmp_path / "executed").exists()
 	assert json.loads(state_file.read_text(encoding="utf-8"))["lesson_events"][0]["text"] == "test"
-	missing_support = _run_bash(_emitter_script(state_file) + f"RUNTIME_DIR={str(tmp_path)!r}\nrecord_orchestrator_lesson_event '{{\"kind\":\"stall_recovery\",\"text\":\"missing\"}}'\n", poller_repo)
+	missing_support = _run_bash(_emitter_script(state_file) + f"POLLER_TRUSTED_SUPPORT_DIR={str(tmp_path / 'poller-support-missing')!r}\nrecord_orchestrator_lesson_event '{{\"kind\":\"stall_recovery\",\"text\":\"missing\"}}'\n", poller_repo)
 	assert missing_support.returncode == 0
 	assert "could not record orchestrator lesson event" in missing_support.stderr
 	assert not (tmp_path / "executed").exists()

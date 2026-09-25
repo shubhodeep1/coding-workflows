@@ -105,18 +105,34 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Resolve workflow support ref for gh retry
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          # Resolve once for this job. Neither a moving main fallback nor the
+          # integration checkout is an executable support authority.
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+            branch_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
+            [ "$(jq -r '.protected // false' <<< "${branch_json}")" = "true" ] || exit 1
+            support_sha="$(jq -r '.commit.sha // empty' <<< "${branch_json}")"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+            support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
+            object_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
+            for depth in 1 2 3; do
+              [ "${object_type}" = "tag" ] || break
+              [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
+              support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
+              object_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
+            done
+            [ "${object_type}" = "commit" ] || exit 1
           fi
+          [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "SCRIPT_REF=${support_sha}" >> "$GITHUB_ENV"
 
       - name: Checkout workflow support source for gh retry
         id: checkout_pre_support_source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -126,25 +142,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Checkout workflow support source fallback for gh retry
-        if: ${{ steps.checkout_pre_support_source.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-          persist-credentials: false
-
       - name: Ensure workflow support source checkout for gh retry
         run: |
           set -euo pipefail
-          if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
-            exit 1
-          fi
+          [ "$(git -C .codex-workflow-src rev-parse HEAD)" = "${SCRIPT_REF}" ] || exit 1
 
       - name: Checkout workflow support source main snapshot for gh retry
         if: ${{ env.SCRIPT_REF != 'main' }}
@@ -163,9 +164,6 @@ jobs:
           set -euo pipefail
 
           src=".codex-workflow-src/scripts/gh_helpers.sh"
-          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/gh_helpers.sh" ]; then
-            src=".codex-workflow-src-main/scripts/gh_helpers.sh"
-          fi
           if [ ! -f "${src}" ]; then
             echo "::error::Missing required support script gh_helpers.sh in shubhodeep1/coding-workflows@${SCRIPT_REF}"
             exit 1
@@ -336,15 +334,9 @@ jobs:
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
-          else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
-          fi
+          [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] || exit 1
 
       - name: Checkout workflow support source
-        continue-on-error: true
         id: checkout_support_source
         uses: actions/checkout@v5
         with:
@@ -355,26 +347,11 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-          persist-credentials: false
-
       - name: Ensure workflow support source checkout
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
-          if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
-            exit 1
-          fi
+          [ "$(git -C .codex-workflow-src rev-parse HEAD)" = "${SCRIPT_REF}" ] || exit 1
 
       - name: Checkout workflow support source main snapshot
         if: ${{ env.SCRIPT_REF != 'main' }}
@@ -399,9 +376,6 @@ jobs:
           _fetched_scripts=()
           for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py security_audit.sh security_audit_causality.py files_touched_scope_guard.py check_resolver_diff.sh check_workflow_script_refs.py verify_integration_fingerprints.py worktree_registry.sh worktree_gc.sh; do
             src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
               exit 1
@@ -423,9 +397,6 @@ jobs:
           lesson_support_verified=false
           if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "${lesson_support_sha}" = "${SCRIPT_REF}" ]; then
             lesson_support_verified=true
-          elif [ "${SCRIPT_REF}" = "stable" ] \
-            && [ "${lesson_support_sha}" = "$(git -C .codex-workflow-src rev-parse 'refs/tags/stable^{commit}' 2>/dev/null || true)" ]; then
-            lesson_support_verified=true
           fi
           if [ "${lesson_support_verified}" = true ] \
             && [ -f .codex-workflow-src/scripts/orchestrate_lib.py ] \
@@ -434,6 +405,24 @@ jobs:
           else
             echo "::warning::Lesson helper support ref is unverified; lesson events will fail open without executing the project checkout."
           fi
+          # Private, SHA-bound executable bundle: the integration checkout can
+          # overwrite scripts/ and prompts/ but cannot write this directory.
+          [ "${lesson_support_verified}" = true ] || exit 1
+          trusted_support_root="$(mktemp -d "${RUNNER_TEMP%/}/poller-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
+          mkdir -p "${trusted_support_root}/scripts"
+          for f in security_audit.sh codex_heartbeat.sh write_codex_config.sh render_prompt.sh render_prompt.py assemble_prompt.sh security_audit_causality.py untrusted_process_sandbox.sh ai_memory_lib.py orchestrate_lib.py openrouter_prompt_cache.py semantic_cache.py memory_injection_patterns.py codex_model_catalog.json security_audit_fp_exclusions.json; do
+            [ -f ".codex-workflow-src/scripts/${f}" ] && [ ! -L ".codex-workflow-src/scripts/${f}" ] || exit 1
+            install -m 0600 ".codex-workflow-src/scripts/${f}" "${trusted_support_root}/scripts/${f}"
+          done
+          [ -d .codex-workflow-src/prompts ] && [ ! -L .codex-workflow-src/prompts ] || exit 1
+          cp -R .codex-workflow-src/prompts "${trusted_support_root}/prompts"
+          [ -z "$(find "${trusted_support_root}/prompts" -type l -print -quit)" ] || exit 1
+          printf '%s\n' "${SCRIPT_REF}" > "${trusted_support_root}/.support_sha"
+          chmod -R go-rwx "${trusted_support_root}"
+          {
+            echo "POLLER_TRUSTED_SUPPORT_DIR=${trusted_support_root}"
+            echo "POLLER_TRUSTED_SUPPORT_SHA=${SCRIPT_REF}"
+          } >> "$GITHUB_ENV"
           for f in post_agent_workspace_guard.py files_touched_scope_guard.py; do
             install -m 0755 "scripts/${f}" "${POST_AGENT_ARTIFACT_DIR}/${f}"
           done
@@ -1089,4 +1078,7 @@ jobs:
           fi
           if [[ "${POST_AGENT_ARTIFACT_DIR:-}" =~ ^${RUNNER_TEMP}/post-agent-poller-[0-9]+-[0-9]+\.[A-Za-z0-9]+$ ]]; then
             rm -rf -- "${POST_AGENT_ARTIFACT_DIR}"
+          fi
+          if [[ "${POLLER_TRUSTED_SUPPORT_DIR:-}" =~ ^${RUNNER_TEMP}/poller-support-[0-9]+-[0-9]+\.[A-Za-z0-9]+$ ]]; then
+            rm -rf -- "${POLLER_TRUSTED_SUPPORT_DIR}"
           fi
