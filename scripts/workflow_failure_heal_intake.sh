@@ -20,7 +20,10 @@
 #   3. Fingerprints the failure (workflow + failing step + normalised error
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
-#      duplicate -> occurrence comment; lineage cap -> escalate;
+#      duplicate -> occurrence comment (an `autofix_failure` report also
+#      matches an open heal issue filed from the same pull request, and
+#      continues the lineage of a closed one or of the heal issue its
+#      `ai/issue-<N>` head branch fixes); lineage cap -> escalate;
 #      budget cap -> alert; otherwise continue.
 #   4. Checks out the coding-workflows source at the release SHA the failing run
 #      used, fetches the branch progress since that SHA (one compare call) and
@@ -330,6 +333,14 @@ BUDGET_ARGS=(--issues-json "${ISSUES_FILE}" --fingerprint "${FP}" --preferred-re
 if [[ "${SOURCE_GEN}" =~ ^[0-9]+$ ]]; then
 	BUDGET_ARGS+=(--source-gen "${SOURCE_GEN}" --source-root "${SOURCE_ROOT}")
 fi
+# A review/autofix report is keyed on its pull request as well as its
+# fingerprint: the evidence (and so the fingerprint) differs run to run, which
+# let one PR open a new heal issue on every failed run. The PR's head branch
+# links the heal issue it fixes (ai/issue-<N>), so a heal fix PR whose own
+# review fails continues that issue's lineage and reaches the cap.
+if [ "${SOURCE_KIND}" = "autofix_failure" ] && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+	BUDGET_ARGS+=(--source-key "${SOURCE_REPO}#${ISSUE_NUMBER}" --source-head-branch "${HEAD_BRANCH}")
+fi
 DECISION_FILE="${RUNTIME_DIR}/decision.json"
 python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" > "${DECISION_FILE}"
 ACTION="$(jq -r '.action' "${DECISION_FILE}")"
@@ -346,10 +357,11 @@ case "${ACTION}" in
 		EXISTING_URL="$(jq -r '.existing_url // ""' "${DECISION_FILE}")"
 		EXISTING_REPO="$(jq -r '.existing_repo // ""' "${DECISION_FILE}")"
 		[ -n "${EXISTING_REPO}" ] || EXISTING_REPO="${SELF_REPO}"
+		DUPLICATE_MATCH="$(jq -r '.match // "fingerprint"' "${DECISION_FILE}")"
 		OCCURRENCE_FILE="${RUNTIME_DIR}/occurrence.md"
 		python3 "${HEAL_PY}" compose-occurrence --payload-json "${PAYLOAD_FILE}" --intake-run-url "${RUN_URL}" > "${OCCURRENCE_FILE}"
 		if gh_retry gh api "repos/${EXISTING_REPO}/issues/${EXISTING}/comments" -F body=@"${OCCURRENCE_FILE}" >/dev/null 2>&1; then
-			log "duplicate existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} source=${SOURCE_LABEL}"
+			log "duplicate existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} source=${SOURCE_LABEL} match=${DUPLICATE_MATCH}"
 		else
 			log "warn duplicate_comment_failed existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
 		fi
