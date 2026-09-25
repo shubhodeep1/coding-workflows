@@ -5503,7 +5503,9 @@ jobs:
               exit 2
             fi
           fi
-          bash "${RESOLVER_SCRIPT}"
+          # stderr is also kept for "Assemble failure evidence", so a resolver
+          # failure is fingerprinted and named in the failure comment.
+          bash "${RESOLVER_SCRIPT}" 2> >(tee -a "${RUNTIME_DIR}/resolver_stage_stderr.txt" >&2)
 
       - name: Cache linked issues references
         # Claude-branch-review mode skips all the downstream label-mutating
@@ -6933,8 +6935,25 @@ jobs:
         # the marker is empty and the comments post without it.
         if: always() && (failure() || env.EDITOR_NOOP_SUSPICIOUS == 'true' || env.EDITOR_CHANGES_LOST == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -uo pipefail
+          # Name the failure for the PR comment (fail-open): the job's first
+          # failed step, from one jobs-API call (CLAUDE.md §15), and the first
+          # specific ::error:: line of the captured stage stderr, redacted.
+          failed_step="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT:-1}/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.runner_name == env.RUNNER_NAME) | .steps[] | select(.conclusion == "failure") | .name][0] // empty' 2>/dev/null | head -n 1 | tr -d '\r' | cut -c1-200 || true)"
+          echo "AUTOFIX_FAILED_STEP=${failed_step}" >> "$GITHUB_ENV"
+          if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+            first_error="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" failure-headline \
+              --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" 2>/dev/null | sed -n 's/^first_error=//p' | head -n 1 || true)"
+            echo "AUTOFIX_FAILURE_FIRST_ERROR=${first_error}" >> "$GITHUB_ENV"
+          fi
+          echo "AUTOFIX_FAILURE_HEADLINE step=${failed_step:-unknown} first_error_present=$([ -n "${first_error:-}" ] && echo 1 || echo 0)"
           if [ -z "${AUTOFIX_FAILURE_HEAL_PY:-}" ] || [ ! -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
             echo "AUTOFIX_FAILURE_MARKER=" >> "$GITHUB_ENV"
             echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_missing"
@@ -6949,6 +6968,7 @@ jobs:
             --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
             --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
             --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
             --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
             --evidence-out "${evidence_out}" \
             --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
@@ -7103,6 +7123,17 @@ jobs:
           Linked issues have been labeled \`ai:review-blocked\`.
           EOF
           )"
+          fi
+          # Name what failed ("Assemble failure evidence"): the failed step and
+          # its first specific error line, so the cause is readable from the PR.
+          if [ -n "${AUTOFIX_FAILED_STEP:-}" ] || [ -n "${AUTOFIX_FAILURE_FIRST_ERROR:-}" ]; then
+            BODY+=$'\n'
+            if [ -n "${AUTOFIX_FAILED_STEP:-}" ]; then
+              BODY+=$'\n'"**Failed step:** \`${AUTOFIX_FAILED_STEP//\`/\'}\`"
+            fi
+            if [ -n "${AUTOFIX_FAILURE_FIRST_ERROR:-}" ]; then
+              BODY+=$'\n'"**First error:** \`${AUTOFIX_FAILURE_FIRST_ERROR//\`/\'}\`"
+            fi
           fi
           # review-autofix-failure:v1 marker ("Assemble failure evidence").
           if [ -n "${AUTOFIX_FAILURE_MARKER:-}" ]; then

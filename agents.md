@@ -193,6 +193,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
     `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
     `WORKFLOW_HEAL`.
+    A report whose failure reason is `identical_failure_cap`, or a generation
+    > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
+    intake never files it as `transient` (remaps to `inconclusive`,
+    `classification_remapped … reason=deterministic_failure`), and its issue
+    body forbids retry / backoff / re-run fixes and requires a regression test
+    that reproduces the failure. The review/autofix failure comment names the
+    failed step (one jobs-API call matched on `RUNNER_NAME`) and the first
+    specific `::error::` line of the captured stage stderr (including the
+    resolver's, `resolver_stage_stderr.txt`), redacted
+    (`failure-headline`, log prefix `AUTOFIX_FAILURE_HEADLINE`).
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -1385,6 +1395,7 @@ and shipped:
 - `WORKTREE_REGISTER_FAIL`
 - `WORKTREE_DEREGISTER_FAIL`
 - `opencode_agent_failure`
+- `AUTOFIX_FAILURE_HEADLINE`
 - `MODEL_CATALOG_BACKFILL`
 - `AUTOFIX_GATE_CLAUDE_FIXER`
 - `AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED`
@@ -1575,6 +1586,7 @@ LOG_PREFIX.name=WORKTREE_REGISTER_FAIL
 LOG_PREFIX.name=WORKTREE_DEREGISTER_FAIL
 LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
+LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
 LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
