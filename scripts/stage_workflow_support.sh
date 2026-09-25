@@ -87,8 +87,7 @@ for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
-main_primary_bootstrap_root=".codex-workflow-src-main"
-main_primary_missing_file=""
+main_primary_bootstrap_root=".codex-workflow-src"
 for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then

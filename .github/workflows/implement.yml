@@ -2779,6 +2779,7 @@ jobs:
               CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
               CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
+              env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
                 --role implement \
                 --workspace "${WORKSPACE_PATH}" \
@@ -4125,6 +4126,7 @@ jobs:
               CODEX_THREAD_REUSE_CONTINUATION_FILE="${repair_thread_reuse_continuation_file}" \
               CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
               CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
+              env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/untrusted_process_sandbox.sh" \
                 --role implement-repair \
                 --workspace "${WORKSPACE_PATH}" \

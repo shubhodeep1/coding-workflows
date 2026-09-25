@@ -9226,7 +9226,7 @@ PY
 	integration_model_rc=0
 	run_untrusted_poller_codex resolver "${integration_judge_workspace}" \
 		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
-		exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
+			exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
 		--sandbox workspace-write < "${prompt_file}" > "${output_file}" \
 		2>> "${RUNTIME_DIR}/integration_judge.log" || integration_model_rc=$?
 	if ! run_poller_workspace_guard reconcile "${integration_judge_workspace}" \

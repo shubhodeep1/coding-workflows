@@ -3052,16 +3052,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"
+          # Capture stderr for the failure fingerprint without changing the
+          # authenticated metadata artifact used by the scope guard.
+          bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh" 2> >(tee -a "${RUNTIME_DIR}/collect_metadata_stderr.txt" >&2)
           linked_issue_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}' || true)"
           if ! [[ "${linked_issue_metadata_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
             echo "::error::Could not publish the linked-issue metadata integrity digest."
             exit 1
           fi
           echo "linked_issue_metadata_sha256=${linked_issue_metadata_sha256}" >> "$GITHUB_OUTPUT"
-          # Keep the stage's stderr for the failure fingerprint ("Assemble
-          # failure evidence"); it still reaches the step log through tee.
-          bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh" 2> >(tee -a "${RUNTIME_DIR}/collect_metadata_stderr.txt" >&2)
 
       - name: Retrieve reviewer memory context (fail-open)
         run: |

@@ -62,6 +62,8 @@ Copy this block when adding a new entry:
   - `rg -n 'package_download_proxy\.py' .github/workflows/review_autofix.yml scripts/stage_workflow_support.sh` shows the review dependency-install caller and trusted support-staging entries.
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_agent_process_isolation.py tests/test_review_autofix_review_pipeline_contract.py -k 'package_download_proxy or dependency_install'` returns exit code 0.
   - `.github/workflows/review_autofix.yml` still creates an internal Docker network for the dependency installer and does not grant that container direct external networking.
+- **Owner:** @shubhodeep1
+
 ### `scripts/workflow_failure_heal_report.sh` + `scripts/workflow_failure_heal_autofix_report.sh` + `scripts/workflow_failure_heal_intake.sh` + `scripts/workflow_failure_heal.py` + `.github/workflows/workflow_failure_heal.yml` + `.github/workflows/workflow-failure-heal-intake.yml`
 
 - **Introduced in:** #4165 (2026-09-20)
