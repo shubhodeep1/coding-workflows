@@ -1651,11 +1651,9 @@ if ! [[ "${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" =~ ^[0-9]+$ ]] \
   SECURITY_PASS_OWNERSHIP_CONTEXT_LINES="3"
 fi
 
+# Retain the exported setting for compatibility; pre-existing advisories are
+# now all attempted on the audit tick, including when the old cap is zero.
 SECURITY_PASS_ADVISORY_FOLLOWUP_CAP="${SECURITY_PASS_ADVISORY_FOLLOWUP_CAP:-5}"
-if ! [[ "${SECURITY_PASS_ADVISORY_FOLLOWUP_CAP}" =~ ^[0-9]+$ ]]; then
-  echo "::warning::SECURITY_PASS_ADVISORY_FOLLOWUP_CAP must be a non-negative integer; defaulting to 5"
-  SECURITY_PASS_ADVISORY_FOLLOWUP_CAP="5"
-fi
 
 # Cap on how many times a security-pass fix issue that ended in
 # ai:implementation-failed may be closed and re-issued within one fix
@@ -6368,28 +6366,23 @@ PY
 
 # security_pass_file_advisory_findings <integration_branch> <head_sha>
 #
-# File a bounded highest-severity/confidence slice of pre-existing-line findings. The cap is
-# shared across repeated calls for one tracking issue in the same poll process,
-# so completion and merged-state retry paths cannot exceed the per-tick API
-# budget.  Failed creates remain queued; marker/state dedupe in the existing
-# create helper reconciles lost responses.  Returns 0 always.
+# File every queued pre-existing-line finding in severity/confidence order.
+# Each row is attempted at most once per tracking issue in this process;
+# failed creates remain queued for the next poll, when marker/state dedupe
+# reconciles responses lost after a successful create. Returns 0 always.
 security_pass_file_advisory_findings() {
   local integration_branch="$1"
   local head_sha="$2"
-  local attempted_this_tick remaining_cap pending_json row_json finding_json finding_id waiver_match_key audited_head_sha justification
+  local pending_json row_json finding_json finding_id waiver_match_key audited_head_sha justification attempt_key
   local queued_count routed_count filed_count=0 filed_issues
 
-  attempted_this_tick="${SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK:-0}"
-  [[ "${attempted_this_tick}" =~ ^[0-9]+$ ]] || attempted_this_tick=0
-  remaining_cap=$((SECURITY_PASS_ADVISORY_FOLLOWUP_CAP - attempted_this_tick))
-  if [ "${remaining_cap}" -lt 0 ]; then
-    remaining_cap=0
-  fi
-  pending_json="$(jq -c --argjson cap "${remaining_cap}" '(.security_pass_advisory_backlog // [])[0:$cap]' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+  pending_json="$(jq -c '.security_pass_advisory_backlog // []' "${STATE_FILE}" 2>/dev/null || echo '[]')"
 
   while IFS= read -r row_json; do
     [ -n "${row_json}" ] || continue
-    SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK=$(( ${SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK:-0} + 1 ))
+    attempt_key="$(printf '%s' "${row_json}" | sha256sum | cut -d' ' -f1)"
+    [ -z "${_SECURITY_PASS_ADVISORY_ATTEMPTED_ROWS[${attempt_key}]+set}" ] || continue
+    _SECURITY_PASS_ADVISORY_ATTEMPTED_ROWS[${attempt_key}]=1
     finding_json="$(printf '%s' "${row_json}" | jq -c 'del(.audited_head_sha)')"
     finding_id="$(printf '%s' "${row_json}" | jq -r '.finding_id')"
     waiver_match_key="$(printf '%s' "${row_json}" | jq -r '.waiver_match_key // ""')"
@@ -18249,7 +18242,7 @@ write_state_snapshot_actions_runs_export || true
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
-  SECURITY_PASS_ADVISORY_ATTEMPTED_THIS_TICK=0
+  declare -A _SECURITY_PASS_ADVISORY_ATTEMPTED_ROWS=()
   SECURITY_PASS_ADVISORY_FILED_ISSUES=""
   SECURITY_PASS_ADVISORY_ROUTED_COUNT=0
   SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX=""

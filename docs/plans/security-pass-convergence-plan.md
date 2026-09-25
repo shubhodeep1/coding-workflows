@@ -59,7 +59,7 @@ findings.
 | keep_fixing round cap; merge-time `/answer` for follow-ups parked in `ai:blocked` | in PR #4135 (pending merge) | `MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS` (default 2), `security_pass_unblock_filed_advisory_followups`, state `security_pass_followups_merge_checked` |
 | **D1** line ownership via `git blame` (`SECURITY_AUDIT_LINE_OWNERSHIP`, `advisory_findings`) | **not implemented** | no identifier exists in `scripts/security_audit.sh` or the poller |
 | **D2** per-line "older than last audit" suppression, `verified_fixed_finding_ids`, `SECURITY_PASS_VERIFIED_FIXED` | **not implemented; suppression dropped by this refresh (D2′)** | prior-id re-emission is live through `SECURITY_AUDIT_PRIOR_FINDINGS`; the verified-fixed log is kept as remaining work |
-| **D3** pre-existing findings routed to advisories at audit time (uncapped; the planned `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` was dropped on 2026-09-25) | **not implemented** | advisories today come only from the judge or a waive, after the budget is spent |
+| **D3** pre-existing findings routed to advisories at audit time (uncapped; `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` is retained as an ignored compatibility input) | **shipped** | `security_pass_file_advisory_findings` attempts the entire priority-ordered backlog; failed or unconfirmed creations stay queued for retry |
 | **D4** rebind a clean pass across a clean sync merge (`SECURITY_PASS_REBOUND`) | **not implemented** | the budget-reset path (PR #4013) re-audits instead |
 
 ## Context
@@ -182,7 +182,8 @@ project-written line blocks (replaces the original D2).
   behaviour); one consolidated advisory issue per project; defer them until
   the final merge like judge-time advisories; a per-tick cap
   (`SECURITY_PASS_ADVISORY_FOLLOWUP_CAP`, default 5) with the overflow carried
-  in a `security_pass_advisory_backlog` state array. The cap was dropped on
+  in a `security_pass_advisory_backlog` state array. The cap is now ignored
+  (including `0`), but the exported name remains for compatibility. It was dropped on
   2026-09-25 together with the weekly audit's 3-per-week follow-up cap: a
   capped finding is a finding nobody files (tracker #3576, run 35996690244,
   surfaced 5 findings and filed 3; #4431 and #4432 had to be filed by hand).
