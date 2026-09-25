@@ -712,6 +712,23 @@ safety-net trigger and archive its checker together. The log's `## Lessons`
 section is ingested into AI memory on merge (see the
 Memory subsystem notes).
 
+Questions do not stall the chain (CLAUDE.md §28). After the start-up checks
+(step 0 permission mode, step 1 plan resolution, step 3 phase checklist),
+every intent or design question a stage would stop to ask is answered with
+its RECOMMENDED option. That covers plan ambiguity, edge cases the plan
+leaves open, and `/verify-activation` findings that need a decision; the
+chain passes `— unattended` to its conformance and activation runs. Each
+pick is recorded as an `AD-<n>` line in the log's `## Auto-decisions`
+section and listed in the PR that carries it. The step-12 activation report
+and the `/deploy-activate` opening message list every entry for human
+review without asking. A `change AD-<n> → <letter>` reply is implemented as
+one PR on `claude/implement-plan-<slug>-decision-changes`, and unchanged
+entries become `confirmed` at LIVE. Failure escalations still stop the
+chain at `BLOCKED`: used-up caps, security or validation runs that did not
+succeed, and terminal validation classes. So do §22.B / §23.C / §24.D
+operations. The AI orchestrator's own clarify auto-answer
+(`[auto-answered-by-orchestrator]`) is separate and unchanged.
+
 No field here changes what any consumer repo receives on the `@stable`
 sync: `.claude/commands/` is not part of the synced surface, and the
 template copies under `workflow-templates/.claude/commands/` have never

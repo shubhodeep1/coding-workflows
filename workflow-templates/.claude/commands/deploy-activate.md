@@ -4,7 +4,7 @@ $ARGUMENTS
 
 ## Procedure
 
-1. **Parse `$ARGUMENTS`, then load the activation log.** Extract the issue number / URL, PR refs, plan-doc path, or feature name. If there is no concrete reference, stop and ask for one. Restate the parsed reference in the opening summary. Then **read the activation log first** (see [Activation Log](#activation-log)): compute the log path from the reference and read `docs/deploy-activation/<ref-slug>.md` in `THIS_REPO`. If a log exists, it is the source of truth for progress — resume from the first step not marked `[x]`, skip the steps already done (and say so), and if it shows `Status: LIVE` report LIVE and stop. If I instead paste a plain statement of which steps are completed / remaining, reconcile that into the log before resuming. If no log exists, you will create one when you emit Step 1.
+1. **Parse `$ARGUMENTS`, then load the activation log.** Extract the issue number / URL, PR refs, plan-doc path, or feature name. If there is no concrete reference, stop and ask for one. Restate the parsed reference in the opening summary. Then **read the activation log first** (see [Activation Log](#activation-log)): compute the log path from the reference and read `docs/deploy-activation/<ref-slug>.md` in `THIS_REPO`. If a log exists, it is the source of truth for progress — resume from the first step not marked `[x]`, skip the steps already done (and say so), and if it shows `Status: LIVE` report LIVE and stop unless the current reply changes an auto-decision; handle that reply per [Auto-Decisions Review](#auto-decisions-review) instead. If I instead paste a plain statement of which steps are completed / remaining, reconcile that into the log before resuming. If no log exists, you will create one when you emit Step 1. Also read the project's `/implement-plan-claude` progress log when one exists: `docs/implement-plan/<slug>.md`, where `<slug>` is the plan filename without `-plan.md` (for an issue or PR reference, the log whose `Plan:` line names the linked plan). Its `## Auto-decisions` entries are listed in the opening message for review (see [Auto-Decisions Review](#auto-decisions-review)).
 
 2. **Build the full deploy plan internally, before emitting Step 1.** Do all the read-only analysis up front so the runbook is stable; only the *delivery* is one-at-a-time.
 
@@ -46,7 +46,18 @@ This is the load-bearing behavior — honor it strictly:
 - **Track progress visibly, and persist it.** Each turn, show a compact checklist (done ✓ / current ▶ / remaining), e.g. `Step 4 of ~9`. The count may grow if a step fails and needs a fix-up — say so. The same checklist is mirrored into the activation log: after each step is confirmed, mark it `[x]` in `docs/deploy-activation/<ref-slug>.md`, then **commit and push the log** so the next session can resume (see [Activation Log](#activation-log)).
 - **Adapt to reality.** If pasted output proves a gate is already satisfied (var already set, wrapper already present, pin already current), **skip** that step and say why.
 - **Never bundle, never auto-execute.** Do not merge steps, and do not run the mutating deploy commands or git pushes yourself — they run on my machine. Read-only verification (`mcp__github__*` / `gh ... --json` reads, `Read`/`Grep` on your checkout) is fine. **DigitalOcean steps are the one execution exception:** per [DigitalOcean Steps](#digitalocean-steps), when the token is present you run the DO API call yourself — reads at any time, a mutation only after I approve that emitted step, never in the same turn as its proposal.
+- **A `change AD-<n> → <letter>` reply is not step output.** It can arrive at any turn; handle it per [Auto-Decisions Review](#auto-decisions-review), then carry on from the current step.
 - **Stop conditions.** STOP and ask in Q/A format if a step needs a decision with material tradeoffs, would rename/remove a §6 identifier, or is ambiguous. STOP and report if the project turns out to be incomplete mid-run.
+
+## Auto-Decisions Review
+
+A project built by `/implement-plan-claude` ran unattended, so any question it raised was answered with its RECOMMENDED option and recorded as an `AD-<n>` entry in its progress log (CLAUDE.md §28). This command is where a human reviews those choices. It shows the list; it never asks about it.
+
+- **Show the list, don't ask.** The opening message prints every `## Auto-decisions` entry: its id, question, the option picked, the alternatives, and its status. Step 1 follows in the same message. Nothing waits on the list, and no Q/A question is asked about any entry. When resuming, print the list again only if some entries are still `pending review`. With no progress log, or no entries in it, omit the section.
+- **A change reply.** When the human replies `change AD-<n> → <letter>` (or describes the change in words), the change is code work, and it is the one place this command writes code. Implement every changed decision in **one** PR on `claude/implement-plan-<slug>-decision-changes`, branched from the default branch (append `-2`, `-3`, … when a merged PR already used the name, §21). Work under CLAUDE.md §12: the smallest change, tests added or extended, the repo's checks run, §6 and §10 honoured. In the same PR, set each changed entry's status to `changed to <letter> (<date>, PR #N)`. Push the branch, open a ready-for-review PR, and arm the §26 check-in for it. This is session work under §23.B, not a deploy step, so you do it yourself.
+- **Hold the runbook until it merges.** A deploy step can depend on the changed code, so emit no further runbook step until that PR has merged. Say so in the turn that opens the PR, and confirm the merge with a read (`mcp__github__pull_request_read`) when the human says `next`. Then re-check whether the change altered any remaining gate, and add or drop steps before continuing.
+- **Confirm the rest at LIVE.** When the final step verifies LIVE, set every entry still `pending review` to `confirmed (<date>)` in the progress log, and commit it with the activation-log push. List the tally in the final message.
+- **Never re-ask.** A recorded decision is reopened only by a human `change` reply, never by this command.
 
 ## Activation Log
 
@@ -55,7 +66,7 @@ This command is **resumable**. Progress for each project is persisted to a per-p
 - **Path.** `docs/deploy-activation/<ref-slug>.md`, one file per project. Derive `<ref-slug>` deterministically from the parsed reference so the same project always maps to the same file:
   - issue → `issue-<N>`  ·  PR → `pr-<N>`  ·  plan doc → `plan-<basename-without-extension>`  ·  bare feature name → `feature-<kebab-case>`.
   - If `$ARGUMENTS` carries more than one reference, key the slug off the primary one in this priority: issue → PR → plan doc → feature name, and record the secondary references inside the file.
-- **Read first (mandatory).** Before emitting any step, read this file in `THIS_REPO`. If it exists it is the source of truth for what is done: resume from the first step not marked `[x]`, skip the `[x]` steps (say that you are skipping them), and if `Status: LIVE` just report LIVE and stop. If it does not exist, create it when you emit Step 1.
+- **Read first (mandatory).** Before emitting any step, read this file in `THIS_REPO`. If it exists it is the source of truth for what is done: resume from the first step not marked `[x]`, skip the `[x]` steps (say that you are skipping them), and if `Status: LIVE` just report LIVE and stop unless the current reply changes an auto-decision (see [Auto-Decisions Review](#auto-decisions-review)). If it does not exist, create it when you emit Step 1.
 - **Accept a pasted progress statement.** If I paste a list of steps already completed / still remaining (rather than raw command output), reconcile it into the log — mark the named steps `[x]`, leave the rest open — and resume from the first open step.
 - **Update after every step.** When a step's pasted output (or a `done`) confirms success, mark it `[x]` with a one-line evidence note and the date, mark the next step current, refresh `Last updated` and `Last note`, then **commit and push the log** (below). On full completion set `Status: LIVE`; if a step is blocked, set `Status: BLOCKED` and record why in `Last note`.
 - **Persistence (commit & push).** The log only helps a future session if it survives this container, so writing the file is not enough — commit it and `git push` to the working branch of `THIS_REPO`. This is the command's own bookkeeping, **not** a mutating deploy step, so it is fine to run yourself: it never touches repo settings, secrets, vars, merges, wrapper edits, or upstream pins. Use the date from the session context for timestamps.
@@ -105,6 +116,9 @@ Side: [CONSUMER] THIS_REPO@main  |  [UPSTREAM] shubhodeep1/coding-workflows@<UPS
 How it runs: <cron «expr» from default branch | push | pull_request | repository_dispatch | supervisor>
 Completeness: COMPLETE — <evidence: file:line, merged/merge-ready PR#>   (if INCOMPLETE: stop per Procedure 2c)
 
+Auto-decisions made while the project ran unattended (for review; not a question. Reply `change AD-<n> → <letter>` at any time; the rest are confirmed at LIVE; omit when there are none):
+- AD-<n> [<stage>] <question> — Picked: <letter> — <option>. Alternatives: <letter> — <option>; … Status: <pending review | changed to <letter>>
+
 Activation gates (~N steps total):
 - [ ] Prereqs: Homebrew, git, gh, auth, clone THIS_REPO + checkout
 - [ ] <add/adjust wrapper .github/workflows/Z.yml — trigger / upstream ref>
@@ -129,6 +143,7 @@ Paste the output (or say `done`) and I'll give you Step 2.
 ✅ LIVE — <project> now runs automatically in <THIS_REPO>.
 Trigger: <cron «expr» from default branch | push | pull_request | repository_dispatch>
 Verified by: <the scheduled run / enabled workflow / flag-now-ON evidence>
+Auto-decisions: <n confirmed, m changed (PR #…) | none>
 ```
 
 ## Tool Access
@@ -142,7 +157,8 @@ The deploy is executed by **me** on my Mac; your tools are for building and adap
 
 ## Rules
 
-- **Read the log first, always.** Never emit Step 1 before reading `docs/deploy-activation/<ref-slug>.md` in `THIS_REPO` for the parsed reference. If it exists, resume from the first not-done step; if it shows `Status: LIVE`, report LIVE and stop. After every confirmed step, update the log and `git push` it so the next session resumes correctly (see [Activation Log](#activation-log)).
+- **Read the log first, always.** Never emit Step 1 before reading `docs/deploy-activation/<ref-slug>.md` in `THIS_REPO` for the parsed reference. If it exists, resume from the first not-done step; if it shows `Status: LIVE`, report LIVE and stop unless the current reply changes an auto-decision (see [Auto-Decisions Review](#auto-decisions-review)). After every confirmed step, update the log and `git push` it so the next session resumes correctly (see [Activation Log](#activation-log)).
+- **Auto-decisions are listed, never re-asked.** Print a `/implement-plan-claude` project's `AD-<n>` entries in the opening message next to Step 1. Implement a human's `change` reply as one decision-changes PR and hold the runbook until it merges. Mark the rest `confirmed` at LIVE (see [Auto-Decisions Review](#auto-decisions-review)).
 - **One step, then wait — always.** The whole value of this command is the paced, paste-driven loop. Emitting multiple steps at once, or racing ahead before I confirm, breaks it.
 - **You guide; I execute — except DigitalOcean.** Never run the mutating deploy commands (`gh variable set`, `gh secret set`, the wrapper edit's commit/push, merge) yourself — they run on my machine and I paste the result. Read-only inspection on your side keeps the next step accurate. DigitalOcean steps invert this: with `DIGITALOCEAN_ACCESS_TOKEN` present you execute them per [DigitalOcean Steps](#digitalocean-steps) — reads freely, mutations only after I approve the emitted step.
 - **DigitalOcean IDs: agents-file first, ask once, record forever (§22.C).** Never ask for an App / database ID already recorded in the agents file's `## DigitalOcean resources` table; when one is missing, ask in Q/A format, verify it resolves with one read call, and record it in that table in the same push as the activation log.
