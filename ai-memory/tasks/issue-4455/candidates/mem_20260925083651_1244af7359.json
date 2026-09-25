@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4139` at `7a454d9694483894653cb6e7c5aa3b88c8a65348`; it matches the issue\u2019s integration-branch metadata. The `/answer` continuation supplied no additional constraints.\n\nScope-mode: Hold Scope\nReuse-audit: extends `security_pass_current_head_is_valid`, `run_security_pass_inline`, and the existing waiver filters.\nScope-mode justification: This is a rollback-safety correction within the existing security pass, not a new subsystem. A full audit on policy change and consistent waiver filtering address both bypass paths without changing the fix-cycle budget or deferred-advisory mechanism. This follows \u00a76 Core Priorities: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and lifecycle\nExtend `scripts/orchestrate_poll_process.sh`, already run by the scheduled `internal-orchestrate-poll.yml` \u2192 `orchestrate_poll.yml` path and relevant dispatches. No new script, supervisor, database operation, or removal-registry entry is needed.\n\n## Files likely to change\n- `scripts/orchestrate_poll_process.sh` \u2014 policy-bound pass validity, audit scope, waiver handling, and state writes.\n- `scripts/security_audit.sh` \u2014 defense-in-depth against automatic line-ownership waivers overriding `file` mode.\n- `tests/test_orchestrate_poll_process.py` and `tests/test_security_audit_workflow_contract.py` \u2014 regression coverage.\n- `README.md` \u2014 document that ownership-setting changes invalidate a pass. Add a changelog fragment if required by the repository\u2019s changelog rule; do not edit `CHANGELOG.md`.\n\n## Functions or modules to implement\n- Record the **effective, normalized** ownership mode and context-line count alongside a completed security audit. Require both, as well as the head SHA and `passed` status, in `security_pass_current_head_is_valid`. Missing legacy policy fields must not authorize a cached pass. Carry the audited policy through legitimate clean-merge rebinding and judge-accepted pass paths.\n- In `run_security_pass_inline`, bypass both the unchanged-head return and clean-merge rebind on policy mismatch. Clear `SECURITY_AUDIT_DIFF_SINCE` for that run so it audits the full `merge-base..head` range. Keep the existing cycle-budget reset conditional on an advancing head, **not** a policy change alone.\n- Exclude rows identified by **both** `source: \"preexisting\"` and `waived_by: \"line-ownership\"` from engine input and poller-side suppression in `file` mode. On a context-policy change, do not let previously automatic rows preempt fresh classification. Keep judge and operator waivers subject to their existing provenance/causality checks.\n- After a successful, head-verified re-audit, reconcile stale automatic waiver and *unfiled* advisory-backlog rows against the new result. Preserve already filed follow-up references and prevent reclassification of the same advisory key from creating a duplicate issue or losing its recorded issue association. Do not drain stale backlog before that re-audit succeeds.\n\n## Data structures affected\nAdd policy fields to the existing orchestrator state; do not change its schema version or existing field meanings. Existing waiver and follow-up row shapes remain compatible. Missing policy fields mean \u201cnot verified under the current policy,\u201d rather than an inferred default.\n\n## API/interface changes\nNo new endpoint, GitHub API call, environment variable, or workflow trigger. Existing `SECURITY_PASS_LINE_OWNERSHIP` and `SECURITY_PASS_OWNERSHIP_CONTEXT_LINES` retain their names and normalization.\n\n## Decisions\n### D1 \u2014 Bind pass validity to the effective policy\n- **Chosen:** Persist normalized mode and context-line count and compare both at pass/rebind gates.\n- **Alternatives considered:** Compare only the SHA; infer the policy of legacy state.\n- **Why:** Neither alternative can establish which ownership rules authorized an earlier pass.\n\n### D2 \u2014 Treat automatic advisory waivers separately from accepted risks\n- **Chosen:** Withhold automatic line-ownership waivers when they could bypass classification, while retaining explicit judge/operator waivers and filed-advisory history.\n- **Alternatives considered:** Discard every waiver on mode change; leave all waivers active.\n- **Why:** The former revokes explicit decisions; the latter defeats the `file` rollback.\n\n## Security considerations\nPersisted state and audit output cross the authorization boundary for allowing project completion. Missing or malformed policy provenance must fail closed to re-audit, not completion. Match the automatic-waiver origin narrowly; a matching finding ID alone must never authorize suppression. A stale waiver or queued advisory must not turn a blocking `file`-mode finding into a clean pass or trigger an obsolete follow-up. No new exposed surface or authorization role is introduced; existing trusted-runner and provenance checks remain in force.\n\n## Risks and edge cases\n- Test unchanged and advanced heads, mode changes in both directions, context-line changes, and legacy states without policy fields. A policy-only change must not spend or reset fix-cycle budget.\n- A failed audit or head movement during audit must retain retryable state without publishing a pass under the new policy.\n- A previously filed pre-existing advisory remains recorded even if the same finding now blocks; an unfiled stale advisory must not be filed on that basis.\n- **Issue/code conflict:** The approved Phase B plan describes `file` as a complete rollback, but current SHA-only validity and waiver suppression do not deliver that behavior. The existing `scripts/run_plan_codex.sh` worktree modification is unrelated and must be left untouched.\n\n## Testing considerations\nExtend the poller\u2019s existing security-pass fixture and tests to assert full-range engine capture, blocking outcome, waiver input, poller suppression, budget, and filed-advisory deduplication for unchanged and later heads. Test context-only changes and judge/operator waiver preservation. Exercise the engine filter directly in `tests/test_security_audit_workflow_contract.py`. Run shell syntax checks, then the focused tests and existing security-pass contract suites on the repository\u2019s pinned dependencies.\n\n## Pre-execution self-check\nThe checkout matches the required integration branch; the affected gates, waiver paths, and representative tests were located. No credential or undecided external value is needed. Assumption: a changed context-line setting requires a full audit even when mode is `file`, because pass validity is bound to the complete effective policy. No repository files were changed during planning.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "addc5cc7a896af2d6aa90031254e4da7148474f3e3c770861dcffdf8b5df58f6",
+  "lineage": {
+    "issue_number": 4455,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36113235100",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36113235100",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4455"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925083651_1244af7359",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4455,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36113235100"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4455",
+  "timestamps": {
+    "created_at": "2026-09-25T08:36:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
