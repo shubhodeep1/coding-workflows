@@ -74,9 +74,6 @@ jobs:
           install -m 0755 "${src}" scripts/gh_helpers.sh
           for helper in review_merge_train.sh label_helpers.sh; do
             src=".codex-workflow-src/scripts/${helper}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${helper}" ]; then
-              src=".codex-workflow-src-main/scripts/${helper}"
-            fi
             if [ -f "${src}" ]; then
               install -m 0755 "${src}" "scripts/${helper}"
             fi

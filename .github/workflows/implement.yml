@@ -1169,9 +1169,6 @@ jobs:
           for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
-              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
-                src=".codex-workflow-src-main/${f}"
-              fi
               if [ ! -f "${src}" ]; then
                 echo "::error::Failed to stage required file ${f}"
                 exit 1
@@ -5464,7 +5461,6 @@ jobs:
         run: |
           set -euo pipefail
           support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
-          support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
           if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh" ]; then
             source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
           else
