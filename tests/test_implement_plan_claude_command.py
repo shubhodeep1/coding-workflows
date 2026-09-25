@@ -117,3 +117,5 @@ def test_live_state_still_accepts_decision_review_replies(text):
 			body = _flat(path)
 			assert "`Status: LIVE` report LIVE and stop unless the current reply changes an auto-decision" in body, path
 			assert "`Status: LIVE` just report LIVE and stop unless the current reply changes an auto-decision" in body, path
+			rules = body.split("## Rules", 1)[1]
+			assert "`Status: LIVE`, report LIVE and stop unless the current reply changes an auto-decision" in rules, path
