@@ -7212,13 +7212,15 @@ def main() -> int:
 	test_editor_preflight_step_wiring()
 	test_main_pinned_scripts_add_no_runtime_output_over_main()
 	test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop()
+	test_stage_step_backfills_missing_model_catalog_rows_from_main()
+	test_stage_step_model_catalog_backfill_fails_open()
+	test_review_isolation_wiring_and_model_relay()
+	test_review_isolation_workspace_transfer_and_hostile_paths()
+	test_review_isolation_traverses_only_allowed_github_directories()
+	test_review_relay_accepts_only_configured_chat_model()
+	test_review_relay_main_preserves_invoked_mode()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
 
 
 def _run_model_catalog_backfill(tmp: Path, staged_catalog: dict | str, main_catalog: dict | str | None) -> tuple[subprocess.CompletedProcess[str], Path]:
@@ -7316,8 +7318,8 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		(host / "scripts/app.py").write_text("before\n")
 		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
 			(host / f"scripts/module{module_suffix}").write_text("before\n")
-		subprocess.run(["git", "init", "-q", str(host)], check=True)
-		subprocess.run(["git", "add", "scripts"], cwd=host, check=True)
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
@@ -7367,8 +7369,8 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		for subdir in ("workflows", "actions"):
 			(host / ".github" / subdir).mkdir(parents=True)
 			(host / ".github" / subdir / "example.yml").write_text("before\n")
-		subprocess.run(["git", "init", "-q", str(host)], check=True)
-		subprocess.run(["git", "add", ".github"], cwd=host, check=True)
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
@@ -7451,3 +7453,7 @@ def test_review_relay_main_preserves_invoked_mode() -> None:
 				broker_module.main()
 			server = broker_class.return_value if mode.endswith("broker") else bridge_class.return_value
 			assert server.mode == mode
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
