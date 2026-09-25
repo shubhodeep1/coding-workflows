@@ -333,11 +333,13 @@ def _assert_security_audit_failure_context(
 def test_security_audit_workflow_has_required_triggers_and_checkout_contract() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert 'schedule:' in content
-	assert 'workflow_dispatch: {}' in content
+	assert 'workflow_dispatch:' in content
 	assert 'workflow_call:' in content
 	assert 'cron: "0 8 * * 0"' in content
 	assert 'uses: actions/checkout@v5' in content
-	assert 'ref: ${{ github.event.repository.default_branch }}' in content
+	# Scheduled runs and a bare dispatch still audit the default branch; the
+	# optional `ref` input only redirects /implement-plan-claude branch audits.
+	assert 'ref: ${{ inputs.ref || github.event.repository.default_branch }}' in content
 	# Full history is required by the incremental scope resolver.
 	assert 'fetch-depth: 0' in content
 
@@ -371,8 +373,9 @@ def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> No
 	template_path = REPO_ROOT / "workflow-templates" / "ai-security-audit.yml"
 	content = template_path.read_text(encoding="utf-8")
 	assert "cron: '0 8 * * 0'" in content
-	assert 'workflow_dispatch: {}' in content
+	assert 'workflow_dispatch:' in content
 	assert 'uses: shubhodeep1/coding-workflows/.github/workflows/security-audit.yml@stable' in content
+	assert "ref: ${{ inputs.ref || '' }}" in content
 	assert 'secrets: inherit' in content
 	manifest = (REPO_ROOT / "workflow-templates" / "profiles" / "full.txt").read_text(encoding="utf-8")
 	assert "ai-security-audit.yml" in manifest.splitlines()
@@ -1649,6 +1652,133 @@ def test_security_audit_invalid_engine_output_preserves_existing_findings_file()
 			assert proc.returncode != 0
 			assert final_state["security_audit_findings_output"] == "sentinel\n"
 			assert final_state.get("calls", []) == []
+
+
+def test_security_audit_workflow_declares_branch_audit_inputs_on_both_triggers() -> None:
+	import yaml
+
+	workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+	triggers = workflow["on"]
+	for trigger in ("workflow_dispatch", "workflow_call"):
+		inputs = triggers[trigger]["inputs"]
+		assert inputs["ref"]["default"] == ""
+		assert inputs["ref"]["type"] == "string"
+		# The weekly follow-up cap is gone (every finding is filed), so the
+		# short-lived bypass input never shipped.
+		assert "bypass_weekly_cap" not in inputs
+	steps = workflow["jobs"]["security-audit"]["steps"]
+	resolve = next(step for step in steps if step.get("name") == "Resolve audit target")
+	# The input reaches the shell only through env (never interpolated into run:).
+	assert "${{" not in resolve["run"]
+	assert resolve["env"]["AUDIT_TARGET_REF_INPUT"] == "${{ inputs.ref || '' }}"
+	assert "SECURITY_AUDIT_TARGET_REF=" in resolve["run"]
+	assert "SECURITY_AUDIT_DIFF_BASE=" in resolve["run"]
+
+
+def test_security_audit_default_branch_followups_carry_no_integration_branch() -> None:
+	state = _security_audit_tracker_state()
+	state["api_responses"] = [[[]]]
+	state["next_issue_number"] = 9100
+	proc, final_state = _run_security_audit(state, codex_output=json.dumps([_finding_payload("default-finding")]))
+
+	assert proc.returncode == 0, proc.stderr
+	followup_bodies = final_state.get("issue_create_bodies", [])
+	assert followup_bodies and "default-finding" in followup_bodies[-1]
+	# Only a branch audit (SECURITY_AUDIT_TARGET_REF) routes follow-ups elsewhere.
+	assert not any("Integration branch:" in body for body in followup_bodies)
+
+
+def test_security_audit_target_ref_routes_followups_and_keeps_tracker_marker() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-target-ref-") as fixture_td:
+		repo_dir, first_sha, head_sha = _git_fixture_repo(Path(fixture_td))
+		state = {
+			"issue_list_responses": [
+				[
+					{
+						"number": 9000,
+						"title": "AI Security Audit Tracker",
+						"body": "<!-- ai:security-audit-tracker:v1 -->\n<!-- ai:security-audit-last-sha:0000000000000000000000000000000000000000 -->\n",
+						"state": "OPEN",
+						"url": "https://github.com/owner/repo/issues/9000",
+					}
+				],
+			],
+			"api_responses": [[[]]],
+			"next_issue_number": 9100,
+		}
+		proc, final_state = _run_security_audit(
+			state,
+			codex_output=json.dumps(
+				[
+					_finding_payload("branch-finding", file_path="file_b.py"),
+					_finding_payload("out-of-range", file_path="file_a.py"),
+				]
+			),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_TARGET_REF": "claude/implement-plan-demo",
+				"SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "followups_created=1" in proc.stdout
+	assert "leaving the tracker's last-audited-commit marker unchanged" in proc.stdout
+	followup_bodies = final_state.get("issue_create_bodies", [])
+	assert len(followup_bodies) == 1
+	assert "- Integration branch: `claude/implement-plan-demo`" in followup_bodies[0]
+	assert "branch-finding" in followup_bodies[0]
+	comment = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert f"branch `claude/implement-plan-demo` changes since its merge-base with the default branch (`{first_sha}`..`{head_sha}`)" in comment
+	# No tracker body edit carries the branch head as the default-branch marker.
+	assert not any(head_sha in body for body in final_state.get("issue_edit_bodies", []))
+
+
+def test_security_audit_target_ref_routes_through_the_integration_ref_resolver() -> None:
+	"""The follow-up line must parse with the resolver clarify/plan/implement use."""
+	body = "<!-- ai:security-finding:x -->\nRefs #1\n\n- Location: `a.py:1`\n- Integration branch: `claude/implement-plan-demo`\n"
+	with tempfile.TemporaryDirectory(prefix="security-audit-resolver-") as td:
+		bin_dir = Path(td)
+		_write_exec(
+			bin_dir / "gh",
+			"#!/usr/bin/env python3\n"
+			"import json, sys\n"
+			"path = sys.argv[2] if len(sys.argv) > 2 else ''\n"
+			"if path == 'repos/owner/repo/issues/101':\n"
+			f"\tprint({body!r})\n"
+			"\tsys.exit(0)\n"
+			"if path.startswith('repos/owner/repo/git/ref/heads/'):\n"
+			"\tprint(json.dumps({'ref': 'x'}))\n"
+			"\tsys.exit(0)\n"
+			"sys.exit(1)\n",
+		)
+		proc = subprocess.run(
+			["bash", str(REPO_ROOT / "scripts" / "resolve_integration_ref.sh")],
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			env={
+				**os.environ,
+				"PATH": os.pathsep.join((str(bin_dir), os.environ.get("PATH", ""))),
+				"REPO": "owner/repo",
+				"ISSUE": "101",
+				"GH_TOKEN": "test-token",
+			},
+		)
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip() == "claude/implement-plan-demo", proc.stderr
+
+
+def test_security_audit_target_ref_requires_explicit_range_and_issues_mode() -> None:
+	proc, final_state = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={"SECURITY_AUDIT_TARGET_REF": "claude/implement-plan-demo"},
+	)
+	assert proc.returncode == 1
+	assert "SECURITY_AUDIT_TARGET_REF requires SECURITY_AUDIT_DIFF_BASE" in proc.stderr
+	assert not final_state.get("codex_calls")
 
 
 def main() -> int:

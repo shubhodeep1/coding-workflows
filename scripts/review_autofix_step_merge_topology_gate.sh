@@ -253,7 +253,22 @@ else
   # re-trigger tail now and skip the reviewer/editor phase; the
   # re-dispatched run reviews the merged head instead.
   _pre_review_unmerged="$(git ls-files --unmerged 2>/dev/null | awk '{print $4}' | sort -u | paste -sd, - || true)"
-  case "$(printf '%s' "${PRE_REVIEW_CONFLICT_RESOLVE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+  _pre_review_resolve_enabled="${PRE_REVIEW_CONFLICT_RESOLVE_ENABLED:-true}"
+  if [ "${CLAUDE_FIXER_MODE:-false}" = "true" ]; then
+    # Claude-fixer mode: the /implement-plan-claude session resolves the
+    # conflict and pushes, so neither the resolver toggle nor this run's push
+    # permission applies. "Hand review round to Claude session (Claude-fixer
+    # mode)" posts the conflict hand-off; the resolver tail stays skipped.
+    echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=content_conflict action=claude_fixer_handoff unmerged=${_pre_review_unmerged:-unknown}"
+    echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"
+    echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+    echo "AUTOFIX_PRE_REVIEW_RESOLVE=true" >> "$GITHUB_ENV"
+    echo "AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED=${_pre_review_unmerged}" >> "$GITHUB_ENV"
+    _pre_review_resolve_enabled="handled"
+  fi
+  case "$(printf '%s' "${_pre_review_resolve_enabled}" | tr '[:upper:]' '[:lower:]')" in
+    handled)
+      ;;
     1|true|yes|on)
       if [ "${CAN_PUSH:-false}" = "true" ]; then
         echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=content_conflict action=pre_review_resolve unmerged=${_pre_review_unmerged:-unknown}"

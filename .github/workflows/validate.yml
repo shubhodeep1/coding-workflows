@@ -29,6 +29,11 @@ name: AI Validate (Reusable)
         required: false
         type: string
         default: ""
+      target_ref:
+        description: "Branch to validate instead of the tracking issue's integration branch or the default branch (empty = unchanged behaviour). Set by /implement-plan-claude for its project branch."
+        required: false
+        type: string
+        default: ""
     secrets:
       GH_PAT:
         required: true
@@ -171,13 +176,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          ref: ${{ inputs.target_ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
       - name: Log checkout ref
         env:
-          VALIDATE_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          VALIDATE_RESOLVED_REF: ${{ inputs.target_ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           echo "Resolved ref: ${VALIDATE_RESOLVED_REF}"
