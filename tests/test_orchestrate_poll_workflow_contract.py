@@ -26,7 +26,19 @@ def test_state_authentication_uses_verified_support_and_signed_initial_post() ->
 	assert "orchestrate_state_v2.py" in poll
 	assert 'poller_trusted_support_file scripts/orchestrate_state_v2.py' in process
 	assert "for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_state_v2.py" in initial
-	assert "python3 -I .codex-workflow-src/scripts/orchestrate_state_v2.py sign" in initial
+	assert 'python3 -I "${ORCHESTRATE_TRUSTED_DIR}/orchestrate_state_v2.py" sign' in initial
+	assert 'ORCHESTRATOR_STATE_SIGNING_KEY: ${{ secrets.ORCHESTRATOR_STATE_SIGNING_KEY }}' in initial
+	assert 'ORCHESTRATOR_STATE_SIGNING_KEY: ${{ secrets.ORCHESTRATOR_STATE_SIGNING_KEY }}' in poll
+	assert initial.index('name: Publish authenticated project descriptor') < initial.index('name: Create Wave 1 issues only')
+	assert '--kind descriptor' in initial and '--descriptor-file "${RECOVERY_DESCRIPTOR_FILE}"' in process
+	assert 'persist-credentials: false' in initial
+	assert '--role plan --workspace "${GITHUB_WORKSPACE}"' in initial
+	assert '--sandbox read-only' in initial
+	assert 'git remote set-url origin "https://x-access-token:' not in initial
+	assert 'gh api repos/shubhodeep1/coding-workflows/branches/main' in initial
+	assert 'gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable' in initial
+	assert 'name: Verify run-start support source' in initial
+	assert 'git -C .codex-workflow-src rev-parse HEAD' in initial
 	assert 'jq -n --rawfile body "${INITIAL_STATE_SIGNED}"' in initial
 	assert 'authenticated_state_comments "${state_issue_num}"' in process
 	assert 'authenticated_state_comments "${issue_num}" "${comments_json}"' in process

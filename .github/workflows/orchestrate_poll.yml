@@ -21,6 +21,8 @@ name: AI Orchestrate Poller (Reusable)
     secrets:
       GH_PAT:
         required: true
+      ORCHESTRATOR_STATE_SIGNING_KEY:
+        required: false
       OPENROUTER_API_KEY:
         required: true
       TG_BOT_SECRET:
@@ -717,6 +719,7 @@ jobs:
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORCHESTRATOR_STATE_SIGNING_KEY: ${{ secrets.ORCHESTRATOR_STATE_SIGNING_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}

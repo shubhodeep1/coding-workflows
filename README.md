@@ -63,6 +63,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | Secret | Required | Used By | Description |
 |---|---|---|---|
 | `GH_PAT` | **Yes** | All workflows | GitHub Personal Access Token with `repo` scope |
+| `ORCHESTRATOR_STATE_SIGNING_KEY` | **Yes for orchestrator** | orchestrate, orchestrate_poll | Independent secret for new state and project-descriptor HMACs. Provision in each calling repository before dispatch; missing secret stops new projects before child creation and stops poller state mutations. Do not reuse `GH_PAT`. Historical PAT-signed state is verification-only. |
 | `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, memory_maintenance, security-audit (source repo only) | [OpenRouter](https://openrouter.ai) API key for LLM access and AI memory keyword extraction |
 | `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Telegram bot token for notifications and message cleanup |
 | `DIGITALOCEAN_ACCESS_TOKEN` | No | Interactive Claude Code sessions only (CLAUDE.md §22) — no Actions workflow reads it | DigitalOcean API token. Set as an env var in the Claude Code session environment (not required as an Actions secret). Lets interactive sessions pull DigitalOcean data (app specs, deployed env vars, logs, deployment status) self-serve for verification and debugging; provisioning or mutating resources always requires asking the user first. Resource IDs per repo live in the `## DigitalOcean resources` section of `agents.md`/`AGENTS.md`. |
@@ -1472,6 +1473,7 @@ through `clarify → plan → implement → review`.
 | Secret | Used By | Description |
 |---|---|---|
 | `GH_PAT` | All workflows | GitHub PAT with repo access |
+| `ORCHESTRATOR_STATE_SIGNING_KEY` | orchestrate, orchestrate_poll | Independent signing secret; required before new projects or poller mutations, never supplied to the decomposer. |
 | `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, memory_maintenance | OpenRouter API key for LLM access and AI memory keyword extraction |
 | `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Telegram bot token (optional; also used for message cleanup) |
 
@@ -1826,6 +1828,8 @@ The smoke defaults `OPENCODE_VERSION` to `1.18.23`. `CODEX_VERSION` remains inde
 ## Project Orchestrator
 
 The orchestrator enables complex, multi-issue projects from a single prompt. It decomposes a project description into a dependency-aware DAG of GitHub issues, dispatches them through the existing AI pipeline in waves, and uses a judge to validate results between waves.
+
+**Authenticated bootstrap (supersedes the legacy body-only recovery in item 13a below):** Before creating Wave 1 children, the trusted host freezes the full validated decomposition, wave ordering, and integration branch in a signed, bounded, chunked project descriptor. The decomposer runs in a read-only, credentialless provider-only sandbox; the signer is staged outside its writable checkout. If initial state publication fails, the five-minute poller reconstructs only from a complete descriptor signed by the producer, an unchanged tracking-body graph, and a complete producer-owned first-wave child map. Checkbox changes, forged unsigned state markers, torn chains, missing credentials, and unverified history never authorize a reset. Configure `ORCHESTRATOR_STATE_SIGNING_KEY` separately from `GH_PAT` for both workflows; without it, new projects stop before child creation and poller state writes stop. Existing PAT-signed records remain readable but cannot be newly minted by the writer.
 
 ### Architecture
 
