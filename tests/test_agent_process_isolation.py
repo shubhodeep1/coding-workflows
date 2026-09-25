@@ -827,6 +827,7 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 				"ENV": str(root / "attacker-env"),
 				"GH_TOKEN": "synthetic-gh-token",
 				"GH_PAT": "synthetic-gh-pat",
+				"ORCHESTRATOR_STATE_SIGNING_KEY": "synthetic-signing-key",
 				"GITHUB_ENV": str(root / "github-env"),
 				"GITHUB_OUTPUT": str(root / "github-output"),
 				"MODEL_PROVIDER_CREDENTIAL_FILE": str(credential),
@@ -850,7 +851,7 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 		assert result.returncode == 0, result.stderr
 		isolated_environment = json.loads(capture.read_text(encoding="utf-8"))
 		for forbidden_name in (
-			"BASH_ENV", "ENV", "GH_TOKEN", "GH_PAT", "GITHUB_TOKEN", "GITHUB_ENV",
+			"BASH_ENV", "ENV", "GH_TOKEN", "GH_PAT", "ORCHESTRATOR_STATE_SIGNING_KEY", "GITHUB_TOKEN", "GITHUB_ENV",
 			"GITHUB_OUTPUT", "GITHUB_PATH", "GITHUB_STATE", "SSH_AUTH_SOCK", "OPENROUTER_API_KEY",
 		):
 			assert forbidden_name not in isolated_environment

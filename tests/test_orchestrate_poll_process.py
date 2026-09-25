@@ -32,7 +32,7 @@ def _signed_state_body(body: str, issue: int) -> str:
 	assert spec and spec.loader
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
-	with patch.dict(os.environ, {"GH_TOKEN": "test-token"}):
+	with patch.dict(os.environ, {"ORCHESTRATOR_STATE_SIGNING_KEY": "test-signing-key"}):
 		return module.sign_body("owner/repo", issue, body)
 
 
@@ -48,22 +48,82 @@ def test_state_authentication_rejects_unsigned_tampered_replayed_and_wrong_autho
 	):
 		signed = _signed_state_body(frame, 192)
 		comment = {"body": signed, "user": {"login": "github-actions[bot]"}}
-		with patch.dict(os.environ, {"GH_TOKEN": "test-token"}):
+		with patch.dict(os.environ, {"ORCHESTRATOR_STATE_SIGNING_KEY": "test-signing-key"}):
 			assert module.verified_body("owner/repo", 192, "github-actions[bot]", comment) == frame
 			assert module.verified_body("owner/repo", 193, "github-actions[bot]", comment) is None
 			assert module.verified_body("other/repo", 192, "github-actions[bot]", comment) is None
 			assert module.verified_body("owner/repo", 192, "github-actions[bot]", {**comment, "body": frame}) is None
 			assert module.verified_body("owner/repo", 192, "github-actions[bot]", {**comment, "body": signed.replace(" -->\n", " -->\nX", 1)}) is None
 			assert module.verified_body("owner/repo", 192, "github-actions[bot]", {**comment, "user": {"login": "attacker"}}) is None
-		with patch.dict(os.environ, {"GH_TOKEN": "rotated-token"}):
+		with patch.dict(os.environ, {"ORCHESTRATOR_STATE_SIGNING_KEY": "rotated-token"}):
 			assert module.verified_body("owner/repo", 192, "github-actions[bot]", comment) is None
-		with patch.dict(os.environ, {"GH_TOKEN": ""}):
+		with patch.dict(os.environ, {"ORCHESTRATOR_STATE_SIGNING_KEY": ""}):
 			try:
 				module.sign_body("owner/repo", 192, frame)
 			except ValueError:
 				pass
 			else:
 				raise AssertionError("missing credential permitted signing")
+	# Old PAT signatures remain verification-only; the signer cannot mint one.
+	legacy_frame = '<!-- ORCHESTRATOR_STATE_V1\n{"status":"pending"}\nORCHESTRATOR_STATE_V1 -->'
+	with patch.dict(os.environ, {"GH_TOKEN": "test-token", "ORCHESTRATOR_STATE_SIGNING_KEY": "test-signing-key"}):
+		legacy_mac = module._mac("owner/repo", 192, "tracking-v1", legacy_frame, legacy=True)
+		legacy_comment = {"body": legacy_frame + f"\n<!-- ORCHESTRATOR_STATE_AUTH_V1 mac={legacy_mac} -->", "user": {"login": "github-actions[bot]"}}
+		assert module.verified_body("owner/repo", 192, "github-actions[bot]", legacy_comment) == legacy_frame
+
+
+def test_project_descriptor_requires_new_key_complete_chain_and_producer(tmp_path: Path) -> None:
+	descriptor = {"schema_version": "orchestrate_project_descriptor.v1", "tracking_issue": 192}
+	state_file = tmp_path / "descriptor.json"
+	state_file.write_text(json.dumps(descriptor), encoding="utf-8")
+	output_dir = tmp_path / "chunks"
+	comments_path = tmp_path / "comments.json"
+	tool = str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py")
+	env = {**os.environ, "GH_TOKEN": "legacy-token", "ORCHESTRATOR_STATE_SIGNING_KEY": "distinct-key", "PYTHONDONTWRITEBYTECODE": "1"}
+	pack = subprocess.run([sys.executable, tool, "pack", "--kind", "descriptor", "--state-file", str(state_file),
+	                       "--out-dir", str(output_dir), "--chunk-size", "32", "--repo", "owner/repo", "--issue", "192"],
+	                      env=env, capture_output=True, text=True)
+	assert pack.returncode == 0, pack.stderr
+	chunks = json.loads(pack.stdout)["files"]
+	assert len(chunks) > 1
+	comments = [{"body": Path(chunk).read_text(encoding="utf-8"), "user": {"login": "github-actions[bot]"}} for chunk in chunks]
+	cmd = [sys.executable, tool, "extract", "--kind", "descriptor", "--comments-json", str(comments_path),
+	       "--repo", "owner/repo", "--issue", "192", "--login", "github-actions[bot]"]
+	for candidate, valid in (
+		(comments, True), (comments[:-1], False),
+		([{**comments[0], "user": {"login": "attacker"}}, *comments[1:]], False),
+		([{**comments[0], "body": comments[0]["body"].replace("part=1/", "part=2/", 1)}, *comments[1:]], False),
+		(comments + comments[:1], False),
+	):
+		comments_path.write_text(json.dumps(candidate), encoding="utf-8")
+		result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+		assert (result.returncode == 0) is valid, result.stderr
+		if valid:
+			assert json.loads(result.stdout) == descriptor
+	# A legacy PAT signature is valid for historical state, never for a new
+	# project descriptor, even when the authenticated author matches.
+	spec = importlib.util.spec_from_file_location("orchestrate_state_v2", tool)
+	assert spec and spec.loader
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	with patch.dict(os.environ, env):
+		legacy_body = module.verified_body("owner/repo", 192, "github-actions[bot]", comments[0])
+	assert legacy_body is not None
+	with patch.dict(os.environ, {"GH_TOKEN": "legacy-token"}):
+		legacy_mac = module._mac("owner/repo", 192, "project-descriptor-v1", legacy_body, legacy=True)
+	legacy_chunks = [{**comments[0], "body": legacy_body + f"\n<!-- ORCHESTRATOR_STATE_AUTH_V1 mac={legacy_mac} -->"}, *comments[1:]]
+	comments_path.write_text(json.dumps(legacy_chunks), encoding="utf-8")
+	assert subprocess.run(cmd, env=env, capture_output=True).returncode != 0
+	comments_path.write_text(json.dumps(comments), encoding="utf-8")
+	for altered in (dict(env, GH_TOKEN="rotated-legacy-token"), dict(env, ORCHESTRATOR_STATE_SIGNING_KEY="")):
+		result = subprocess.run(cmd, env=altered, capture_output=True, text=True)
+		assert (result.returncode == 0) is bool(altered["ORCHESTRATOR_STATE_SIGNING_KEY"])
+	state_file.write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+	too_large = subprocess.run([sys.executable, tool, "pack", "--kind", "descriptor", "--state-file", str(state_file),
+	                            "--out-dir", str(output_dir), "--repo", "owner/repo", "--issue", "192"],
+	                           env=env, capture_output=True, text=True)
+	assert too_large.returncode != 0
+	assert "project descriptor exceeds 2 MiB limit" in too_large.stderr
 
 
 def test_attacker_standalone_counter_cannot_skip_or_close_issue() -> None:
@@ -630,7 +690,7 @@ def _state_comment(state: dict) -> str:
 def _extract_latest_standalone_state(comments: list[dict]) -> dict | None:
 	for comment in reversed(comments):
 		body = str((comment or {}).get("body", ""))
-		body = body.split("\n<!-- ORCHESTRATOR_STATE_AUTH_V1 mac=", 1)[0]
+		body = re.split(r"\n<!-- ORCHESTRATOR_STATE_AUTH_V[12] mac=", body, maxsplit=1)[0]
 		open_marker = "<!-- AI_STANDALONE_STALL_STATE_V1\n"
 		close_marker = "\nAI_STANDALONE_STALL_STATE_V1 -->"
 		if not body.startswith(open_marker) or not body.endswith(close_marker):
@@ -809,6 +869,7 @@ def _run_poller(
 	state: dict,
 	enable_validation: str,
 	max_validate_cycles: str,
+	omit_initial_state: bool = False,
 	tracking_labels: list[str] | None = None,
 	tracking_comments: list[str | dict] | None = None,
 	tracking_body: str | None = None,
@@ -1271,7 +1332,7 @@ def _run_poller(
 				entry = {"body": str(raw_comment)}
 			entry.setdefault("id", comment_id)
 			entry.setdefault("body", "")
-			if entry["body"].startswith(("<!-- ORCHESTRATOR_STATE_V1\n", "<!-- ORCHESTRATOR_STATE_V2 part=", "<!-- AI_STANDALONE_STALL_STATE_V1\n")) and "ORCHESTRATOR_STATE_AUTH_V1" not in entry["body"] and not isinstance(raw_comment, dict):
+			if entry["body"].startswith(("<!-- ORCHESTRATOR_STATE_V1\n", "<!-- ORCHESTRATOR_STATE_V2 part=", "<!-- AI_STANDALONE_STALL_STATE_V1\n")) and "ORCHESTRATOR_STATE_AUTH_V" not in entry["body"] and not isinstance(raw_comment, dict):
 				try:
 					entry["body"] = _signed_state_body(entry["body"], issue_num)
 					entry.setdefault("user", {"login": "github-actions[bot]"})
@@ -1297,6 +1358,7 @@ def _run_poller(
 			str(tracking_num): {
 				"labels": list(tracking_labels),
 				"comments": [
+					*([] if omit_initial_state else [
 					_comment_entry(
 						{
 							# Sandbox SHA aliases (`__integration_head__`, ...) are
@@ -1317,6 +1379,7 @@ def _run_poller(
 						1,
 						tracking_num,
 					),
+					]),
 					*[
 						_comment_entry(comment_body, idx + 2, tracking_num)
 						for idx, comment_body in enumerate(tracking_comments)
@@ -3570,6 +3633,7 @@ sys.exit(proc.returncode)
 				"JUDGE_PROMPT_FILE": str(runtime_dir / "judge_prompt.txt"),
 				"JUDGE_OUTPUT_FILE": str(runtime_dir / "judge_output.txt"),
 				"GH_TOKEN": "test-token",
+				"ORCHESTRATOR_STATE_SIGNING_KEY": "test-signing-key",
 				"OPENROUTER_API_KEY": "test-openrouter",
 				"GITHUB_REPOSITORY": "owner/repo",
 				"GITHUB_WORKSPACE": str(sandbox),
@@ -16914,7 +16978,7 @@ def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_uses_d
 				str(comments_json),
 				"--repo", "owner/repo", "--issue", "192", "--login", "github-actions[bot]",
 			],
-			env={**os.environ, "GH_TOKEN": "test-token", "PYTHONDONTWRITEBYTECODE": "1"},
+			env={**os.environ, "GH_TOKEN": "test-token", "ORCHESTRATOR_STATE_SIGNING_KEY": "test-signing-key", "PYTHONDONTWRITEBYTECODE": "1"},
 			capture_output=True,
 			text=True,
 			timeout=30,
@@ -16923,6 +16987,25 @@ def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_uses_d
 	assert proc.returncode == 0, proc.stderr
 	assert json.loads(proc.stdout) == state
 	assert _extract_latest_state(comments) == state
+	# Recovery must not use that older snapshot when the latest signed write
+	# is incomplete, even though the legacy extractor can still read it.
+	with tempfile.TemporaryDirectory() as td:
+		strict_path = Path(td) / "comments.json"
+		strict_path.write_text(json.dumps(comments), encoding="utf-8")
+		strict_result = subprocess.run(
+			[sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"), "extract", "--strict-latest",
+			 "--comments-json", str(strict_path), "--repo", "owner/repo", "--issue", "192", "--login", "github-actions[bot]"],
+			env={**os.environ, "GH_TOKEN": "test-token", "ORCHESTRATOR_STATE_SIGNING_KEY": "test-signing-key", "PYTHONDONTWRITEBYTECODE": "1"},
+			capture_output=True, text=True,
+		)
+		assert strict_result.returncode == 4
+		bad_frame = (f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={'0' * 64} -->\n"
+		             "YWJj\nORCHESTRATOR_STATE_V2 -->")
+		strict_path.write_text(json.dumps(older_complete + [{"body": _signed_state_body(bad_frame, 192),
+		                                                    "user": {"login": "github-actions[bot]"}}]), encoding="utf-8")
+		assert subprocess.run(strict_result.args, env={**os.environ, "GH_TOKEN": "test-token",
+		                                           "ORCHESTRATOR_STATE_SIGNING_KEY": "test-signing-key", "PYTHONDONTWRITEBYTECODE": "1"},
+		                      capture_output=True).returncode == 4
 
 
 def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_same_total_uses_different_chunking():
@@ -16949,7 +17032,7 @@ def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_same_t
 				str(comments_json),
 				"--repo", "owner/repo", "--issue", "192", "--login", "github-actions[bot]",
 			],
-			env={**os.environ, "GH_TOKEN": "test-token", "PYTHONDONTWRITEBYTECODE": "1"},
+			env={**os.environ, "GH_TOKEN": "test-token", "ORCHESTRATOR_STATE_SIGNING_KEY": "test-signing-key", "PYTHONDONTWRITEBYTECODE": "1"},
 			capture_output=True,
 			text=True,
 			timeout=30,
@@ -16982,7 +17065,7 @@ def test_v2_extract_helper_matches_production_for_interleaved_older_complete_and
 				str(comments_json),
 				"--repo", "owner/repo", "--issue", "192", "--login", "github-actions[bot]",
 			],
-			env={**os.environ, "GH_TOKEN": "test-token", "PYTHONDONTWRITEBYTECODE": "1"},
+			env={**os.environ, "GH_TOKEN": "test-token", "ORCHESTRATOR_STATE_SIGNING_KEY": "test-signing-key", "PYTHONDONTWRITEBYTECODE": "1"},
 			capture_output=True,
 			text=True,
 			timeout=30,
@@ -18479,6 +18562,7 @@ def test_state_extraction_with_special_chars_in_comment_bodies():
 
 
 def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state():
+	# Historical test name: healing an older snapshot now risks rewinding work.
 	state = _base_state(status="in_progress")
 	malformed_latest = '<!-- ORCHESTRATOR_STATE_V1\n{"schema_version":"orchestrate_state.v1",\nORCHESTRATOR_STATE_V1 -->'
 	result = _run_poller(
@@ -18488,7 +18572,9 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		tracking_comments=[malformed_latest],
 		issue_labels={10: ["ai:implementing"]},
 	)
-	assert "restored from older valid state and posted healed canonical state" in result["stdout"]
+	assert "refusing to rewind to an older snapshot" in result["stdout"]
+	assert result["state_on_disk"] is None
+	assert "ORCHESTRATOR_STATE_V2" not in "".join(c["body"] for c in result["issues"]["192"]["comments"])
 	assert result["latest_state"]["schema_version"] == "orchestrate_state.v1"
 	assert result["latest_state"]["status"] == "in_progress"
 	state_payloads = _extract_state_payloads(result["issues"]["192"]["comments"])
@@ -18502,14 +18588,7 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 	comments = result["issues"]["192"]["comments"]
 	malformed_idx = next(i for i, c in enumerate(comments) if c.get("body", "").startswith(malformed_latest))
 	following_payloads = _extract_state_payloads(comments[malformed_idx + 1 :])
-	assert following_payloads
-	following_valid_payloads = []
-	for raw_payload in following_payloads:
-		try:
-			following_valid_payloads.append(json.loads(raw_payload))
-		except json.JSONDecodeError:
-			continue
-	assert any(payload.get("schema_version") == "orchestrate_state.v1" for payload in following_valid_payloads)
+	assert not following_payloads
 
 
 def test_state_comment_pack_manifest_count_mismatch_skips_partial_v2_write():
@@ -18542,7 +18621,7 @@ def test_all_invalid_state_comments_do_not_bless_unverified_reconstruction():
 		tracking_comments=[malformed_latest],
 		issue_labels={10: ["ai:implementing"]},
 	)
-	assert "No authenticated state for tracking issue #192; refusing reconstruction" in result["stdout"]
+	assert "Authenticated but unusable state for #192" in result["stdout"]
 	assert "restored from older valid state and posted healed canonical state" not in result["stdout"]
 	assert "State reconstructed and posted for tracking issue #192." not in result["stdout"]
 	assert result["latest_state"]["schema_version"] == "orchestrate_state.v1"
@@ -18627,7 +18706,7 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 		issue_labels={10: ["ai:implementing"]},
 	)
 	# The rebuild is refused (and the reason is surfaced), not performed.
-	assert "No authenticated state for tracking issue #192; refusing reconstruction" in result["stdout"]
+	assert "Authenticated but unusable state for #192" in result["stdout"]
 	assert (
 		"State reconstructed and posted for tracking issue #192."
 		not in result["stdout"]
@@ -18643,16 +18722,49 @@ def test_unauthenticated_state_reconstruction_requires_complete_initial_wave(tmp
 		"### Wave 1\n\n- [ ] **phase-a**: A (priority 1)\n"
 		"- [ ] **phase-b**: B (priority 1)\n", encoding="utf-8",
 	)
-	for issue_map, expected_success in (({}, False), ({"phase-a": 10}, False), ({"phase-a": 10, "phase-b": 11}, True)):
+	for issue_map in ({}, {"phase-a": 10}, {"phase-a": 10, "phase-b": 11}):
 		proc = subprocess.run(
 			[sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "rebuild-state",
 			 "--body-file", str(body_path), "--tracking-issue", "192", "--issue-map-json", json.dumps(issue_map),
 			 "--require-complete-first-wave"],
 			capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
 		)
-		assert (proc.returncode == 0) is expected_success
-		if expected_success:
-			assert json.loads(proc.stdout)["security_pass_status"] == "pending"
+		assert proc.returncode != 0
+
+
+def test_unsigned_attacker_state_marker_cannot_suppress_descriptor_recovery(tmp_path: Path) -> None:
+	data = {
+		"project_title": "Demo", "project_summary": "Project summary",
+		"issues": [
+			{"id": "first", "title": "First", "body": "First task", "priority": 1},
+			{"id": "later", "title": "Later", "body": "Trusted deferred task", "priority": 2},
+		],
+		"dependency_edges": [{"from": "first", "to": "later"}],
+	}
+	data_file = tmp_path / "decomposition.json"
+	data_file.write_text(json.dumps(data), encoding="utf-8")
+	tool = str(REPO_ROOT / "scripts" / "orchestrate_lib.py")
+	descriptor = subprocess.run([sys.executable, tool, "freeze-project-descriptor", "--input-file", str(data_file),
+	                            "--tracking-issue", "192", "--integration-branch", "orchestrator/project-192"],
+	                           capture_output=True, text=True, check=True).stdout
+	body = subprocess.run([sys.executable, tool, "build-tracking-body", "--input-file", str(data_file),
+	                      "--integration-branch", "orchestrator/project-192"], capture_output=True, text=True, check=True).stdout
+	payload = descriptor.encode("utf-8")
+	frame = (f"<!-- ORCHESTRATOR_PROJECT_DESCRIPTOR_V1 part=1/1 manifest={hashlib.sha256(payload).hexdigest()} -->\n"
+	         f"{base64.b64encode(payload).decode('ascii')}\nORCHESTRATOR_PROJECT_DESCRIPTOR_V1 -->")
+	result = _run_poller(
+		state=_base_state(status="in_progress"), omit_initial_state=True,
+		enable_validation="false", max_validate_cycles="3", tracking_body=body,
+		tracking_comments=[{"body": _signed_state_body(frame, 192), "user": {"login": "github-actions[bot]"}},
+		                   {"body": '<!-- ORCHESTRATOR_STATE_V1\n{}\nORCHESTRATOR_STATE_V1 -->',
+		                    "user": {"login": "attacker"}}],
+		issue_labels={10: ["ai:clarification"]},
+		issue_bodies={10: "First task\n- Tracking issue: #192\n- Local ID: `first`"},
+		search_issue_items=[{"number": 10, "body": "- Tracking issue: #192\n- Local ID: `first`",
+		                     "user": {"login": "github-actions[bot]"}}],
+	)
+	assert "State reconstructed and posted for tracking issue #192" in result["stdout"]
+	assert result["latest_state"]["pending_issue_defs"]["later"]["body"] == "Trusted deferred task"
 
 
 def test_deferred_creation_adopts_existing_github_issue_instead_of_duplicating():

@@ -31,6 +31,8 @@ name: AI Orchestrate (Reusable)
     secrets:
       GH_PAT:
         required: true
+      ORCHESTRATOR_STATE_SIGNING_KEY:
+        required: false
       OPENROUTER_API_KEY:
         required: true
       TG_BOT_SECRET:
@@ -98,17 +100,21 @@ jobs:
           # has no tracking-issue integration metadata before checkout.
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
 
-      - name: Configure git auth for memory helper clones
+      - name: Configure host-only git auth for memory helper clones
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REVIEW_GIT_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
-          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
-          SERVER_HOST="${SERVER_HOST#http://}"
-          SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          umask 077
+          [ -n "${REVIEW_GIT_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          credential_dir="$(mktemp -d "${RUNNER_TEMP%/}/orchestrate-git-credential-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
+          printf '%s\n' "${REVIEW_GIT_TOKEN}" > "${credential_dir}/token"
+          echo "REVIEW_GIT_CREDENTIAL_DIR=${credential_dir}" >> "$GITHUB_ENV"
+          echo 'GIT_CONFIG_COUNT=1' >> "$GITHUB_ENV"
+          echo 'GIT_CONFIG_KEY_0=credential.helper' >> "$GITHUB_ENV"
+          echo 'GIT_CONFIG_VALUE_0=!f() { [ "$1" = get ] || exit 1; host=""; while IFS= read -r line; do case "$line" in host=*) host="${line#host=}" ;; esac; done; [ "$host" = "${GITHUB_SERVER_URL#https://}" ] && [ -n "${REVIEW_GIT_CREDENTIAL_DIR:-}" ] || exit 1; IFS= read -r token < "${REVIEW_GIT_CREDENTIAL_DIR}/token" || [ -n "$token" ] || exit 1; [ -n "$token" ] && printf "username=x-access-token\npassword=%s\n" "$token"; }; f' >> "$GITHUB_ENV"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -163,23 +169,50 @@ jobs:
       - name: Validate required environment variables
         shell: bash
         env:
+          GH_PAT: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ORCHESTRATOR_STATE_SIGNING_KEY: ${{ secrets.ORCHESTRATOR_STATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${OPENROUTER_API_KEY:-}" ]; then
             echo "Missing required environment variables: OPENROUTER_API_KEY" >&2
             exit 1
           fi
+          if [ -z "${ORCHESTRATOR_STATE_SIGNING_KEY:-}" ]; then
+            echo "::error::Dedicated orchestrator state signing secret is unavailable; refusing project creation"
+            exit 1
+          fi
+          if [ "${ORCHESTRATOR_STATE_SIGNING_KEY}" = "${GH_PAT:-}" ]; then
+            echo "::error::Orchestrator state signing secret must differ from GH_PAT"
+            exit 1
+          fi
 
       - name: Resolve workflow support ref for run-start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          # No other call in this bootstrap resolves the verified support
+          # commit. Resolve it once and reuse it across both staging passes.
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+            branch_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
+            [ "$(jq -r '.protected // false' <<< "${branch_json}")" = true ] || exit 1
+            support_sha="$(jq -r '.commit.sha // empty' <<< "${branch_json}")"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+            support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
+            object_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
+            for depth in 1 2 3; do
+              [ "${object_type}" = tag ] || break
+              [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
+              support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
+              object_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
+            done
+            [ "${object_type}" = commit ] || exit 1
           fi
+          [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "SCRIPT_REF=${support_sha}" >> "$GITHUB_ENV"
 
       - name: Checkout workflow support source for run-start
         id: checkout_support_source_run_start
@@ -191,6 +224,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback for run-start
         if: ${{ steps.checkout_support_source_run_start.outcome == 'failure' }}
@@ -198,10 +232,18 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: main
+          ref: ${{ env.SCRIPT_REF }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify run-start support source
+        run: |
+          set -euo pipefail
+          [ "$(git -C .codex-workflow-src rev-parse HEAD)" = "${SCRIPT_REF}" ] || {
+            echo "::error::Run-start support checkout is not the verified commit"; exit 1;
+          }
 
       - name: Checkout workflow support source main snapshot for run-start
         if: ${{ env.SCRIPT_REF != 'main' }}
@@ -213,6 +255,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow memory support files for run-start
         run: |
@@ -228,9 +271,6 @@ jobs:
           _fetched_scripts=()
           for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py; do
             src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::warning::Missing required run-start support script ${f}; run-start memory event may be skipped"
               continue
@@ -307,12 +347,7 @@ jobs:
       - name: Resolve workflow support ref
         run: |
           set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
-          else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
-          fi
+          [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] || exit 1
 
       - name: Checkout workflow support source
         id: checkout_support_source
@@ -324,22 +359,24 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: main
+          ref: ${{ env.SCRIPT_REF }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout
         run: |
           set -euo pipefail
-          if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+          if [ ! -d .codex-workflow-src ] || [ "$(git -C .codex-workflow-src rev-parse HEAD)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Failed to checkout verified workflow support commit"
             exit 1
           fi
 
@@ -353,6 +390,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow support files
         run: |
@@ -362,9 +400,6 @@ jobs:
           _fetched_scripts=()
           for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_state_v2.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
               exit 1
@@ -383,9 +418,6 @@ jobs:
           # shim resolves ${SCRIPT_DIR}/render_prompt.py.
           for f in render_prompt.py; do
             src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional render_prompt.py backend unavailable on ${SCRIPT_REF}; render_prompt.sh shim (if present) resolves it elsewhere or the bundled bash renderer is used."
               continue
@@ -531,6 +563,21 @@ jobs:
             --model "${MODEL_EDITOR}" \
             --reasoning "${MODEL_REASONING_EFFORT}"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Freeze trusted decomposer support
+        run: |
+          set -euo pipefail
+          # No fallback to a moving main checkout or model-writable signer.
+          support_sha="$(git -C .codex-workflow-src rev-parse HEAD)"
+          [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "${support_sha}" = "${SCRIPT_REF}" ] || {
+            echo "::error::Workflow support checkout does not match trusted ref"; exit 1;
+          }
+          trusted_dir="$(mktemp -d "${RUNNER_TEMP%/}/orchestrate-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
+          for helper in orchestrate_state_v2.py untrusted_process_sandbox.sh model_provider_proxy.py orchestrate_lib.py; do
+            [ -f ".codex-workflow-src/scripts/${helper}" ] && [ ! -L ".codex-workflow-src/scripts/${helper}" ] || exit 1
+            install -m 0700 ".codex-workflow-src/scripts/${helper}" "${trusted_dir}/${helper}"
+          done
+          echo "ORCHESTRATE_TRUSTED_DIR=${trusted_dir}" >> "$GITHUB_ENV"
 
       - name: Pre-assemble static context
         run: |
@@ -737,7 +784,10 @@ jobs:
             # `timeout` wrapper governs codex directly — wrapping a
             # pipeline would only time out `cat`, not the model call.
             if timeout --signal=TERM --kill-after=30s -- "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" \
-                 codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+                 bash "${ORCHESTRATE_TRUSTED_DIR}/untrusted_process_sandbox.sh" \
+                   --role plan --workspace "${GITHUB_WORKSPACE}" --config-format codex \
+                   --config "${CODEX_HOME}" --runtime-dir "${RUNTIME_DIR}" -- \
+                   codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "::warning::Codex returned empty output on attempt ${attempt}."
                 last_status="empty output"
@@ -1123,6 +1173,41 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "INTEGRATION_BRANCH=${INTEGRATION_BRANCH}" >> "$GITHUB_ENV"
 
+      - name: Publish authenticated project descriptor
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORCHESTRATOR_STATE_SIGNING_KEY: ${{ secrets.ORCHESTRATOR_STATE_SIGNING_KEY }}
+          TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+          INTEGRATION_BRANCH: ${{ steps.integration_branch.outputs.integration_branch }}
+        run: |
+          set -euo pipefail
+          [ -n "${ORCHESTRATOR_STATE_SIGNING_KEY:-}" ] || { echo "::error::Signing credential unavailable"; exit 1; }
+          source scripts/gh_helpers.sh
+          descriptor_file="${RUNTIME_DIR}/project_descriptor.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 -I "${ORCHESTRATE_TRUSTED_DIR}/orchestrate_lib.py" freeze-project-descriptor \
+            --input-file "${DECOMPOSITION_FILE}" --tracking-issue "${TRACKING_ISSUE_NUMBER}" \
+            --integration-branch "${INTEGRATION_BRANCH}" > "${descriptor_file}"
+          descriptor_dir="${RUNTIME_DIR}/descriptor_chunks"
+          manifest="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${ORCHESTRATE_TRUSTED_DIR}/orchestrate_state_v2.py" pack \
+            --kind descriptor --state-file "${descriptor_file}" --out-dir "${descriptor_dir}" \
+            --repo "${GITHUB_REPOSITORY}" --issue "${TRACKING_ISSUE_NUMBER}")"
+          # The existing issue/ref reads in this workflow contain no token
+          # identity; one /user lookup covers every descriptor chunk POST.
+          author="$(gh_retry gh api user --jq '.login')"
+          [ -n "${author}" ] || exit 1
+          # The POST response already includes the author and body: no extra
+          # per-chunk API read is required to confirm publication.
+          total="$(jq -r '.total' <<< "${manifest}")"
+          [ "$(jq '.files | length' <<< "${manifest}")" -eq "${total}" ] || exit 1
+          for ((part=0; part<total; part++)); do
+            chunk="$(jq -r --argjson part "${part}" '.files[$part]' <<< "${manifest}")"
+            response="$(jq -n --rawfile body "${chunk}" '{body:$body}' | \
+              gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUMBER}/comments" --input -)"
+            jq -e --arg login "${author}" --rawfile body "${chunk}" \
+              '(.user.login | ascii_downcase) == ($login | ascii_downcase) and .body == $body and (.id | type == "number")' \
+              <<< "${response}" >/dev/null || { echo "::error::Project descriptor publication not confirmed"; exit 1; }
+          done
+
       - name: Create Wave 1 issues only
         id: create_issues
         env:
@@ -1213,6 +1298,7 @@ jobs:
       - name: Build and post initial state
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORCHESTRATOR_STATE_SIGNING_KEY: ${{ secrets.ORCHESTRATOR_STATE_SIGNING_KEY }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
           INTEGRATION_BRANCH: ${{ steps.integration_branch.outputs.integration_branch }}
         run: |
@@ -1259,7 +1345,7 @@ jobs:
           INITIAL_STATE_BODY="${RUNTIME_DIR}/initial_state_comment.txt"
           INITIAL_STATE_SIGNED="${RUNTIME_DIR}/initial_state_signed.txt"
           printf '%s' "${STATE_COMMENT}" > "${INITIAL_STATE_BODY}"
-          PYTHONDONTWRITEBYTECODE=1 python3 -I .codex-workflow-src/scripts/orchestrate_state_v2.py sign \
+          PYTHONDONTWRITEBYTECODE=1 python3 -I "${ORCHESTRATE_TRUSTED_DIR}/orchestrate_state_v2.py" sign \
             --repo "${GITHUB_REPOSITORY}" --issue "${TRACKING_ISSUE_NUMBER}" \
             --body-file "${INITIAL_STATE_BODY}" > "${INITIAL_STATE_SIGNED}"
           jq -n --rawfile body "${INITIAL_STATE_SIGNED}" '{"body": $body}' \

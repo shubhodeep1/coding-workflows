@@ -10,6 +10,14 @@
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TOOL_CALL_BUDGET_JUDGE
 
 set -euo pipefail
+if [ -z "${ORCHESTRATOR_STATE_SIGNING_KEY:-}" ]; then
+  echo "::error::Dedicated orchestrator state signing credential unavailable; refusing state mutations" >&2
+  exit 1
+fi
+if [ "${ORCHESTRATOR_STATE_SIGNING_KEY}" = "${GH_TOKEN:-}" ]; then
+  echo "::error::Orchestrator state signing credential must differ from GitHub credential" >&2
+  exit 1
+fi
 # The poller later checks out untrusted integration code without restarting.
 # Inherited Python children must never import modules from that checkout.
 export PYTHONSAFEPATH=1
@@ -3009,7 +3017,7 @@ extract_latest_valid_orchestrator_state() {
   printf '%s' "${comments_json}" > "${_v2_comments_file}"
   trusted_state_reader="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)" || return 1
   PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_reader}" extract \
-    --comments-json "${_v2_comments_file}" --repo "${GITHUB_REPOSITORY}" \
+    --strict-latest --comments-json "${_v2_comments_file}" --repo "${GITHUB_REPOSITORY}" \
     --issue "${state_issue_num}" --login "${trusted_login}" > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
   if [ "${_v2_rc}" = "0" ] && [ -s "${_v2_payload_file}" ]; then
@@ -3041,6 +3049,11 @@ extract_latest_valid_orchestrator_state() {
     fi
   fi
   rm -f "${_v2_comments_file}" "${_v2_payload_file}"
+  if [ "${_v2_rc}" = "4" ] || [ "${_v2_rc}" = "0" ]; then
+    # A complete but invalid payload is no safer than a torn write.
+    echo "::warning::Newest authenticated V2 state for #${state_issue_num} is incomplete or unusable; refusing older snapshots." >&2
+    return 1
+  fi
 
   comments_json="${authenticated_comments}"
 
@@ -18546,16 +18559,14 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   if [ "${STATE_FALLBACK_USED}" = "true" ] && [ -n "${STATE_JSON}" ]; then
-    printf '%s\n' "${STATE_JSON}" > "${STATE_FILE}"
-    post_state_comment || true
-    echo "::warning::Detected malformed latest ORCHESTRATOR_STATE_V1 for issue #${TRACKING_NUM}; restored from older valid state and posted healed canonical state."
+    echo "::warning::Newer authenticated state for issue #${TRACKING_NUM} is unusable; refusing to rewind to an older snapshot."
+    continue
   fi
 
   if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then
-    # Unsigned historical records and rotated credentials cannot be blessed
-    # by rebuilding from editable issue prose. Retry on a later tick instead.
-    if ! state_comment_login >/dev/null || [ -z "${GH_TOKEN:-}" ] || \
-      printf '%s' "${COMMENTS}" | jq -e 'any(.[]; (.body // "") | test("^<!-- ORCHESTRATOR_STATE_V[12]"))' >/dev/null 2>&1; then
+    # Only producer-authenticated state evidence can veto recovery. A marker
+    # posted by an arbitrary commenter is not evidence that state ever existed.
+    if ! state_comment_login >/dev/null || [ -z "${GH_TOKEN:-}" ]; then
       echo "::warning::No authenticated state for tracking issue #${TRACKING_NUM}; refusing reconstruction from unverified comments."
       continue
     fi
@@ -18578,6 +18589,36 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # later poll cycle read the real state.
     if [ "${COMMENTS_FETCH_OK}" != "true" ]; then
       echo "::warning::Comments fetch failed for tracking issue #${TRACKING_NUM}; cannot confirm orchestrator state is missing. Skipping state reconstruction this cycle (will retry next poll)."
+      continue
+    fi
+    TRUSTED_RECOVERY_COMMENTS="$(authenticated_state_comments "${TRACKING_NUM}" "${COMMENTS}")" || {
+      echo "::warning::State comment authentication unavailable for #${TRACKING_NUM}; deferring reconstruction."
+      continue
+    }
+    # A broken authenticated snapshot is evidence of an advanced project;
+    # recovery from a descriptor would reset it to wave one.
+    if printf '%s' "${TRUSTED_RECOVERY_COMMENTS}" | jq -e 'any(.[]; (.body // "") | test("^<!-- ORCHESTRATOR_STATE_V[12]"))' >/dev/null 2>&1; then
+      echo "::warning::Authenticated but unusable state for #${TRACKING_NUM}; deferring reconstruction."
+      continue
+    fi
+    # If a producer wrote an incomplete descriptor, never accept an older
+    # complete chain or editable tracking prose as its replacement.
+    if printf '%s' "${COMMENTS}" | jq -e --arg login "${NOOP_CAP_TRUSTED_LOGIN}" \
+      'any(.[]; ((.user.login // "" | ascii_downcase) == $login) and ((.body // "") | startswith("<!-- ORCHESTRATOR_PROJECT_DESCRIPTOR_V1")))' >/dev/null 2>&1; then
+      :
+    else
+      echo "::warning::No authenticated project descriptor evidence for #${TRACKING_NUM}; deferring reconstruction."
+      continue
+    fi
+    RECOVERY_COMMENTS_FILE="${RUNTIME_DIR}/rebuild_comments_${TRACKING_NUM}.json"
+    RECOVERY_DESCRIPTOR_FILE="${RUNTIME_DIR}/rebuild_descriptor_${TRACKING_NUM}.json"
+    printf '%s' "${COMMENTS}" > "${RECOVERY_COMMENTS_FILE}"
+    TRUSTED_STATE_READER="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)" || continue
+    if ! PYTHONDONTWRITEBYTECODE=1 python3 -I "${TRUSTED_STATE_READER}" extract \
+      --kind descriptor --comments-json "${RECOVERY_COMMENTS_FILE}" \
+      --repo "${GITHUB_REPOSITORY}" --issue "${TRACKING_NUM}" \
+      --login "${NOOP_CAP_TRUSTED_LOGIN}" > "${RECOVERY_DESCRIPTOR_FILE}"; then
+      echo "::warning::Incomplete or unauthenticated project descriptor for #${TRACKING_NUM}; deferring reconstruction."
       continue
     fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
@@ -18641,6 +18682,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     REBUILD_ERR_FILE="${RUNTIME_DIR}/rebuild_err_${TRACKING_NUM}.txt"
     if poller_trusted_orchestrate_lib rebuild-state \
       --body-file "${REBUILD_BODY_FILE}" \
+      --descriptor-file "${RECOVERY_DESCRIPTOR_FILE}" \
       --issue-map-json "${ISSUE_MAP_JSON}" \
       --require-complete-first-wave \
       --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>"${REBUILD_ERR_FILE}"; then

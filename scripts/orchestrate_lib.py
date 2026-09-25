@@ -2940,6 +2940,20 @@ def parse_tracking_body(body: str) -> dict[str, Any]:
 	return result
 
 
+def _descriptor_body_structure_matches(body: str, wave_count: int, issue_count: int, edge_count: int) -> bool:
+	"""Reject duplicate/renumbered graph headings hidden from the body parser."""
+	return (
+		len(re.findall(r"^## Project:", body, re.MULTILINE)) == 1
+		and len(INTEGRATION_BRANCH_LINE_RE.findall(body)) == 1
+		and not TARGET_BRANCH_LINE_RE.search(body)
+		and re.findall(r"^### Wave\b.*$", body, re.MULTILINE)
+		== [f"### Wave {index}" for index in range(1, wave_count + 1)]
+		and len(re.findall(r"^### Dependencies\b.*$", body, re.MULTILINE)) == (1 if edge_count else 0)
+		and re.findall(r"^\*\*Total issues:\*\* (\d+) \| \*\*Waves:\*\* (\d+)$", body, re.MULTILINE)
+		== [(str(issue_count), str(wave_count))]
+	)
+
+
 def rebuild_tracking_state(
 	body: str,
 	issue_number_map: dict[str, int],
@@ -3433,6 +3447,35 @@ def cmd_build_tracking_body(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_freeze_project_descriptor(args: argparse.Namespace) -> int:
+	"""Freeze the exact post-serialization graph before any child is created."""
+	tracking_issue = int(args.tracking_issue)
+	if tracking_issue < 1 or args.integration_branch != f"orchestrator/project-{tracking_issue}":
+		raise OrchestrateError("invalid project descriptor branch or tracking issue")
+	data = validate_decomposition(json.loads(Path(args.input_file).read_text(encoding="utf-8")))
+	waves = compute_waves(data, auto_serialize=False)
+	canonical_body = build_tracking_issue_body(data, waves, integration_branch=args.integration_branch)
+	if not _descriptor_body_structure_matches(canonical_body, len(waves), len(data["issues"]), len(data["dependency_edges"])):
+		raise OrchestrateError("decomposition cannot be represented unambiguously in tracking body")
+	canonical_graph = parse_tracking_body(canonical_body)
+	if canonical_graph["project_title"] != data["project_title"] \
+		or canonical_graph["integration_branch"] != args.integration_branch \
+		or canonical_graph["dependency_edges"] != data["dependency_edges"] \
+		or [[{key: issue[key] for key in ("id", "title", "priority")} for issue in wave]
+		    for wave in canonical_graph["waves"]] != [
+			[{key: issue[key] for key in ("id", "title", "priority")} for issue in wave] for wave in waves
+		]:
+		raise OrchestrateError("decomposition cannot be represented unambiguously in tracking body")
+	_print_json({
+		"schema_version": "orchestrate_project_descriptor.v1",
+		"tracking_issue": tracking_issue,
+		"integration_branch": args.integration_branch,
+		"decomposition": data,
+		"waves": [[issue["id"] for issue in wave] for wave in waves],
+	})
+	return 0
+
+
 def cmd_render_tracking_body(args: argparse.Namespace) -> int:
 	path = Path(args.state_file).resolve()
 	with path.open("r", encoding="utf-8") as f:
@@ -3640,8 +3683,46 @@ def cmd_rebuild_state(args: argparse.Namespace) -> int:
 		body = f.read()
 
 	issue_map_raw: dict[str, Any] = json.loads(args.issue_map_json)
-	issue_map = {k: int(v) for k, v in issue_map_raw.items()}
+	if not isinstance(issue_map_raw, dict) or any(not isinstance(k, str) or not isinstance(v, int) or isinstance(v, bool) for k, v in issue_map_raw.items()):
+		raise ReconstructionUnsafeError("invalid discovered issue map")
+	issue_map = dict(issue_map_raw)
 	tracking_issue = int(args.tracking_issue)
+	if args.require_complete_first_wave:
+		if not args.descriptor_file:
+			raise ReconstructionUnsafeError("authenticated project descriptor required")
+		descriptor = json.loads(Path(args.descriptor_file).read_text(encoding="utf-8"))
+		if not isinstance(descriptor, dict) or descriptor.get("schema_version") != "orchestrate_project_descriptor.v1" \
+			or descriptor.get("tracking_issue") != tracking_issue:
+			raise ReconstructionUnsafeError("invalid project descriptor identity")
+		data = validate_decomposition(descriptor.get("decomposition"))
+		branch = descriptor.get("integration_branch")
+		if branch != f"orchestrator/project-{tracking_issue}":
+			raise ReconstructionUnsafeError("project descriptor integration branch mismatch")
+		waves = compute_waves(data, auto_serialize=False)
+		wave_ids = [[issue["id"] for issue in wave] for wave in waves]
+		if descriptor.get("waves") != wave_ids:
+			raise ReconstructionUnsafeError("project descriptor wave graph mismatch")
+		if not _descriptor_body_structure_matches(body, len(waves), len(data["issues"]), len(data["dependency_edges"])):
+			raise ReconstructionUnsafeError("tracking body graph headings differ from authenticated descriptor")
+		parsed = parse_tracking_body(body)
+		expected = parse_tracking_body(build_tracking_issue_body(data, waves, integration_branch=branch))
+		# Checkbox changes are mutable status; titles, priorities, membership,
+		# edge ordering, branch and project identity are not.
+		for graph in (parsed, expected):
+			for wave in graph["waves"]:
+				for issue in wave:
+					issue.pop("completed", None)
+		if parsed != expected:
+			raise ReconstructionUnsafeError("tracking body graph differs from authenticated descriptor")
+		first_wave_ids = set(wave_ids[0])
+		if set(issue_map) != first_wave_ids or len(set(issue_map.values())) != len(issue_map) \
+			or any(n < 1 or n == tracking_issue for n in issue_map.values()) \
+			or any(issue["completed"] for wave in parse_tracking_body(body)["waves"] for issue in wave):
+			raise ReconstructionUnsafeError("initial wave evidence incomplete or project already advanced")
+		state = build_tracking_state(data, waves, issue_map, integration_branch=branch)
+		state["tracking_issue"] = tracking_issue
+		_print_json(state)
+		return 0
 	if args.require_complete_first_wave:
 		# An absent authenticated comment is not evidence of a never-started
 		# project. Only the initial all-created Wave 1 case is safe to reset.
@@ -3825,6 +3906,11 @@ def build_parser() -> argparse.ArgumentParser:
 	p_partition.set_defaults(func=cmd_check_partition)
 
 	p_body = subparsers.add_parser("build-tracking-body", help="Build tracking issue markdown body")
+	p_descriptor = subparsers.add_parser("freeze-project-descriptor", help="Freeze authenticated recovery input")
+	p_descriptor.add_argument("--input-file", required=True)
+	p_descriptor.add_argument("--tracking-issue", required=True, type=int)
+	p_descriptor.add_argument("--integration-branch", required=True)
+	p_descriptor.set_defaults(func=cmd_freeze_project_descriptor)
 	p_body.add_argument("--input-file", required=True)
 	p_body.add_argument("--integration-branch", default="", help="Optional integration branch name")
 	p_body.set_defaults(func=cmd_build_tracking_body)
@@ -3866,6 +3952,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p_rebuild = subparsers.add_parser("rebuild-state", help="Rebuild state from tracking body + issue map")
 	p_rebuild.add_argument("--body-file", required=True, help="Path to tracking issue body text file")
+	p_rebuild.add_argument("--descriptor-file", help="Verified, complete project descriptor JSON")
 	p_rebuild.add_argument("--issue-map-json", required=True, help='JSON: {"local_id": github_number, ...}')
 	p_rebuild.add_argument("--tracking-issue", required=True, help="Tracking issue number")
 	p_rebuild.add_argument("--require-complete-first-wave", action="store_true", help="Refuse ambiguous reconstruction without authenticated state")
