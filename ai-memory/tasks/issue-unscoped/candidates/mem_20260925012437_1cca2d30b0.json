@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  expected_change_site: tests/e2e_smoke_canary.txt only; the PR diff should contain exactly this one changed file\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  EVIDENCE: PR diff / PR CHANGED FILES include .ai/.workspace_source_manifest.txt with four hunks (~39 lines) adding changelog.d/4342-heal-failed-runs-reviewer-failures-pr-reconcile.md, changelog.d/4398-issue-author-provenance.md, changelog.d/4399-trusted-review-support.md, changelog.d/4400-clarify-isolation.md, scripts/clarify_isolated_run.sh, scripts/clarify_openrouter_broker.py, scripts/clarify_sandbox/Dockerfile, scripts/workflow_failure_heal_pr_reconcile.sh, and tests/test_workflow_failure_heal_pr_reconcile.py; the LAST RUN DIFF only touches tests/e2e_smoke_canary.txt and its content is reported correct, but the cumulative PR still carries the manifest modifications from the earlier implement run, which the editor left unresolved. Severity disagreement: reported as MAJOR and BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\" (Issue #4420, Constraints section)\n  Expected change site: The PR diff should contain exactly one changed file (tests/e2e_smoke_canary.txt).\n  Evidence of absence: PR DIFF and PR CHANGED FILES include .ai/.workspace_source_manifest.txt with 4 hunks (~39 lines) adding entries for changelog.d/4342-heal-failed-runs-reviewer-failures-pr-reconcile.md, changelog.d/4398-issue-author-provenance.md, changelog.d/4399-trusted-review-support.md, changelog.d/4400-clarify-isolation.md, scripts/clarify_isolated_run.sh, scripts/clarify_openrouter_broker.py, scripts/clarify_sandbox/Dockerfile, scripts/workflow_failure_heal_pr_reconcile.sh, tests/test_workflow_failure_heal_pr_reconcile.py. These additions are unrelated to the canary update and the last autofix editor acknowledged the manifest modifications remain unresolved. The LAST RUN DIFF itself is compliant (only tests/e2e_smoke_canary.txt) and the canary file content is correct, but the cumulative PR diff still carries the out-of-scope manifest modifications from the original implement run.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR diff modifies .ai/.workspace_source_manifest.txt, which is explicitly forbidden by the linked issue constraints.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  Expected change site: PR diff should contain only tests/e2e_smoke_canary.txt; .ai/.workspace_source_manifest.txt should not appear in the PR.\n  Evidence of absence: PR CHANGED FILES and PR DIFF both include .ai/.workspace_source_manifest.txt with four hunks adding changelog.d/4342-heal-failed-runs-reviewer-failures-pr-reconcile.md, changelog.d/4398-issue-author-provenance.md, changelog.d/4399-trusted-review-support.md, changelog.d/4400-clarify-isolation.md, scripts/clarify_isolated_run.sh, scripts/clarify_openrouter_broker.py, scripts/clarify_sandbox/Dockerfile, scripts/workflow_failure_heal_pr_reconcile.sh, and tests/test_workflow_failure_heal_pr_reconcile.py. The LAST RUN DIFF itself only touches tests/e2e_smoke_canary.txt (correct per the constraint), but the cumulative PR carries manifest modifications from an earlier implement run that were not reverted before this autofix pass; the autofix editor explicitly noted it could not remove the manifest changes without violating the same single-file constraint, so the fix has to land at the implement/PR-rebase layer rather than in this autofix iteration. The canary content itself matches the linked-issue spec exactly (status: ok / run_id: 36078283644 / updated-by: ai-pipeline with trailing newline).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  Expected change site: The PR diff should contain exactly one changed file (tests/e2e_smoke_canary.txt).\n  Evidence of absence: PR CHANGED FILES lists two files: tests/e2e_smoke_canary.txt and .ai/.workspace_source_manifest.txt. The PR diff includes four hunks (~39 lines of additions) to .ai/.workspace_source_manifest.txt adding entries for changelog.d/4342-heal-failed-runs-reviewer-failures-pr-reconcile.md, changelog.d/4398-issue-author-provenance.md, changelog.d/4399-trusted-review-support.md, changelog.d/4400-clarify-isolation.md, scripts/clarify_isolated_run.sh, scripts/clarify_openrouter_broker.py, scripts/clarify_sandbox/Dockerfile, scripts/workflow_failure_heal_pr_reconcile.sh, and tests/test_workflow_failure_heal_pr_reconcile.py. The autofix editor's own summary acknowledged this remains unresolved: \"Removing .ai/.workspace_source_manifest.txt from the PR would modify another file, contrary to this run's explicit single-file constraint. Its PR diff remains unresolved.\" The LAST RUN DIFF correctly touches only tests/e2e_smoke_canary.txt, but the cumulative PR diff still carries the manifest modifications from the original implement run.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\n  Expected change site: tests/e2e_smoke_canary.txt only\n  Evidence of absence: PR CHANGED FILES and ORIGINAL PR DIFF include .ai/.workspace_source_manifest.txt (4 hunks, ~39 lines adding changelog.d/4398-4400 + new clarify/workflow_failure_heal scripts + test); editor summary explicitly notes it remains unresolved.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "659aab80160e93fe86f4e692c462bb9c0e9ec618d289e3745387cc3f063a464c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4426,
+    "run_id": "36080936206",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36080936206",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925012437_1cca2d30b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4426,
+    "run_id": "36080936206"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T01:24:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
