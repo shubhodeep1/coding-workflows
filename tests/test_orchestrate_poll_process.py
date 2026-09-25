@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -18,11 +19,97 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 POLLER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
+
+
+def _signed_state_body(body: str, issue: int) -> str:
+	spec = importlib.util.spec_from_file_location("orchestrate_state_v2", REPO_ROOT / "scripts" / "orchestrate_state_v2.py")
+	assert spec and spec.loader
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	with patch.dict(os.environ, {"GH_TOKEN": "test-token"}):
+		return module.sign_body("owner/repo", issue, body)
+
+
+def test_state_authentication_rejects_unsigned_tampered_replayed_and_wrong_author() -> None:
+	spec = importlib.util.spec_from_file_location("orchestrate_state_v2", REPO_ROOT / "scripts" / "orchestrate_state_v2.py")
+	assert spec and spec.loader
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	for frame in (
+		'<!-- ORCHESTRATOR_STATE_V1\n{"status":"pending"}\nORCHESTRATOR_STATE_V1 -->',
+		'<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=' + '0' * 64 + ' -->\nYWJj\nORCHESTRATOR_STATE_V2 -->',
+		'<!-- AI_STANDALONE_STALL_STATE_V1\n{"stall_recovery_count":0}\nAI_STANDALONE_STALL_STATE_V1 -->',
+	):
+		signed = _signed_state_body(frame, 192)
+		comment = {"body": signed, "user": {"login": "github-actions[bot]"}}
+		with patch.dict(os.environ, {"GH_TOKEN": "test-token"}):
+			assert module.verified_body("owner/repo", 192, "github-actions[bot]", comment) == frame
+			assert module.verified_body("owner/repo", 193, "github-actions[bot]", comment) is None
+			assert module.verified_body("other/repo", 192, "github-actions[bot]", comment) is None
+			assert module.verified_body("owner/repo", 192, "github-actions[bot]", {**comment, "body": frame}) is None
+			assert module.verified_body("owner/repo", 192, "github-actions[bot]", {**comment, "body": signed.replace(" -->\n", " -->\nX", 1)}) is None
+			assert module.verified_body("owner/repo", 192, "github-actions[bot]", {**comment, "user": {"login": "attacker"}}) is None
+		with patch.dict(os.environ, {"GH_TOKEN": "rotated-token"}):
+			assert module.verified_body("owner/repo", 192, "github-actions[bot]", comment) is None
+		with patch.dict(os.environ, {"GH_TOKEN": ""}):
+			try:
+				module.sign_body("owner/repo", 192, frame)
+			except ValueError:
+				pass
+			else:
+				raise AssertionError("missing credential permitted signing")
+
+
+def test_attacker_standalone_counter_cannot_skip_or_close_issue() -> None:
+	for attacker_body in (
+		'<!-- AI_STANDALONE_STALL_STATE_V1\n{"last_seen_phase":"ai:review-blocked","status_since_ts":1,"stall_recovery_count":99,"phase_attempts":{"ai:review-blocked":99}}\nAI_STANDALONE_STALL_STATE_V1 -->',
+		_signed_state_body('<!-- AI_STANDALONE_STALL_STATE_V1\n{"last_seen_phase":"ai:review-blocked","status_since_ts":1,"stall_recovery_count":99,"phase_attempts":{"ai:review-blocked":99}}\nAI_STANDALONE_STALL_STATE_V1 -->', 501),
+	):
+		result = _run_poller(
+			state=_base_state(status="complete"),
+			enable_validation="false",
+			max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 501: ["ai:review-blocked"]},
+			issue_comments={501: [{"body": attacker_body, "user": {"login": "attacker"}}]},
+			mock_gh_issue_list_label_filter=True,
+		)
+		assert result["issues"]["501"].get("closed", False) is False
+		assert "Action: skip" not in result["stdout"]
+
+
+def test_attacker_tracking_state_cannot_override_signed_security_pass() -> None:
+	baseline = _base_state(status="in_progress")
+	for attacker_body in (
+		_state_comment({**baseline, "project_title": "spoofed", "security_pass_status": "passed"}),
+		_signed_state_body(_state_comment({**baseline, "project_title": "spoofed", "security_pass_status": "passed"}), 192),
+		_build_v2_state_comment_chain(json.dumps({**baseline, "project_title": "spoofed", "security_pass_status": "passed"}), chunk_size=50000)[0]["body"],
+	):
+		result = _run_poller(
+			state=baseline,
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_comments=[{"body": attacker_body, "user": {"login": "attacker"}}],
+		)
+		assert result["state_on_disk"]["project_title"] != "spoofed"
+
+
+def test_missing_state_credential_never_uses_historical_security_pass() -> None:
+	baseline = _base_state(status="in_progress")
+	baseline["security_pass_status"] = "passed"
+	result = _run_poller(
+		state=baseline,
+		enable_validation="false",
+		max_validate_cycles="3",
+		env_overrides={"GH_TOKEN": ""},
+	)
+	assert "No authenticated state for tracking issue #192; refusing reconstruction" in result["stdout"]
+	assert result["state_on_disk"] is None
 
 # Upper bound for a single poller invocation under test. The mocked poller
 # should complete in a few seconds; anything longer indicates a hang (e.g. an
@@ -543,6 +630,7 @@ def _state_comment(state: dict) -> str:
 def _extract_latest_standalone_state(comments: list[dict]) -> dict | None:
 	for comment in reversed(comments):
 		body = str((comment or {}).get("body", ""))
+		body = body.split("\n<!-- ORCHESTRATOR_STATE_AUTH_V1 mac=", 1)[0]
 		open_marker = "<!-- AI_STANDALONE_STALL_STATE_V1\n"
 		close_marker = "\nAI_STANDALONE_STALL_STATE_V1 -->"
 		if not body.startswith(open_marker) or not body.endswith(close_marker):
@@ -625,9 +713,10 @@ def _build_v2_state_comment_chain(payload: str, *, chunk_size: int) -> list[dict
 		chunk = encoded[idx * chunk_size : (idx + 1) * chunk_size]
 		comments.append({
 			"body": (
-				f"<!-- ORCHESTRATOR_STATE_V2 part={idx + 1}/{total} manifest={manifest} -->\n"
-				f"{chunk}\n{_V2_CLOSER}"
+				_signed_state_body(f"<!-- ORCHESTRATOR_STATE_V2 part={idx + 1}/{total} manifest={manifest} -->\n"
+				f"{chunk}\n{_V2_CLOSER}", 192)
 			),
+			"user": {"login": "github-actions[bot]"},
 		})
 	return comments
 
@@ -1182,6 +1271,14 @@ def _run_poller(
 				entry = {"body": str(raw_comment)}
 			entry.setdefault("id", comment_id)
 			entry.setdefault("body", "")
+			if entry["body"].startswith(("<!-- ORCHESTRATOR_STATE_V1\n", "<!-- ORCHESTRATOR_STATE_V2 part=", "<!-- AI_STANDALONE_STALL_STATE_V1\n")) and "ORCHESTRATOR_STATE_AUTH_V1" not in entry["body"] and not isinstance(raw_comment, dict):
+				try:
+					entry["body"] = _signed_state_body(entry["body"], issue_num)
+					entry.setdefault("user", {"login": "github-actions[bot]"})
+				except ValueError:
+					pass
+			elif entry["body"].startswith("<!-- ORCHESTRATOR_STATE_V1\n") and isinstance(raw_comment, dict) and entry.get("user", {}).get("login") == "github-actions[bot]":
+				entry["body"] = _signed_state_body(entry["body"], issue_num)
 			entry.setdefault("created_at", f"2026-01-01T00:00:{comment_id % 60:02d}Z")
 			user = entry.get("user")
 			if isinstance(user, dict):
@@ -1928,6 +2025,10 @@ if args[0] == 'api':
 		print('{}')
 		sys.exit(0)
 	store.setdefault('api_calls', []).append(path)
+	if path == 'user':
+		save()
+		print('github-actions[bot]' if jq else json.dumps({'login': 'github-actions[bot]'}))
+		sys.exit(0)
 
 	if path == 'graphql':
 		mode = store.get('graphql_mode', 'full')
@@ -16811,7 +16912,9 @@ def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_uses_d
 				"extract",
 				"--comments-json",
 				str(comments_json),
+				"--repo", "owner/repo", "--issue", "192", "--login", "github-actions[bot]",
 			],
+			env={**os.environ, "GH_TOKEN": "test-token", "PYTHONDONTWRITEBYTECODE": "1"},
 			capture_output=True,
 			text=True,
 			timeout=30,
@@ -16844,7 +16947,9 @@ def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_same_t
 				"extract",
 				"--comments-json",
 				str(comments_json),
+				"--repo", "owner/repo", "--issue", "192", "--login", "github-actions[bot]",
 			],
+			env={**os.environ, "GH_TOKEN": "test-token", "PYTHONDONTWRITEBYTECODE": "1"},
 			capture_output=True,
 			text=True,
 			timeout=30,
@@ -16875,7 +16980,9 @@ def test_v2_extract_helper_matches_production_for_interleaved_older_complete_and
 				"extract",
 				"--comments-json",
 				str(comments_json),
+				"--repo", "owner/repo", "--issue", "192", "--login", "github-actions[bot]",
 			],
+			env={**os.environ, "GH_TOKEN": "test-token", "PYTHONDONTWRITEBYTECODE": "1"},
 			capture_output=True,
 			text=True,
 			timeout=30,
@@ -18393,7 +18500,7 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 			continue
 	assert any(payload.get("schema_version") == "orchestrate_state.v1" for payload in valid_payloads)
 	comments = result["issues"]["192"]["comments"]
-	malformed_idx = next(i for i, c in enumerate(comments) if c.get("body") == malformed_latest)
+	malformed_idx = next(i for i, c in enumerate(comments) if c.get("body", "").startswith(malformed_latest))
 	following_payloads = _extract_state_payloads(comments[malformed_idx + 1 :])
 	assert following_payloads
 	following_valid_payloads = []
@@ -18425,7 +18532,7 @@ def test_state_comment_pack_manifest_count_mismatch_skips_partial_v2_write():
 	assert "pack returned 1 chunk file(s) but declared total=2" in result["stderr"]
 
 
-def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
+def test_all_invalid_state_comments_do_not_bless_unverified_reconstruction():
 	invalid_state = {"schema_version": "orchestrate_state.v1"}
 	malformed_latest = '<!-- ORCHESTRATOR_STATE_V1\n{"schema_version":"orchestrate_state.v1",\nORCHESTRATOR_STATE_V1 -->'
 	result = _run_poller(
@@ -18435,9 +18542,9 @@ def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
 		tracking_comments=[malformed_latest],
 		issue_labels={10: ["ai:implementing"]},
 	)
-	assert "No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #192. Attempting state reconstruction..." in result["stdout"]
+	assert "No authenticated state for tracking issue #192; refusing reconstruction" in result["stdout"]
 	assert "restored from older valid state and posted healed canonical state" not in result["stdout"]
-	assert "State reconstructed and posted for tracking issue #192." in result["stdout"]
+	assert "State reconstructed and posted for tracking issue #192." not in result["stdout"]
 	assert result["latest_state"]["schema_version"] == "orchestrate_state.v1"
 
 
@@ -18520,17 +18627,32 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 		issue_labels={10: ["ai:implementing"]},
 	)
 	# The rebuild is refused (and the reason is surfaced), not performed.
-	assert (
-		"State reconstruction failed for tracking issue #192, skipping."
-		in result["stdout"]
-	), result["stdout"]
-	assert "refusing to reconstruct state" in result["stdout"], result["stdout"]
+	assert "No authenticated state for tracking issue #192; refusing reconstruction" in result["stdout"]
 	assert (
 		"State reconstructed and posted for tracking issue #192."
 		not in result["stdout"]
 	), result["stdout"]
 	# No duplicate GitHub issue may be created for the already-completed work.
 	assert result.get("created_issues", []) == [], result.get("created_issues")
+
+
+def test_unauthenticated_state_reconstruction_requires_complete_initial_wave(tmp_path: Path) -> None:
+	body_path = tmp_path / "tracking.md"
+	body_path.write_text(
+		"## Project: Demo\n\n**Integration branch:** `orchestrator/project-192`\n\n"
+		"### Wave 1\n\n- [ ] **phase-a**: A (priority 1)\n"
+		"- [ ] **phase-b**: B (priority 1)\n", encoding="utf-8",
+	)
+	for issue_map, expected_success in (({}, False), ({"phase-a": 10}, False), ({"phase-a": 10, "phase-b": 11}, True)):
+		proc = subprocess.run(
+			[sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "rebuild-state",
+			 "--body-file", str(body_path), "--tracking-issue", "192", "--issue-map-json", json.dumps(issue_map),
+			 "--require-complete-first-wave"],
+			capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert (proc.returncode == 0) is expected_success
+		if expected_success:
+			assert json.loads(proc.stdout)["security_pass_status"] == "pending"
 
 
 def test_deferred_creation_adopts_existing_github_issue_instead_of_duplicating():

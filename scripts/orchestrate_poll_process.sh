@@ -50,6 +50,40 @@ poller_trusted_orchestrate_lib() {
   PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_lib}" "$@"
 }
 
+# Share the single token-identity lookup with the later fingerprint-cap sweep.
+NOOP_CAP_TRUSTED_LOGIN=""
+NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
+state_comment_login() {
+  if [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "unset" ]; then
+    NOOP_CAP_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+    if [ -n "${NOOP_CAP_TRUSTED_LOGIN}" ]; then
+      NOOP_CAP_TRUSTED_LOGIN_STATE="ok"
+    else
+      NOOP_CAP_TRUSTED_LOGIN_STATE="failed"
+    fi
+  fi
+  [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "ok" ] || return 1
+  printf '%s\n' "${NOOP_CAP_TRUSTED_LOGIN}"
+}
+
+# Input: paginated REST/GraphQL comments array. Output: only records whose
+# exact bytes, repository, issue, purpose and API-reported author are trusted.
+authenticated_state_comments() {
+  local issue_num="$1" comments_json="$2" trusted_login trusted_state_helper comments_file
+  [[ "${issue_num}" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ -n "${GH_TOKEN:-}" ] || return 1
+  trusted_login="$(state_comment_login)" || return 1
+  trusted_state_helper="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)" || return 1
+  comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_authenticated_comments.XXXXXX")" || return 1
+  printf '%s' "${comments_json}" > "${comments_file}"
+  PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_helper}" filter \
+    --repo "${GITHUB_REPOSITORY}" --issue "${issue_num}" \
+    --login "${trusted_login}" --comments-json "${comments_file}"
+  local auth_rc=$?
+  rm -f "${comments_file}"
+  return "${auth_rc}"
+}
+
 # ---------------------------------------------------------------
 # Helper: Telegram (tracked via tg_helpers.sh)
 # ---------------------------------------------------------------
@@ -2509,8 +2543,9 @@ post_state_comment() {
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/orchstate_v2_pack.XXXXXX")"
   if ! manifest_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_writer}" pack \
       --state-file "${STATE_FILE}" \
+      --repo "${GITHUB_REPOSITORY}" --issue "${TRACKING_NUM}" \
       --out-dir "${pack_dir}" 2>&1)"; then
-    echo "::error::orchestrate_state_v2 pack failed for issue #${TRACKING_NUM}: ${manifest_json}" >&2
+    echo "::error::orchestrate_state_v2 pack failed for issue #${TRACKING_NUM}" >&2
     rm -rf "${pack_dir}"
     return 1
   fi
@@ -2947,6 +2982,7 @@ is_valid_orchestrator_state_json() {
 
 extract_latest_valid_orchestrator_state() {
   local comments_json="$1"
+  local state_issue_num="${2:-${TRACKING_NUM:-}}"
   local candidate
   local candidate_body
   local candidate_state
@@ -2956,6 +2992,11 @@ extract_latest_valid_orchestrator_state() {
   EXTRACTED_STATE_JSON=""
   EXTRACTED_STATE_FALLBACK_USED="false"
   EXTRACTED_STATE_COMMENT_COUNT=0
+
+  local authenticated_comments trusted_login
+  state_comment_login >/dev/null || return 1
+  authenticated_comments="$(authenticated_state_comments "${state_issue_num}" "${comments_json}")" || return 1
+  trusted_login="${NOOP_CAP_TRUSTED_LOGIN}"
 
   # Try the V2 chunked-chain reader first.  If a complete V2 chain is
   # present (newest write wins), use it; otherwise fall through to the
@@ -2968,7 +3009,8 @@ extract_latest_valid_orchestrator_state() {
   printf '%s' "${comments_json}" > "${_v2_comments_file}"
   trusted_state_reader="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)" || return 1
   PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_reader}" extract \
-    --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
+    --comments-json "${_v2_comments_file}" --repo "${GITHUB_REPOSITORY}" \
+    --issue "${state_issue_num}" --login "${trusted_login}" > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
   if [ "${_v2_rc}" = "0" ] && [ -s "${_v2_payload_file}" ]; then
     # Independent size guard: the extractor enforces its own per-chunk
@@ -2999,6 +3041,8 @@ extract_latest_valid_orchestrator_state() {
     fi
   fi
   rm -f "${_v2_comments_file}" "${_v2_payload_file}"
+
+  comments_json="${authenticated_comments}"
 
   while IFS= read -r candidate; do
     [ -n "${candidate}" ] || continue
@@ -4762,7 +4806,7 @@ resolve_active_orchestrator_context_for_issue() {
     rm -f "${tracking_comments_pages_file}"
 
     tracking_state_json=""
-    if ! extract_latest_valid_orchestrator_state "${tracking_comments}"; then
+    if ! extract_latest_valid_orchestrator_state "${tracking_comments}" "${tracking_num}"; then
       continue
     fi
     tracking_state_json="${EXTRACTED_STATE_JSON}"
@@ -14032,7 +14076,8 @@ STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"
 # lets callers that already hold the comments list avoid re-hitting the
 # GitHub API just to re-parse the same data, which was previously a
 # significant contributor to rate-limit pressure during standalone stall
-# recovery sweeps.
+# recovery sweeps. Callers MUST pass only the result of
+# authenticated_state_comments; raw comments can never select a PATCH target.
 _extract_standalone_state_comment_id_from_comments() {
   local comments_json="$1"
   printf '%s' "${comments_json:-[]}" \
@@ -14085,8 +14130,9 @@ get_standalone_state_comment_id() {
   local issue_num="$1"
   local comments_json
   if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
-    comments_json='[]'
+    return 1
   fi
+  comments_json="$(authenticated_state_comments "${issue_num}" "${comments_json}")" || return 1
   _extract_standalone_state_comment_id_from_comments "${comments_json}"
 }
 
@@ -14094,8 +14140,9 @@ read_standalone_state_json() {
   local issue_num="$1"
   local comments_json
   if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
-    comments_json='[]'
+    return 1
   fi
+  comments_json="$(authenticated_state_comments "${issue_num}" "${comments_json}")" || return 1
   _extract_standalone_state_json_from_comments "${comments_json}"
 }
 
@@ -14103,11 +14150,21 @@ write_standalone_state_json() {
   local issue_num="$1"
   local state_json="$2"
   local comment_body
-  local comment_id
+  local comment_id trusted_state_helper unsigned_file
 
   comment_body="${STANDALONE_STATE_MARKER_OPEN}
 ${state_json}
 ${STANDALONE_STATE_MARKER_CLOSE}"
+
+  trusted_state_helper="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)" || return 1
+  unsigned_file="$(mktemp "${TMPDIR:-/tmp}/orch_standalone_state.XXXXXX")" || return 1
+  printf '%s' "${comment_body}" > "${unsigned_file}"
+  if ! comment_body="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_helper}" sign \
+      --repo "${GITHUB_REPOSITORY}" --issue "${issue_num}" --body-file "${unsigned_file}")"; then
+    rm -f "${unsigned_file}"
+    return 1
+  fi
+  rm -f "${unsigned_file}"
 
   # Optional 3rd argument: caller-supplied comment id.  Passing it (even
   # empty) skips the otherwise-automatic lookup, which saves a full
@@ -14121,6 +14178,7 @@ ${STANDALONE_STATE_MARKER_CLOSE}"
     comment_id="$(get_standalone_state_comment_id "${issue_num}")"
   fi
   if [ -n "${comment_id}" ] && [ "${comment_id}" != "null" ]; then
+    [[ "${comment_id}" =~ ^[1-9][0-9]*$ ]] || return 1
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
       -X PATCH -f body="${comment_body}" >/dev/null 2>&1 || true
   else
@@ -16590,6 +16648,13 @@ run_standalone_stall_recovery() {
     return
   fi
 
+  # Resolve once in the parent shell; the per-issue filter runs in a
+  # command substitution and cannot propagate its cache to this process.
+  if ! state_comment_login >/dev/null; then
+    echo "::warning::Standalone state token identity unavailable; deferring stall recovery." >&2
+    return
+  fi
+
   echo ""
   echo "========================================"
   echo "Standalone issue stall recovery"
@@ -16613,7 +16678,7 @@ run_standalone_stall_recovery() {
         t_comments='[]'
       fi
       t_state_json=""
-      if extract_latest_valid_orchestrator_state "${t_comments}"; then
+      if extract_latest_valid_orchestrator_state "${t_comments}" "${t_num}"; then
         t_state_json="${EXTRACTED_STATE_JSON}"
       fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
@@ -16795,8 +16860,13 @@ PY
       continue
     fi
 
-    state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
-    state_json="$(_extract_standalone_state_json_from_comments "${comments_json}")"
+    local trusted_standalone_comments
+    trusted_standalone_comments="$(authenticated_state_comments "${issue_num}" "${comments_json}")" || {
+      echo "::warning::Standalone state authentication unavailable for issue #${issue_num}; skipping recovery this cycle." >&2
+      continue
+    }
+    state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${trusted_standalone_comments}")"
+    state_json="$(_extract_standalone_state_json_from_comments "${trusted_standalone_comments}")"
 
     updated_state="$(python3 -I - "$state_json" "$phase" <<'PY'
 import json, sys, time
@@ -18482,6 +18552,13 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then
+    # Unsigned historical records and rotated credentials cannot be blessed
+    # by rebuilding from editable issue prose. Retry on a later tick instead.
+    if ! state_comment_login >/dev/null || [ -z "${GH_TOKEN:-}" ] || \
+      printf '%s' "${COMMENTS}" | jq -e 'any(.[]; (.body // "") | test("^<!-- ORCHESTRATOR_STATE_V[12]"))' >/dev/null 2>&1; then
+      echo "::warning::No authenticated state for tracking issue #${TRACKING_NUM}; refusing reconstruction from unverified comments."
+      continue
+    fi
     # A failed (or unvalidated) comments fetch is NOT evidence that the
     # orchestrator state is missing.  The state comment may exist but be
     # temporarily unreadable — e.g. a paginated fetch of a tracking issue
@@ -18526,6 +18603,22 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       -f q="repo:${GITHUB_REPOSITORY} \"Tracking issue: #${TRACKING_NUM}\" in:body" \
       --jq '.items // []' 2>/dev/null || echo '[]')"
 
+    # Search results are untrusted. Only children created by the same
+    # workflow identity may justify rebuilding a missing initial snapshot.
+    if ! CHILD_ISSUES="$(printf '%s' "${CHILD_ISSUES}" | jq -ce --arg login "${NOOP_CAP_TRUSTED_LOGIN}" '
+      [ .[] | select((.user.login // "" | ascii_downcase) == $login) ]
+    ')"; then
+      echo "::warning::Child issue evidence unavailable for #${TRACKING_NUM}; deferring reconstruction."
+      continue
+    fi
+    if ! printf '%s' "${CHILD_ISSUES}" | jq -e '
+      [ .[] | (.body // "" | capture("Local ID: `(?<id>[^`]+)`")? | .id) ]
+      | length == (unique | length)
+    ' >/dev/null 2>&1; then
+      echo "::warning::Conflicting child issue mappings for #${TRACKING_NUM}; deferring reconstruction."
+      continue
+    fi
+
     # Build issue_number_map from child issue bodies: extract Local ID metadata
     ISSUE_MAP_JSON="$(echo "${CHILD_ISSUES}" | jq '
       reduce .[] as $issue ({};
@@ -18549,6 +18642,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     if poller_trusted_orchestrate_lib rebuild-state \
       --body-file "${REBUILD_BODY_FILE}" \
       --issue-map-json "${ISSUE_MAP_JSON}" \
+      --require-complete-first-wave \
       --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>"${REBUILD_ERR_FILE}"; then
 
       rm -f "${REBUILD_ERR_FILE}"
@@ -24462,8 +24556,7 @@ NOOP_RECOVERY_BLOCKED=0
 NOOP_RECOVERY_CAP_SKIPPED=0
 # Token identity that posts the fingerprint-cap marker. Resolved lazily
 # (one GET /user per cycle, only when a cap marker is seen) and cached.
-NOOP_CAP_TRUSTED_LOGIN=""
-NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
+# Token identity is cached by state_comment_login for the whole poll run.
 NOOP_MAX_RETRIES=3
 # Operator-facing opt-outs. `e2e-smoke-test` mirrors the workflow's
 # own auto-merge suppression so the smoke-test bait-removal race
@@ -24600,14 +24693,8 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 				--arg marker "<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA} " \
 				'[.[] | select((.body // "") | contains($marker)) | (.user.login // "" | ascii_downcase)] | unique | .[]' \
 				2>/dev/null || echo "")"
-			if [ -n "${N_NOOP_CAP_AUTHORS}" ] && [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "unset" ]; then
-				NOOP_CAP_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
-				if [ -n "${NOOP_CAP_TRUSTED_LOGIN}" ]; then
-					NOOP_CAP_TRUSTED_LOGIN_STATE="ok"
-				else
-					NOOP_CAP_TRUSTED_LOGIN_STATE="failed"
-					echo "::warning::Noop-suspicious sweep could not resolve the token identity; fingerprint-cap skip disabled this cycle (re-dispatch continues)."
-				fi
+			if [ -n "${N_NOOP_CAP_AUTHORS}" ]; then
+				state_comment_login >/dev/null || echo "::warning::Noop-suspicious sweep could not resolve the token identity; fingerprint-cap skip disabled this cycle (re-dispatch continues)."
 			fi
 			if [ -n "${N_NOOP_CAP_AUTHORS}" ] && [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "ok" ] \
 				&& printf '%s\n' "${N_NOOP_CAP_AUTHORS}" | grep -Fxq -- "${NOOP_CAP_TRUSTED_LOGIN}"; then

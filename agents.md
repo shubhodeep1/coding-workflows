@@ -916,6 +916,16 @@ committing the corresponding file:
 
 ## Orchestrator tracking-issue comment markers
 
+Tracking V1/V2 and standalone stall-state comments carry an
+`ORCHESTRATOR_STATE_AUTH_V1` HMAC trailer. The trusted workflow host signs
+the exact framed body using the existing `GH_TOKEN`, scoped to repository,
+issue, and record kind. The poller accepts records only when both the MAC and
+the API-reported author match the authenticated token identity; an unsigned
+legacy marker is not authoritative. Missing or rotated credentials defer
+recovery rather than trusting historical claims. The initial V1 writer and
+the V2/standalone writers use the verified workflow-support helper; no
+operator sign-off or manual script is involved.
+
 The orchestrator poller (`scripts/orchestrate_poll_process.sh`) maintains
 two distinct marker-keyed comment families on each tracking issue. Both edit
 in place every poll cycle so the tracking issue stays a live status
