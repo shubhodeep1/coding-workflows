@@ -170,6 +170,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/memory_helpers.sh` — Shell helper for memory helpers.
 - `scripts/memory_injection_patterns.py` — Advisory prompt-injection regex roster for AI-memory candidate writes.
 - `scripts/memory_maintenance_extract_learnings.py` — Extract repository learnings for the memory-maintenance workflow.
+- `scripts/model_provider_proxy.py` — Provider-only proxy for isolated model processes.
 - `scripts/nag_reminder.sh` — Fail-open reminder injection helper for long-running unattended wrapper loops.
 - `scripts/opencode_helpers.sh` — Shared OpenCode command, output, bootstrap, and alert helpers.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
@@ -178,6 +179,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/orchestrate_parse_and_post_answer.sh` — Shell helper for orchestrate parse and post answer.
 - `scripts/orchestrate_poll_process.sh` — orchestrate_poll_process.sh — Process active orchestrator tracking issues.
 - `scripts/orchestrate_state_v2.py` — V2 chunked state persistence helper for orchestrator state comments.
+- `scripts/package_download_proxy.py` — Proxy for sandboxed package downloads.
+- `scripts/post_agent_workspace_guard.py` — Snapshot and reconcile untrusted model workspace changes.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
@@ -189,6 +192,10 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
 - `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
+- `scripts/review_autofix_step_detect_merge_conflicts.sh` — Late merge-conflict check for review_autofix.yml.
+- `scripts/review_autofix_step_initialize_runtime.sh` — Review/autofix runtime workspace initialization.
+- `scripts/review_autofix_step_iteration_summary.sh` — Review/autofix iteration summary output.
+- `scripts/review_autofix_step_partial_finalize.sh` — Review/autofix partial-finalize marker and comment.
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
@@ -214,6 +221,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/self_heal_validation.sh` — failure context, then signalling validate_process.sh to re-run.
 - `scripts/semantic_cache.py` — Semantic cache helper for clarify-phase workflows.
 - `scripts/security_audit.sh` — security_audit.sh — Run the default-branch OWASP Top 10 + STRIDE security audit.
+- `scripts/security_audit_causality.py` — Causality checks for security audit findings.
 - `scripts/security_audit_fp_exclusions.json` — JSON asset for editable security-audit false-positive exclusions.
 - `scripts/semble_helpers.sh` — semble_helpers.sh — shared, sourceable Semble query helpers.
 - `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.
@@ -229,6 +237,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/tg_helpers.sh` — tg_helpers.sh — Telegram message tracking & cleanup helpers.
 - `scripts/transcript_archive.sh` — transcript_archive.sh — fail-open JSON archive helper for captured phase output.
 - `scripts/truncate_to_utf8_byte_cap.py` — Truncate stdin to a UTF-8 byte cap on a codepoint boundary.
+- `scripts/trusted_git_write.sh` — Trusted Git write boundary for sandboxed model work.
+- `scripts/untrusted_process_sandbox.sh` — Credentialless systemd sandbox for model and validator processes.
 - `scripts/validate_changed_files_syntax.sh` — Shell helper for validate changed files syntax.
 - `scripts/validate_driver.sh` — Shell helper for validate driver.
 - `scripts/validate_editor_audit.sh` — when the helper exits non-zero (caller-side).

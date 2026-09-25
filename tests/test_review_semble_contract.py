@@ -162,6 +162,8 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	stage_step_block = _step_block(workflow, "Stage workflow support files")
 	stage_helper = _stage_helper_text()
 	init_block = _step_block(workflow, "Initialize runtime workspace")
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_autofix_step_initialize_runtime.sh"' in init_block
+	init_block += _read(REPO_ROOT / "scripts" / "review_autofix_step_initialize_runtime.sh")
 	preflight_block = _step_block(workflow, '"Preflight: Verify required files before reviewer invocation"')
 	reviewers = _read(REVIEWERS)
 	apply_fixes = _read(APPLY_FIXES)

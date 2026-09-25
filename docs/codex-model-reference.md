@@ -11,12 +11,14 @@ Rows with pinned override fields are marked `(frozen)` in `notes`.
 | minimax/minimax-m3 | null | false | freeform | — |
 | google/gemini-3-flash-preview | null | false | freeform | — |
 | google/gemini-3.1-pro-preview | null | false | freeform | — |
+| google/gemini-3.1-flash-lite | null | false | freeform | — |
 | google/gemini-2.5-pro | null | false | freeform | — |
 | moonshotai/kimi-k2.5 | null | false | freeform | — |
 | moonshotai/kimi-k3 | null | false | freeform | — |
 | moonshotai/kimi-k2.7-code | null | false | freeform | — |
 | deepseek/deepseek-v3.2 | null | false | freeform | — |
 | z-ai/glm-5 | null | false | freeform | — |
+| z-ai/glm-5.2 | null | false | freeform | — |
 | qwen/qwen3.5-397b-a17b | null | false | freeform | — |
 | qwen/qwen3-coder-plus | null | false | freeform | — |
 | stepfun/step-3.5-flash | null | false | freeform | — |

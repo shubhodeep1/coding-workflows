@@ -16,6 +16,8 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SANDBOX = REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh"
@@ -647,6 +649,162 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 			assert forbidden_name not in isolated_environment
 		assert isolated_environment["SANDBOX_PROVIDER_TOKEN"] == "sandbox-proxy"
 		assert isolated_environment["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_sandbox_rejects_private_tmp_namespace_control_root() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		workspace.mkdir()
+		runtime.mkdir()
+		environment = os.environ.copy()
+		environment.update(
+			{
+				"RUNNER_TEMP": "/tmp",
+				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+			}
+		)
+		result = subprocess.run(
+			[
+				"bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+				"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S", "-c", "print('unreachable')",
+			],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 1
+		assert "namespace control root cannot be beneath private temporary storage" in result.stderr
+
+
+def test_sandbox_rejects_inaccessible_namespace_control_root() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		runtime = root / "runtime"
+		control_root = root / "control"
+		workspace.mkdir()
+		runtime.mkdir()
+		control_root.mkdir()
+		control_root.chmod(0)
+		try:
+			environment = os.environ.copy()
+			environment.update({"RUNNER_TEMP": str(control_root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1"})
+			result = subprocess.run(
+				[
+					"bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+					"--runtime-dir", str(runtime), "--", "/usr/bin/python3", "-I", "-S", "-c", "print('unreachable')",
+				],
+				env=environment, capture_output=True, text=True, check=False,
+			)
+			assert result.returncode == 1
+			assert "namespace control root is unavailable" in result.stderr
+		finally:
+			control_root.chmod(0o700)
+
+
+def test_sandbox_rejects_special_objects_in_external_writable_tree() -> None:
+	with tempfile.TemporaryDirectory(dir=REPO_ROOT.parent) as control_directory:
+		control_root = Path(control_directory)
+		workspace = control_root / "workspace"
+		runtime = control_root / "runtime"
+		validator_output = runtime / "validator-output"
+		workspace.mkdir()
+		validator_output.mkdir(parents=True)
+		os.mkfifo(validator_output / "blocked-fifo")
+		environment = os.environ.copy()
+		environment.update({"RUNNER_TEMP": str(control_root)})
+		result = subprocess.run(
+			[
+				"bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+				"--runtime-dir", str(runtime), "--writable-output-dir", str(validator_output),
+				"--", "/usr/bin/python3", "-I", "-S", "-c", "print('unreachable')",
+			],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 1
+		assert "external writable tree contains an unsupported object" in result.stderr
+
+
+def test_production_sandbox_starts_with_private_tmp_runtime() -> None:
+	require_smoke = os.environ.get("REQUIRE_PRODUCTION_SANDBOX_SMOKE") == "1"
+	runner_temp_value = os.environ.get("RUNNER_TEMP", "")
+	runner_temp = Path(runner_temp_value).resolve() if runner_temp_value else None
+	if runner_temp is None or not runner_temp.is_dir() or runner_temp == Path("/tmp") or Path("/tmp") in runner_temp.parents:
+		if require_smoke:
+			raise AssertionError("RUNNER_TEMP must resolve outside /tmp for the production sandbox smoke")
+		pytest.skip("namespace-visible RUNNER_TEMP is unavailable")
+
+	with tempfile.TemporaryDirectory(prefix="sandbox-control-test-", dir=runner_temp) as control_directory:
+		control_root = Path(control_directory)
+		before_sandboxes = set(control_root.glob("agent-sandbox.*"))
+		with tempfile.TemporaryDirectory(prefix="sandbox-private-runtime-", dir="/tmp") as runtime_directory:
+			runtime = Path(runtime_directory)
+			credential = runtime / "provider-token"
+			credential.write_text("synthetic-provider-token", encoding="utf-8")
+			credential.chmod(0o600)
+			forwarded_output = runtime / "forwarded-output.txt"
+			config_dir = control_root / "codex"
+			config_dir.mkdir()
+			(config_dir / "config.toml").write_text(
+				'model = "openai/gpt-5.6-sol"\n'
+				'[model_providers.openrouter]\nbase_url = "https://openrouter.ai/api/v1"\nenv_key = "OPENROUTER_API_KEY"\n',
+				encoding="utf-8",
+			)
+			environment = os.environ.copy()
+			environment.update(
+				{
+					"GH_PAT": "synthetic-gh-pat",
+					"MODEL_PROVIDER_CREDENTIAL_FILE": str(credential),
+					"RUNTIME_DIR": str(runtime),
+					"RUNNER_TEMP": str(control_root),
+					"CODEX_THREAD_REUSE_OUTPUT_FILE": str(forwarded_output),
+				}
+			)
+			environment.pop("UNTRUSTED_PROCESS_SANDBOX_TEST_MODE", None)
+			probe = (
+				"import glob,json,os,pathlib,sys; "
+				"readable=[]; "
+				"candidates=glob.glob(sys.argv[2] + '/agent-sandbox.*/provider-credential'); "
+				"[(readable.append(path) if os.access(path, os.R_OK) else None) for path in candidates]; "
+				"pathlib.Path(os.environ['CODEX_THREAD_REUSE_OUTPUT_FILE']).write_text('forwarded'); "
+				"print(json.dumps({'source_exists': pathlib.Path(sys.argv[1]).exists(), "
+				"'copied_credentials': candidates, 'readable_credentials': readable, "
+				"'gh_pat': os.getenv('GH_PAT')}))"
+			)
+			result = subprocess.run(
+				[
+					"bash", str(SANDBOX), "--role", "plan", "--workspace", str(REPO_ROOT),
+					"--config-format", "codex", "--config", str(config_dir),
+					"--runtime-dir", str(runtime), "--", "python3", "-c", probe,
+					str(credential), str(control_root),
+				],
+				env=environment, capture_output=True, text=True, check=False, timeout=60,
+			)
+			if result.returncode != 0 and not require_smoke:
+				pytest.skip(f"production systemd sandbox unavailable: {result.stderr.strip()}")
+			assert result.returncode == 0, result.stderr
+			payload = json.loads(result.stdout)
+			assert payload["source_exists"] is False
+			assert payload["copied_credentials"]
+			assert payload["readable_credentials"] == []
+			assert payload["gh_pat"] is None
+			assert forwarded_output.read_text(encoding="utf-8") == "forwarded"
+			validator_output = runtime / "validator-output"
+			validator_output.mkdir()
+			validator_result = validator_output / "result.txt"
+			validator_run = subprocess.run(
+				[
+					"bash", str(SANDBOX), "--role", "validator", "--workspace", str(REPO_ROOT),
+					"--runtime-dir", str(runtime), "--writable-output-dir", str(validator_output),
+					"--", "/usr/bin/python3", "-I", "-S", "-c",
+					"import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('validator-forwarded')",
+					str(validator_result),
+				],
+				env=environment, capture_output=True, text=True, check=False, timeout=60,
+			)
+			assert validator_run.returncode == 0, validator_run.stderr
+			assert validator_result.read_text(encoding="utf-8") == "validator-forwarded"
+		assert set(control_root.glob("agent-sandbox.*")) == before_sandboxes
 
 
 def test_provider_proxy_has_a_narrow_route_allowlist() -> None:

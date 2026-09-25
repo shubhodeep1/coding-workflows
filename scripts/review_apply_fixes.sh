@@ -2226,7 +2226,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     --workspace "${PWD}" --manifest "${editor_workspace_manifest}" \
     --quarantine-dir "${editor_workspace_quarantine}" \
     --changed-paths-out "${editor_workspace_paths}" --report "${editor_workspace_report}"; then
-    cmd_rc=78
+    echo "::error::Editor workspace guard rejected attempt ${attempt}; aborting before output parsing or retry."
+    exit 78
   fi
 
   editor_clean_output="${tmp_output}.ansi-clean"

@@ -112,6 +112,27 @@ def test_validator_emits_exact_grep_literal() -> None:
 	)
 
 
+def test_upstream_review_failure_cannot_be_reclassified_as_editor_empty_noop() -> None:
+	text = _review_autofix_text()
+	apply_block = _step_block(text, "Apply fixes with editor model")
+	post_block = _step_block(text, "Post editor summary comment")
+	validator_block = _step_block(text, "Validate editor no-op disposition")
+
+	attempt_marker = 'echo "AUTOFIX_EDITOR_ATTEMPTED=true" >> "$GITHUB_ENV"'
+	editor_call = 'bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"'
+	assert attempt_marker in apply_block
+	assert apply_block.index(attempt_marker) < apply_block.index(editor_call)
+	assert 'REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}' in post_block
+	assert 'echo "AUTOFIX_REVIEW_PIPELINE_FAILURE=true" >> "$GITHUB_ENV"' in post_block
+	assert 'if [ "${REVIEWERS_STEP_OUTCOME:-skipped}" != "success" ]; then' in post_block
+	assert '[ "${AUTOFIX_EDITOR_ATTEMPTED:-false}" != "true" ]' in post_block
+	assert '[ "${REVIEWERS_STEP_OUTCOME}" = "success" ]' in post_block
+	assert '[ "${AUTOFIX_EDITOR_ATTEMPTED}" = "true" ]' in post_block
+	assert 'echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"' in post_block
+	assert "env.AUTOFIX_EDITOR_ATTEMPTED == 'true'" in validator_block
+	assert "env.AUTOFIX_REVIEW_PIPELINE_FAILURE != 'true'" in validator_block
+
+
 def test_retry_notice_does_not_collide_with_validator_literal() -> None:
 	"""The in-step retry's `::notice::` MUST NOT contain the same literal
 	the e2e poller greps for. If it did, a successful first-iteration
@@ -1308,6 +1329,7 @@ def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_p
 if __name__ == "__main__":
 	test_merge_conflict_chain_gates_on_editor_noop_suspicious()
 	test_validator_emits_exact_grep_literal()
+	test_upstream_review_failure_cannot_be_reclassified_as_editor_empty_noop()
 	test_retry_notice_does_not_collide_with_validator_literal()
 	test_e2e_poller_grep_includes_warning_prefix()
 	test_e2e_poller_uses_tempfile_not_variable_capture()

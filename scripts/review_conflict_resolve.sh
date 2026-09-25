@@ -1915,9 +1915,13 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   _run_codex=true
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
-      _codex_exit=$?
+      _codex_exit=78
       _run_codex=false
     fi
+  fi
+  if [ "${_codex_exit}" -eq 78 ]; then
+    echo "::error::Conflict resolver workspace_safety_violation."
+    exit 78
   fi
   if [ "${_run_codex}" = "true" ]; then
     emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"

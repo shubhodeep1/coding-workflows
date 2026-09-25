@@ -482,6 +482,7 @@ def _run_fragment(
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		(tdp / "scripts").mkdir()
+		(tdp / "validator-output").mkdir()
 		helper_path = tdp / "scripts" / "files_touched_scope_guard.py"
 		if helper_source is None:
 			shutil.copy(GUARD_SCRIPT, helper_path)
@@ -531,6 +532,7 @@ def _run_fragment(
 				"ENFORCE_FILES_TOUCHED": enforce,
 				"ALLOW_OUT_OF_SCOPE_FILES": allow_out_of_scope,
 				"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(tdp / "scripts"),
+				"IMPLEMENT_VALIDATOR_OUTPUT_DIR": str(tdp / "validator-output"),
 				"SUPPORT_SCRIPTS_DIR": str(tdp / "scripts"),
 				"RUNTIME_DIR": str(tdp),
 				"LINKED_ISSUE_METADATA_FILE": str(linked_issue_metadata_file),

@@ -454,7 +454,11 @@ def _step_block(step_name: str) -> str:
 				if indent == step_indent:
 					end = j
 					break
-		return "\n".join(lines[idx:end])
+		block = "\n".join(lines[idx:end])
+		step_script = re.search(r'bash "\$\{SUPPORT_SCRIPTS_DIR\}/(review_autofix_step_[^"/]+\.sh)"', block)
+		if step_script:
+			block += "\n" + (REPO_ROOT / "scripts" / step_script.group(1)).read_text(encoding="utf-8")
+		return block
 	raise AssertionError(f"Step not found in workflow: {step_name}")
 
 
@@ -478,6 +482,9 @@ def _job_block(job_name: str) -> str:
 
 def _step_run_script(step_name: str) -> str:
 	block_lines = _step_block(step_name).splitlines()
+	step_script = re.search(r'bash "\$\{SUPPORT_SCRIPTS_DIR\}/(review_autofix_step_[^"/]+\.sh)"', "\n".join(block_lines))
+	if step_script:
+		return (REPO_ROOT / "scripts" / step_script.group(1)).read_text(encoding="utf-8")
 	run_idx = -1
 	run_indent = -1
 	for idx, line in enumerate(block_lines):
@@ -498,6 +505,21 @@ def _step_run_script(step_name: str) -> str:
 
 	script = textwrap.dedent("\n".join(script_lines)).strip("\n")
 	return script + ("\n" if script else "")
+
+
+def test_extracted_step_scripts_use_workflow_support_ref() -> None:
+	stage = _step_block("Stage workflow support files")
+	stage_helper = _stage_helper_text()
+	assert 'step_script_ref_root=".codex-workflow-src-main"' in stage
+	assert 'if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then' in stage
+	assert 'if [ ! -f "${step_script_ref_root}/scripts/${step_script_support_file}" ]; then' in stage
+	assert 'install -m 0755 "${step_script_ref_root}/scripts/${step_script_support_file}" "${SUPPORT_SCRIPTS_DIR}/${step_script_support_file}"' in stage
+	assert stage.index('install -m 0755 "${step_script_ref_root}/scripts/${step_script_support_file}"') < stage.index('for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}')
+	for script_name in (
+		"review_autofix_step_initialize_runtime.sh", "review_autofix_step_detect_merge_conflicts.sh",
+		"review_autofix_step_partial_finalize.sh", "review_autofix_step_iteration_summary.sh",
+	):
+		assert script_name in stage_helper.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0]
 
 
 def _extract_review_autofix_timeout_minutes(workflow_text: str) -> tuple[int, int]:
@@ -4247,7 +4269,7 @@ def test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cl
 	collect_block = _step_block("Collect local slop-scan findings")
 	cleanup_block = _step_block("Remove slop-scan runtime artifact")
 
-	assert 'echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"' in workflow
+	assert 'echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"' in _step_block("Initialize runtime workspace")
 	assert "continue-on-error: true" in collect_block
 	assert 'write_slop_scan_sentinel "disabled"' in collect_block
 	assert 'write_slop_scan_sentinel "scan_error"' in collect_block
@@ -4499,8 +4521,8 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	gate_block = _step_block("Evaluate review gate")
 	prompt_text = (REPO_ROOT / "prompts" / "review-consolidator.txt").read_text(encoding="utf-8")
 
-	assert "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json" in workflow
-	assert "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md" in workflow
+	assert "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json" in _step_block("Initialize runtime workspace")
+	assert "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md" in _step_block("Initialize runtime workspace")
 	assert "REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_helper
@@ -4593,6 +4615,30 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 	assert chains["moonshotai/kimi-k3"] == ["moonshotai/kimi-k2.7-code"]
 	assert chains["qwen/qwen3.7-plus"] == ["qwen/qwen3.6-plus"]
 	assert chains["x-ai/grok-4.6"] == ["x-ai/grok-4.20"]
+
+
+def test_review_runtime_catalog_uses_complete_main_primary_snapshot() -> None:
+	stage_helper = _stage_helper_text()
+	assert '[ ! -s "${main_primary_bootstrap_root}/scripts/codex_model_catalog.json" ]' in stage_helper
+	assert 'main_primary_missing_file="codex_model_catalog.json"' in stage_helper
+	assert 'catalog_src="${main_primary_bootstrap_root}/scripts/codex_model_catalog.json"' in stage_helper
+	assert 'install -m 0644 "${catalog_src}" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"' in stage_helper
+	assert 'catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"' not in stage_helper
+
+
+def test_review_preflight_validates_every_configured_reviewer_and_summariser_model() -> None:
+	preflight = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	assert 'check_required_nonempty_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"' in preflight
+	assert 'printf \'%s\\n%s\\n\' "${REVIEWER_MODELS:-}" "${XPOLL_SUMMARISER_MODEL:-}"' in preflight
+	assert "awk '!seen[$0]++'" in preflight
+	assert 'for preflight_model_slug in "${preflight_review_models[@]}"; do' in preflight
+	assert 'OPENCODE_MODEL_CATALOG_PATH="${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"' in preflight
+	assert '--model "${preflight_model_slug}"' in preflight
+	assert 'emit_opencode_preflight_alert 1 config_generation_failed' in preflight
+
+	catalog_slugs = [row.get("slug") for row in json.loads(MODEL_CATALOG.read_text(encoding="utf-8"))["models"]]
+	for required_slug in ("google/gemini-3.1-flash-lite", "z-ai/glm-5.2"):
+		assert catalog_slugs.count(required_slug) == 1
 
 
 def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models() -> None:
@@ -5494,6 +5540,23 @@ def test_review_pipeline_summary_classifies_editor_noop_recoverable_failure() ->
 	)["summary"]
 	assert flag_only_summary["slot_results"]["editor"]["status"] == "success"
 	assert flag_only_summary["slot_results"]["editor"]["failure_class"] == "none"
+
+
+def test_review_pipeline_failure_precedes_editor_noop_and_keeps_editor_unattempted() -> None:
+	summary = _run_review_pipeline_summary_step_harness(
+		extra_env={
+			"AUTOFIX_REVIEW_PIPELINE_FAILURE": "true",
+			"AUTOFIX_EDITOR_EMPTY_NOOP": "true",
+			"AUTOFIX_EDITOR_ATTEMPTED": "false",
+		},
+	)["summary"]
+	assert summary["finalize_reason"] == "review_pipeline_failure"
+	assert summary["slot_results"]["editor"] == {
+		"attempt_count": 0,
+		"status": "skipped",
+		"failure_class": "not_invoked",
+	}
+	assert "editor" in summary["skipped_phases"]
 
 
 def test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reason_precedence() -> None:
@@ -6881,7 +6944,25 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			]
 
 
+def test_review_autofix_extracted_steps_are_staged_and_under_size_limit() -> None:
+	workflow_text = _workflow_text()
+	assert WORKFLOW.stat().st_size < 430_000
+	for step_name, script_name in (
+		("Initialize runtime workspace", "review_autofix_step_initialize_runtime.sh"),
+		("Detect merge conflicts", "review_autofix_step_detect_merge_conflicts.sh"),
+		("Post partial finalize comment and persist runtime marker", "review_autofix_step_partial_finalize.sh"),
+		("Append review pipeline iteration summary", "review_autofix_step_iteration_summary.sh"),
+	):
+		assert f'bash "${{SUPPORT_SCRIPTS_DIR}}/{script_name}"' in _step_block(step_name)
+		assert script_name in workflow_text.split("REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-", 1)[1].split("REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS:", 1)[0]
+		script_path = REPO_ROOT / "scripts" / script_name
+		assert script_path.is_file()
+		assert "${{" not in script_path.read_text(encoding="utf-8")
+	assert 'for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do' in _step_block("Stage workflow support files")
+
+
 def main() -> int:
+	test_review_autofix_extracted_steps_are_staged_and_under_size_limit()
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
 	test_review_preflight_missing_opencode_binary_emits_classified_error()
@@ -6914,6 +6995,8 @@ def main() -> int:
 	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()
 	test_agents_md_materiality_classifier_and_workflow_wiring()
 	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
+	test_review_runtime_catalog_uses_complete_main_primary_snapshot()
+	test_review_preflight_validates_every_configured_reviewer_and_summariser_model()
 	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
 	test_stall_guard_retryable_failures_log_deterministic_reviewer_advance()
 	test_silent_retry_exhaustion_logs_terminal_failure_reason()
@@ -6941,6 +7024,7 @@ def main() -> int:
 	test_review_pipeline_summary_reports_partial_finalize_validated_push()
 	test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety()
 	test_review_pipeline_summary_classifies_editor_noop_recoverable_failure()
+	test_review_pipeline_failure_precedes_editor_noop_and_keeps_editor_unattempted()
 	test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reason_precedence()
 	test_review_partial_finalize_publish_safety_gate_is_wired()
 	test_review_partial_finalize_timeout_extractor_handles_structured_yaml_layout()
