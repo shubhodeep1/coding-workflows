@@ -147,9 +147,13 @@ def test_evaluate_reminds_after_pr_write_tools(tool_name):
 	assert "Never subscribe" in context
 	# The terminal verdict is handed back so the pushing session writes the report.
 	assert "create_trigger" in context
-	assert "fire_trigger" in context
+	assert "update_trigger" in context
+	assert "persistent_session_id = this session" in context
+	assert "run_once_at = now + 7 days" in context
 	assert "hand-back" in context
 	assert "this session writes the action-needed report" in context
+	assert "Never use fire_trigger for the hand-back" in context
+	assert "stale_routines.py" in context
 
 
 @pytest.mark.parametrize("command", PUSH_COMMANDS)
@@ -366,10 +370,12 @@ def test_claude_md_documents_the_rule():
 	assert "`/implement-plan-claude` is the exception" in joined
 	assert "PushNotification" in joined
 	# The pushing session, not the Sonnet checker, writes the terminal report.
-	assert "poke-only Routine bound to this session" in joined
-	assert "`fire_trigger`" in joined
+	assert "`persistent_session_id` = this session's id" in joined
+	assert "`run_once_at` = now + 7 days" in joined
 	assert "The pushing session writes the report when the hand-back wakes it" in joined
 	assert "(pushing session unreachable)" in joined
+	assert "`fire_trigger` is never used for it" in joined
+	assert "**No-verdict wake.**" in joined
 	assert (
 		"fails open with a `systemMessage` warning when the hook payload cannot be read, "
 		"is invalid or non-object JSON, or evaluation raises an internal exception."

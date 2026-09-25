@@ -29,10 +29,11 @@ whitespace-only input is treated as an empty object and allowed silently.
 
 The reminder is the §26 mechanism, not a §25 subscription: it tells the
 session to start a Sonnet checker session (`create_session`, re-armed with
-`send_later`) that hands the terminal verdict back through a poke-only
-Routine (`create_trigger` / `fire_trigger`) so the pushing session writes
-the report, never to subscribe to PR activity, and the §25 guard keeps
-blocking `subscribe_pr_activity`.
+`send_later`) that hands the terminal verdict back through a scheduled
+Routine bound to the pushing session (`create_trigger` /
+`update_trigger`) so the pushing session writes the report, never to
+subscribe to PR activity, and the §25 guard keeps blocking
+`subscribe_pr_activity`.
 """
 
 from __future__ import annotations
@@ -69,20 +70,23 @@ REMINDER = (
 	"for the pushed branch exists, arm the 3-hourly status check-in for it "
 	"unless one is already armed for that PR, /implement-plan-claude opened "
 	"it (its own checker is the check-in), or the user opted out for this "
-	"task: first create_trigger a poke-only hand-back Routine bound to this "
-	"session (no cron_expression, run_once_at, or persistent_session_id), "
-	"then call create_session with a Sonnet model and a prompt naming the "
-	"repository, the PR number and URL, the hand-back trigger id, this "
-	"session's id, the §26 check-in steps (run "
-	".claude/scripts/check_in_status.py --terminal-only; re-arm with "
-	"send_later delay_minutes=180 while the PR is open; on merged or closed, "
-	"fire_trigger the hand-back Routine with the verdict so this session "
-	"writes the action-needed report, renames itself, and sends one "
-	"PushNotification), and fallback next steps the checker reports itself "
-	"only if the hand-back fails (fire_trigger errors, or its session_id is "
-	"not this session because this one was archived). Without create_session, use send_later "
-	"into this session and a Sonnet subagent for the read. Never subscribe "
-	"to PR activity (§25)."
+	"task: run the stale Routine sweep (.claude/scripts/stale_routines.py, "
+	"§26.G); create_trigger a hand-back Routine bound to this session "
+	"(persistent_session_id = this session, run_once_at = now + 7 days, name "
+	"\"PR <owner>/<repo>#<n> hand-back\"); then call create_session with a "
+	"Sonnet model and a prompt naming the repository, the PR number and URL, "
+	"the hand-back trigger id, this session's id, the §26 check-in steps "
+	"(run .claude/scripts/check_in_status.py --terminal-only; while the PR "
+	"is open, update_trigger the hand-back 7 days ahead and re-arm with "
+	"send_later delay_minutes=180; on merged or closed, update_trigger the "
+	"hand-back to fire in 1 minute with the verdict so this session writes "
+	"the action-needed report, renames itself, and sends one "
+	"PushNotification, then confirm delivery with get_trigger 10 minutes "
+	"later), and fallback next steps the checker reports itself only if the "
+	"hand-back fails. Never use fire_trigger for the hand-back: it starts a "
+	"fresh session instead of waking this one. Without create_session, use "
+	"send_later into this session and a Sonnet subagent for the read. Never "
+	"subscribe to PR activity (§25)."
 )
 
 
