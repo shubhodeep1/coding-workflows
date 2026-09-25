@@ -5,13 +5,27 @@
   "entry_id": "processed_command_4469_5833491515_approved",
   "issue_number": 4469,
   "metadata": {
+    "branch": "ai/issue-4469",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "README.md",
+      "agents.md",
+      "changelog.d/4469-validate-hook-output-boundary.md",
+      "scripts/run_workspace_hook.sh",
+      "tests/test_workspace_hooks.py"
+    ],
+    "issue_number": 4469,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4469",
+    "pr_number": 4474,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4474",
+    "run_attempt": "1",
+    "run_id": "36143325534",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36143325534"
   },
   "run_attempt": 1,
   "run_id": "36143325534",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-25T13:50:45Z",
+  "status": "completed",
+  "timestamp": "2026-09-25T14:03:18Z",
   "workflow": "implement"
 }
