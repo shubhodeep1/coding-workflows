@@ -50,6 +50,7 @@ orchestrator/project-2840 stack, plus run 25629086684 / PR #2865.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tempfile
@@ -490,6 +491,96 @@ def test_reasoning_default_lowered_to_high() -> None:
 	)
 
 
+def _attempt_state_function() -> str:
+	match = re.search(
+		r"^_resolver_attempt_state\(\)\n\{\n.*?\n\}\n",
+		_resolve_script_text(),
+		flags=re.DOTALL | re.MULTILINE,
+	)
+	assert match is not None
+	return match.group(0)
+
+
+def _run_attempt_fixture(tmp_path: Path, actions: str) -> subprocess.CompletedProcess[str]:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	git_env = {key: value for key, value in os.environ.items() if key not in (
+		"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+		"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "BASH_ENV", "ENV",
+	)}
+	subprocess.run(["git", "init", "-q", str(repo)], check=True, env=git_env)
+	(repo / "allowed.txt").write_text("baseline\n", encoding="utf-8")
+	(repo / "outside.txt").write_text("tracked\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "allowed.txt", "outside.txt"], check=True, env=git_env)
+	(repo / "existing-untracked.txt").write_text("untracked\n", encoding="utf-8")
+	state_dir = tmp_path / "attempt-state"
+	conflicts = tmp_path / "conflicts.txt"
+	conflicts.write_text("allowed.txt\n", encoding="utf-8")
+	program = (
+		"set -euo pipefail\n"
+		f"RESOLVER_ATTEMPT_TREE_DIR={str(state_dir)!r}\n"
+		f"CONFLICTED_PATHS_FILE={str(conflicts)!r}\n"
+		f"CHECK_RESOLVER_DIFF={str(REPO_ROOT / 'scripts/check_resolver_diff.sh')!r}\n"
+		f"{_attempt_state_function()}\n"
+		f"{actions}\n"
+	)
+	return subprocess.run(["bash", "-c", program], cwd=repo, text=True, capture_output=True, env=git_env)
+
+
+def test_out_of_scope_attempt_restores_before_retry(tmp_path: Path) -> None:
+	result = _run_attempt_fixture(tmp_path, """
+	_resolver_attempt_state capture
+	rm allowed.txt
+	printf 'drift\\n' > outside.txt
+	chmod +x outside.txt
+	printf 'overwritten\\n' > existing-untracked.txt
+	printf 'new\\n' > new-untracked.txt
+	ln -s outside.txt outside-link
+	if _resolver_attempt_state check; then exit 30; fi
+	_resolver_attempt_state restore
+	test "$(cat allowed.txt)" = baseline
+	test "$(cat outside.txt)" = tracked
+	test ! -x outside.txt
+	test "$(cat existing-untracked.txt)" = untracked
+	test ! -e new-untracked.txt
+	test ! -L outside-link
+	printf 'resolved\\n' > allowed.txt
+	_resolver_attempt_state check
+	printf 'allowed.txt\\n' > touched.txt
+	# The accepted output must still pass the production final hard gate.
+	"$CHECK_RESOLVER_DIFF" --conflicted-set "$CONFLICTED_PATHS_FILE" --touched-set touched.txt --repo-root "$PWD"
+	""")
+	# The touched-set fixture is created only after the attempt check.
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outside.txt" in result.stdout
+	assert "new-untracked.txt" in result.stdout
+	assert "check_resolver_diff: touched=1 conflicted=1" in result.stdout
+
+
+def test_unsafe_attempt_restore_stops_before_second_attempt(tmp_path: Path) -> None:
+	result = _run_attempt_fixture(tmp_path, """
+	_resolver_attempt_state capture
+	printf 'drift\\n' > outside.txt
+	if _resolver_attempt_state check; then exit 30; fi
+	git add outside.txt
+	if _resolver_attempt_state restore; then exit 31; fi
+	echo 'restore refused; no second attempt or commit'
+	""")
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "resolver changed the merge index" in result.stderr
+	assert "restore refused; no second attempt or commit" in result.stdout
+	assert (tmp_path / "repo" / "outside.txt").read_text() == "drift\n"
+
+
+def test_scope_check_precedes_retry_success_and_preserves_final_guard() -> None:
+	src = _resolve_script_text()
+	assert src.index('_resolver_attempt_state check || _scope_status=$?') < src.index(
+		'echo "Conflict resolver succeeded on attempt ${attempt} (soft validation passed)."'
+	)
+	assert 'if ! "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \\' in src
+	assert 'if ! _restore_attempt_base; then' in src
+
+
 def main() -> int:
 	test_dependency_fallback_prefers_main_then_script_ref_checkout()
 	test_dependency_fallback_gates_workspace_scripts_and_fails_closed()
@@ -504,6 +595,7 @@ def main() -> int:
 	test_build_retry_prompt_sets_retry_prompt_outcome()
 	test_retry_loop_reads_retry_prompt_outcome_for_log_dispatch()
 	test_reasoning_default_lowered_to_high()
+	test_scope_check_precedes_retry_success_and_preserves_final_guard()
 	print(
 		"OK: review_conflict_resolve outcome-aware retry-prelude "
 		"contract holds (validation + timeout preludes, "

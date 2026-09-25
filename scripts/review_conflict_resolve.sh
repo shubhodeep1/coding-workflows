@@ -488,6 +488,7 @@ if ! opencode_require_bootstrap review_conflict_resolve writer "${MODEL_EDITOR}"
 fi
 
 RESOLVER_ATTEMPT_BASE_MISSING_FILE="${RUNTIME_DIR}/resolver_attempt_base_missing.txt"
+RESOLVER_ATTEMPT_TREE_DIR="${RUNTIME_DIR}/resolver_attempt_tree"
 RESOLVER_RETRY_PROMPT_FILE="${RUNTIME_DIR}/resolver_retry_prompt.txt"
 RESOLVER_MARKER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_marker_violations.txt"
 RESOLVER_FP_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_fp_violations.txt"
@@ -500,10 +501,9 @@ RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact
 # prepare step populated with git-marked unmerged paths plus the
 # fingerprint-violation expansion set) so retries re-start from
 # the same post-merge-replay state instead of layering new edits
-# on top of the previous rejected output.  Files outside the
-# allowlist are off-limits to the resolver anyway (enforced by
-# the post-loop allowlist guard + check_resolver_diff.sh), so a
-# per-file allowlist snapshot is sufficient.
+# on top of the previous rejected output. On the source repo the
+# full-tree attempt snapshot below supersedes this allowlist copy:
+# it also restores edits outside the allowlist before a retry.
 #
 # Delete/modify conflicts: an allowlist path is listed as unmerged
 # even when the working-tree file is absent (e.g. both-sides-deleted,
@@ -578,6 +578,157 @@ if [ -f "${RESOLVER_ALLOWLIST_FILE}" ] && [ -s "${RESOLVER_ALLOWLIST_FILE}" ]; t
   _snap_count="$(find "${RESOLVER_ATTEMPT_BASE_DIR}" -type f 2>/dev/null | wc -l | tr -d '[:space:]')"
   _snap_missing_count="$(wc -l < "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}" | tr -d '[:space:]')"
   echo "Resolver retry-base snapshot captured: ${_snap_count} file(s), ${_snap_missing_count} allowlist path(s) absent at snapshot time (delete/rename conflicts — will be re-deleted on restore)."
+fi
+
+# Source-repo commit accounting compares against the pre-resolver tree. Keep
+# recoverable bytes for ALL tracked and pre-existing untracked paths as well:
+# the allowlist-only retry snapshot cannot undo an out-of-scope model edit.
+# Index entries are recorded separately; an agent that stages files is unsafe
+# to retry, rather than silently resetting the in-progress merge index.
+_resolver_attempt_state()
+{
+  local _state_action="$1"
+  RESOLVER_ATTEMPT_TREE_DIR="${RESOLVER_ATTEMPT_TREE_DIR}" \
+  CONFLICTED_PATHS_FILE="${CONFLICTED_PATHS_FILE}" \
+  python3 - "${_state_action}" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+
+action = sys.argv[1]
+root = Path.cwd()
+store = Path(os.environ["RESOLVER_ATTEMPT_TREE_DIR"])
+manifest_file = store / "manifest.json"
+
+
+def git_paths(*args):
+	return set(filter(None, subprocess.check_output(["git", "ls-files", "-z", *args]).split(b"\0")))
+
+
+def safe_path(raw):
+	path = os.fsdecode(raw)
+	parts = Path(path).parts
+	if (not parts or Path(path).is_absolute() or any(p in (".", "..", ".git") for p in parts)
+			or "\n" in path or "\r" in path or "\t" in path):
+		raise ValueError("unsafe resolver path")
+	parent = root
+	for component in parts[:-1]:
+		parent /= component
+		if parent.is_symlink():
+			raise ValueError("symlink in resolver path ancestry")
+	return path
+
+
+def file_state(path, copy_to=None):
+	try:
+		info = (root / path).lstat()
+	except FileNotFoundError:
+		return {"kind": "missing"}
+	if stat.S_ISLNK(info.st_mode):
+		data = os.fsencode(os.readlink(root / path))
+		kind = "link"
+	elif stat.S_ISREG(info.st_mode):
+		data = (root / path).read_bytes()
+		kind = "file"
+	else:
+		raise ValueError("unsupported resolver path type")
+	if copy_to is not None:
+		copy_to.write_bytes(data)
+	return {"kind": kind, "sha": hashlib.sha256(data).hexdigest(),
+		"mode": stat.S_IMODE(info.st_mode)}
+
+
+def index_state():
+	return hashlib.sha256(subprocess.check_output(["git", "ls-files", "--stage", "-z"])).hexdigest()
+
+
+try:
+	if Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"]).decode().strip()).resolve() != root.resolve():
+		raise ValueError("resolver working tree does not match Git root")
+	if action == "capture":
+		if store.exists():
+			raise ValueError("attempt snapshot already exists")
+		store.mkdir(parents=True)
+		(store / "files").mkdir()
+		paths = sorted(git_paths("--cached") | git_paths("--others", "--exclude-standard"))
+		entries = {}
+		for number, raw in enumerate(paths):
+			path = safe_path(raw)
+			entries[path] = file_state(path, store / "files" / str(number))
+			entries[path]["slot"] = number
+		manifest_file.write_text(json.dumps({"index": index_state(), "entries": entries}))
+	else:
+		manifest = json.loads(manifest_file.read_text())
+		entries = manifest["entries"]
+		for path in entries:
+			safe_path(os.fsencode(path))
+		if index_state() != manifest["index"]:
+			raise ValueError("resolver changed the merge index")
+		current = {safe_path(raw) for raw in git_paths("--cached") | git_paths("--others", "--exclude-standard")}
+		current.update(entries)
+		changes = []
+		for path in sorted(current):
+			previous = entries.get(path, {"kind": "missing"})
+			if file_state(path) != {key: value for key, value in previous.items() if key != "slot"}:
+				changes.append(path)
+		if action == "check":
+			allowed = {safe_path(os.fsencode(p)) for p in Path(os.environ["CONFLICTED_PATHS_FILE"]).read_text().splitlines() if p}
+			outside = [p for p in changes if p not in allowed]
+			if outside:
+				print("::warning::Conflict resolver attempt edited files outside the conflicted set:")
+				for path in outside:
+					print("  - " + path)
+				sys.exit(1)
+		elif action == "restore":
+			# Validate every baseline byte before modifying any path. Never
+			# follow a symlink or remove an unrecorded pre-existing path.
+			for path in changes:
+				previous = entries.get(path, {"kind": "missing"})
+				if previous["kind"] != "missing":
+					data = (store / "files" / str(previous["slot"])).read_bytes()
+					if hashlib.sha256(data).hexdigest() != previous["sha"]:
+						raise ValueError("attempt snapshot content mismatch")
+			for path in changes:
+				previous = entries.get(path, {"kind": "missing"})
+				target = root / path
+				if previous["kind"] == "missing":
+					if target.is_symlink() or target.is_file():
+						target.unlink()
+					continue
+				if target.is_symlink() or target.is_file():
+					target.unlink()
+				target.parent.mkdir(parents=True, exist_ok=True)
+				data = (store / "files" / str(previous["slot"])).read_bytes()
+				if previous["kind"] == "link":
+					os.symlink(os.fsdecode(data), target)
+				else:
+					with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as temp:
+						temp.write(data)
+						temp_path = temp.name
+					os.chmod(temp_path, previous["mode"])
+					os.replace(temp_path, target)
+			# Re-read the full path set, not only the paths initially changed.
+			if index_state() != manifest["index"] or any(
+				file_state(path) != {k: v for k, v in entry.items() if k != "slot"}
+				for path, entry in entries.items()
+			) or any(safe_path(raw) not in entries for raw in git_paths("--cached") | git_paths("--others", "--exclude-standard")):
+				raise ValueError("attempt restore verification failed")
+		else:
+			raise ValueError("unknown attempt state action")
+except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+	print("::error::Resolver attempt state unavailable or unsafe: " + str(exc), file=sys.stderr)
+	sys.exit(2)
+PY
+}
+
+if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+  _resolver_attempt_state capture || exit 1
 fi
 
 _capture_fingerprints_baseline()
@@ -750,6 +901,10 @@ echo "Integration fingerprint verification tier selected: ${RESOLVER_FP_VERIFICA
 # is non-empty; an empty allowlist means there was nothing to
 # resolve anyway).
 _restore_attempt_base() {
+  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+    _resolver_attempt_state restore
+    return $?
+  fi
   if [ ! -d "${RESOLVER_ATTEMPT_BASE_DIR}" ]; then
     echo "::warning::Resolver retry-base snapshot missing at ${RESOLVER_ATTEMPT_BASE_DIR}; retry will layer on top of previous attempt's output."
     return 0
@@ -837,7 +992,7 @@ _build_retry_prompt() {
   local _marker_file="$2"
   local _fp_file="$3"
   local _failure_kind="${4:-validation}"
-  if [ "${_failure_kind}" = "exec_error" ]; then
+  if [ "${_failure_kind}" = "exec_error" ] || [ "${_failure_kind}" = "scope" ]; then
     cp -a "${CONFLICT_RESOLVER_PROMPT_FILE}" "${RESOLVER_RETRY_PROMPT_FILE}"
     _retry_prompt_outcome="verbatim:exec_error"
     return 0
@@ -1788,7 +1943,10 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # attempt's violations (or, on a timed-out previous attempt,
   # the timeout-aware variant).
   if [ "${attempt}" -gt 1 ]; then
-    _restore_attempt_base || echo "::warning::Resolver retry-base restore reported a non-fatal error; continuing."
+    if ! _restore_attempt_base; then
+      echo "::error::Resolver retry-base restoration could not be verified; refusing another model attempt."
+      exit 1
+    fi
     _build_retry_prompt "$((attempt - 1))" \
       "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
       "${RESOLVER_FP_VIOLATIONS_FILE}" \
@@ -1824,7 +1982,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt reflexion prompt (prev markers=${_prev_marker_count}, prev fingerprint_violations=${_prev_fp_violation_count})."
         ;;
       verbatim:exec_error)
-        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt exited non-zero before validation could run; retrying with original prompt verbatim (no reflexion data to feed back)."
+        if [ "${_prev_attempt_failure_kind}" = "scope" ]; then
+          echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt edited outside the conflicted set; restored the full pre-attempt tree and retrying with original prompt verbatim."
+        else
+          echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt exited non-zero before validation could run; retrying with original prompt verbatim (no reflexion data to feed back)."
+        fi
         ;;
       verbatim:fallback)
         # Prelude template absent or non-integration-sync run: log the
@@ -1969,6 +2131,29 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation."
     emit_conflict_resolver_substate "Failed" "${attempt}"
     exit 78
+  fi
+  # Check the attempt-relative tree even when the agent exited non-zero.
+  # The post-loop touched-set guard remains the final defense; this early
+  # check makes an out-of-scope edit retryable only after full restoration.
+  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+    _scope_status=0
+    _resolver_attempt_state check || _scope_status=$?
+    if [ "${_scope_status}" -eq 2 ]; then
+      echo "::error::Resolver attempt state cannot be trusted; refusing to commit or retry."
+      exit 1
+    fi
+    if [ "${_scope_status}" -ne 0 ]; then
+      rm -f "${tmp_output}"
+      _prev_attempt_failure_kind="scope"
+      emit_conflict_resolver_substate "Failed" "${attempt}"
+      if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
+        echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts with out-of-conflict edits; refusing [ai-merge-resolve] commit."
+        exit 1
+      fi
+      attempt=$((attempt + 1))
+      sleep 2
+      continue
+    fi
   fi
   # Graceful-SIGTERM-at-timer-boundary diagnostic. If OpenCode installs
   # a SIGTERM handler that completes cleanup and exits 0 within the
