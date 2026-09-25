@@ -109,7 +109,7 @@ config="$6"
 [ -n "${OPENROUTER_API_KEY:-}" ] && [ -s "${prompt}" ] || { echo '::error::Review relay preflight failed' >&2; exit 1; }
 
 # Never mount a host-generated config with other providers or host paths.
-PYTHONDONTWRITEBYTECODE=1 python3 - "${config}" "${root}/config.json" "${model}" <<'PY'
+if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${config}" "${root}/config.json" "${model}" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -121,6 +121,10 @@ config.pop("mcp", None)  # Serena runs only on the host, never inside the writer
 with open(sys.argv[2], "w", encoding="utf-8") as handle:
 	json.dump(config, handle)
 PY
+then
+	echo '::error::Review isolation config rejected' >&2
+	exit 1
+fi
 install -m 0600 "${prompt}" "${root}/prompt"
 image="$(< "${root}/image")"
 [[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo '::error::Invalid review image ID' >&2; exit 1; }

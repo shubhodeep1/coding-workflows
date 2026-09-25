@@ -123,13 +123,13 @@ def main():
 		if not key or "\n" in key or "\r" in key or not model:
 			raise SystemExit(2)
 		server = UnixHTTPServer(sys.argv[2], Relay)
-		server.mode = "broker"
+		server.mode = sys.argv[1]
 		server.api_key = key
 		server.model = model
 		os.chmod(sys.argv[2], 0o600)  # The container uses the host UID to connect.
 	else:
 		server = http.server.HTTPServer(("127.0.0.1", 8765), Relay)
-		server.mode = "bridge"
+		server.mode = sys.argv[1]
 		server.socket_path = sys.argv[2]
 	with server:
 		server.serve_forever()

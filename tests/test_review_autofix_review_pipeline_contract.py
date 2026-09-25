@@ -7398,3 +7398,19 @@ def test_review_relay_accepts_only_configured_chat_model() -> None:
 			server.server_close()
 			thread.join(timeout=2)
 	assert seen == [("POST", "/api/v1/chat/completions", "openai/gpt-6-sol", "Bearer test-only-key")]
+
+
+def test_review_relay_main_preserves_invoked_mode() -> None:
+	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
+	assert spec and spec.loader
+	broker_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(broker_module)
+	with mock.patch.object(broker_module, "UnixHTTPServer") as broker_class, \
+		mock.patch.object(broker_module.http.server, "HTTPServer") as bridge_class, \
+		mock.patch.object(broker_module.os, "chmod"), \
+		mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-only-key"}):
+		for mode in ("broker", "bridge", "review-broker", "review-bridge"):
+			with mock.patch.object(broker_module.sys, "argv", ["broker", mode, "/unused.sock"]):
+				broker_module.main()
+			server = broker_class.return_value if mode.endswith("broker") else bridge_class.return_value
+			assert server.mode == mode

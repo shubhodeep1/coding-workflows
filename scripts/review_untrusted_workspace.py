@@ -214,7 +214,7 @@ def main():
 		else:
 			transfer(host, workspace, manifest)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
-		print("::error::Review isolation snapshot or transfer rejected", file=sys.stderr)
+		print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__})", file=sys.stderr)
 		raise SystemExit(1) from None
 
 
