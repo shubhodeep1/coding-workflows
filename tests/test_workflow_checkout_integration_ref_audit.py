@@ -23,6 +23,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"audit_consumer_drift.yml": "Consumer-wrapper drift audit is scheduled/manual repository maintenance, not an orchestrator issue-phase checkout path.",
 	"cancel_on_pr_close.yml": "PR-close cleanup cancels branch runs and has no orchestrator issue-phase checkout.",
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",
+	"claude-issue-intake.yml": "Claude issue intake is repository_dispatch automation that fires the dispatcher routine from the default branch; it runs no orchestrator issue phase and reads no issue metadata into a checkout ref.",
 	"integration-pr-readiness.yml": "Integration-PR readiness check runs on pull_request refs and posts commit status metadata, not orchestrator issue-phase checkout.",
 	"issue_pr_status.yml": "Issue/PR status utility workflow does not execute orchestrator issue phases.",
 	"lint-plan-archival.yml": "Plan-archival lint validates pull_request body/diff state rather than orchestrator issue-phase integration refs.",
