@@ -180,6 +180,8 @@ if [ -z "${POST_AGENT_ARTIFACT_DIR:-}" ]; then
 fi
 TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${POST_AGENT_ARTIFACT_DIR}/files_touched_scope_guard.py"
 TRUSTED_POLLER_WORKSPACE_GUARD="${POST_AGENT_ARTIFACT_DIR}/post_agent_workspace_guard.py"
+POST_AGENT_VALIDATION_CHECKER="${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py"
+export POST_AGENT_VALIDATION_CHECKER
 UNTRUSTED_POLLER_SANDBOX="${RUNTIME_DIR}/untrusted_process_sandbox.sh"
 UNTRUSTED_POLLER_PROVIDER_PROXY="${RUNTIME_DIR}/model_provider_proxy.py"
 POLLER_VALIDATOR_OUTPUT_DIR="${POST_AGENT_ARTIFACT_DIR}/validator-output-poller"
@@ -195,6 +197,10 @@ prepare_untrusted_poller_runtime() {
 	}
 	[ -x "${TRUSTED_POLLER_RESOLVER_GUARD}" ] || {
 		echo "::error::Pre-staged integration resolver guard is unavailable" >&2
+		return 1
+	}
+	[ -x "${POST_AGENT_VALIDATION_CHECKER}" ] || {
+		echo "::error::Pre-staged workflow-reference checker is unavailable" >&2
 		return 1
 	}
 	[ -x "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" ] || {

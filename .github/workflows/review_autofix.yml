@@ -1557,6 +1557,16 @@ jobs:
 
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PYTHONSAFEPATH: '1'
+      PYTHONPATH: ''
+      REVIEW_GIT_TOKEN: ${{ github.token }}
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: credential.helper
+      GIT_CONFIG_VALUE_0: >-
+        !f() { [ "$1" = get ] || exit 1; host=""; while IFS= read -r line; do
+        case "$line" in host=*) host="${line#host=}" ;; esac; done;
+        [ "$host" = "${GITHUB_SERVER_URL#https://}" ] && [ -n "$REVIEW_GIT_TOKEN" ] || exit 1;
+        printf 'username=x-access-token\npassword=%s\n' "$REVIEW_GIT_TOKEN"; }; f
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
       # Review-pipeline knobs: mirror the landed script defaults so repo-var
@@ -1702,20 +1712,10 @@ jobs:
           # checkout itself, so reviewers see the working tree as usual.
           filter: blob:none
           token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
 
       - name: Show disk usage (post checkout)
         run: df -h /
-
-      - name: Configure git auth for memory helper clones
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
-          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
-          SERVER_HOST="${SERVER_HOST#http://}"
-          SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
         run: |
@@ -1737,6 +1737,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
@@ -1747,6 +1748,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout
         run: |
@@ -1766,6 +1768,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow support files
         id: stage_workflow_support
@@ -1788,6 +1791,7 @@ jobs:
           SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
           SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+          echo "PYTHONPATH=${SUPPORT_SCRIPTS_DIR}" >> "$GITHUB_ENV"
 
           # The branch-pinned staging helper can predate these artifacts. Keep
           # every metadata producer, validator, and commit producer on one
@@ -1820,7 +1824,7 @@ jobs:
               exit 1
             fi
           done
-          for metadata_guard_support_file in verify_integration_fingerprints.py review_collect_pr_metadata.sh files_touched_scope_guard.py post_agent_workspace_guard.py check_resolver_diff.sh untrusted_process_sandbox.sh; do
+          for metadata_guard_support_file in verify_integration_fingerprints.py review_collect_pr_metadata.sh files_touched_scope_guard.py post_agent_workspace_guard.py check_resolver_diff.sh check_workflow_script_refs.py untrusted_process_sandbox.sh; do
             install -m 0755 \
               "${security_sensitive_support_root}/scripts/${metadata_guard_support_file}" \
               "${SUPPORT_SCRIPTS_DIR}/${metadata_guard_support_file}"
@@ -2011,6 +2015,8 @@ jobs:
 
           RUNTIME_DIR="/tmp/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
           POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-review-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
+          install -m 0755 "${SUPPORT_SCRIPTS_DIR}/check_workflow_script_refs.py" "${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py"
+          echo "POST_AGENT_VALIDATION_CHECKER=${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py" >> "$GITHUB_ENV"
           PREVIOUS_REVIEWS_DIR="${RUNTIME_DIR}/previous_reviews"
           RUNTIME_CONTEXT_DIR="${RUNTIME_DIR}/runtime_context"
           job_start_epoch="$(date +%s)"
@@ -3930,11 +3936,9 @@ jobs:
           # warning is emitted -- yet pytest is still not importable.  The
           # editor then cannot run the repository's pytest suites and
           # improvises no-install import shims instead, which is exactly what
-          # every autofix round on PR #4029 reported.  Bootstrap pytest
-          # explicitly whenever the repository declares pytest configuration
-          # and the interpreter the editor will use cannot import it.
-          # `python3 -m pip` (not bare `pip`) keeps the install and the
-          # importability probe on the same interpreter.
+          # every autofix round on PR #4029 reported. Probe the prepared
+          # interpreter only in the credentialless validation container;
+          # never import from the PR checkout on the privileged host.
           pytest_bootstrap_wanted=false
           if [ -f pytest.ini ] || [ -f conftest.py ] || [ -f tests/conftest.py ]; then
             pytest_bootstrap_wanted=true
@@ -3946,16 +3950,15 @@ jobs:
             pytest_bootstrap_wanted=true
           fi
           if [ "${pytest_bootstrap_wanted}" = "true" ]; then
-            if python3 -c "import pytest" >/dev/null 2>&1; then
+            if [ -n "${REVIEW_PYTHON_DEPENDENCY_VOLUME:-}" ] && timeout 30 docker run --rm \
+              --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+              --volume "${REVIEW_PYTHON_DEPENDENCY_VOLUME}:/review-venv:ro" \
+              --workdir /tmp python:3.12-slim /review-venv/bin/python -I -c 'import pytest' >/dev/null 2>&1; then
               echo "Repository declares pytest configuration and pytest is already importable."
             else
-              echo "Repository declares pytest configuration but pytest is not importable — installing pytest"
               echo "::warning::pytest is not importable from the safely prepared environment; refusing privileged host installation."
-              if python3 -c "import pytest" >/dev/null 2>&1; then
-                echo "pytest bootstrap succeeded."
-              else
-                echo "::warning::pytest is declared by this repository but could not be installed; the editor cannot run its pytest suites and will fall back to ad-hoc validation."
-              fi
+              echo "::warning::pytest is declared by this repository but could not be installed; the editor cannot run its pytest suites and will fall back to ad-hoc validation."
             fi
           fi
 
@@ -7168,7 +7171,8 @@ jobs:
             "${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src-main/scripts/review_append_iteration_summary.sh" \
             "${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts/review_append_iteration_summary.sh"; do
             if [ -f "${summary_helper_candidate}" ]; then
-              bash "${summary_helper_candidate}"
+              cd "${RUNNER_TEMP:?RUNNER_TEMP is required for safe summary startup}"
+              env -u BASH_ENV -u ENV bash "${summary_helper_candidate}"
               exit $?
             fi
           done

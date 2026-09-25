@@ -60,6 +60,17 @@ env:
 jobs:
   poll:
     runs-on: ubuntu-latest
+    env:
+      PYTHONSAFEPATH: '1'
+      PYTHONPATH: ''
+      REVIEW_GIT_TOKEN: ${{ github.token }}
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: credential.helper
+      GIT_CONFIG_VALUE_0: >-
+        !f() { [ "$1" = get ] || exit 1; host=""; while IFS= read -r line; do
+        case "$line" in host=*) host="${line#host=}" ;; esac; done;
+        [ "$host" = "${GITHUB_SERVER_URL#https://}" ] && [ -n "$REVIEW_GIT_TOKEN" ] || exit 1;
+        printf 'username=x-access-token\npassword=%s\n' "$REVIEW_GIT_TOKEN"; }; f
     concurrency:
       # Only one poller per repo at a time; newer runs queue instead of
       # killing the active run (which may be mid-way through conflict
@@ -106,6 +117,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback for gh retry
         if: ${{ steps.checkout_pre_support_source.outcome == 'failure' }}
@@ -117,6 +129,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout for gh retry
         run: |
@@ -136,6 +149,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage gh retry helper
         run: |
@@ -243,17 +257,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
-
-      - name: Configure git auth for memory helper clones
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
-          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
-          SERVER_HOST="${SERVER_HOST#http://}"
-          SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          persist-credentials: false
 
       - name: Setup Node.js
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -342,6 +346,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
@@ -353,6 +358,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
@@ -373,16 +379,18 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow support files
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
+          echo "PYTHONPATH=${GITHUB_WORKSPACE}/.codex-workflow-src/scripts" >> "$GITHUB_ENV"
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py security_audit.sh security_audit_causality.py files_touched_scope_guard.py check_resolver_diff.sh verify_integration_fingerprints.py worktree_registry.sh worktree_gc.sh; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py security_audit.sh security_audit_causality.py files_touched_scope_guard.py check_resolver_diff.sh check_workflow_script_refs.py verify_integration_fingerprints.py worktree_registry.sh worktree_gc.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -404,6 +412,7 @@ jobs:
           for f in post_agent_workspace_guard.py files_touched_scope_guard.py; do
             install -m 0755 "scripts/${f}" "${POST_AGENT_ARTIFACT_DIR}/${f}"
           done
+          install -m 0755 scripts/check_workflow_script_refs.py "${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py"
 
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
@@ -822,7 +831,7 @@ jobs:
         run: bash scripts/worktree_gc.sh
 
       - name: Build state snapshot
-        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        if: ${{ success() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -839,7 +848,7 @@ jobs:
             --memory-root-relative "${AI_MEMORY_ROOT:-ai-memory}"
 
       - name: Upload state snapshot artifact
-        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        if: ${{ success() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
         uses: actions/upload-artifact@v6
         with:
           name: state-snapshot
@@ -847,7 +856,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish state snapshot branch
-        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' && env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true' }}
+        if: ${{ success() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' && env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true' }}
         shell: bash
         run: |
           set -euo pipefail

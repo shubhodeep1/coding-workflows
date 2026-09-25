@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Review and poller post-agent failures no longer leave a Python startup payload at the active checkout path.** Reconciliation failures quarantine the identity-checked worktree, validator units cannot read Git metadata, workflow-reference checks use staged code, and Python probes and summaries avoid importing from PR-controlled directories. Cross-language changes keep uncertain access-control findings blocking.

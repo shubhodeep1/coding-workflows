@@ -226,6 +226,7 @@ changelog.d/4290-security-boundary-hardening.md
 changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/4342-sandbox-state-outside-private-tmp.md
 changelog.d/4379-followup-metadata-and-merged-label-race.md
+changelog.d/4391-post-agent-private-tmp.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/codex-blocked-verdict-bail.md
@@ -518,6 +519,7 @@ scripts/orchestrate_parse_and_post_answer.sh
 scripts/orchestrate_poll_process.sh
 scripts/orchestrate_state_v2.py
 scripts/package_download_proxy.py
+scripts/post_agent_workspace_guard.py
 scripts/post_review_comment.sh
 scripts/pr_checks_lib.sh
 scripts/promote_main_cycle.sh
@@ -528,18 +530,21 @@ scripts/render_validation_templates.py
 scripts/repo_root.py
 scripts/resolve_integration_ref.sh
 scripts/review_agents_md_materiality.sh
+scripts/review_append_iteration_summary.sh
 scripts/review_apply_fixes.sh
 scripts/review_collect_pr_metadata.sh
 scripts/review_commit_changes.sh
 scripts/review_conflict_prepare.sh
 scripts/review_conflict_resolve.sh
 scripts/review_consolidate.sh
+scripts/review_detect_merge_conflicts.sh
 scripts/review_enable_auto_merge.sh
 scripts/review_filter_uninteresting_files.sh
 scripts/review_floor_rules.sh
 scripts/review_issue_ledger.sh
 scripts/review_merge_train.sh
 scripts/review_parse_consolidator.sh
+scripts/review_pre_review_merge_topology.sh
 scripts/review_rb_judge.sh
 scripts/review_reject_verify.sh
 scripts/review_resolve_review_threads.sh
@@ -827,6 +832,7 @@ tests/test_review_autofix_reasoning_schedule.py
 tests/test_review_autofix_review_pipeline_contract.py
 tests/test_review_autofix_smoke_conflict_resolver_override.py
 tests/test_review_autofix_smoke_editor_override.py
+tests/test_review_autofix_step_scripts.py
 tests/test_review_autofix_sweep_stale_queued.py
 tests/test_review_autofix_sweep_zero_candidate_fast_exit.py
 tests/test_review_autofix_terminal_same_head_gate.py

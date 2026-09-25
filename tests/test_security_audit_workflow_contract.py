@@ -1451,6 +1451,59 @@ def test_security_audit_cross_file_deleted_guard_keeps_sink_blocking(
 	assert payload["advisory_findings"] == []
 
 
+@pytest.mark.parametrize("route_name", ("gateway.js", "gateway.yml", "README.md"))
+def test_security_audit_cross_language_route_addition_blocks_base_owned_sink(route_name: str) -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-cross-language-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = tmp_path / "repo"
+		repo_dir.mkdir()
+		git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		git_env.update({
+			"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+			"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+		})
+
+		def fixture_git(*args: str) -> str:
+			return subprocess.run(
+				["git", *args], cwd=repo_dir, env=git_env, check=True,
+				capture_output=True, text=True, encoding="utf-8",
+			).stdout.strip()
+
+		fixture_git("init", "-q")
+		(repo_dir / "views.py").write_text(
+			"def privileged_action(user):\n\treturn mutate_money_state()\n" +
+			"\n".join(f"FILLER_{line_number} = {line_number}" for line_number in range(3, 21)) + "\n",
+			encoding="utf-8",
+		)
+		fixture_git("add", "views.py")
+		fixture_git("commit", "-q", "-m", "base")
+		base_sha = fixture_git("rev-parse", "HEAD")
+		with (repo_dir / "views.py").open("a", encoding="utf-8") as handle:
+			handle.write("FILLER_21 = 21\n")
+		(repo_dir / route_name).write_text("new route\n", encoding="utf-8")
+		fixture_git("add", route_name, "views.py")
+		fixture_git("commit", "-q", "-m", "route")
+		head_sha = fixture_git("rev-parse", "HEAD")
+		finding = _finding_payload("base-owned-sink", file_path="views.py", category="A01: Broken Access Control")
+		finding["line"] = 2
+		output_path = tmp_path / "findings.json"
+		proc, final_state = _run_security_audit(
+			{}, codex_output=json.dumps([finding]), cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": base_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_LINE_OWNERSHIP": "project-lines",
+				"SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES": "0",
+			},
+		)
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [row["finding_id"] for row in payload["findings"]] == ([] if route_name.endswith(".md") else ["base-owned-sink"])
+
+
 def test_security_audit_unrelated_control_deletion_does_not_block_base_owned_sink() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-unrelated-control-") as fixture_td:
 		tmp_path = Path(fixture_td)

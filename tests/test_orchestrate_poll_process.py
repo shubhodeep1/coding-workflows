@@ -21648,6 +21648,16 @@ def test_integration_resolver_guard_freezes_clean_paths_and_conflict_anchors() -
 		assert "outside conflict spans" in span_tamper.stderr
 
 
+def test_poller_snapshot_skips_failed_guard_and_checkout_does_not_persist_token() -> None:
+	workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "git remote set-url origin \"https://x-access-token:" not in workflow
+	assert "persist-credentials: false" in workflow
+	assert 'GIT_CONFIG_KEY_0: credential.helper' in workflow
+	for step_name in ("Build state snapshot", "Upload state snapshot artifact", "Publish state snapshot branch"):
+		step = workflow.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
+		assert "if: ${{ success() &&" in step
+
+
 def test_security_pass_poller_delegates_waiver_causality_to_shared_helper() -> None:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	waiver_function = script.split("security_pass_apply_waivers_to_findings() {", 1)[1].split(

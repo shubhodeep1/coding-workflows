@@ -70,6 +70,74 @@ def test_workspace_guard_quarantines_ignored_python_startup_payload() -> None:
 		assert json.loads(report.read_text(encoding="utf-8"))["rejected"][0]["reason"] == "python-startup-path"
 
 
+def test_guard_disposes_workspace_after_inventory_error() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		manifest = root / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		(workspace / "sitecustomize.py").write_text("raise RuntimeError('startup executed')\n", encoding="utf-8")
+		(workspace / "bad\x01name").write_text("invalid\n", encoding="utf-8")
+		result = subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "reconcile", "--workspace", str(workspace),
+			 "--manifest", str(manifest), "--quarantine-dir", str(root / "quarantine"),
+			 "--changed-paths-out", str(root / "changed"), "--report", str(root / "report")],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20
+		disposed = subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "dispose", "--workspace", str(workspace), "--manifest", str(manifest)],
+			capture_output=True, text=True, check=False,
+		)
+		assert disposed.returncode == 0, disposed.stderr
+		assert not workspace.exists()
+		assert list(root.glob("post-agent-rejected-*/workspace/sitecustomize.py"))
+
+
+def test_guard_disposal_refuses_mismatched_snapshot_identity() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		manifest = root / "manifest.json"
+		subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "snapshot", "--workspace", str(workspace), "--manifest", str(manifest)],
+			check=True,
+		)
+		payload = json.loads(manifest.read_text(encoding="utf-8"))
+		payload["workspace"]["inode"] += 1
+		manifest.write_text(json.dumps(payload), encoding="utf-8")
+		result = subprocess.run(
+			["/usr/bin/python3", "-I", "-S", str(WORKSPACE_GUARD), "dispose", "--workspace", str(workspace), "--manifest", str(manifest)],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 20
+		assert workspace.is_dir()
+
+
+def test_resolver_checker_and_validator_metadata_are_not_from_checkout() -> None:
+	resolver = RESOLVER_GUARD.read_text(encoding="utf-8")
+	sandbox = SANDBOX.read_text(encoding="utf-8")
+	assert 'checker="${POST_AGENT_VALIDATION_CHECKER:-}"' in resolver
+	assert '${REPO_ROOT}/scripts/check_workflow_script_refs.py' not in resolver
+	assert '[ "${provider_required}" = true ] || [ "${role}" = validator ]' in sandbox
+	assert 'InaccessiblePaths=${protected_git_path}' in sandbox
+	assert 'dispose --workspace "${workspace}"' in sandbox
+	review = (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	poller = (REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert 'POST_AGENT_VALIDATION_CHECKER=${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py' in review
+	assert '"${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py"' in poller
+	assert 'if: ${{ success() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED' in poller
+	assert 'git remote set-url origin "https://x-access-token:' not in review
+	assert 'GIT_CONFIG_KEY_0: credential.helper' in review
+	assert 'persist-credentials: false' in review
+	assert 'python3 -c "import pytest"' not in review
+
+
 def test_workspace_guard_restores_authorized_new_regular_file() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		root = Path(directory)

@@ -529,7 +529,7 @@ case "${role}" in
 esac
 for protected_git_path in "${git_metadata_paths[@]:-}"; do
 	[ -n "${protected_git_path}" ] || continue
-	if [ "${provider_required}" = true ]; then
+	if [ "${provider_required}" = true ] || [ "${role}" = validator ]; then
 		systemd_properties+=(--property="InaccessiblePaths=${protected_git_path}")
 	else
 		systemd_properties+=(--property="ReadOnlyPaths=${protected_git_path}")
@@ -549,5 +549,17 @@ if [ "${sandbox_unit_rc}" -eq 226 ]; then
 	echo "untrusted_process_sandbox: sandbox_namespace_setup_failed role=${role} rc=226 unit=${sandbox_unit_name}" >&2
 	timeout --kill-after=2 10 "${sandbox_journal_cmd[@]}" --no-pager -o cat -n 20 -u "${sandbox_unit_name}" 2>/dev/null \
 		| sed 's/^/untrusted_process_sandbox: sandbox_namespace_setup_failed journal: /' >&2 || true
+fi
+if [ "${role}" = workspace-guard ] && [ "${guard_action}" = reconcile ] && [ "${sandbox_unit_rc}" -ne 0 ]; then
+	guard_manifest=""
+	guard_previous=""
+	for guard_argument in "$@"; do
+		if [ "${guard_previous}" = --manifest ]; then guard_manifest="${guard_argument}"; break; fi
+		guard_previous="${guard_argument}"
+	done
+	if [ -n "${guard_manifest}" ] && [ -f "${guard_manifest}" ]; then
+		/usr/bin/python3 -I -S "${4}" dispose --workspace "${workspace}" --manifest "${guard_manifest}" || \
+			echo "untrusted_process_sandbox: workspace disposal failed" >&2
+	fi
 fi
 exit "${sandbox_unit_rc}"
