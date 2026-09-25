@@ -741,6 +741,11 @@ when the bounded fix-cycle budget is exhausted.
   files from there are copied into the sandbox's private input area. Snapshot
   manifests, reconciliation reports and changed-path lists remain unit-visible
   until the host consumes them, then workflow cleanup removes the artifact dir.
+  Staged review helpers can run under a main-pinned workflow that does not yet
+  export `POST_AGENT_ARTIFACT_DIR`; they create a private directory under
+  `RUNNER_TEMP` and publish it through `GITHUB_ENV` for subsequent steps.
+  The resolver's baseline fingerprint capture writes only to a dedicated
+  validator-output subdirectory; its input is copied out of host private tmp.
   Rejection or a missing unit-visible root stops publication; never disable
   `PrivateTmp=yes` or run a validator with host credentials as a fallback.
 - `scripts/model_provider_proxy.py` derives a non-empty model allowlist from

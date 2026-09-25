@@ -168,8 +168,8 @@ def test_implement_workflow_stages_and_guards_all_codex_launches() -> None:
 
 	assert "workspace_safety_check.sh" in stage_block
 	assert "bash scripts/workspace_safety_check.sh" in implement_block
-	assert "bash scripts/workspace_safety_check.sh" in repair_block
-	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"' in summary_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/workspace_safety_check.sh"' in repair_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/workspace_safety_check.sh"' in summary_block
 
 
 def test_ci_and_release_gate_run_workspace_safety_check_tests() -> None:
@@ -182,9 +182,11 @@ def test_ci_and_release_gate_run_workspace_safety_check_tests() -> None:
 def test_review_workflow_bootstraps_and_restages_workspace_safety_helper() -> None:
 	stage_block = REVIEW_STAGE_HELPER.read_text(encoding="utf-8")
 	merge_detect_block = _step_run_text(REVIEW_WORKFLOW, "Detect merge conflicts")
+	merge_detect_script = (REPO_ROOT / "scripts" / "review_detect_merge_conflicts.sh").read_text(encoding="utf-8")
 
 	assert "workspace_safety_check.sh" in stage_block
-	assert "workspace_safety_check.sh" in merge_detect_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_detect_merge_conflicts.sh"' in merge_detect_block
+	assert "workspace_safety_check.sh" in merge_detect_script
 
 
 def test_validate_process_guards_codex_attempts_and_short_circuits_exit_78() -> None:

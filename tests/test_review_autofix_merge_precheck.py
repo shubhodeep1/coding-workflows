@@ -30,7 +30,10 @@ FULL_RM_LINE = (
 
 
 def _workflow() -> str:
-    return REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
+    return REVIEW_AUTOFIX_WF.read_text(encoding="utf-8") + "\n" + "\n".join(
+        (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
+        for name in ("review_pre_review_merge_topology.sh", "review_detect_merge_conflicts.sh")
+    )
 
 
 def _section(start_marker: str, end_marker: str) -> str:
@@ -39,7 +42,15 @@ def _section(start_marker: str, end_marker: str) -> str:
     assert start != -1, f"Expected section start marker: {start_marker!r}"
     end = wf.find(end_marker, start)
     assert end != -1, f"Expected section end marker after {start_marker!r}: {end_marker!r}"
-    return wf[start:end]
+    section = wf[start:end]
+    for step_name, script_name in (
+        ("Pre-review deterministic merge-topology gate", "review_pre_review_merge_topology.sh"),
+        ("Detect merge conflicts", "review_detect_merge_conflicts.sh"),
+    ):
+        if start_marker == f"- name: {step_name}":
+            assert f'bash "${{SUPPORT_SCRIPTS_DIR}}/{script_name}"' in section
+            return section + "\n" + (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+    return section
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +79,7 @@ def test_known_ci_artifacts_removed_before_git_reset_in_detect_step():
     )
     # Match the actual git command (not a comment line) by requiring a newline
     # immediately before the indented command.
-    reset_match = re.search(r"\n\s+git reset --hard HEAD\s*\n", detect_step)
+    reset_match = re.search(r"\n\s*git reset --hard HEAD\s*\n", detect_step)
     rm_pos = detect_step.find(FULL_RM_LINE)
     assert rm_pos != -1, (
         f"Expected {FULL_RM_LINE!r} to appear in the Detect merge conflicts step"

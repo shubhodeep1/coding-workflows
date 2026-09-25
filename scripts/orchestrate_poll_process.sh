@@ -167,6 +167,17 @@ fi
 
 TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"
 TRUSTED_POLLER_RESOLVER_GUARD="${RUNTIME_DIR}/check_resolver_diff.sh"
+if [ -z "${POST_AGENT_ARTIFACT_DIR:-}" ]; then
+	if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "${RUNNER_TEMP}" ]; then
+		echo "::error::RUNNER_TEMP is required for post-agent artifacts." >&2
+		exit 78
+	fi
+	POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-poller-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}.XXXXXX")"
+	export POST_AGENT_ARTIFACT_DIR
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		printf 'POST_AGENT_ARTIFACT_DIR=%s\n' "${POST_AGENT_ARTIFACT_DIR}" >> "${GITHUB_ENV}"
+	fi
+fi
 TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${POST_AGENT_ARTIFACT_DIR}/files_touched_scope_guard.py"
 TRUSTED_POLLER_WORKSPACE_GUARD="${POST_AGENT_ARTIFACT_DIR}/post_agent_workspace_guard.py"
 UNTRUSTED_POLLER_SANDBOX="${RUNTIME_DIR}/untrusted_process_sandbox.sh"

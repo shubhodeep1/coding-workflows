@@ -66,9 +66,21 @@ if ! [[ "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
   echo "::error::Post-agent workspace guard is unavailable or changed after staging." >&2
   exit 1
 fi
+if [ -z "${POST_AGENT_ARTIFACT_DIR:-}" ]; then
+  if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "${RUNNER_TEMP}" ]; then
+    echo "::error::RUNNER_TEMP is required for post-agent artifacts." >&2
+    exit 78
+  fi
+  POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-review-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}.XXXXXX")"
+  export POST_AGENT_ARTIFACT_DIR
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    printf 'POST_AGENT_ARTIFACT_DIR=%s\n' "${POST_AGENT_ARTIFACT_DIR}" >> "${GITHUB_ENV}"
+  fi
+fi
 run_resolver_validator_python() {
   bash "${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh" \
     --role validator --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+    --writable-output-dir "${POST_AGENT_ARTIFACT_DIR}/validator-output-resolver" \
     -- /usr/bin/python3 -I -S "$@"
 }
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
@@ -480,7 +492,8 @@ RESOLVER_MARKER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_marker_violations.txt"
 RESOLVER_FP_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_fp_violations.txt"
 RESOLVER_FP_VIOLATIONS_PREV_FILE="${RUNTIME_DIR}/resolver_fp_violations_prev.txt"
 RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt"
-RESOLVER_FP_BASELINE_STATE_FILE="${POST_AGENT_ARTIFACT_DIR}/resolver_fp_baseline_state.json"
+mkdir -p "${POST_AGENT_ARTIFACT_DIR}/validator-output-resolver"
+RESOLVER_FP_BASELINE_STATE_FILE="${POST_AGENT_ARTIFACT_DIR}/validator-output-resolver/resolver_fp_baseline_state.json"
 RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact.json"
 
 # Snapshot every in-scope file (the resolver's allowlist, which
@@ -585,7 +598,8 @@ _capture_fingerprints_baseline()
   fi
   local _baseline_capture_exit=0
   INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+    run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      --repo-root "${PWD}" \
       --baseline-fingerprints-state "${RESOLVER_FP_BASELINE_STATE_FILE}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" || _baseline_capture_exit=$?
   if [ "${_baseline_capture_exit}" -ne 0 ] || [ ! -s "${RESOLVER_FP_BASELINE_STATE_FILE}" ]; then
@@ -1889,10 +1903,13 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   resolver_workspace_paths="${POST_AGENT_ARTIFACT_DIR}/post-agent-resolver-${attempt}.paths.txt"
   resolver_workspace_report="${POST_AGENT_ARTIFACT_DIR}/post-agent-resolver-${attempt}.report.json"
   resolver_workspace_quarantine="${POST_AGENT_ARTIFACT_DIR}/post-agent-resolver-${attempt}.quarantine"
-  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+  if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
     --role workspace-guard --guard-action snapshot --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
     -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
-    --workspace "${PWD}" --manifest "${resolver_workspace_manifest}"
+    --workspace "${PWD}" --manifest "${resolver_workspace_manifest}"; then
+    echo "::error::Conflict resolver workspace snapshot failed for attempt ${attempt}; aborting before model execution."
+    exit 78
+  fi
   # Strip any invalid UTF-8 bytes that may have leaked into the
   # retry-prompt (rebuilt inside the loop, so we sanitise each
   # iteration). See sanitize_codex_prompt_file in scripts/gh_helpers.sh.
@@ -1951,6 +1968,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     --quarantine-dir "${resolver_workspace_quarantine}" \
     --changed-paths-out "${resolver_workspace_paths}" --report "${resolver_workspace_report}"; then
     echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation; aborting before output parsing."
+    exit 78
+  fi
+  if [ "${_codex_exit}" -eq 78 ]; then
+    echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation."
+    emit_conflict_resolver_substate "Failed" "${attempt}"
     exit 78
   fi
   resolver_clean_output="${tmp_output}.ansi-clean"

@@ -103,6 +103,17 @@ if ! [[ "${POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
   echo "::error::Post-agent workspace guard is unavailable or changed after staging." >&2
   exit 1
 fi
+if [ -z "${POST_AGENT_ARTIFACT_DIR:-}" ]; then
+  if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "${RUNNER_TEMP}" ]; then
+    echo "::error::RUNNER_TEMP is required for post-agent artifacts." >&2
+    exit 78
+  fi
+  POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-review-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}.XXXXXX")"
+  export POST_AGENT_ARTIFACT_DIR
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    printf 'POST_AGENT_ARTIFACT_DIR=%s\n' "${POST_AGENT_ARTIFACT_DIR}" >> "${GITHUB_ENV}"
+  fi
+fi
 
 run_editor_codex_attempt() {
   local prompt_file="$1"
@@ -2014,10 +2025,13 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   editor_workspace_paths="${POST_AGENT_ARTIFACT_DIR}/post-agent-editor-${attempt}.paths.txt"
   editor_workspace_report="${POST_AGENT_ARTIFACT_DIR}/post-agent-editor-${attempt}.report.json"
   editor_workspace_quarantine="${POST_AGENT_ARTIFACT_DIR}/post-agent-editor-${attempt}.quarantine"
-  bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
+  if ! bash "${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
     --role workspace-guard --guard-action snapshot --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
     -- /usr/bin/python3 -I -S "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" snapshot \
-    --workspace "${PWD}" --manifest "${editor_workspace_manifest}"
+    --workspace "${PWD}" --manifest "${editor_workspace_manifest}"; then
+    echo "::error::Editor workspace snapshot failed for attempt ${attempt}; aborting before model execution."
+    exit 78
+  fi
   # Run OpenCode: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   emit_editor_substate "LaunchingAgentProcess" "${attempt}"
   emit_editor_substate "InitializingSession" "${attempt}"

@@ -188,11 +188,13 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/repo_root.py` — Resolve the repository root from scripts and tests.
 - `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
 - `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
+- `scripts/review_append_iteration_summary.sh` — Emit the review/autofix iteration metrics and structured run summary.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
+- `scripts/review_detect_merge_conflicts.sh` — Late merge-conflict check before the review/autofix resolver tail.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
@@ -200,6 +202,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
 - `scripts/review_merge_train.sh` — merge train for review_autofix.yml: `gate` queues an ai/issue-* PR behind older open ai/issue-* PRs on the same base that edit the same files (label ai:merge-queued); `release` (cancel_on_pr_close.yml, orchestrate_poll.yml) re-dispatches review once the blockers are gone.
 - `scripts/review_parse_consolidator.sh` — Shell helper for review parse consolidator.
+- `scripts/review_pre_review_merge_topology.sh` — Pre-review stale-base and merge-topology gate.
 - `scripts/review_rb_judge.sh` — Runs the review-blocked judge for PR merge, fix, or close-and-reissue decisions.
 - `scripts/review_reject_verify.sh` — Shell helper for review reject verify.
 - `scripts/review_resolve_review_threads.sh` — resolve PR review threads that the editor stage already audited.

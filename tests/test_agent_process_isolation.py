@@ -408,6 +408,35 @@ def test_validator_role_uses_isolated_no_site_python_outside_workspace() -> None
 		assert validator_result.read_text(encoding="utf-8") == "ok"
 
 
+def test_resolver_fingerprint_baseline_capture_uses_validator_output() -> None:
+	resolver_script = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	assert 'run_resolver_validator_python "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py"' in resolver_script
+	assert '--baseline-fingerprints-state "${RESOLVER_FP_BASELINE_STATE_FILE}"' in resolver_script
+	with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		runtime = root / "runtime"
+		runtime.mkdir(mode=0o700)
+		output_dir = runtime / "validator-output-resolver"
+		output_dir.mkdir()
+		fingerprints = root / "fingerprints.json"
+		fingerprints.write_text("{}\n", encoding="utf-8")
+		baseline = output_dir / "baseline.json"
+		environment = os.environ.copy()
+		environment.update({"RUNNER_TEMP": str(root), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1"})
+		result = subprocess.run(
+			["bash", str(SANDBOX), "--role", "validator", "--workspace", str(workspace),
+			 "--runtime-dir", str(runtime), "--writable-output-dir", str(output_dir),
+			 "--", "/usr/bin/python3", "-I", "-S", str(REPO_ROOT / "scripts/verify_integration_fingerprints.py"),
+			 "--repo-root", str(workspace), "--baseline-fingerprints-state", str(baseline), str(fingerprints)],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert json.loads(baseline.read_text(encoding="utf-8"))["fingerprints"] == {}
+
+
 def test_private_tmp_units_exchange_guard_artifacts() -> None:
 	if shutil.which("systemd-run") is None:
 		pytest.skip("systemd-run is unavailable")
@@ -519,6 +548,59 @@ def test_resolver_python_syntax_validation_is_read_only() -> None:
 		)
 		assert result.returncode == 0, result.stderr
 		assert not (workspace / "__pycache__").exists()
+
+
+def test_resolver_syntax_validation_accepts_deleted_python_path() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		removed = workspace / "removed.py"
+		removed.write_text("VALUE = 1\n", encoding="utf-8")
+		removed.unlink()
+		conflicted = root / "conflicted.txt"
+		touched = root / "touched.txt"
+		conflicted.write_text("removed.py\n", encoding="utf-8")
+		touched.write_text("removed.py\n", encoding="utf-8")
+		result = subprocess.run(
+			["bash", str(RESOLVER_GUARD), "--repo-root", str(workspace),
+			 "--conflicted-set", str(conflicted), "--touched-set", str(touched)],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "touched=1 conflicted=1" in result.stdout
+
+
+@pytest.mark.parametrize(("script_name", "initializer_end"), [
+	("review_apply_fixes.sh", "\n\nrun_editor_codex_attempt()"),
+	("review_conflict_resolve.sh", "\nrun_resolver_validator_python()"),
+	("review_rb_judge.sh", "\nrun_review_rb_validator_python()"),
+	("orchestrate_poll_process.sh", "\nTRUSTED_POLLER_REVIEW_SCOPE_GUARD="),
+])
+def test_staged_writer_creates_unit_visible_artifacts_without_workflow_export(
+	script_name: str, initializer_end: str,
+) -> None:
+	script = (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+	start = script.index('if [ -z "${POST_AGENT_ARTIFACT_DIR:-}" ]; then')
+	initializer = script[start:script.index(initializer_end, start)]
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		env_file = root / "github-env.txt"
+		env_file.touch()
+		environment = os.environ.copy()
+		environment.pop("POST_AGENT_ARTIFACT_DIR", None)
+		environment.update({"RUNNER_TEMP": str(root), "GITHUB_ENV": str(env_file),
+			"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2"})
+		result = subprocess.run(
+			["bash", "-euo", "pipefail", "-c", initializer + '\nprintf "%s\\n" "$POST_AGENT_ARTIFACT_DIR"'],
+			env=environment, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		artifact = Path(result.stdout.strip())
+		assert artifact.parent == root
+		assert artifact.stat().st_mode & 0o777 == 0o700
+		assert env_file.read_text(encoding="utf-8") == f"POST_AGENT_ARTIFACT_DIR={artifact}\n"
 
 
 def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
