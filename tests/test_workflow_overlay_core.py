@@ -316,7 +316,7 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 		workflow_text = workflow_path.read_text(encoding="utf-8")
 		if workflow_path.name == "review_autofix.yml":
 			assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in workflow_text
-			assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in workflow_text
+			assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in workflow_text
 			assert 'bash "${helper}"' in workflow_text
 			assert 'bash "${helper}" validate' not in workflow_text
 			assert 'if [ "${1:-}" = "validate" ]; then\n\tmain_validate "$@"\nelse\n\tstage_review_runtime_support\nfi' in stage_helper_text

@@ -49,6 +49,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"auto-release-stable.yml": "Scheduled stable-branch release check operates on repo refs (stable branch vs stable tag), not tracking-issue metadata.",
 	"workflow_failure_heal.yml": "Escalation reporter checks out the repo only to read consumer wrapper release pins and dispatches upstream; it executes no orchestrator issue phase.",
 	"workflow-failure-heal-intake.yml": "Heal intake is repository_dispatch / workflow_run issue-filing automation on the default branch, not an orchestrator issue-phase checkout path.",
+	"internal-cancel-on-pr-close.yml": "Heal PR reconcile checks out main on pull_request close to merge or close heal PRs of the closed PR; it executes no orchestrator issue phase.",
 }
 
 
@@ -107,14 +108,22 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 			checkout_resolver_step = "- name: Resolve checkout ref"
 			checkout_resolver_id = "id: checkout_ref"
 		else:
-			checkout_ref = "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+			# validate.yml authorizes an explicit `target_ref` against a
+			# project PR and pins its head SHA, which wins over the tracking
+			# issue's integration branch.
+			ref_expression = (
+				"steps.authorized_target.outputs.sha || steps.refctx.outputs.ref || github.event.repository.default_branch"
+				if workflow_name == "validate.yml"
+				else "steps.refctx.outputs.ref || github.event.repository.default_branch"
+			)
+			checkout_ref = f"ref: ${{{{ {ref_expression} }}}}"
 			resolved_ref_name = {
 				"clarify.yml": "CLARIFY_RESOLVED_REF",
 				"orchestrate_clarify_respond.yml": "ORCHESTRATE_CLARIFY_RESOLVED_REF",
 				"plan.yml": "PLAN_RESOLVED_REF",
 				"validate.yml": "VALIDATE_RESOLVED_REF",
 			}[workflow_name]
-			resolved_ref_env = f"{resolved_ref_name}: ${{{{ steps.refctx.outputs.ref || github.event.repository.default_branch }}}}"
+			resolved_ref_env = f"{resolved_ref_name}: ${{{{ {ref_expression} }}}}"
 			resolved_ref_log = f'echo "Resolved ref: ${{{resolved_ref_name}}}"'
 			unsafe_resolved_ref_log = "echo \"Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
 			resolved_base_env = ""

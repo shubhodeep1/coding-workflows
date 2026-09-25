@@ -68,12 +68,21 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 			"'ai:orchestrator-tracking'",
 			"'ai:security-audit'",
 			"'ai:retro'",
+			"github.event.issue.user.type == 'User'",
+			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.issue.author_association)",
+			"github.event.issue.user.type == 'Bot'",
+			"github.event.issue.user.login == 'github-actions[bot]'",
 			"github.event.issue.pull_request == null",
 			"github.event.comment.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)",
 			"startsWith(github.event.comment.body, '/reclarify')",
 		),
 	)
+	opened, reclarify = _canonical_predicate("clarify").split(" || (github.event_name == 'issue_comment'", 1)
+	assert "github.event.issue.user.type == 'User'" in opened
+	assert "github.event.issue.user.login == 'github-actions[bot]'" in opened
+	assert "github.event.comment.user.type == 'User'" in reclarify
+	assert "github.event.issue.author_association" not in reclarify
 
 
 def test_plan_predicate_preserves_trusted_human_and_bot_answer_routes() -> None:

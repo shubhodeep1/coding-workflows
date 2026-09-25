@@ -56,10 +56,10 @@ def test_smoke_roster_and_editor_defaults_match_production() -> None:
 	smoke = SMOKE.read_text(encoding="utf-8")
 	production = PRODUCTION_REVIEW.read_text(encoding="utf-8")
 	assert _reviewer_roster(smoke) == _reviewer_roster(production)
-	assert "vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol'" in smoke
-	assert "vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5'" in smoke
-	assert "vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol'" in production
-	assert "vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5'" in production
+	assert "vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol'" in smoke
+	assert "vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.6-sol'" in smoke
+	assert "vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol'" in production
+	assert "vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.6-sol'" in production
 
 
 def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
@@ -123,7 +123,7 @@ def test_production_review_path_uses_opencode_for_read_and_write_sides() -> None
 	assert '"${reviewer_opencode_workspace}"\n    json' in reviewers
 	assert 'reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"' in reviewers
 	assert 'opencode_run_cmd "$@"' in summariser
-	assert 'opencode_run_cmd "$@"' in apply_fixes
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in apply_fixes
 	assert "exec codex --ask-for-approval never" not in apply_fixes
 
 

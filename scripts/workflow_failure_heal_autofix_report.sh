@@ -8,7 +8,8 @@
 # the review/autofix run on a pull request has failed, it:
 #
 #   1. Names the failure (`failure_reason`) from the flags the run already set
-#      (editor empty no-op, editor changes lost, editor refusal) or from the
+#      (reviewer step failed, editor empty no-op, editor changes lost, editor
+#      refusal) or from the
 #      structured run summary's `finalize_reason`, falling back to
 #      `workflow_failure`.
 #   2. Counts how many review runs in a row failed on this pull request from
@@ -46,6 +47,31 @@
 #   REPORT_SUMMARY_LINE_FILE               file holding the REVIEW_AUTOFIX_RUN_SUMMARY_V1 line
 #   AUTOFIX_EDITOR_EMPTY_NOOP, EDITOR_CHANGES_LOST, EDITOR_NOOP_REFUSAL,
 #   EDITOR_NOOP_SUSPICIOUS, RESOLVER_ESCALATED   run flags (true/false)
+#   EDITOR_PREFLIGHT_FAILED                the editor preflight failed (true/false); names
+#                                          the failure editor_preflight_failed ahead of the
+#                                          other flags (the editor never ran)
+#   AUTOFIX_REVIEWERS_FAILED               the reviewer step failed, so the editor never ran
+#                                          (true/false); names the failure reviewers_failed,
+#                                          after editor_preflight_failed (the preflight step
+#                                          runs first) and ahead of the editor flags
+#   AUTOFIX_FAILURE_REASON                 failure_reason chosen by the caller (the
+#                                          identical-failure cap passes identical_failure_cap);
+#                                          wins over the flags when it is a valid reason token
+#   AUTOFIX_FAILURE_FP                     fingerprint of the run's review-autofix-failure:v1
+#                                          marker, sent as failure_fingerprint when 64 hex
+#   PR_CHANGED_FILES_FILE                  the PR's changed files (one path per line) the run
+#                                          already wrote; sent as changed_files (absent is fine)
+#   AUTOFIX_FAILURE_MARKER_AUTHOR          login the workflow posts failure comments as (default
+#                                          empty). When set, the runs named by that author's
+#                                          review-autofix-failure:v1 markers for the PR head in
+#                                          PR_ISSUE_COMMENTS_FILE lead run_refs, so the intake
+#                                          reads the failed runs' logs (the identical-failure cap
+#                                          sets it; its own run has no failed job)
+#
+# Ownership facts for the intake's self-inflicted routing ride in the payload:
+# base_branch (the PR JSON's base.ref), script_ref (REPORT_WRAPPER_SHA),
+# changed_files (PR_CHANGED_FILES_FILE) and crash_file (extracted from the
+# evidence, which includes the stage stderr tail the run assembled). No API call.
 
 set -uo pipefail
 
@@ -70,9 +96,6 @@ export PYTHONDONTWRITEBYTECODE=1
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HEAL_PY="${WORKFLOW_HEAL_PY:-${script_dir}/workflow_failure_heal.py}"
-if [ ! -f "${HEAL_PY}" ] && [ -f "scripts/workflow_failure_heal.py" ]; then
-	HEAL_PY="scripts/workflow_failure_heal.py"
-fi
 
 # Optional helpers (staged by the review workflow; absent in tests).
 if [ -f "${script_dir}/gh_helpers.sh" ]; then
@@ -114,7 +137,14 @@ FINALIZE_REASON=""
 if [ -s "${SUMMARY_LINE_FILE}" ]; then
 	FINALIZE_REASON="$(sed -n 's/^REVIEW_AUTOFIX_RUN_SUMMARY_V1 //p' "${SUMMARY_LINE_FILE}" | head -1 | jq -r '.finalize_reason // ""' 2>/dev/null || echo "")"
 fi
-if [ "${AUTOFIX_EDITOR_EMPTY_NOOP:-false}" = "true" ]; then
+if [ -n "${AUTOFIX_FAILURE_REASON:-}" ] && [[ "${AUTOFIX_FAILURE_REASON}" =~ ^[a-z][a-z0-9_:-]{0,79}$ ]]; then
+	FAILURE_REASON="${AUTOFIX_FAILURE_REASON}"
+elif [ "${EDITOR_PREFLIGHT_FAILED:-false}" = "true" ]; then
+	FAILURE_REASON="editor_preflight_failed"
+elif [ "${AUTOFIX_REVIEWERS_FAILED:-false}" = "true" ]; then
+	# The reviewer step failed, so the editor never ran.
+	FAILURE_REASON="reviewers_failed"
+elif [ "${AUTOFIX_EDITOR_EMPTY_NOOP:-false}" = "true" ]; then
 	FAILURE_REASON="editor_empty_noop"
 elif [ "${EDITOR_CHANGES_LOST:-false}" = "true" ]; then
 	FAILURE_REASON="editor_changes_lost"
@@ -137,6 +167,11 @@ else
 	log "warn pr_comments_unavailable pr=${PR}; counting this run only"
 fi
 STREAK=$((PRIOR_FAILURES + 1))
+if [ "${FAILURE_REASON}" = "identical_failure_cap" ] && [ "${PRIOR_FAILURES}" -gt 0 ]; then
+	# The cap run stops in the gate and posts a cap comment, not a failure
+	# comment: the failures are exactly the ones already on the PR.
+	STREAK="${PRIOR_FAILURES}"
+fi
 if [ "${STREAK}" -lt "${STREAK_THRESHOLD}" ]; then
 	log "skip reason=below_streak pr=${PR} reason=${FAILURE_REASON} streak=${STREAK} threshold=${STREAK_THRESHOLD}"
 	exit 0
@@ -149,7 +184,19 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 	echo "failure_reason=${FAILURE_REASON}"
 	echo "finalize_reason=${FINALIZE_REASON:-unknown}"
 	echo "consecutive_failed_runs=${STREAK}"
-	echo "flags: AUTOFIX_EDITOR_EMPTY_NOOP=${AUTOFIX_EDITOR_EMPTY_NOOP:-} EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS:-} EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL:-} EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST:-} HAS_PR_DIFF=${HAS_PR_DIFF:-} PR_DIFF_SOURCE=${PR_DIFF_SOURCE:-}"
+	echo "flags: AUTOFIX_REVIEWERS_FAILED=${AUTOFIX_REVIEWERS_FAILED:-} AUTOFIX_EDITOR_EMPTY_NOOP=${AUTOFIX_EDITOR_EMPTY_NOOP:-} EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS:-} EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL:-} EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST:-} HAS_PR_DIFF=${HAS_PR_DIFF:-} PR_DIFF_SOURCE=${PR_DIFF_SOURCE:-}"
+	# The bounded stderr tail of the failing stages ("Assemble failure
+	# evidence"): it carries the shell error that names the crash file.
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/failure_evidence_tail.txt" ]; then
+		echo "--- failure_evidence_tail.txt (tail) ---"
+		tail -n 40 "${RUNTIME_DIR}/failure_evidence_tail.txt" 2>/dev/null | cut -c1-400
+	fi
+	# Per-slot / summariser exit codes and self-named script errors when the
+	# reviewer step failed ("Post editor summary comment" writes it).
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/reviewers_failure_evidence.txt" ]; then
+		echo "--- reviewers_failure_evidence.txt ---"
+		head -n 40 "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null | cut -c1-400
+	fi
 	if [ -s "${SUMMARY_LINE_FILE}" ]; then
 		head -c 6000 "${SUMMARY_LINE_FILE}"
 		echo
@@ -185,6 +232,24 @@ BUILD_ARGS=(--repo "${REPO}" --pr-json "${PR_JSON_FILE}" --workflow-name "${WORK
 	--wrapper-sha "${WRAPPER_SHA}" --reporter-run-url "${RUN_URL}")
 if [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
 	BUILD_ARGS+=(--comments-json "${COMMENTS_FILE}")
+fi
+if [[ "${AUTOFIX_FAILURE_FP:-}" =~ ^[0-9a-f]{64}$ ]]; then
+	BUILD_ARGS+=(--failure-fingerprint "${AUTOFIX_FAILURE_FP}")
+fi
+# Only when the staged helper knows the flag (an older copy would reject it and
+# the report would be lost).
+if [ -n "${AUTOFIX_FAILURE_MARKER_AUTHOR:-}" ] && grep -q 'failure-marker-author' "${HEAL_PY}" 2>/dev/null; then
+	BUILD_ARGS+=(--failure-marker-author "${AUTOFIX_FAILURE_MARKER_AUTHOR}")
+fi
+# Ownership facts: only when the staged helper knows the flags (an older copy
+# would reject them and the report would be lost; the intake then routes the
+# report without ownership, as before).
+if grep -q 'classify-crash-ownership' "${HEAL_PY}" 2>/dev/null; then
+	BASE_BRANCH_REF="$(jq -r '.base.ref // ""' "${PR_JSON_FILE}" 2>/dev/null || echo "")"
+	BUILD_ARGS+=(--base-branch "${BASE_BRANCH_REF}" --script-ref "${REPORT_WRAPPER_SHA:-}")
+	if [ -n "${PR_CHANGED_FILES_FILE:-}" ] && [ -s "${PR_CHANGED_FILES_FILE}" ]; then
+		BUILD_ARGS+=(--changed-files-file "${PR_CHANGED_FILES_FILE}")
+	fi
 fi
 if ! python3 "${HEAL_PY}" build-autofix-payload "${BUILD_ARGS[@]}" > "${PAYLOAD_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
 	log "skip reason=payload_build_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"
