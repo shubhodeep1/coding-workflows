@@ -16,9 +16,10 @@
 #       -> the consensus ledger through scripts/post_review_comment.sh
 #          (chunked PR comments), then one comment carrying `kind=findings`;
 #   * nothing at all (no finding in any ledger block, no failing check)
-#       -> no comment; CLAUDE_FIXER_ZERO_FINDINGS=true is exported so the
-#          workflow's own auto-merge step runs, as it does when the editor
-#          finds nothing to commit.
+#       -> no comment; on a normal round, CLAUDE_FIXER_ZERO_FINDINGS=true
+#          enables the existing auto-merge tail. On a verdict-triggered
+#          re-review, fresh raw evidence and checks publish clean_review=true
+#          for the separate head-bound auto-merge job instead.
 #
 # The hand-off marker is
 #   <!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->
@@ -96,6 +97,46 @@ if [ -s "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ]; then
 fi
 
 if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}" -eq 0 ] && [ -z "${claude_fixer_failed_checks}" ]; then
+  if [ "${CLAUDE_FIXER_CONVERGENCE_REVIEW:-false}" = "true" ]; then
+    # Cached consensus and skipped/partial reviewer slots are not evidence
+    # for a verdict-triggered re-review. Check every configured raw slot.
+    claude_fixer_fresh_start="${RUNTIME_DIR}/claude_fixer_review_start"
+    [ -f "${claude_fixer_fresh_start}" ] && [ -n "${REVIEWER_MODELS:-}" ] \
+      && grep -Fxq '=== CONSENSUS FINDINGS ===' "${REVIEWER_CONSENSUS_FILE}" \
+      && grep -Fxq '=== CONSENSUS TASK GAPS ===' "${REVIEWER_CONSENSUS_FILE}" \
+      || { echo "::error::Claude-fixer convergence has incomplete reviewer evidence."; exit 1; }
+    claude_fixer_reviewed_slots=0
+    while IFS= read -r claude_fixer_model; do
+      [ -n "${claude_fixer_model}" ] || continue
+      claude_fixer_safe_model="$(printf '%s' "${claude_fixer_model}" | tr '/.:' '___')"
+      claude_fixer_status="${PREVIOUS_REVIEWS_DIR}/status_review_${claude_fixer_safe_model}.txt"
+      claude_fixer_raw="${PREVIOUS_REVIEWS_DIR}/review_${claude_fixer_safe_model}.txt"
+      if [ ! -s "${claude_fixer_raw}" ] || [ ! "${claude_fixer_status}" -nt "${claude_fixer_fresh_start}" ] \
+        || [ "$(cat "${claude_fixer_status}" 2>/dev/null)" != "success" ] \
+        || ! grep -Eq '^[[:space:]]*NONE[[:space:]]*$' "${claude_fixer_raw}" \
+        || grep -Eq '^[[:space:]]*(File:|Problem:|Requirement:|Evidence of absence:)[[:space:]]*[^[:space:]]' "${claude_fixer_raw}"; then
+        echo "::error::Claude-fixer convergence reviewer slot is missing, stale, failed or nonempty."
+        exit 1
+      fi
+      claude_fixer_reviewed_slots=$((claude_fixer_reviewed_slots + 1))
+    done <<< "${REVIEWER_MODELS}"
+    [ "${claude_fixer_reviewed_slots}" -ge 2 ] || { echo "::error::Insufficient independent reviewer evidence."; exit 1; }
+    # Fresh authenticated PR/check reads: the earlier check context can be
+    # stale by the time the reviewers finish. No earlier PR read in this step
+    # proves post-review head freshness. This run's check is self-pending.
+    # gh_helpers was already loaded; pr_checks_lib shares its retry contract.
+    source "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh"
+    claude_fixer_pr="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+    claude_fixer_base="$(jq -r '.base.ref // empty' <<< "${claude_fixer_pr}")"
+    [ -n "${claude_fixer_base}" ] && jq -e --arg head "${HEAD_SHA}" \
+      '.state == "open" and .head.sha == $head and .mergeable == true' <<< "${claude_fixer_pr}" >/dev/null \
+      && PR_CHECKS_REPOSITORY="${GITHUB_REPOSITORY}" PR_CHECKS_SELF_RUN_ID="${GITHUB_RUN_ID}" \
+        _pr_checks_completed "${PR_NUMBER}" "${HEAD_SHA}" "${claude_fixer_base}" \
+      || { echo "::error::Claude-fixer convergence head or checks are not ready."; exit 1; }
+    echo "clean_review=true" >> "${GITHUB_OUTPUT}"
+    echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=none action=review_verified"
+    exit 0
+  fi
   echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=none findings=0 failed_checks=0 action=auto_merge"
   echo "CLAUDE_FIXER_ZERO_FINDINGS=true" >> "$GITHUB_ENV"
   exit 0

@@ -556,7 +556,8 @@ record_orchestrator_lesson_event() {
   if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ]; then
     return 0
   fi
-  if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py append-lesson-event \
+  # The project checkout is untrusted; use the support-ref copy staged outside it.
+  if [ ! -f "${RUNTIME_DIR:-}/orchestrate_lib.py" ] || ! PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_DIR}/orchestrate_lib.py" append-lesson-event \
     --state-file "${STATE_FILE}" --event-json "${event_json}" >/dev/null; then
     echo "::warning::tracking #${TRACKING_NUM:-?}: could not record orchestrator lesson event; continuing fail-open" >&2
   fi

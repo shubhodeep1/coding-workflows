@@ -34,6 +34,7 @@ permissions:
   issues: write
 
 env:
+  SECURITY_AUDIT_SUPPORT_SHA: ""
   MODEL_PROVIDER_PROXY_MAX_REQUESTS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_REQUESTS || '64' }}
   MODEL_PROVIDER_PROXY_MAX_CONCURRENCY: ${{ vars.MODEL_PROVIDER_PROXY_MAX_CONCURRENCY || '1' }}
   MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS || '65536' }}
@@ -64,6 +65,54 @@ jobs:
           # commit recorded on the tracker issue body.
           fetch-depth: 0
           ref: ${{ inputs.ref || github.event.repository.default_branch }}
+          path: audit-target
+          persist-credentials: false
+
+      - name: Resolve trusted audit support
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          SECURITY_AUDIT_SOURCE_REPO: ${{ github.repository || '' }}
+        run: |
+          set -euo pipefail
+          # Neither target checkout nor the audit script has authenticated
+          # support identity metadata. Resolve it once before any support
+          # execution; tag-object reads only peel annotated release tags.
+          if [ "${SECURITY_AUDIT_SOURCE_REPO}" = "shubhodeep1/coding-workflows" ]; then
+            branch_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
+            [ "$(jq -r '.protected // false' <<< "${branch_json}")" = "true" ] || exit 1
+            support_sha="$(jq -r '.commit.sha // empty' <<< "${branch_json}")"
+          else
+            tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+            support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
+            object_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
+            for _depth in 1 2 3; do
+              [ "${object_type}" = "tag" ] || break
+              [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
+              support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
+              object_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
+            done
+            [ "${object_type}" = "commit" ] || exit 1
+          fi
+          [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "SECURITY_AUDIT_SUPPORT_SHA=${support_sha}" >> "$GITHUB_ENV"
+
+      - name: Checkout trusted audit support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SECURITY_AUDIT_SUPPORT_SHA }}
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .audit-support
+          persist-credentials: false
+
+      - name: Verify trusted audit support
+        run: |
+          set -euo pipefail
+          [[ "${SECURITY_AUDIT_SUPPORT_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [ "$(git -C .audit-support rev-parse HEAD)" = "${SECURITY_AUDIT_SUPPORT_SHA}" ] || exit 1
+          [ -f .audit-support/scripts/security_audit.sh ] || exit 1
+          echo "SECURITY_AUDIT_SUPPORT_DIR=${GITHUB_WORKSPACE}/.audit-support" >> "$GITHUB_ENV"
 
       - name: Resolve audit target
         env:
@@ -77,11 +126,11 @@ jobs:
           fi
           # fetch-depth: 0 above fetched every branch, so the default
           # branch's remote-tracking ref is available for the merge-base.
-          if ! audit_diff_base="$(git merge-base "refs/remotes/origin/${AUDIT_DEFAULT_BRANCH}" HEAD)"; then
+          if ! audit_diff_base="$(git -C audit-target merge-base "refs/remotes/origin/${AUDIT_DEFAULT_BRANCH}" HEAD)"; then
             echo "::error::Could not compute the merge-base of ${AUDIT_TARGET_REF_INPUT} with ${AUDIT_DEFAULT_BRANCH}."
             exit 1
           fi
-          audit_diff_head="$(git rev-parse HEAD)"
+          audit_diff_head="$(git -C audit-target rev-parse HEAD)"
           echo "SECURITY_AUDIT_TARGET: branch ${AUDIT_TARGET_REF_INPUT} range ${audit_diff_base}..${audit_diff_head}"
           {
             echo "SECURITY_AUDIT_TARGET_REF=${AUDIT_TARGET_REF_INPUT}"
@@ -89,78 +138,20 @@ jobs:
             echo "SECURITY_AUDIT_DIFF_HEAD=${audit_diff_head}"
           } >> "$GITHUB_ENV"
 
-      - name: Resolve workflow support ref
-        run: |
-          set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
-            echo "SECURITY_AUDIT_IS_SOURCE_REPO=true" >> "$GITHUB_ENV"
-          else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
-            echo "SECURITY_AUDIT_IS_SOURCE_REPO=false" >> "$GITHUB_ENV"
-          fi
-
-      - name: Checkout workflow support source
-        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'
-        id: checkout_support_source
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: ${{ env.SCRIPT_REF }}
-          token: ${{ secrets.GH_PAT || github.token }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-
-      - name: Checkout workflow support source fallback
-        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true' && steps.checkout_support_source.outcome == 'failure'
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT || github.token }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-
-      - name: Stage audit support files
-        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'
-        run: |
-          set -euo pipefail
-          if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
-            exit 1
-          fi
-          SUPPORT_DIR="${RUNNER_TEMP}/security-audit-support"
-          mkdir -p "${SUPPORT_DIR}"
-          cp -r .codex-workflow-src/scripts "${SUPPORT_DIR}/scripts"
-          cp -r .codex-workflow-src/prompts "${SUPPORT_DIR}/prompts"
-          # Remove the support checkout so the audited tree stays exactly the
-          # consumer repository — the read-only Codex pass must never cite
-          # workflow-source files as consumer findings.
-          rm -rf .codex-workflow-src
-          echo "SECURITY_AUDIT_SUPPORT_DIR=${SUPPORT_DIR}" >> "$GITHUB_ENV"
-
-      - name: Install Codex CLI (source repo)
-        if: env.SECURITY_AUDIT_IS_SOURCE_REPO == 'true'
-        uses: ./.github/actions/install-codex
-
-      - name: Install Codex CLI (consumer repos)
-        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+      - name: Install Codex CLI
+        uses: ./.audit-support/.github/actions/install-codex
 
       - name: Create Codex config
         run: |
           set -euo pipefail
           # The catalog path MUST be absolute: codex resolves a relative
           # model_catalog_json against CODEX_HOME (~/.codex) and exits with
-          # "No such file or directory (os error 2)". In the source repo
-          # SECURITY_AUDIT_SUPPORT_DIR is unset, so fall back to the
-          # workspace root rather than ".".
-          bash "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/write_codex_config.sh" \
+          # "No such file or directory (os error 2)". Both source and
+          # consumer runs use the verified absolute support checkout.
+          bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/write_codex_config.sh" \
             --model "openai/gpt-6-sol" \
             --reasoning xhigh \
-            --catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-${GITHUB_WORKSPACE}}/scripts/codex_model_catalog.json"
+            --catalog-path "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_model_catalog.json"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Run security audit
@@ -176,4 +167,14 @@ jobs:
           SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}
         run: |
           set -euo pipefail
-          bash "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/security_audit.sh"
+          # Never let the audited tree supply the exclusion policy. Operator
+          # overrides are resolved against the verified support commit too.
+          if [[ "${SECURITY_AUDIT_FP_EXCLUSIONS}" != /* ]]; then
+            SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_SUPPORT_DIR}/${SECURITY_AUDIT_FP_EXCLUSIONS}"
+            export SECURITY_AUDIT_FP_EXCLUSIONS
+          fi
+          case "$(realpath -m -- "${SECURITY_AUDIT_FP_EXCLUSIONS}")" in
+            "${GITHUB_WORKSPACE}/audit-target"/*) echo "::error::Audit policy cannot come from the target checkout."; exit 1 ;;
+          esac
+          cd audit-target
+          bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit.sh"

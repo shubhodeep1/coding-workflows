@@ -7075,6 +7075,31 @@ def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
 	assert 'FINGERPRINT_CAP_SUPPORT_VERIFIED:-false' in gate_job
 
 
+def test_review_blocked_issue_lineage_rejects_untrusted_pr_data(tmp_path: Path) -> None:
+	pr_path = tmp_path / "pr.json"
+	base = {
+		"number": 42, "state": "open",
+		"user": {"login": "workflow-bot"},
+		"head": {"ref": "ai/issue-71", "repo": {"full_name": "o/r"}},
+		"title": "https://github.com/o/r/issues/72",
+		"body": "Fixes #72",
+	}
+	for data, issue_payload, expected in (
+		(base, '{"number":71}', "71"),
+		({**base, "head": {"ref": "evil/issue-71", "repo": {"full_name": "o/r"}}}, '{"number":71}', ""),
+		({**base, "head": {"ref": "ai/issue-71", "repo": {"full_name": "fork/r"}}}, '{"number":71}', ""),
+		({**base, "user": {"login": "attacker"}}, '{"number":71}', ""),
+		(base, '{"number":71,"pull_request":{}}', ""),
+	):
+		pr_path.write_text(json.dumps(data), encoding="utf-8")
+		run = subprocess.run(
+			["bash", "-c", f'source "{REPO_ROOT}/scripts/label_helpers.sh"; gh_retry() {{ printf "%s\\n" "$MOCK_ISSUE"; }}; verified_review_blocked_issue_from_pr "$PR_FILE" o/r workflow-bot 42'],
+			env={**os.environ, "PR_FILE": str(pr_path), "MOCK_ISSUE": issue_payload},
+			capture_output=True, text=True,
+		)
+		assert run.stdout.strip() == expected
+
+
 def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	job = _job_block("fingerprint-cap-block")
 	assert "needs: gate" in job
@@ -7091,9 +7116,10 @@ def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	already = job.index("AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=")
 	assert already < job.index('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"')
 	assert already < job.index('ensure_label_exists "ai:review-blocked"')
-	# One PR read; linked issues via the strict title/body fallback, else the PR.
+	# One PR read; only verified workflow-owned branch lineage can label an issue.
 	assert job.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
-	assert "extract_repo_scoped_issue_refs_from_text" in job
+	assert "verified_review_blocked_issue_from_pr" in job
+	assert "extract_repo_scoped_issue_refs_from_text" not in job
 	assert 'set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"' in job
 	assert '"repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked"' in job
 	assert "**AI review/autofix stopped: identical failure repeated**" in job

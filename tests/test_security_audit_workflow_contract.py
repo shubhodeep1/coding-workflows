@@ -383,17 +383,21 @@ def test_security_audit_workflow_has_required_triggers_and_checkout_contract() -
 
 def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
-	# Source-repo runs must keep using the local action so branch-local changes
-	# to install-codex stay testable; consumer-called runs use the stable ref.
-	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO == 'true'" in content
-	assert 'uses: ./.github/actions/install-codex' in content
-	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'" in content
-	assert 'uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable' in content
+	# Neither source nor consumer audits execute the target checkout's action.
+	assert 'path: audit-target' in content
+	assert 'path: .audit-support' in content
+	assert 'uses: ./.audit-support/.github/actions/install-codex' in content
+	assert 'uses: ./.github/actions/install-codex' not in content
+	assert 'uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable' not in content
+	assert 'branch_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"' in content
+	assert 'git/tags/${support_sha}' in content
+	assert 'git -C .audit-support rev-parse HEAD' in content
+	assert 'cd audit-target' in content
 	assert 'scripts/write_codex_config.sh' in content
 	# The catalog path must be absolute in both source-repo and consumer runs:
 	# codex resolves a relative model_catalog_json against CODEX_HOME and
 	# exits with ENOENT (every run from 2026-07-05 to 2026-09-23 failed so).
-	assert '--catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-${GITHUB_WORKSPACE}}/scripts/codex_model_catalog.json"' in content
+	assert '--catalog-path "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_model_catalog.json"' in content
 	assert '--catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-.}/' not in content
 	assert 'OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}' in content
 	assert "SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}" in content
@@ -403,7 +407,7 @@ def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	) in content
 	assert "SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}" in content
 	assert "SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}" in content
-	assert 'bash "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/security_audit.sh"' in content
+	assert 'bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit.sh"' in content
 
 
 def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> None:
@@ -2724,6 +2728,41 @@ def test_security_audit_workflow_declares_branch_audit_inputs_on_both_triggers()
 	assert resolve["env"]["AUDIT_TARGET_REF_INPUT"] == "${{ inputs.ref || '' }}"
 	assert "SECURITY_AUDIT_TARGET_REF=" in resolve["run"]
 	assert "SECURITY_AUDIT_DIFF_BASE=" in resolve["run"]
+
+
+def test_security_audit_support_resolution_rejects_untrusted_refs(tmp_path: Path) -> None:
+	import yaml
+
+	workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+	resolve = next(step for step in workflow["jobs"]["security-audit"]["steps"] if step.get("name") == "Resolve trusted audit support")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text("""#!/bin/sh
+case "$*" in
+  *branches/main*) printf '%s\\n' "$MOCK_BRANCH" ;;
+  *git/ref/tags/stable*) printf '%s\\n' "$MOCK_REF" ;;
+  *git/tags/*) printf '%s\\n' "$MOCK_TAG" ;;
+  *) exit 1 ;;
+esac
+""", encoding="utf-8")
+	gh.chmod(0o755)
+	env_file = tmp_path / "env"
+	sha = "a" * 40
+	for repo, branch, ref, tag, succeeds in (
+		("shubhodeep1/coding-workflows", {"protected": True, "commit": {"sha": sha}}, {}, {}, True),
+		("shubhodeep1/coding-workflows", {"protected": False, "commit": {"sha": sha}}, {}, {}, False),
+		("consumer/repo", {}, {"object": {"sha": "b" * 40, "type": "tag"}}, {"object": {"sha": sha, "type": "commit"}}, True),
+		("consumer/repo", {}, {"object": {"sha": "b" * 40, "type": "tree"}}, {}, False),
+	):
+		env_file.write_text("", encoding="utf-8")
+		proc = subprocess.run(["bash", "-c", resolve["run"]], cwd=tmp_path, capture_output=True, text=True, env={
+			**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "GH_TOKEN": "test",
+			"GITHUB_ENV": str(env_file), "SECURITY_AUDIT_SOURCE_REPO": repo,
+			"MOCK_BRANCH": json.dumps(branch), "MOCK_REF": json.dumps(ref), "MOCK_TAG": json.dumps(tag),
+		})
+		assert (proc.returncode == 0) == succeeds, proc.stderr
+		assert (f"SECURITY_AUDIT_SUPPORT_SHA={sha}" in env_file.read_text(encoding="utf-8")) == succeeds
 
 
 def test_security_audit_default_branch_followups_carry_no_integration_branch() -> None:
