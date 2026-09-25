@@ -1166,6 +1166,61 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 	return "\n".join(lines) + "\n"
 
 
+_ERROR_LINE_RE = re.compile(r"^\s*(?:::error(?: [^:]*)?::|##\[error\])\s*(?P<msg>\S.*)$")
+_GENERIC_ERROR_RE = re.compile(r"^(?:Process completed with exit code [0-9]+\.?|.*\bAborting\.?)$", re.IGNORECASE)
+_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+	(re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@"), r"\1[redacted]@"),
+	(re.compile(r"([Aa]uthorization:\s*)(?:(?:[Bb]earer|[Bb]asic|[Tt]oken)\s+)?\S+"), r"\1[redacted]"),
+	(re.compile(r"([Bb]earer\s+)\S+"), r"\1[redacted]"),
+	(re.compile(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+"), r"\1[redacted]"),
+	(re.compile(r"(sk-(?:or|ant)-)[A-Za-z0-9_-]+"), r"\1[redacted]"),
+)
+FAILURE_HEADLINE_LIMIT = 300
+
+
+def redact_secrets(text: str) -> str:
+	"""Mask credential shapes before a log line is quoted in a PR comment.
+
+	Mirrors the redaction ``scripts/security_audit.sh`` applies to its log
+	excerpts (URL userinfo, Authorization / Bearer values, GitHub and
+	OpenRouter / Anthropic tokens). Files on the runner are not masked the way
+	the Actions log is, so anything quoted from them goes through here.
+	"""
+	for pattern, replacement in _SECRET_PATTERNS:
+		text = pattern.sub(replacement, text)
+	return text
+
+
+def failure_headline(texts: Iterable[str], limit: int = FAILURE_HEADLINE_LIMIT) -> str:
+	"""Return the first specific ``::error::`` / ``##[error]`` line, or ``""``.
+
+	Generic lines (``Process completed with exit code N``, ``… Aborting.``)
+	are skipped. A ``  - item`` list printed right under the error (for
+	example the out-of-scope paths ``check_resolver_diff.sh`` names) is folded
+	into the line, up to three items. The result is one redacted line.
+	"""
+	for text in texts:
+		lines = sanitize_text(text).split("\n")
+		for index, raw in enumerate(lines):
+			match = _ERROR_LINE_RE.match(raw)
+			if not match:
+				continue
+			message = match.group("msg").strip()
+			if _GENERIC_ERROR_RE.match(message):
+				continue
+			details: list[str] = []
+			for following in lines[index + 1 : index + 4]:
+				item = following.strip()
+				if item.startswith("- ") and not _ERROR_LINE_RE.match(following):
+					details.append(item[2:].strip())
+				else:
+					break
+			if details:
+				message = message.rstrip(":") + ": " + ", ".join(details)
+			return single_line(redact_secrets(message), limit)
+	return ""
+
+
 def _finalize_reason_from_summary_line(path: str) -> str:
 	try:
 		text = Path(path).read_text(encoding="utf-8", errors="replace")
@@ -1478,6 +1533,27 @@ def parse_classification(markdown: str) -> str:
 	return "inconclusive"
 
 
+DETERMINISTIC_FAILURE_REASONS: tuple[str, ...] = ("identical_failure_cap",)
+
+
+def is_deterministic_failure(payload: dict[str, Any], gen: int) -> bool:
+	"""True when the reported failure is known to repeat the same way.
+
+	Either the review/autofix identical-failure cap tripped (the same
+	fingerprint failed several runs in a row on one head), or an earlier heal
+	of this lineage already shipped a fix and the failure came back
+	(``gen > 1``). A retry cannot fix such a failure: PR #4443 failed six times
+	on one fingerprint, and the generation-2 heal (#4448) only added a
+	resolver retry, so the cap tripped again.
+	"""
+	if str(payload.get("failure_reason") or "") in DETERMINISTIC_FAILURE_REASONS:
+		return True
+	try:
+		return int(gen) > 1
+	except (TypeError, ValueError):
+		return False
+
+
 def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any]]) -> list[str]:
 	lines = [f"- **Source repository:** `{payload['source_repo']}`"]
 	kind = payload.get("source_kind")
@@ -1631,7 +1707,17 @@ def compose_issue_body(
 	parts.append("")
 	parts.append("- Keep the change minimal and backward compatible; never rename or remove existing identifiers, env vars, labels, or log prefixes.")
 	parts.append("- Do not disable, skip, or weaken the failing check, guard, or escalation to make the symptom disappear.")
-	parts.append("- If the evidence points to a transient or environmental cause, say so in the plan instead of inventing a code fix.")
+	if is_deterministic_failure(payload, gen):
+		parts.append(
+			"- **This failure is deterministic**: it repeated with the same fingerprint, or it came back after an earlier "
+			"heal of this lineage merged a fix. A retry, backoff, re-run, or longer timeout is not an accepted fix."
+		)
+		parts.append(
+			"- The fix must remove the cause and ship a **regression test that reproduces the failing condition**: it "
+			"fails on the reported head and passes with the fix. Record in the PR that you ran it both ways."
+		)
+	else:
+		parts.append("- If the evidence points to a transient or environmental cause, say so in the plan instead of inventing a code fix.")
 	parts.append("")
 	parts.append(
 		f"_Filed by the workflow failure heal intake. Lineage generation {gen} (cap {max_depth}); "
@@ -1952,6 +2038,17 @@ def _cmd_autofix_failure_fingerprint(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_failure_headline(args: argparse.Namespace) -> int:
+	texts: list[str] = []
+	for path in args.evidence_file or []:
+		try:
+			texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
+		except OSError:
+			continue
+	sys.stdout.write("first_error=" + failure_headline(texts) + "\n")
+	return 0
+
+
 def _cmd_reviewer_failure_evidence(args: argparse.Namespace) -> int:
 	texts: list[str] = []
 	for path in args.log_file or []:
@@ -2051,6 +2148,14 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		linked_heal_issue=heal_fix_branch_issue(args.source_head_branch),
 	)
 	_write_json(decision)
+	return 0
+
+
+def _cmd_is_deterministic(args: argparse.Namespace) -> int:
+	payload = _load_json_file(args.payload_json)
+	if not isinstance(payload, dict):
+		payload = {}
+	sys.stdout.write(("true" if is_deterministic_failure(payload, args.gen) else "false") + "\n")
 	return 0
 
 
@@ -2250,6 +2355,15 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("parse-classification", help="Read the classification token from the diagnosis")
 	p.add_argument("--diagnosis-file", required=True)
 	p.set_defaults(func=_cmd_parse_classification)
+
+	p = sub.add_parser("failure-headline", help="Print first_error= with the first specific error line of the evidence files (redacted)")
+	p.add_argument("--evidence-file", action="append")
+	p.set_defaults(func=_cmd_failure_headline)
+
+	p = sub.add_parser("is-deterministic", help="Print true when the reported failure repeats deterministically")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--gen", type=int, default=1)
+	p.set_defaults(func=_cmd_is_deterministic)
 
 	p = sub.add_parser("compose-issue", help="Write the heal issue title + body files")
 	p.add_argument("--payload-json", required=True)

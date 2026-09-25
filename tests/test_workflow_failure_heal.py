@@ -3076,3 +3076,114 @@ def test_extract_crash_file_on_self_named_script_errors() -> None:
 	assert heal.extract_crash_file("REVIEWER_SLOT_STATE: slot=x") is None
 	# The shell crash line and path-naming error lines still win.
 	assert heal.extract_crash_file("gh_helpers: retry exhausted\n" + EDITOR_GUARD_CRASH_LINE) == "scripts/review_apply_fixes.sh"
+
+
+# --- Deterministic failures and failure headlines (PR #4443 guards) ----------
+
+
+RESOLVER_SCOPE_STDERR = (
+	"Conflict resolver succeeded on attempt 1 (soft validation passed).\n"
+	"::error::Conflict resolver edited files outside the conflicted set:\n"
+	"  - workflow-templates/CLAUDE.md\n"
+	"::error::This usually indicates a hallucinated merge resolution. Aborting.\n"
+	"::error::Conflict resolver output failed validation; skipping [ai-merge-resolve] commit.\n"
+)
+
+
+def test_failure_headline_names_the_first_specific_error() -> None:
+	headline = heal.failure_headline(["##[error]Process completed with exit code 1.\n", RESOLVER_SCOPE_STDERR])
+	assert headline == "Conflict resolver edited files outside the conflicted set: workflow-templates/CLAUDE.md"
+	assert heal.failure_headline(["no errors here\n", "##[error]Process completed with exit code 2."]) == ""
+	assert heal.failure_headline([]) == ""
+
+
+def test_failure_headline_redacts_credentials_and_stays_one_line() -> None:
+	text = "::error::push to https://x-access-token:ghs_abc123@github.com/o/r failed; Authorization: Bearer sk-ant-api03-xyz\nnext\n"
+	headline = heal.failure_headline([text])
+	assert "ghs_abc123" not in headline and "sk-ant-api03-xyz" not in headline
+	assert "[redacted]" in headline and "\n" not in headline
+	assert len(heal.failure_headline(["::error::" + "x" * 1000])) == heal.FAILURE_HEADLINE_LIMIT
+
+
+def test_redact_secrets_patterns() -> None:
+	assert heal.redact_secrets("ghp_abcDEF123 github_pat_11AA_bb") == "ghp_[redacted] github_pat_[redacted]"
+	assert heal.redact_secrets("key sk-or-v1-abc") == "key sk-or-[redacted]"
+	assert heal.redact_secrets("plain text") == "plain text"
+
+
+def test_failure_headline_cli(tmp_path) -> None:
+	evidence = tmp_path / "resolver_stage_stderr.txt"
+	evidence.write_text(RESOLVER_SCOPE_STDERR)
+	result = subprocess.run(
+		[sys.executable, str(REPO_ROOT / "scripts" / "workflow_failure_heal.py"), "failure-headline", "--evidence-file", str(tmp_path / "missing.txt"), "--evidence-file", str(evidence)],
+		capture_output=True,
+		text=True,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+	assert result.returncode == 0
+	assert result.stdout == "first_error=Conflict resolver edited files outside the conflicted set: workflow-templates/CLAUDE.md\n"
+
+
+def test_is_deterministic_failure() -> None:
+	assert heal.is_deterministic_failure({"failure_reason": "identical_failure_cap"}, 1) is True
+	assert heal.is_deterministic_failure({"failure_reason": "editor_empty_noop"}, 2) is True
+	assert heal.is_deterministic_failure({"failure_reason": "editor_empty_noop"}, 1) is False
+	assert heal.is_deterministic_failure({}, "x") is False
+
+
+def test_deterministic_issue_body_forbids_retry_fixes_and_requires_a_regression_test() -> None:
+	payload = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap"))
+	body = heal.compose_issue_body(payload=payload, diagnosis="d", fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch=None, max_depth=3, intake_run_url="u", run_summaries=[])
+	assert "**This failure is deterministic**" in body
+	assert "A retry, backoff, re-run, or longer timeout is not an accepted fix." in body
+	assert "**regression test that reproduces the failing condition**" in body
+	assert "transient or environmental cause" not in body
+	plain = heal.compose_issue_body(payload=heal.validate_payload(_autofix_payload()), diagnosis="d", fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch=None, max_depth=3, intake_run_url="u", run_summaries=[])
+	assert "**This failure is deterministic**" not in plain
+	assert "transient or environmental cause" in plain
+
+
+def test_intake_refuses_transient_for_a_deterministic_failure(tmp_path) -> None:
+	intake = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
+	start = intake.index("# A deterministic failure (the identical-failure cap tripped")
+	end = intake.index("# A self-inflicted token is routed as such only when")
+	block = intake[start:end]
+	diag = tmp_path / "diag.md"
+	payload = tmp_path / "payload.json"
+
+	def run(reason: str, gen: str, classification: str) -> tuple[str, str]:
+		diag.write_text("## Classification\ntransient\n")
+		payload.write_text(json.dumps({"failure_reason": reason}))
+		script = (
+			"set -euo pipefail\nlog() { echo \"WORKFLOW_HEAL $*\"; }\n"
+			f"HEAL_PY={REPO_ROOT / 'scripts' / 'workflow_failure_heal.py'}\n"
+			f"PAYLOAD_FILE={payload}\nDIAG_FILE={diag}\nGEN={gen}\nCLASSIFICATION={classification}\nSOURCE_LABEL=s\nFP=f\n"
+			+ block
+			+ 'echo "RESULT=${CLASSIFICATION}"\n'
+		)
+		out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, check=True).stdout
+		return out.strip().splitlines()[-1], diag.read_text()
+
+	result, text = run("identical_failure_cap", "1", "transient")
+	assert result == "RESULT=inconclusive"
+	assert text.startswith("> **Heal intake note:**") and "a retry is not an accepted fix" in text
+	assert run("editor_empty_noop", "2", "transient")[0] == "RESULT=inconclusive"
+	assert run("editor_empty_noop", "1", "transient")[0] == "RESULT=transient"
+	assert run("identical_failure_cap", "1", "workflow-defect")[0] == "RESULT=workflow-defect"
+
+
+def test_heal_prompt_rule_for_deterministic_failures() -> None:
+	for path in (PROMPT_FILE, REPO_ROOT / "prompts" / "_templates" / "mode-workflow-failure-heal.txt"):
+		text = " ".join(path.read_text(encoding="utf-8").split())
+		assert "is deterministic. Never classify it `transient`, and never propose a retry, backoff, re-run, or longer timeout as the fix" in text, path
+
+
+def test_review_autofix_failure_comment_names_the_failed_step_and_first_error() -> None:
+	wf = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert 'bash "${RESOLVER_SCRIPT}" 2> >(tee -a "${RUNTIME_DIR}/resolver_stage_stderr.txt" >&2)' in wf
+	assert '--evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt"' in wf
+	assert "select(.runner_name == env.RUNNER_NAME) | .steps[] | select(.conclusion == \"failure\") | .name" in wf
+	assert 'echo "AUTOFIX_FAILED_STEP=${failed_step}" >> "$GITHUB_ENV"' in wf
+	assert 'echo "AUTOFIX_FAILURE_FIRST_ERROR=${first_error}" >> "$GITHUB_ENV"' in wf
+	assert '"**Failed step:** \\`${AUTOFIX_FAILED_STEP//\\`/\\\'}\\`"' in wf
+	assert '"**First error:** \\`${AUTOFIX_FAILURE_FIRST_ERROR//\\`/\\\'}\\`"' in wf
