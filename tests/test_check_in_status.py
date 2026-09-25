@@ -184,6 +184,162 @@ def test_empty_head_sha_exits_2_with_error(monkeypatch, capsys):
 	assert code == 2 and out["done"] is False and out["error"]
 
 
+FIXER_HEAD = "a" * 40
+FIXER_REF = "claude/implement-plan-demo-phase-1"
+
+
+def _fixer_pr(**overrides):
+	return _pr(head={"sha": FIXER_HEAD, "ref": FIXER_REF}, **overrides)
+
+
+def _comment(body, association="OWNER"):
+	return {"body": body, "author_association": association}
+
+
+def _handoff(kind="findings", head=FIXER_HEAD, round_number=1):
+	return f"## Review round\n<!-- ai:claude-fixer-handoff:v1 kind={kind} head={head} round={round_number} -->"
+
+
+def _verdict(head=FIXER_HEAD):
+	return f"<!-- ai:claude-fixer-verdict:v1 head={head} -->\nNothing left to fix."
+
+
+def _stub_fixer(monkeypatch, responses, comments):
+	calls = _stub(monkeypatch, responses)
+
+	def fake_list(path):
+		calls.append(path)
+		assert path == "repos/o/r/issues/7/comments"
+		return comments
+
+	monkeypatch.setattr(checker, "gh_api_list", fake_list)
+	return calls
+
+
+def test_fixer_findings_handoff_for_current_head_is_a_review_round(monkeypatch, capsys):
+	calls = _stub_fixer(monkeypatch, {"repos/o/r/pulls/7": _fixer_pr()}, [_comment(_handoff(round_number=2))])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "review-round" and out["round"] == 2
+	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments"]
+
+
+def test_fixer_conflict_handoff_is_a_conflict_round(monkeypatch, capsys):
+	_stub_fixer(monkeypatch, {"repos/o/r/pulls/7": _fixer_pr()}, [_comment(_handoff(kind="conflict"))])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "conflict"
+
+
+def test_fixer_handoff_answered_by_verdict_keeps_waiting(monkeypatch, capsys):
+	_stub_fixer(
+		monkeypatch,
+		{
+			"repos/o/r/pulls/7": _fixer_pr(),
+			f"repos/o/r/commits/{FIXER_HEAD}/check-runs?per_page=100&page=1": {"check_runs": []},
+		},
+		[_comment(_handoff()), _comment(_verdict())],
+	)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False
+
+
+def test_fixer_handoff_instruction_cannot_answer_its_own_round(monkeypatch, capsys):
+	body = _handoff() + "\nReply with `" + _verdict().splitlines()[0] + "` when done."
+	_stub_fixer(monkeypatch, {"repos/o/r/pulls/7": _fixer_pr()}, [_comment(body)])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "review-round"
+
+
+def test_fixer_new_handoff_on_same_head_supersedes_old_verdict(monkeypatch, capsys):
+	_stub_fixer(monkeypatch, {"repos/o/r/pulls/7": _fixer_pr()}, [
+		_comment(_handoff()), _comment(_verdict()), _comment(_handoff(round_number=2)),
+	])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "review-round" and out["round"] == 2
+
+
+def test_fixer_handoff_for_an_older_head_is_ignored(monkeypatch, capsys):
+	_stub_fixer(
+		monkeypatch,
+		{
+			"repos/o/r/pulls/7": _fixer_pr(),
+			f"repos/o/r/commits/{FIXER_HEAD}/check-runs?per_page=100&page=1": {"check_runs": []},
+		},
+		[_comment(_handoff(head="b" * 40))],
+	)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False
+
+
+def test_fixer_handoff_from_untrusted_author_is_ignored(monkeypatch, capsys):
+	_stub_fixer(
+		monkeypatch,
+		{
+			"repos/o/r/pulls/7": _fixer_pr(),
+			f"repos/o/r/commits/{FIXER_HEAD}/check-runs?per_page=100&page=1": {"check_runs": []},
+		},
+		[_comment(_handoff(), association="NONE")],
+	)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False
+
+
+def test_fixer_conflict_without_active_run_is_immediate(monkeypatch, capsys):
+	_stub_fixer(
+		monkeypatch,
+		{
+			"repos/o/r/pulls/7": _fixer_pr(mergeable_state="dirty"),
+			f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1": {"total_count": 0},
+			f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1": {"total_count": 0},
+		},
+		[_comment(_handoff()), _comment(_verdict())],
+	)
+	_, out = _run(["--pr", "7"], capsys)
+	# No 6-hour wait and no head-commit read: a verdict never hides a conflict.
+	assert out["done"] is True and out["state"] == "conflict"
+
+
+def test_fixer_conflict_with_active_run_waits(monkeypatch, capsys):
+	_stub_fixer(
+		monkeypatch,
+		{
+			"repos/o/r/pulls/7": _fixer_pr(mergeable_state="dirty"),
+			f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1": {"total_count": 1},
+			f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1": {"total_count": 0},
+		},
+		[],
+	)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and "still queued or running" in out["reason"]
+
+
+def test_fixer_blocking_label_still_wins(monkeypatch, capsys):
+	_stub_fixer(monkeypatch, {"repos/o/r/pulls/7": _fixer_pr(labels=[{"name": "ai:review-blocked"}])}, [_comment(_handoff())])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "blocked"
+
+
+def test_non_fixer_pr_never_reads_comments(monkeypatch, capsys):
+	calls = _stub(monkeypatch, {
+		"repos/o/r/pulls/7": _pr(),
+		"repos/o/r/commits/abc/check-runs?per_page=100&page=1": {"check_runs": []},
+	})
+	monkeypatch.setattr(checker, "gh_api_list", lambda path: pytest.fail("comments read for a non-fixer PR"))
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and len(calls) == 2
+
+
+def test_gh_api_list_paginates_and_rejects_objects(monkeypatch):
+	pages = {
+		"repos/o/r/issues/7/comments?per_page=100&page=1": [{"body": str(i)} for i in range(100)],
+		"repos/o/r/issues/7/comments?per_page=100&page=2": [{"body": "last"}],
+	}
+	monkeypatch.setattr(checker, "_gh_api_json", lambda path: pages[path])
+	assert len(checker.gh_api_list("repos/o/r/issues/7/comments")) == 101
+	monkeypatch.setattr(checker, "_gh_api_json", lambda path: {"message": "x"})
+	with pytest.raises(checker.ReadError, match="non-array page"):
+		checker.gh_api_list("repos/o/r/issues/7/comments")
+
+
 def test_run_completed_and_pending(monkeypatch, capsys):
 	for conclusion in (
 		"failure", "cancelled", "timed_out", "action_required",
