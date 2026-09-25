@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `e8ee6bedab91f28004bf5c45ff6abf2e2b993726`. No integration branch was specified, so there is no known ref mismatch.\n\nScope-mode: Selective Expansion\nReuse-audit: extends the protected-path check in `.github/workflows/review_autofix.yml`\nScope-mode justification: Protecting only the two filenames in the exploit would leave nested Dockerfiles, Compose variants, renamed files, and other executable build/test configuration on the same bypass path. Extend the existing check for those cases rather than introduce another classifier. This is a small, interface-free completeness increment; under \u00a76, Security and Correctness & safety take priority over Speed.\n\n## Automation and wiring\n- Extend the existing **Evaluate review gate** step in `.github/workflows/review_autofix.yml`; its current PR-triggered and dispatched runs provide the entry point. No new script, scheduler, supervisor, database operation, or future-removal registry entry is needed.\n\n## Files likely to change\n- `.github/workflows/review_autofix.yml` \u2014 extend protected-path matching before deterministic-skip authorization.\n- `tests/test_review_autofix_review_pipeline_contract.py` \u2014 add regression cases to its existing gate-contract tests.\n- `README.md` \u2014 update the documented deterministic-skip exclusions.\n\n## Functions or modules to implement\n- In the existing loop over each PR filename **and rename source**, protect Dockerfile and Compose naming variants at any depth and case; conventional build/test entry points; and otherwise unmatched executable-configuration filename/extension patterns. Keep the existing `PROTECTED_SKIP_SUPPRESSED` result and final gate condition. Do not make protection depend on `AGENTS_MD_MATERIALITY_ENABLED`.\n- Preserve the single, completeness-checked PR-files fetch. Do not add a GitHub API call or change the materiality advisory classifier to authorize skips.\n\n## Data structures affected\n- None persisted. The existing per-run protected-path flag changes which path the gate selects.\n\n## API/interface changes\n- No new inputs or API calls. A matching PR routes to semantic review rather than `deterministic-skip-merge`; existing log keys and head-bound merge behavior remain unchanged.\n\n## Decisions\n### D1 \u2014 Protect executable configuration in the existing gate\n- **Chosen:** Expand its case-insensitive path rules, including nested paths and both sides of renames, and retain fail-closed handling of incomplete file lists.\n- **Alternatives considered:** Add only root `Dockerfile` and `docker-compose.yml`; rely on the optional materiality advisory; add a separate classifier.\n- **Why:** The first two leave bypasses, while a separate classifier duplicates an authorization decision already made in this gate.\n\n## Security considerations\n- **Trust boundary:** PR-controlled filenames determine whether unreviewed changes may reach auto-merge. Validate and inspect the complete existing `/pulls/{n}/files` result before authorizing either skip branch.\n- **Authorization:** No new endpoint or privilege is introduced. Protected matches must require semantic review even when materiality checks are disabled.\n- **Abuse cases:** Cover a tiny root or nested Dockerfile/Compose edit, case variants, a rename *from* a protected name, executable configuration placed under `docs/`, and a small change to a build/test entry point. An incomplete or malformed files response must continue to prevent deterministic skip.\n\n## Risks and edge cases\n- Filename-only rules cannot prove that an arbitrarily named file is executable. Match broad configuration patterns conservatively and document the remaining naming limitation; do not claim content inspection the gate does not perform.\n- Avoid treating ordinary documentation as executable merely because it is under `docs/`; conversely, the `docs/**` doc-only rule must not override a protected executable filename.\n- **Issue/codebase conflict:** The cited line is in the gate area, but protection is implemented by the existing filename loop, not the materiality classifier. The reported Dockerfile/Compose gap is present on this planning ref.\n\n## Testing considerations\n- Exercise the gate\u2019s protected-path logic with root/nested Dockerfile and Compose variants, build/test entry points, generic configuration, mixed case, `docs/` placement, and rename-source-only matches. Include benign documentation and small non-configuration changes as negative cases.\n- Assert protected matches suppress both doc-only and small-diff skips, independently of materiality; retain assertions for one PR-files lookup and the final protected-path condition.\n- Run the existing review-pipeline contract test and workflow-size guard. The workflow is currently 445,930 bytes; keep the result below 480,000 bytes. Use the repository\u2019s pinned CI environment for any toolchain-dependent validation.\n\nPre-execution self-check: The named files and existing gate were inspected; no required scalar input or new external API contract is missing. No repository files were changed.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fa7d9558e491c4ed01344d51a11bde0996d262c0fa0ceb40a31d968203d2ae3b",
+  "lineage": {
+    "issue_number": 4454,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36111421060",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36111421060",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4454"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925081618_72f3ba76bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4454,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36111421060"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4454",
+  "timestamps": {
+    "created_at": "2026-09-25T08:16:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
