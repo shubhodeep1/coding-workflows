@@ -44,7 +44,6 @@ set -euo pipefail
 if [ -n "${WORKSPACE_PATH:-}" ]; then
   cd "${WORKSPACE_PATH}"
 fi
-
 stage_resolver_touched_path_or_fail() {
   local resolver_staging_path="$1"
   local resolver_staging_exit_code=0

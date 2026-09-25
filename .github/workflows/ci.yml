@@ -699,6 +699,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
 
+      - name: Review autofix Claude-fixer mode and validate target_ref contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_claude_fixer_mode.py tests/test_validate_target_ref_input.py
+
       - name: Review consolidator reject-verifier contract test
         run: |
           set -euo pipefail

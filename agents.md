@@ -64,6 +64,25 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on PRs whose
+   head ref starts with `claude/implement-plan-` the reviewer panel runs as
+   usual, but the GPT editor, conflict resolver, push / re-trigger tail and
+   review-blocked judge are skipped. `scripts/review_autofix_step_claude_fixer_handoff.sh`
+   posts the consensus ledger (or the pre-review conflict) and an
+   `<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->`
+   comment for the `/implement-plan-claude` session, which fixes the round in
+   one `[claude-autofix]` commit (counted toward `MAX_AUTOFIX_ITERATIONS`) or
+   answers with `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->` and a
+   `claude_fixer_converged_head=<sha>` dispatch; the gate verifies both
+   markers for that exact head (hand-off by the `GH_PAT` identity, verdict by
+   an OWNER / MEMBER / COLLABORATOR) and the `claude-fixer-auto-merge` job
+   enables auto-merge. Zero ledger entries and no failing check auto-merge in
+   the run; at the cap the PR itself is labelled `ai:review-blocked`; dispatch
+   re-runs on a head that already has a hand-off are skipped
+   (`claude_fixer_awaiting_session`). `[claude-intervention]` and
+   `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`
+   and `[ai-merge-resolve]`. The consolidator / floor stages live inside the
+   editor step, so they do not run in this mode.
 8. **conflict resolver** (`prompts/conflict-resolver.txt`,
    `integration-sync-conflict-resolver.txt`) — merge-conflict resolution
    inside autofix. In consumer repos the resolver, the review-blocked judge
@@ -416,6 +435,15 @@ a new value, add it to the appropriate overrides file with a
   failure-path reporter skips when support staging did not complete or its
   optional Python helper is absent; neither case executes `scripts/` from
   the PR worktree.
+- `internal-review.yml` itself must not forward a `with:` input that
+  `review_autofix.yml` on `main` does not define yet: GitHub validates the
+  call against `main`'s file, so every review run on the PR adding the input
+  ends as a zero-job `startup_failure` (runs 36088124636 through 36095647423
+  on PR #4438, `input "claude_fixer_converged_head" is not defined`). Add the
+  input to `review_autofix.yml` (and the `@stable`-pinned consumer
+  `ai-review.yml`, which moves in lockstep with the release), and in this
+  repo dispatch `review_autofix.yml` directly for it, as
+  `/implement-plan-claude` does for `claude_fixer_converged_head`.
 - Consequence for contributors and the unattended editor: a helper on the PR
   branch may not depend on a new workflow export until that export is on
   `main`. New variables a staged helper reads must default inside the helper
@@ -644,21 +672,31 @@ model, not the command file. A file that starts with `---` would be parsed
 as frontmatter, so the command body must remain the first line.
 
 One deliberate exception that is **not** a command pin: `/implement-plan-claude`
-waits for each phase PR to merge through a 3-hourly check-in (its **Check-in
-Loop** section). The checker is a Sonnet session started with
-`create_session` (`model: claude-sonnet-5`) that runs
-`.claude/scripts/check_in_status.py`, re-arms itself with `send_later`, and,
-when the wait is over, starts the next **stage session** on the model the
-operator picked. Every stage (a phase, a blocked-PR fix, the conformance
+waits for each review round and each merge through an hourly check-in (its
+**Check-in Loop** section). The checker is a low-effort Sonnet session:
+`create_session` (`model: claude-sonnet-5`) with the prompt `/effort low`
+alone, then a one-shot `create_trigger` into it carrying the instructions,
+because `/effort low` is not applied when more text follows it in one prompt
+(CLAUDE.md §26.B). It runs `.claude/scripts/check_in_status.py`, re-arms
+itself with `send_later` every 60 minutes, and, when the wait is over, starts
+the next **stage session** on the model the operator picked. Every stage (a
+phase, a review round, a blocked-PR fix, the conformance
 audit (`/verify-activation — scope conformance`, run after the last phase
 and before the security pass, and again after any Claude-written
-validation fix), a security or validation read, the completion PR, a
-`/verify-activation — scope activation` cycle, the `/deploy-activate`
-hand-off) runs in its own fresh session titled
+validation fix), a security or validation read, the completion PR, the
+final merge, a `/verify-activation — scope activation` cycle, the
+`/deploy-activate` hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
 unless it is waiting on the user; the command's session is never woken to
-continue, because a 3-hour gap outlives the prompt cache and a wake would
-re-send the whole history at full price. Routines created with
+continue, because the gap between check-ins outlives the prompt cache and a
+wake would re-send the whole history at full price. New projects work on a
+project branch `claude/implement-plan-<slug>` with a draft final PR into the
+default branch (the orchestrator's `orchestrator/project-<N>` equivalent):
+phase and fix PRs target it, security (`security-audit.yml` `ref` input) and
+validation (`validate.yml` `target_ref` input) run against it, and the final
+PR is marked ready, reviewed as a whole, and auto-merged only after every
+stage passed. Projects whose log predates the project branch finish straight
+on the default branch. Routines created with
 `create_new_session_on_fire` are not used: their sessions get no MCP tools
 and no repository, so they cannot report. Stage sessions and checkers need Auto mode (the
 command asks for it in step 0): outside it the claude-code-remote write
@@ -685,10 +723,12 @@ carried frontmatter.
 
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
 pushes a branch and a pull request exists for it, the session starts a
-Sonnet checker session (`create_session`, titled `PR #<n> status check-in`)
-whose prompt carries the next steps for each terminal state. The checker
+low-effort Sonnet checker session (`create_session`, titled
+`PR #<n> status check-in`, prompt `/effort low` alone) and delivers its
+instructions, including the next steps for each terminal state, through a
+one-shot `create_trigger` into that session two minutes later. The checker
 runs `.claude/scripts/check_in_status.py --terminal-only` (one REST read),
-re-arms itself with `send_later` every 180 minutes while the PR is open, and
+re-arms itself with `send_later` every 60 minutes while the PR is open, and
 once it merges or closes writes the report in its own session, renames
 itself `PR #<n> merged — …`, and sends one `PushNotification`. The pushing
 session is never woken. PRs opened by `/implement-plan-claude` are covered
@@ -1413,6 +1453,12 @@ and shipped:
 - `sandbox_namespace_setup_failed`
 - `opencode_agent_failure`
 - `MODEL_CATALOG_BACKFILL`
+- `AUTOFIX_GATE_CLAUDE_FIXER`
+- `AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED`
+- `CLAUDE_FIXER_HANDOFF`
+- `CLAUDE_FIXER_REVIEW_BLOCKED`
+- `CLAUDE_FIXER_AUTO_MERGE`
+- `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1601,6 +1647,12 @@ LOG_PREFIX.name=sandbox_private_tmp_path
 LOG_PREFIX.name=sandbox_namespace_setup_failed
 LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
+LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
+LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
+LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
+LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
+LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
+LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---
 
@@ -1774,6 +1826,7 @@ depend on it.
 ## Integration-sync verifier + bootstrap contract
 
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
+- `.github/workflows/review_autofix.yml` stages `verify_integration_fingerprints.py`, `review_conflict_prepare.sh`, `review_conflict_resolve.sh`, `review_collect_pr_metadata.sh`, `files_touched_scope_guard.py`, `render_prompt.py`, `opencode_helpers.sh`, and `write_opencode_config.sh` through `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` (main snapshot first, branch fallback). The metadata collector and scope guard stay on the same revision as the commit producers that consume their artifact and CLI, including a workflow-level compatibility overwrite when an in-flight branch carries an older staging helper. `render_prompt.py` is main-primary so the newest renderer (and any bundled contract/reference assets) reaches an in-flight PR whose branch predates the fix. The reviewer/editor prompt bodies embed arbitrary PR-diff + comment text that can carry literal `{{...}}` / `{%...%}` tokens, so their post-embed render calls now pass `--skip-syntax-validation` (opt-in via `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` in `render_prompt.sh`) — the strict `validate_supported_template_syntax` gate is skipped for those already-assembled bodies while placeholder substitution still runs. This removes the false-positive class at the source (an embedded diff token no longer hard-fails the whole reviewer/editor step, so a docs/diff carrying template syntax — run 28936678508 — or the earlier lone-`${{` case, PR #3592 / #3593 / run 28888093412, cannot wedge the review). The gate stays strict for every static template render (e.g. the editor continuation prompt `prompts/mode-review-apply-fixes-continuation.txt`), so genuine prompt-authoring errors are still caught. `render_prompt.py` stays fail-open — when the backend is absent from both refs, bootstrap preserves the ref's bundled bash renderer. `OPTIONAL_BOOTSTRAP_SCRIPTS` is reserved for genuinely optional helpers only.
 - `.github/workflows/review_autofix.yml` stages required and main-primary helpers from the verified reusable-workflow SHA; PR-head copies are review data, not runtime code. `render_prompt.py`, `review_conflict_resolve.sh` and their dependencies ship with that same workflow commit. Embedded PR-diff template syntax is still handled by `render_prompt.sh` with `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` after assembly, while static templates retain strict validation. Optional support missing from that commit skips the feature; required support fails closed. The model catalog comes from the same commit as the reviewer roster, never from a PR branch or a separately resolved main snapshot.
 - `scripts/review_merge_train.sh` is staged through `REQUIRED_BOOTSTRAP_SCRIPTS` for `review_autofix.yml` and copied best-effort (with `label_helpers.sh`) next to `gh_helpers.sh` by `orchestrate_poll.yml` and `cancel_on_pr_close.yml`, which do not run the full support staging. Both callers treat a missing copy as "skip this tick" so an older `SCRIPT_REF` keeps polling; its own API budget is documented in the script header (CLAUDE.md §15).
 - `scripts/review_conflict_resolve.sh` persists one `AUTOFIX_RESOLVER_RETRY_STATE_V1` PR-body block per final PR/head SHA, keyed by normalized fingerprint failure signature. `RESOLVER_ESCAPE_THRESHOLD_N` is the per-tier same-head, same-signature step size: multiples advance `strict` → `ratio` → `count_only` → `warn_only`, emit `FINGERPRINT_TIER_DOWNGRADED_V1`, and after the next multiple the script labels the **final PR issue** `ai:resolver-escalated` and records `escalated_at` for poller-side suppression / branch-rebuild gating.

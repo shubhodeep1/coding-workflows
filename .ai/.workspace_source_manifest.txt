@@ -142,6 +142,7 @@ analysis/workflow-optimization-2026-09-24-2.md
 analysis/workflow-optimization-2026-09-24.md
 analysis/workflow-optimization-2026-09-25.md
 changelog.d/.gitkeep
+changelog.d/3576-security-audit-uncapped-followups.md
 changelog.d/4139-security-agent-isolation.md
 changelog.d/4139-security-pass-cycle-3-isolation.md
 changelog.d/4139-security-pass-hardening.md
@@ -168,6 +169,8 @@ changelog.d/4400-clarify-isolation.md
 changelog.d/4428-workflow-heal-prompt-parity.md
 changelog.d/4431-protect-deterministic-review-skip.md
 changelog.d/4433-python-startup-boundaries.md
+changelog.d/4438-implement-plan-claude-fixer-project-branch.md
+changelog.d/4439-audit-plans-implement-plan-claude-gate.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
@@ -210,6 +213,7 @@ docs/implement-plan/heal-deterministic-autofix-failures.md
 docs/plans/apply-ai-tools-learnings-plan.md
 docs/plans/claude-code-tooling-learnings-plan.md
 docs/plans/complete-squad-improvements-plan.md
+docs/plans/confine-human-steps-to-activation-plan.md
 docs/plans/gsd-inspired-improvements-plan.md
 docs/plans/gstack-learnings-plan.md
 docs/plans/heal-deterministic-autofix-failures-plan.md
@@ -470,6 +474,7 @@ scripts/resolve_integration_ref.sh
 scripts/review_agents_md_materiality.sh
 scripts/review_append_iteration_summary.sh
 scripts/review_apply_fixes.sh
+scripts/review_autofix_step_claude_fixer_handoff.sh
 scripts/review_autofix_step_detect_merge_conflicts.sh
 scripts/review_autofix_step_editor_uncommitted_changes.sh
 scripts/review_autofix_step_iteration_summary.sh
@@ -664,6 +669,7 @@ tests/test_assemble_prompt.py
 tests/test_audit_consumer_drift.py
 tests/test_audit_gate_identity.py
 tests/test_audit_gate_template_atomicity.py
+tests/test_audit_plans_command.py
 tests/test_auto_release_stable.py
 tests/test_blocker_check.py
 tests/test_branch_rebuild.py
@@ -777,6 +783,7 @@ tests/test_repo_root_helper.py
 tests/test_retrigger_inflight_direct_fallback.py
 tests/test_review_apply_fixes_reviewer_manifest_validation.py
 tests/test_review_apply_fixes_smoke_deterministic.py
+tests/test_review_autofix_claude_fixer_mode.py
 tests/test_review_autofix_editor_noop_cascade_contract.py
 tests/test_review_autofix_failure_log_upload.py
 tests/test_review_autofix_force_tick_repository_env.py
@@ -867,6 +874,7 @@ tests/test_validate_process_fixup_labels.py
 tests/test_validate_process_render_recovery.py
 tests/test_validate_process_template_mode.py
 tests/test_validate_semble_contract.py
+tests/test_validate_target_ref_input.py
 tests/test_validate_workflow_validate_bootstrap.py
 tests/test_validation_discovery_bootstrap.py
 tests/test_validation_refresh_runner.py

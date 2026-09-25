@@ -48,6 +48,13 @@ def _section(start_marker: str, end_marker: str) -> str:
     end = wf.find(end_marker, start)
     assert end != -1, f"Expected section end marker after {start_marker!r}: {end_marker!r}"
     section = wf[start:end]
+    for step_name, script_name in (
+        ("Pre-review deterministic merge-topology gate", "review_autofix_step_merge_topology_gate.sh"),
+        ("Detect merge conflicts", "review_autofix_step_detect_merge_conflicts.sh"),
+    ):
+        if start_marker == f"- name: {step_name}":
+            assert f'REVIEW_AUTOFIX_STEP_SCRIPT="${{SUPPORT_SCRIPTS_DIR:-}}/{script_name}"' in REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
+            return section
     return section
 
 

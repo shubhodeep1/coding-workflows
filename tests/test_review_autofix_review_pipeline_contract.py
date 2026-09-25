@@ -3141,7 +3141,7 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 		assert security_sensitive_support_file in main_primary_bootstrap_line, main_primary_bootstrap_line
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"' in block
 	stage_block = _step_block("Stage workflow support files")
-	assert 'security_sensitive_support_root=".codex-workflow-src-main"' in stage_block
+	assert 'security_sensitive_support_root=".codex-workflow-src"' in stage_block
 	assert 'security_sensitive_support_root=".codex-workflow-src"' in stage_block
 	assert stage_block.index('if [ ! -f "${security_sensitive_support_src}" ]; then') < stage_block.index('install -m 0755 \\')
 	for security_sensitive_support_file in (
@@ -5187,7 +5187,8 @@ def test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain() -> 
 
 def _review_pipeline_summary_contract_block() -> str:
 	step_block = _step_block("Append review pipeline iteration summary")
-	assert 'review_autofix_step_iteration_summary.sh' in WORKFLOW.read_text(encoding="utf-8")
+	assert '### Review Pipeline — Iteration ${iteration_label}' in step_block
+	assert 'review_autofix_step_iteration_summary.sh' in WORKFLOW.read_text(encoding='utf-8')
 	return step_block
 
 
@@ -7247,7 +7248,7 @@ def test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop() -> None
 	start = text.index("for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do")
 	loop = text[start:text.index("\ndone\n", start)]
 	assert 'main_primary_bootstrap_root=".codex-workflow-src"' in text
-	assert 'src="${main_primary_bootstrap_root}/scripts/${f}"' in loop
+	assert 'src=".codex-workflow-src/scripts/${f}"' in loop
 	assert '.codex-workflow-src-main' not in loop
 
 

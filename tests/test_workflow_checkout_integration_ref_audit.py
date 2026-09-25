@@ -108,14 +108,22 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 			checkout_resolver_step = "- name: Resolve checkout ref"
 			checkout_resolver_id = "id: checkout_ref"
 		else:
-			checkout_ref = "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+			# validate.yml also accepts an explicit `target_ref` input
+			# (/implement-plan-claude project branches), which wins over the
+			# tracking issue's integration branch.
+			ref_expression = (
+				"inputs.target_ref || steps.refctx.outputs.ref || github.event.repository.default_branch"
+				if workflow_name == "validate.yml"
+				else "steps.refctx.outputs.ref || github.event.repository.default_branch"
+			)
+			checkout_ref = f"ref: ${{{{ {ref_expression} }}}}"
 			resolved_ref_name = {
 				"clarify.yml": "CLARIFY_RESOLVED_REF",
 				"orchestrate_clarify_respond.yml": "ORCHESTRATE_CLARIFY_RESOLVED_REF",
 				"plan.yml": "PLAN_RESOLVED_REF",
 				"validate.yml": "VALIDATE_RESOLVED_REF",
 			}[workflow_name]
-			resolved_ref_env = f"{resolved_ref_name}: ${{{{ steps.refctx.outputs.ref || github.event.repository.default_branch }}}}"
+			resolved_ref_env = f"{resolved_ref_name}: ${{{{ {ref_expression} }}}}"
 			resolved_ref_log = f'echo "Resolved ref: ${{{resolved_ref_name}}}"'
 			unsafe_resolved_ref_log = "echo \"Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
 			resolved_base_env = ""
