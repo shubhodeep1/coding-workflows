@@ -649,16 +649,23 @@ Loop** section). The checker is a Sonnet session started with
 `create_session` (`model: claude-sonnet-5`) that runs
 `.claude/scripts/check_in_status.py`, re-arms itself with `send_later`, and,
 when the wait is over, starts the next **stage session** on the model the
-operator picked. Every stage (a phase, a blocked-PR fix, the conformance
+operator picked. Every stage (a phase, the conformance
 audit (`/verify-activation — scope conformance`, run after the last phase
 and before the security pass, and again after any Claude-written
 validation fix), a security or validation read, the completion PR, a
 `/verify-activation — scope activation` cycle, the `/deploy-activate`
 hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
-unless it is waiting on the user; the command's session is never woken to
+unless it is waiting on the user; a finished stage session is not woken to
 continue, because a 3-hour gap outlives the prompt cache and a wake would
-re-send the whole history at full price. Routines created with
+re-send the whole history at full price. The one exception is the
+**hand-back**: when a PR the chain waits on is blocked, closed, or stuck,
+the checker fires a poke-only Routine (`create_trigger` with no schedule,
+bound to the stage session that opened the PR; `fire_trigger` with the
+verdict) so that session runs the blocked-PR fix and writes any
+action-needed report itself. Merged PRs, finished runs, and resolved issue
+lists still start a fresh stage session, and a failed hand-back falls back
+to a fresh `… — blocked PR` stage session. Routines created with
 `create_new_session_on_fire` are not used: their sessions get no MCP tools
 and no repository, so they cannot report. Stage sessions and checkers need Auto mode (the
 command asks for it in step 0): outside it the claude-code-remote write
@@ -686,12 +693,24 @@ carried frontmatter.
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
 pushes a branch and a pull request exists for it, the session starts a
 Sonnet checker session (`create_session`, titled `PR #<n> status check-in`)
-whose prompt carries the next steps for each terminal state. The checker
-runs `.claude/scripts/check_in_status.py --terminal-only` (one REST read),
-re-arms itself with `send_later` every 180 minutes while the PR is open, and
-once it merges or closes writes the report in its own session, renames
-itself `PR #<n> merged — …`, and sends one `PushNotification`. The pushing
-session is never woken. PRs opened by `/implement-plan-claude` are covered
+and, before it, a poke-only **hand-back Routine** bound to itself
+(`create_trigger` with no `cron_expression`, `run_once_at`, or
+`persistent_session_id`). The checker runs
+`.claude/scripts/check_in_status.py --terminal-only` (one REST read) and
+re-arms itself with `send_later` every 180 minutes while the PR is open.
+Once the PR merges or closes it calls `fire_trigger` on the hand-back
+Routine with the verdict, renames itself
+`PR #<n> <merged | closed> — handed to <session id>`, and stops. The
+pushing session, woken exactly once, writes the action-needed report
+because it holds the context, deletes the Routine, archives the checker,
+renames itself `PR #<n> merged — …`, and sends one `PushNotification`. Only
+if the hand-back fails does the checker write the report itself, from the
+fallback next steps in its prompt, with ` (pushing session unreachable)` in
+its title. A failed hand-back is not always an error: when the bound session
+is archived, `fire_trigger` succeeds but starts a fresh, context-less
+session (verified 2026-09-25), so the checker compares the `session_id` the
+call returns with the pushing session's id and archives the stray session
+on a mismatch. PRs opened by `/implement-plan-claude` are covered
 by that command's own checker. Without `create_session` the session falls
 back to a `send_later` self check-in with a Sonnet subagent doing the read.
 It never handles CI, reviews, comments, or conflicts; that stays a direct

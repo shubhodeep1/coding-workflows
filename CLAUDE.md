@@ -1529,10 +1529,12 @@ stall recovery — those keep their own policies.
 After an interactive Claude Code session pushes work and a pull request
 exists for it, the session **arms a 3-hourly status check-in for that pull
 request** and keeps it armed until the PR is terminal (merged, or closed
-without merging). The check-in runs in a small Sonnet checker session,
-reads the PR's state and nothing else, and when the PR is terminal reports
-the next steps, or says the pushing session can be closed because there
-are none. This section applies in this repo
+without merging). The check-in runs in a small Sonnet checker session
+that reads the PR's state and nothing else. When the PR is terminal the
+checker hands the verdict back to the pushing session, which still holds
+the context, and that session writes the action-needed report: the next
+steps, or that it can be closed because there are none. This section
+applies in this repo
 and in every consumer repo that receives this file via the `@stable` sync.
 
 The check-in is the scheduled self check-in §25.C allows, not the PR
@@ -1560,35 +1562,51 @@ CI or review events, and never touches the PR. §25 and its
 
 ### B) How to arm
 
-Waking the session that pushed costs its whole conversation on every
-check, and a 3-hour gap outlives the prompt cache. The check-in therefore
-runs in its own small **Sonnet checker session**, and the pushing session is
-never woken:
+Waking the session that pushed costs its whole conversation, and a 3-hour
+gap outlives the prompt cache, so the 3-hourly reads run in a small
+**Sonnet checker session** and never wake the pushing session. The pushing
+session is woken exactly once, when the PR is terminal, because the report
+(§26.D) needs the context only it holds:
 
-1. Call `create_session` (Claude Code Remote MCP server) with
-   `source_url` = the repository, `model: claude-sonnet-5`,
-   `permission_mode` = this session's mode, `title` =
-   `PR #<n> status check-in`, and a standalone prompt that names the
-   repository, the PR number and URL, the §26.C steps, and the **next
-   steps for each terminal state**, written now by the pushing session,
-   which still has the context: what remains if the PR merges (follow-up
-   work, a release or consumer sync it waits on, an action the user must
-   take, or "none — the pushing session can be closed"), and what to ask
-   if it is closed without merging.
-2. Report the checker's session id in this session's reply.
+1. Create the **hand-back Routine**: `create_trigger` (Claude Code Remote
+   MCP server) with no `cron_expression`, no `run_once_at`, and no
+   `persistent_session_id`, which makes a poke-only Routine bound to this
+   session that never fires on its own; `name` =
+   `PR #<n> hand-back`, `initiation: own_followup`, and `prompt` =
+   `CLAUDE.md §26 hand-back for PR #<n> (<PR URL>) in <owner>/<repo>: the
+   Sonnet checker observed a terminal state; its verdict follows. Continue
+   with CLAUDE.md §26.D in this session. If this session has no earlier
+   turns about that PR, it is a stray session the Routine started because
+   the pushing session was archived: end the turn without acting.`
+2. Call `create_session` with `source_url` = the repository,
+   `model: claude-sonnet-5`, `permission_mode` = this session's mode,
+   `title` = `PR #<n> status check-in`, and a standalone prompt that names
+   the repository, the PR number and URL, the §26.C steps, the hand-back
+   trigger id, this session's id (Bash:
+   `echo "session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}"`), and
+   **fallback next steps** for each terminal state, written now while the
+   context is at hand: what remains if the PR merges (follow-up work, a
+   release or consumer sync it waits on, an action the user must take, or
+   "none — the pushing session can be closed"), and what to ask if it is
+   closed without merging. The checker uses them only when the hand-back
+   fails (§26.C step 4).
+3. Report the checker's session id and the hand-back trigger id in this
+   session's reply.
 
 A session started by a Routine with `create_new_session_on_fire` has no
 MCP tools and no repository, so it cannot run the check; `create_session`
 gives the checker both, and the checker re-arms itself with `send_later`.
 A checker only runs unattended in Auto mode, so it inherits it only when
 this session is in Auto mode; otherwise it waits on a permission prompt
-at every re-arm. Outside Auto mode the claude-code-remote write tools
-(`send_later`, `create_session`, `archive_session`, and the trigger tools)
-ask on every call whatever `permissions.allow` says, and Haiku 4.5 cannot
-run in Auto mode, which is why the checker is Sonnet.
+at every re-arm and at the hand-back. Outside Auto mode the
+claude-code-remote write tools (`send_later`, `create_session`,
+`archive_session`, and the trigger tools, `fire_trigger` included) ask on
+every call whatever `permissions.allow` says, and Haiku 4.5 cannot run in
+Auto mode, which is why the checker is Sonnet.
 
 When `create_session` is not available (a local CLI, desktop, or IDE
-session without the Claude Code Remote MCP server), arm `send_later` into
+session without the Claude Code Remote MCP server), skip the hand-back
+Routine and arm `send_later` into
 this session with `delay_minutes: 180`, `initiation: own_followup`, and a
 message that restates §26.C; on each wake, delegate the check to a Sonnet
 subagent (the Agent tool with `model: "sonnet"`) and continue with §26.D on
@@ -1612,14 +1630,34 @@ so once in the report and stop; do not poll in a loop.
    change this: fixing CI or addressing comments happens only when the
    user asks for it directly, under §12.
 3. **Read failed** (exit 2) → re-arm the same way; after three consecutive
-   failures, report the failure once (§26.D, with the error as the state)
-   and keep re-arming.
-4. **Terminal** → stop re-arming and continue with §26.D.
+   failures, call `fire_trigger` once as in step 4 with the error as the
+   verdict, without renaming, and keep re-arming. The pushing session
+   reports the failure in one line and leaves the checker, the Routine,
+   and its own title as they are.
+4. **Terminal** → stop re-arming and **hand back**: call `fire_trigger`
+   with the hand-back trigger id and `text` = the script's JSON line
+   followed by `checker session: <own id>`. Its result names the session
+   the Routine woke (`session_id`, as `cse_<x>`; compare it as
+   `session_<x>`). When that is the pushing session, the checker writes no
+   report and sends no notification; it renames itself
+   (`set_session_title`) to
+   `PR #<n> <merged | closed> — handed to <pushing session id>` and ends
+   the turn. When it is a different session, the pushing session was
+   archived and the server started a fresh session with no context for the
+   Routine instead (observed 2026-09-25): the checker archives that stray
+   session (`archive_session`) and falls back. It also falls back when
+   `fire_trigger` returns an error (the Routine was deleted). In the
+   fallback it writes the §26.D report itself from the fallback next steps in its
+   prompt, deletes the hand-back Routine (`delete_trigger`, ignoring
+   not-found), renames itself with the §26.D title plus
+   ` (pushing session unreachable)`, and sends the §26.D
+   `PushNotification`.
 
 ### D) What to report when the PR is terminal
 
-The checker writes the report in its own session, from the next steps the
-pushing session gave it:
+The pushing session writes the report when the hand-back wakes it (the
+checker writes it only in the §26.C step 4 fallback), in that session,
+where the user already looks for the task's outcome:
 
 - which terminal state the PR reached (merged, with the merge commit, or
   closed without merging, with when);
@@ -1628,15 +1666,18 @@ pushing session gave it:
 - when no next steps exist, say plainly that the pushing session can be
   closed safely.
 
-Then it renames itself (`set_session_title`, with its own id from
+Then it deletes the hand-back Routine (`delete_trigger`, ignoring
+not-found), archives the checker (`archive_session`, with the id the
+verdict names), renames itself (`set_session_title`, with its own id from
 `session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}` in Bash rather than a
 `get_session` call) to
 `PR #<n> merged — <no action needed | action needed>` or
 `PR #<n> closed — decision needed`, and sends one `PushNotification` (one
 line, under 200 characters) with the terminal state and whether action is
 needed, since the user is unlikely to be watching hours after the push.
-It sends it only on the terminal check-in, never on a non-terminal one,
-and it does not archive itself: its report is what the user opens.
+It sends it only for a terminal verdict, never on a non-terminal
+check-in, and it does not archive itself: its report is what the user
+opens.
 
 ### E) Enforcement
 

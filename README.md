@@ -1029,9 +1029,11 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
 > interactive session start a small Sonnet checker session for every pull
 > request it pushes; the checker runs `.claude/scripts/check_in_status.py` every
-> 3 hours (re-armed with `send_later`), and once the PR merges or closes it
-> reports the next steps (or that the pushing session can be closed) without
-> waking the pushing session. It never subscribes to PR activity and never
+> 3 hours (re-armed with `send_later`) without waking the pushing session.
+> Once the PR merges or closes, the checker hands the verdict back through a
+> poke-only Routine (`fire_trigger`), and the pushing session, which holds the
+> context, reports the next steps (or that it can be closed). The checker
+> reports them itself only when that hand-back fails. It never subscribes to PR activity and never
 > acts on CI or review comments. The same sync ships the `settings.json`
 > permission allowlist for the tools these commands call. Nothing to
 > configure in the consumer.
