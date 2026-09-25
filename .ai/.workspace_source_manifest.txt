@@ -157,6 +157,8 @@ changelog.d/4375-review-editor-preflight.md
 changelog.d/4398-issue-author-provenance.md
 changelog.d/4399-trusted-review-support.md
 changelog.d/4400-clarify-isolation.md
+changelog.d/4428-workflow-heal-prompt-parity.md
+changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
 changelog.d/implement-plan-failed-run-blocks.md

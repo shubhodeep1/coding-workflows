@@ -110,8 +110,8 @@ def test_review_apply_fixes_switches_model_on_final_attempt() -> None:
 	# fallback receives matching limits and role permissions.
 	assert '--role writer' in text
 	assert '--model "${editor_attempt_model}"' in text
-	assert 'opencode_run_cmd "$@"' in text
-	assert 'writer\n    "${editor_attempt_model}"' in text
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in text
+	assert '"${stdout_file}"\n    "${editor_attempt_model}"' in text
 	assert '"${EDITOR_REASONING_EFFORT}"' in text
 	# The loop sets the fallback on the final attempt.
 	assert 'EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"' in text
