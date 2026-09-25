@@ -1546,7 +1546,9 @@ CI or review events, and never touches the PR. §25 and its
   request the session pushes new commits to**, including PRs opened by a
   slash command (`/seed-repo`, `/investigate-issue`, and the rest).
   `/implement-plan-claude` is the exception: its own Sonnet checker is the
-  check-in for every PR it opens, so it arms no second one.
+  check-in for every PR it opens, so it arms no second one. The same holds
+  for `/implement-issue-claude`, which arms that same checker for its
+  phase PR.
 - **One check-in per PR.** Arm it once the PR exists (right after
   `create_pull_request`, or right after the first push to an existing PR).
   If a check-in is already armed for that PR, a later push does not arm
@@ -1697,6 +1699,67 @@ broke the stable release gate (run 35903885958).
   documents the `review_autofix.yml` pattern: `review_autofix_step_<slug>.sh`
   under `scripts/`, the resolving wrapper that sources it, the
   `REQUIRED_BOOTSTRAP_SCRIPTS` entry, and the test registry.
+
+---
+
+## §28. Claude Issue & Plan Sessions Act Instead of Asking (MANDATORY)
+
+This section applies in this repo and in every consumer repo that receives
+this file via the `@stable` sync. It covers every session that runs
+`/implement-issue-claude` (started by the Claude issue dispatcher routine for
+a standalone issue, or by hand) and every session of an
+`/implement-plan-claude` project — the session that first ran the command,
+each stage session, and each checker. Nobody is watching those sessions, so a
+question they ask stalls the project. Other slash commands and ordinary
+interactive sessions keep §0 and §2 unchanged, and so does the
+`/deploy-activate` session a finished project starts: it walks a human
+through deploy steps and waits for their output by design.
+
+### A) Act and record
+
+In a covered session, §0 (Prime Directive), §2 (Always-On Ask-First Mode),
+§12.D, and every "stop and ask" step in those two command files are replaced
+by this rule: where an ambiguity would have produced a Q/A question, the
+session takes the option it would have marked `(RECOMMENDED)`, records that
+decision as an assumption, and continues. Assumptions go in the plan doc
+(`## Assumptions`), the progress log (`## Notes`), and the PR body, so a
+reviewer sees every judgement call. No covered session waits for a human
+answer.
+
+### B) What still binds
+
+§6 (naming immutability — add aliases, never rename in place), §10 (MongoDB
+contracts), §19 (auto-close keyword discipline), §21 (merged-PR commit
+guard), §25 (no PR watching), §26, and §27 stay hard rules. The ask-first
+operations in §22.B, §23.C, and §24.D are never performed by a covered
+session, except the workflow dispatches a command's own file names as
+command-invoked (§23.C); needing one is a hard blocker (§28.C), never a
+guess.
+
+### C) Hard blockers
+
+A covered session stops, rather than guessing, only when:
+
+- it would need an ask-first operation from §28.B;
+- a retry or cycle cap in its command file is exhausted;
+- a workflow the command dispatches fails before doing its job, or a
+  validation run ends in a terminal class (`harness_error`, `infeasible`,
+  `codex_failure`, or an unknown payload);
+- the work needs a secret, credential, or resource ID the session cannot
+  obtain with a self-serve read (§22.A, §23.A, §24.B).
+
+On a hard blocker it sets the progress log to `Status: BLOCKED` with the
+blocker, posts **one** comment on the source issue (issue mode) or the plan's
+tracking issue (when it has one) naming the blocker, the options, and its
+recommendation, labels a source issue `ai:claude-blocked`, sends one
+`PushNotification`, and ends its turn. A human unblocks it by answering on
+the issue and re-running the command (for an issue: comment `/reclarify`).
+
+### D) Enforcement
+
+Prose only: the two command files restate this rule at every former "ask"
+point, and `tests/test_implement_issue_claude_command.py` and
+`tests/test_implement_plan_claude_command.py` pin that text.
 
 ---
 
