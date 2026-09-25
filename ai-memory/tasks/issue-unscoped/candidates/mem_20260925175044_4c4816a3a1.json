@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/.workspace_source_manifest.txt:164-172 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The PR creates `changelog.d/4469-validate-hook-output-boundary.md` but omits it from the sorted workspace source manifest.\n  WHY: `scripts/workspace_init.sh` uses the manifest as the canonical workspace inventory, so the omitted changelog fragment is excluded from snapshots and flagged by manifest-versus-worktree drift detection.\n- tests/test_codex_thread_reuse_core.py:567-568 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The lint test asserts that `helper_path=\"scripts/stage_workflow_support.sh\"` exists in `.github/workflows/validate.yml`, but that file uses `helper_stage_dir` instead.\n  WHY: The assertion fails and blocks the required lint check; x-ai_grok-4_20 and z-ai_glm-5_2 note that neither file is modified by this PR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .ai/.workspace_source_manifest.txt:167-170 | severity=high | confidence=5\n  PROBLEM: The new changelog fragment changelog.d/4469-validate-hook-output-boundary.md is not added to the sorted workspace source manifest.\n  WHY: The workspace manifest is the canonical inventory used by scripts/workspace_init.sh for workspace snapshot generation. Missing entries can lead to drift detection errors or the file being excluded from the workspace during initialization.\n- tests/test_codex_thread_reuse_core.py:567 | severity=critical | confidence=5\n  PROBLEM: The lint test fails with AssertionError because it asserts that helper_path=\"scripts/stage_workflow_support.sh\" exists in .github/workflows/validate.yml, but this string is absent from that file.\n  WHY: This causes the required lint check to fail, blocking the PR from merging.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .ai/.workspace_source_manifest.txt:lines 164-172 (the hunk adds entries for 4451, 4452, 4453 only) | severity=high | confidence=5\n  PROBLEM: The PR creates `changelog.d/4469-validate-hook-output-boundary.md` (confirmed by the `new file mode 100644` hunk in the same PR) but does not add it to the sorted manifest inventory. The manifest hunk at lines 164-172 inserts entries for 4451, 4452, and 4453 only; the 4469 fragment is absent between the existing 4440 line and the new 4451 line where alphabetical sort would place it.\n  WHY: `scripts/workspace_init.sh` consumes the manifest as the canonical sorted inventory of tracked files. A missing entry means the new changelog file is not part of the workspace snapshot, so drift detection in the workspace init path will flag the new file as an unexpected untracked artifact on every subsequent validation run that re-derives the inventory.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .ai/.workspace_source_manifest.txt:Lines 167-170 (after the PR diff additions) | severity=high | confidence=5\n  PROBLEM: The PR creates `changelog.d/4469-validate-hook-output-boundary.md` but does not add it to the sorted workspace source manifest. The manifest adds entries for 4451, 4452, and 4453 but omits 4469, which should appear alphabetically between line 169 (4453) and line 170 (heal-autofix-source-pr-dedup.md).\n  WHY: `scripts/workspace_init.sh` uses the manifest as the canonical sorted inventory of tracked files for workspace snapshots. A missing entry means the file is absent from workspace initialization, causing manifest-vs-worktree drift detection to flag it as an unexpected untracked file in subsequent validation runs.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_codex_thread_reuse_core.py:567 | severity=critical | confidence=5\n  PROBLEM: Lint CI fails with AssertionError; validate.yml uses helper_stage_dir (lines 279/452) with no occurrence of the asserted helper_path string.\n  WHY: Required lint job exits 1, blocking merge; pre-existing on base (PR does not touch validate.yml or this test).\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .ai/.workspace_source_manifest.txt:lines 167-170 \u2014 entries for 4451, 4452, 4453 are present but changelog.d/4469-validate-hook-output-boundary.md is absent | severity=high | confidence=5\n  PROBLEM: The PR creates changelog.d/4469-validate-hook-output-boundary.md as a new tracked file but does not add it to the sorted workspace source manifest.\n  WHY: The manifest omits the new file between line 169 (changelog.d/4453-claude-fixer-verdict-verification.md) and line 170 (changelog.d/heal-autofix-source-pr-dedup.md). The correct sorted position is line 170, shifting heal-autofix to line 171. Previous editor runs attempted to regenerate the manifest but the changes were lost (per the \"Editor changes lost\" PR comment, entry[4]).\n- tests/test_codex_thread_reuse_core.py:lines 567-568 \u2014 assert 'helper_path=\"scripts/stage_workflow_support.sh\"' in text and assert 'bash \"${helper_path}\" validate --manifest \"${manifest_path}\"' in text | severity=critical | confidence=5\n  PROBLEM: The lint CI check fails because the test asserts the string helper_path=\"scripts/stage_workflow_support.sh\" exists in .github/workflows/validate.yml, but validate.yml line 452 uses helper_stage_dir instead: WORKFLOW_SUPPORT_REF=\"${support_sha}\" bash \"${helper_stage_dir}/scripts/stage_workflow_support.sh\" validate --manifest \"${manifest_path}\".\n  WHY: The test reads validate.yml, searches for helper_path= which does not appear anywhere in the file (confirmed: validate.yml uses helper_stage_dir at lines 265, 273, 277, 279, 280, 286, 452), raises AssertionError, and exits with code 1. The set -euo pipefail in the CI step causes the entire lint job to fail, which also prevents test_workspace_hooks.py (the next test in the sequence) from running \u2014 so the PR's own new regression tests never execute in CI. Neither test_codex_thread_reuse_core.py nor validate.yml are in the PR's changed files; this is a pre-existing base-branch failure that blocks merge.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "873c41d6735ce13635e1f8653bb205ba39324fd5ab23440242f5e77e584a1f06",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4474,
+    "run_id": "36167067478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36167067478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925175044_4c4816a3a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4474,
+    "run_id": "36167067478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T17:50:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
