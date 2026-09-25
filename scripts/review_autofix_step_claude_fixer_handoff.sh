@@ -26,7 +26,9 @@
 # `ai:claude-fixer-verdict:v1` reply) to start the next stage session.
 #
 # Inputs (environment): PR_NUMBER, GH_TOKEN, GITHUB_REPOSITORY, HEAD_SHA,
-# HEAD_REF, CLAUDE_FIXER_ROUND, AUTOFIX_PRE_REVIEW_RESOLVE,
+# HEAD_REF, CLAUDE_FIXER_ROUND_INDEX (consecutive [ai-autofix] /
+# [claude-autofix] commits on the head; round = index + 1),
+# AUTOFIX_PRE_REVIEW_RESOLVE,
 # AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED, REVIEWER_CONSENSUS_FILE,
 # PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR, GITHUB_RUN_ID,
 # GITHUB_SERVER_URL, RUNTIME_DIR.
@@ -41,8 +43,9 @@ if ! [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] || ! [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}
   echo "::error::Claude-fixer hand-off needs a numeric PR_NUMBER and a 40-hex HEAD_SHA (PR_NUMBER=${PR_NUMBER:-} HEAD_SHA=${HEAD_SHA:-})."
   exit 1
 fi
-claude_fixer_round="${CLAUDE_FIXER_ROUND:-1}"
-[[ "${claude_fixer_round}" =~ ^[0-9]+$ ]] || claude_fixer_round=1
+claude_fixer_round_index="${CLAUDE_FIXER_ROUND_INDEX:-0}"
+[[ "${claude_fixer_round_index}" =~ ^[0-9]+$ ]] || claude_fixer_round_index=0
+claude_fixer_round="$((claude_fixer_round_index + 1))"
 claude_fixer_run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
 claude_fixer_body_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/claude_fixer_handoff.XXXXXX")"
 

@@ -1562,17 +1562,6 @@ def test_security_audit_invalid_engine_output_preserves_existing_findings_file()
 			assert final_state.get("calls", []) == []
 
 
-def main() -> int:
-	for name in sorted(globals()):
-		if name.startswith("test_") and callable(globals()[name]):
-			globals()[name]()
-	return 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 def test_security_audit_workflow_declares_branch_audit_inputs_on_both_triggers() -> None:
 	import yaml
 
@@ -1733,3 +1722,14 @@ def test_security_audit_target_ref_requires_explicit_range_and_issues_mode() -> 
 	assert proc.returncode == 1
 	assert "SECURITY_AUDIT_TARGET_REF requires SECURITY_AUDIT_DIFF_BASE" in proc.stderr
 	assert not final_state.get("codex_calls")
+
+
+def main() -> int:
+	for name in sorted(globals()):
+		if name.startswith("test_") and callable(globals()[name]):
+			globals()[name]()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
