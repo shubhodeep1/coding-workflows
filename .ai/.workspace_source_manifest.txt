@@ -9,7 +9,9 @@
 .claude/commands/apply-analysis.md
 .claude/commands/apply-url.md
 .claude/commands/audit-plans.md
+.claude/commands/claude-issue-dispatch.md
 .claude/commands/deploy-activate.md
+.claude/commands/implement-issue-claude.md
 .claude/commands/implement-plan-ai.md
 .claude/commands/implement-plan-claude.md
 .claude/commands/investigate-issue.md
@@ -42,6 +44,7 @@
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
+.github/workflows/claude-issue-intake.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml
@@ -142,6 +145,7 @@ analysis/workflow-optimization-2026-09-24-2.md
 analysis/workflow-optimization-2026-09-24.md
 analysis/workflow-optimization-2026-09-25.md
 changelog.d/.gitkeep
+changelog.d/3576-security-audit-uncapped-followups.md
 changelog.d/4305-editor-checksum-and-gate-retry-queueing.md
 changelog.d/4305-editor-checksum-summary-warning.md
 changelog.d/4327-review-failure-fingerprint-cap.md
@@ -159,6 +163,9 @@ changelog.d/4399-trusted-review-support.md
 changelog.d/4400-clarify-isolation.md
 changelog.d/4428-workflow-heal-prompt-parity.md
 changelog.d/4431-protect-deterministic-review-skip.md
+changelog.d/4438-implement-plan-claude-fixer-project-branch.md
+changelog.d/4439-audit-plans-implement-plan-claude-gate.md
+changelog.d/4443-claude-issue-implementer.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
@@ -200,6 +207,7 @@ docs/implement-plan/heal-deterministic-autofix-failures.md
 docs/plans/apply-ai-tools-learnings-plan.md
 docs/plans/claude-code-tooling-learnings-plan.md
 docs/plans/complete-squad-improvements-plan.md
+docs/plans/confine-human-steps-to-activation-plan.md
 docs/plans/gsd-inspired-improvements-plan.md
 docs/plans/gstack-learnings-plan.md
 docs/plans/heal-deterministic-autofix-failures-plan.md
@@ -379,6 +387,9 @@ scripts/clarify_informal_detect.py
 scripts/clarify_isolated_run.sh
 scripts/clarify_openrouter_broker.py
 scripts/clarify_sandbox/Dockerfile
+scripts/claude_issue_handoff.sh
+scripts/claude_issue_intake.sh
+scripts/claude_issue_route.py
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
 scripts/codex_model_catalog.json
@@ -456,6 +467,7 @@ scripts/repo_root.py
 scripts/resolve_integration_ref.sh
 scripts/review_agents_md_materiality.sh
 scripts/review_apply_fixes.sh
+scripts/review_autofix_step_claude_fixer_handoff.sh
 scripts/review_autofix_step_detect_merge_conflicts.sh
 scripts/review_autofix_step_editor_uncommitted_changes.sh
 scripts/review_autofix_step_iteration_summary.sh
@@ -644,6 +656,7 @@ tests/test_assemble_prompt.py
 tests/test_audit_consumer_drift.py
 tests/test_audit_gate_identity.py
 tests/test_audit_gate_template_atomicity.py
+tests/test_audit_plans_command.py
 tests/test_auto_release_stable.py
 tests/test_blocker_check.py
 tests/test_branch_rebuild.py
@@ -655,6 +668,7 @@ tests/test_ci_inventory_parity_order_contract.py
 tests/test_ci_poll_test_sharding.py
 tests/test_ci_shared_shell_block_guard.py
 tests/test_clarify_informal_detect.py
+tests/test_claude_issue_route.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
 tests/test_codex_stall_guard_poller.py
@@ -688,6 +702,7 @@ tests/test_gh_helpers_parse_reset_header.py
 tests/test_header_render.sh
 tests/test_identity_recall_render.sh
 tests/test_implement_blocked_verdict_terminalizes.py
+tests/test_implement_issue_claude_command.py
 tests/test_implement_plan_claude_command.py
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
@@ -757,6 +772,7 @@ tests/test_repo_root_helper.py
 tests/test_retrigger_inflight_direct_fallback.py
 tests/test_review_apply_fixes_reviewer_manifest_validation.py
 tests/test_review_apply_fixes_smoke_deterministic.py
+tests/test_review_autofix_claude_fixer_mode.py
 tests/test_review_autofix_editor_noop_cascade_contract.py
 tests/test_review_autofix_failure_log_upload.py
 tests/test_review_autofix_force_tick_repository_env.py
@@ -846,6 +862,7 @@ tests/test_validate_process_fixup_labels.py
 tests/test_validate_process_render_recovery.py
 tests/test_validate_process_template_mode.py
 tests/test_validate_semble_contract.py
+tests/test_validate_target_ref_input.py
 tests/test_validate_workflow_validate_bootstrap.py
 tests/test_validation_discovery_bootstrap.py
 tests/test_validation_refresh_runner.py
@@ -885,7 +902,9 @@ workflow-templates/.claude/commands/analyze-log.md
 workflow-templates/.claude/commands/apply-analysis.md
 workflow-templates/.claude/commands/apply-url.md
 workflow-templates/.claude/commands/audit-plans.md
+workflow-templates/.claude/commands/claude-issue-dispatch.md
 workflow-templates/.claude/commands/deploy-activate.md
+workflow-templates/.claude/commands/implement-issue-claude.md
 workflow-templates/.claude/commands/implement-plan-ai.md
 workflow-templates/.claude/commands/implement-plan-claude.md
 workflow-templates/.claude/commands/investigate-issue.md
