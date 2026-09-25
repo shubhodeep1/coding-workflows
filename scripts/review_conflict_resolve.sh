@@ -2452,13 +2452,49 @@ if [ -n "$(git status --porcelain)" ]; then
       exit 1
     fi
 
+    resolver_validation_root="${POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR:-}"
+    resolver_validation_canonical="$(realpath -e -- "${resolver_validation_root:-/nonexistent}" 2>/dev/null)"
+    if [ -z "${resolver_validation_root}" ] || [ ! -d "${resolver_validation_root}" ] \
+      || [ "${resolver_validation_canonical}" != "${resolver_validation_root}" ]; then
+      echo "::error::Resolver validation runtime directory is missing or unsafe; refusing to commit."
+      echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+      rm -f "${RESOLVER_TOUCHED_FILE}"
+      exit 1
+    fi
+    case "${resolver_validation_canonical}" in
+      /tmp|/tmp/*|/var/tmp|/var/tmp/*)
+        echo "::error::Resolver validation runtime directory is hidden by PrivateTmp; refusing to commit."
+        echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+        rm -f "${RESOLVER_TOUCHED_FILE}"
+        exit 1
+        ;;
+    esac
+    resolver_validation_dir="$(mktemp -d "${resolver_validation_root}/resolver-validation.XXXXXX")" || {
+      echo "::error::Could not stage resolver validation manifests; refusing to commit."
+      echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+      rm -f "${RESOLVER_TOUCHED_FILE}"
+      exit 1
+    }
+    if [ ! -f "${RESOLVER_TOUCHED_FILE}" ] \
+      || [ -L "${CONFLICTED_PATHS_FILE}" ] || [ -L "${RESOLVER_TOUCHED_FILE}" ] \
+      || [ -L "${CONFLICT_SPANS_FILE}" ] || [ -L "${CLEAN_MERGE_MANIFEST_FILE}" ] \
+      || ! install -m 0600 -- "${CONFLICTED_PATHS_FILE}" "${resolver_validation_dir}/conflicted.txt" \
+      || ! install -m 0600 -- "${RESOLVER_TOUCHED_FILE}" "${resolver_validation_dir}/touched.txt" \
+      || ! install -m 0600 -- "${CONFLICT_SPANS_FILE}" "${resolver_validation_dir}/spans.json" \
+      || ! install -m 0600 -- "${CLEAN_MERGE_MANIFEST_FILE}" "${resolver_validation_dir}/clean.tsv"; then
+      echo "::error::Could not stage resolver validation manifests; refusing to commit."
+      echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+      rm -f "${RESOLVER_TOUCHED_FILE}"
+      exit 1
+    fi
+
     if ! POST_AGENT_VALIDATION_SANDBOX="${SUPPORT_SCRIPTS_DIR}/untrusted_process_sandbox.sh" \
       POST_AGENT_VALIDATION_RUNTIME_DIR="${RUNTIME_DIR}" \
       "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
-        --conflicted-set "${CONFLICTED_PATHS_FILE}" \
-        --touched-set    "${RESOLVER_TOUCHED_FILE}" \
-        --conflict-spans "${CONFLICT_SPANS_FILE}" \
-        --clean-manifest "${CLEAN_MERGE_MANIFEST_FILE}" \
+        --conflicted-set "${resolver_validation_dir}/conflicted.txt" \
+        --touched-set    "${resolver_validation_dir}/touched.txt" \
+        --conflict-spans "${resolver_validation_dir}/spans.json" \
+        --clean-manifest "${resolver_validation_dir}/clean.tsv" \
         --strict-manifests \
         --repo-root      "${PWD}"; then
       echo "::error::Conflict resolver output failed validation; skipping [ai-merge-resolve] commit."
