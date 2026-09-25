@@ -1088,6 +1088,8 @@ def test_every_writer_path_reconciles_complete_workspace_manifest() -> None:
 		guarded_script = (REPO_ROOT / "scripts" / guarded_script_name).read_text(encoding="utf-8")
 		guard_rejection_at = guarded_script.index(guard_rejection_message)
 		assert "exit 78" in guarded_script[guard_rejection_at:guard_rejection_at + 200]
+		if guarded_script_name == "review_conflict_resolve.sh":
+			assert 'emit_conflict_resolver_substate "Failed" "${attempt}"' in guarded_script[guard_rejection_at:guard_rejection_at + 200]
 	assert "--writable-output-dir" in (REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh").read_text(
 		encoding="utf-8"
 	)

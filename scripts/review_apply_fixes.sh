@@ -2088,7 +2088,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     if [ -f "${editor_workspace_report}" ] && [ ! -L "${editor_workspace_report}" ] \
         && [ "$(stat -c %s "${editor_workspace_report}" 2>/dev/null)" -le 1048576 ]; then
       cp "${editor_workspace_report}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}_guard_report.json" 2>/dev/null || true
-      if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -S - "${editor_workspace_report}" <<'PY'
+      if ! PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S - "${editor_workspace_report}" <<'PY'
 import json
 import sys
 

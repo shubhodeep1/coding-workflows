@@ -1310,11 +1310,14 @@ def test_editor_workspace_guard_failure_workflow_routing(tmp_path: Path) -> None
 	assert "env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED == 'true'" in summary_step.split("run: |")[0]
 	assert summary_step.index('if [ "${AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED:-false}" = "true" ]') < summary_step.index('AUTOFIX_EDITOR_EMPTY_NOOP=true')
 	assert 'editor_attempt_*_guard_report.json' in _step_block(workflow, "Stage codex logs for upload (failure or empty-editor)")
-	for name in ("Mark linked issues review-blocked (workflow failure)", "Post review-blocked comment on PR (workflow failure)"):
-		assert "env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true'" in _step_block(workflow, name).split('run: |')[0]
-	for name in ("Commit changes", "Push all pending commits", "Mark linked issues ready to merge"):
+	for name in ("Mark linked issues review-blocked (workflow failure)", "Force orchestrate poll after workflow failure review-blocked label", "Post review-blocked comment on PR (workflow failure)"):
+		failure_gate = _step_block(workflow, name).split('run: |')[0]
+		assert "env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' || env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED == 'true'" in failure_gate
+	assert "continue-on-error" not in editor_step.split('run: |')[0]
+	for name in ("Commit changes", "Push all pending commits", "Enable auto-merge on PR", "Mark linked issues ready to merge"):
 		gate = _step_block(workflow, name).split('run: |')[0]
-		assert "if:" in gate and "always()" not in gate and "failure()" not in gate
+		assert "if:" in gate and "env.AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED != 'true'" in gate
+		assert "always()" not in gate and "failure()" not in gate
 
 	support_dir = tmp_path / "support"
 	support_dir.mkdir()
@@ -1323,15 +1326,34 @@ def test_editor_workspace_guard_failure_workflow_routing(tmp_path: Path) -> None
 	github_env.touch()
 	comment_capture = tmp_path / "comment"
 	summary_script = _step_run_script(summary_step)
-	result = subprocess.run(["bash", "-euo", "pipefail", "-c", summary_script], env={
-		"PATH": os.environ["PATH"], "SUPPORT_SCRIPTS_DIR": str(support_dir),
-		"AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED": "true", "GITHUB_ENV": str(github_env),
-		"EDITOR_SUMMARY_FILE": str(tmp_path / "empty"), "PR_NUMBER": "4413",
-		"COMMENT_CAPTURE": str(comment_capture),
-	}, capture_output=True, text=True, check=False)
-	assert result.returncode == 1, result.stderr
-	assert "workspace guard rejected a change" in comment_capture.read_text(encoding="utf-8")
-	assert "AUTOFIX_EDITOR_EMPTY_NOOP" not in github_env.read_text(encoding="utf-8")
+	previous_reviews = tmp_path / "previous_reviews"
+	previous_reviews.mkdir()
+	for report_state in ("present", "missing", "malformed"):
+		report = previous_reviews / "editor_attempt_2_guard_report.json"
+		if report_state == "present":
+			report.write_text(json.dumps({
+				"schema_version": "post_agent_workspace_report.v1",
+				"rejected": [{"path": ".ai/.workspace_source_manifest.txt", "change": "modified", "reason": "hidden-path"}],
+			}), encoding="utf-8")
+		elif report_state == "malformed":
+			report.write_text('{"rejected": [}', encoding="utf-8")
+		else:
+			report.unlink()
+		result = subprocess.run(["bash", "-euo", "pipefail", "-c", summary_script], env={
+			"PATH": os.environ["PATH"], "SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED": "true", "GITHUB_ENV": str(github_env),
+			"EDITOR_SUMMARY_FILE": str(tmp_path / "empty"), "PR_NUMBER": "4413",
+			"COMMENT_CAPTURE": str(comment_capture), "PREVIOUS_REVIEWS_DIR": str(previous_reviews),
+		}, capture_output=True, text=True, check=False)
+		assert result.returncode == 1, result.stderr
+		comment = comment_capture.read_text(encoding="utf-8")
+		assert "body=**AI review/autofix editor workspace guard rejected a change" in comment
+		assert "[View workflow run](ACTIONS_EXPR/ACTIONS_EXPR/actions/runs/ACTIONS_EXPR)" in comment
+		if report_state == "present":
+			assert '- path=".ai/.workspace_source_manifest.txt" change="modified" reason="hidden-path"' in comment
+		else:
+			assert "Guard report unavailable or invalid" in comment
+		assert "AUTOFIX_EDITOR_EMPTY_NOOP" not in github_env.read_text(encoding="utf-8")
 
 	retry_start = editor_step.index('bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" || {')
 	retry_end = editor_step.index('\n              }', retry_start) + len('\n              }')

@@ -19,6 +19,9 @@ This repository contains reusable `workflow_call` workflows that power the full 
 
 For the issue → PR pipeline state machine and the full command vocabulary, see [`docs/how-it-works.md`](docs/how-it-works.md).
 
+An editor workspace-guard rejection fails the review/autofix run instead of scheduling an empty-output retry; no editor change from that attempt is committed or merged. The PR comment lists up to 10 rejected paths, change types, and reasons when a valid guard report is available. Inspect the run's `codex-review-autofix-failure-logs-*` artifact for the editor transcript, stderr, and full bounded guard report; missing or invalid reports are called out in the comment. The workflow-failure review-blocked handling remains active for open PRs.
+The `REVIEW_AUTOFIX_RUN_SUMMARY_V1` editor slot reports `workspace_guard_rejected`, with finalize reason `editor_workspace_guard_rejected`, even if the same run also set the empty-noop flag.
+
 ### Memory System
 
 All active pipeline phases (clarify, plan, implement, review, orchestrate, validate) now integrate with the AI memory subsystem.  Workflows persist decisions, implementation plans, review findings, and validation results as candidate records to a dedicated `ai-memory` git branch.  Before constructing each LLM prompt, relevant prior context is retrieved from memory and injected between the static prompt prefix and the dynamic issue/PR content — preserving provider-side prompt-prefix caching while giving the model awareness of previous runs.

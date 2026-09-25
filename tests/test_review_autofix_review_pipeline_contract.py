@@ -5493,6 +5493,17 @@ def test_review_pipeline_summary_classifies_editor_noop_recoverable_failure() ->
 	assert flag_only_summary["slot_results"]["editor"]["failure_class"] == "none"
 
 
+def test_review_pipeline_summary_guard_failure_overrides_empty_noop() -> None:
+	summary = _run_review_pipeline_summary_step_harness(extra_env={
+		"AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED": "true",
+		"AUTOFIX_EDITOR_EMPTY_NOOP": "true",
+		"EDITOR_NOOP_SUSPICIOUS": "true",
+	})["summary"]
+	assert summary["slot_results"]["editor"]["status"] == "failed"
+	assert summary["slot_results"]["editor"]["failure_class"] == "workspace_guard_rejected"
+	assert summary["finalize_reason"] == "editor_workspace_guard_rejected"
+
+
 def test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reason_precedence() -> None:
 	"""On the real recoverable_failure path review_apply_fixes.sh also requests
 	a partial finalize, and `determine_finalize_reason` returns
