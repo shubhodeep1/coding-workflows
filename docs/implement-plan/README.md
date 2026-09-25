@@ -14,14 +14,22 @@ container, or just a later day — continues from the phase, security-pass
 cycle, or validation cycle where the previous session stopped instead of
 re-implementing phases that already merged. The log rides in each phase PR,
 each conformance or activation fix PR, each validation-fix PR, and the
-completion PR, so the copy on the default
+completion PR, so the copy on the base
 branch can lag the live session by one step; each stage session's
 `— resume.` prompt carries the current stage in the meantime.
 
-Each stage (a phase, a blocked-PR fix, a conformance audit, a security or
-validation read, the completion PR, a `/verify-activation` cycle) runs in its own session titled
-`implement-plan <slug> — <stage>`, started by a Sonnet checker session once
-the previous stage's wait is over.
+New projects keep their log on the project branch
+`claude/implement-plan-<slug>` (its first commit, carrying a
+`Project branch:` line), and the log reaches the default branch with the
+project's final PR. A log that sits on the default branch without a
+`Project branch:` line belongs to a project that started before the project
+branch existed; that project finishes straight on the default branch.
+
+Each stage (a phase, a review round, a blocked-PR fix, a conformance audit,
+a security or validation read, the completion PR, the final merge, a
+`/verify-activation` cycle) runs in its own session titled
+`implement-plan <slug> — <stage>`, started by an hourly low-effort Sonnet
+checker session once the previous stage's wait is over.
 
 Each log ends with a `## Lessons` section: one line per surprise a stage hit
 (`- [source:<source>] <lesson> (files: <path>, …)`). When a PR from a

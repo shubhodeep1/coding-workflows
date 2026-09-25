@@ -1531,10 +1531,10 @@ stall recovery — those keep their own policies.
 ## §26. Post-Push PR Status Check-In (MANDATORY)
 
 After an interactive Claude Code session pushes work and a pull request
-exists for it, the session **arms a 3-hourly status check-in for that pull
+exists for it, the session **arms an hourly status check-in for that pull
 request** and keeps it armed until the PR is terminal (merged, or closed
-without merging). The check-in runs in a small Sonnet checker session,
-reads the PR's state and nothing else, and when the PR is terminal reports
+without merging). The check-in runs in a small Sonnet checker session at
+low effort, reads the PR's state and nothing else, and when the PR is terminal reports
 the next steps, or says the pushing session can be closed because there
 are none. This section applies in this repo
 and in every consumer repo that receives this file via the `@stable` sync.
@@ -1565,21 +1565,31 @@ CI or review events, and never touches the PR. §25 and its
 ### B) How to arm
 
 Waking the session that pushed costs its whole conversation on every
-check, and a 3-hour gap outlives the prompt cache. The check-in therefore
-runs in its own small **Sonnet checker session**, and the pushing session is
-never woken:
+check. The check-in therefore runs in its own small **Sonnet checker
+session at low effort**, and the pushing session is never woken:
 
 1. Call `create_session` (Claude Code Remote MCP server) with
    `source_url` = the repository, `model: claude-sonnet-5`,
    `permission_mode` = this session's mode, `title` =
-   `PR #<n> status check-in`, and a standalone prompt that names the
-   repository, the PR number and URL, the §26.C steps, and the **next
-   steps for each terminal state**, written now by the pushing session,
-   which still has the context: what remains if the PR merges (follow-up
-   work, a release or consumer sync it waits on, an action the user must
-   take, or "none — the pushing session can be closed"), and what to ask
-   if it is closed without merging.
-2. Report the checker's session id in this session's reply.
+   `PR #<n> status check-in`, and the prompt `/effort low` **and nothing
+   else**. `create_session` takes no effort parameter, and `/effort low`
+   only takes effect when it is the whole prompt: followed by more text in
+   the same prompt it is not applied (verified 2026-09-25 with
+   `get_session`, whose `session_context.effort_level` reads `low` only in
+   the two-step form). The level lasts for the whole session, so every
+   later wake of the checker runs at low effort too.
+2. Call `create_trigger` with `persistent_session_id` = the checker's
+   session id, `run_once_at` = two minutes from now, `name` =
+   `PR #<n> status check-in: instructions`, `initiation: own_followup`,
+   and a standalone prompt that names the repository, the PR number and
+   URL, the §26.C steps, and the **next steps for each terminal state**,
+   written now by the pushing session, which still has the context: what
+   remains if the PR merges (follow-up work, a release or consumer sync it
+   waits on, an action the user must take, or "none — the pushing session
+   can be closed"), and what to ask if it is closed without merging. The
+   one-shot trigger disables itself after it fires.
+3. Report the checker's session id and the trigger id in this session's
+   reply.
 
 A session started by a Routine with `create_new_session_on_fire` has no
 MCP tools and no repository, so it cannot run the check; `create_session`
@@ -1593,11 +1603,12 @@ run in Auto mode, which is why the checker is Sonnet.
 
 When `create_session` is not available (a local CLI, desktop, or IDE
 session without the Claude Code Remote MCP server), arm `send_later` into
-this session with `delay_minutes: 180`, `initiation: own_followup`, and a
+this session with `delay_minutes: 60`, `initiation: own_followup`, and a
 message that restates §26.C; on each wake, delegate the check to a Sonnet
-subagent (the Agent tool with `model: "sonnet"`) and continue with §26.D on
+subagent (the Agent tool with `model: "sonnet"`; the Agent tool takes no
+effort level) and continue with §26.D on
 this session when it reports a terminal state. When `send_later` is
-missing too, use `CronCreate` (recurring, every 3 hours, deleted with
+missing too, use `CronCreate` (recurring, every hour, deleted with
 `CronDelete` once the PR is terminal) and tell the user once that this
 scheduler lives only as long as the session. When no scheduler exists, say
 so once in the report and stop; do not poll in a loop.
@@ -1609,7 +1620,7 @@ so once in the report and stop; do not poll in a loop.
    of the PR (§15) and prints one JSON line: `done`, `state` (`merged` /
    `closed` / `open`), and `reason`. The script decides; the model does not
    interpret the PR.
-2. **Not terminal** → call `send_later` with `delay_minutes: 180` and
+2. **Not terminal** → call `send_later` with `delay_minutes: 60` and
    `initiation: own_followup` into the checker session, and end the turn.
    No message to the user, no PR comment, no CI, review, comment,
    conflict, or branch work. A red check or an open review thread does not
