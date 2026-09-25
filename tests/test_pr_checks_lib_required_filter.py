@@ -386,16 +386,28 @@ def test_library_default_matches_orchestrator_default() -> None:
 
 
 def test_orchestrator_rb_gates_pass_base_ref() -> None:
-	"""All four orchestrator review-blocked merge gates must call
+	"""Every orchestrator review-blocked merge gate must call
 	_pr_checks_completed with a 3rd (base-ref) argument so they use the
 	required-checks filter — not the legacy block-on-any-failure 2-arg
-	form that deadlocks on a permanently-red non-required check."""
+	form that deadlocks on a permanently-red non-required check.
+
+	Only two such gates exist now (merge / merge_with_followup). The
+	force-merge and no-fix inline fallbacks main used to run when RB
+	judge retries were exhausted are gone: the judge no longer gets an
+	autonomous terminal action on retries-exhausted (it is refused —
+	see judge_skip_reason=invalid_final_fix), because every terminal
+	action (merge / merge_with_followup / close_and_reissue) requires
+	explicit trusted human approval first (`review_blocked_build_approval_request`
+	/ `review_blocked_approval_status`); auto-force-merging on
+	retries-exhausted would bypass that gate. The variable names also
+	grew a `_judged` infix (`_rb_merge_judged_sha`, `_rb_mwf_judged_sha`)
+	to bind the merge attempt to the exact head SHA the judge evaluated."""
 	import re
 
 	poller_text = POLLER.read_text(encoding="utf-8")
 	# 2-arg RB gate calls (PR + sha, no base ref) must NOT exist anymore.
 	two_arg = re.findall(
-		r'_pr_checks_completed "\$\{RB_PR\}" "\$\{_rb_[a-z]+_sha\}"(?!\s+")',
+		r'_pr_checks_completed "\$\{RB_PR\}" "\$\{_rb_[a-z_]+_sha\}"(?!\s+")',
 		poller_text,
 	)
 	assert not two_arg, (
@@ -404,14 +416,14 @@ def test_orchestrator_rb_gates_pass_base_ref() -> None:
 		"Every RB gate must pass the base ref so the required-checks filter "
 		"applies."
 	)
-	# Exactly the four RB gates pass a base ref.
+	# Exactly the two remaining RB gates pass a base ref.
 	three_arg = re.findall(
-		r'_pr_checks_completed "\$\{RB_PR\}" "\$\{_rb_[a-z]+_sha\}" "\$\{_rb_[a-z]+_base\}"',
+		r'_pr_checks_completed "\$\{RB_PR\}" "\$\{_rb_[a-z_]+_sha\}" "\$\{_rb_[a-z_]+_base\}"',
 		poller_text,
 	)
-	assert len(three_arg) == 4, (
-		"expected exactly 4 review-blocked merge gates passing a base ref "
-		f"(merge / force-merge / no-fix / merge_with_followup); found "
+	assert len(three_arg) == 2, (
+		"expected exactly 2 review-blocked merge gates passing a base ref "
+		f"(merge / merge_with_followup); found "
 		f"{len(three_arg)}: {three_arg}"
 	)
 

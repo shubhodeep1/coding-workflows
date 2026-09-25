@@ -19,7 +19,7 @@ IMMUTABLE_LOADER_SNIPPET = (
 	'python3 "${clarify_respond_immutable_support_root}/scripts/load_workflow_overlay.py" \\\n'
 	'            --repo-root "${GITHUB_WORKSPACE}"'
 )
-ORCHESTRATE_LOADER_SNIPPET = 'python3 "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py" \\'
+ORCHESTRATE_LOADER_SNIPPET = 'python3 -I -B "${orchestrate_immutable_support_root}/scripts/load_workflow_overlay.py" \\'
 POLL_LOADER_SNIPPET = 'python3 "${poll_immutable_support_root}/scripts/load_workflow_overlay.py" \\'
 LOADER_SCHEMA_SNIPPET = '--schema-path "ai-memory/schemas/workflow_overlay.v1.json"'
 IMMUTABLE_LOADER_SCHEMA_SNIPPETS = {
@@ -99,8 +99,14 @@ def test_orchestrate_workflow_stages_prompt_assembly_assets() -> None:
 		assert prompt_asset in workflow_text
 	assert "gh_helpers.sh emit_event.sh emit_event.py" in workflow_text
 	assert "openrouter_prompt_cache.py semantic_cache.py" in workflow_text
-	assert "python3 -I -B -c" in workflow_text
-	assert "sys.path.insert(0, '${SUPPORT_SCRIPTS_DIR}')" in workflow_text
+	# Wave-1/state-build Python runs via the isolated launcher on stdin
+	# (`_gh_helpers_run_isolated_python -- - ... <<'PY'`, which execs
+	# `python3 -I -B - ...`) rather than `python3 -c "..."`, and takes
+	# SUPPORT_SCRIPTS_DIR as an argv value instead of interpolating it into
+	# the Python source, so a path containing a quote can't break out.
+	assert "_gh_helpers_run_isolated_python -- -" in workflow_text
+	assert "sys.path.insert(0, sys.argv[1])" in workflow_text
+	assert '"${SUPPORT_SCRIPTS_DIR}" \\' in workflow_text
 	assert "sys.path.insert(0, 'scripts')" not in workflow_text
 	assert 'repository_agents_file="AGENTS.md"' in workflow_text
 

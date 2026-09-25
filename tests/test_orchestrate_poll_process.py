@@ -6706,6 +6706,14 @@ def test_security_pass_final_merge_reanswers_advisory_followups_parked_in_ai_blo
 	# marker, but an untrusted author association must not suppress the real
 	# poller answer or mark the follow-up checked without posting it.
 	retry_state_after_forged_marker = json.loads(json.dumps(latest_state))
+	# Drop the state_auth block the first tick signed for the *unmodified*
+	# state: signatures are computed over the full state document, so
+	# hand-editing security_pass_followups_merge_checked below would leave
+	# a present-but-invalid signature, which extract_latest_valid_orchestrator_state
+	# treats as tampering and rejects outright (no legacy fallback) rather
+	# than as a plain unsigned legacy comment. Stripping it here mirrors
+	# how a real, never-previously-signed state seeds a poller run.
+	retry_state_after_forged_marker.pop("state_auth", None)
 	retry_state_after_forged_marker["security_pass_followups_merge_checked"] = [851, 852, 853]
 	retry_after_forged_marker = _run_poller(
 		state=retry_state_after_forged_marker,
@@ -6740,6 +6748,11 @@ def test_security_pass_final_merge_reanswers_advisory_followups_parked_in_ai_blo
 	# if the issue still carries ai:blocked when the next tick starts. The
 	# persisted comment is a trusted User comment, matching the GH_PAT path.
 	retry_state_after_lost_mark = json.loads(json.dumps(latest_state))
+	# Same rationale as retry_state_after_forged_marker above: strip the
+	# now-stale state_auth block before hand-editing the state, or the
+	# signature mismatch is treated as tampering and the whole tracking
+	# issue is skipped this tick (no reconstruction at all).
+	retry_state_after_lost_mark.pop("state_auth", None)
 	retry_state_after_lost_mark["security_pass_followups_merge_checked"] = [851, 852, 853]
 	retry_after_lost_mark = _run_poller(
 		state=retry_state_after_lost_mark,
@@ -20835,7 +20848,7 @@ def test_capture_intent_fingerprints_helper_is_defined_and_idempotent():
 	assert "FINGERPRINT_POST_MERGE_REF" in script
 	assert "git rev-parse --verify FETCH_HEAD" in script
 	assert "command -v timeout >/dev/null 2>&1" in script
-	assert 'GIT_COMMAND_TIMEOUT_SECS="${integration_fetch_timeout_secs}"' in script
+	assert '"GIT_COMMAND_TIMEOUT_SECS=${integration_fetch_timeout_secs}"' in script
 	assert 'GIT_TERMINAL_PROMPT=0 timeout "${integration_fetch_timeout_secs}s"' in script
 	assert "skipping post-merge presence filter" in script
 	assert 'elif git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch_for_capture}"' not in script
