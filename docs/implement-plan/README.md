@@ -39,5 +39,13 @@ Each log ends with a `## Lessons` section: one line per surprise a stage hit
 the `ai-memory` branch as a `lessons_learned_record.v1` record. This README
 is never ingested.
 
+Each log also carries a `## Auto-decisions` section (CLAUDE.md §28): one
+`AD-<n>` line per question a stage answered with its RECOMMENDED option
+instead of stopping the unattended chain. The `/verify-activation`
+activation stage and `/deploy-activate` list those entries for human review
+at the end of the project. Entries move from `pending review` to
+`confirmed` or `changed to <letter>` and are never deleted. Lesson ingestion
+reads only `## Lessons`, so this section never reaches AI memory.
+
 See the **Progress Log** section of `.claude/commands/implement-plan-claude.md`
 for the full file format and the read/update/persist contract.
