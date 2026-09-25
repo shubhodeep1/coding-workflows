@@ -84,13 +84,18 @@ MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_confli
 OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
-  if [ ! -f "${src}" ]; then
-    echo "::error::Required bootstrap script '${f}' is missing from verified support commit ${SCRIPT_REF}." >&2
+  # Do not follow a support-commit symlink into the PR-controlled checkout.
+  if [ ! -f "${src}" ] || [ -L "${src}" ]; then
+    echo "::error::Required bootstrap script '${f}' is missing or not a regular file in verified support commit ${SCRIPT_REF}." >&2
     exit 1
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
 mkdir -p "${SUPPORT_SCRIPTS_DIR}/review_sandbox"
+if [ -L ".codex-workflow-src/scripts/review_sandbox" ] || [ -L ".codex-workflow-src/scripts/review_sandbox/Dockerfile" ]; then
+  echo "::error::Required trusted review sandbox Dockerfile must be a regular file in verified support commit ${SCRIPT_REF}." >&2
+  exit 1
+fi
 install -m 0644 ".codex-workflow-src/scripts/review_sandbox/Dockerfile" "${SUPPORT_SCRIPTS_DIR}/review_sandbox/Dockerfile" || {
   echo "::error::Required trusted review sandbox Dockerfile is missing from verified support commit ${SCRIPT_REF}." >&2
   exit 1
