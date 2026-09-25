@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -14,6 +16,7 @@ CODEX_HEARTBEAT_TEST = REPO_ROOT / "tests" / "test_codex_heartbeat.py"
 RUN_VALIDATION_REPO_CHECKS = REPO_ROOT / "scripts" / "run_validation_repo_checks.sh"
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 STAGE_WORKFLOW_SUPPORT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
+VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
 
 
 def _workflow_text() -> str:
@@ -136,6 +139,73 @@ def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
 	assert 'python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2' in wf
+	assert "id: renderer_dependencies" in wf
+	assert "python3 -c 'import yaml, jsonschema, jinja2'" in wf
+	assert "VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}" in wf
+	assert "if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'" in wf
+
+
+def test_renderer_dependency_preflight_blocks_rendering() -> None:
+	process_text = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	function_text = process_text.split("run_template_validation_harness_renderer()\n{", 1)[1].split("\n}\n", 1)[0]
+	function_text = "run_template_validation_harness_renderer()\n{" + function_text + "\n}\n"
+	assert "VALIDATION_RENDERER_DEPENDENCIES_READY" in function_text
+	assert "import yaml, jsonschema, jinja2" in function_text
+	for setup_ready, imports_available, expected_status in (
+		("true", "false", 14),
+		("false", "true", 14),
+		("true", "true", 0),
+		("", "true", 0),
+	):
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir)
+			for asset in (
+				".ai/validate.yml",
+				"scripts/render_validation_templates.py",
+				"scripts/templates/slot_manifest.schema.json",
+				"workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
+				"workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
+				"workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2",
+			):
+				asset_path = root / asset
+				asset_path.parent.mkdir(parents=True, exist_ok=True)
+				asset_path.touch()
+			shim = root / "python3"
+			shim.write_text(
+				"#!/bin/sh\n"
+				"if [ \"$1\" = '-c' ] && [ \"$2\" = 'import yaml, jsonschema, jinja2' ]; then\n"
+				"  [ \"$IMPORTS_AVAILABLE\" = 'true' ] && exit 0\n"
+				"  exit 1\n"
+				"fi\n"
+				"case \"$1\" in\n"
+				"  scripts/render_validation_templates.py) touch renderer-invoked; exit 0;;\n"
+				"esac\n"
+				"exec \"$REAL_PYTHON3\" \"$@\"\n",
+				encoding="utf-8",
+			)
+			shim.chmod(0o755)
+			env = os.environ.copy()
+			env.update({
+				"PATH": f"{root}:{os.environ['PATH']}",
+				"REAL_PYTHON3": sys.executable,
+				"IMPORTS_AVAILABLE": imports_available,
+				"GENERATE_LOG_FILE": str(root / "renderer.log"),
+			})
+			env.pop("BASH_ENV", None)
+			if setup_ready:
+				env["VALIDATION_RENDERER_DEPENDENCIES_READY"] = setup_ready
+			else:
+				env.pop("VALIDATION_RENDERER_DEPENDENCIES_READY", None)
+			result = subprocess.run(
+				["bash", "-c", function_text + "\nrun_template_validation_harness_renderer"],
+				cwd=root, env=env, capture_output=True, text=True, timeout=30,
+			)
+			assert result.returncode == expected_status, result.stdout + result.stderr
+			log_text = (root / "renderer.log").read_text(encoding="utf-8")
+			assert "printf: --: invalid option" not in log_text
+			assert (root / "renderer-invoked").exists() == (expected_status == 0)
+			if expected_status == 14:
+				assert "dependenc" in log_text.lower()
 
 
 def test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
@@ -242,6 +312,7 @@ def main() -> int:
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
 	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()
 	test_validate_workflow_passes_template_default_env()
+	test_renderer_dependency_preflight_blocks_rendering()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	test_validate_workflow_bootstraps_codex_heartbeat_support()
 	test_codex_heartbeat_helper_contract()

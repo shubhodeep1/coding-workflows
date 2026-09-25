@@ -747,11 +747,13 @@ jobs:
             --metadata-json "${metadata_json}"
 
       - name: Install Python dependencies for validation renderer
+        id: renderer_dependencies
         run: |
           set -euo pipefail
 
           if [ -f "scripts/render_validation_templates.py" ]; then
             python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
+            python3 -c 'import yaml, jsonschema, jinja2'
           else
             echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
           fi
@@ -911,6 +913,7 @@ jobs:
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
           MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
           VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
+          VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
