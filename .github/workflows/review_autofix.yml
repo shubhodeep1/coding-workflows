@@ -1020,8 +1020,8 @@ jobs:
               if [ "${SMALL_DIFF}" = "true" ] || [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
                 # `gh api --paginate --jq '[…]'` emits one JSON array per
                 # page. Without `jq -s 'add // []'` the concatenated output
-                # is not one document. pipefail rejects a failed page;
-                # length must match the authenticated PR's changed_files.
+                # is not one document. pipefail propagates fetch failures;
+                # the length check rejects partial pagination results.
                 if ! pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename, previous_filename: .previous_filename, status: .status}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
                   pr_files_json=""
                 fi
