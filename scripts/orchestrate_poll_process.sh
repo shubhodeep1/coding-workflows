@@ -694,20 +694,23 @@ emit_orchestrator_completion_lessons() {
   fi
 
   telemetry_json="$(
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${PWD}" "${STATE_FILE}" "${TRACKING_NUM}" <<'PY' 2>&1
+    poller_run_isolated_python \
+      "AI_MEMORY_BRANCH=${AI_MEMORY_BRANCH:-ai-memory}" \
+      "AI_MEMORY_ROOT=${AI_MEMORY_ROOT:-ai-memory}" \
+      "AI_MEMORY_PUSH_RETRIES=${AI_MEMORY_PUSH_RETRIES:-16}" \
+      -- - "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}" "${PWD}" "${STATE_FILE}" "${TRACKING_NUM}" <<'PY' 2>&1
 import json
 import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, sys.argv[1])
 from ai_memory_lib import persist_memory_operation, record_lessons_learned, resolve_memory_root_dir
 from orchestrate_lib import build_completion_lessons
 
-repo_root = Path(sys.argv[1]).resolve()
-state = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-tracking_issue = int(sys.argv[3])
+repo_root = Path(sys.argv[2]).resolve()
+state = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
+tracking_issue = int(sys.argv[4])
 memory_branch = str(os.environ.get("AI_MEMORY_BRANCH", "ai-memory") or "ai-memory").strip() or "ai-memory"
 memory_root_relative = str(os.environ.get("AI_MEMORY_ROOT", "ai-memory") or "ai-memory").strip() or "ai-memory"
 try:
