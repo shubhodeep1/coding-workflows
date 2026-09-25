@@ -1436,7 +1436,14 @@ through `clarify → plan → implement → review`.
   issue with an occurrence comment per report (`<!-- workflow-failure-heal:fp=… -->`).
   A recurrence after the previous heal issue closed increments the generation
   (`<!-- workflow-failure-heal:gen=N -->`, `root=…`); an escalation on a heal
-  issue itself inherits its generation. Past
+  issue itself inherits its generation. A review/autofix failure report is
+  also keyed on its pull request (`<!-- workflow-failure-heal:source=owner/repo#N -->`),
+  because its evidence, and so its fingerprint, changes from run to run: while
+  a heal issue from the same PR is open the report is an occurrence comment on
+  it (log `duplicate … match=source`), a closed one continues its lineage, and
+  a PR on an `ai/issue-<N>` branch whose issue `#N` is a heal issue continues
+  that issue's lineage, so a heal fix PR whose own review keeps failing reaches
+  the cap instead of starting a new generation-1 issue. Past
   `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (default 3) the chain stops: the prior
   issue is labelled `ai:workflow-heal-escalated` and a Telegram CRITICAL asks
   for a human.
@@ -1685,7 +1692,7 @@ through `clarify → plan → implement → review`.
 | `COMPREHENSIVE_RELEASE_WORKFLOW_REF` | `main` | Ref for that dispatch. |
 | `REISSUE_PRESERVE_BASELINE_ENABLED` | `true` | Let the review-blocked judge's `spot-fix` reissue preserve the closed PR head as an `ai/reissue-baseline/*` branch that the next implement run starts from. `false` forces `redo` (start over from the base branch) |
 | `WORKFLOW_HEAL_ENABLED` | `true` | Switch for the workflow failure heal path. On by default: a human-needed escalation label (`ai:needs-human`, `ai:check-triage-escalated`, `ai:destructive-blocked`, `ai:scope-blocked`, `ai:harness-broken`, `ai:resolver-escalated`, `ai:security-pass-failed`) is reported to coding-workflows, whose intake diagnoses the failed runs and opens an `ai:workflow-heal` issue for the pipeline. Set to `false` per repo to disable the wrapper, the report, and (in coding-workflows) the intake. |
-| `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` | `3` | coding-workflows only. Max heal generations for one failure fingerprint before the chain is escalated (`ai:workflow-heal-escalated` + Telegram CRITICAL) instead of opening another issue. |
+| `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` | `3` | coding-workflows only. Max heal generations for one failure fingerprint (or, for review/autofix reports, one pull request and the heal issue it fixes) before the chain is escalated (`ai:workflow-heal-escalated` + Telegram CRITICAL) instead of opening another issue. |
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets that PR's head branch (falling back to this value when the branch is gone). |

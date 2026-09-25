@@ -147,7 +147,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     heal issues of the same fingerprint / lineage. It de-dupes by fingerprint
     (label `ai:workflow-heal`; the promote cycle's `[cycle:<id>]` run-name
     suffix is ignored, and the error signature comes from the steps'
-    `##[error]` output, not the echoed step script), caps the lineage at
+    `##[error]` output, not the echoed step script), de-dupes an
+    `autofix_failure` report also by its pull request's `source=` marker (that
+    PR's closed heal issues, and the heal issue its `ai/issue-<N>` head branch
+    fixes, continue the lineage), caps the lineage at
     `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
     `ai:workflow-heal-escalated` + Telegram), and bounds the volume with
     `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`. A
