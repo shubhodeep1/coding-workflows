@@ -5,13 +5,25 @@
   "entry_id": "processed_command_4451_5829222692_approved",
   "issue_number": 4451,
   "metadata": {
+    "branch": "ai/issue-4451",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/security-audit.yml",
+      "changelog.d/4451-pin-security-audit-support.md",
+      "tests/test_security_audit_workflow_contract.py"
+    ],
+    "issue_number": 4451,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4451",
+    "pr_number": 4457,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4457",
+    "run_attempt": "1",
+    "run_id": "36112160695",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36112160695"
   },
   "run_attempt": 1,
   "run_id": "36112160695",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-25T08:20:18Z",
+  "status": "completed",
+  "timestamp": "2026-09-25T08:36:32Z",
   "workflow": "implement"
 }
