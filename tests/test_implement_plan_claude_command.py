@@ -88,10 +88,19 @@ def test_review_rounds_are_fixed_by_claude(text):
 	assert "if `state` is review-round / conflict use `<next stage on review round>`" in text
 
 
-def test_security_dispatch_bypasses_weekly_cap_and_targets_project_branch(text):
-	assert "-f bypass_weekly_cap=true" in text
+def test_security_dispatch_targets_project_branch(text):
 	assert "`-f ref=claude/implement-plan-<slug>`" in text
-	assert "no finding deferred by the weekly cap** (`deferred_by_weekly_cap=0`)" in text
+	# The audit files every finding (no weekly cap), so no bypass input exists.
+	assert "bypass_weekly_cap" not in text
+	assert "deferred_by_weekly_cap" not in text
+
+
+def test_convergence_dispatch_goes_straight_to_review_autofix_here(text):
+	# internal-review.yml pins review_autofix.yml@main; forwarding a new input
+	# through it made every run on the PR adding the input a startup_failure
+	# (run 36095647423).
+	assert "`gh workflow run review_autofix.yml -R <owner>/<repo> -f pr_number=<N> -f claude_fixer_converged_head=<sha>`" in text
+	assert "gh workflow run internal-review.yml" not in text
 
 
 def test_validation_dispatch_inputs(text):

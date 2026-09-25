@@ -32,10 +32,8 @@ from review_autofix_step_scripts import (  # noqa: E402
 
 HANDOFF_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_handoff.sh"
 TOPOLOGY_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_merge_topology_gate.sh"
-WRAPPERS = (
-	REPO_ROOT / ".github" / "workflows" / "internal-review.yml",
-	REPO_ROOT / "workflow-templates" / "ai-review.yml",
-)
+WRAPPERS = (REPO_ROOT / "workflow-templates" / "ai-review.yml",)
+INTERNAL_REVIEW = REPO_ROOT / ".github" / "workflows" / "internal-review.yml"
 HEAD = "c" * 40
 AUTHOR = "workflow-bot"
 
@@ -99,6 +97,18 @@ def test_converged_head_input_on_every_entry_point():
 		assert workflow["jobs"]["review"]["with"]["claude_fixer_converged_head"] == (
 			"${{ github.event_name == 'workflow_dispatch' && github.event.inputs.claude_fixer_converged_head || '' }}"
 		)
+
+
+def test_internal_review_does_not_forward_the_converged_input():
+	"""internal-review.yml calls review_autofix.yml@main, so on the PR that adds
+	an input to review_autofix.yml, forwarding it from internal-review.yml makes
+	every run a zero-job startup_failure (run 36095647423: `input
+	"claude_fixer_converged_head" is not defined`). This library dispatches
+	review_autofix.yml directly for the convergence run instead."""
+	workflow = _load(INTERNAL_REVIEW)
+	assert "claude_fixer_converged_head" not in workflow["on"]["workflow_dispatch"]["inputs"]
+	for job in workflow["jobs"].values():
+		assert "claude_fixer_converged_head" not in (job.get("with") or {})
 
 
 def test_gate_exports_fixer_outputs_and_mode():

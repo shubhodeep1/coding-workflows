@@ -5,9 +5,9 @@ name: Security Audit
     # GitHub Actions schedules are literal YAML, not repo-variable driven.
     # Keep README's SECURITY_AUDIT_CRON row aligned with this value.
     - cron: "0 8 * * 0"
-  # `ref` / `bypass_weekly_cap` are set by /implement-plan-claude when it
-  # audits a project branch; scheduled runs and a bare dispatch leave them
-  # empty / false and audit the default branch exactly as before.
+  # `ref` is set by /implement-plan-claude when it audits a project branch;
+  # scheduled runs and a bare dispatch leave it empty and audit the default
+  # branch exactly as before.
   workflow_dispatch:
     inputs:
       ref:
@@ -15,11 +15,6 @@ name: Security Audit
         required: false
         default: ""
         type: string
-      bypass_weekly_cap:
-        description: "Open a follow-up for every surviving finding instead of stopping at the weekly follow-up cap."
-        required: false
-        default: false
-        type: boolean
   # Consumer repos run this workflow through the synced
   # workflow-templates/ai-security-audit.yml wrapper (called @stable).
   workflow_call:
@@ -28,10 +23,6 @@ name: Security Audit
         required: false
         default: ""
         type: string
-      bypass_weekly_cap:
-        required: false
-        default: false
-        type: boolean
     secrets:
       GH_PAT:
         required: false
@@ -72,10 +63,8 @@ jobs:
         env:
           AUDIT_TARGET_REF_INPUT: ${{ inputs.ref || '' }}
           AUDIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          AUDIT_BYPASS_WEEKLY_CAP_INPUT: ${{ inputs.bypass_weekly_cap == true && 'true' || 'false' }}
         run: |
           set -euo pipefail
-          echo "SECURITY_AUDIT_BYPASS_WEEKLY_CAP=${AUDIT_BYPASS_WEEKLY_CAP_INPUT}" >> "$GITHUB_ENV"
           if [ -z "${AUDIT_TARGET_REF_INPUT}" ] || [ "${AUDIT_TARGET_REF_INPUT}" = "${AUDIT_DEFAULT_BRANCH}" ]; then
             echo "SECURITY_AUDIT_TARGET: default branch ${AUDIT_DEFAULT_BRANCH}"
             exit 0
