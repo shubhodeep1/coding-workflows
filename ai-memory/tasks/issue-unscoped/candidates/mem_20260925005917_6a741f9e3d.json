@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Changes to review application, conflict resolution, judging, and consolidation repeatedly pair script edits with review-autofix or step-script contract tests. When changing a step or its handoffs, inspect the surrounding pipeline contracts and update the corresponding tests.",
+  "fingerprint": "e136ee43b971f8fd316f074d2b0efb0f179dcff2ed20fe4408876da3b4f4fc0f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36079804889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36079804889",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4390",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4392",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4399",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4400",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4407",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4394",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4396",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4402",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4403",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4408"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260925005917_6a741f9e3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Review-autofix behavior is split across shell step scripts and guarded by pipeline contract tests.",
+  "timestamps": {
+    "created_at": "2026-09-25T00:59:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
