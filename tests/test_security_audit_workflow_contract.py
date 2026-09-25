@@ -361,8 +361,10 @@ def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	assert "SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}" in content
 	assert "SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}" in content
 	assert (
-		"SECURITY_AUDIT_FP_EXCLUSIONS: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}"
+		"AUDIT_EXCLUSIONS_CONFIG: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}"
 	) in content
+	assert 'echo "SECURITY_AUDIT_FP_EXCLUSIONS=${catalog_path}" >> "$GITHUB_ENV"' in content
+	assert "SECURITY_AUDIT_FP_EXCLUSIONS: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS" not in content
 	assert "SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}" in content
 	assert "SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}" in content
 	assert 'bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit.sh"' in content
@@ -537,6 +539,158 @@ def test_security_audit_target_resolution_requires_exact_branch_commit() -> None
 	assert f"AUDIT_DATA_SHA={sha}\n" in variables
 
 
+def _run_audit_exclusions_resolution(
+	workspace: Path, configured: str, *, enabled: str = "true"
+) -> tuple[subprocess.CompletedProcess[str], str]:
+	env_path = workspace / "exclusions-env"
+	if env_path.exists():
+		env_path.unlink()
+	env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	env.update({
+		"GITHUB_WORKSPACE": str(workspace),
+		"GITHUB_ENV": str(env_path),
+		"AUDIT_EXCLUSIONS_CONFIG": configured,
+		"AUDIT_ENABLED": enabled,
+	})
+	proc = subprocess.run(
+		["bash", "--noprofile", "--norc", "-e"],
+		input=_audit_workflow_step("Resolve trusted security audit exclusions")["run"],
+		cwd=workspace,
+		env=env,
+		capture_output=True,
+		text=True,
+		encoding="utf-8",
+	)
+	return proc, env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+
+
+def _audit_exclusions_support_repo(workspace: Path) -> Path:
+	(workspace / "scripts").mkdir()
+	trusted = workspace / "scripts" / "security_audit_fp_exclusions.json"
+	trusted.write_bytes((REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json").read_bytes())
+	(workspace / "scripts" / "clean.json").write_text(
+		'{"schema_version":"security_audit_fp_exclusions.v1","rules":[]}', encoding="utf-8"
+	)
+	(workspace / "scripts" / "malformed.json").write_text("{invalid", encoding="utf-8")
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	for args in (
+		("init", "-q"),
+		("add", "scripts"),
+		("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-q", "-m", "support"),
+	):
+		subprocess.run(["git", *args], cwd=workspace, env=git_env, check=True, capture_output=True)
+	return trusted
+
+
+def test_security_audit_exclusions_resolution_accepts_only_unchanged_tracked_support() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-support-") as td:
+		workspace = Path(td)
+		trusted = _audit_exclusions_support_repo(workspace)
+		audit_data = workspace / "audit-data"
+		(audit_data / "scripts").mkdir(parents=True)
+		malicious = audit_data / "scripts" / "security_audit_fp_exclusions.json"
+		malicious.write_text(
+			json.dumps({"schema_version": "security_audit_fp_exclusions.v1", "rules": [
+				{"id": "all", "reason": "suppress everything"},
+			]}), encoding="utf-8"
+		)
+		(workspace / "scripts" / "escape.json").symlink_to(malicious)
+		(workspace / "scripts" / "outside.json").symlink_to(
+			REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json"
+		)
+		(workspace / "scripts" / "internal.json").symlink_to(trusted)
+
+		for configured, expected in (
+			("scripts/security_audit_fp_exclusions.json", trusted),
+			("scripts/clean.json", workspace / "scripts" / "clean.json"),
+			(str(trusted), trusted),
+			("scripts/internal.json", trusted),
+		):
+			proc, variables = _run_audit_exclusions_resolution(workspace, configured)
+			assert proc.returncode == 0, (configured, proc.stderr)
+			assert variables == f"SECURITY_AUDIT_FP_EXCLUSIONS={expected}\n"
+
+		for configured in (
+			"audit-data/scripts/security_audit_fp_exclusions.json",
+			"../audit-data/scripts/security_audit_fp_exclusions.json",
+			"audit-data/../scripts/security_audit_fp_exclusions.json",
+			"scripts/escape.json",
+			"scripts/outside.json",
+			str(malicious),
+			str(REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json"),
+			"scripts/missing.json",
+			"scripts",
+			"scripts/security_audit_fp_exclusions.json\nINJECTED=true",
+		):
+			proc, variables = _run_audit_exclusions_resolution(workspace, configured)
+			assert proc.returncode != 0 and not variables, configured
+			assert "::error::Security audit exclusion catalog" in proc.stdout
+			assert "INJECTED" not in proc.stdout + proc.stderr
+
+		# An untracked in-tree file or modified tracked file is not content
+		# from the verified support commit, even if its path stays in-tree.
+		untracked = workspace / "scripts" / "untracked.json"
+		untracked.write_text("{}", encoding="utf-8")
+		proc, variables = _run_audit_exclusions_resolution(workspace, "scripts/untracked.json")
+		assert proc.returncode != 0 and not variables
+		trusted.write_text("{}", encoding="utf-8")
+		proc, variables = _run_audit_exclusions_resolution(workspace, "scripts/security_audit_fp_exclusions.json")
+		assert proc.returncode != 0 and not variables
+		proc, variables = _run_audit_exclusions_resolution(workspace, "scripts/missing.json", enabled="false")
+		assert proc.returncode == 0 and not variables
+
+
+def test_security_audit_nested_data_cannot_replace_trusted_exclusions() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-trust-boundary-") as td:
+		workspace = Path(td)
+		trusted = _audit_exclusions_support_repo(workspace)
+		repo_dir, first_sha, head_sha = _git_fixture_repo(workspace / "audit-data")
+		malicious = repo_dir / "scripts" / "security_audit_fp_exclusions.json"
+		malicious.parent.mkdir()
+		malicious.write_text(json.dumps({
+			"schema_version": "security_audit_fp_exclusions.v1",
+			"rules": [{"id": "all", "reason": "suppress everything"}],
+		}), encoding="utf-8")
+		for configured, finding_id in (
+			("scripts/security_audit_fp_exclusions.json", "default-branch-finding"),
+			("scripts/clean.json", "explicit-branch-finding"),
+		):
+			proc, variables = _run_audit_exclusions_resolution(workspace, configured)
+			assert proc.returncode == 0, proc.stderr
+			catalog = variables.strip().split("=", 1)[1]
+			state = _security_audit_tracker_state()
+			state["api_responses"] = [[[]]]
+			proc, final_state = _run_security_audit(
+				state,
+				codex_output=json.dumps([_finding_payload(finding_id, file_path="file_b.py")]),
+				cwd=repo_dir,
+				extra_env={
+					"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+					"SECURITY_AUDIT_FP_EXCLUSIONS": catalog,
+					**({"SECURITY_AUDIT_TARGET_REF": "feature/audit"} if finding_id == "explicit-branch-finding" else {}),
+					**({"SECURITY_AUDIT_DIFF_BASE": first_sha, "SECURITY_AUDIT_DIFF_HEAD": head_sha} if finding_id == "explicit-branch-finding" else {}),
+				},
+			)
+			assert proc.returncode == 0, proc.stderr
+			assert f"tracker=#9000 findings=1 followups_created=1" in proc.stdout
+			assert finding_id in "\n".join(final_state.get("issue_create_bodies", []))
+
+		proc, variables = _run_audit_exclusions_resolution(workspace, "scripts/malformed.json")
+		assert proc.returncode == 0, proc.stderr
+		proc, final_state = _run_security_audit(
+			_security_audit_tracker_state(),
+			codex_output=json.dumps([_finding_payload("must-not-publish", file_path="file_b.py")]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_FP_EXCLUSIONS": variables.strip().split("=", 1)[1],
+			},
+		)
+		assert proc.returncode != 0
+		assert final_state.get("issue_comment_args", []) == []
+		assert final_state.get("issue_create_args", []) == []
+
+
 def test_security_audit_workflow_keeps_executable_support_outside_data_checkout() -> None:
 	steps = _audit_workflow_step
 	import yaml
@@ -562,6 +716,8 @@ def test_security_audit_workflow_keeps_executable_support_outside_data_checkout(
 	assert "${{" not in resolve["run"]
 	assert resolve["env"]["AUDIT_TARGET_REF_INPUT"] == "${{ inputs.ref || '' }}"
 	assert "git -C audit-data merge-base" in steps("Verify audit data and resolve scope")["run"]
+	assert names.index("Verify audit data and resolve scope") < names.index("Resolve trusted security audit exclusions") < names.index("Run security audit")
+	assert "${{" not in steps("Resolve trusted security audit exclusions")["run"]
 	assert steps("Run security audit")["working-directory"] == "./audit-data"
 	assert steps("Run security audit")["env"]["SECURITY_AUDIT_SUPPORT_DIR"] == "${{ github.workspace }}"
 
