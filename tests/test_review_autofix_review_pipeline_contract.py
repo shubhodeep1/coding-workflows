@@ -7314,8 +7314,10 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		(host / "scripts").mkdir(parents=True)
 		(host / ".git-credentials").write_text("private-sentinel")
 		(host / "scripts/app.py").write_text("before\n")
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			(host / f"scripts/module{module_suffix}").write_text("before\n")
 		subprocess.run(["git", "init", "-q", str(host)], check=True)
-		subprocess.run(["git", "add", "scripts/app.py"], cwd=host, check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
@@ -7324,6 +7326,8 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 				capture_output=True, text=True, check=False,
 			)
 		assert run("snapshot").returncode == 0
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			assert (source / f"scripts/module{module_suffix}").read_text() == "before\n"
 		assert subprocess.run(["git", "-C", str(host), "rev-parse", "HEAD"], env=_git_clean_env(), capture_output=True).returncode != 0
 		assert not (source / ".git-credentials").exists()
 		assert "private-sentinel" not in (source / ".git" / "config").read_text()
@@ -7334,9 +7338,13 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		assert not (source / "scripts/backend.py").exists()
 		(source / "scripts/app.py").write_text("after\n")
 		(source / "scripts/new.py").write_text("new\n")
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			(source / f"scripts/module{module_suffix}").write_text("after\n")
 		assert run("transfer").returncode == 0
 		assert (host / "scripts/app.py").read_text() == "after\n"
 		assert (host / "scripts/new.py").read_text() == "new\n"
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			assert (host / f"scripts/module{module_suffix}").read_text() == "after\n"
 		# A later retry has an updated baseline; a concurrent host edit does not.
 		(host / "scripts/app.py").write_text("host changed\n")
 		(source / "scripts/app.py").write_text("isolated changed\n")
