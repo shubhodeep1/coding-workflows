@@ -263,7 +263,7 @@ def _emitter_script(state_file: Path) -> str:
 		+ _extract_bash_function(script, "is_truthy() {")
 		+ _extract_bash_function(script, "record_orchestrator_lesson_event() {")
 		+ _extract_bash_function(script, "emit_orchestrator_completion_lessons() {")
-		+ f"STATE_FILE={str(state_file)!r}\nTRACKING_NUM=77\n"
+		+ f"STATE_FILE={str(state_file)!r}\nTRACKING_NUM=77\nRUNTIME_DIR={str(SCRIPTS_DIR)!r}\n"
 	)
 
 
@@ -307,6 +307,25 @@ def test_record_orchestrator_lesson_event_preserves_diagnostic(tmp_path: Path) -
 	assert result.returncode == 0
 	assert "ORCHESTRATE_ERROR: Expecting value" in result.stderr
 	assert "could not record orchestrator lesson event" in result.stderr
+
+
+def test_record_lesson_uses_external_support_not_project_script(poller_repo: Path, tmp_path: Path) -> None:
+	workflow = (REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "lesson_support_verified=false" in workflow
+	assert "cmp -s scripts/orchestrate_lib.py .codex-workflow-src/scripts/orchestrate_lib.py" in workflow
+	assert 'install -m 0755 .codex-workflow-src/scripts/orchestrate_lib.py "${RUNTIME_DIR}/orchestrate_lib.py"' in workflow
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps(_state()), encoding="utf-8")
+	project_script = poller_repo / "scripts" / "orchestrate_lib.py"
+	project_script.write_text(f"from pathlib import Path\nPath({str(tmp_path / 'executed')!r}).touch()\n", encoding="utf-8")
+	result = _run_bash(_emitter_script(state_file) + "record_orchestrator_lesson_event '{\"kind\":\"stall_recovery\",\"text\":\"test\"}'\n", poller_repo)
+	assert result.returncode == 0, result.stderr
+	assert not (tmp_path / "executed").exists()
+	assert json.loads(state_file.read_text(encoding="utf-8"))["lesson_events"][0]["text"] == "test"
+	missing_support = _run_bash(_emitter_script(state_file) + f"RUNTIME_DIR={str(tmp_path)!r}\nrecord_orchestrator_lesson_event '{{\"kind\":\"stall_recovery\",\"text\":\"missing\"}}'\n", poller_repo)
+	assert missing_support.returncode == 0
+	assert "could not record orchestrator lesson event" in missing_support.stderr
+	assert not (tmp_path / "executed").exists()
 
 
 @pytest.mark.parametrize("switch", ["AI_MEMORY_ENABLED", "LESSONS_LEARNED_ENABLED"])

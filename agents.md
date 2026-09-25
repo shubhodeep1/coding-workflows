@@ -53,7 +53,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` (default 3) trailing markers on
    the current head share one fingerprint the gate skips the run
    (`skip_reason=fingerprint_cap`) and the `fingerprint-cap-block` job labels
-   the linked issues (or the PR) `ai:review-blocked`, posts one
+   only an issue proven by the bot-owned `ai/issue-<N>` head branch (otherwise
+   the PR) `ai:review-blocked`, posts one
    `review-autofix-failure-cap:v1` comment and sends an
    `identical_failure_cap` heal report (`REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED`;
    force_rb_judge dispatches bypass it). The poller's noop-suspicious
@@ -80,11 +81,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
    answers with `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->` and a
    `claude_fixer_converged_head=<sha>` dispatch; the gate verifies both
    markers for that exact head (hand-off by the `GH_PAT` identity, verdict by
-   an OWNER / MEMBER / COLLABORATOR) and the `claude-fixer-auto-merge` job
-   enables auto-merge. Zero ledger entries and no failing check auto-merge in
+   the PR author with OWNER / MEMBER / COLLABORATOR association). This requests
+   a fresh full reviewer pass; only complete clean raw review, a current head,
+   and settled checks let `claude-fixer-auto-merge` enable auto-merge. Zero
+   ledger entries and no failing check auto-merge in
    the run; at the cap the PR itself is labelled `ai:review-blocked`; dispatch
-   re-runs on a head that already has a hand-off are skipped
-   (`claude_fixer_awaiting_session`). `[claude-intervention]` and
+   re-runs on a head that already has a hand-off are skipped while awaiting
+   the verdict (`claude_fixer_awaiting_session`); after the verdict the sweep
+   retries incomplete reviews. `[claude-intervention]` and
    `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`
    and `[ai-merge-resolve]`. The consolidator / floor stages live inside the
    editor step, so they do not run in this mode.

@@ -509,7 +509,7 @@ jobs:
             # suppression below), and changed_files (to verify the paginated
             # path list before either skip branch can run).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), head_repo: (.head.repo.full_name // ""), author_login: (.user.login // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
@@ -725,13 +725,10 @@ jobs:
           # fixes to the Claude session that owns the PR instead of the GPT
           # editor / resolver (codex-agent step "Hand review round to Claude
           # session (Claude-fixer mode)"). The gate adds two things:
-          #   * claude_fixer_converged_head dispatch: the session found nothing
-          #     left to fix on that head. Accept it only when it names the
-          #     current head, a findings hand-off for that head was posted by
-          #     the GH_PAT identity, and a trusted collaborator's
-          #     ai:claude-fixer-verdict:v1 comment answers it; the sibling
-          #     claude-fixer-auto-merge job then enables auto-merge. Anything
-          #     else skips the run (claude_fixer_converged_unverified).
+          #   * claude_fixer_converged_head dispatch: treat the PR author's
+          #     verdict on the latest bot hand-off as a request for fresh
+          #     review. Only positive reviewer/check evidence can enable the
+          #     sibling auto-merge job. Invalid requests skip the run.
           #   * any other workflow_dispatch (sweep, continuation, orchestrator)
           #     on a head that already has a hand-off is skipped: the round
           #     waits on the session, and a rerun would only repeat the panel.
@@ -767,17 +764,23 @@ jobs:
               gate_fetch_marker_comments
               if [ "${gate_marker_fetch_state}" != "ok" ]; then
                 claude_fixer_converged_detail="comments_${gate_marker_fetch_state}"
-              elif jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
+              elif [ "$(printf '%s' "${_pr_gate}" | jq -r '.head_repo // empty')" != "${REPOSITORY}" ] \
+                || [ -z "$(printf '%s' "${_pr_gate}" | jq -r '.author_login // empty')" ]; then
+                claude_fixer_converged_detail="unverified_pr_owner"
+              elif jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" --arg fixer "$(printf '%s' "${_pr_gate}" | jq -r '.author_login')" '
                   ([.[] | select((.id | type) == "number" and .author_login == $author and
                     ((.body // "") | test("<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->")))] | max_by(.id)) as $latest_handoff |
                   $latest_handoff != null and
                   (($latest_handoff.body // "") | contains("<!-- ai:claude-fixer-handoff:v1 kind=findings head=" + $head + " ")) and
                   any(.[]; (.id | type) == "number" and .id > $latest_handoff.id and
                     ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")) and
+                    ((.author_login // "" | ascii_downcase) == ($fixer | ascii_downcase)) and
                     ((.body // "") | contains("<!-- ai:claude-fixer-verdict:v1 head=" + $head + " -->")))
                 ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
                 CLAUDE_FIXER_CONVERGED="true"
-                SKIP_REASON="claude_fixer_converged"
+                SHOULD_RUN="true"
+                SKIP_REASON=""
+                FORCE_FULL_REVIEW_TIER="true"
               else
                 claude_fixer_converged_detail="handoff_or_verdict_missing"
               fi
@@ -792,9 +795,29 @@ jobs:
             if [ "${gate_marker_fetch_state}" = "ok" ] && jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
                 any(.[]; .author_login == $author and ((.body // "") | test("<!-- ai:claude-fixer-handoff:v1 kind=[a-z]+ head=" + $head + " ")))
               ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
-              SHOULD_RUN="false"
-              SKIP_REASON="claude_fixer_awaiting_session"
-              echo "AUTOFIX_GATE_SKIP reason=claude_fixer_awaiting_session pr=${PR_NUMBER} head_sha=${pr_head_sha_gate}"
+              # A completed author verdict is durable retry authorization if
+              # the previous convergence review failed. Reuse this cycle's
+              # cached comments and PR payload; no extra API read is needed.
+              if [ "$(printf '%s' "${_pr_gate}" | jq -r '.head_repo // empty')" = "${REPOSITORY}" ] \
+                && [ -n "$(printf '%s' "${_pr_gate}" | jq -r '.author_login // empty')" ] \
+                && jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" --arg fixer "$(printf '%s' "${_pr_gate}" | jq -r '.author_login')" '
+                  ([.[] | select((.id | type) == "number" and .author_login == $author and
+                    ((.body // "") | test("<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->")))] | max_by(.id)) as $latest_handoff |
+                  $latest_handoff != null and
+                  (($latest_handoff.body // "") | contains("<!-- ai:claude-fixer-handoff:v1 kind=findings head=" + $head + " ")) and
+                  any(.[]; (.id | type) == "number" and .id > $latest_handoff.id and
+                    ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")) and
+                    ((.author_login // "" | ascii_downcase) == ($fixer | ascii_downcase)) and
+                    ((.body // "") | contains("<!-- ai:claude-fixer-verdict:v1 head=" + $head + " -->")))
+                ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
+                CLAUDE_FIXER_CONVERGED="true"
+                FORCE_FULL_REVIEW_TIER="true"
+                echo "AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED pr=${PR_NUMBER} head=${pr_head_sha_gate} accepted=true detail=retry"
+              else
+                SHOULD_RUN="false"
+                SKIP_REASON="claude_fixer_awaiting_session"
+                echo "AUTOFIX_GATE_SKIP reason=claude_fixer_awaiting_session pr=${PR_NUMBER} head_sha=${pr_head_sha_gate}"
+              fi
             fi
           fi
           if [ "${CLAUDE_FIXER}" = "true" ]; then
@@ -838,7 +861,7 @@ jobs:
           # response or the comments response, so eligible dispatches issue one
           # GET /user plus one paginated GET /issues/{n}/comments, shared with
           # the fingerprint cap below through gate_fetch_marker_comments.
-          if [ "${SHOULD_RUN}" = "true" ] \
+          if [ "${SHOULD_RUN}" = "true" ] && [ "${CLAUDE_FIXER_CONVERGED}" != "true" ] \
             && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
             && [ "${AUTOFIX_SKIP_TERMINAL_SAME_HEAD:-true}" != "false" ] \
             && [ "${FORCE_RB_JUDGE:-false}" != "true" ] \
@@ -1085,6 +1108,8 @@ jobs:
           DET_SKIP_REASON=""
           if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             FORCE_REVIEW="false"
+            # A verified convergence request always requires a new full panel.
+            [ "${CLAUDE_FIXER_CONVERGED}" != "true" ] || FORCE_REVIEW="true"
             if printf "%s" "${PR_TITLE}" | grep -Fq "[force-review]"; then
               FORCE_REVIEW="true"
             fi
@@ -1932,17 +1957,12 @@ jobs:
           # 4) Workflow run summary
           write_deterministic_skip_summary
 
-  # Claude-fixer mode convergence (gate output claude_fixer_converged): the
-  # /implement-plan-claude session found nothing left to fix on the reviewed
-  # head and dispatched claude_fixer_converged_head. The gate verified the
-  # hand-off and the verdict for that exact head; this job enables auto-merge
-  # through the same helper the codex-agent "Enable auto-merge on PR" step
-  # uses, bound to that head (--match-head-commit). No reviewer or editor
-  # model runs here.
+  # Convergence is a request for independent review, not merge authorization.
+  # Only the completed codex-agent reviewer pass can publish clean evidence.
   claude-fixer-auto-merge:
-    needs: gate
+    needs: [gate, codex-agent]
     runs-on: ubuntu-latest
-    if: ${{ needs.gate.outputs.claude_fixer_converged == 'true' }}
+    if: ${{ needs.gate.outputs.claude_fixer_converged == 'true' && needs.codex-agent.result == 'success' && needs.codex-agent.outputs.claude_fixer_review_clean == 'true' }}
     steps:
       - name: Checkout auto-merge helper
         uses: actions/checkout@v5
@@ -1955,6 +1975,7 @@ jobs:
           sparse-checkout: |
             scripts/review_enable_auto_merge.sh
             scripts/gh_helpers.sh
+            scripts/pr_checks_lib.sh
             scripts/emit_event.sh
           sparse-checkout-cone-mode: false
 
@@ -1973,6 +1994,15 @@ jobs:
             echo "::error::Unverified auto-merge helper checkout."
             exit 1
           fi
+          source .codex-workflow-src/scripts/gh_helpers.sh
+          source .codex-workflow-src/scripts/pr_checks_lib.sh
+          # The gate's PR snapshot and the reviewer job's own post-review
+          # read predate this job; fetch once to reject head movement.
+          pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          base_ref="$(jq -r '.base.ref // empty' <<< "${pr_json}")"
+          [ -n "${base_ref}" ] && jq -e --arg head "${INITIAL_HEAD_SHA}" \
+            '.state == "open" and .head.sha == $head and .mergeable == true' <<< "${pr_json}" >/dev/null
+          PR_CHECKS_SELF_RUN_ID="${GITHUB_RUN_ID}" _pr_checks_completed "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${base_ref}"
           echo "CLAUDE_FIXER_AUTO_MERGE pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA}"
           bash .codex-workflow-src/scripts/review_enable_auto_merge.sh
 
@@ -2111,31 +2141,32 @@ jobs:
           fi
           pr_json="${work_dir}/pr_payload.json"
           if ! gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "${pr_json}" 2>/dev/null; then
-            echo "::warning::Could not fetch PR #${PR_NUMBER}; labeling the PR itself ai:review-blocked without linked-issue resolution."
-            printf '{}' > "${pr_json}"
+            echo "::warning::Could not verify PR #${PR_NUMBER}; skipping cap labels."
+            exit 0
           fi
           pr_state="$(jq -r '.state // ""' "${pr_json}" 2>/dev/null || echo "")"
           current_head="$(jq -r '.head.sha // ""' "${pr_json}" 2>/dev/null || echo "")"
+          if ! jq -e --argjson pr "${PR_NUMBER}" '.number == $pr' "${pr_json}" >/dev/null 2>&1; then
+            echo "::warning::PR identity mismatch; skipping cap labels."
+            exit 0
+          fi
           if [ "${pr_state}" = "closed" ]; then
             echo "AUTOFIX_FINGERPRINT cap=skipped pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=pr_closed"
             exit 0
           fi
-          if [ -n "${current_head}" ] && [ "${current_head}" != "${PR_HEAD_SHA}" ]; then
+          if [ "${pr_state}" != "open" ] || ! [[ "${current_head}" =~ ^[0-9a-f]{40}$ ]] \
+            || [ "${current_head}" != "${PR_HEAD_SHA}" ]; then
             # A push landed after the gate: the new head has no identical
             # failures yet and gets its own run.
             echo "AUTOFIX_FINGERPRINT cap=skipped pr=${PR_NUMBER} head=${PR_HEAD_SHA} current_head=${current_head} reason=head_moved"
             exit 0
           fi
 
-          # Linked issues: strict current-repo closing-keyword refs and
-          # repo-scoped issue URLs in the PR title/body (the same fallback the
-          # workflow-failure review-blocked step uses).
+          # Only workflow-owned branch lineage authorizes an issue label.
+          # PR title/body and closing references are controlled by the PR author.
           issue_numbers=""
-          pr_text="$(jq -r '[.title // "", .body // ""] | join(" ")' "${pr_json}" 2>/dev/null || echo "")"
-          if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
-            issue_numbers="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${pr_text}" || true)"
-          else
-            echo "::warning::extract_repo_scoped_issue_refs_from_text unavailable; labeling the PR itself."
+          if type verified_review_blocked_issue_from_pr >/dev/null 2>&1; then
+            issue_numbers="$(verified_review_blocked_issue_from_pr "${pr_json}" "${REPOSITORY}" "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" "${PR_NUMBER}" || true)"
           fi
 
           ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
@@ -2228,6 +2259,8 @@ jobs:
 
   codex-agent:
     needs: gate
+    outputs:
+      claude_fixer_review_clean: ${{ steps.claude_fixer_handoff.outputs.clean_review }}
     # Display name surfaces the gate's no-PR claude_branch_review decision in
     # the GitHub Checks UI. Only claude/** pushes without an open PR use the
     # reviewer-comment path; PR-backed claude/** branches keep the normal
@@ -2375,6 +2408,7 @@ jobs:
       # findings and no failing check still enable auto-merge here, and the
       # iteration cap + review-blocked judge still apply. See the gate.
       CLAUDE_FIXER_MODE: ${{ needs.gate.outputs.claude_fixer }}
+      CLAUDE_FIXER_CONVERGENCE_REVIEW: ${{ needs.gate.outputs.claude_fixer_converged || 'false' }}
       # No-PR claude-branch-review path overrides (push events on claude/**
       # without an open PR).  Read by "Collect PR metadata" and
       # "Checkout PR head branch" to synthesize PR_META_FILE / TARGET_BRANCH
@@ -4433,6 +4467,11 @@ jobs:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           set -euo pipefail
+          if [ "${CLAUDE_FIXER_CONVERGENCE_REVIEW:-false}" = "true" ]; then
+            # A same-head resume is not independent evidence for this request.
+            export AUTOFIX_RESUME_RESTORED=false
+            touch "${RUNTIME_DIR}/claude_fixer_review_start"
+          fi
           materiality_pid=""
           case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on)
@@ -4597,6 +4636,7 @@ jobs:
       # resolver, or export CLAUDE_FIXER_ZERO_FINDINGS=true so the auto-merge
       # step runs. Body: scripts/review_autofix_step_claude_fixer_handoff.sh.
       - name: Hand review round to Claude session (Claude-fixer mode)
+        id: claude_fixer_handoff
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CLAUDE_FIXER_MODE == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -4604,6 +4644,7 @@ jobs:
           HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
           HEAD_REF: ${{ env.TARGET_BRANCH }}
           CLAUDE_FIXER_ROUND_INDEX: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          CLAUDE_FIXER_CONVERGENCE_REVIEW: ${{ needs.gate.outputs.claude_fixer_converged || 'false' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_fixer_handoff.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_fixer_handoff.sh"
@@ -5876,7 +5917,7 @@ jobs:
         # `${AUTOFIX_SKIP_SELF_TRIGGERED:-false}`, so the default is `false`
         # and the [ai-autofix] synchronize is NOT skipped). The autofix loop now actually "keeps going
         # until there are no edits" instead of converging on a stale head.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && (env.CLAUDE_FIXER_MODE != 'true' || env.CLAUDE_FIXER_ZERO_FINDINGS == 'true')"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && (env.CLAUDE_FIXER_MODE != 'true' || (env.CLAUDE_FIXER_CONVERGENCE_REVIEW != 'true' && env.CLAUDE_FIXER_ZERO_FINDINGS == 'true'))"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -5900,7 +5941,7 @@ jobs:
         # head f11d6dc while editor commit 005824e was still local) and the
         # docstring at scripts/review_commit_changes.sh:32-41 for the same
         # rationale that already governs EDITOR_CHANGES_LOST at :3315-3326.
-        if: "success() && env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true' && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && (env.CLAUDE_FIXER_MODE != 'true' || env.CLAUDE_FIXER_ZERO_FINDINGS == 'true')"
+        if: "success() && env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true' && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && (env.CLAUDE_FIXER_MODE != 'true' || (env.CLAUDE_FIXER_CONVERGENCE_REVIEW != 'true' && env.CLAUDE_FIXER_ZERO_FINDINGS == 'true'))"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -6152,31 +6193,21 @@ jobs:
             }
           fi
 
-          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+          ISSUE_NUMBERS=""
+          if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] \
+            || ! jq -e --argjson pr "${PR_NUMBER}" '.number == $pr and .state == "open"' "${PR_PAYLOAD_FILE:-/dev/null}" >/dev/null 2>&1; then
+            echo "::warning::PR metadata unavailable; skipping review-blocked labels."
+            exit 0
           fi
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: strict current-repo closing-keyword refs and repo-scoped issue URLs/paths only.
-            PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
-            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
-              PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
-            fi
-            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
-              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
-            else
-              ISSUE_NUMBERS=""
-            fi
-            if [ -z "${ISSUE_NUMBERS}" ]; then
-              echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
-              exit 0
-            fi
-            echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
+          if type verified_review_blocked_issue_from_pr >/dev/null 2>&1; then
+            ISSUE_NUMBERS="$(verified_review_blocked_issue_from_pr "${PR_PAYLOAD_FILE}" "${REPOSITORY}" "" "${PR_NUMBER}" || true)"
           fi
 
           ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
+          if [ -z "${ISSUE_NUMBERS}" ]; then
+            gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null
+            exit 0
+          fi
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
@@ -7192,7 +7223,7 @@ jobs:
           echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${failure_reason} fp=${failure_fp} degraded=${failure_degraded:-1}"
 
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.CLAUDE_FIXER_CONVERGENCE_REVIEW != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -7226,28 +7257,18 @@ jobs:
 
           ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
 
-          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+          ISSUE_NUMBERS=""
+          if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] \
+            || ! jq -e --argjson pr "${PR_NUMBER}" '.number == $pr and .state == "open"' "${PR_PAYLOAD_FILE:-/dev/null}" >/dev/null 2>&1; then
+            echo "::warning::PR metadata unavailable; skipping review-blocked labels."
+            exit 0
           fi
-
+          if type verified_review_blocked_issue_from_pr >/dev/null 2>&1; then
+            ISSUE_NUMBERS="$(verified_review_blocked_issue_from_pr "${PR_PAYLOAD_FILE}" "${REPOSITORY}" "" "${PR_NUMBER}" || true)"
+          fi
           if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: strict current-repo closing-keyword refs and repo-scoped issue URLs/paths only.
-            PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
-            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
-              PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
-            fi
-            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
-              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
-            else
-              ISSUE_NUMBERS=""
-            fi
-            if [ -z "${ISSUE_NUMBERS}" ]; then
-              echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
-              exit 0
-            fi
-            echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
+            gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null
+            exit 0
           fi
 
           while IFS= read -r issue_number; do
@@ -7262,7 +7283,7 @@ jobs:
         # reported as the step that failed the job — the job's red status
         # already reflects the original failure that triggered this path.
         continue-on-error: true
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.CLAUDE_FIXER_CONVERGENCE_REVIEW != 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -7303,7 +7324,9 @@ jobs:
           # itself prove editor execution succeeded (fallback summaries
           # can also be posted). Keep this branch wording limited to
           # that invariant.
-          if [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
+          if [ "${CLAUDE_FIXER_CONVERGENCE_REVIEW:-false}" = "true" ]; then
+            BODY="AI Claude-fixer re-review did not complete on this head. Auto-merge remains disabled; the scheduled sweep can retry after checks or reviewers recover. [View workflow run](${RUN_URL})."
+          elif [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
             BODY="$(cat <<EOF
           **AI review/autofix encountered a post-editor failure — needs human intervention**
 

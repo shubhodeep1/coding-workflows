@@ -20,6 +20,39 @@ if ! type gh_retry >/dev/null 2>&1; then
 	gh_retry() { "$@"; }
 fi
 
+# Resolve only workflow-owned issue lineage. PR text and GitHub's
+# closingIssuesReferences are author-controlled and cannot authorize labels.
+# An empty result means the caller must label only the PR.
+verified_review_blocked_issue_from_pr()
+{
+	local pr_file="$1" repo="$2" trusted_login="${3:-}" expected_pr="${4:-}"
+	local issue_number issue_json
+	[[ "${expected_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
+	if [ -z "${trusted_login}" ]; then
+		# The caller's PR metadata contains its author, not the authenticated
+		# bot identity; only the cap gate has a cached /user response to pass.
+		trusted_login="$(gh_retry gh api user --jq '.login // empty' 2>/dev/null || true)"
+	fi
+	[ -n "${trusted_login}" ] || return 1
+	issue_number="$(jq -r --arg repo "${repo}" --arg login "${trusted_login}" --argjson pr "${expected_pr}" '
+		if .number != $pr or .state != "open" or
+		   (.user.login // "" | ascii_downcase) != ($login | ascii_downcase) or
+		   .head.repo.full_name != $repo or
+		   (.head.ref // "" | test("^ai/issue-[1-9][0-9]*$") | not) then empty
+		else .head.ref | capture("^ai/issue-(?<number>[1-9][0-9]*)$").number end
+	' "${pr_file}" 2>/dev/null || true)"
+	[[ "${issue_number}" =~ ^[1-9][0-9]*$ ]] || return 1
+	# PR metadata cannot distinguish an issue number from another PR. No
+	# issue payload is otherwise fetched in these label-only call sites.
+	issue_json="$(gh_retry gh api "repos/${repo}/issues/${issue_number}" 2>/dev/null || true)"
+	if printf '%s' "${issue_json}" | jq -e --argjson number "${issue_number}" \
+		'.number == $number and .pull_request == null' >/dev/null 2>&1; then
+		printf '%s\n' "${issue_number}"
+		return 0
+	fi
+	return 1
+}
+
 declare -A _AI_LABEL_COLORS=(
 	["ai:clarification"]="f9d0c4"
 	["ai:planning"]="d4c5f9"

@@ -5,8 +5,8 @@
 reviewer panel, but the GPT editor, conflict resolver, push / re-trigger tail
 and review-blocked judge do not run: the findings (or the pre-review
 conflict) are handed to the Claude session that owns the PR, and a
-`claude_fixer_converged_head` dispatch turns auto-merge on once that session
-found nothing left to fix. Zero findings still auto-merge in the run, and the
+`claude_fixer_converged_head` dispatch requests an independent same-head
+review before auto-merge. Zero findings still auto-merge in the first run, and the
 MAX_AUTOFIX_ITERATIONS cap still applies, counting `[claude-autofix]` rounds.
 """
 
@@ -118,7 +118,7 @@ def test_gate_exports_fixer_outputs_and_mode():
 	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
 	assert "claude/implement-plan-*) CLAUDE_FIXER=\"true\" ;;" in gate_run
 	assert 'SKIP_REASON="claude_fixer_awaiting_session"' in gate_run
-	assert 'SKIP_REASON="claude_fixer_converged"' in gate_run
+	assert 'CLAUDE_FIXER_CONVERGED="true"' in gate_run
 	assert "${{" not in gate_run.split("# ----- Claude-fixer mode", 1)[1].split("# ----- Terminal same-head skip", 1)[0]
 	gate_env = _steps(WORKFLOW, "gate")["Evaluate review gate"]["env"]
 	assert gate_env["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
@@ -132,7 +132,7 @@ def test_editor_tail_and_judge_are_skipped_in_fixer_mode():
 
 def test_zero_findings_rounds_still_auto_merge():
 	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
-		assert "(env.CLAUDE_FIXER_MODE != 'true' || env.CLAUDE_FIXER_ZERO_FINDINGS == 'true')" in AGENT_STEPS[name]["if"], name
+		assert "(env.CLAUDE_FIXER_CONVERGENCE_REVIEW != 'true' && env.CLAUDE_FIXER_ZERO_FINDINGS == 'true')" in AGENT_STEPS[name]["if"], name
 
 
 def test_handoff_step_runs_after_reviewers_and_before_the_editor():
@@ -166,14 +166,21 @@ def test_iteration_counter_counts_claude_autofix_rounds():
 
 def test_converged_auto_merge_job_is_bound_to_the_gate_head():
 	job = WORKFLOW["jobs"]["claude-fixer-auto-merge"]
-	assert job["needs"] == "gate"
-	assert job["if"] == "${{ needs.gate.outputs.claude_fixer_converged == 'true' }}"
+	assert job["needs"] == ["gate", "codex-agent"]
+	assert "needs.codex-agent.outputs.claude_fixer_review_clean == 'true'" in job["if"]
 	checkout, merge = job["steps"]
 	assert checkout["with"]["ref"] == "${{ needs.gate.outputs.review_support_sha }}"
 	assert "scripts/review_enable_auto_merge.sh" in checkout["with"]["sparse-checkout"]
 	assert merge["env"]["INITIAL_HEAD_SHA"] == "${{ needs.gate.outputs.head_sha }}"
 	assert "bash .codex-workflow-src/scripts/review_enable_auto_merge.sh" in merge["run"]
 	assert "${{" not in merge["run"]
+	assert "_pr_checks_completed" in merge["run"]
+	assert "needs.codex-agent.result == 'success'" in job["if"]
+	assert AGENT_STEPS["Hand review round to Claude session (Claude-fixer mode)"]["id"] == "claude_fixer_handoff"
+	assert "claude_fixer_review_start" in AGENT_STEPS["Run reviewer models"]["run"]
+	assert "CLAUDE_FIXER_CONVERGENCE_REVIEW" in HANDOFF_SCRIPT.read_text(encoding="utf-8")
+	assert "env.CLAUDE_FIXER_CONVERGENCE_REVIEW != 'true'" in AGENT_STEPS["Mark linked issues review-blocked (workflow failure)"]["if"]
+	assert "AI Claude-fixer re-review did not complete" in AGENT_STEPS["Post review-blocked comment on PR (workflow failure)"]["run"]
 
 
 def test_topology_gate_hands_conflicts_to_claude_regardless_of_resolver_toggle():
@@ -189,8 +196,8 @@ def test_topology_gate_hands_conflicts_to_claude_regardless_of_resolver_toggle()
 def _gate_jq(label: str) -> str:
 	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
 	block = gate_run.split("# ----- Claude-fixer mode", 1)[1].split("# ----- Terminal same-head skip", 1)[0]
-	programs = re.findall(r"jq -e --arg head \"\$\{pr_head_sha_gate\}\" --arg author \"\$\{gate_marker_author_login\}\" '(.*?)'", block, re.S)
-	assert len(programs) == 2, programs
+	programs = re.findall(r"jq -e --arg head \"\$\{pr_head_sha_gate\}\" --arg author \"\$\{gate_marker_author_login\}\"[^\n]* '\n(.*?)\n\s+' \"\$\{gate_marker_comments_file\}\"", block, re.S)
+	assert len(programs) == 3, programs
 	return programs[0] if label == "converged" else programs[1]
 
 
@@ -198,7 +205,7 @@ def _jq_true(program: str, comments: list[dict]) -> bool:
 	with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
 		json.dump([{"id": index, **comment} for index, comment in enumerate(comments, 1)], handle)
 	try:
-		proc = subprocess.run(["jq", "-e", "--arg", "head", HEAD, "--arg", "author", AUTHOR, program, handle.name], capture_output=True, text=True)
+		proc = subprocess.run(["jq", "-e", "--arg", "head", HEAD, "--arg", "author", AUTHOR, "--arg", "fixer", "dev", program, handle.name], capture_output=True, text=True)
 	finally:
 		os.unlink(handle.name)
 	return proc.returncode == 0
@@ -215,7 +222,8 @@ VERDICT = f"<!-- ai:claude-fixer-verdict:v1 head={HEAD} -->"
 
 def test_converged_requires_workflow_handoff_and_trusted_verdict():
 	program = _gate_jq("converged")
-	assert _jq_true(program, [_c(HANDOFF), _c(VERDICT, author="someone", association="COLLABORATOR")])
+	assert _jq_true(program, [_c(HANDOFF), _c(VERDICT, author="dev", association="COLLABORATOR")])
+	assert not _jq_true(program, [_c(HANDOFF), _c(VERDICT, author="someone", association="COLLABORATOR")])
 	# Verdict from an untrusted author does not count.
 	assert not _jq_true(program, [_c(HANDOFF), _c(VERDICT, author="someone", association="NONE")])
 	# A hand-off posted by anyone but the workflow identity does not count.
@@ -229,7 +237,7 @@ def test_converged_requires_workflow_handoff_and_trusted_verdict():
 	# A force-review of the same head creates a new handoff requiring a new reply.
 	assert not _jq_true(program, [_c(HANDOFF), _c(VERDICT), _c(HANDOFF.replace("round=1", "round=2"))])
 	assert not _jq_true(program, [_c(HANDOFF), _c(VERDICT), _c(CONFLICT)])
-	assert _jq_true(program, [_c(HANDOFF), _c(VERDICT), _c(HANDOFF.replace("round=1", "round=2")), _c(VERDICT)])
+	assert _jq_true(program, [_c(HANDOFF), _c(VERDICT, author="dev"), _c(HANDOFF.replace("round=1", "round=2")), _c(VERDICT, author="dev")])
 
 
 def test_dispatch_rerun_is_skipped_once_a_handoff_names_the_head():
@@ -279,9 +287,12 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 """
 
 
-def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = ""):
+def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", convergence: bool = False, raw_review: str | None = None, check_conclusion: str = "success", current_head: str = HEAD):
 	support = tmp / "support"
 	support.mkdir()
+	if convergence:
+		for name in ("pr_checks_lib.sh", "gh_helpers.sh"):
+			(support / name).write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
 	calls = tmp / "calls.jsonl"
 	(support / "post_review_comment.sh").write_text(
 		f"#!/usr/bin/env bash\necho post_review_comment \"$REVIEWER_CONSENSUS_FILE\" \"$PR_NUMBER\" >> {tmp / 'posts.log'}\n",
@@ -294,6 +305,9 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		"#!/usr/bin/env python3\n"
 		"import json, sys\n"
 		"args = sys.argv[1:]\n"
+		"if any('/pulls/42' in a for a in args): print(json.dumps({'state':'open','head':{'sha': '" + current_head + "'},'base':{'ref':'main'},'mergeable':True})); sys.exit(0)\n"
+		"if any('/branches/main/protection' in a for a in args): print(json.dumps({'required_status_checks':{'contexts':['CI']}})); sys.exit(0)\n"
+		"if any('/check-runs' in a for a in args): print(json.dumps([{'check_runs':[{'name':'CI','status':'completed','conclusion':'" + check_conclusion + "'}]}])); sys.exit(0)\n"
 		"payload = None\n"
 		"if '--input' in args:\n"
 		"\tpayload = json.load(open(args[args.index('--input') + 1]))\n"
@@ -325,7 +339,19 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		"GITHUB_RUN_ID": "99",
 		"RUNTIME_DIR": str(tmp),
 		"GITHUB_ENV": str(github_env),
+		"GITHUB_OUTPUT": str(tmp / "out"),
+		"CLAUDE_FIXER_CONVERGENCE_REVIEW": "true" if convergence else "false",
+		"REVIEWER_MODELS": "minimax/minimax-m3\nz-ai/glm-5.2",
 	}
+	if convergence:
+		(tmp / "claude_fixer_review_start").touch()
+		if raw_review is not None:
+			reviews = tmp / "previous_reviews"
+			reviews.mkdir()
+			for model in ("minimax_minimax-m3", "z-ai_glm-5_2"):
+				(reviews / f"review_{model}.txt").write_text(raw_review, encoding="utf-8")
+				(reviews / f"status_review_{model}.txt").write_text("success\n", encoding="utf-8")
+			env["PREVIOUS_REVIEWS_DIR"] = str(reviews)
 	proc = subprocess.run(["bash", "-c", f'source "{HANDOFF_SCRIPT}"'], env=env, capture_output=True, text=True)
 	gh_calls = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
 	posts = (tmp / "posts.log").read_text() if (tmp / "posts.log").exists() else ""
@@ -356,6 +382,29 @@ def test_handoff_zero_findings_exports_auto_merge_flag_without_comments():
 	assert proc.returncode == 0, proc.stderr
 	assert calls == [] and posts == ""
 	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
+
+
+def test_convergence_never_merges_from_a_clean_summary_without_raw_review():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, convergence=True)
+		assert proc.returncode != 0
+		assert not calls and "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+		assert not (Path(td) / "out").exists()
+
+
+def test_convergence_requires_clean_raw_slots_and_current_successful_checks():
+	for raw_review, check_conclusion, current_head, succeeds in (
+		("NONE\n", "success", HEAD, True),
+		("File: scripts/x.sh\nProblem: missing guard\nNONE\n", "success", HEAD, False),
+		("NONE\n", "failure", HEAD, False),
+		("NONE\n", "success", "d" * 40, False),
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, convergence=True, raw_review=raw_review, check_conclusion=check_conclusion, current_head=current_head)
+			assert (proc.returncode == 0) == succeeds, proc.stderr
+			assert not calls and "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+			output = (Path(td) / "out").read_text() if (Path(td) / "out").exists() else ""
+			assert ("clean_review=true" in output) == succeeds
 
 
 def test_handoff_failed_checks_alone_are_handed_off():
@@ -450,7 +499,7 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 			{"id": i, "user": {"login": c["author_login"]}, "author_association": c["author_association"], "created_at": "2026-09-25T00:00:00Z", "body": c["body"]}
 			for i, c in enumerate(comments, 1)
 		],
-		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1"},
+		"pr": {"state": "open", "merged": False, "user": {"login": "dev"}, "head": {"ref": head_ref, "sha": HEAD, "repo": {"full_name": "o/r"}}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1"},
 	}), encoding="utf-8")
 	output_file = tmp / "out.txt"
 	output_file.write_text("", encoding="utf-8")
@@ -518,9 +567,18 @@ def test_gate_accepts_a_verified_convergence_dispatch():
 		)
 	assert proc.returncode == 0, proc.stderr
 	assert out["claude_fixer_converged"] == "true"
-	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_converged"
+	assert out["should_run"] == "true" and out["skip_reason"] == ""
 	assert out["deterministic_skip"] == "false"
+	assert out["force_full_review_tier"] == "true"
 	assert out["head_sha"] == HEAD
+
+
+def test_gate_retries_a_verdict_after_a_failed_review_on_the_same_head():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF), _c(VERDICT, author="dev")])
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "true" and out["claude_fixer_converged"] == "true"
+	assert out["deterministic_skip"] == "false"
 
 
 def test_gate_rejects_an_embedded_or_stale_verdict_for_current_head():

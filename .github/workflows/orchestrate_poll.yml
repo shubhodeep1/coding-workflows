@@ -416,6 +416,24 @@ jobs:
           for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py check_resolver_diff.sh files_touched_scope_guard.py; do
             install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"
           done
+          # The integration checkout can replace scripts/ later in this job.
+          # Refuse an unverified fallback: lessons fail open, but project code
+          # must never become the executable fallback after checkout.
+          lesson_support_sha="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)"
+          lesson_support_verified=false
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "${lesson_support_sha}" = "${SCRIPT_REF}" ]; then
+            lesson_support_verified=true
+          elif [ "${SCRIPT_REF}" = "stable" ] \
+            && [ "${lesson_support_sha}" = "$(git -C .codex-workflow-src rev-parse 'refs/tags/stable^{commit}' 2>/dev/null || true)" ]; then
+            lesson_support_verified=true
+          fi
+          if [ "${lesson_support_verified}" = true ] \
+            && [ -f .codex-workflow-src/scripts/orchestrate_lib.py ] \
+            && cmp -s scripts/orchestrate_lib.py .codex-workflow-src/scripts/orchestrate_lib.py; then
+            install -m 0755 .codex-workflow-src/scripts/orchestrate_lib.py "${RUNTIME_DIR}/orchestrate_lib.py"
+          else
+            echo "::warning::Lesson helper support ref is unverified; lesson events will fail open without executing the project checkout."
+          fi
           for f in post_agent_workspace_guard.py files_touched_scope_guard.py; do
             install -m 0755 "scripts/${f}" "${POST_AGENT_ARTIFACT_DIR}/${f}"
           done
