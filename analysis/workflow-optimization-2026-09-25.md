@@ -184,3 +184,45 @@ No actionable `TODO`, `FIXME`, or `HACK` marker was found in the scoped files. T
 | Code modularization | 2 workflows and approximately 7 scripts, including proposed shared helpers | Large |
 | Expression size reduction | `implement.yml` and one staged script, plus contract tests | Medium |
 | Medium/Low fixes | Approximately 7 existing files, plus focused tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-25)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` meets the static safety conditions; `NEEDS_VERIFICATION` requires the stated checks; `RISKY_SKIP` must not be auto-implemented because it touches a protected pagination, retry, polling, or race-sensitive path.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — `NEEDS_VERIFICATION`.** **Calls:** `scripts/auto_release_stable.sh:162`, `scripts/auto_release_stable.sh:170`, and `scripts/auto_release_stable.sh:176`. **Current → proposed:** 3 workflow-run reads → 1 repository-wide run read *only if that snapshot is complete for all three workflows*; otherwise retain the scoped reads. **Endpoints:** `GET /repos/{repo}/actions/workflows/{workflow}/runs` → `GET /repos/{repo}/actions/runs`. **Evidence:** The three results are filtered for the same active statuses at `scripts/auto_release_stable.sh:166-178`; the first also supplies the failed-attempt guard at `scripts/auto_release_stable.sh:182-193`. **Proposed fix:** Replace the three reads in the release guard with one validated run snapshot, filter it by workflow, and retain scoped fallback whenever it cannot supply the currently inspected 30 runs for *each* workflow. **Safety rationale:** The broader endpoint and its ordering do not statically prove equivalent coverage to three separately limited snapshots. **Downstream signal:** Verify workflow identity, ordering, permissions, and coverage of each workflow’s first 30 runs on a busy repository; compare active and failed-attempt decisions before changing the guard.
+
+- **MERGE-002 — `RISKY_SKIP`.** **Calls:** `.github/workflows/clarify.yml:512` and `.github/workflows/clarify.yml:515-517`. **Current → proposed:** 2 reads when semantic caching is enabled → 1 on successful full-history retrieval; retain 2 on full-history failure. **Endpoint:** `GET /repos/{repo}/issues/{issue}/comments`, currently with different `per_page` values. **Evidence:** The step first saves 50 comments for the prompt, then fetches the same ordered thread with `--paginate` for the semantic cache. **Proposed fix:** Subject to manual review, have the “Fetch issue comments” step derive its first 50 prompt comments from the complete history; on full-history failure, still fetch the bounded prompt input and write the existing cache-bypass sentinel. **Safety rationale:** The second call paginates, and changing which snapshot supplies the prompt can change page-boundary, failure, and concurrent-comment behavior. **Downstream signal:** Do not auto-implement; manually test multi-page ordering, a comment arriving between reads, and full-history failure while preserving the prompt and cache-bypass behavior.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — `NEEDS_VERIFICATION`.** **Calls:** `.github/workflows/review_autofix.yml:535-543` and `.github/workflows/review_autofix.yml:1425-1437`; the first result crosses jobs through `.github/workflows/review_autofix.yml:1345,1369`. **Current → proposed:** 2 GraphQL reads when the gate successfully returns `[]` and PR text is nonempty → 1 for that case; other paths unchanged. **Endpoint:** GraphQL `repository.pullRequest.closingIssuesReferences(first: 50)`. **Evidence:** The gate records `post_merge_linked_issues_cache_known="true"` on success, but exports only the array. The dispatch job treats `[]` as a reason to fetch again, so it cannot distinguish a confirmed empty result from a failed gate lookup. **Proposed fix:** Export the gate’s cache-known flag alongside `post_merge_linked_issues_json`; update the “Dispatch standalone validate” step to reuse a *confirmed* empty array, while retaining its live lookup for unknown results. **Safety rationale:** The reads cross a workflow-job boundary, and static reading cannot establish whether a later closing reference must be observed before dispatch. **Downstream signal:** Verify the intended freshness contract across the two jobs, including a closing reference added after the gate; test successful-empty and failed-lookup outputs separately before suppressing the second read.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — its proposed reuse removes a read after a paginated comment snapshot; concurrent edits need manual review.
+- BATCH-001: `RISKY_SKIP` — older-PR file reads paginate, so aliased batching must prove per-PR completeness.
+- BATCH-002: `RISKY_SKIP` — this is a poller path with paginated timeline fallback and strict PR verification.
+- API-002: `RISKY_SKIP` — changing permanent-failure classification changes retry behavior.
+- API-003: `RISKY_SKIP` — the active-run guard paginates and precedes dispatch; incomplete coverage could permit duplicate runs.
+
+### Summary Counts
+
+*Counts include net-new findings only; cross-references are not recounted.*
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | MERGE-001, REUSE-001 |
+| RISKY_SKIP | 1 | MERGE-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
