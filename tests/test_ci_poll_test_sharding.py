@@ -185,6 +185,15 @@ class JobBudgetTest(unittest.TestCase):
 	def test_lint_job_has_headroom_over_the_sharded_runtime(self) -> None:
 		self.assertEqual(load_lint_job()["timeout-minutes"], 45)
 
+	def test_e2e_smoke_job_has_headroom_for_all_phase_budgets(self) -> None:
+		e2e_smoke_job = yaml.safe_load(
+			RELEASE_WORKFLOWS["test-and-mark-stable"].read_text(encoding="utf-8")
+		)["jobs"]["e2e-smoke-test"]
+		self.assertEqual(
+			e2e_smoke_job["timeout-minutes"],
+			e2e_smoke_job["env"]["E2E_JOB_TIMEOUT_MINUTES"],
+		)
+
 
 def load_release_validate_scripts_job(workflow_path: Path) -> dict:
 	return yaml.safe_load(workflow_path.read_text(encoding="utf-8"))["jobs"]["validate-scripts"]

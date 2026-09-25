@@ -172,11 +172,58 @@ def test_lessons_learned_writer_persists_issue_scoped_schema_valid_record() -> N
 		assert persisted["tags"] == [long_tag[:256], "tests/test_memory_record_schema.py"]
 
 
+def test_lessons_learned_writer_with_record_ids_skips_existing_records() -> None:
+	with tempfile.TemporaryDirectory(prefix="lessons-learned-ids-") as td:
+		memory_root = Path(td) / "ai-memory"
+		ai_memory_lib.ensure_memory_layout(memory_root)
+		shutil.copytree(REPO_ROOT / "ai-memory" / "schemas", memory_root / "schemas", dirs_exist_ok=True)
+		lessons = [{"lesson_kind": "project_retrospective", "lesson_text": "Reusable lesson.", "tags": ["source:conformance"]}]
+
+		first = ai_memory_lib.record_lessons_learned(
+			memory_root,
+			issue_number=None,
+			pr_number=5,
+			phase="implement_plan",
+			lessons=lessons,
+			record_ids=["lesson-implement-plan-abc123"],
+		)
+		assert [record["record_id"] for record in first] == ["lesson-implement-plan-abc123"]
+		persisted_path = memory_root / "tasks" / "issue-unscoped" / "lessons_learned" / "lesson-implement-plan-abc123.json"
+		assert persisted_path.is_file()
+		original = persisted_path.read_text(encoding="utf-8")
+
+		second = ai_memory_lib.record_lessons_learned(
+			memory_root,
+			issue_number=None,
+			pr_number=6,
+			phase="implement_plan",
+			lessons=lessons,
+			record_ids=["lesson-implement-plan-abc123"],
+		)
+		assert second == []
+		assert persisted_path.read_text(encoding="utf-8") == original
+
+		try:
+			ai_memory_lib.record_lessons_learned(
+				memory_root,
+				issue_number=None,
+				pr_number=None,
+				phase="implement_plan",
+				lessons=lessons,
+				record_ids=["a", "b"],
+			)
+		except ai_memory_lib.MemoryValidationError:
+			pass
+		else:
+			raise AssertionError("record_ids length mismatch must be rejected")
+
+
 def main() -> int:
 	test_memory_record_schema_accepts_repo_learnings_without_version_bump()
 	test_memory_record_schema_accepts_optional_prune_marked_at_timestamp()
 	test_build_scope_treats_blank_override_as_unset()
 	test_lessons_learned_writer_persists_issue_scoped_schema_valid_record()
+	test_lessons_learned_writer_with_record_ids_skips_existing_records()
 	print("OK: memory record schema and lessons-learned writer stay additive")
 	return 0
 

@@ -21,6 +21,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "review_merge_train.sh"
@@ -471,6 +473,42 @@ def test_cancel_on_close_releases_train_for_unmerged_prs() -> None:
 	release_step = workflow.split("- name: Release merge-queued PRs (merge train)", 1)[1]
 	assert "github.event.pull_request.merged == true" not in release_step
 	assert "whether it merged or not" in release_step
+
+
+def test_cancel_on_close_wrappers_keep_event_and_add_matching_schedule() -> None:
+	wrappers = [
+		REPO_ROOT / ".github" / "workflows" / "internal-cancel-on-pr-close.yml",
+		REPO_ROOT / "workflow-templates" / "ai-cancel-on-pr-close.yml",
+	]
+	for wrapper in wrappers:
+		workflow = wrapper.read_text(encoding="utf-8")
+		assert "pull_request:\n    types: [closed]" in workflow
+		assert 'schedule:\n    - cron: "*/5 * * * *"' in workflow
+		assert "pull_request_target" not in workflow
+		assert "  actions: write" in workflow
+		assert "  contents: read" in workflow
+		assert "  pull-requests: read" in workflow
+		assert "issues: write" not in workflow
+		assert "checkout" not in str(yaml.safe_load(workflow)["jobs"]["cancel"]).lower()
+
+
+def test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe() -> None:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8")
+	assert "group: cancel-on-pr-close-${{ github.repository }}" in workflow
+	assert 'if [ "${EVENT_NAME}" = "schedule" ]; then' in workflow
+	assert workflow.count("-f status=queued") == 1
+	assert workflow.count("-f status=in_progress") == 1
+	assert "split -l 50" in workflow
+	assert "pullRequest(number:${pr_number}){number state}" in workflow
+	assert "headRefName baseRefName" not in workflow
+	assert "active run(s) without pull-request linkage" in workflow
+	assert "select(all($linked_prs[];" in workflow
+	assert '$live_pr.state == "CLOSED" or $live_pr.state == "MERGED"' in workflow
+	assert 'endswith("/internal-cancel-on-pr-close.yml")' in workflow
+	assert 'endswith("/ai-cancel-on-pr-close.yml")' in workflow
+	assert "Scheduled cleanup found no cancellable queued/in-progress pull_request workflow runs." in workflow
+	assert "Scheduled cleanup is running the global merge-train release scan." in workflow
+	assert "BASE_BRANCH: ${{ github.event.pull_request.base.ref }}" in workflow
 
 
 def test_usage_error_for_unknown_subcommand(tmp_path: Path) -> None:

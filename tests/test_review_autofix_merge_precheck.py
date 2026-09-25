@@ -13,7 +13,12 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -32,10 +37,8 @@ FULL_RM_LINE = (
 
 
 def _workflow() -> str:
-    return REVIEW_AUTOFIX_WF.read_text(encoding="utf-8") + "\n" + "\n".join(
-        (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
-        for name in ("review_pre_review_merge_topology.sh", "review_detect_merge_conflicts.sh")
-    )
+    # Moved step bodies (scripts/review_autofix_step_*.sh) inlined again.
+    return expanded_review_autofix_text()
 
 
 def _section(start_marker: str, end_marker: str) -> str:
@@ -50,7 +53,6 @@ def _section(start_marker: str, end_marker: str) -> str:
         ("Detect merge conflicts", "review_detect_merge_conflicts.sh"),
     ):
         if start_marker == f"- name: {step_name}":
-            assert f'bash "${{SUPPORT_SCRIPTS_DIR}}/{script_name}"' in section
             return section + "\n" + (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
     return section
 

@@ -403,7 +403,6 @@ TRACKER_MARKER="<!-- ai:security-audit-tracker:v1 -->"
 FOLLOWUP_MARKER_PREFIX="<!-- ai:security-finding:"
 FOLLOWUP_KEY_MARKER_PREFIX="<!-- ai:security-waiver-key:"
 LAST_SHA_MARKER_PREFIX="<!-- ai:security-audit-last-sha:"
-MAX_FOLLOWUP_ISSUES_PER_WEEK="3"
 # Past this many changed files an incremental diff stops being cheaper than a
 # full audit, so the scope resolver falls back to the full default-branch scope.
 SECURITY_AUDIT_INCREMENTAL_MAX_FILES="200"
@@ -1227,7 +1226,7 @@ if bash "${SECURITY_AUDIT_SANDBOX_HELPER}" \
 		-c include_apply_patch_tool=true \
 		exec \
 		--skip-git-repo-check \
-		--model "${WORKFLOW_EDITOR_MODEL:-openai/gpt-5.6-sol}" \
+		--model "${WORKFLOW_EDITOR_MODEL:-openai/gpt-6-sol}" \
 		--sandbox read-only < "${RENDERED_PROMPT_FILE}" \
 		> "${CODEX_OUTPUT_FILE}" 2> "${CODEX_ERROR_FILE}"; then
 	:
@@ -2107,14 +2106,18 @@ PY
 	exit 0
 fi
 
-# Standalone workflow: no cycle-local issue cache exists here. Fetch existing
-# follow-up issues once and reuse the result for weekly-cap accounting + dedupe.
-gh_retry gh issue list \
-	--repo "${GITHUB_REPOSITORY}" \
-	--state all \
-	--label "ai:security" \
-	--limit 200 \
-		--json number,title,body,createdAt,url > "${EXISTING_FOLLOWUPS_JSON}"
+# Standalone workflow: no cycle-local issue cache exists here. Fetch every
+# existing `ai:security` issue once (open and closed) and reuse the result for
+# the finding-marker dedupe. This replaces the former `gh issue list --limit
+# 200` call rather than adding one (§15): with no follow-up cap, a repo can
+# pass 200 labelled issues, and a truncated list would re-file every finding
+# whose marker fell off the end. One paginated REST read, ceil(N/100) calls;
+# `--slurp` wraps the pages in one JSON array, and pull requests (which the
+# issues endpoint also returns) are skipped by the dedupe below.
+gh_retry gh api --method GET --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues" \
+	-f labels="ai:security" \
+	-f state=all \
+	-f per_page=100 > "${EXISTING_FOLLOWUPS_JSON}"
 
 python3 - \
 	"${FILTERED_FINDINGS_FILE}" \
@@ -2129,7 +2132,6 @@ python3 - \
 	"${SECURITY_AUDIT_FP_EXCLUSIONS}" \
 	"${FOLLOWUP_MARKER_PREFIX}" \
 	"${FOLLOWUP_KEY_MARKER_PREFIX}" \
-	"${MAX_FOLLOWUP_ISSUES_PER_WEEK}" \
 	"${AUDIT_SCOPE_MODE}" \
 	"${AUDIT_SCOPE_HEAD_SHA}" \
 	"${AUDIT_SCOPE_BASE_SHA}" <<'PY'
@@ -2139,7 +2141,7 @@ import json
 import re
 import shlex
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 findings_path = Path(sys.argv[1])
@@ -2154,10 +2156,9 @@ confidence_gate = sys.argv[9]
 exclusions_path = sys.argv[10]
 followup_marker_prefix = sys.argv[11]
 followup_key_marker_prefix = sys.argv[12]
-max_followups_per_week = int(sys.argv[13])
-audit_scope_mode = sys.argv[14]
-head_sha = sys.argv[15].strip()
-last_audited_sha = sys.argv[16].strip()
+audit_scope_mode = sys.argv[13]
+head_sha = sys.argv[14].strip()
+last_audited_sha = sys.argv[15].strip()
 
 
 def load_json(path: Path, *, label: str):
@@ -2165,15 +2166,6 @@ def load_json(path: Path, *, label: str):
 		return json.loads(path.read_text(encoding="utf-8"))
 	except (OSError, json.JSONDecodeError) as exc:
 		raise SystemExit(f"unable to load {label}: {exc}")
-
-
-def parse_dt(value: object) -> datetime | None:
-	if not isinstance(value, str) or not value.strip():
-		return None
-	try:
-		return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
-	except ValueError:
-		return None
 
 
 def truncate_title(title: str) -> str:
@@ -2200,6 +2192,14 @@ existing_followups = load_json(existing_followups_path, label="existing follow-u
 if not isinstance(findings, list) or not isinstance(summary, dict) or not isinstance(existing_followups, list):
 	raise SystemExit("security-audit summary generation received invalid JSON payloads")
 
+# `gh api --paginate --slurp` yields one array per page; flatten them.
+existing_followup_issues: list[object] = []
+for page in existing_followups:
+	if isinstance(page, list):
+		existing_followup_issues.extend(page)
+	else:
+		existing_followup_issues.append(page)
+
 marker_regex = re.compile(r"\A" + re.escape(followup_marker_prefix) + r"([^>\r\n]+) -->\r?\n")
 key_marker_regex = re.compile(
 	r"\A"
@@ -2221,12 +2221,10 @@ generated_footer_key_regex = re.compile(
 existing_finding_ids: set[str] = set()
 existing_waiver_keys: set[str] = set()
 existing_waiver_metadata: set[tuple[str, str, str]] = set()
-weekly_existing_count = 0
 now_utc = datetime.now(timezone.utc)
-week_start = (now_utc - timedelta(days=now_utc.weekday())).date()
 
-for issue in existing_followups:
-	if not isinstance(issue, dict):
+for issue in existing_followup_issues:
+	if not isinstance(issue, dict) or issue.get("pull_request"):
 		continue
 	body = str(issue.get("body") or "").replace("\r\n", "\n")
 	match = marker_regex.search(body)
@@ -2248,14 +2246,11 @@ for issue in existing_followups:
 		existing_waiver_metadata.add(
 			(key_match.group(2), footer_key_match.group(2), footer_key_match.group(3))
 		)
-	created_at = parse_dt(issue.get("createdAt"))
-	if created_at is not None and created_at.date() >= week_start:
-		weekly_existing_count += 1
 
-remaining_weekly_capacity = max(0, max_followups_per_week - weekly_existing_count)
+# Every surviving finding without a marked follow-up gets its own issue; there
+# is no per-run or per-week cap.
 planned_followups: list[dict[str, object]] = []
 skipped_existing_count = 0
-skipped_weekly_cap_count = 0
 
 for finding in findings:
 	if not isinstance(finding, dict):
@@ -2268,9 +2263,6 @@ for finding in findings:
 		or (not waiver_match_key and finding_id in existing_finding_ids)
 	):
 		skipped_existing_count += 1
-		continue
-	if len(planned_followups) >= remaining_weekly_capacity:
-		skipped_weekly_cap_count += 1
 		continue
 	planned_followups.append(finding)
 
@@ -2291,10 +2283,8 @@ comment_lines = [
 	f"- Suppressed excluded findings: {int(summary.get('suppressed_excluded', 0))}",
 	f"- Suppressed invalid findings: {int(summary.get('suppressed_invalid', 0))}",
 	f"- Suppressed out-of-scope findings: {int(summary.get('suppressed_out_of_scope', 0))}",
-	f"- Existing follow-up issues this UTC week: {weekly_existing_count}",
 	f"- New follow-up issues planned this run: {len(planned_followups)}",
 	f"- Findings skipped because a marked follow-up issue already exists: {skipped_existing_count}",
-	f"- Findings deferred by the weekly cap: {skipped_weekly_cap_count}",
 ]
 
 if findings:

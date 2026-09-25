@@ -135,6 +135,14 @@ def test_harness_error_branch_handles_escalated_case() -> None:
 	)
 
 
+def test_harness_error_comments_include_current_run_reference() -> None:
+	"""Both harness-error paths expose the current validation run when available."""
+	branch = _extract_harness_error_branch()
+	assert 'if [ -n "${GITHUB_RUN_ID:-}" ]; then' in branch
+	assert 'HARNESS_RUN_REFERENCE=$\'\\n\\n\'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"' in branch
+	assert branch.count("${HARNESS_FIXES}${HARNESS_RUN_REFERENCE}") == 2
+
+
 def test_prior_fingerprint_scan_uses_existing_prior_comments_fetch() -> None:
 	"""Q6=A: no new GitHub API call — reuse PRIOR_COMMENTS already fetched
 	at the top of validate_process.sh for the cycle-N LLM context."""

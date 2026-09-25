@@ -200,6 +200,14 @@
     "ai:check-triage-escalated": {
       "color": "b60205",
       "description": "Check-failure auto-fix chain hit the lineage cap; needs human attention"
+    },
+    "ai:workflow-heal": {
+      "color": "d876e3",
+      "description": "Issue auto-filed from an escalated workflow failure by workflow failure heal"
+    },
+    "ai:workflow-heal-escalated": {
+      "color": "b60205",
+      "description": "Workflow failure heal chain hit the lineage cap; needs human attention"
     }
   },
   "phase_groups": [

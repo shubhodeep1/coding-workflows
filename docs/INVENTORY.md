@@ -35,6 +35,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-workflow-analysis.txt` — You are a workflow optimization analyst for an AI-powered GitHub Actions pipeline.
 - `prompts/mode-workflow-api-redundancy.txt` — You are a conservative GitHub API call consolidation auditor for an AI-powered GitHub Actions pipeline.
 - `prompts/mode-workflow-audit.txt` — You are a workflow and script auditor for an AI-powered GitHub Actions pipeline.
+- `prompts/mode-workflow-failure-heal.txt` — Role: workflow failure healer. Goal: diagnose an escalated pipeline failure or a failed release run, classify who owns the fix, and write a GitHub issue body the pipeline can act on.
 - `prompts/review-consolidator.txt` — You are the review consolidator for the AI review pipeline.
 - `prompts/review-reviewer-checklist.txt` — Reviewer checklist defining the eight review lenses and issue formats.
 
@@ -63,6 +64,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/internal-plan.yml` — GitHub Actions workflow: Internal: AI Plan.
 - `.github/workflows/internal-review.yml` — GitHub Actions workflow: Internal: AI Review & Autofix.
 - `.github/workflows/internal-validate.yml` — GitHub Actions workflow: Internal: AI Validate.
+- `.github/workflows/internal-workflow-failure-heal.yml` — GitHub Actions workflow: Internal: AI Workflow Failure Heal.
 - `.github/workflows/issue_pr_status.yml` — GitHub Actions workflow: AI Issue PR Status Sync.
 - `.github/workflows/lint-plan-archival.yml` — GitHub Actions workflow: Lint plan-archival completeness.
 - `.github/workflows/lint-pr-body-auto-close.yml` — GitHub Actions workflow: Lint PR body for auto-close keywords against orchestrator-tracking issues.
@@ -85,7 +87,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/validate.yml` — GitHub Actions workflow: AI Validate (Reusable).
 - `.github/workflows/validation-improvements-intake.yml` — GitHub Actions workflow: Validation Improvements Intake.
 - `.github/workflows/validation-refresh.yml` — GitHub Actions workflow: Validation Refresh.
+- `.github/workflows/workflow-failure-heal-intake.yml` — GitHub Actions workflow: Workflow Failure Heal Intake.
 - `.github/workflows/workflow-log-analysis.yml` — GitHub Actions workflow: Workflow Log Analysis.
+- `.github/workflows/workflow_failure_heal.yml` — GitHub Actions workflow: AI Workflow Failure Heal (Reusable).
 - `.github/workflows/workspace-cache-maintenance.yml` — GitHub Actions workflow: Workspace Cache Maintenance.
 
 ## Scripts
@@ -113,6 +117,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
+- `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
+- `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
+- `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
 - `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.
@@ -157,6 +164,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/implement_diagnose_post_codex_failure.sh` — validation failures in implement.yml and file fix-up issues.
 - `scripts/implement_handle_guard_block.sh` — Handle destructive-commit and scope-guard rejections after support cleanup.
 - `scripts/implement_staged_support_workspace.sh` — implement_staged_support_workspace.sh — give the implement editor the branch's own copies of the staged support helpers (self-repo only).
+- `scripts/ingest_implement_plan_lessons.py` — Ingest `/implement-plan-claude` progress-log lessons into AI memory.
 - `scripts/install_semble.sh` — install_semble.sh — fail-soft Semble installer for GitHub Actions jobs.
 - `scripts/issue_attachment_bundle.py` — Python helper for issue attachment bundle.
 - `scripts/label_helpers.sh` — label_helpers.sh — idempotent AI label creation helpers.
@@ -190,6 +198,11 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
 - `scripts/review_append_iteration_summary.sh` — Emit the review/autofix iteration metrics and structured run summary.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
+- `scripts/review_autofix_step_detect_merge_conflicts.sh` — body of the review_autofix.yml "Detect merge conflicts" step (sourced by the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
+- `scripts/review_autofix_step_editor_uncommitted_changes.sh` — body of the review_autofix.yml "Detect editor-claimed-but-uncommitted changes" step (sourced by the step).
+- `scripts/review_autofix_step_iteration_summary.sh` — body of the review_autofix.yml "Append review pipeline iteration summary" step (sourced by the step; skips with a warning when the script cannot be found).
+- `scripts/review_autofix_step_merge_topology_gate.sh` — body of the review_autofix.yml "Pre-review deterministic merge-topology gate" step (sourced by the step).
+- `scripts/review_autofix_step_partial_finalize.sh` — body of the review_autofix.yml "Post partial finalize comment and persist runtime marker" step (sourced by the step; skips with a warning when the script cannot be found).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
@@ -223,8 +236,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
 - `scripts/slop_scan_local.py` — Local slop-scan heuristics for review_autofix changed scripts and Python heredocs.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
-- `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-5.6-luna, reasoning: medium).
-- `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-5.6-luna to widen analysis coverage.
+- `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-6-luna, reasoning: medium).
+- `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-6-luna to widen analysis coverage.
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
 - `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.
@@ -244,6 +257,11 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/validation_template_bootstrap.py` — Shared onboarding helper for validation template manifests.
 - `scripts/verify_integration_fingerprints.py` — Verify that an orchestrator integration-sync resolver run preserved merged sub-issue intent.
 - `scripts/watchdog_helpers.sh` — Shell helper for shared Codex watchdog utilities.
+- `scripts/workflow_failure_heal.py` — Shared logic for the workflow failure heal pipeline: payload build/validation, fingerprinting, dedup/lineage/budget decisions, and heal issue composition.
+- `scripts/workflow_failure_heal_autofix_report.sh` — Report a repeated review/autofix failure on a pull request to coding-workflows' heal intake from the review workflow's failure path, with the run's own evidence.
+- `scripts/workflow_failure_heal_intake.sh` — Diagnose an escalated workflow failure report in coding-workflows, enforce heal dedup/lineage/budget rules, and open the heal issue.
+- `scripts/workflow_failure_heal_pr_reconcile.sh` — When a coding-workflows pull request closes, close the heal PRs stacked on its head branch (source not merged) or move their heal commits onto the source base and re-point them (source merged).
+- `scripts/workflow_failure_heal_report.sh` — Report a human-needed escalation from a consumer (or this repo) to coding-workflows with linked failed runs and the wrapper release pin.
 - `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
 - `scripts/workflow_retro_fanout.sh` — Post weekly workflow retros to consumer repositories from the centralized fan-out job.
 - `scripts/workflow_wrapper_refs.py` — Render consumer workflow wrappers with immutable reusable-workflow references.

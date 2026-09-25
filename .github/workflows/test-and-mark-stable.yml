@@ -114,7 +114,7 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
           when a long single step should extend the wait past the
           inactivity window). The wait loop clamps overrides above
           90 minutes so a typo cannot mask a genuine hang until the
-          120-minute smoke-test job timeout kills the run.
+          300-minute smoke-test job timeout kills the run.
         required: false
         type: number
         default: 75
@@ -373,7 +373,10 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # The conservative serial-budget check in Validate prerequisites must stay
+    # aligned with this hard runner limit. Defaults reserve 20 minutes for deep
+    # verification, analysers, aggregation, and unconditional cleanup.
+    timeout-minutes: 300
     concurrency:
       group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
       cancel-in-progress: true
@@ -407,8 +410,13 @@ jobs:
       # step ran a healthy 51m and the 50m cap killed the wait 58s before
       # the step completed. The shell validation below clamps overrides
       # above 90m so a typo cannot suppress stall detection until the
-      # 120m e2e-smoke-test job timeout kills the run.
+      # e2e-smoke-test job timeout kills the run.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
+      E2E_JOB_TIMEOUT_MINUTES: 300
+      REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
+      EDITOR_RETRY_BUDGET_MINUTES: 25
+      PHASE7_WAIT_BUDGET_MINUTES: 10
+      E2E_FINALIZATION_RESERVE_MINUTES: 20
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
       # / poll review_autofix runs. Defaults to the source repo's
@@ -445,12 +453,44 @@ jobs:
             echo "::error::test_repo must match owner/repo."
             exit 1
           fi
-          for timeout_value in "${PHASE_TIMEOUT}" "${PLAN_PHASE_TIMEOUT}" "${REVIEW_TIMEOUT}" "${REVIEW_STEP_TIMEOUT}"; do
+          for timeout_value in \
+            "${PHASE_TIMEOUT}" \
+            "${PLAN_PHASE_TIMEOUT}" \
+            "${REVIEW_TIMEOUT}" \
+            "${REVIEW_STEP_TIMEOUT}" \
+            "${E2E_JOB_TIMEOUT_MINUTES}" \
+            "${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}" \
+            "${EDITOR_RETRY_BUDGET_MINUTES}" \
+            "${PHASE7_WAIT_BUDGET_MINUTES}" \
+            "${E2E_FINALIZATION_RESERVE_MINUTES}"; do
             if ! [[ "${timeout_value}" =~ ^[0-9]+$ ]] || [ "${timeout_value}" -lt 1 ]; then
-              echo "::error::phase, plan, review, and review-step timeouts must be positive integers."
+              echo "::error::E2E timeout budgets must be positive integers."
               exit 1
             fi
           done
+          REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_STEP_TIMEOUT}"
+          if [ "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" -gt 90 ]; then
+            REVIEW_EFFECTIVE_BUDGET_MINUTES=90
+          fi
+          REVIEW_EFFECTIVE_BUDGET_MINUTES=$((REVIEW_EFFECTIVE_BUDGET_MINUTES + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))
+          if [ "${REVIEW_TIMEOUT}" -gt "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" ]; then
+            REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_TIMEOUT}"
+          fi
+          E2E_SERIAL_BUDGET_MINUTES=$((
+            (2 * PHASE_TIMEOUT) +
+            PLAN_PHASE_TIMEOUT +
+            REVIEW_EFFECTIVE_BUDGET_MINUTES +
+            EDITOR_RETRY_BUDGET_MINUTES +
+            PHASE_TIMEOUT +
+            PHASE7_WAIT_BUDGET_MINUTES +
+            E2E_FINALIZATION_RESERVE_MINUTES
+          ))
+          echo "E2E conservative serial budget: ${E2E_SERIAL_BUDGET_MINUTES}/${E2E_JOB_TIMEOUT_MINUTES} minutes"
+          if [ "${E2E_SERIAL_BUDGET_MINUTES}" -gt "${E2E_JOB_TIMEOUT_MINUTES}" ]; then
+            echo "::error::Configured E2E phase budgets require ${E2E_SERIAL_BUDGET_MINUTES}m, exceeding the ${E2E_JOB_TIMEOUT_MINUTES}m job timeout."
+            echo "::error::Budget = 2*phase(${PHASE_TIMEOUT}) + plan(${PLAN_PHASE_TIMEOUT}) + max(review=${REVIEW_TIMEOUT}, min(review-step=${REVIEW_STEP_TIMEOUT}, cap=90) + handoff=${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}) + editor-retry(${EDITOR_RETRY_BUDGET_MINUTES}) + phase-6(${PHASE_TIMEOUT}) + phase-7(${PHASE7_WAIT_BUDGET_MINUTES}) + finalization(${E2E_FINALIZATION_RESERVE_MINUTES})."
+            exit 1
+          fi
           echo "Target repo: ${TEST_REPO}"
           echo "Phase timeout: ${PHASE_TIMEOUT} minutes"
           echo "Review workflow file: ${REVIEW_WORKFLOW_FILE}"
@@ -676,7 +716,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-clarify
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # ── Phase 2: Wait for Plan to complete ──────────────────────
@@ -871,7 +911,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-plan
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # ── Phase 3: Approve and wait for implementation ────────────
@@ -1065,7 +1105,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-implement
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: "Phase 3b1: Apply force-review label to smoke PR"
@@ -1384,12 +1424,19 @@ jobs:
           [[ "$REVIEW_STEP_TIMEOUT" =~ ^[0-9]+$ ]] && [ "$REVIEW_STEP_TIMEOUT" -gt 0 ] || REVIEW_STEP_TIMEOUT=75
           REVIEW_STEP_TIMEOUT_MAX=90
           if [ "$REVIEW_STEP_TIMEOUT" -gt "$REVIEW_STEP_TIMEOUT_MAX" ]; then
-            echo "::warning::REVIEW_STEP_TIMEOUT=${REVIEW_STEP_TIMEOUT} exceeds ${REVIEW_STEP_TIMEOUT_MAX}m cap; clamping so wait-review still reports genuine stalls before the 120m job timeout"
+            echo "::warning::REVIEW_STEP_TIMEOUT=${REVIEW_STEP_TIMEOUT} exceeds ${REVIEW_STEP_TIMEOUT_MAX}m cap; clamping so wait-review still reports genuine stalls before the job timeout"
             REVIEW_STEP_TIMEOUT="$REVIEW_STEP_TIMEOUT_MAX"
           fi
           STEP_INACTIVITY_LIMIT=$((REVIEW_STEP_TIMEOUT * 60))
           echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
-          LAST_ACTIVITY=$(date +%s)
+          REVIEW_PHASE_WALL_BUDGET_MINUTES=$((REVIEW_STEP_TIMEOUT + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))
+          if [ "$REVIEW_TIMEOUT" -gt "$REVIEW_PHASE_WALL_BUDGET_MINUTES" ]; then
+            REVIEW_PHASE_WALL_BUDGET_MINUTES="$REVIEW_TIMEOUT"
+          fi
+          REVIEW_PHASE_STARTED_AT=$(date +%s)
+          REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))
+          echo "Review total wall-clock budget: ${REVIEW_PHASE_WALL_BUDGET_MINUTES} minutes"
+          LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
           PREV_STATE=""
           LAST_STEP_GUARD_RUN_ID=""
           LAST_STEP_GUARD_NAME=""
@@ -1420,6 +1467,11 @@ jobs:
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
+            if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then
+              echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
 
             # Find the review workflow run for this PR's head branch
             PR_BRANCH="ai/issue-${ISSUE_NUMBER}"
@@ -1536,11 +1588,21 @@ jobs:
               # Tier 1 still precedes 2 so an already-completed success
               # wins over an active sibling (preserves the run-26989483268
               # fix).
+              #
+              # select(.name != .path) drops phantom "workflow file issue"
+              # runs. GitHub names a run after its file path only when it
+              # cannot load the workflow (e.g. a file over the 512,000-byte
+              # limit), since every workflow here and in workflow-templates/
+              # sets name:. Such a zero-job run on the pinned head_sha
+              # matched the name regex and was accepted instantly as
+              # "completed with failure" before any editor ran (stable gate
+              # run 35903885958, phantom .github/workflows/review_autofix.yml
+              # runs after #4327).
               REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
+                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not) | select(.name != .path) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
-                --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i")) | select((.event == "dynamic" or (.name | test("copilot"; "i"))) | not)] | sort_by(.created_at) | last' || echo "")
+                --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i")) | select((.event == "dynamic" or (.name | test("copilot"; "i"))) | not) | select(.name != .path)] | sort_by(.created_at) | last' || echo "")
             fi
 
             # If rate-limited, skip this cycle entirely (don't corrupt state)
@@ -1621,7 +1683,7 @@ jobs:
                   exit 0
                 fi
 
-                # Check live logs for reviewer progress (majority-pass shortcut)
+                # Check live logs for reviewer progress
                 # and for the editor-noop fallback marker (early-exit shortcut).
                 # Both are gated behind ELAPSED >= 600 so we only pay the live-
                 # log API cost after the editor step is plausibly running —
@@ -1762,10 +1824,7 @@ jobs:
                     [[ "$FAILED_R" =~ ^[0-9]+$ ]] || FAILED_R=0
                     TOTAL_DONE=$((SUCCEEDED + FAILED_R))
                     if [ "$SUCCEEDED" -ge 3 ] && [ $((SUCCEEDED * 2)) -gt "$TOTAL_DONE" ]; then
-                      echo "  ✓ Review run still in_progress but ${SUCCEEDED}/${TOTAL_DONE} reviewers succeeded (>50%) — treating as pass"
-                      echo "status=success" >> "$GITHUB_OUTPUT"
-                      echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-                      exit 0
+                      echo "  ... ${SUCCEEDED}/${TOTAL_DONE} reviewers succeeded (>50%); waiting for authoritative review completion and editor verification..."
                     elif [ "$TOTAL_DONE" -gt 0 ]; then
                       echo "  ... ${SUCCEEDED}/${TOTAL_DONE} reviewers succeeded so far, waiting for more..."
                     fi
@@ -1937,7 +1996,7 @@ jobs:
           wait_for_completion_secs: "300"
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # ── Phase 4b: Verify editor restored the canary file ──
@@ -1953,10 +2012,11 @@ jobs:
       # known-flaky (seven prior in-tree fixes targeting reasoning
       # effort and prompt content; production runs hit empty-completion
       # state non-deterministically). On first pytest failure we
-      # snapshot the branch head SHA, re-dispatch ${REVIEW_WORKFLOW_FILE}
-      # via `--ref "${BRANCH}"`, and poll for a new workflow_dispatch
-      # run whose head_sha matches the snapshotted SHA. We allow up
-      # to 25 minutes for the new run to complete (raised from 10 min
+      # snapshot the branch head SHA, adopt the oldest active review run
+      # for the bait/current head when one exists, or re-dispatch
+      # ${REVIEW_WORKFLOW_FILE} via `--ref "${BRANCH}"` and register the
+      # oldest matching post-snapshot run. We allow up to 25 minutes for
+      # the pinned run to complete (raised from 10 min
       # after run 25371432937 truncated a still-running successful
       # retry); if the second verification also fails, we hard-fail
       # this step. The retry
@@ -1978,8 +2038,8 @@ jobs:
       #   fetch_failed_after_retry — same, after retry
       #   pytest_unavailable       — pip + apt fallback both failed (infra error)
       #   pr_head_fetch_failed     — pulls/<n> API failed; refused to fail-open commit guard
-      #   retry_dispatch_failed    — gh workflow run failed, or wait-review id non-numeric
-      #   retry_timeout            — re-dispatched run did not complete in 25 min
+      #   retry_dispatch_failed    — run discovery/dispatch/registration failed, or wait-review id non-numeric
+      #   retry_timeout            — pinned retry run did not complete in 25 min
       #   retry_workflow_failed    — retry run completed but conclusion != success
       #   pr_closed_during_retry   — PR closed/merged while waiting for the retry run
       #   pr_state_check_failed    — fetch_pr_state returned "unknown" 4 consecutive times
@@ -2241,28 +2301,31 @@ jobs:
             exit 0
           fi
 
-          echo "::warning::Phase 4b first attempt failed — re-dispatching review_autofix and retrying once"
+          echo "::warning::Phase 4b first attempt failed — adopting or dispatching review_autofix and retrying once"
 
-          # ── Retry: redispatch ${REVIEW_WORKFLOW_FILE} on the current branch head ──
-          # Mirrors the Phase 3c fallback dispatch (lines ~1101-1109),
-          # which uses ${REVIEW_WORKFLOW_FILE} as the public entry-point
-          # that gates into review_autofix.yml without an `[ai-autofix]`
-          # self-trigger guard.
+          # ── Retry: adopt active work or redispatch ${REVIEW_WORKFLOW_FILE} ──
+          # Mirrors the fallback dispatch in Phase 3c's
+          # `Inject editor bait commit on PR branch` step, which uses
+          # ${REVIEW_WORKFLOW_FILE} as the public entry-point that gates into
+          # review_autofix.yml without an `[ai-autofix]` self-trigger guard.
           #
-          # Capture the branch head SHA right before dispatch — that's
-          # what the new workflow_dispatch run will carry as head_sha,
-          # and what we'll poll for. Filtering on BAIT_SHA would miss
-          # the retry run whenever the editor's first attempt already
-          # advanced the branch past the bait (e.g. the editor pushed
-          # a wrong-fix commit but pytest still failed); we'd hit
-          # retry_timeout even though the dispatch succeeded.
+          # Capture the branch head SHA before discovery. An active run
+          # for either the bait or current head may already be queued by
+          # Phase 3c or pull_request:synchronize; adopting the oldest one
+          # avoids adding another run behind it in pr-autofix concurrency.
           #
           # `gh workflow run` is dispatched with --ref "${BRANCH}"
           # (its documented contract is branch/tag, not raw SHA);
-          # RETRY_DISPATCH_SHA is used only as the poll filter. Tiny
-          # race window if the branch advances between snapshot and
-          # dispatch — acceptable, and the retry_timeout path catches
-          # it cleanly.
+          # RETRY_DISPATCH_SHA and BAIT_SHA select already-active work before
+          # dispatch. After dispatch, the branch-scoped baseline identifies
+          # the oldest new run even if the branch advanced. Once selected,
+          # one positive run id is polled directly so a newer peer cannot
+          # replace it.
+          if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]] || [ "${PRIOR_REVIEW_RUN}" -lt 1 ]; then
+            echo "::error::wait-review.outputs.review_run_id is not a positive integer ('${PRIOR_REVIEW_RUN}'); refusing retry discovery with a no-op exclusion filter"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           if ! RETRY_DISPATCH_SHA=$(gh_api_with_retry "repos/${TEST_REPO}/git/refs/heads/${BRANCH}" --jq '.object.sha // empty'); then
             echo "::error::Could not resolve ${BRANCH} head SHA before retry dispatch"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
@@ -2275,42 +2338,79 @@ jobs:
           fi
           echo "  resolved ${BRANCH} head for retry dispatch: ${RETRY_DISPATCH_SHA:0:7}"
 
-          if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
-              --repo "${TEST_REPO}" \
-              --ref "${BRANCH}" \
-              -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
-            echo "::error::Retry dispatch failed; cannot recover"
-            cat /tmp/retry_dispatch.txt >&2 || true
+          RETRY_RUNS_QUERY="repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?branch=${BRANCH}&per_page=100"
+          if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
+            echo "::error::Could not discover existing review runs before retry dispatch"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — polling for the new review run"
+          if ! printf '%s\n' "${RETRY_RUNS_JSON}" | jq -e '
+            type == "object" and
+            (.workflow_runs | type == "array") and
+            all(.workflow_runs[];
+              type == "object" and
+              (.id | type == "number") and .id > 0 and .id == (.id | floor) and
+              (.head_sha | type == "string") and
+              (.status | type == "string") and
+              (.created_at | type == "string") and
+              ((.conclusion == null) or (.conclusion | type == "string")))
+          ' >/dev/null 2>&1; then
+            echo "::error::Malformed review run-list payload before retry dispatch"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          RETRY_BASELINE_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r '[.workflow_runs[].id] | max // 0')
+          if ! [[ "${RETRY_BASELINE_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Malformed review run baseline id: '${RETRY_BASELINE_ID}'"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
 
-          # Poll for the new review run on RETRY_DISPATCH_SHA (the
-          # branch head we snapshotted at dispatch time). Skip the run
-          # we already saw via wait-review by recording its id. We
-          # gate Phase 4b on wait-review having succeeded, which means
-          # review_run_id should be a non-empty numeric string here;
-          # if it's somehow empty/non-numeric, the jq exclusion filter
-          # would default to `select(.id != 0)` (no-op, since GitHub
-          # run ids are always positive) and could pick up the
-          # original review run as the "retry run". Fail fast in that
-          # case rather than silently misattribute.
-          if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]] || [ "${PRIOR_REVIEW_RUN}" -lt 1 ]; then
-            echo "::error::wait-review.outputs.review_run_id is not a positive integer ('${PRIOR_REVIEW_RUN}'); refusing to enter retry poll loop with a no-op exclusion filter"
-            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-            exit 1
+          RETRY_ACTIVE_RUN=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -c \
+            --arg bait_sha "${BAIT_SHA}" \
+            --arg retry_sha "${RETRY_DISPATCH_SHA}" \
+            --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
+            '[.workflow_runs[]
+              | select(.id != $prior_run_id)
+              | select(.status != "completed")
+              | select(.head_sha == $bait_sha or .head_sha == $retry_sha)]
+            | sort_by(.created_at, .id)
+            | .[0] // empty')
+
+          RETRY_RUN_ID=""
+          RETRY_STATUS=""
+          RETRY_CONCL=""
+          RETRY_REGISTRATION_DEADLINE=0
+          if [ -n "${RETRY_ACTIVE_RUN}" ]; then
+            RETRY_RUN_ID=$(printf '%s\n' "${RETRY_ACTIVE_RUN}" | jq -r '.id')
+            if ! [[ "${RETRY_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${RETRY_RUN_ID}" -lt 1 ]; then
+              echo "::error::Adopted review run id is not a positive integer: '${RETRY_RUN_ID}'"
+              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            echo "✓ Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work"
+          else
+            if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
+                --repo "${TEST_REPO}" \
+                --ref "${BRANCH}" \
+                -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
+              echo "::error::Retry dispatch failed; cannot recover"
+              cat /tmp/retry_dispatch.txt >&2 || true
+              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))
+            echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — registering the oldest new branch run after baseline ${RETRY_BASELINE_ID}"
           fi
-          # 25 minutes (was 10 min; raised after run 25371432937 timed out
+
+          # EDITOR_RETRY_BUDGET_MINUTES defaults to 25 (was 10; raised after
+          # run 25371432937 timed out
           # during the retry's reviewer pass — full review_autofix pipeline
           # is 6 reviewers + consolidator + editor + conflict resolver and
           # observed to take ~20 min wall time, so 600s reliably truncated
           # genuine successful retries. 25 min keeps the upper bound below
           # the orchestrator phase budget while covering the observed P95).
-          DEADLINE=$(( $(date +%s) + 1500 ))
-          RETRY_RUN_ID=""
-          RETRY_STATUS=""
-          RETRY_CONCL=""
+          DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))
           # Circuit breaker: if fetch_pr_state returns "unknown" (API
           # failure / parse failure) for too many consecutive iterations
           # we're effectively polling blind and the closed-PR guard
@@ -2341,19 +2441,62 @@ jobs:
               # *consecutive* failures, not cumulative.
               PR_STATE_FAILURES=0
             fi
-            CANDIDATES=$(gh_api_with_retry \
-              "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=10" \
-              --jq ".workflow_runs[] | select(.head_sha == \"${RETRY_DISPATCH_SHA}\") | select(.id != ${PRIOR_REVIEW_RUN:-0}) | \"\(.id) \(.status) \(.conclusion // \"null\")\"") || CANDIDATES=""
-            if [ -z "${CANDIDATES}" ]; then
-              echo "  (no new review run yet, pr_state=${PR_STATE})"
+            if [ -z "${RETRY_RUN_ID}" ]; then
+              if [ "$(date +%s)" -ge "${RETRY_REGISTRATION_DEADLINE}" ]; then
+                echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
+                echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+              if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
+                echo "::warning::Could not list post-dispatch review runs; retrying within the registration window"
+                continue
+              fi
+              if ! printf '%s\n' "${RETRY_RUNS_JSON}" | jq -e '
+                type == "object" and
+                (.workflow_runs | type == "array") and
+                all(.workflow_runs[];
+                  type == "object" and
+                  (.id | type == "number") and .id > 0 and .id == (.id | floor) and
+                  (.head_sha | type == "string") and
+                  (.status | type == "string") and
+                  (.created_at | type == "string") and
+                  ((.conclusion == null) or (.conclusion | type == "string")))
+              ' >/dev/null 2>&1; then
+                echo "::warning::Malformed post-dispatch review run-list payload; retrying within the registration window"
+                continue
+              fi
+              RETRY_RUN_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r \
+                --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
+                --argjson baseline_id "${RETRY_BASELINE_ID}" \
+                '[.workflow_runs[]
+                  | select(.id > $baseline_id and .id != $prior_run_id)]
+                | sort_by(.created_at, .id)
+                | .[0].id // empty')
+              if [ -z "${RETRY_RUN_ID}" ]; then
+                echo "  (retry review run not registered yet, pr_state=${PR_STATE})"
+                continue
+              fi
+              if ! [[ "${RETRY_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${RETRY_RUN_ID}" -lt 1 ]; then
+                echo "::error::Registered review run id is not a positive integer: '${RETRY_RUN_ID}'"
+                echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+              echo "✓ Registered retry review run #${RETRY_RUN_ID}; polling that exact run"
+            fi
+
+            if ! RETRY_RUN_JSON=$(gh_api_with_retry "repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"); then
+              echo "::warning::Could not read retry review run #${RETRY_RUN_ID}; retrying within the retry window"
               continue
             fi
-            # GitHub returns runs newest-first; the matching list is in
-            # the same order so head -n 1 picks the most recent
-            # candidate (the run we just dispatched).
-            RETRY_RUN_ID=$(echo "${CANDIDATES}" | head -n 1 | awk '{print $1}')
-            RETRY_STATUS=$(echo "${CANDIDATES}" | head -n 1 | awk '{print $2}')
-            RETRY_CONCL=$(echo "${CANDIDATES}" | head -n 1 | awk '{print $3}')
+            if ! printf '%s\n' "${RETRY_RUN_JSON}" | jq -e \
+              --argjson retry_run_id "${RETRY_RUN_ID}" \
+              'type == "object" and .id == $retry_run_id and (.status | type == "string") and ((.conclusion == null) or (.conclusion | type == "string"))' \
+              >/dev/null 2>&1; then
+              echo "::warning::Malformed payload for retry review run #${RETRY_RUN_ID}; retrying within the retry window"
+              continue
+            fi
+            RETRY_STATUS=$(printf '%s\n' "${RETRY_RUN_JSON}" | jq -r '.status')
+            RETRY_CONCL=$(printf '%s\n' "${RETRY_RUN_JSON}" | jq -r '.conclusion // "null"')
             echo "  retry run #${RETRY_RUN_ID}: status=${RETRY_STATUS} conclusion=${RETRY_CONCL}"
             if [ "${RETRY_STATUS}" = "completed" ]; then
               break
@@ -2361,7 +2504,7 @@ jobs:
           done
 
           if [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
-            echo "::error::Retry review run did not complete within 25 minutes"
+            echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
             echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
             exit 1
           fi
@@ -2703,13 +2846,115 @@ jobs:
 
           echo "Posted orchestrator state to tracking issue #${TRACKING_NUMBER}"
 
-          # 6d: Trigger the poller workflow
+          # 6d: Trigger the poller workflow and pin the exact run registered by
+          # this dispatch. A later scheduled/manual poller must never replace
+          # the run whose status and logs this phase attributes to Phase 6.
+          RATE_LIMIT_BACKOFF=0
+          . ./scripts/comprehensive_test_and_release_gh_api.sh
+
+          REGISTERED_POLLER_RUN_ID=""
+          POLLER_DISPATCH_REF="ai/issue-${ISSUE_NUMBER}"
+          dispatch_and_register_poller()
+          {
+            local workflow_file="$1"
+            local baseline_id=""
+            local registration_deadline
+            local runs_json=""
+            local candidate_query=""
+            local candidate_count=""
+            local candidate_id=""
+            local dispatch_started_epoch=""
+
+            # GitHub's workflow_dispatch API returns 204/no run id. The old
+            # broad actions/runs lookup could select a peer poller, so this is
+            # intentionally scoped to the unique smoke-test issue branch.
+            candidate_query="repos/${TEST_REPO}/actions/workflows/${workflow_file}/runs?event=workflow_dispatch&branch=${POLLER_DISPATCH_REF}&per_page=10"
+            if ! baseline_id=$(gh_api_safe_quiet_print "${candidate_query}" \
+              --jq '.workflow_runs[0].id // 0'); then
+              echo "  Poller wrapper ${workflow_file} is unavailable for snapshot/dispatch."
+              return 1
+            fi
+            if ! [[ "${baseline_id}" =~ ^[0-9]+$ ]]; then
+              echo "::error::Malformed pre-dispatch run id for ${workflow_file}: '${baseline_id}'"
+              return 2
+            fi
+
+            dispatch_started_epoch=$(date +%s)
+            if ! gh workflow run "${workflow_file}" --repo "${TEST_REPO}" --ref "${POLLER_DISPATCH_REF}" 2>/dev/null; then
+              echo "  Poller wrapper ${workflow_file} could not be dispatched."
+              return 1
+            fi
+
+            registration_deadline=$(( $(date +%s) + 90 ))
+            while [ "$(date +%s)" -lt "${registration_deadline}" ]; do
+              if ! runs_json=$(gh_api_safe_quiet_print "${candidate_query}"); then
+                echo "::warning::Could not list post-dispatch runs for ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
+              fi
+              if ! printf '%s' "${runs_json}" \
+                | jq -se 'length == 1 and (.[0] | type == "object" and (.workflow_runs | type == "array"))' \
+                >/dev/null 2>&1; then
+                echo "::warning::Malformed run-list payload for ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
+              fi
+
+              candidate_count=$(printf '%s' "${runs_json}" \
+                | jq -r \
+                  --arg dispatch_ref "${POLLER_DISPATCH_REF}" \
+                  --argjson baseline_id "${baseline_id}" \
+                  --argjson dispatch_started_epoch "${dispatch_started_epoch}" \
+                  '[.workflow_runs[] | select(.event == "workflow_dispatch" and .id > $baseline_id and .head_branch == $dispatch_ref and ((.created_at | fromdateiso8601? // 0) >= ($dispatch_started_epoch - 5)))] | length' \
+                2>/dev/null || echo "")
+              if ! [[ "${candidate_count}" =~ ^[0-9]+$ ]]; then
+                echo "::warning::Malformed candidate count while registering ${workflow_file}; retrying within the registration window."
+                sleep 5
+                continue
+              fi
+              if [ "${candidate_count}" -gt 1 ]; then
+                echo "::error::Ambiguous ${workflow_file} registration: ${candidate_count} branch-scoped runs appeared after baseline ${baseline_id}."
+                return 2
+              fi
+              if [ "${candidate_count}" -eq 1 ]; then
+                candidate_id=$(printf '%s' "${runs_json}" \
+                  | jq -r \
+                    --arg dispatch_ref "${POLLER_DISPATCH_REF}" \
+                    --argjson baseline_id "${baseline_id}" \
+                    --argjson dispatch_started_epoch "${dispatch_started_epoch}" \
+                    '.workflow_runs[] | select(.event == "workflow_dispatch" and .id > $baseline_id and .head_branch == $dispatch_ref and ((.created_at | fromdateiso8601? // 0) >= ($dispatch_started_epoch - 5))) | .id' \
+                  2>/dev/null || echo "")
+                if ! [[ "${candidate_id}" =~ ^[0-9]+$ ]] || [ "${candidate_id}" -lt 1 ]; then
+                  echo "::error::Registered ${workflow_file} run id is not a positive integer: '${candidate_id}'"
+                  return 2
+                fi
+                REGISTERED_POLLER_RUN_ID="${candidate_id}"
+                return 0
+              fi
+              sleep 5
+            done
+
+            echo "::error::${workflow_file} dispatch did not register a branch-scoped run within 90 seconds."
+            return 2
+          }
+
           echo "Triggering orchestrator poller..."
           POLLER_WORKFLOW="internal-orchestrate-poll.yml"
-          if ! gh workflow run "${POLLER_WORKFLOW}" --repo "${TEST_REPO}" 2>/dev/null; then
-            # Try the consumer wrapper name
+          if dispatch_and_register_poller "${POLLER_WORKFLOW}"; then
+            :
+          else
+            POLLER_REGISTRATION_RC=$?
+            if [ "${POLLER_REGISTRATION_RC}" -eq 2 ]; then
+              exit 1
+            fi
             POLLER_WORKFLOW="ai-orchestrate-poll.yml"
-            if ! gh workflow run "${POLLER_WORKFLOW}" --repo "${TEST_REPO}" 2>/dev/null; then
+            if dispatch_and_register_poller "${POLLER_WORKFLOW}"; then
+              :
+            else
+              POLLER_REGISTRATION_RC=$?
+              if [ "${POLLER_REGISTRATION_RC}" -eq 2 ]; then
+                exit 1
+              fi
               echo "::warning::Could not trigger poller workflow. Skipping review-blocked verification."
               echo "status=skipped" >> "$GITHUB_OUTPUT"
               # Cleanup tracking issue
@@ -2719,7 +2964,13 @@ jobs:
             fi
           fi
 
-          echo "Poller triggered. Waiting for it to process the review-blocked issue..."
+          POLLER_RUN_ID="${REGISTERED_POLLER_RUN_ID}"
+          if ! [[ "${POLLER_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${POLLER_RUN_ID}" -lt 1 ]; then
+            echo "::error::Phase 6 did not register a positive poller run id."
+            exit 1
+          fi
+          echo "poller_run_id=${POLLER_RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "Poller run #${POLLER_RUN_ID} registered from ${POLLER_WORKFLOW}. Waiting for it to process the review-blocked issue..."
 
           # 6e: Wait for the poller to handle the review-blocked issue
           # The poller should: invoke judge → merge/fix/close_and_reissue
@@ -2728,15 +2979,24 @@ jobs:
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
           PREV_LABELS=""
-          RATE_LIMIT_BACKOFF=0
-          . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
 
-            LABELS=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-              --jq '[.labels[].name] | join(",")' || echo "")
+            if ! LABELS=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")'); then
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Review-blocked issue #${ISSUE_NUMBER} labels remained unreadable for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
+              fi
+              echo "::warning::Could not read review-blocked issue #${ISSUE_NUMBER} labels; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
 
             # If rate-limited, skip this cycle (don't corrupt state)
             if [ "$RATE_LIMIT_BACKOFF" -gt 0 ] && [ -z "$LABELS" ]; then
@@ -2744,31 +3004,8 @@ jobs:
               continue
             fi
 
-            # Also check poller workflow run status for activity detection
-            POLLER_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?per_page=5&event=workflow_dispatch" \
-              --jq "[.workflow_runs[] | select(.name | test(\"Orchestrate.*Poll|Poll\"; \"i\"))] | sort_by(.created_at) | last" || echo "")
-            POLLER_STATUS="unknown"
-            POLLER_CONCLUSION="null"
-            if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
-              POLLER_STATUS=$(echo "${POLLER_RUN}" | jq -r '.status // "unknown"')
-              POLLER_CONCLUSION=$(echo "${POLLER_RUN}" | jq -r '.conclusion // "null"')
-            fi
-
-            CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
-
-            # Capture the latest poller run id (used by the per-phase
-            # soft-error analyser invocation below to ingest the poller's
-            # logs as the `orchestrate_poll` phase artifact).
-            if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
-              POLLER_LATEST_ID=$(echo "${POLLER_RUN}" | jq -r '.id // empty')
-              if [ -n "${POLLER_LATEST_ID}" ]; then
-                echo "poller_run_id=${POLLER_LATEST_ID}" >> "$GITHUB_OUTPUT"
-              fi
-            fi
-
-            # Reset inactivity timer only when LABELS change (not poller
-            # status alone — poller runs starting/completing would otherwise
-            # reset the timer indefinitely while labels remain stuck).
+            # Label progress and terminal success remain authoritative even
+            # when the separate Actions run endpoint is temporarily unreadable.
             if [ "$LABELS" != "$PREV_LABELS" ]; then
               if [ -n "$PREV_LABELS" ]; then
                 echo "  ↻ Label change detected — resetting inactivity timer"
@@ -2777,8 +3014,6 @@ jobs:
               IDLE=0
               PREV_LABELS="$LABELS"
             fi
-            # Still track full state for debug logging
-            PREV_STATE="$CUR_STATE"
 
             # Success: poller has driven the review-blocked issue to a
             # terminal state. Two shapes are accepted:
@@ -2816,6 +3051,43 @@ jobs:
                 -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
               exit 0
             fi
+
+            # Observe only the run pinned immediately after this phase's
+            # dispatch. Never substitute a newer scheduled/manual poller.
+            if ! POLLER_RUN=$(gh_api_safe_quiet_print \
+              "repos/${TEST_REPO}/actions/runs/${POLLER_RUN_ID}"); then
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Pinned poller run #${POLLER_RUN_ID} remained unreadable for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
+              fi
+              echo "::warning::Could not read pinned poller run #${POLLER_RUN_ID}; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
+            if ! printf '%s' "${POLLER_RUN}" \
+              | jq -se 'length == 1 and (.[0] | type == "object" and (.status | type == "string") and ((.conclusion == null) or (.conclusion | type == "string")))' \
+              >/dev/null 2>&1; then
+              if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
+                echo "::error::Pinned poller run #${POLLER_RUN_ID} returned malformed payloads for ${PHASE_TIMEOUT} minutes"
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
+              fi
+              echo "::warning::Pinned poller run #${POLLER_RUN_ID} returned a malformed payload; retrying within the inactivity window"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
+            POLLER_STATUS=$(printf '%s' "${POLLER_RUN}" | jq -r '.status')
+            POLLER_CONCLUSION=$(printf '%s' "${POLLER_RUN}" | jq -r '.conclusion // "null"')
+
+            CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
+
+            # Still track full state for debug logging
+            PREV_STATE="$CUR_STATE"
 
             # Check if the poller workflow failed
             if [ "${POLLER_STATUS}" = "completed" ] && [ "${POLLER_CONCLUSION}" = "failure" ]; then
@@ -3072,7 +3344,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-orchestrate_poll
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # ── Phase 7: Verify cancel_on_pr_close fires on PR close ───
@@ -3100,17 +3372,19 @@ jobs:
           # cancel_on_pr_close already ran successfully on the original
           # close. Detect that case and verify the cancel run that fired
           # for the prior close instead.
-          # Default to '{}' on gh failure so subsequent jq parses don't
-          # blow up under `set -euo pipefail`.
           PR_INFO=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-            --jq '{state, head_sha: .head.sha}' 2>/dev/null || echo "{}")
+            --jq '{state, head_sha: .head.sha, closed_at, mergeable, mergeable_state}' 2>/dev/null || echo "{}")
           PR_STATE=$(echo "${PR_INFO}" | jq -r '.state // ""')
           PR_HEAD_SHA=$(echo "${PR_INFO}" | jq -r '.head_sha // ""')
+          PR_CLOSED_AT=$(echo "${PR_INFO}" | jq -r '.closed_at // ""')
+          PR_MERGEABLE=$(echo "${PR_INFO}" | jq -r 'if .mergeable == null then "unknown" else (.mergeable | tostring) end')
+          PR_MERGEABLE_STATE=$(echo "${PR_INFO}" | jq -r '.mergeable_state // "unknown"')
           if [ -z "${PR_STATE}" ]; then
             echo "::error::Could not read state of PR #${PR_NUMBER} (gh api returned empty)"
             echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          echo "Pre-close PR diagnostics: mergeable=${PR_MERGEABLE}, mergeable_state=${PR_MERGEABLE_STATE}"
           if [ "${PR_STATE}" = "closed" ]; then
             if ! [[ "${PR_HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
               echo "::error::Closed PR head is not a valid 40-hex SHA."
@@ -3118,11 +3392,29 @@ jobs:
               exit 1
             fi
             echo "PR #${PR_NUMBER} is already closed (head_sha=${PR_HEAD_SHA}); looking up the cancel-on-close run that fired for that closure."
-            EXISTING=$(gh api \
-              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=20&head_sha=${PR_HEAD_SHA}" \
-              --jq '[.workflow_runs[] | select(.event == "pull_request")] | sort_by(.created_at) | last' 2>/dev/null || echo "")
+            if [ -z "${PR_CLOSED_AT}" ]; then
+              echo "::error::Closed PR #${PR_NUMBER} has no closed_at timestamp."
+              echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            if ! EXISTING_RUNS_JSON=$(gh api \
+              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=50"); then
+              echo "::error::Could not list internal-cancel-on-pr-close runs for already-closed PR #${PR_NUMBER}."
+              echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            EXISTING=$(printf '%s' "${EXISTING_RUNS_JSON}" | jq -c \
+              --arg head_sha "${PR_HEAD_SHA}" \
+              --arg closed_at "${PR_CLOSED_AT}" \
+              '[.workflow_runs[]
+                | select(
+                    (.event == "pull_request" and .head_sha == $head_sha) or
+                    (.event == "schedule" and .created_at >= $closed_at)
+                  )]
+                | sort_by(.created_at)
+                | last')
             if [ -z "${EXISTING}" ] || [ "${EXISTING}" = "null" ]; then
-              echo "::error::PR #${PR_NUMBER} already closed but no internal-cancel-on-pr-close run found for head_sha=${PR_HEAD_SHA}"
+              echo "::error::PR #${PR_NUMBER} already closed but no event or scheduled internal-cancel-on-pr-close run was found after closed_at=${PR_CLOSED_AT}"
               echo "status=no_run" >> "$GITHUB_OUTPUT"
               exit 1
             fi
@@ -3130,10 +3422,10 @@ jobs:
             EXISTING_STATUS=$(echo "${EXISTING}" | jq -r '.status // ""')
             EXISTING_CONCLUSION=$(echo "${EXISTING}" | jq -r '.conclusion // ""')
             echo "  found pre-existing cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS}, conclusion=${EXISTING_CONCLUSION}"
-            # Match the open-PR poll budget (600s) so a slow/queued run
+            # Match the open-PR poll budget so a slow/queued run
             # doesn't flake the smoke test if it would have eventually
             # succeeded.
-            WAIT_DEADLINE=$(( $(date +%s) + 600 ))
+            WAIT_DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
             while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
               sleep 5
               # Fetch once, then parse locally. A transient failure still
@@ -3145,7 +3437,7 @@ jobs:
               echo "  cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS:-?}, conclusion=${EXISTING_CONCLUSION:-?}"
             done
             if [ "${EXISTING_STATUS}" != "completed" ]; then
-              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} did not complete within 600s (status=${EXISTING_STATUS:-?})"
+              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${EXISTING_STATUS:-?})"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               echo "cancel_run_id=${EXISTING_RUN_ID}" >> "$GITHUB_OUTPUT"
               exit 1
@@ -3163,17 +3455,181 @@ jobs:
           fi
 
           # PR is still open — exercise the close path end to end.
+
+          # ── Phase 7a: bring a conflicted smoke PR back to mergeable ──────
+          # GitHub never runs `pull_request` workflows for a PR that has a
+          # merge conflict (docs: events-that-trigger-workflows), so closing a
+          # conflicted smoke PR emits no `pull_request.closed` run and Phase 7
+          # fails `no_run` although the cancel wrapper is healthy. Run
+          # 35672590166 hit exactly that: the forward-merge of stable into
+          # main landed 75 s before the close and rewrote the same hunk of
+          # .ai/.workspace_source_manifest.txt that the smoke PR's workspace
+          # init had regenerated. The scheduled cleanup sweep (#4258) is the
+          # production backstop for such closures, not a substitute for the
+          # close trigger, and its observed cadence (median ~12 min) exceeds
+          # PHASE7_WAIT_BUDGET_MINUTES, so a conflicted PR would still fail.
+          #
+          # Before closing, merge the PR's base into the throwaway ai/issue-N
+          # branch through the merges API. On a 409, overwrite every PR file
+          # that the base also changed since the merge base with the base's
+          # version (the smoke PR's own content is no longer load-bearing once
+          # Phase 4b has verified the canary), retry the merge once, then wait
+          # for GitHub to recompute mergeability. A branch that still cannot be
+          # made mergeable is closed anyway and left to the scheduled fallback;
+          # the outcome is recorded either way so a later `no_run` is
+          # diagnosable from the log (PHASE7_UNCONFLICT_* lines).
+          #
+          # API calls (§15): one mergeability poll (≤18 calls at 5 s while
+          # GitHub reports mergeable=null), one `/merges` (two on conflict),
+          # and on conflict one `/compare`, one `/pulls/N/files` page, and up
+          # to four calls per overlapping file (base contents, merge-base blob,
+          # branch blob, PUT). The snapshot and close calls below are unchanged.
+          PHASE7_UNCONFLICT_OUTCOME="not_needed"
+          PHASE7_BASE_REF=""
+          PHASE7_MERGEABLE="unknown"
+          PHASE7_MERGEABLE_STATE="unknown"
+          _phase7_refresh_mergeability()
+          {
+            # Sets PHASE7_MERGEABLE / PHASE7_MERGEABLE_STATE / PHASE7_BASE_REF,
+            # polling while GitHub still reports mergeable=null (it recomputes
+            # lazily after any push to the base or the head).
+            local deadline info
+            deadline=$(( $(date +%s) + 90 ))
+            while :; do
+              info=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+                --jq '{mergeable, mergeable_state, base_ref: .base.ref}' 2>/dev/null || echo "{}")
+              PHASE7_MERGEABLE=$(printf '%s' "${info}" | jq -r 'if .mergeable == null then "unknown" else (.mergeable | tostring) end')
+              PHASE7_MERGEABLE_STATE=$(printf '%s' "${info}" | jq -r '.mergeable_state // "unknown"')
+              PHASE7_BASE_REF=$(printf '%s' "${info}" | jq -r '.base_ref // ""')
+              if [ "${PHASE7_MERGEABLE}" != "unknown" ] || [ "$(date +%s)" -ge "${deadline}" ]; then
+                return 0
+              fi
+              sleep 5
+            done
+          }
+          _phase7_merge_base_into_branch()
+          {
+            # 0 = merged or already up to date, 2 = merge conflict, 1 = other error.
+            local err
+            if err=$(gh api "repos/${TEST_REPO}/merges" \
+                -f base="${BRANCH}" -f head="${PHASE7_BASE_REF}" \
+                -f commit_message="[E2E Smoke Test] merge ${PHASE7_BASE_REF} into ${BRANCH} before close (run ${GITHUB_RUN_ID})" \
+                2>&1 >/dev/null); then
+              return 0
+            fi
+            if printf '%s' "${err}" | grep -Eqi 'HTTP 409|status code 409|conflict'; then
+              return 2
+            fi
+            echo "::warning::PHASE7_UNCONFLICT merge of ${PHASE7_BASE_REF} into ${BRANCH} failed with a non-conflict error: ${err}"
+            return 1
+          }
+          _phase7_take_base_version()
+          {
+            # Overwrite one PR file on the branch with the base's version,
+            # taken from the contents JSON the caller already fetched (one
+            # base read per file, reused for the blob comparison and the
+            # payload). The commit subject is prefixed `[E2E Smoke Test]`,
+            # never `[ai-autofix]`, for the same reason as the bait commit.
+            local path="$1" base_json="$2" branch_sha content
+            local -a sha_args=()
+            content=$(printf '%s' "${base_json}" | jq -r '.content // empty' 2>/dev/null | tr -d '\n')
+            if [ -z "${content}" ]; then
+              echo "PHASE7_UNCONFLICT_FILE path=${path} outcome=skipped reason=base_content_unavailable"
+              return 1
+            fi
+            branch_sha=$(gh api "repos/${TEST_REPO}/contents/${path}?ref=${BRANCH}" --jq '.sha // empty' 2>/dev/null || echo "")
+            if [ -n "${branch_sha}" ]; then
+              sha_args=(-f "sha=${branch_sha}")
+            fi
+            if ! gh api -X PUT "repos/${TEST_REPO}/contents/${path}" \
+                -f message="[E2E Smoke Test] take ${PHASE7_BASE_REF} version of ${path} to clear the merge conflict (run ${GITHUB_RUN_ID})" \
+                -f content="${content}" \
+                "${sha_args[@]}" \
+                -f branch="${BRANCH}" >/dev/null 2>&1; then
+              echo "PHASE7_UNCONFLICT_FILE path=${path} outcome=put_failed"
+              return 1
+            fi
+            echo "PHASE7_UNCONFLICT_FILE path=${path} outcome=replaced_with_base"
+            return 0
+          }
+
+          _phase7_refresh_mergeability
+          echo "PHASE7_UNCONFLICT_CHECK pr=${PR_NUMBER} branch=${BRANCH} base=${PHASE7_BASE_REF} mergeable=${PHASE7_MERGEABLE} mergeable_state=${PHASE7_MERGEABLE_STATE}"
+          if [ "${PHASE7_MERGEABLE}" = "false" ] && [ -n "${PHASE7_BASE_REF}" ]; then
+            PHASE7_UNCONFLICT_OUTCOME="merge_failed"
+            PHASE7_MERGE_RC=0
+            _phase7_merge_base_into_branch || PHASE7_MERGE_RC=$?
+            if [ "${PHASE7_MERGE_RC}" -eq 2 ]; then
+              PHASE7_MERGE_BASE_SHA=$(gh api "repos/${TEST_REPO}/compare/${PHASE7_BASE_REF}...${BRANCH}" \
+                --jq '.merge_base_commit.sha // ""' 2>/dev/null || echo "")
+              PHASE7_PR_FILES=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}/files?per_page=100" \
+                --jq '.[].filename' 2>/dev/null || echo "")
+              while IFS= read -r phase7_path; do
+                [ -n "${phase7_path}" ] || continue
+                phase7_base_json=$(gh api "repos/${TEST_REPO}/contents/${phase7_path}?ref=${PHASE7_BASE_REF}" 2>/dev/null || echo "")
+                phase7_base_blob=$(printf '%s' "${phase7_base_json}" | jq -r '.sha // ""' 2>/dev/null || echo "")
+                phase7_merge_base_blob=""
+                if [ -n "${PHASE7_MERGE_BASE_SHA}" ]; then
+                  phase7_merge_base_blob=$(gh api "repos/${TEST_REPO}/contents/${phase7_path}?ref=${PHASE7_MERGE_BASE_SHA}" \
+                    --jq '.sha // ""' 2>/dev/null || echo "")
+                fi
+                if [ -z "${PHASE7_MERGE_BASE_SHA}" ]; then
+                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=merge_base_unavailable"
+                elif [ -z "${phase7_merge_base_blob}" ]; then
+                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=merge_base_blob_unavailable"
+                elif [ -z "${phase7_base_blob}" ]; then
+                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=base_blob_unavailable"
+                elif [ -n "${phase7_base_blob}" ] && [ "${phase7_base_blob}" != "${phase7_merge_base_blob}" ]; then
+                  _phase7_take_base_version "${phase7_path}" "${phase7_base_json}" || true
+                else
+                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=base_unchanged_since_merge_base"
+                fi
+              done <<< "${PHASE7_PR_FILES}"
+              PHASE7_MERGE_RC=0
+              _phase7_merge_base_into_branch || PHASE7_MERGE_RC=$?
+            fi
+            if [ "${PHASE7_MERGE_RC}" -eq 0 ]; then
+              _phase7_refresh_mergeability
+              if [ "${PHASE7_MERGEABLE}" = "true" ]; then
+                PHASE7_UNCONFLICT_OUTCOME="unconflicted"
+              else
+                PHASE7_UNCONFLICT_OUTCOME="still_${PHASE7_MERGEABLE_STATE}"
+              fi
+            elif [ "${PHASE7_MERGE_RC}" -eq 2 ]; then
+              PHASE7_UNCONFLICT_OUTCOME="still_conflicted"
+            fi
+            echo "PHASE7_UNCONFLICT_RESULT pr=${PR_NUMBER} branch=${BRANCH} outcome=${PHASE7_UNCONFLICT_OUTCOME} mergeable=${PHASE7_MERGEABLE} mergeable_state=${PHASE7_MERGEABLE_STATE}"
+            if [ "${PHASE7_UNCONFLICT_OUTCOME}" != "unconflicted" ]; then
+              echo "::warning::Smoke PR #${PR_NUMBER} could not be made mergeable before close (outcome=${PHASE7_UNCONFLICT_OUTCOME}); GitHub will not fire pull_request.closed for a conflicted PR, so Phase 7 now depends on the scheduled cleanup fallback."
+            fi
+          elif [ "${PHASE7_MERGEABLE}" != "true" ]; then
+            PHASE7_UNCONFLICT_OUTCOME="still_${PHASE7_MERGEABLE_STATE}"
+            echo "PHASE7_UNCONFLICT_RESULT pr=${PR_NUMBER} branch=${BRANCH} outcome=${PHASE7_UNCONFLICT_OUTCOME} mergeable=${PHASE7_MERGEABLE} mergeable_state=${PHASE7_MERGEABLE_STATE}"
+            echo "::warning::Smoke PR #${PR_NUMBER} mergeability could not be confirmed before close (outcome=${PHASE7_UNCONFLICT_OUTCOME}, base=${PHASE7_BASE_REF:-unknown}); Phase 7 may depend on the scheduled cleanup fallback."
+          fi
+          echo "unconflict=${PHASE7_UNCONFLICT_OUTCOME}" >> "$GITHUB_OUTPUT"
+
           # Snapshot the most recent cancel-on-close run BEFORE we close the
           # PR so we can detect a fresh run by monotonic ID after the close.
-          PRE_RUN_ID=$(gh api \
-            "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=1" \
-            --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          if ! PRE_RUNS_JSON=$(gh api \
+            "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=1"); then
+            echo "::error::Could not snapshot internal-cancel-on-pr-close runs before closing PR #${PR_NUMBER}."
+            echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          PRE_RUN_ID=$(printf '%s' "${PRE_RUNS_JSON}" | jq -r '.workflow_runs[0].id // 0')
           echo "Pre-close cancel run head: ${PRE_RUN_ID}"
 
           # Close the PR (this is what triggers internal-cancel-on-pr-close).
-          gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-            -X PATCH -f state=closed >/dev/null 2>&1 \
+          CLOSE_RESPONSE=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+            -X PATCH -f state=closed --jq '{closed_at}' 2>/dev/null) \
             || { echo "::error::Could not close PR #${PR_NUMBER}"; echo "status=close_failed" >> "$GITHUB_OUTPUT"; exit 1; }
+          PR_CLOSED_AT=$(printf '%s' "${CLOSE_RESPONSE}" | jq -r '.closed_at // ""')
+          if [ -z "${PR_CLOSED_AT}" ]; then
+            echo "::error::Close response for PR #${PR_NUMBER} did not include closed_at."
+            echo "status=close_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           echo "✓ Closed PR #${PR_NUMBER}"
 
           # Event-propagation grace: GitHub's webhook delivery for the
@@ -3181,7 +3637,7 @@ jobs:
           # observed to lag 2-3 seconds under heavy queue load. Sleep 5s
           # before the first poll so we don't false-fail by reading the
           # `actions/workflows/.../runs` index before the cancel run has
-          # been created. The 600s overall budget below absorbs this.
+          # been created. The named Phase 7 budget below absorbs this.
           sleep 5
 
           # Wait for a new cancel-on-close run to register and complete.
@@ -3190,15 +3646,29 @@ jobs:
           # seconds to index the new run. Poll fast for the first 30s
           # to catch quick runs (the cancel job is short — it only
           # cancels other workflows), then back off to a slower cadence
-          # to ride out longer execution. Total budget unchanged at 600s.
-          DEADLINE=$(( $(date +%s) + 600 ))
+          # to ride out longer execution. Total budget defaults to 10m.
+          DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
           POLL_START=$(date +%s)
           NEW_RUN_ID=""
           NEW_CONCLUSION=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            CANDIDATE=$(gh api \
-              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=10" \
-              --jq "[.workflow_runs[] | select(.id > ${PRE_RUN_ID})] | sort_by(.created_at) | last" 2>/dev/null || echo "")
+            if ! CANDIDATE_RUNS_JSON=$(gh api \
+              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=10"); then
+              echo "::error::Could not list internal-cancel-on-pr-close runs after closing PR #${PR_NUMBER}."
+              echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            CANDIDATE=$(printf '%s' "${CANDIDATE_RUNS_JSON}" | jq -c \
+              --argjson pre_run_id "${PRE_RUN_ID}" \
+              --arg closed_at "${PR_CLOSED_AT}" \
+              '[.workflow_runs[]
+                | select(.id > $pre_run_id)
+                | select(
+                    .event == "pull_request" or
+                    (.event == "schedule" and .created_at >= $closed_at)
+                  )]
+                | sort_by(.created_at)
+                | last')
             if [ -n "${CANDIDATE}" ] && [ "${CANDIDATE}" != "null" ]; then
               NEW_RUN_ID=$(echo "${CANDIDATE}" | jq -r '.id // ""')
               STATUS=$(echo "${CANDIDATE}" | jq -r '.status // ""')
@@ -3242,7 +3712,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-cancel_on_pr_close
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # The previous Phase 8 in this job re-ran the LLM analyser across
@@ -3405,14 +3875,18 @@ jobs:
             PASSED=false
           fi
 
-          # Check cancel_on_pr_close (Phase 7)
+          # Check cancel_on_pr_close (Phase 7). `unconflict` records whether
+          # Phase 7a had to make the smoke PR mergeable before the close
+          # (not_needed / unconflicted / still_conflicted / merge_failed /
+          # still_<mergeable_state>).
           CANCEL="${{ steps.verify-cancel-on-close.outputs.status }}"
+          CANCEL_UNCONFLICT="${{ steps.verify-cancel-on-close.outputs.unconflict }}"
           if [ "$CANCEL" = "success" ]; then
-            echo "  ✓ Cancel-PR .. PASSED (cancel_on_pr_close ran successfully)"
+            echo "  ✓ Cancel-PR .. PASSED (cancel_on_pr_close ran successfully; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
           elif [ -z "$CANCEL" ]; then
             echo "  - Cancel-PR .. SKIPPED (no PR to close)"
           else
-            echo "  ✗ Cancel-PR .. FAILED (${CANCEL})"
+            echo "  ✗ Cancel-PR .. FAILED (${CANCEL}; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
             PASSED=false
           fi
 
@@ -3667,6 +4141,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_review_blocked_budget.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
@@ -3678,6 +4153,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rereview_and_approval_rubric.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_surface_prompt_hardening.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py
@@ -3760,34 +4236,7 @@ jobs:
       - name: Script-workflow cross-reference
         run: |
           set -euo pipefail
-          echo "Verifying all scripts referenced by workflows exist..."
-          # Scripts intentionally absent on main: optional backends that shim
-          # branches stage at runtime (see #3057). They appear as literal
-          # scripts/<name> tokens in workflow YAML (e.g. validate.yml stages
-          # render_prompt.py conditionally; review_autofix.yml's leaked-path
-          # guard lists it), but main ships a self-contained alternative
-          # (render_prompt.sh), so their absence here is expected and must not
-          # fail the cross-reference gate. Keep this list in sync with the
-          # optional-bootstrap handling in the consumer-facing workflows.
-          OPTIONAL_SCRIPTS=("scripts/render_prompt.py")
-          MISSING=0
-          for ref in $(grep -rhoE 'scripts/[a-zA-Z0-9_.-]+\.(sh|py|json)' .github/workflows/ | sort -u); do
-            if [ ! -f "$ref" ]; then
-              if printf '%s\n' "${OPTIONAL_SCRIPTS[@]}" | grep -qxF "$ref"; then
-                echo "OPTIONAL (absent on main, staged by shim branches): $ref"
-                continue
-              fi
-              echo "FAIL: $ref referenced in workflows but does not exist"
-              MISSING=$((MISSING + 1))
-            else
-              echo "OK: $ref"
-            fi
-          done
-          if [ "$MISSING" -gt 0 ]; then
-            echo "::error::${MISSING} script(s) referenced by workflows are missing"
-            exit 1
-          fi
-          echo "All referenced scripts exist."
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
 
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
@@ -3907,7 +4356,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-workflow_log_analysis
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Capture workflow-log-analysis actual result
@@ -3941,17 +4390,17 @@ jobs:
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     # Sum of remaining in-step DEADLINEs (validation-refresh 2400s +
-    # update_workflows 600s + memory-maintenance 900s = 3900s ≈ 65m).
+    # update_workflows 600s + memory-maintenance 2400s = 5400s = 90m).
     # Add headroom for prerequisite validation, checkout, and the
     # per-phase run-soft-error-analyzer composite actions (each waits
     # up to wait_for_completion_secs=120s and then runs an OpenRouter
     # call; log1 of run #25200117236 observed ~40s per phase, so 3
     # phases under OpenRouter latency variance can plausibly reach
-    # 6–9m), runner queueing, and step setup. Cap at 90m so a runaway
+    # 6–9m), runner queueing, and step setup. Cap at 110m so a runaway
     # validation-refresh / update_workflows / memory_maintenance can
     # still be killed within a sensible budget. Down from 360m before
     # the workflow-log-analysis split-out.
-    timeout-minutes: 90
+    timeout-minutes: 110
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -4035,7 +4484,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-validation_refresh
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
@@ -4078,12 +4527,12 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-update_workflows
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
-        timeout-minutes: 25
+        timeout-minutes: 45
         run: |
           set -euo pipefail
           sleep 4
@@ -4103,7 +4552,7 @@ jobs:
             --display-name "internal-memory-maintenance" \
             --registration-timeout-secs 900 \
             --registration-poll-interval-secs 5 \
-            --completion-timeout-secs 900 \
+            --completion-timeout-secs 2400 \
             --completion-poll-interval-secs 15 \
             --dispatch-max-attempts 5 \
             --dispatch-backoff-base-secs 2
@@ -4118,7 +4567,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-memory_maintenance
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
   # ──────────────────────────────────────────────────────────────────
@@ -4307,7 +4756,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-orchestrate_decompose
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Cleanup orchestrate test issues
@@ -4435,7 +4884,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-validate_standalone
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
   # ──────────────────────────────────────────────────────────────────
@@ -4624,7 +5073,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-clarify_negative
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Cleanup negative-test issue
@@ -4687,7 +5136,7 @@ jobs:
       # (anthropic/claude-sonnet-4-6 was never in the catalog, so even
       # a wired override would have failed apply_patch invocation).
       #
-      # Default is openai/gpt-5.6-sol — the same slug as the production
+      # Default is openai/gpt-6-sol — the same slug as the production
       # WORKFLOW_EDITOR_MODEL default. The previous canary
       # (openai/gpt-5.3-codex) was retired after the 2026-05-07
       # ablation suite identified `apply_patch_tool_type: "freeform"`
@@ -4705,7 +5154,7 @@ jobs:
       # slug is missing (codex falls back to bundled metadata, but
       # reliability degrades). Keep this default in sync with the
       # production default in implement.yml's MODEL_EDITOR.
-      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
+      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-6-sol' }}
     steps:
       # Required for the run-soft-error-analyzer composite action below.
       - name: Checkout repository (for soft-error analyser)
@@ -4858,7 +5307,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-alt_clarify
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: "Soft-error analyser (alt-model plan)"
@@ -4871,7 +5320,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-alt_plan
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: "Soft-error analyser (alt-model implement)"
@@ -4884,7 +5333,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-alt_implement
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: "Soft-error analyser (alt-model review_autofix)"
@@ -4898,7 +5347,7 @@ jobs:
           wait_for_completion_secs: "300"
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Cleanup alt-model artifacts
@@ -4985,7 +5434,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Ensure tag does not already exist
+      - name: Validate existing version tag
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-version.outputs.version }}"
@@ -4994,24 +5443,30 @@ jobs:
           # tag push (or be incomplete depending on checkout fetch
           # config). `git ls-remote --exit-code` returns 0 if the ref
           # exists on origin, 2 if it does not, and any other non-zero
-          # value for transport / auth / repo errors. Distinguish those
-          # so a transient failure can't silently look like "tag absent"
-          # and let the workflow advance to a duplicate-tag push.
+          # value for transport / auth / repo errors. A matching existing
+          # tag is a partial-release recovery; a tag targeting any other
+          # commit remains an immutable conflict.
           set +e
-          git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1
+          git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>/tmp/release_version_tag_lsremote_err
           rc=$?
           set -e
           case "$rc" in
             0)
-              echo "::error::Tag ${VERSION} already exists on origin"
-              exit 1
+              git fetch origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+              intended_release_commit="$(git rev-parse HEAD)"
+              existing_release_commit="$(git rev-parse "${VERSION}^{commit}")"
+              if [ "${existing_release_commit}" != "${intended_release_commit}" ]; then
+                echo "::error::Tag ${VERSION} already exists on origin at ${existing_release_commit}, not intended release commit ${intended_release_commit}. Refusing to retarget the immutable tag."
+                exit 1
+              fi
+              echo "Tag ${VERSION} already targets ${intended_release_commit} — accepting partial-release recovery."
               ;;
             2)
-              # Tag absent — this is what we want.
               echo "Tag ${VERSION} does not yet exist on origin — OK"
               ;;
             *)
               echo "::error::git ls-remote failed with exit code ${rc} (transport/auth/repo error). Refusing to proceed without a confirmed tag-absent signal."
+              cat /tmp/release_version_tag_lsremote_err >&2 2>/dev/null || true
               exit 1
               ;;
           esac
@@ -5091,6 +5546,7 @@ jobs:
           # while the test jobs run, and only the dispatched commit was tested.
           ref: ${{ github.sha }}
           fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
 
       - name: Record the tested commit
         env:
@@ -5137,7 +5593,11 @@ jobs:
           pushed="false"
           delay=2
           for attempt in 1 2 3 4; do
-            if git push origin "HEAD:${SOURCE_BRANCH}"; then
+            # refs/heads/ on the push and on the tip lookup below: `stable` is
+            # also a tag, so a bare `HEAD:stable` is rejected with "dst refspec
+            # stable matches more than one" and `git fetch origin stable`
+            # resolves to the tag, leaving origin/stable stale.
+            if git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"; then
               pushed="true"
               break
             fi
@@ -5148,8 +5608,7 @@ jobs:
             # released. A remote tip other than RELEASE_TESTED_SHA means the
             # branch moved under this run, so fail closed instead of
             # re-baselining onto untested history.
-            git fetch origin "${SOURCE_BRANCH}" || true
-            _remote_tip="$(git rev-parse "origin/${SOURCE_BRANCH}" 2>/dev/null || true)"
+            _remote_tip="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" 2>/dev/null | awk '{print $1}' || true)"
             if [ -n "${_remote_tip}" ] && [ "${_remote_tip}" != "${RELEASE_TESTED_SHA}" ]; then
               echo "::error::RELEASE_STALE_TIP branch=${SOURCE_BRANCH} tested=${RELEASE_TESTED_SHA} tip=${_remote_tip}: the branch moved after this gate started; not releasing a stale checkout."
               exit 1
@@ -5186,7 +5645,108 @@ jobs:
 
           VERSION="${{ needs.resolve-version.outputs.version }}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          VERSION_TAG_ALREADY_PUBLISHED=false
 
+          publish_tag_with_remote_verification() {
+            local tag_ref="$1"
+            local publication_mode="$2"
+            local expected_object_id=""
+            local remote_lookup_error=""
+            local remote_lookup_error_file=""
+            local remote_lookup_output=""
+            local remote_object_id=""
+            local attempt=1
+            local max_attempts=5
+            local backoff_seconds=2
+            local lookup_rc=0
+
+            case "${publication_mode}" in
+              immutable|moving) ;;
+              *)
+                echo "::error::Unsupported tag publication mode '${publication_mode}' for ${tag_ref}."
+                return 1
+                ;;
+            esac
+
+            if ! expected_object_id="$(git rev-parse "${tag_ref}" 2>/dev/null)"; then
+              echo "::error::Could not resolve ${tag_ref} to a local Git object."
+              return 1
+            fi
+            if [[ ! "${expected_object_id}" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+              echo "::error::Could not resolve ${tag_ref} to a valid local Git object ID."
+              return 1
+            fi
+
+            while [ "${attempt}" -le "${max_attempts}" ]; do
+              echo "Publishing ${tag_ref} (attempt ${attempt}/${max_attempts})..."
+              if [ "${publication_mode}" = "immutable" ]; then
+                if git push origin "${tag_ref}"; then
+                  return 0
+                fi
+              elif git push -f origin "${tag_ref}"; then
+                return 0
+              fi
+
+              remote_lookup_error_file="$(mktemp "${RUNNER_TEMP:-/tmp}/release_tag_lsremote_err.XXXXXX")"
+              set +e
+              remote_lookup_output="$(git ls-remote --exit-code origin "${tag_ref}" 2>"${remote_lookup_error_file}")"
+              lookup_rc=$?
+              set -e
+              remote_lookup_error="$(<"${remote_lookup_error_file}")"
+              rm -f "${remote_lookup_error_file}"
+              remote_object_id=""
+              if [ "${lookup_rc}" -eq 0 ]; then
+                remote_object_id="$(printf '%s\n' "${remote_lookup_output}" | awk -v expected_ref="${tag_ref}" '$2 == expected_ref { print $1 }')"
+                if [[ "${remote_object_id}" =~ ^[0-9a-fA-F]{40,64}$ ]] && [ "${remote_object_id}" = "${expected_object_id}" ]; then
+                  echo "Remote ${tag_ref} already matches the local tag object; treating the failed push as accepted."
+                  return 0
+                fi
+                if [ "${publication_mode}" = "immutable" ] && [[ "${remote_object_id}" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+                  echo "::error::Immutable ${tag_ref} exists remotely at a different object ID; refusing to overwrite it."
+                  return 1
+                fi
+              fi
+
+              if [ "${attempt}" -eq "${max_attempts}" ]; then
+                echo "::error::Failed to publish and verify ${tag_ref} after ${max_attempts} attempts."
+                if [ "${lookup_rc}" -ne 0 ] && [ -n "${remote_lookup_error}" ]; then
+                  printf '%s\n' "${remote_lookup_error}" >&2
+                fi
+                return 1
+              fi
+
+              echo "::warning::Push result for ${tag_ref} was not confirmed; retrying in ${backoff_seconds}s."
+              sleep "${backoff_seconds}"
+              backoff_seconds=$((backoff_seconds * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          # Re-check after changelog assembly because that step may have moved
+          # HEAD. Only a tag peeled to this final release commit is recoverable.
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>/tmp/release_version_tag_lsremote_err
+          version_tag_lookup_rc=$?
+          set -e
+          case "${version_tag_lookup_rc}" in
+            0)
+              git fetch origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+              intended_release_commit="$(git rev-parse HEAD)"
+              existing_release_commit="$(git rev-parse "${VERSION}^{commit}")"
+              if [ "${existing_release_commit}" != "${intended_release_commit}" ]; then
+                echo "::error::Tag ${VERSION} already exists on origin at ${existing_release_commit}, not final release commit ${intended_release_commit}. Refusing to retarget the immutable tag."
+                exit 1
+              fi
+              VERSION_TAG_ALREADY_PUBLISHED=true
+              echo "Tag ${VERSION} already targets ${intended_release_commit} — retaining it for partial-release recovery."
+              ;;
+            2) ;;
+            *)
+              echo "::error::git ls-remote failed with exit code ${version_tag_lookup_rc}; refusing to publish without authoritative immutable-tag state."
+              cat /tmp/release_version_tag_lsremote_err >&2 2>/dev/null || true
+              exit 1
+              ;;
+          esac
           # Stale-tip guard. RELEASE_TESTED_SHA is the commit this run was
           # dispatched on and the gate tested. HEAD may be that commit or
           # that commit plus the changelog-assembly commit, nothing else, and
@@ -5213,31 +5773,82 @@ jobs:
           fi
 
           # Immutable version tag (refs/tags/ prefix for consistency with the moving-tag pushes below)
-          git tag -a "$VERSION" -m "Release $VERSION"
-          git push origin "refs/tags/$VERSION"
+          if [ "${VERSION_TAG_ALREADY_PUBLISHED}" != "true" ]; then
+            git tag -a "$VERSION" -m "Release $VERSION"
+            publish_tag_with_remote_verification "refs/tags/$VERSION" immutable
+          fi
 
           # Moving stable pointer (use refs/tags/ to disambiguate from refs/heads/stable)
           git tag -f stable "$VERSION"
-          git push -f origin refs/tags/stable
+          publish_tag_with_remote_verification refs/tags/stable moving
 
           # Moving major-version pointer (e.g. v1)
           git tag -f "$MAJOR" "$VERSION"
-          git push -f origin "refs/tags/$MAJOR"
+          publish_tag_with_remote_verification "refs/tags/$MAJOR" moving
 
           echo "Tagged $VERSION and updated stable + $MAJOR pointers."
 
       - name: Create GitHub Release
         if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           VERSION="${{ needs.resolve-version.outputs.version }}"
-          gh release create "${VERSION}" \
+          RELEASE_LOOKUP_ERROR_FILE="/tmp/release_lookup_err"
+          RELEASE_CREATE_ERROR_FILE="/tmp/release_create_err"
+
+          # Audited the adjacent consumer-dispatch API calls: they publish an
+          # event but return no release-by-tag state, so this lookup cannot be
+          # merged with or served by existing workflow data.
+          set +e
+          EXISTING_RELEASE_TAG="$(gh_retry gh api "repos/${{ github.repository }}/releases/tags/${VERSION}" --jq 'if (.draft == false and .prerelease == false) then .tag_name else error("release-is-draft-or-prerelease") end' 2>"${RELEASE_LOOKUP_ERROR_FILE}")"
+          RELEASE_LOOKUP_RC=$?
+          set -e
+
+          if [ "${RELEASE_LOOKUP_RC}" -eq 0 ]; then
+            if [ "${EXISTING_RELEASE_TAG}" != "${VERSION}" ]; then
+              echo "::error::Release lookup for ${VERSION} returned unexpected tag '${EXISTING_RELEASE_TAG}'."
+              exit 1
+            fi
+            echo "GitHub Release ${VERSION} already exists — accepting partial-release recovery."
+            exit 0
+          fi
+
+          if ! grep -Fq "HTTP 404" "${RELEASE_LOOKUP_ERROR_FILE}"; then
+            echo "::error::Failed to determine whether GitHub Release ${VERSION} exists."
+            cat "${RELEASE_LOOKUP_ERROR_FILE}" >&2 2>/dev/null || true
+            exit "${RELEASE_LOOKUP_RC}"
+          fi
+
+          set +e
+          gh_retry gh release create "${VERSION}" \
             --title "${VERSION}" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
-            --target "${SOURCE_BRANCH}"
+            --target "${SOURCE_BRANCH}" 2>"${RELEASE_CREATE_ERROR_FILE}"
+          RELEASE_CREATE_RC=$?
+          set -e
+          if [ "${RELEASE_CREATE_RC}" -eq 0 ]; then
+            exit 0
+          fi
+
+          # A concurrent recovery run may have created the release after the
+          # confirmed 404. Accept that race only after an exact-tag recheck.
+          set +e
+          EXISTING_RELEASE_TAG="$(gh_retry gh api "repos/${{ github.repository }}/releases/tags/${VERSION}" --jq 'if (.draft == false and .prerelease == false) then .tag_name else error("release-is-draft-or-prerelease") end' 2>"${RELEASE_LOOKUP_ERROR_FILE}")"
+          RELEASE_RECHECK_RC=$?
+          set -e
+          if [ "${RELEASE_RECHECK_RC}" -eq 0 ] && [ "${EXISTING_RELEASE_TAG}" = "${VERSION}" ]; then
+            echo "GitHub Release ${VERSION} appeared concurrently — accepting it as complete."
+            exit 0
+          fi
+
+          cat "${RELEASE_CREATE_ERROR_FILE}" >&2 2>/dev/null || true
+          cat "${RELEASE_LOOKUP_ERROR_FILE}" >&2 2>/dev/null || true
+          exit "${RELEASE_CREATE_RC}"
 
       - name: Notify consumer repos via repository_dispatch
         if: ${{ !inputs.dry_run }}

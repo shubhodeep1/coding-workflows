@@ -259,7 +259,7 @@ def test_wrapper_ref_renderer_contract() -> None:
 
 def test_every_wrapper_template_renders_to_an_immutable_ref() -> None:
 	templates = sorted(WORKFLOW_TEMPLATES_DIR.glob("*.yml"))
-	assert len(templates) == 16
+	assert len(templates) == 17
 	for template_path in templates:
 		rendered_text = pin_reusable_workflow_refs(
 			template_path.read_text(encoding="utf-8"),

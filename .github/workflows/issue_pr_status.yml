@@ -138,6 +138,12 @@ jobs:
             fi
             _fetched_scripts+=("${f}")
           done
+          # Optional helper for the implement-plan lessons step. Kept out of
+          # MEMORY_HELPERS_READY so a support ref that predates it never
+          # blocks lineage finalization; that step skips when it is missing.
+          if fetch_from_ref_or_local "scripts/ingest_implement_plan_lessons.py" "scripts/ingest_implement_plan_lessons.py"; then
+            _fetched_scripts+=("ingest_implement_plan_lessons.py")
+          fi
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -162,7 +168,8 @@ jobs:
             validation_history.v1.json \
             operator_bypass_audit.v1.json \
             revalidate_events.v1.json \
-            validation_discovery.v1.json; do
+            validation_discovery.v1.json \
+            lessons_learned_record.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
               if fetch_from_ref_or_local "ai-memory/schemas/${sf}" "ai-memory/schemas/${sf}.tmp"; then
                 mv "ai-memory/schemas/${sf}.tmp" "ai-memory/schemas/${sf}"
@@ -526,6 +533,40 @@ jobs:
               --pr-number "${PR_NUMBER}" \
               --pr-url "${PR_URL}"
           done <<< "${LINKED_ISSUE_NUMBERS}"
+
+      # /implement-plan-claude records reusable lessons in its progress log
+      # (docs/implement-plan/<slug>.md, `## Lessons`). When a PR that carries
+      # the log merges, copy those lessons into the ai-memory branch.
+      # Idempotent (record ids derive from slug + source + text) and
+      # fail-open: this step never turns the job red.
+      - name: Ingest implement-plan lessons into AI memory
+        if: ${{ !cancelled() && github.event.pull_request.merged == true && (startsWith(github.event.pull_request.head.ref, 'claude/implement-plan-') || startsWith(github.event.pull_request.head.ref, 'claude/verify-activation-')) }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_MEMORY_ENABLED: ${{ vars.AI_MEMORY_ENABLED || 'true' }}
+          LESSONS_LEARNED_ENABLED: ${{ vars.LESSONS_LEARNED_ENABLED || 'true' }}
+          MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/ingest_implement_plan_lessons.py ] || [ ! -f scripts/ai_memory_lib.py ]; then
+            echo "::warning::implement-plan lessons helper unavailable; skipping ingestion"
+            echo "AI_MEMORY_TELEMETRY: {\"op\":\"ingest_implement_plan_lessons\",\"ok\":true,\"fail_open\":true,\"reason\":\"helper_missing\",\"source\":\"issue_pr_status.yml\"}"
+            exit 0
+          fi
+
+          if [ -z "${MERGE_COMMIT_SHA:-}" ] || ! git fetch --no-tags --quiet --depth=1 origin "${MERGE_COMMIT_SHA}"; then
+            echo "::warning::could not fetch merge commit ${MERGE_COMMIT_SHA:-<none>}; skipping implement-plan lessons ingestion"
+            echo "AI_MEMORY_TELEMETRY: {\"op\":\"ingest_implement_plan_lessons\",\"ok\":false,\"fail_open\":true,\"reason\":\"merge_commit_unavailable\",\"source\":\"issue_pr_status.yml\"}"
+            exit 0
+          fi
+
+          python3 scripts/ingest_implement_plan_lessons.py \
+            --ref "${MERGE_COMMIT_SHA}" \
+            --pr-number "${PR_NUMBER}"
 
       - name: Send PR merged Telegram alert
         if: github.event.pull_request.merged == true
