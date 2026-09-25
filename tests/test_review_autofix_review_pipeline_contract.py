@@ -7248,7 +7248,7 @@ def test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop() -> None
 	start = text.index("for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do")
 	loop = text[start:text.index("\ndone\n", start)]
 	assert 'main_primary_bootstrap_root=".codex-workflow-src"' in text
-	assert 'src="${main_primary_bootstrap_root}/scripts/${f}"' in loop
+	assert 'src=".codex-workflow-src/scripts/${f}"' in loop
 	assert '.codex-workflow-src-main' not in loop
 
 
