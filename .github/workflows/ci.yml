@@ -426,6 +426,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py
 
+      - name: CLAUDE.md section numbering guard (§6 identifiers)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_md_section_numbers.py
+
       - name: /audit-plans command contract tests
         run: |
           set -euo pipefail

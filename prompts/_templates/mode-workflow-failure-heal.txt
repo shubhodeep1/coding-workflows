@@ -144,4 +144,11 @@ Hard rules:
   "inconclusive -- here is what to check next".
 - Do not propose changes that would weaken a security control, delete data,
   skip a test, or disable the escalation / guard that surfaced the failure.
+- A failure that repeated with the same fingerprint (the report's failure
+  reason is `identical_failure_cap`) or that came back after an earlier heal
+  of this lineage merged a fix is deterministic. Never classify it
+  `transient`, and never propose a retry, backoff, re-run, or longer timeout
+  as the fix: find the deterministic cause, and make the Suggested fix include
+  a regression test that reproduces the failing condition (fails on the
+  failing SHA, passes with the fix).
 - Keep the body focused and skimmable; this is a work item, not an essay.
