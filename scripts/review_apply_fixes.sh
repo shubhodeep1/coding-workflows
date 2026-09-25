@@ -170,6 +170,10 @@ review_apply_fixes_preflight()
 		# A function named setup_editor_isolation, where a branch defines one,
 		# adds its prerequisite checks to this function in dry-run form in the
 		# same change.
+		RUNTIME_DIR
+		WORKSPACE_PATH
+		GITHUB_WORKSPACE
+		GITHUB_ENV
 	)
 	local preflight_checks=0
 	local preflight_failed=0
@@ -207,8 +211,13 @@ review_apply_fixes_preflight()
 	else
 		_review_apply_fixes_preflight_result opencode_config_writer fail "unreadable:${OPENCODE_CONFIG_WRITER_PATH}"
 	fi
-	# CODEX_HELPERS_PATH is not used by this script on main; a caller that
-	# sets it gets the readability check, an unset value is not a failure.
+	# CODEX_HELPERS_PATH is now always derived from SUPPORT_SCRIPTS_DIR near
+	# the top of this script and hard-required before this function can even
+	# be reached (a missing/unreadable file exits the script outright), so
+	# this check is always exercised and, by construction, always reports ok
+	# once we get this far. It stays a defensive `-n` check (rather than an
+	# unconditional one) so a future caller that clears CODEX_HELPERS_PATH
+	# before invoking --preflight does not silently skip this evidence line.
 	if [ -n "${CODEX_HELPERS_PATH:-}" ]; then
 		if [ -r "${CODEX_HELPERS_PATH}" ]; then
 			_review_apply_fixes_preflight_result codex_helpers ok "${CODEX_HELPERS_PATH}"

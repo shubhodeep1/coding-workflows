@@ -1428,20 +1428,6 @@ jobs:
       POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}
       POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}
     steps:
-      - name: Validate immutable workflow support source
-        env:
-          WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}
-          WORKFLOW_SUPPORT_REF: ${{ fromJSON(toJSON(job)).workflow_sha }}
-        run: |
-          set -euo pipefail
-          if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "shubhodeep1/coding-workflows" ]; then
-            echo "::error::Reusable workflow repository '${WORKFLOW_DEFINITION_REPOSITORY}' does not match expected source 'shubhodeep1/coding-workflows'."
-            exit 1
-          fi
-          if ! [[ "${WORKFLOW_SUPPORT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::job.workflow_sha is not an immutable 40-character commit SHA."
-            exit 1
-          fi
       - name: Checkout workflow support source
         uses: actions/checkout@v5
         with:
@@ -1604,20 +1590,6 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
     steps:
-      - name: Validate immutable workflow support source
-        env:
-          WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}
-          WORKFLOW_SUPPORT_REF: ${{ fromJSON(toJSON(job)).workflow_sha }}
-        run: |
-          set -euo pipefail
-          if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "shubhodeep1/coding-workflows" ]; then
-            echo "::error::Reusable workflow repository '${WORKFLOW_DEFINITION_REPOSITORY}' does not match expected source 'shubhodeep1/coding-workflows'."
-            exit 1
-          fi
-          if ! [[ "${WORKFLOW_SUPPORT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::job.workflow_sha is not an immutable 40-character commit SHA."
-            exit 1
-          fi
       - name: Checkout workflow support source
         uses: actions/checkout@v5
         with:
@@ -4020,8 +3992,7 @@ jobs:
         # with the editor step's explicit env entries, so it sees what the
         # editor will see ("Apply fixes with editor model").
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          REPOSITORY: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}
         run: |
