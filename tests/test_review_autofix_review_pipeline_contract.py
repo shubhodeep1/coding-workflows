@@ -7447,7 +7447,9 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	broker = (REPO_ROOT / "scripts/clarify_openrouter_broker.py").read_text(encoding="utf-8")
 	assert 'REVIEW_PATH = "/api/v1/chat/completions"' in broker
 	assert '"review-broker"' in broker and '"review-bridge"' in broker
-	assert 'self.server.model' in broker
+	# The configured model is the budget policy's only allowed model.
+	assert 'budget = build_budget_state(model)' in broker
+	assert 'frozenset((model,))' in broker
 
 
 def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
@@ -7563,6 +7565,7 @@ def test_review_relay_accepts_only_configured_chat_model() -> None:
 		server.mode = "review-broker"
 		server.model = "openai/gpt-6-sol"
 		server.api_key = "test-only-key"
+		server.budget = broker_module.build_budget_state("openai/gpt-6-sol")
 		thread = threading.Thread(target=server.serve_forever, daemon=True)
 		thread.start()
 		try:

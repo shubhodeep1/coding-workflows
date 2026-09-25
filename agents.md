@@ -885,6 +885,21 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   later repair allow-list. Validation and self-heal model calls use the same
   runner-supervised separate-UID read-only path, while trusted runner code owns
   output application and repository/GitHub mutations.
+- The clarify phases (`clarify.yml`, `orchestrate_clarify_respond.yml`, via
+  `scripts/clarify_isolated_run.sh`) and the sandboxed review editor
+  (`scripts/review_untrusted_sandbox.sh`) reach the provider through the
+  host-side relay `scripts/clarify_openrouter_broker.py` instead of the
+  loopback broker. Its `broker` and `review-broker` modes load
+  `model_provider_broker.py` from their own directory and apply the same
+  policy: exact model, token-limit and price-ceiling normalization, and the
+  `MODEL_PROVIDER_BROKER_MAX_*` request, output-token, input-token, and cost
+  budgets with the same defaults and bounds (HTTP 400 for a policy rejection,
+  429 when a budget is exhausted, usage true-up after each response). Budgets
+  apply per relay process, which the launchers start once per clarify attempt
+  or editor attempt. Both launchers pass the `MODEL_PROVIDER_BROKER_MAX_*`
+  variables through their `env -i` start explicitly; a missing
+  `model_provider_broker.py` or an invalid value stops the relay before it
+  listens, and the attempt fails closed.
 - Issue-phase integration-ref resolution executes the SHA-pinned canonical
   resolver before checkout. A successful empty result means no integration
   metadata exists and permits the default branch; resolver staging, helper,

@@ -22,6 +22,13 @@ name: AI Orchestrate Clarify Respond (Reusable)
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE || '10' }}
+  MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE || '30' }}
+  MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE || '0.10' }}
+  MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE || '1' }}
+  MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS || '16777216' }}
+  MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS || '1677721600' }}
+  MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD || '' }}
 
 jobs:
   respond:
@@ -270,7 +277,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-            for f in gh_helpers.sh emit_event.sh emit_event.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py orchestrate_parse_and_post_answer.sh clarify_data_provision_guard.py; do
+            for f in gh_helpers.sh emit_event.sh emit_event.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py model_provider_broker.py orchestrate_parse_and_post_answer.sh clarify_data_provision_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"

@@ -100,7 +100,7 @@ def test_clarify_respond_isolates_every_model_call() -> None:
 	respond = (WORKFLOW_DIR / "orchestrate_clarify_respond.yml").read_text(encoding="utf-8")
 	# Staging list order is not semantic -- assert the three model-call
 	# support files are staged together, in whatever order the list uses.
-	assert "clarify_isolated_run.sh clarify_openrouter_broker.py orchestrate_parse_and_post_answer.sh" in respond
+	assert "clarify_isolated_run.sh clarify_openrouter_broker.py model_provider_broker.py orchestrate_parse_and_post_answer.sh" in respond
 	assert 'sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"' in respond
 	assert '.codex-workflow-src-main' not in respond
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in respond
