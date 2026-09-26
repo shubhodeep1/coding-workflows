@@ -297,6 +297,38 @@ class GuardBehaviorContractTest(unittest.TestCase):
 		self.assertNotIn("first-sensitive-value", output)
 		self.assertNotIn("second-sensitive-value", output)
 
+	def test_broker_codex_prepare_helper_call_satisfies_required_helper(self) -> None:
+		for helper_call in (
+			'model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"\n',
+			'  model_provider_broker_prepare_codex_writer "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "${WORKSPACE_PATH}"\n',
+		):
+			with self.subTest(helper_call=helper_call.strip()):
+				with tempfile.TemporaryDirectory() as temporary_directory:
+					fixture_root = Path(temporary_directory)
+					_write_valid_fixture(fixture_root)
+					_replace_once(
+						fixture_root, "scripts/validate_process.sh", "codex_config_assemble\n", helper_call
+					)
+					result = _run_guard(fixture_root)
+				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+				self.assertNotIn("CI_GUARD_FAILURE", result.stdout + result.stderr)
+
+	def test_broker_codex_prepare_helper_mention_in_comment_does_not_satisfy_required_helper(self) -> None:
+		with tempfile.TemporaryDirectory() as temporary_directory:
+			fixture_root = Path(temporary_directory)
+			_write_valid_fixture(fixture_root)
+			_replace_once(
+				fixture_root,
+				"scripts/validate_process.sh",
+				"codex_config_assemble\n",
+				"# configured by model_provider_broker_prepare_codex_readonly elsewhere\n",
+			)
+			result = _run_guard(fixture_root)
+		output = result.stdout + result.stderr
+		self.assertNotEqual(result.returncode, 0, output)
+		self.assertIn("check=required-helper-missing", output)
+		self.assertIn("file=scripts/validate_process.sh", output)
+
 
 if __name__ == "__main__":
 	unittest.main()

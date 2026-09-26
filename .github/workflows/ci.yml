@@ -79,8 +79,14 @@ jobs:
             scripts/validate_process.sh
           )
           ci_guard_required_codex_scanned="$(IFS=,; echo "${ci_guard_required_codex_files[*]}")"
+          # The broker-isolated Codex launches configure Codex through the
+          # model_provider_broker_prepare_codex_{readonly,writer} helpers in
+          # scripts/codex_helpers.sh (same shared module, broker base URL and
+          # isolated CODEX_HOME). A call to either one satisfies the check;
+          # a mention in a comment does not.
           for ci_guard_file in "${ci_guard_required_codex_files[@]}"; do
-            if ! grep -q 'codex_config_assemble' "${ci_guard_file}"; then
+            if ! grep -q 'codex_config_assemble' "${ci_guard_file}" \
+              && ! grep -Eq '^[[:space:]]*model_provider_broker_prepare_codex_(readonly|writer)[[:space:]]' "${ci_guard_file}"; then
               ci_guard_report_failure \
                 "codex-config-shared-helper" \
                 "required-helper-missing" \
