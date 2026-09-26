@@ -211,3 +211,22 @@ def test_depth_limit_refusal_is_loud_not_a_session_local_cron(text):
 	assert "**Refused at the depth limit.**" in text
 	assert "do **not** fall back to `CronCreate` or any other session-local loop" in text
 	assert "[Fallbacks](#fallbacks) apply only when the tools are missing, not when they refuse." in text
+
+
+def test_every_started_session_runs_opus_at_high_effort(text):
+	"""Q2/Q14: stages, /deploy-activate and fixers start as Opus 5.5 with `/effort high` alone."""
+	assert "The **stage model** is always `claude-opus-5-5` at high effort" in text
+	assert "the prompt `/effort high` **and nothing else**" in text
+	assert "`name` = `implement-plan <slug>: stage start`" in text
+	assert "model claude-opus-5-5, permission_mode <mode>" in text
+	assert "and the prompt `/effort high` and nothing else; (b) create_trigger" in text
+	assert "model <stage model>" not in text and "`model` = the stage model" not in text
+
+
+def test_stage_sessions_claim_before_fixing(text):
+	"""Q22: a stage session claims the PR head so the §26.H sweep never duplicates it."""
+	assert "### Claims" in COMMAND.read_text(encoding="utf-8")
+	assert ".claude/scripts/claude_fix_claim.py post" in text
+	assert "[Claim the head](#claims) (`--kind review` for findings, `--kind conflict` for a conflict)" in text
+	assert "[claim the head](#claims) (`--kind blocked`, or `--kind ci` for a stuck PR)" in text
+	assert "the §26.H hand-back cap does not apply to its PRs" in text
