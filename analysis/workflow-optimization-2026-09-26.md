@@ -102,3 +102,148 @@ Clarify, plan, implement, and clarify-respond families have 158–159 *other/ski
 | Other MCP servers observed | 0 | 0 | 0 | None observed | No unknown server prefix found in inspected deep dives. |
 
 **GH API call summary:** two visible `update-branch` PUT failures (HTTP 422) in poll run 36203394070; total calls, cache-miss calls, and full-window rate-limit counts were not supplied. **Next collection step:** add per-step API aggregates and job queue timestamps to the existing telemetry path, and reconcile the 120-run assembled versus 23-run full-log coverage in future reports.
+
+## Deep Audit — Workflows & Scripts (2026-09-26)
+
+### Section 1: Bug & Correctness Sweep
+
+Static checks covered 50 workflow YAML files, 94 shell scripts, and 60 Python scripts. YAML parsing, `bash -n`, and in-memory Python compilation found no syntax failures. Findings below are source-based; no workflow was executed. The CI bootstrap failure and memory delays already described in the report are not repeated.
+
+**SEC-001 — PR-head files can supply triage model instructions**  
+**File:** `.github/workflows/check_failure_triage.yml:219-225,301-313`  
+**Severity:** High · **Category:** `security`  
+**Description:** The job checks out the PR head, then installs trusted system instructions and the triage prompt *only if those paths are absent*. `scripts/check_failure_triage.sh:281-320` reads the resulting files as instructions; lines 322-331 invoke Codex with `--sandbox danger-full-access`. A same-repository PR can therefore supply instruction files that steer a secret-bearing diagnosis job. The extent to which checkout credentials remain accessible to that process is **an inference**. [NEEDS VERIFICATION]  
+**Recommended fix:** Always stage these instruction and prompt files from the verified support source, keeping PR content in the explicitly marked failure-context portion of the prompt. Set `persist-credentials: false` on the PR checkout and assess a tokenless isolated model path, following the repository’s `scripts/clarify_isolated_run.sh` pattern.
+
+**BUG-001 — Failed deduplication read permits a new triage issue**  
+**File:** `scripts/check_failure_triage.sh:219-230`  
+**Severity:** High · **Category:** `bug`  
+**Description:** An exhausted `gh_retry` or failed `jq` becomes `[]` through `|| echo '[]'`. The script then treats “could not list open triage issues” as “none exist” and reaches `gh issue create` at line 391. Job concurrency serializes matching runs but does not correct this failed-read path.  
+**Recommended fix:** Capture and validate the list call separately. If uniqueness cannot be confirmed, stop before issue creation, emit a bounded diagnostic, and let a later run retry.
+
+**BUG-002 — Merge-train cap can overlook an older blocker**  
+**File:** `scripts/review_merge_train.sh:202-233`  
+**Severity:** Medium · **Category:** `bug`  
+**Description:** On the 21st eligible older PR with the default `MT_MAX_OLDER=20`, `_mt_blockers_for_into` breaks without checking its files. If the first 20 do not overlap, the gate interprets empty blockers as unblocked (`:327-334`). This contradicts the file’s “every older overlapping PR” queue policy (`:13-16`).  
+**Recommended fix:** Return a distinct `cap_exceeded` result rather than an empty blocker list. Keep that PR queued for a later complete evaluation, or fetch the remaining paths through a bounded batch.
+
+**BUG-003 — Candidate PR cache does not enforce repository identity**  
+**File:** `scripts/orchestrate_poll_process.sh:14779-14804`  
+**Severity:** Medium · **Category:** `bug`  
+**Description:** `_fetch_candidate_issue_details_graphql` selects a closing cross-reference by PR type but not repository. Its sibling `_fetch_linked_pr_status_graphql` explicitly filters `repository.nameWithOwner` (`:14905-14916`). The candidate result feeds validation dispatch state (`:2704-2719`) and merged-PR recovery. **Inference:** if GitHub supplies a cross-repository event with `willCloseTarget=true`, those decisions could use the wrong PR’s state. [NEEDS VERIFICATION]  
+**Recommended fix:** Request the source PR’s `repository.nameWithOwner` and apply the sibling helper’s same-repository filter; test a cross-repository timeline fixture.
+
+**BUG-004 — Merge-train comment writes report success on failure**  
+**File:** `scripts/review_merge_train.sh:275-291`  
+**Severity:** Low · **Category:** `bug`  
+**Description:** `_mt_upsert_comment` suppresses both PATCH and POST errors with `|| true`; its existing-comment branch then explicitly returns success. The release caller’s warning handler (`:482-486`) cannot detect a missed released-status comment.  
+**Recommended fix:** Return the write’s status. Keep queue-label handling fail-open as designed, but let callers emit their existing warning when the comment was not persisted.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+These are static call-count candidates, not measured request totals. Pagination, retries, and fallback calls can increase actual requests. The existing report’s log sample did not establish an unbatched read hotspot.
+
+**BATCH-001 — Merge-train changed-file reads are per PR**  
+**File:** `scripts/review_merge_train.sh:123-136,202-230`  
+**Severity:** Medium · **Category:** `api-batching`  
+**Description:** After one open-PR list, each distinct older PR triggers a paginated `pulls/{n}/files` read; the process cache prevents repeat reads but not the initial N reads. **Current:** `1 + N` logical reads for N distinct older PRs (up to 21 at the default gate cap), plus an optional own-PR fallback. **Proposed:** `1 + ceil(N/10)` with ten aliased PR file connections per GraphQL batch—three for N=20—plus REST fallback for incomplete connections. [NEEDS VERIFICATION]  
+**Recommended fix:** Add a prefetch to `scripts/review_merge_train.sh`, following `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`. Preserve `_MT_FILES_CACHE`, check each connection’s `pageInfo`, and use the existing REST path for a failed or incomplete item.
+
+**BATCH-002 — Release repeatedly lists marker comments**  
+**File:** `scripts/review_merge_train.sh:255-290,464-486`  
+**Severity:** Medium · **Category:** `api-batching`  
+**Description:** For N queued PRs and R successfully released PRs, release makes N queued-marker comment-list reads, then R more released-marker list reads; E already-existing released markers add E body GETs. **Current:** `N + R + E` logical comment reads. **Proposed:** `ceil(N/25)` aliased GraphQL comment reads for the queued PR set, with cached marker IDs *and bodies* reused for both operations; retain per-item paginated REST fallback. Writes remain per PR. [NEEDS VERIFICATION]  
+**Recommended fix:** Extend the poller’s aliased-issue batching pattern with a merge-train comment prefetch, including pagination checks as in `scripts/gh_helpers.sh::gh_pr_with_all_comments`. Pass cached marker records to `_mt_upsert_comment`.
+
+**API-001 — Known label is created again for every linked issue**  
+**File:** `scripts/label_helpers.sh:143-176,179-196`  
+**Severity:** Medium · **Category:** `api-redundancy`  
+**Description:** `set_issue_phase_label_resilient` calls `ensure_label_exists` every time. The fingerprint-cap workflow first ensures `ai:review-blocked`, then calls that setter for each linked issue (`.github/workflows/review_autofix.yml:2121-2129`). **Current:** `N + 1` label-create attempts for N linked issues. **Proposed:** one confirmed create/existence result reused for that run; retry a later call if confirmation failed.  
+**Recommended fix:** Add a run-local, repository-and-label-keyed success cache to `scripts/label_helpers.sh::ensure_label_exists`, following the cycle-local-cache discipline in `scripts/orchestrate_poll_process.sh`. Do not cache an unconfirmed API result.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+**DUP-001 — Three identical integration-ref bootstrap bodies**  
+**File:** `.github/workflows/clarify.yml:61-130`  
+**Severity:** Medium · **Category:** `duplication`  
+**Description:** The same 70-line resolver clone, fallback, and invocation block appears in `.github/workflows/implement.yml:440-509` and `.github/workflows/orchestrate_clarify_respond.yml:115-184`. Three copies must retain the same trust boundary and fallback behavior.  
+**Recommended fix:** Put the body in a new trusted `scripts/resolve_integration_ref_bootstrap.sh <issue_number> <support_ref>`; update all three callers to stage it from a verified support checkout **before** invoking it. Pass GitHub expressions via step `env:`, never by executing a PR-head copy.
+
+**DUP-002 — Release-tag publication routine is copied across workflows**  
+**File:** `.github/workflows/mark-stable.yml:665-738`  
+**Severity:** Medium · **Category:** `duplication`  
+**Description:** The `publish_tag_with_remote_verification` routine and surrounding tag-publication step are identical in `.github/workflows/test-and-mark-stable.yml:5641-5791`. The routine distinguishes immutable from moving tags and verifies a failed push against the remote; drift between copies would affect release safety.  
+**Recommended fix:** Move the routine to `scripts/release_tag_helpers.sh::publish_tag_with_remote_verification <tag_ref> <immutable|moving>` and source the verified copy in both workflows. Retain each caller’s tested-tip and immutable-tag checks.
+
+**DUP-003 — Internal plan and implement wrappers share a near-identical shape**  
+**File:** `.github/workflows/internal-plan.yml:1-34`  
+**Severity:** Low · **Category:** `duplication`  
+**Description:** Compared after phase-name and expression normalization, this wrapper and `.github/workflows/internal-implement.yml:1-32` are approximately 80% line-similar. Their `/answer` versus `/approved` predicates and permissions are important differences, so literal YAML deduplication is not safe. [NEEDS VERIFICATION]  
+**Recommended fix:** If wrapper drift recurs, extend `scripts/workflow_wrapper_refs.py` with `render_internal_wrapper(phase, predicate, permissions, reusable_ref)` and generate/check both wrappers from explicit phase-specific inputs. Retain the existing phase-wrapper predicate-parity test; do not introduce a dynamic `uses:` target.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+All 50 workflows were parsed. The 224 `run:` bodies containing `${{ }}` were measured by YAML scalar length; runtime expansion of context values is unknown. Blocks without interpolation were excluded. No measured `if:` value exceeds 859 characters, and no workflow exceeds 800 KB.
+
+**EXPR-001 — Implement support-staging block is near the medium-risk threshold**  
+**File:** `.github/workflows/implement.yml:981-1337`  
+**Severity:** Medium · **Category:** `expression-limit`  
+**Description:** This interpolated `run:` body measures approximately **16,985 characters**, leaving **4,015** to the stated 21,000-character limit and only **1,015** to the 18,000-character high-risk threshold. It contains three `${{ }}` substitutions; those values are not included in the static estimate.  
+**Recommended fix:** Extract staging into a trusted script under `scripts/`, pass the repository and two feature-flag values through `env:`, and retain the existing staged-support ledger behavior.
+
+**EXPR-002 — Validation embeds its support manifest in an interpolated step**  
+**File:** `.github/workflows/validate.yml:257-452`  
+**Severity:** Low · **Category:** `expression-limit`  
+**Description:** The body measures approximately **10,673 characters**, leaving **10,327** to 21,000. Most of its length is the JSON manifest heredoc (`:289-448`); two expressions follow it. It is below the requested risk thresholds, but manifest growth consumes the same block budget.  
+**Recommended fix:** Stage a static manifest file from the verified support source and pass it to the existing `stage_workflow_support.sh validate --manifest` interface.
+
+**File-size contract:** The repository’s measured guard is stricter than the prompt’s 1 MB assessment: `tests/test_workflow_file_size_limit.py:24-27,39-53` records a 480,000-byte CI guard and a 512,000-byte startup limit. The largest workflow is **451,362 bytes**; see DEBT-001.
+
+### Section 5: Cross-Cutting Concerns
+
+**CONSIST-001 — Shared phase-label setter retains a documented terminal-label race**  
+**File:** `scripts/label_helpers.sh:193-225`  
+**Severity:** High · **Category:** `consistency`  
+**Description:** For a nonterminal target, `set_issue_phase_label_resilient` computes a full replacement from an earlier GET and PUTs it without rechecking `ai:merged` or `ai:closed`. `scripts/review_rb_judge.sh:772-849` uses add-first, selective deletion, and terminal reconciliation specifically to avoid a merged label being displaced. **Inference:** a concurrent close between the shared setter’s GET and PUT can recreate that class of phase regression.  
+**Recommended fix:** Move the judge’s terminal-aware reconciliation into `scripts/label_helpers.sh` and use it for nonterminal transitions; preserve terminal precedence and add a concurrent-close regression test before updating callers.
+
+**DEAD-001 — Triage defines an unused API fallback**  
+**File:** `scripts/check_failure_triage.sh:66-79`  
+**Severity:** Low · **Category:** `dead-code`  
+**Description:** The local `_safe_gh_jq` fallback creates a temporary file and calls raw `gh api`, but this script has no `_safe_gh_jq` invocation.  
+**Recommended fix:** Remove this local definition; keep the sourced `gh_helpers.sh` implementation available for future actual callers.
+
+**SHELL-001 — Singleton loops trigger SC2043**  
+**File:** `scripts/stage_workflow_support.sh:138-145,198-208`  
+**Severity:** Low · **Category:** `shellcheck`  
+**Description:** Focused ShellCheck reports SC2043 for both `for f in <one literal>` loops. The first stages only `transcript_archive.sh`; the second checks only `unattended_system_instructions.md`. Neither needs iteration.  
+**Recommended fix:** Replace each loop with a direct assignment and its existing conditional body. CI currently checks shell scripts at `--severity=error` (`.github/workflows/ci.yml:1030-1034`), so these warnings do not fail that step.
+
+**DEBT-001 — Review workflow has limited room beneath its actual size guard**  
+**File:** `.github/workflows/review_autofix.yml:6210-6381`  
+**Severity:** Medium · **Category:** `tech-debt`  
+**Description:** The workflow measures **451,362 bytes**, only **28,638 bytes** below the repository’s 480,000-byte CI guard. This cited interpolated step alone is approximately 9,203 characters; further inline growth could reach the guard before the prompt’s 800 KB warning level.  
+**Recommended fix:** Before adding substantial inline logic, extract large steps using the existing `review_autofix_step_*.sh` verified-support pattern and update its required-script and test registries as documented in `agents.md`.
+
+No actionable SC2086 finding or `TODO`/`FIXME`/`HACK` marker was confirmed in the scoped scans. ShellCheck’s SC2016 notes on quoted GraphQL query literals were not treated as defects.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | SEC-001, BUG-001, CONSIST-001 |
+| Medium | 9 | BUG-002, BUG-003, BATCH-001, BATCH-002, API-001, DUP-001, DUP-002, EXPR-001, DEBT-001 |
+| Low | 5 | BUG-004, DUP-003, EXPR-002, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | ~4–6: triage workflow/script, label helper, judge and tests | Large |
+| API call optimization | ~3–5: merge-train and label helpers, callers and tests | Medium |
+| Code modularization | ~9–11: five phase/release workflows, two wrappers, shared scripts and tests | Large |
+| Expression size reduction | ~3–5: implement/validate workflows, extracted script or manifest and tests | Medium |
+| Medium/Low fixes | ~4–6: poller, merge-train, triage and support-staging scripts plus tests | Medium |
