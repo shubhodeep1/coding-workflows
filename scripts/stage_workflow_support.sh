@@ -716,6 +716,18 @@ stage_optional_preserve_entry()
 	local track_path="$3"
 	local emit_notice="${4:-true}"
 	local tmp_path
+	# Validation executables are always supplied by the verified SHA. Never
+	# preserve an executable from the target checkout as a fallback.
+	if [ "${TARGET_NAME:-}" = "validate" ] && [ "${executable}" = "true" ]; then
+		if [ ! -f "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ] || [ -L "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ]; then
+			emit_optional_missing_notice "${repo_path}" || true
+			return 0
+		fi
+		copy_from_ref_or_local "${repo_path}" "${repo_path}" "true" "false"
+		chmod +x "${repo_path}"
+		record_fetched_script "${track_path}"
+		return 0
+	fi
 	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
 	   { [ -L "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ] ||
 	     { [ -e "${repo_path}" ] && [ ! -f "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ]; }; }; then
@@ -888,7 +900,8 @@ run_overlay_loader()
 	fi
 	# WORKFLOW.md overlay is opt-in by file presence; absent file must
 	# stay a no-op while valid prompt overrides flow through render_prompt.py.
-	PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+	env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u PYTHONPATH \
+		PYTHONDONTWRITEBYTECODE=1 python3 -E "${SUPPORT_PRIMARY_ROOT}/scripts/load_workflow_overlay.py" \
 		--repo-root "${REPO_ROOT}" \
 		--schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
 		--github-env "${GITHUB_ENV}"
@@ -900,7 +913,8 @@ stage_validate_support()
 	# Compare every target template to the pinned manifest before any staging
 	# can overwrite it. The renderer subsequently reads only the private copy.
 	local trusted_root="${RUNNER_TEMP:?}/validate-support-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${MANIFEST_PATH}" "${REPO_ROOT}" "${SUPPORT_PRIMARY_ROOT}" "${trusted_root}" <<'PY'
+	env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u PYTHONPATH \
+		PYTHONDONTWRITEBYTECODE=1 python3 -I - "${MANIFEST_PATH}" "${REPO_ROOT}" "${SUPPORT_PRIMARY_ROOT}" "${trusted_root}" <<'PY'
 import json
 import pathlib
 import shutil

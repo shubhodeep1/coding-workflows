@@ -727,7 +727,7 @@ jobs:
           git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
           export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
-          source scripts/memory_helpers.sh
+          source "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/memory_helpers.sh"
           memory_bootstrap --ensure-branch --require memory_record_run_event
           unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
 
@@ -757,8 +757,10 @@ jobs:
           set -euo pipefail
 
           if [ -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/render_validation_templates.py" ]; then
-            python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
-            python3 -c 'import yaml, jsonschema, jinja2'
+            (cd "${VALIDATE_TRUSTED_SUPPORT_ROOT}" && env -i HOME="${HOME}" PATH="${PATH}" \
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2)
+            (cd "${VALIDATE_TRUSTED_SUPPORT_ROOT}" && env -i HOME="${HOME}" PATH="${PATH}" \
+              PYTHONDONTWRITEBYTECODE=1 python3 -E -c 'import yaml, jsonschema, jinja2')
           else
             echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
           fi
@@ -841,13 +843,17 @@ jobs:
             exit 0
           fi
 
-          if [ ! -f "scripts/install_semble.sh" ]; then
+          if [ ! -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/install_semble.sh" ]; then
             echo "::notice::scripts/install_semble.sh is unavailable; validation will continue without Semble."
             exit 0
           fi
 
-          if ! bash scripts/install_semble.sh; then
+          if ! (cd "${VALIDATE_TRUSTED_SUPPORT_ROOT}" && env -i HOME="${HOME}" PATH="${PATH}" \
+            PYTHONDONTWRITEBYTECODE=1 bash "${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/install_semble.sh"); then
             echo "::warning::scripts/install_semble.sh exited non-zero; validation will continue without Semble."
+          elif (cd "${VALIDATE_TRUSTED_SUPPORT_ROOT}" && env -i HOME="${HOME}" PATH="${PATH}" \
+            PYTHONDONTWRITEBYTECODE=1 python3 -E -c 'import semble.version'); then
+            echo "SEMBLE_AVAILABLE=true" >> "$GITHUB_ENV"
           fi
 
       - name: Build semble index
@@ -863,7 +869,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f "scripts/semble_helpers.sh" ]; then
+          if [ ! -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/semble_helpers.sh" ]; then
             echo "::notice::scripts/semble_helpers.sh is unavailable; validation prompts will continue without Semble context."
             {
               echo "SEMBLE_INDEX_AVAILABLE=false"
@@ -880,10 +886,20 @@ jobs:
           # handled here (older @stable refs may not yet ship the script);
           # all other errors are handled inside the script (writes
           # SEMBLE_INDEX_AVAILABLE=false on any error and exits 0).
-          if [ -f scripts/build_semble_wrapper.sh ]; then
-            SEMBLE_INDEX_PATH="${RUNTIME_DIR}/.semble-index" \
-            SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" \
-              bash scripts/build_semble_wrapper.sh
+          if [ -f "${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/build_semble_wrapper.sh" ]; then
+            (cd "${VALIDATE_TRUSTED_SUPPORT_ROOT}" && env -i HOME="${HOME}" PATH="${PATH}" \
+              PYTHONDONTWRITEBYTECODE=1 GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+              SEMBLE_INDEX_PATH="${RUNTIME_DIR}/.semble-index" \
+              SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" \
+              bash "${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/build_semble_wrapper.sh")
+            if [ -f "${RUNTIME_DIR}/.semble-index" ] && [ ! -L "${RUNTIME_DIR}/.semble-index" ] &&
+               [ -f "${RUNTIME_DIR}/semble/bin/semble" ] && [ ! -L "${RUNTIME_DIR}/semble/bin/semble" ]; then
+              {
+                echo "SEMBLE_INDEX_AVAILABLE=true"
+                echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
+                echo "SEMBLE_BIN=${RUNTIME_DIR}/semble/bin/semble"
+              } >> "$GITHUB_ENV"
+            fi
           else
             echo "::notice::scripts/build_semble_wrapper.sh is unavailable; validation prompts will continue without Semble context."
             {

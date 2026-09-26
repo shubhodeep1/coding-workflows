@@ -435,6 +435,24 @@ def test_validate_hook_rejects_executable_data_and_unsafe_host_target(tmp_path: 
 	assert not (outside_dir / "data.txt").exists()
 
 
+def test_validate_hook_python_ignores_checkout_modules_and_command_files(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	# The fake Docker executable is a Python script too; isolate its imports
+	# so this probe exercises only the trusted hook helper's Python calls.
+	fake_docker = tmp_path / "fake-bin/docker"
+	fake_docker.write_text(fake_docker.read_text(encoding="utf-8").replace(
+		"#!/usr/bin/env python3\n", "#!/usr/bin/env -S python3 -I\n", 1), encoding="utf-8")
+	marker = tmp_path / "import-hijacked"
+	(repo_root / "json.py").write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n", encoding="utf-8")
+	(repo_root / "pathlib.py").write_text(f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+	_write_hook(workspace_path, "validate", "before_run", "#!/usr/bin/env bash\nexit 0\n")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "before_run",
+		GH_TOKEN="sentinel", GITHUB_ENV=str(tmp_path / "env"), BASH_ENV="")
+	assert result.returncode == 0, result.stderr
+	assert not marker.exists()
+	assert not (tmp_path / "env").exists()
+
+
 def test_validate_hook_rejects_symlink_result_and_missing_sandbox(tmp_path: Path) -> None:
 	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
 	_write_hook(workspace_path, "validate", "after_run", "#!/usr/bin/env bash\nln -s /etc/passwd escaped\n")
@@ -453,7 +471,7 @@ def test_implement_workflow_stages_and_orders_workspace_hooks() -> None:
 	stage_block = _step_run_text(IMPLEMENT_WORKFLOW, "Stage workflow support files")
 	assert "run_workspace_hook.sh" in stage_block
 	assert _step(IMPLEMENT_WORKFLOW, "Run Codex implementation").get("id") == "implement_run"
-	assert _step(IMPLEMENT_WORKFLOW, "Run workspace after_run hook").get("if") == "always() && env.SKIP_IMPLEMENT != 'true' && steps.implement_run.outcome != 'skipped'"
+	assert _step(IMPLEMENT_WORKFLOW, "Run workspace after_run hook").get("if") == "always() && env.SKIP_IMPLEMENT != 'true' && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true' && steps.implement_run.outcome != 'skipped'"
 	assert _step_index(IMPLEMENT_WORKFLOW, "Activate workspace shell context") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace after_create hook") < _step_index(IMPLEMENT_WORKFLOW, "Detect preexisting Serena project config")
 	assert _step_index(IMPLEMENT_WORKFLOW, "Retrieve implementation memory context") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace before_run hook") < _step_index(IMPLEMENT_WORKFLOW, "Run Codex implementation")
 	assert _step_index(IMPLEMENT_WORKFLOW, "Run Codex implementation") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace after_run hook") < _step_index(IMPLEMENT_WORKFLOW, "Write run summary")
@@ -464,7 +482,10 @@ def test_validate_workflow_stages_and_orders_workspace_hooks() -> None:
 	fetch_block = _step_run_text(VALIDATE_WORKFLOW, "Fetch workflow support files")
 	assert "run_workspace_hook.sh" in fetch_block
 	assert "VALIDATE_HOOK_HELPER=" in fetch_block
-	assert _step(VALIDATE_WORKFLOW, "Run validation process").get("if") == "always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'"
+	validation_gate = str(_step(VALIDATE_WORKFLOW, "Run validation process").get("if"))
+	for step_id in ("verified_checkout", "runtime", "support_files", "workspace_meta", "workspace_state",
+			"workspace_contents", "workspace_after_create_hook", "workspace_before_run_hook"):
+		assert f"steps.{step_id}.outcome == 'success'" in validation_gate
 	assert _step_index(VALIDATE_WORKFLOW, "Activate workspace shell context") < _step_index(VALIDATE_WORKFLOW, "Run workspace after_create hook") < _step_index(VALIDATE_WORKFLOW, "Initialize Serena runtime state")
 	assert _step_index(VALIDATE_WORKFLOW, "Build semble index") < _step_index(VALIDATE_WORKFLOW, "Run workspace before_run hook") < _step_index(VALIDATE_WORKFLOW, "Run validation process")
 	assert _step_index(VALIDATE_WORKFLOW, "Run validation process") < _step_index(VALIDATE_WORKFLOW, "Run workspace after_run hook") < _step_index(VALIDATE_WORKFLOW, "Collect validation status")

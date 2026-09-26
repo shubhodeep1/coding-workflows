@@ -1192,6 +1192,18 @@ when the bounded fix-cycle budget is exhausted.
 
 ### Credentialless model and trusted Git boundary
 
+- Validation stages its renderer, memory and optional Semble helpers from the
+  verified private support tree even on non-explicit runs. Inline host Python
+  uses isolated imports; hook snapshot/replay and self-heal never execute
+  checkout-adjacent modules, renderer or telemetry helpers. Self-heal has no
+  host-model fallback and uses the idle-stall guard around its credentialless
+  sandbox. Before the
+  validation driver runs, the renderer verifies every generated asset and
+  refuses extra or modified host-side test scripts and custom harnesses. The
+  driver receives no GitHub credentials or runner command files; generated
+  application check commands run through Docker Compose inside the app service.
+  A missing checkout copy of the driver is allowed; a mismatched copy fails
+  closed, and missing private helpers cannot fall back to checkout executables.
 - The scheduled poller resolves protected `main` (source repo) or peels the
   consumer's `stable` tag once per run, checks out and verifies that commit,
   and freezes its audit scripts, prompt dependencies, policy/catalog, and
