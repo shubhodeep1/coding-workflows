@@ -105,8 +105,8 @@ jobs:
               ;;
           esac
 
-      # Kept name (§6); since #4525 this step queues the issue instead of firing the routine.
-      - name: Fire the Claude issue dispatcher routine
+      # Renamed from "Fire the Claude issue dispatcher routine" (#4525, operator-approved).
+      - name: Queue the issue for the Claude issue pickup
         run: |
           set -euo pipefail
           bash scripts/claude_issue_intake.sh
