@@ -302,6 +302,8 @@ jobs:
               "scripts/memory_injection_patterns.py",
               "scripts/openrouter_prompt_cache.py",
               "scripts/write_codex_config.sh",
+              "scripts/untrusted_process_sandbox.sh",
+              "scripts/model_provider_proxy.py",
               "scripts/codex_helpers.sh",
               "scripts/orchestrate_force_tick.sh",
               "scripts/watchdog_helpers.sh",
@@ -902,6 +904,7 @@ jobs:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           VALIDATION_TIMEOUT: ${{ inputs.validation_timeout }}

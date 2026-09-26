@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Explicit-target validation and Claude-fixer clean reviews now fail closed on untrusted instructions or incomplete reviewer evidence.** Explicit project targets stage verified instructions and isolate model calls without runner credentials; a clean fixer review needs two fresh, distinct successful reviewer slots, and a verified clean convergence run can reach the existing head-bound auto-merge tail.

@@ -9,6 +9,7 @@ config_path=""
 runtime_dir="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}"
 writable_output_dir=""
 guard_action=""
+hide_workspace_instructions=false
 host_home="${HOME:-/nonexistent}"
 runner_command_files="${RUNNER_TEMP:-/tmp}/_runner_file_commands"
 while [ "$#" -gt 0 ]; do
@@ -20,6 +21,7 @@ while [ "$#" -gt 0 ]; do
 		--runtime-dir) runtime_dir="${2:-}"; shift 2 ;;
 		--writable-output-dir) writable_output_dir="${2:-}"; shift 2 ;;
 		--guard-action) guard_action="${2:-}"; shift 2 ;;
+		--hide-workspace-instructions) hide_workspace_instructions=true; shift ;;
 		--) shift; break ;;
 		*) echo "untrusted_process_sandbox: unknown argument: $1" >&2; exit 2 ;;
 	esac
@@ -552,6 +554,31 @@ for protected_git_path in "${git_metadata_paths[@]:-}"; do
 		systemd_properties+=(--property="ReadOnlyPaths=${protected_git_path}")
 	fi
 done
+if [ "${hide_workspace_instructions}" = true ]; then
+	[ "${provider_required}" = true ] || exit 2
+	# Codex discovers AGENTS.md in ancestor and nested directories. A target
+	# checkout may supply any of these; they must not become model instructions.
+	workspace_instruction_list="${sandbox_dir}/workspace-instructions.list"
+	if ! find "${workspace}" -xdev \( -type f -o -type l \) \
+		\( -name AGENTS.md -o -name agents.md -o -name CLAUDE.md \) \
+		-print0 > "${workspace_instruction_list}"; then
+		echo "untrusted_process_sandbox: cannot inventory workspace instructions" >&2
+		exit 1
+	fi
+	while IFS= read -r -d '' workspace_instruction_path; do
+		case "${workspace_instruction_path}" in
+			*$'\n'*|*$'\r'*|*$'\t'*|*' '*)
+				echo "untrusted_process_sandbox: unsafe workspace instruction path" >&2; exit 1 ;;
+		esac
+		systemd_properties+=(--property="InaccessiblePaths=${workspace_instruction_path}")
+	done < "${workspace_instruction_list}"
+	for trusted_instruction in unattended_system_instructions.md ai_pipeline.md; do
+		[ -f "${workspace}/${trusted_instruction}" ] && [ ! -L "${workspace}/${trusted_instruction}" ] || {
+			echo "untrusted_process_sandbox: verified instructions are unavailable" >&2; exit 1;
+		}
+		systemd_properties+=(--property="ReadOnlyPaths=${workspace}/${trusted_instruction}")
+	done
+fi
 # No --quiet: systemd-run's unit name and "Main processes terminated with"
 # lines are the only in-band trace of a unit that never reached the command.
 sandbox_unit_rc=0
