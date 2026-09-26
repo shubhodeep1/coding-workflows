@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "Several changes span orchestrator state helpers, poll-processing scripts, and workflow definitions, including authentication and trusted-poller behavior. When modifying this flow, verify how state is authenticated and how trusted post-processing is separated from untrusted inputs; test both script behavior and workflow wiring.",
+  "fingerprint": "c03ad9ecd4caa43e55053c72c63e48fcf887f9eb0ab6d536ce6b23b84ceef803",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36207068726",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36207068726",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4469",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4471",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4481",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4484",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4489",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4474",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4475",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4483",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4486",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4490"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260926010626_2c476af608",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Treat orchestrator state and polling as explicit trust boundaries.",
+  "timestamps": {
+    "created_at": "2026-09-26T01:06:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
