@@ -122,7 +122,7 @@ def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> Non
 	helper = _helper_text()
 	for snippet in (
 		"WORKFLOW.md overlay is opt-in by file presence",
-		"python3 scripts/load_workflow_overlay.py",
+		'python3 -E "${SUPPORT_PRIMARY_ROOT}/scripts/load_workflow_overlay.py"',
 		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
 		'--github-env "${GITHUB_ENV}"',
 	):
@@ -136,12 +136,56 @@ def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_mai
 	assert "realpath -m" not in helper
 
 
+def test_validation_optional_executable_replaces_branch_owned_copy(tmp_path: Path) -> None:
+	staging = _helper_text()
+	fn = "stage_optional_preserve_entry()\n{" + staging.split("stage_optional_preserve_entry()\n{", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+	workspace = tmp_path / "workspace"
+	verified = tmp_path / "verified"
+	for root, body in ((workspace, "echo branch"), (verified, "echo verified")):
+		path = root / "scripts/install_semble.sh"
+		path.parent.mkdir(parents=True)
+		path.write_text(body, encoding="utf-8")
+	program = fn + 'copy_from_ref_or_local() { cp "${SUPPORT_PRIMARY_ROOT}/$1" "$2"; }\nrecord_fetched_script() { :; }\n'
+	program += 'stage_optional_preserve_entry scripts/install_semble.sh true install_semble.sh\n'
+	env = {**os.environ, "TARGET_NAME": "validate", "SUPPORT_PRIMARY_ROOT": str(verified)}
+	env.pop("BASH_ENV", None)
+	result = subprocess.run(["bash", "-c", program], cwd=workspace, env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert (workspace / "scripts/install_semble.sh").read_text(encoding="utf-8") == "echo verified"
+
+
+def test_validate_run_start_memory_uses_private_source() -> None:
+	wf = _workflow_text()
+	step = wf.split("- name: Record validation run start", 1)[1].split("- name: Install Python dependencies", 1)[0]
+	assert 'source "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/memory_helpers.sh"' in step
+	assert "source scripts/memory_helpers.sh" not in step
+	assert 'bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/validate_process.sh"' in wf
+
+
+def test_private_memory_python_ignores_target_sibling_modules(tmp_path: Path) -> None:
+	private_scripts = tmp_path / "private/scripts"
+	private_scripts.mkdir(parents=True)
+	(private_scripts / "memory_helpers.sh").write_bytes((REPO_ROOT / "scripts/memory_helpers.sh").read_bytes())
+	(private_scripts / "ai_memory.py").write_text("import json\nprint(json.dumps({'ok': True}))\n", encoding="utf-8")
+	checkout = tmp_path / "checkout"
+	(checkout / "scripts").mkdir(parents=True)
+	marker = tmp_path / "imported-branch-module"
+	(checkout / "scripts/json.py").write_text(f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+	result = subprocess.run(["bash", "-c", 'source "$1"; memory_record_run_event', "bash",
+		str(private_scripts / "memory_helpers.sh")], cwd=checkout,
+		env={**os.environ, "PYTHONPATH": str(checkout / "scripts"), "GH_TOKEN": "sentinel",
+			"PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True, timeout=20)
+	assert result.returncode == 0, result.stderr
+	assert not marker.exists()
+	assert '{"ok": true}' in result.stdout
+
+
 def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
 	assert 'python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2' in wf
 	assert "id: renderer_dependencies" in wf
-	assert "python3 -c 'import yaml, jsonschema, jinja2'" in wf
+	assert "python3 -E -c 'import yaml, jsonschema, jinja2'" in wf
 	assert "VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}" in wf
 	assert "steps.workspace_after_create_hook.outcome == 'success' && steps.workspace_before_run_hook.outcome == 'success'" in wf
 
@@ -185,7 +229,7 @@ def test_bootstrap_failure_status_without_runtime_or_credentials(tmp_path: Path)
 
 def test_validate_template_inventory_rejects_untrusted_entries(tmp_path: Path) -> None:
 	staging = _helper_text()
-	program = staging.split('python3 - "${MANIFEST_PATH}" "${REPO_ROOT}" "${SUPPORT_PRIMARY_ROOT}" "${trusted_root}" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
+	program = staging.split('python3 -I - "${MANIFEST_PATH}" "${REPO_ROOT}" "${SUPPORT_PRIMARY_ROOT}" "${trusted_root}" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
 	manifest = {"optional_copy_files": []}
 	source = tmp_path / "source"
 	target = tmp_path / "target"
@@ -201,13 +245,16 @@ def test_validate_template_inventory_rejects_untrusted_entries(tmp_path: Path) -
 		asset.write_text("trusted", encoding="utf-8")
 	manifest_file = tmp_path / "manifest.json"
 	manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+	import_marker = tmp_path / "host-json-imported"
+	(target / "json.py").write_text(f"open({str(import_marker)!r}, 'w').close()\n", encoding="utf-8")
 	def check() -> int:
 		private = tmp_path / "private"
 		if private.exists():
 			import shutil
 			shutil.rmtree(private)
-		return subprocess.run([sys.executable, "-c", program, str(manifest_file), str(target), str(source), str(private)], capture_output=True, text=True).returncode
+		return subprocess.run([sys.executable, "-I", "-c", program, str(manifest_file), str(target), str(source), str(private)], cwd=target, capture_output=True, text=True).returncode
 	assert check() == 0
+	assert not import_marker.exists()
 	for family in ("_shared", "node-runtime"):
 		asset = target / f"workflow-templates/validation-harness/{family}/example.j2"
 		asset.parent.mkdir(parents=True, exist_ok=True)
@@ -255,6 +302,7 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 			shim = root / "python3"
 			shim.write_text(
 				"#!/bin/sh\n"
+				"[ \"$1\" = '-E' ] && shift\n"
 				"if [ \"$1\" = '-c' ] && [ \"$2\" = 'import yaml, jsonschema, jinja2' ]; then\n"
 				"  [ \"$IMPORTS_AVAILABLE\" = 'true' ] && exit 0\n"
 				"  exit 1\n"

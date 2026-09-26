@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -136,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
 		help="Output root where rendered files are written",
 	)
 	parser.add_argument("--check-manifest", action="store_true", help="Validate manifest and family without rendering")
+	parser.add_argument("--verify-output-root", action="store_true", help="Verify rendered files without writing")
 	return parser
 
 
@@ -174,6 +177,8 @@ def _json_pointer_from_path(path_parts: list[Any]) -> str:
 def load_manifest(manifest_path: Path) -> dict[str, Any]:
 	if yaml is None:
 		raise _missing_dependency_error("PyYAML")
+	if manifest_path.is_symlink():
+		raise ManifestLoadError("Manifest must not be a symlink")
 	if not manifest_path.exists():
 		raise ManifestLoadError(f"Manifest file not found: {manifest_path}")
 	try:
@@ -256,6 +261,64 @@ def validate_manifest(manifest: dict[str, Any], schema: dict[str, Any]) -> None:
 
 	formatted = "\n".join(f"- {line}" for line in detail_lines)
 	raise ManifestValidationError(f"Manifest validation failed:\n{formatted}")
+
+
+def validate_rendered_shell_inputs(manifest: dict[str, Any]) -> None:
+	"""Reject shell syntax in fields embedded in generated shell/YAML contexts."""
+	if manifest.get("type") == "python-repo-checks":
+		entry = manifest.get("entry", "scripts/run_validation_repo_checks.sh")
+		if not isinstance(entry, str) or not entry.strip() or len(entry) > 512:
+			raise ManifestValidationError("entry must be a nonempty command of at most 512 characters")
+		try:
+			entry_parts = shlex.split(entry)
+		except ValueError as exc:
+			raise ManifestValidationError("entry has invalid quoting") from exc
+		if not entry_parts or any(not re.fullmatch(r"[A-Za-z0-9_./:=+@%-]+", part) for part in entry_parts):
+			raise ManifestValidationError("entry must contain only literal command arguments")
+	elif manifest.get("type") == "node-runtime":
+		entry = manifest.get("entry", "package.json")
+		if not isinstance(entry, str) or not re.fullmatch(r"[A-Za-z0-9_./-]{1,256}", entry):
+			raise ManifestValidationError("node-runtime entry must be a literal file path")
+	elif manifest.get("type") == "python-mongo-flask":
+		entry = manifest.get("entry", "app.py")
+		if not isinstance(entry, str) or not re.fullmatch(r"[A-Za-z0-9_./-]{1,256}", entry):
+			raise ManifestValidationError("python-mongo-flask entry must be a literal file path")
+	# Other family templates embed these values in shell assignments, Docker
+	# health checks and env files. Do not let manifest-controlled shell syntax
+	# become host-side command substitution during template execution.
+	slots = manifest.get("slots", {})
+	project_name = slots.get("project_name")
+	if not isinstance(project_name, str) or not re.fullmatch(r"[A-Za-z0-9_./:+-]{1,128}", project_name):
+		raise ManifestValidationError("project_name must be a literal value")
+	if manifest.get("type") != "python-mongo-flask":
+		for value in slots.get("canary_tools", []):
+			if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_./:+-]{1,128}", value):
+				raise ManifestValidationError("canary_tools must be literal values for this family")
+	for slot_name in ("mongo_db_name", "mongo_image"):
+		if slot_name in slots and (not isinstance(slots[slot_name], str) or
+								not re.fullmatch(r"[A-Za-z0-9_./:+-]{1,128}", slots[slot_name])):
+			raise ManifestValidationError(f"{slot_name} must be a literal value")
+	for slot_name, slot_pattern in (("health_path", r"/[A-Za-z0-9_./?&=%-]{0,127}"),
+			("test_host_header", r"[A-Za-z0-9.-]{1,128}")):
+		if slot_name in slots and (not isinstance(slots[slot_name], str) or
+								not re.fullmatch(slot_pattern, slots[slot_name])):
+			raise ManifestValidationError(f"{slot_name} must be a literal value")
+	if manifest.get("type") == "python-mongo-repo-checks":
+		for field_name in ("custom_tests", "skip_tests"):
+			for value in manifest.get(field_name, []):
+				if any(char in value for char in "'\"$`\\\r\n"):
+					raise ManifestValidationError(f"{field_name} contains unsafe YAML or shell syntax")
+	for override_name in manifest.get("env_overrides", {}):
+		if (override_name in {"BASH_ENV", "BASHOPTS", "SHELLOPTS", "ENV", "PATH", "HOME", "IFS", "CDPATH",
+				"SHELL", "TMPDIR", "PROMPT_COMMAND", "PS4", "TEST_DIR", "LOG_DIR", "CANARY_PATTERN",
+				"HELPER_PATTERN", "VALIDATION_INCLUDE_SYNTHESISED", "NODE_OPTIONS", "JAVA_TOOL_OPTIONS",
+				"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}
+				or override_name.startswith(("LD_", "DYLD_", "GH_", "GITHUB_", "GIT_", "DOCKER_", "COMPOSE_",
+					"VALIDATE_", "PYTHON", "BASH", "RUBY", "PERL", "XDG_", "SSH_", "AWS_", "PIP_", "UV_"))):
+			raise ManifestValidationError(f"env_overrides cannot control host execution: {override_name}")
+	app_service_override = manifest.get("env_overrides", {}).get("APP_SERVICE")
+	if app_service_override is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", app_service_override):
+		raise ManifestValidationError("APP_SERVICE must be a literal service name")
 
 
 def resolve_family(manifest: dict[str, Any]) -> FamilySpec:
@@ -370,6 +433,7 @@ def render_templates(
 		keep_trailing_newline=True,
 		undefined=StrictUndefined,
 	)
+	environment.filters["shell_quote"] = shlex.quote
 
 	rendered_files: list[RenderedFile] = []
 	for template_spec in template_specs:
@@ -400,6 +464,8 @@ def _ensure_path_within_root(output_root: Path, candidate: Path) -> None:
 
 
 def write_outputs(output_root: Path, rendered_files: list[RenderedFile]) -> list[Path]:
+	if output_root.is_symlink():
+		raise OutputWriteError("Validation output root must not be a symlink")
 	try:
 		output_root.mkdir(parents=True, exist_ok=True)
 	except OSError as exc:
@@ -408,7 +474,15 @@ def write_outputs(output_root: Path, rendered_files: list[RenderedFile]) -> list
 	written_paths: list[Path] = []
 
 	for rendered_file in sorted(rendered_files, key=lambda item: item.output_rel_path.as_posix()):
-		target = (output_root / rendered_file.output_rel_path).resolve()
+		raw_target = output_root / rendered_file.output_rel_path
+		for path_component in (raw_target, *raw_target.parents):
+			if path_component.is_symlink():
+				raise OutputWriteError("Validation output path must not contain a symlink")
+			if path_component == output_root:
+				break
+		if raw_target.exists() and not raw_target.is_file():
+			raise OutputWriteError("Validation output path must be a regular file")
+		target = raw_target.resolve()
 		_ensure_path_within_root(resolved_root, target)
 		try:
 			target.parent.mkdir(parents=True, exist_ok=True)
@@ -444,13 +518,39 @@ def main(argv: list[str] | None = None) -> int:
 		schema = load_schema(schema_path)
 		validate_manifest(manifest, schema)
 		family = resolve_family(manifest)
+		validate_rendered_shell_inputs(manifest)
 		if args.check_manifest:
 			return 0
+		if output_root.is_symlink():
+			raise OutputWriteError("Validation output root must not be a symlink")
 		template_specs = collect_templates(templates_root, family)
 		context = build_render_context(manifest, family)
 		context.setdefault("output_root_name", output_root.name or "validation")
 		rendered_files = render_templates(template_specs, templates_root, context)
-		written_paths = write_outputs(output_root, rendered_files)
+		if args.verify_output_root:
+			expected = {item.output_rel_path.as_posix(): item.content.encode("utf-8") for item in rendered_files}
+			for relpath, content in expected.items():
+				actual = output_root / relpath
+				if (actual.is_symlink() or not actual.is_file() or actual.stat().st_size != len(content)
+						or actual.read_bytes() != content):
+					raise TemplateRenderError(f"Unverified validation asset: {relpath}")
+			for directory in (output_root / "tests", output_root / "_lib"):
+				if directory.exists():
+					if directory.is_symlink():
+						raise TemplateRenderError("Unverified validation test directory")
+					for index, path in enumerate(directory.rglob("*")):
+						if index > len(expected) + 20:
+							raise TemplateRenderError("Validation test tree exceeds verified inventory")
+						if path.is_symlink() or (not path.is_dir() and
+								(not path.is_file() or path.relative_to(output_root).as_posix() not in expected)):
+							raise TemplateRenderError("Unverified validation test or helper")
+			for relpath in ("validate.env", "docker-compose.test.yml", "Dockerfile.app"):
+				actual = output_root / relpath
+				if (actual.exists() or actual.is_symlink()) and relpath not in expected:
+					raise TemplateRenderError(f"Unverified validation asset: {relpath}")
+			written_paths = [output_root / item.output_rel_path for item in rendered_files]
+		else:
+			written_paths = write_outputs(output_root, rendered_files)
 	except RenderValidationTemplatesError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
 		return 1

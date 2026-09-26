@@ -113,6 +113,55 @@ def test_manifest_only_check_rejects_invalid_yaml_and_unknown_family(tmp_path: P
 	assert not (tmp_path / "validation").exists()
 
 
+def test_manifest_rejects_host_shell_and_environment_controls(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	for family, mutation in (
+		("python-repo-checks", {"entry": "python3 $(touch marker)"}),
+		("node-runtime", {"entry": 'package.json"; touch marker'}),
+		("node-runtime", {"env_overrides": {"BASH_ENV": "malicious.sh"}}),
+		("node-runtime", {"env_overrides": {"APP_SERVICE": "--privileged"}}),
+		("python-mongo-repo-checks", {"custom_tests": ["echo 'x'\nvolumes: [/run/docker.sock]"]}),
+	):
+		payload = _manifest_payload(family)
+		payload.update(mutation)
+		_write_yaml(manifest, payload)
+		result = _run_renderer(manifest, tmp_path / "validation")
+		assert result.returncode != 0, (family, result.stdout)
+	assert not (tmp_path / "marker").exists()
+
+
+def test_verify_output_root_refuses_extra_or_modified_test(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	output = tmp_path / "validation"
+	_write_yaml(manifest, _manifest_payload("python-repo-checks"))
+	assert _run_renderer(manifest, output).returncode == 0
+	verify = ["python3", str(SCRIPT_PATH), "--manifest", str(manifest), "--schema", str(SCHEMA_PATH),
+		"--templates-root", str(TEMPLATES_ROOT), "--output-root", str(output), "--verify-output-root"]
+	assert subprocess.run(verify, capture_output=True).returncode == 0
+	(output / "tests" / "custom.sh").write_text("echo injected\n", encoding="utf-8")
+	assert subprocess.run(verify, capture_output=True).returncode != 0
+	(output / "tests" / "custom.sh").unlink()
+	(output / "tests" / "40_repo_checks.sh").write_text("echo injected\n", encoding="utf-8")
+	assert subprocess.run(verify, capture_output=True).returncode != 0
+
+
+def test_renderer_rejects_output_root_symlink(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	_write_yaml(manifest, _manifest_payload("python-repo-checks"))
+	outside = tmp_path / "outside"
+	outside.mkdir()
+	(tmp_path / "validation").symlink_to(outside, target_is_directory=True)
+	result = _run_renderer(manifest, tmp_path / "validation")
+	assert result.returncode != 0
+	assert not list(outside.iterdir())
+	(tmp_path / "validation").unlink()
+	(tmp_path / "validation").mkdir()
+	(tmp_path / "validation/tests").symlink_to(outside, target_is_directory=True)
+	result = _run_renderer(manifest, tmp_path / "validation")
+	assert result.returncode != 0
+	assert not list(outside.iterdir())
+
+
 def test_renderer_rejects_symlinked_template_tree(tmp_path: Path) -> None:
 	manifest = tmp_path / "validate.yml"
 	_write_yaml(manifest, _manifest_payload("python-mongo-flask"))

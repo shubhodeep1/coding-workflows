@@ -42,20 +42,21 @@ set -euo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "self-heal: jq is required" >&2; exit 2; }
 command -v patch >/dev/null 2>&1 || { echo "self-heal: patch is required" >&2; exit 2; }
+SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source gh_helpers.sh for sanitize_codex_prompt_file (best-effort —
 # the call site below guards via `command -v`).
-if [ -f "scripts/gh_helpers.sh" ]; then
+if [ -f "${SELF_HEAL_SCRIPT_DIR}/gh_helpers.sh" ]; then
 	# shellcheck source=gh_helpers.sh
 	# shellcheck disable=SC1091
-	source scripts/gh_helpers.sh 2>/dev/null || true
+	source "${SELF_HEAL_SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 fi
 
 SEMBLE_HELPERS_AVAILABLE="false"
 # shellcheck source=semble_helpers.sh
-if [ -f "scripts/semble_helpers.sh" ]; then
+if [ -f "${SELF_HEAL_SCRIPT_DIR}/semble_helpers.sh" ]; then
 	# shellcheck disable=SC1091
-	if source scripts/semble_helpers.sh; then
+	if source "${SELF_HEAL_SCRIPT_DIR}/semble_helpers.sh"; then
 		if type semble_query_block >/dev/null 2>&1; then
 			SEMBLE_HELPERS_AVAILABLE="true"
 		else
@@ -83,7 +84,6 @@ SELF_HEAL_OUTPUT_FILE="${RUNTIME_DIR}/validate_self_heal_output.txt"
 SELF_HEAL_LOG_FILE="${RUNTIME_DIR}/validate_self_heal.log"
 SELF_HEAL_DECISION_FILE="${RUNTIME_DIR}/validate_self_heal_decision.json"
 SELF_HEAL_PATCH_TMP="${RUNTIME_DIR}/validate_self_heal_patch.diff"
-SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_stall_guard.sh"
 LEDGER_SUBSTATE_HELPER=""
@@ -201,7 +201,8 @@ _tail_if_exists()
 
 build_self_heal_semble_query()
 {
-	python3 - \
+	env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u GITHUB_ENV -u GITHUB_OUTPUT -u PYTHONPATH \
+		PYTHONDONTWRITEBYTECODE=1 python3 -I - \
 		"${SELF_HEAL_FAILURE_PHASE}" \
 		"${VALIDATION_RESULT_FILE:-}" \
 		"${DIAGNOSE_RESULT_FILE:-}" \
@@ -307,52 +308,22 @@ build_self_heal_serena_tool_hints()
 run_self_heal_codex()
 {
 	local stderr_tmp="$1"
-	local stall_status_file=""
-	local rc=0
 
 	SELF_HEAL_STALL_STATE=""
-	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
-		if ! [[ "${VALIDATE_AUTHORIZED_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-		   [ "$(git rev-parse HEAD 2>/dev/null)" != "${VALIDATE_AUTHORIZED_TARGET_SHA}" ] ||
-		   [ ! -f "${SELF_HEAL_SCRIPT_DIR}/untrusted_process_sandbox.sh" ]; then
-			echo "self-heal: authorized head or isolated model launcher is unavailable" >&2
-			return 2
-		fi
-		bash "${SELF_HEAL_SCRIPT_DIR}/untrusted_process_sandbox.sh" \
-			--role judge --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
-			--config-format codex --config "${HOME}/.codex" \
-			--hide-workspace-instructions -- \
-			codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
-			exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access \
-			< "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
-		return $?
+	if [ ! -f "${SELF_HEAL_SCRIPT_DIR}/untrusted_process_sandbox.sh" ] ||
+	   { [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
+	     { ! [[ "${VALIDATE_AUTHORIZED_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+	       [ "$(git rev-parse HEAD 2>/dev/null)" != "${VALIDATE_AUTHORIZED_TARGET_SHA}" ]; }; }; then
+		echo "self-heal: authorized head or isolated model launcher is unavailable" >&2
+		return 2
 	fi
-	if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-		stall_status_file="$(mktemp /tmp/self_heal_stall_status.XXXXXX)"
-		set +e
-		"${CODEX_STALL_GUARD_HELPER}" \
-			--phase validate_self_heal \
-			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
-			--status-file "${stall_status_file}" \
-			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" 2> "${stderr_tmp}"
-		rc=$?
-		set -e
-		if SELF_HEAL_STALL_STATE="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
-			:
-		elif [ -s "${stall_status_file}" ]; then
-			echo "self-heal: could not parse codex stall guard status from ${stall_status_file}" >&2
-		fi
-		rm -f "${stall_status_file}"
-		return "${rc}"
-	elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-		"${CODEX_HEARTBEAT_HELPER}" \
-			--phase validate_self_heal \
-			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
-			--stderr-file "${stderr_tmp}" \
-			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}"
-	else
-		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
-	fi
+	bash "${SELF_HEAL_SCRIPT_DIR}/untrusted_process_sandbox.sh" \
+		--role judge --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+		--config-format codex --config "${HOME}/.codex" \
+		--hide-workspace-instructions -- \
+		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
+		exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access \
+		< "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
 }
 
 # Ensure the patches ledger exists.
@@ -418,7 +389,13 @@ for _llm_attempt in 1 2; do
 	echo "self-heal: LLM call attempt ${_llm_attempt}/2" >> "${SELF_HEAL_LOG_FILE}"
 	emit_self_heal_substate "PreparingWorkspace" "${_llm_attempt}"
 	if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
-		sanitize_codex_prompt_file "${SELF_HEAL_PROMPT_FILE}"
+		# The helper's iconv fallback runs Python on stdin. Keep both its
+		# imports and environment outside the untrusted checkout.
+		(
+			cd "${SELF_HEAL_SCRIPT_DIR}"
+			unset GH_TOKEN GH_PAT GITHUB_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH PYTHONPATH BASH_ENV ENV OPENROUTER_API_KEY
+			PYTHONSAFEPATH=1 sanitize_codex_prompt_file "${SELF_HEAL_PROMPT_FILE}"
+		)
 	fi
 	_self_heal_stderr_tmp="$(mktemp)"
 	emit_self_heal_substate "BuildingPrompt" "${_llm_attempt}"
@@ -442,7 +419,8 @@ for _llm_attempt in 1 2; do
 		# Use json.JSONDecoder.raw_decode() which is string/escape-aware
 		# (the earlier brace-depth counter mis-handled JSON strings that
 		# contain literal '{' or '}' — unified diffs frequently do).
-		if python3 - "${SELF_HEAL_OUTPUT_FILE}" "${SELF_HEAL_DECISION_FILE}" <<'PY'
+		if env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u GITHUB_ENV -u GITHUB_OUTPUT -u PYTHONPATH \
+			PYTHONDONTWRITEBYTECODE=1 python3 -I - "${SELF_HEAL_OUTPUT_FILE}" "${SELF_HEAL_DECISION_FILE}" <<'PY'
 import json, sys
 src, dst = sys.argv[1], sys.argv[2]
 with open(src, 'r', encoding='utf-8', errors='replace') as fh:

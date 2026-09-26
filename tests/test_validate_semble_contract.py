@@ -257,11 +257,11 @@ def test_validate_workflow_bootstraps_and_exports_semble_state() -> None:
 	assert "uses: astral-sh/setup-uv@v7" in wf
 	assert "- name: Install semble\n        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'" in wf
 	assert 'echo "::notice::VALIDATION_USE_SEMBLE is not true; skipping Semble install."' in wf
-	assert "bash scripts/install_semble.sh" in wf
+	assert 'bash "${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/install_semble.sh"' in wf
 	assert "- name: Build semble index" in _workflow_text()
 	# Inline BM25 wrapper extracted to scripts/build_semble_wrapper.sh; the
 	# in-workflow body now delegates to that script via a one-liner.
-	assert "bash scripts/build_semble_wrapper.sh" in wf
+	assert 'bash "${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/build_semble_wrapper.sh"' in wf
 	assert 'SEMBLE_INDEX_PATH="${RUNTIME_DIR}/.semble-index" \\' in wf
 	assert 'SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" \\' in wf
 	assert "- name: Emit Serena stats" in wf
@@ -302,7 +302,9 @@ def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:
 	assert 'ensure_serena_bootstrap()' in text
 	assert 'if ! env_is_truthy "${SERENA_ENABLED:-false}"; then\n    emit_serena_fallback "${serena_phase}" "disabled"\n    clear_stale_serena_codex_config' in text
 	assert 'echo "::notice::scripts/setup_serena.sh is unavailable; validation will continue without Serena."\n    emit_serena_fallback "${serena_phase}" "setup-failure"\n    clear_stale_serena_codex_config' in text
-	assert 'SERENA_FALLBACK_TARGET="validate" SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" bash "${_validate_script_dir}/setup_serena.sh"' in text
+	assert 'SERENA_FALLBACK_TARGET="validate"' in text
+	assert 'GITHUB_ENV="${bootstrap_env_file}"' in text
+	assert 'bash "${_validate_script_dir}/setup_serena.sh"' in text
 	assert 'echo "::warning::scripts/setup_serena.sh exited non-zero; validation will continue without Serena."\n    emit_serena_fallback "${serena_phase}" "setup-failure"\n    clear_stale_serena_codex_config' in text
 	assert 'DISCOVER_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "discover" || true)"' in text
 	assert 'SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "${VALIDATE_TRUSTED_SUPPORT_ROOT}/prompts/mode-validate-discover.txt"' in text
@@ -335,7 +337,7 @@ def test_validate_process_includes_discover_and_diagnose_semble_hooks() -> None:
 
 def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 	text = _self_heal_text()
-	assert 'if source scripts/semble_helpers.sh; then' in text
+	assert 'if source "${SELF_HEAL_SCRIPT_DIR}/semble_helpers.sh"; then' in text
 	assert 'SELF_HEAL_SEMBLE_MAX_CHUNKS="${SELF_HEAL_SEMBLE_MAX_CHUNKS:-3}"' in text
 	assert 'build_self_heal_semble_query()' in text
 	assert 'build_self_heal_serena_tool_hints()' in text
