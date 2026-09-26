@@ -49,6 +49,9 @@ name: "Internal: AI Review Autofix Sweep"
 on:
   schedule:
     - cron: '*/30 * * * *'
+    # Hourly CLAUDE.md §26.H catch-all (job `claude-pr-catch-all` below);
+    # the review-dispatch `sweep` job skips this tick.
+    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       head_ref_filter:
@@ -77,6 +80,7 @@ concurrency:
 
 jobs:
   sweep:
+    if: github.event.schedule != '17 * * * *'
     runs-on: ubuntu-24.04
     steps:
       - name: Enumerate open PRs and dispatch internal-review.yml
@@ -304,3 +308,46 @@ jobs:
           done
 
           echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
+
+  # CLAUDE.md §26.H catch-all. Every PR-backed claude/* head runs in
+  # Claude-fixer mode, so its conflicts, failed checks, review hand-offs and
+  # blocks wait for a Claude session. The §26 checker hands them to the
+  # session that pushed the PR; this job starts one fresh Opus 5.5 fixer
+  # (via the "Claude issue dispatcher" routine, payload claude_pr_fix.v1)
+  # for any such PR, here or in a registered consumer repo, whose fix has
+  # been due for CLAUDE_PR_SWEEP_MIN_AGE_HOURS with no live claim. Without
+  # CLAUDE_ISSUE_ROUTINE_ID / CLAUDE_ISSUE_ROUTINE_TOKEN it only reports.
+  # Decision, API budget and fail-open rules: scripts/claude_pr_sweep.py.
+  claude-pr-catch-all:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the sweep scripts and the consumer registry
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Start Claude fixers for unhandled claude/* PRs
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          CLAUDE_ISSUE_ROUTINE_ID: ${{ vars.CLAUDE_ISSUE_ROUTINE_ID || '' }}
+          CLAUDE_ISSUE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ISSUE_ROUTINE_TOKEN }}
+          CLAUDE_ISSUE_ROUTINE_BETA: ${{ vars.CLAUDE_ISSUE_ROUTINE_BETA || 'experimental-cc-routine-2026-04-01' }}
+          CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN: ${{ vars.CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN || '' }}
+          CLAUDE_FIXER_VERDICT_BOT_LOGIN: ${{ vars.CLAUDE_FIXER_VERDICT_BOT_LOGIN || '' }}
+          CLAUDE_PR_SWEEP_MIN_AGE_HOURS: ${{ vars.CLAUDE_PR_SWEEP_MIN_AGE_HOURS || '2' }}
+          CLAUDE_FIX_CLAIM_LEASE_HOURS: ${{ vars.CLAUDE_FIX_CLAIM_LEASE_HOURS || '3' }}
+          CLAUDE_FIX_HAND_BACK_CAP: ${{ vars.CLAUDE_FIX_HAND_BACK_CAP || '3' }}
+          CLAUDE_PR_SWEEP_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          # The review workflow posts hand-offs with GH_PAT, so its account is
+          # the only author whose hand-off markers count (check_in_status.py).
+          if [ -z "${CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN}" ]; then
+            CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
+            export CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN
+          fi
+          echo "CLAUDE_PR_SWEEP handoff_author=${CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN:-<unset: hand-offs ignored>}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_pr_sweep.py

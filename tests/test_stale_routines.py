@@ -83,6 +83,9 @@ def _deleted_ids(result):
 		"implement-plan heal-autofix: hand-back",
 		"implement-plan heal-deterministic-autofix-failures: safety…",
 		"PR #12 hand-back",
+		"PR #12 status check-in: subscriber",
+		"PR #12 status check-in: fixer start",
+		"dispatch shubhodeep1/coding-workflows#4539: start",
 	],
 )
 def test_ended_routines_of_ours_are_deleted(monkeypatch, tmp_path, capsys, name):
@@ -108,6 +111,7 @@ def test_session_gone_routine_is_deleted(monkeypatch, tmp_path, capsys):
 		"PR #4366 trial check-in",
 		"e2e-dummy run — 3h check-in",
 		"probe: routine wake repro",
+		"dispatch nightly: start",
 		"Swap heal phase-4 checker to Sonnet",
 	],
 )
