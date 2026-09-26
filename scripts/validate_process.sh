@@ -2041,11 +2041,19 @@ run_template_validation_harness_renderer()
 		printf 'python3 -V: %s\n' "$("${python3_bin}" -V 2>&1 || echo 'failed')"
 		"${python3_bin}" -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))' 2>&1 \
 			|| printf '(python3 -c probe failed)\n'
-		printf '--- end python3 environment probe ---\n'
+		printf -- '--- end python3 environment probe ---\n'
 	} >> "${GENERATE_LOG_FILE}" 2>&1
 	if ! "${python3_bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
 		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $("${python3_bin}" -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
 		return 17
+	fi
+	if [ "${VALIDATION_RENDERER_DEPENDENCIES_READY:-true}" != "true" ]; then
+		printf '%s\n' 'Template renderer dependency setup did not succeed; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+	if ! "${python3_bin}" -c 'import yaml, jsonschema, jinja2' >/dev/null 2>&1; then
+		printf '%s\n' 'Template renderer dependencies (yaml, jsonschema, jinja2) are not importable by python3; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
 	fi
 
 	if ! renderer_summary="$("${python3_bin}" "${renderer_script}" \
@@ -3449,7 +3457,7 @@ case "${renderer_exit}" in
 		exit 1
 		;;
 	14)
-		local_failure_summary="Template renderer subprocess (\`scripts/render_validation_templates.py\`) exited non-zero (exit 14). Common causes: missing renderer dependencies (\`pyyaml\`, \`jsonschema\`, \`jinja2\`), invalid \`.ai/validate.yml\`, schema-validation failure, or template-collection error."
+		local_failure_summary="Template renderer preflight or subprocess (\`scripts/render_validation_templates.py\`) failed (exit 14). Common causes: failed dependency setup, dependencies (\`pyyaml\`, \`jsonschema\`, \`jinja2\`) not importable, invalid \`.ai/validate.yml\`, schema-validation failure, or template-collection error."
 		_render_log_excerpt="(no renderer log captured at ${GENERATE_LOG_FILE})"
 		if [ -s "${GENERATE_LOG_FILE}" ]; then
 			_render_log_excerpt="$(tail -n 40 "${GENERATE_LOG_FILE}" 2>/dev/null || echo '(failed to read renderer log)')"

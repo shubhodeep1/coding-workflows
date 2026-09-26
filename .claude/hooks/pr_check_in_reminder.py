@@ -3,8 +3,8 @@
 
 Implements the enforcement half of CLAUDE.md §26 (post-push PR status
 check-in). After a session pushes a branch, opens a pull request, or writes
-to a remote branch through the GitHub MCP tools, §26 requires it to arm a
-3-hourly status check-in for that pull request. The instruction sits at the
+to a remote branch through the GitHub MCP tools, §26 requires it to arm an
+hourly status check-in for that pull request. The instruction sits at the
 far end of the context window exactly when a session has run long enough to
 push, so this hook feeds the reminder back into the model's context on every
 matching tool call, regardless of what the model remembers.
@@ -67,28 +67,29 @@ SETTINGS_MATCHER = "^(?:Bash|mcp__.*__create_pull_request|mcp__.*__push_files|mc
 REMINDER = (
 	"PR status check-in reminder (CLAUDE.md §26): this call pushed a branch, "
 	"opened a pull request, or wrote to a remote branch. Once the pull request "
-	"for the pushed branch exists, arm the 3-hourly status check-in for it "
+	"for the pushed branch exists, arm the hourly status check-in for it "
 	"unless one is already armed for that PR, /implement-plan-claude opened "
 	"it (its own checker is the check-in), or the user opted out for this "
 	"task: run the stale Routine sweep (.claude/scripts/stale_routines.py, "
 	"§26.G); create_trigger a hand-back Routine bound to this session "
 	"(persistent_session_id = this session, run_once_at = now + 7 days, name "
-	"\"PR #<n> hand-back\", the PR URL in its prompt); then call "
-	"create_session with a "
-	"Sonnet model and a prompt naming the repository, the PR number and URL, "
-	"the hand-back trigger id, this session's id, the §26 check-in steps "
-	"(run .claude/scripts/check_in_status.py --terminal-only; while the PR "
-	"is open, update_trigger the hand-back 7 days ahead and re-arm with "
-	"send_later delay_minutes=180; on merged or closed, update_trigger the "
+	"\"PR #<n> hand-back\", the PR URL in its prompt); call create_session "
+	"with a Sonnet model and the prompt `/effort low` alone (text after it in "
+	"the same prompt stops it from applying), then create_trigger with "
+	"persistent_session_id = that session and run_once_at two minutes out, "
+	"whose prompt names the repository, the PR number and URL, the hand-back "
+	"trigger id, this session's id, the §26 check-in steps (run "
+	".claude/scripts/check_in_status.py --terminal-only; while the PR is "
+	"open, update_trigger the hand-back 7 days ahead and re-arm with "
+	"send_later delay_minutes=60; on merged or closed, update_trigger the "
 	"hand-back's run_once_at to 1 minute out, never its prompt, so this "
 	"session re-reads the PR state, writes the action-needed report, "
-	"renames itself, and sends one "
-	"PushNotification, then confirm delivery with get_trigger 10 minutes "
-	"later), and fallback next steps the checker reports itself only if the "
-	"hand-back fails. Never use fire_trigger for the hand-back: it starts a "
-	"fresh session instead of waking this one. Without create_session, use "
-	"send_later into this session and a Sonnet subagent for the read. Never "
-	"subscribe to PR activity (§25)."
+	"renames itself, and sends one PushNotification, then confirm delivery "
+	"with get_trigger 10 minutes later), and fallback next steps the checker "
+	"reports itself only if the hand-back fails. Never use fire_trigger for "
+	"the hand-back: it starts a fresh session instead of waking this one. "
+	"Without create_session, use send_later into this session and a Sonnet "
+	"subagent for the read. Never subscribe to PR activity (§25)."
 )
 
 

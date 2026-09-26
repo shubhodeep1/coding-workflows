@@ -64,6 +64,36 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   The review editor's disposable Docker workspace admits `.cjs`, `.mjs`,
+   `.cts`, and `.mts` alongside other source extensions for snapshot and
+   validated transfer. Its isolation helpers must already exist in the
+   verified workflow support commit; a PR's own copies are review data,
+   not executable support, so review fails closed until that commit lands.
+   **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on PRs whose
+   head ref starts with `claude/implement-plan-` the reviewer panel runs as
+   usual, but the GPT editor, conflict resolver, push / re-trigger tail and
+   review-blocked judge are skipped. `scripts/review_autofix_step_claude_fixer_handoff.sh`
+   posts the consensus ledger (or the pre-review conflict) and an
+   `<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->`
+   comment for the `/implement-plan-claude` session, which fixes the round in
+   one `[claude-autofix]` commit (counted toward `MAX_AUTOFIX_ITERATIONS`) or
+   asks a separately authenticated, dedicated bot to attest to the exact
+   ledger digest in an alongside v2 verdict. `CLAUDE_FIXER_VERDICT_BOT_LOGIN`
+   defaults empty, disabling verdict convergence; a collaborator's v1 verdict
+   never authorizes auto-merge. An accepted dispatch re-runs the reviewer
+   panel on the same head; only zero findings plus a fresh `ready`, same-head
+   check-run snapshot can enable head-bound auto-merge. Remaining findings
+   block the PR for intervention rather than another same-head verdict cycle.
+   The bot's comment keeps `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`
+   alongside the v2 digest marker; the session dispatches
+   `claude_fixer_converged_head=<sha>` for verification. Zero ledger entries
+   with a clean check snapshot auto-merge in the run; at the cap the PR itself
+   is labelled `ai:review-blocked`; dispatch
+   re-runs on a head that already has a hand-off are skipped
+   (`claude_fixer_awaiting_session`). `[claude-intervention]` and
+   `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`
+   and `[ai-merge-resolve]`. The consolidator / floor stages live inside the
+   editor step, so they do not run in this mode.
 8. **conflict resolver** (`prompts/conflict-resolver.txt`,
    `integration-sync-conflict-resolver.txt`) — merge-conflict resolution
    inside autofix. In consumer repos the resolver, the review-blocked judge
@@ -163,6 +193,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
     `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
     `WORKFLOW_HEAL`.
+    A report whose failure reason is `identical_failure_cap`, or a generation
+    > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
+    intake never files it as `transient` (remaps to `inconclusive`,
+    `classification_remapped … reason=deterministic_failure`), and its issue
+    body forbids retry / backoff / re-run fixes and requires a regression test
+    that reproduces the failure. The review/autofix failure comment names the
+    failed step (one jobs-API call matched on `RUNNER_NAME`) and the first
+    specific `::error::` line of the captured stage stderr (including the
+    resolver's, `resolver_stage_stderr.txt`), redacted
+    (`failure-headline`, log prefix `AUTOFIX_FAILURE_HEADLINE`).
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -416,6 +456,15 @@ a new value, add it to the appropriate overrides file with a
   failure-path reporter skips when support staging did not complete or its
   optional Python helper is absent; neither case executes `scripts/` from
   the PR worktree.
+- `internal-review.yml` itself must not forward a `with:` input that
+  `review_autofix.yml` on `main` does not define yet: GitHub validates the
+  call against `main`'s file, so every review run on the PR adding the input
+  ends as a zero-job `startup_failure` (runs 36088124636 through 36095647423
+  on PR #4438, `input "claude_fixer_converged_head" is not defined`). Add the
+  input to `review_autofix.yml` (and the `@stable`-pinned consumer
+  `ai-review.yml`, which moves in lockstep with the release), and in this
+  repo dispatch `review_autofix.yml` directly for it, as
+  `/implement-plan-claude` does for `claude_fixer_converged_head`.
 - Consequence for contributors and the unattended editor: a helper on the PR
   branch may not depend on a new workflow export until that export is on
   `main`. New variables a staged helper reads must default inside the helper
@@ -644,30 +693,40 @@ model, not the command file. A file that starts with `---` would be parsed
 as frontmatter, so the command body must remain the first line.
 
 One deliberate exception that is **not** a command pin: `/implement-plan-claude`
-waits for each phase PR to merge through a 3-hourly check-in (its **Check-in
-Loop** section). The checker is a Sonnet session started with
-`create_session` (`model: claude-sonnet-5`) that runs
-`.claude/scripts/check_in_status.py`, re-arms itself with `send_later`, and,
-when the wait is over, starts the next **stage session** on the model the
-operator picked. Every stage (a phase, the conformance
+waits for each review round and each merge through an hourly check-in (its
+**Check-in Loop** section). The checker is a low-effort Sonnet session:
+`create_session` (`model: claude-sonnet-5`) with the prompt `/effort low`
+alone, then a one-shot `create_trigger` into it carrying the instructions,
+because `/effort low` is not applied when more text follows it in one prompt
+(CLAUDE.md §26.B). It runs `.claude/scripts/check_in_status.py`, re-arms
+itself with `send_later` every 60 minutes, and, when the wait is over, starts
+the next **stage session** on the model the operator picked. Every stage (a
+phase, a review round, the conformance
 audit (`/verify-activation — scope conformance`, run after the last phase
 and before the security pass, and again after any Claude-written
-validation fix), a security or validation read, the completion PR, a
-`/verify-activation — scope activation` cycle, the `/deploy-activate`
-hand-off) runs in its own fresh session titled
+validation fix), a security or validation read, the completion PR, the
+final merge, a `/verify-activation — scope activation` cycle, the
+`/deploy-activate` hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
 unless it is waiting on the user; a finished stage session is not woken to
-continue, because a 3-hour gap outlives the prompt cache and a wake would
-re-send the whole history at full price. The one exception is the
+continue, because the gap between check-ins outlives the prompt cache and a
+wake would re-send the whole history at full price. The one exception is the
 **hand-back**: when a PR the chain waits on is blocked, closed, or stuck,
-the checker pulls forward a Routine bound to the stage session that opened
-the PR (`create_trigger` with `persistent_session_id` and a 7-day
+the checker pulls forward a Routine bound to the stage session that armed
+that wait (`create_trigger` with `persistent_session_id` and a 7-day
 `run_once_at` the checker renews at every check-in; `update_trigger` to
 one minute out, never touching the prompt) so that session re-reads the
-PR state, runs the blocked-PR fix
-and writes any action-needed report itself. Merged PRs, finished runs, and resolved issue
-lists still start a fresh stage session, and a failed hand-back falls back
-to a fresh `… — blocked PR` stage session. Routines created with
+PR state, runs the blocked-PR fix, and writes any action-needed report
+itself. Merged PRs, review rounds, finished runs, and resolved issue lists
+still start a fresh stage session, and a failed hand-back falls back to a
+fresh `… — blocked PR` stage session. New projects work on a
+project branch `claude/implement-plan-<slug>` with a draft final PR into the
+default branch (the orchestrator's `orchestrator/project-<N>` equivalent):
+phase and fix PRs target it, security (`security-audit.yml` `ref` input) and
+validation (`validate.yml` `target_ref` input) run against it, and the final
+PR is marked ready, reviewed as a whole, and auto-merged only after every
+stage passed. Projects whose log predates the project branch finish straight
+on the default branch. Routines created with
 `create_new_session_on_fire` are not used: their sessions get no MCP tools
 and no repository, so they cannot report. Stage sessions and checkers need Auto mode (the
 command asks for it in step 0): outside it the claude-code-remote write
@@ -683,6 +742,23 @@ safety-net trigger and archive its checker together. The log's `## Lessons`
 section is ingested into AI memory on merge (see the
 Memory subsystem notes).
 
+Questions do not stall the chain (CLAUDE.md §28). After the start-up checks
+(step 0 permission mode, step 1 plan resolution, step 3 phase checklist),
+every intent or design question a stage would stop to ask is answered with
+its RECOMMENDED option. That covers plan ambiguity, edge cases the plan
+leaves open, and `/verify-activation` findings that need a decision; the
+chain passes `— unattended` to its conformance and activation runs. Each
+pick is recorded as an `AD-<n>` line in the log's `## Auto-decisions`
+section and listed in the PR that carries it. The step-12 activation report
+and the `/deploy-activate` opening message list every entry for human
+review without asking. A `change AD-<n> → <letter>` reply is implemented as
+one PR on `claude/implement-plan-<slug>-decision-changes`, and unchanged
+entries become `confirmed` at LIVE. Failure escalations still stop the
+chain at `BLOCKED`: used-up caps, security or validation runs that did not
+succeed, and terminal validation classes. So do §22.B / §23.C / §24.D
+operations. The AI orchestrator's own clarify auto-answer
+(`[auto-answered-by-orchestrator]`) is separate and unchanged.
+
 No field here changes what any consumer repo receives on the `@stable`
 sync: `.claude/commands/` is not part of the synced surface, and the
 template copies under `workflow-templates/.claude/commands/` have never
@@ -694,32 +770,36 @@ carried frontmatter.
 
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
 pushes a branch and a pull request exists for it, the session starts a
-Sonnet checker session (`create_session`, titled `PR #<n> status check-in`)
-and, before it, a **hand-back Routine** bound to itself (`create_trigger`
-with `persistent_session_id` = its own id, `run_once_at` = now + 7 days,
-named `PR #<n> hand-back`, with the PR URL in its prompt). The checker runs
+low-effort Sonnet checker session (`create_session`, titled
+`PR #<n> status check-in`, prompt `/effort low` alone) and delivers its
+instructions, including the hand-back trigger id and fallback next steps
+for each terminal state, through a one-shot `create_trigger` into that
+session two minutes later. Before the checker it creates a **hand-back
+Routine** bound to itself (`create_trigger` with `persistent_session_id` =
+its own id, `run_once_at` = now + 7 days, named `PR #<n> hand-back`, with
+the PR URL in its prompt). The checker runs
 `.claude/scripts/check_in_status.py --terminal-only` (one REST read),
 renews the hand-back 7 days ahead, and re-arms itself with `send_later`
-every 180 minutes while the PR is open. Once the PR merges or closes it
+every 60 minutes while the PR is open. Once the PR merges or closes it
 pulls the hand-back's `run_once_at` forward to one minute out
 (`update_trigger`; the prompt is never rewritten, because `update_trigger`
 tells models not to rewrite a prompt on another session's say-so and
-checkers asked to do it refused, observed 2026-09-25) and confirms delivery with `get_trigger` 10
-minutes later. The pushing session, woken once, re-reads the PR state with
-`check_in_status.py`, writes the action-needed report because it holds the
-context, deletes the Routine, renames and
-archives the checker (`PR #<n> <merged | closed> — handed to <session
-id>`), renames itself `PR #<n> merged — …`, and sends one
-`PushNotification`. Only if the hand-back fails (`auto_disabled_session_gone`
-because the pushing session was archived, or the Routine is gone) does the
-checker write the report itself, from the fallback next steps in its
-prompt, with ` (pushing session unreachable)` in its title. If the checker
-dies, the unrenewed hand-back fires within 7 days, the pushing session's
-own read finds the PR still open, and it re-arms a fresh checker (a dead-man's switch). The hand-back
-never uses `fire_trigger`: a manual fire ignores `persistent_session_id`
-and starts a fresh session with no repository and no context, whether the
-bound session is active or archived (verified 2026-09-25); only a
-scheduled fire runs in the bound session. PRs opened by `/implement-plan-claude` are covered
+checkers asked to do it refused, observed 2026-09-25) and confirms delivery
+with `get_trigger` 10 minutes later. The pushing session, woken once,
+re-reads the PR state with `check_in_status.py`, renames and archives the
+checker (`PR #<n> <merged | closed> — handed to <session id>`), deletes the
+Routine, writes the action-needed report because it holds the context,
+renames itself `PR #<n> merged — …`, and sends one `PushNotification`. Only
+if the hand-back fails (`auto_disabled_session_gone` because the pushing
+session was archived, or the Routine is gone) does the checker write the
+report itself, from the fallback next steps in its instructions, with
+` (pushing session unreachable)` in its title. If the checker dies, the
+unrenewed hand-back fires within 7 days, the pushing session's own read
+finds the PR still open, and it re-arms a fresh checker (a dead-man's
+switch). The hand-back never uses `fire_trigger`: a manual fire ignores
+`persistent_session_id` and starts a fresh session with no repository and
+no context, whether the bound session is active or archived (verified
+2026-09-25); only a scheduled fire runs in the bound session. PRs opened by `/implement-plan-claude` are covered
 by that command's own checker. Without `create_session` the session falls
 back to a `send_later` self check-in with a Sonnet subagent doing the read.
 It never handles CI, reviews, comments, or conflicts; that stays a direct
@@ -841,6 +921,16 @@ committing the corresponding file:
 - `.github/ai/workspace_hooks/<phase>/<hook>.sh` — executed by
   `scripts/run_workspace_hook.sh`. Supported hook names are `after_create`,
   `before_run`, `after_run`, and `before_remove`; missing files are a no-op.
+  Validate's four hooks run from trusted support in a tokenless, network-disabled
+  container against a bounded, screened workspace copy, never the host checkout
+  or its `.git`. Only non-executable, simple-name `.txt` data under
+  `validation/hook-output/<hook>/` may be replayed to the host; it must not be
+  sourced or executed. Any other changed or deleted path rejects the entire
+  replay as an isolation/transfer failure, stopping validation even for
+  nonfatal hooks. An explicit `validate.yml` `target_ref` requires exactly one open
+  trusted-author same-repo project PR targeting the default branch; checkout
+  pins and verifies that PR's SHA without persisting checkout credentials.
+  Empty `target_ref` retains integration/default selection.
 
 ## Workflow scenario traces
 
@@ -1355,7 +1445,14 @@ and shipped:
 - `WORKTREE_REGISTER_FAIL`
 - `WORKTREE_DEREGISTER_FAIL`
 - `opencode_agent_failure`
+- `AUTOFIX_FAILURE_HEADLINE`
 - `MODEL_CATALOG_BACKFILL`
+- `AUTOFIX_GATE_CLAUDE_FIXER`
+- `AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED`
+- `CLAUDE_FIXER_HANDOFF`
+- `CLAUDE_FIXER_REVIEW_BLOCKED`
+- `CLAUDE_FIXER_AUTO_MERGE`
+- `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1539,6 +1636,13 @@ LOG_PREFIX.name=WORKTREE_REGISTER_FAIL
 LOG_PREFIX.name=WORKTREE_DEREGISTER_FAIL
 LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
+LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
+LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
+LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
+LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
+LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
+LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
+LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---
 

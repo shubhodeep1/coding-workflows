@@ -50,7 +50,7 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_claude_fixer_handoff.sh"
 # Keep this registry for compatibility, but all runtime files now come from
 # the same verified workflow commit as the required bootstrap scripts.
 #
@@ -90,6 +90,11 @@ for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
+mkdir -p "${SUPPORT_SCRIPTS_DIR}/review_sandbox"
+install -m 0644 ".codex-workflow-src/scripts/review_sandbox/Dockerfile" "${SUPPORT_SCRIPTS_DIR}/review_sandbox/Dockerfile" || {
+  echo "::error::Required trusted review sandbox Dockerfile is missing from verified support commit ${SCRIPT_REF}." >&2
+  exit 1
+}
 for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then
@@ -455,6 +460,13 @@ setup_context()
 			ORIGINAL_SCRIPT_REF="stable"
 		fi
 	fi
+	# Explicit targets must never select executable support from their checkout.
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		[[ "${ORIGINAL_SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] || {
+			echo "::error::Explicit validation requires an immutable support ref." >&2
+			exit 1
+		}
+	fi
 	RESOLVED_SCRIPT_REF="${ORIGINAL_SCRIPT_REF}"
 
 	IS_SELF_REPO="false"
@@ -486,7 +498,14 @@ checkout_support_ref()
 
 	rm -rf "${dest}"
 	mkdir -p "$(dirname "${dest}")"
-	if git clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
+	if [[ "${ref}" =~ ^[0-9a-f]{40}$ ]]; then
+		if git clone --quiet --no-tags --depth 1 --branch main "${remote_url}" "${dest}" 2>/dev/null &&
+		   git -C "${dest}" fetch --quiet --depth 1 origin "${ref}" 2>/dev/null &&
+		   git -C "${dest}" checkout --quiet --detach FETCH_HEAD 2>/dev/null &&
+		   [ "$(git -C "${dest}" rev-parse HEAD)" = "${ref}" ]; then
+			return 0
+		fi
+	elif git clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
 		return 0
 	fi
 	rm -rf "${dest}"
@@ -498,11 +517,11 @@ bootstrap_support_roots()
 	SUPPORT_PRIMARY_ROOT=""
 	SUPPORT_MAIN_ROOT=""
 
-	if [ "${IS_SELF_REPO}" = "true" ]; then
+	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
 	elif checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
 		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
-	elif checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/primary"; then
+	elif [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/primary"; then
 		echo "::warning::Support checkout ref ${ORIGINAL_SCRIPT_REF} is unavailable; using main."
 		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
 		RESOLVED_SCRIPT_REF="main"
@@ -523,6 +542,10 @@ copy_from_ref_or_local()
 	local require_remote="${3:-false}"
 	local allow_main_fallback="${4:-true}"
 	local source_path=""
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		require_remote="true"
+		allow_main_fallback="false"
+	fi
 
 	mkdir -p "$(dirname "${target_path}")"
 
@@ -658,7 +681,7 @@ stage_optional_preserve_entry()
 	local emit_notice="${4:-true}"
 	local tmp_path
 
-	if [ -f "${repo_path}" ]; then
+	if [ -f "${repo_path}" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		if [ "${executable}" = "true" ]; then
 			chmod +x "${repo_path}"
 		fi

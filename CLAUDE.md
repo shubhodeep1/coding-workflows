@@ -33,6 +33,10 @@ If you are **not 100% certain** the outcome matches the user's expectations:
 **STOP. ASK. DO NOT PROCEED.** — even if the task looks trivial or the intent
 seems obvious.
 
+The one exception is §28: inside an unattended `/implement-plan-claude`
+project, a question is answered with its RECOMMENDED option, recorded, and
+listed for human review at the end instead of stopping the chain.
+
 ---
 
 ## §1. Core Priorities (Strict Order)
@@ -1527,14 +1531,14 @@ stall recovery — those keep their own policies.
 ## §26. Post-Push PR Status Check-In (MANDATORY)
 
 After an interactive Claude Code session pushes work and a pull request
-exists for it, the session **arms a 3-hourly status check-in for that pull
+exists for it, the session **arms an hourly status check-in for that pull
 request** and keeps it armed until the PR is terminal (merged, or closed
-without merging). The check-in runs in a small Sonnet checker session
-that reads the PR's state and nothing else. When the PR is terminal the
-checker hands the verdict back to the pushing session, which still holds
-the context, and that session writes the action-needed report: the next
-steps, or that it can be closed because there are none. This section
-applies in this repo
+without merging). The check-in runs in a small Sonnet checker session at
+low effort that reads the PR's state and nothing else. When the PR is
+terminal the checker hands the verdict back to the pushing session, which
+still holds the context, and that session writes the action-needed report:
+the next steps, or that it can be closed because there are none. This
+section applies in this repo
 and in every consumer repo that receives this file via the `@stable` sync.
 
 The check-in is the scheduled self check-in §25.C allows, not the PR
@@ -1562,11 +1566,10 @@ CI or review events, and never touches the PR. §25 and its
 
 ### B) How to arm
 
-Waking the session that pushed costs its whole conversation, and a 3-hour
-gap outlives the prompt cache, so the 3-hourly reads run in a small
-**Sonnet checker session** and never wake the pushing session. The pushing
-session is woken once, when the PR is terminal, because the report (§26.D)
-needs the context only it holds:
+Waking the session that pushed costs its whole conversation, so the hourly
+reads run in a small **Sonnet checker session at low effort** and never
+wake the pushing session. The pushing session is woken once, when the PR
+is terminal, because the report (§26.D) needs the context only it holds:
 
 0. Run the stale Routine sweep (§26.G).
 1. Create the **hand-back Routine**: `create_trigger` (Claude Code Remote
@@ -1582,16 +1585,27 @@ needs the context only it holds:
    switch), and §26.D reads the PR state itself in both cases.
 2. Call `create_session` with `source_url` = the repository,
    `model: claude-sonnet-5`, `permission_mode` = this session's mode,
-   `title` = `PR #<n> status check-in`, and a standalone prompt that names
-   the repository, the PR number and URL, the §26.C steps, the hand-back
-   trigger id, this session's id, and **fallback next steps** for each
-   terminal state, written now while the context is at hand: what remains
-   if the PR merges (follow-up work, a release or consumer sync it waits
-   on, an action the user must take, or "none — the pushing session can
-   be closed"), and what to ask if it is closed without merging. The
-   checker uses them only when the hand-back fails (§26.C step 5).
-3. Report the checker's session id and the hand-back trigger id in this
-   session's reply.
+   `title` = `PR #<n> status check-in`, and the prompt `/effort low` **and
+   nothing else**. `create_session` takes no effort parameter, and
+   `/effort low` only takes effect when it is the whole prompt: followed by
+   more text in the same prompt it is not applied (verified 2026-09-25 with
+   `get_session`, whose `session_context.effort_level` reads `low` only in
+   the two-step form). The level lasts for the whole session, so every
+   later wake of the checker runs at low effort too.
+3. Call `create_trigger` with `persistent_session_id` = the checker's
+   session id, `run_once_at` = two minutes from now, `name` =
+   `PR #<n> status check-in: instructions`, `initiation: own_followup`,
+   and a standalone prompt that names the repository, the PR number and
+   URL, the §26.C steps, the hand-back trigger id, this session's id, and
+   **fallback next steps** for each terminal state, written now while the
+   context is at hand: what remains if the PR merges (follow-up work, a
+   release or consumer sync it waits on, an action the user must take, or
+   "none — the pushing session can be closed"), and what to ask if it is
+   closed without merging. The checker uses them only when the hand-back
+   fails (§26.C step 5). The one-shot trigger disables itself after it
+   fires.
+4. Report the checker's session id, the instructions trigger id, and the
+   hand-back trigger id in this session's reply.
 
 The hand-back is a **scheduled** fire: a Routine fired on its schedule
 runs in the session it is bound to, and a fire into an archived session
@@ -1617,11 +1631,12 @@ why the checker is Sonnet.
 When `create_session` is not available (a local CLI, desktop, or IDE
 session without the Claude Code Remote MCP server), skip the hand-back
 Routine and arm `send_later` into
-this session with `delay_minutes: 180`, `initiation: own_followup`, and a
+this session with `delay_minutes: 60`, `initiation: own_followup`, and a
 message that restates §26.C; on each wake, delegate the check to a Sonnet
-subagent (the Agent tool with `model: "sonnet"`) and continue with §26.D on
+subagent (the Agent tool with `model: "sonnet"`; the Agent tool takes no
+effort level) and continue with §26.D on
 this session when it reports a terminal state. When `send_later` is
-missing too, use `CronCreate` (recurring, every 3 hours, deleted with
+missing too, use `CronCreate` (recurring, every hour, deleted with
 `CronDelete` once the PR is terminal) and tell the user once that this
 scheduler lives only as long as the session. When no scheduler exists, say
 so once in the report and stop; do not poll in a loop.
@@ -1634,9 +1649,10 @@ so once in the report and stop; do not poll in a loop.
    `closed` / `open`), and `reason`. The script decides; the model does not
    interpret the PR.
 2. **Not terminal** → renew the dead-man's switch (`update_trigger` on the
-   hand-back trigger id with only `run_once_at` = now + 7 days), call `send_later` with `delay_minutes: 180`,
-   `initiation: own_followup`, and `name` = `PR #<n> status check-in` into
-   the checker session, and end the turn.
+   hand-back trigger id with only `run_once_at` = now + 7 days), call
+   `send_later` with `delay_minutes: 60`, `initiation: own_followup`, and
+   `name` = `PR #<n> status check-in` into the checker session, and end
+   the turn.
    No message to the user, no PR comment, no CI, review, comment,
    conflict, or branch work. A red check or an open review thread does not
    change this: fixing CI or addressing comments happens only when the
@@ -1812,8 +1828,144 @@ broke the stable release gate (run 35903885958).
 
 ---
 
+## §28. Unattended Auto-Decisions in `/implement-plan-claude` Projects (MANDATORY)
+
+A `/implement-plan-claude` project runs unattended: every stage after the
+first runs in a fresh session nobody is watching, so a §0/§2 stop would
+stall the project until a human noticed. Inside the scope below, a question
+the session would otherwise stop to ask is **answered with its RECOMMENDED
+option, recorded, and surfaced for human review at the end of the
+project**, so a human is needed only when the project is complete. This
+section applies in this repo and in every consumer repo that receives this
+file via the `@stable` sync.
+
+### A) Scope
+
+- A session running `/implement-plan-claude` **after its start-up checks**:
+  the invoking session once step 0 (permission mode), step 1 (resolving
+  the plan) and step 3 (building the phase checklist) are done, and every
+  `— resume.` stage session the chain starts.
+- A `/verify-activation` run whose `$ARGUMENTS` end with `— unattended`
+  (the chain passes that marker at its conformance and activation stages).
+
+Nothing else: a standalone session, any other slash command, and
+`/implement-plan-ai` stay under §0/§2 unchanged. (The AI orchestrator
+already answers its own clarifications with the RECOMMENDED options in
+`plan.yml` / `clarify.yml`.)
+
+### B) What is auto-decided
+
+Every question §0, §2, §12.D, or the command's own "stop and ask" rules
+would raise about **intent or design**: scope, behaviour, edge cases,
+interfaces, data, operations, an ambiguous or under-specified plan step,
+and a `/verify-activation` finding that "needs a decision" (a §12.D
+tradeoff, a documented-contract change, a §6/§10 item that has an
+alias-preserving or contract-updating option). Instead of stopping:
+
+1. Write the question in the §2 format as usual: stable `Q`-ID, every
+   option, at least one marked `(RECOMMENDED)`.
+2. Take the RECOMMENDED option. With several marked on a single-choice
+   question, take the first; on a question stated as multi-select, take
+   every recommended option.
+3. Record it (§28.D) and continue with the work.
+
+The RECOMMENDED option must itself obey the hard rules, because nobody
+reviews it before it ships: §1 priority order (the safer option wins
+when security is involved), §6 (never rename or remove an identifier in
+place; add the alias alongside), §10 (the `/db/contracts/*` update ships
+in the same PR), §5 (the smallest change that settles the question). If
+no option passes, the question is not auto-decidable and follows §28.C.
+
+This is an explicit carve-out from §0 and §2 (including §2's
+"Forbidden: applying reasonable defaults without confirmation"), for the
+§28.A scope only.
+
+### C) Never auto-decided — still stop and ask
+
+- **Start-up checks** — step 0 (permission mode), step 1 (which plan), and
+  step 3 (a plan with no Phases section). The user is still at the
+  keyboard for those.
+- **Failure escalations** — a cap reached (blocked-PR interventions,
+  conformance runs, security cycles, validation cycles, verify-activation
+  cycles), a security or validation run that did not conclude `success`,
+  a terminal validation class (`harness_error`, `infeasible`,
+  `codex_failure`, unknown payload), a security follow-up closed without
+  a merged PR. These are failures, not clarifications: picking a
+  "recommended" way past them could skip the security pass or loop
+  forever. The chain stops at `Status: BLOCKED` and asks, as the command
+  describes.
+- **Ask-first operations** — §22.B (DigitalOcean mutations), §23.C
+  (destructive and administrative GitHub writes, merges included), and
+  §24.D (Cloudflare destructive and account-level writes). The chain never
+  performs them; a project that needs one lists it as an operator step,
+  and `/deploy-activate` walks the human through it.
+- A question with no option that satisfies §28.B's hard rules.
+
+### D) Recording
+
+Each auto-decision gets one entry in the `## Auto-decisions` section of the
+project's progress log, `docs/implement-plan/<slug>.md`:
+
+```md
+- AD-<n> [<stage>, <YYYY-MM-DD>] <question> — Picked: <letter> — <option>. Alternatives: <letter> — <option>; <letter> — <option>. Why: <one line>. Applied in: <PR #N | no code change>. Status: pending review
+```
+
+- `AD-<n>` numbers run across the whole project (the log's entries plus
+  any the `— resume.` block carries as uncommitted) and are never reused
+  or renumbered; they are identifiers under §6.
+- The entry rides the PR in flight with the rest of the log, and that PR's
+  body lists the same entries under `## Auto-decisions`, so reviewers see
+  what was decided without being asked.
+- A stage that records an entry but opens no PR writes it into its report
+  and into the `Uncommitted auto-decisions:` line of the `— resume.` block
+  it hands on; the next PR commits it.
+- Status moves from `pending review` to `confirmed (<date>)` or
+  `changed to <letter> (<date>, PR #N)` (§28.E); entries are never deleted.
+- Per-decision notifications are not sent. Stage reports carry a count
+  only; the full list is shown at the end (§28.E).
+
+### E) Human review at the end
+
+The list is **shown, never re-asked**:
+
+- The `/verify-activation` activation stage (`/implement-plan-claude` step
+  12) prints every entry under `Auto-decisions (for review)` in its
+  report, and its completion `PushNotification` carries the count.
+- `/deploy-activate` prints the same list in its opening message, next to
+  Step 1, without waiting on it.
+
+The human replies `change AD-<n> → <letter>` (or describes the change) in
+the final LIVE report session or in the `/deploy-activate` session, at any
+point. That session then:
+
+1. Implements every changed decision as **one** PR on
+   `claude/implement-plan-<slug>-decision-changes` from the default branch
+   (append `-2`, `-3`, … when a merged PR already used the name, §21),
+   under §12 rules, verified and tested like any fix, with the log entries
+   set to `changed to <letter> (<date>, PR #N)` in the same PR.
+2. Arms the §26 check-in for that PR.
+3. In `/deploy-activate`, holds the runbook at the current step until that
+   PR has merged (a deploy step can depend on the changed code), confirming
+   the merge with a read before emitting the next step.
+
+Entries left unchanged are marked `confirmed (<date>)` when `/deploy-activate`
+reaches LIVE, committed with its activation-log push. On the LIVE path
+(no `/deploy-activate`), a `confirm` reply does the same through a
+docs-only PR on the decision-changes branch; without a reply the entries
+stay `pending review`, which blocks nothing.
+
+### F) Interactive Sessions Only
+
+The unattended pipelines read `unattended_system_instructions.md` and
+never see this file. §28 changes nothing about the orchestrator's own
+clarify auto-answer (`[auto-answered-by-orchestrator]`), which keeps its
+own policy.
+
+---
+
 ## FINAL REMINDER
 
-If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
+If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.** (Inside
+§28's scope: record the RECOMMENDED pick and continue.)
 
 Accuracy > speed. Safety > convenience. Backward compatibility is mandatory.

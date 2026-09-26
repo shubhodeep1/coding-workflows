@@ -29,6 +29,11 @@ name: AI Validate (Reusable)
         required: false
         type: string
         default: ""
+      target_ref:
+        description: "Branch to validate instead of the tracking issue's integration branch or the default branch (empty = unchanged behaviour). Set by /implement-plan-claude for its project branch."
+        required: false
+        type: string
+        default: ""
     secrets:
       GH_PAT:
         required: true
@@ -168,16 +173,64 @@ jobs:
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Authorize explicit validation target
+        id: authorized_target
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          VALIDATE_TARGET_REF: ${{ inputs.target_ref }}
+          VALIDATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VALIDATE_TARGET_REF}" ]; then
+            exit 0
+          fi
+          if [[ ! "${VALIDATE_TARGET_REF}" =~ ^claude/implement-plan-[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
+             ! git check-ref-format --branch "${VALIDATE_TARGET_REF}" >/dev/null 2>&1; then
+            echo "::error::Invalid explicit validation target."
+            exit 1
+          fi
+          # The integration issue lookup has no PR head/repository identity.
+          # One paginated pull listing supplies the independent binding.
+          target_prs="$(gh api --method GET --paginate --slurp \
+            -f state=open -f "head=${GITHUB_REPOSITORY%%/*}:${VALIDATE_TARGET_REF}" \
+            -f "base=${VALIDATE_DEFAULT_BRANCH}" -f per_page=100 \
+            "repos/${GITHUB_REPOSITORY}/pulls")" || exit 1
+          authorized_sha="$(jq -er --arg repo "${GITHUB_REPOSITORY}" \
+            --arg branch "${VALIDATE_TARGET_REF}" --arg base "${VALIDATE_DEFAULT_BRANCH}" '
+            if type != "array" or any(.[]; type != "array") then error("invalid pull listing") else
+              [ .[][] ] |
+              if length != 1 then error("target PR binding is missing or ambiguous")
+              elif .[0] | (.state == "open" and .head.ref == $branch and
+                .base.ref == $base and .head.repo.full_name == $repo and
+                .base.repo.full_name == $repo and
+                (.author_association == "OWNER" or .author_association == "MEMBER" or
+                 .author_association == "COLLABORATOR") and
+                (.head.sha | type == "string" and test("^[0-9a-fA-F]{40}$")))
+              then .[0].head.sha else error("target PR is unauthorized") end
+            end' <<< "${target_prs}")" || { echo "::error::Explicit validation target is not authorized."; exit 1; }
+          echo "sha=${authorized_sha}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          ref: ${{ steps.authorized_target.outputs.sha || steps.refctx.outputs.ref || github.event.repository.default_branch }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
+
+      - name: Verify authorized checkout
+        env:
+          VALIDATE_AUTHORIZED_SHA: ${{ steps.authorized_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${VALIDATE_AUTHORIZED_SHA}" ] && [ "$(git rev-parse HEAD)" != "${VALIDATE_AUTHORIZED_SHA}" ]; then
+            echo "::error::Validation checkout does not match the authorized PR head."
+            exit 1
+          fi
 
       - name: Log checkout ref
         env:
-          VALIDATE_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          VALIDATE_RESOLVED_REF: ${{ steps.authorized_target.outputs.sha || steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           echo "Resolved ref: ${VALIDATE_RESOLVED_REF}"
@@ -187,17 +240,6 @@ jobs:
           else
             echo "HEAD branch: DETACHED"
           fi
-
-      - name: Configure git auth for memory helper clones
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
-          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
-          SERVER_HOST="${SERVER_HOST#http://}"
-          SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Setup shared runtime
         id: runtime
@@ -211,61 +253,38 @@ jobs:
       - name: Fetch workflow support files
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
-          helper_path="scripts/stage_workflow_support.sh"
-
-          if [ ! -f "${helper_path}" ]; then
-            helper_ref="stable"
-            if [ "${GITHUB_REPOSITORY}" = "${wf_source}" ]; then
-              helper_ref="${GITHUB_SHA}"
-            fi
-
-            SERVER_HOST="${GITHUB_SERVER_URL#https://}"
-            SERVER_HOST="${SERVER_HOST#http://}"
-            SERVER_HOST="${SERVER_HOST%/}"
-            WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
-
-            helper_stage_root="${RUNNER_TEMP}/codex-validate-helper-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            helper_stage_dir="${helper_stage_root}/src"
-            cleanup_helper_stage() {
-              rm -rf "${helper_stage_root}"
-            }
-            trap cleanup_helper_stage EXIT
-
-            checkout_helper_ref() {
-              local ref="$1"
-              local dest="$2"
-              rm -rf "${dest}"
-              mkdir -p "$(dirname "${dest}")"
-              if git clone --quiet --no-tags --depth 1 --branch "${ref}" "${WF_REMOTE_URL}" "${dest}" 2>/dev/null; then
-                return 0
-              fi
-              rm -rf "${dest}"
-              return 1
-            }
-
-            helper_path=""
-            if checkout_helper_ref "${helper_ref}" "${helper_stage_dir}"; then
-              if [ -f "${helper_stage_dir}/scripts/stage_workflow_support.sh" ]; then
-                helper_path="${helper_stage_dir}/scripts/stage_workflow_support.sh"
-              else
-                echo "::warning::scripts/stage_workflow_support.sh not found on ${helper_ref}; using main fallback."
-              fi
-            fi
-            if [ -z "${helper_path}" ] && [ "${helper_ref}" != "main" ] && checkout_helper_ref "main" "${helper_stage_dir}"; then
-              if [ -f "${helper_stage_dir}/scripts/stage_workflow_support.sh" ]; then
-                helper_path="${helper_stage_dir}/scripts/stage_workflow_support.sh"
-              fi
-            fi
-            if [ -z "${helper_path}" ]; then
-              echo "::error::scripts/stage_workflow_support.sh is unavailable in checked-out support sources."
-              exit 1
-            fi
+          helper_ref="stable"
+          if [ "${GITHUB_REPOSITORY}" = "${wf_source}" ]; then
+            helper_ref="main"
           fi
-
-          chmod +x "${helper_path}"
+          helper_stage_root="${RUNNER_TEMP}/codex-validate-helper-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          helper_stage_dir="${helper_stage_root}/src"
+          mkdir -p "${helper_stage_root}"
+          # Never execute a staging helper (or hook helper) from target_ref.
+          helper_auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          helper_git() {
+            git -c "http.extraHeader=Authorization: Basic ${helper_auth}" "$@"
+          }
+          if ! helper_git clone --quiet --no-tags --depth 1 --branch "${helper_ref}" \
+            "https://github.com/${wf_source}" "${helper_stage_dir}"; then
+            echo "::error::Trusted validation support checkout failed."
+            exit 1
+          fi
+          support_sha="$(git -C "${helper_stage_dir}" rev-parse HEAD)"
+          [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          if [ ! -f "${helper_stage_dir}/scripts/stage_workflow_support.sh" ] ||
+             [ ! -f "${helper_stage_dir}/scripts/run_workspace_hook.sh" ]; then
+            echo "::error::Trusted validation support helpers are unavailable."
+            exit 1
+          fi
+          hook_helper_dir="${RUNNER_TEMP}/validate-hook-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${hook_helper_dir}"
+          install -m 0755 "${helper_stage_dir}/scripts/run_workspace_hook.sh" "${hook_helper_dir}/run_workspace_hook.sh"
+          echo "VALIDATE_HOOK_HELPER=${hook_helper_dir}/run_workspace_hook.sh" >> "$GITHUB_ENV"
 
           manifest_path="${RUNNER_TEMP}/validate-support-manifest.json"
           cat > "${manifest_path}" <<'EOF'
@@ -430,7 +449,7 @@ jobs:
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
-          bash "${helper_path}" validate --manifest "${manifest_path}"
+          WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"
       - name: Initialize workspace metadata
         id: workspace_meta
         env:
@@ -517,7 +536,8 @@ jobs:
         id: workspace_after_create_hook
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh validate after_create
+          : "${VALIDATE_HOOK_HELPER:?Trusted validation hook helper is unavailable}"
+          bash "${VALIDATE_HOOK_HELPER}" validate after_create
 
       - name: Initialize Serena runtime state
         run: |
@@ -698,8 +718,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Auth is scoped to this step; no credential enters origin/.git.
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
           source scripts/memory_helpers.sh
           memory_bootstrap --ensure-branch --require memory_record_run_event
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
 
           issue_number="${TRACKING_ISSUE}"
           if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
@@ -722,11 +747,13 @@ jobs:
             --metadata-json "${metadata_json}"
 
       - name: Install Python dependencies for validation renderer
+        id: renderer_dependencies
         run: |
           set -euo pipefail
 
           if [ -f "scripts/render_validation_templates.py" ]; then
             python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
+            python3 -c 'import yaml, jsonschema, jinja2'
           else
             echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
           fi
@@ -864,7 +891,8 @@ jobs:
         id: workspace_before_run_hook
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh validate before_run
+          : "${VALIDATE_HOOK_HELPER:?Trusted validation hook helper is unavailable}"
+          bash "${VALIDATE_HOOK_HELPER}" validate before_run
 
       - name: Run validation process
         id: validate_run
@@ -885,6 +913,7 @@ jobs:
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
           MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
           VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
+          VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
@@ -896,7 +925,8 @@ jobs:
         if: always() && steps.validate_run.outcome != 'skipped'
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh validate after_run
+          : "${VALIDATE_HOOK_HELPER:?Trusted validation hook helper is unavailable}"
+          bash "${VALIDATE_HOOK_HELPER}" validate after_run
 
       - name: Stage validate hints cache for save
         if: always() && steps.validate_run.outcome != 'skipped'
@@ -1010,6 +1040,7 @@ jobs:
         if: always()
         continue-on-error: true
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           STATUS_FILE_PATH: ${{ steps.collect_status.outputs.status_file }}
           STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
@@ -1130,6 +1161,7 @@ jobs:
         if: always()
         continue-on-error: true
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           STATUS_FILE_PATH: ${{ steps.collect_status.outputs.status_file }}
           STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
@@ -1212,7 +1244,8 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh validate before_remove
+          : "${VALIDATE_HOOK_HELPER:?Trusted validation hook helper is unavailable}"
+          bash "${VALIDATE_HOOK_HELPER}" validate before_remove
 
       - name: Enforce validation outcome
         if: always()

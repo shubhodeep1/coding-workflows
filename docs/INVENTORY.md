@@ -197,6 +197,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
 - `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
+- `scripts/review_autofix_step_claude_fixer_handoff.sh` — body of the review_autofix.yml "Hand review round to Claude session (Claude-fixer mode)" step (sourced by the step): posts the reviewer findings or the pre-review conflict for the `/implement-plan-claude` session on `claude/implement-plan-*` PRs, or exports `CLAUDE_FIXER_ZERO_FINDINGS=true` so the workflow's auto-merge step runs.
 - `scripts/review_autofix_step_detect_merge_conflicts.sh` — body of the review_autofix.yml "Detect merge conflicts" step (sourced by the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
 - `scripts/review_autofix_step_editor_uncommitted_changes.sh` — body of the review_autofix.yml "Detect editor-claimed-but-uncommitted changes" step (sourced by the step).
 - `scripts/review_autofix_step_iteration_summary.sh` — body of the review_autofix.yml "Append review pipeline iteration summary" step (sourced by the step; skips with a warning when the script cannot be found).
@@ -220,6 +221,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_run_judge_interim.sh` — Shell helper for review run judge interim.
 - `scripts/review_run_reviewers.sh` — Shell helper for review run reviewers.
 - `scripts/review_synthesise_smoke.sh` — Shell helper for review synthesise smoke.
+- `scripts/review_sandbox/Dockerfile` — Pinned, credential-free review dependency and editor image.
+- `scripts/review_untrusted_sandbox.sh` — Prepare the disposable review workspace and run the OpenCode writer without host credentials.
+- `scripts/review_untrusted_workspace.py` — Validate review snapshot paths, baselines and editor changes before transfer.
 - `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
 - `scripts/run_plan_codex.sh` — Plan-phase Codex runner extracted from workflow YAML.
 - `scripts/run_validation_repo_checks.sh` — Shell helper for run validation repo checks.
