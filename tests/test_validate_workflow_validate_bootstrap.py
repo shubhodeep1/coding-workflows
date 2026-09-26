@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
 
@@ -161,6 +162,97 @@ def test_validate_workflow_passes_template_default_env() -> None:
 	assert "\"${RUNNER_TEMP}/validation-renderer-venv/bin/python\" -I -B -c 'import yaml, jsonschema, jinja2'" in wf
 	assert "VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}" in wf
 	assert "if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'" in wf
+
+
+def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup() -> None:
+	wf = _workflow_text()
+	step_match = re.search(
+		r"      - name: Install Python dependencies for validation renderer\n(?P<body>.*?)(?=      - name: |\Z)",
+		wf, re.DOTALL,
+	)
+	assert step_match is not None
+	step = step_match.group("body")
+	assert "          BASH_ENV: ''\n" in step
+	assert 'if [ -f "${SUPPORT_SCRIPTS_DIR}/render_validation_templates.py" ]; then' in step
+	assert 'cd "${RUNNER_TEMP:?}"' in step
+	script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir)
+		workspace = root / "workspace"
+		runner_temp = root / "runner-temp"
+		bin_dir = root / "bin"
+		support_scripts = root / "support" / "scripts"
+		for directory in (workspace / "scripts", runner_temp, bin_dir, support_scripts):
+			directory.mkdir(parents=True)
+		(support_scripts / "render_validation_templates.py").touch()
+		venv_wrapper = root / "venv-python"
+		startup_file = root / "shell-startup"
+		startup_marker = root / "sourced-startup"
+		import_marker = root / "imported-yaml"
+		startup_file.write_text(f"touch {startup_marker}\n", encoding="utf-8")
+		(workspace / "yaml.py").write_text(
+			f"from pathlib import Path\nPath({str(import_marker)!r}).touch()\n"
+			f"Path({str(startup_file)!r}).write_text('compromised')\n",
+			encoding="utf-8",
+		)
+		# This branch installs into a venv with python3 -I -B (which implies -E
+		# and -P). The shim builds the venv from wrappers whose pip install and
+		# import probe run the same workspace-isolation assertions.
+		isolation_probe = root / "isolation_probe.py"
+		isolation_probe.write_text(
+			"import importlib, importlib.util, os, pathlib, sys\n"
+			"workspace = pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve()\n"
+			"assert pathlib.Path.cwd() != workspace\n"
+			"assert all(pathlib.Path(p or os.getcwd()).resolve() != workspace for p in sys.path)\n"
+			"for name in ('pip', 'yaml', 'jsonschema', 'jinja2'):\n"
+			"    spec = importlib.util.find_spec(name)\n"
+			"    assert not spec or not spec.origin or pathlib.Path(spec.origin).resolve() != workspace / (name + '.py')\n"
+			"for name in ('yaml', 'jsonschema', 'jinja2'):\n"
+			"    if importlib.util.find_spec(name):\n"
+			"        importlib.import_module(name)\n",
+			encoding="utf-8",
+		)
+		venv_python = (
+			"#!/bin/sh\n"
+			"[ \"$1\" = -I ] && [ \"$2\" = -B ] || exit 21\n"
+			"case \"$3\" in\n"
+			"  -m) [ \"$4\" = pip ] || exit 22;;\n"
+			"  -c) [ \"$4\" = 'import yaml, jsonschema, jinja2' ] || exit 23;;\n"
+			"  *) exit 24;;\n"
+			"esac\n"
+			f"exec \"$REAL_PYTHON3\" -I {isolation_probe}\n"
+		)
+		python_shim = bin_dir / "python3"
+		python_shim.write_text(
+			"#!/bin/sh\n"
+			"[ \"$1\" = -I ] && [ \"$2\" = -B ] && [ \"$3\" = -m ] && [ \"$4\" = venv ] || exit 11\n"
+			"mkdir -p \"$5/bin\"\n"
+			f"cp {venv_wrapper} \"$5/bin/python\"\n"
+			"chmod +x \"$5/bin/python\"\n",
+			encoding="utf-8",
+		)
+		python_shim.chmod(0o755)
+		venv_wrapper.write_text(venv_python, encoding="utf-8")
+		env = os.environ.copy()
+		env.update({
+			"BASH_ENV": "",  # Step env overrides the prior workspace-directed BASH_ENV.
+			"GITHUB_WORKSPACE": str(workspace),
+			"PATH": f"{bin_dir}:{os.environ['PATH']}",
+			"PYTHONHOME": str(workspace),
+			"PYTHONPATH": str(workspace),
+			"REAL_PYTHON3": sys.executable,
+			"RUNNER_TEMP": str(runner_temp),
+			"SUPPORT_SCRIPTS_DIR": str(support_scripts),
+			"GITHUB_PATH": str(root / "github-path"),
+		})
+		result = subprocess.run(
+			["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
+			cwd=workspace, env=env, capture_output=True, text=True, timeout=30,
+		)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert not startup_marker.exists()
+		assert not import_marker.exists()
+		assert startup_file.read_text(encoding="utf-8") == f"touch {startup_marker}\n"
 
 
 def test_renderer_dependency_preflight_blocks_rendering() -> None:
@@ -406,6 +498,7 @@ def main() -> int:
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
 	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()
 	test_validate_workflow_passes_template_default_env()
+	test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 	test_renderer_dependency_preflight_blocks_rendering()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	test_validate_workflow_bootstraps_codex_heartbeat_support()

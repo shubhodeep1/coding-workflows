@@ -810,10 +810,16 @@ jobs:
 
       - name: Install Python dependencies for validation renderer
         id: renderer_dependencies
+        env:
+          # Do not source the workspace-directed shell startup file in this host-side step.
+          BASH_ENV: ''
         run: |
           set -euo pipefail
 
           if [ -f "${SUPPORT_SCRIPTS_DIR}/render_validation_templates.py" ]; then
+            # Install and probe outside the checkout; -I also ignores PYTHON*
+            # variables, user site-packages and the current directory.
+            cd "${RUNNER_TEMP:?}"
             python3 -I -B -m venv "${RUNNER_TEMP}/validation-renderer-venv"
             "${RUNNER_TEMP}/validation-renderer-venv/bin/python" -I -B -m pip install --disable-pip-version-check --quiet pyyaml jsonschema jinja2
             "${RUNNER_TEMP}/validation-renderer-venv/bin/python" -I -B -c 'import yaml, jsonschema, jinja2'
