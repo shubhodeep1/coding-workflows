@@ -43,12 +43,12 @@ on:
       # overrides so the gate can bypass its PR-API fetch and synthesize
       # PR_META_FILE without calling /repos/{owner}/{repo}/pulls/{n}.
       # PR-backed claude/** branches intentionally do NOT use this mode;
-      # they run the same review -> editor -> commit -> re-review loop as
-      # every other PR branch. post_review_comment.sh routes to a commit
+      # they run the review -> hand-off -> re-review loop of Claude-fixer
+      # mode (see the gate). post_review_comment.sh routes to a commit
       # comment when PR_NUMBER is empty (see scripts/post_review_comment.sh
       # §"Routing decision").
       force_claude_branch_review:
-        description: "No-PR claude-branch review path: bypass gate's PR-number requirement and run reviewer-comment mode against the head_ref_override / head_sha_override / base_ref_override inputs. PR-backed claude/** branches run normal autofix."
+        description: "No-PR claude-branch review path: bypass gate's PR-number requirement and run reviewer-comment mode against the head_ref_override / head_sha_override / base_ref_override inputs. PR-backed claude/** branches run Claude-fixer mode."
         required: false
         default: false
         type: boolean
@@ -574,10 +574,10 @@ jobs:
           # Pushes to claude/** with no open PR have no PR thread to update
           # and no PR number for the editor / commit / auto-merge loop. Keep
           # that synthetic no-PR route as reviewer-comment-only, but do NOT
-          # special-case PR-backed claude/** branches. Once a claude/** branch
-          # has a PR, it should run the standard review -> editor -> commit ->
-          # re-review loop until reviewers stop generating new findings, just
-          # like any other branch.
+          # special-case PR-backed claude/** branches here. Once a claude/**
+          # branch has a PR, it runs the review -> hand-off -> re-review loop
+          # of Claude-fixer mode (below) until reviewers stop generating new
+          # findings.
           CLAUDE_BRANCH_REVIEW="false"
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${FORCE_CLAUDE_BRANCH_REVIEW:-false}" = "true" ] \
@@ -716,11 +716,12 @@ jobs:
             fi
           }
 
-          # ----- Claude-fixer mode (PR head ref claude/implement-plan-*) -----
-          # /implement-plan-claude PRs keep the reviewer panel but hand the
-          # fixes to the Claude session that owns the PR instead of the GPT
-          # editor / resolver (codex-agent step "Hand review round to Claude
-          # session (Claude-fixer mode)"). The gate adds two things:
+          # ----- Claude-fixer mode (every PR-backed claude/* head) -----
+          # Claude PRs (/implement-plan-claude stages, and any session's PR
+          # under CLAUDE.md §26) keep the reviewer panel but hand the fixes to
+          # the Claude session that owns the PR instead of the GPT editor /
+          # resolver (codex-agent step "Hand review round to Claude session
+          # (Claude-fixer mode)"). The gate adds two things:
           #   * claude_fixer_converged_head dispatch: authenticate a dedicated
           #     bot verdict bound to the latest workflow-owned findings ledger.
           #     This only authorizes a fresh reviewer run, NEVER auto-merge.
@@ -739,7 +740,7 @@ jobs:
           CLAUDE_FIXER_VERIFY="false"
           if [ "${CLAUDE_FIXER_ENABLED:-true}" != "false" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             case "${pr_head_ref}" in
-              claude/implement-plan-*) CLAUDE_FIXER="true" ;;
+              claude/*) CLAUDE_FIXER="true" ;;
             esac
           fi
           claude_fixer_force_review="false"
@@ -2335,12 +2336,12 @@ jobs:
       # commit comment via scripts/post_review_comment.sh, and exits without
       # invoking the editor / commit / push / rb_judge / auto-merge tail.
       # This is only for claude/** pushes with no open PR; PR-backed claude/**
-      # branches run normal autofix. Sourced from the gate output. See gate.
+      # branches run Claude-fixer mode. Sourced from the gate output. See gate.
       CLAUDE_BRANCH_REVIEW_MODE: ${{ needs.gate.outputs.claude_branch_review }}
-      # Claude-fixer mode (PR head ref claude/implement-plan-*): the reviewer
+      # Claude-fixer mode (every PR-backed claude/* head): the reviewer
       # panel runs as for every PR, then "Hand review round to Claude session
       # (Claude-fixer mode)" posts the findings (or the pre-review conflict)
-      # for the /implement-plan-claude session instead of the GPT editor /
+      # for the Claude session that owns the PR instead of the GPT editor /
       # resolver / commit / push / re-trigger tail, which is skipped. Zero
       # findings and no failing check still enable auto-merge here, and the
       # iteration cap + review-blocked judge still apply. See the gate.

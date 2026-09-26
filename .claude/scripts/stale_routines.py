@@ -33,6 +33,8 @@ Only Routines these flows create are ever eligible, matched by name:
   * `PR #<n> status check-in…`     (§26 checker reminders)
   * `PR #<n> hand-back`            (§26 hand-back)
   * `implement-plan <slug>: …`     (/implement-plan-claude, hand-back included)
+  * `dispatch <owner>/<repo>#<n>: …` (the Claude dispatcher's one-shot start
+                                    of an issue or PR fixer session, §26.H)
 
 Routine names are capped at 60 characters and truncated with `…`, so a name
 never carries the repository. A hand-back is recognised by its prompt, which
@@ -68,6 +70,7 @@ DEFAULT_GRACE_HOURS = 24.0
 
 CHECK_IN_NAME_PATTERN = re.compile(r"^PR #\d+ (?:status check-in|hand-back)")
 IMPLEMENT_PLAN_NAME_PATTERN = re.compile(r"^implement-plan \S+: ")
+DISPATCH_NAME_PATTERN = re.compile(r"^dispatch [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d+: ")
 HAND_BACK_PROMPT_PATTERN = re.compile(
 	r"hand-back for .*?https://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(?P<pr>\d+)",
 	re.IGNORECASE | re.DOTALL,
@@ -98,7 +101,8 @@ def gh_api(path: str) -> dict:
 
 def is_ours(name: str) -> bool:
 	"""Return True when `name` is a Routine one of the check-in flows creates."""
-	return bool(CHECK_IN_NAME_PATTERN.search(name) or IMPLEMENT_PLAN_NAME_PATTERN.search(name))
+	return bool(CHECK_IN_NAME_PATTERN.search(name) or IMPLEMENT_PLAN_NAME_PATTERN.search(name)
+		or DISPATCH_NAME_PATTERN.search(name))
 
 
 def routine_prompt(routine: dict) -> str:
