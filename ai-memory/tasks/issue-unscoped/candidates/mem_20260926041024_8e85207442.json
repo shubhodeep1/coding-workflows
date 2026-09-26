@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u00a720.A requires exactly one changelog fragment for security fixes, at `changelog.d/<issue-or-pr>-<slug>.md`.\n  expected_change_site: `changelog.d/4511-validate-preflight-isolation.md`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  EVIDENCE: PR diff contains no `changelog.d/4511-*.md` entry; `glob changelog.d/4511*` returns no files; `pr_changed_files.txt` lists only `.ai/.workspace_source_manifest.txt`, `.github/workflows/validate.yml`, and `tests/test_validate_workflow_validate_bootstrap.py`; `.ai/.workspace_source_manifest.txt` confirms only `changelog.d/4447-resolver-scope-retry.md` (unrelated, pre-existing) was added, not a 4511 fragment.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: Add a changelog fragment for the security fix per \u00a720.A (\"Add exactly one fragment when the PR changes observable behaviour: ... security fixes and data-loss fixes\"). The fragment must be `changelog.d/4511-validate-preflight-isolation.md`.\n  Expected change site: changelog.d/4511-validate-preflight-isolation.md (new file)\n  Evidence of absence: PR diff contains no `changelog.d/4511-*` entry. glob confirms no matching file exists. This PR fixes a high-severity STRIDE: Elevation of Privilege vulnerability in `.github/workflows/validate.yml` where a PR-provided `yaml.py` could modify `BASH_ENV` so later secret-bearing Bash steps execute attacker code. Security fixes require a fragment under \u00a720.A, and the changelog assembler (`scripts/assemble_changelog.py`) expects exactly one fragment per PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \u00a720.A / unattended_system_instructions.md \u2014 Add exactly one fragment when the PR changes observable behaviour: security fixes and data-loss fixes. Create changelog.d/<issue-or-pr>-<slug>.md.\n  Expected change site: changelog.d/4511-validate-preflight-isolation.md\n  Evidence of absence: PR diff contains no changelog.d/4511-*.md entry. The PR is a security fix for issue #4511.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \u00a720.A / `unattended_system_instructions.md` \u2014 \"Add exactly one fragment when the PR changes observable behaviour: ... security fixes and data-loss fixes ... Create `changelog.d/<issue-or-pr>-<slug>.md`, e.g. `changelog.d/3712-soft-deadline-finalization.md`.\" Restated in `agents.md` (\"Reference\") and `CLAUDE.md` \u00a720 / `workflow-templates/CLAUDE.md` \u00a720 (consumers inherit via `@stable`).\n  Expected change site: `changelog.d/4511-validate-preflight-isolation.md` (new fragment file; `scripts/assemble_changelog.py` deletes the fragment after folding it into `CHANGELOG.md`).\n  Evidence of absence: PR diff contains no `changelog.d/4511-*.md` entry. `pr_changed_files.txt` lists only `.ai/.workspace_source_manifest.txt`, `.github/workflows/validate.yml`, and `tests/test_validate_workflow_validate_bootstrap.py`. The PR is a high-severity privilege-escalation fix for issue #4511 (PR-provided `yaml.py` modifying `BASH_ENV` to attack later secret-bearing Bash steps) \u2014 exactly the security-fix class \u00a720.A names as mandatory.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \u00a720.A / CLAUDE.md \u00a720 \u2014 \"Add exactly one fragment when the PR changes observable behaviour: ... security fixes and data-loss fixes ... Create `changelog.d/<issue-or-pr>-<slug>.md`.\"\n  Expected change site: `changelog.d/4511-validate-preflight-isolation.md` (new file)\n  Evidence of absence: PR diff contains no `changelog.d/4511-*.md` entry. The PR is a security fix for issue #4511 (STRIDE: Elevation of Privilege, severity high, confidence 9/10) \u2014 exactly the class \u00a720.A names. `agents.md` (\"Reference\") reiterates: \"CHANGELOG.md is never edited directly. Write one fragment per PR at `changelog.d/<issue-or-pr>-<slug>.md`.\" The fix changes observable behavior (renderer-dependency probe now runs isolated from the workspace with `-E -P` flags and cleared `BASH_ENV`), so the fragment is mandatory.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: \u00a720.A requires exactly one changelog.d/<issue-or-pr>-<slug>.md for security fixes\n  Expected change site: changelog.d/4511-validate-preflight-isolation.md\n  Evidence of absence: no 4511 fragment in diff, manifest, or glob; only unrelated 4447/4443 entries present\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: \u00a720.A / `unattended_system_instructions.md` \u2014 \"Add exactly one fragment when the PR changes observable behaviour: ... security fixes and data-loss fixes ... Create `changelog.d/<issue-or-pr>-<slug>.md`\". The issue summary also names this as a security fix.\n  Expected change site: `changelog.d/4511-validate-preflight-isolation.md` (new file; `assemble_changelog.py` folds and deletes it at release time).\n  Evidence of absence: `glob changelog.d/4511*` returns no files. The PR diff introduces no `changelog.d/4511-*.md` entry. The `.ai/.workspace_source_manifest.txt` diff confirms only `changelog.d/4447-resolver-scope-retry.md` (unrelated, pre-existing) was added \u2014 not a 4511 fragment. This is a security fix that changes `.github/workflows/validate.yml` behavior and ships to consumer repos via `@stable` sync, so \u00a720.A's \"security fixes\" category makes the fragment mandatory.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4fc826b165c367cef78861ea46d1041935419aede9552c367c954c2f5f6accb4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4514,
+    "run_id": "36216190204",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36216190204",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260926041024_8e85207442",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4514,
+    "run_id": "36216190204"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-26T04:10:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
