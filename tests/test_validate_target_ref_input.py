@@ -201,6 +201,27 @@ def test_nonexplicit_self_heal_has_no_host_model_fallback():
 	assert text.count("python3 -I -") >= 2
 	assert 'source "${SELF_HEAL_SCRIPT_DIR}/gh_helpers.sh"' in text
 	assert 'source "${SELF_HEAL_SCRIPT_DIR}/semble_helpers.sh"' in text
+	assert 'cd "${SELF_HEAL_SCRIPT_DIR}/.." && env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN' in text
+	assert 'bash "${SELF_HEAL_SCRIPT_DIR}/render_prompt.sh" "${SELF_HEAL_SCRIPT_DIR}/../prompts/mode-validate-self-heal.txt"' in text
+	assert 'bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt' not in text
+	assert 'LEDGER_SUBSTATE_HELPER="${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh"' in text
+	assert '"scripts/ledger_emit_substate.sh"' not in text
+
+
+def test_validation_host_python_ignores_checkout_modules_with_leading_options(tmp_path: Path):
+	process = (ROOT / "scripts/validate_process.sh").read_text(encoding="utf-8")
+	function = "python3()\n{" + process.split("python3()\n{", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+	marker = tmp_path / "hijacked"
+	(tmp_path / "json.py").write_text(f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+	env = {**os.environ, "GH_TOKEN": "sentinel", "PYTHONPATH": str(tmp_path)}
+	env.pop("BASH_ENV", None)
+	for command in ('python3 -W ignore -c "import json; print(json.dumps({}))"',
+			'python3 -W ignore -m json.tool <<< "{}"'):
+		result = subprocess.run(["bash", "-c", function + command], cwd=tmp_path, env=env,
+			capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		assert "{}" in result.stdout
+		assert not marker.exists()
 
 
 def test_trusted_validation_driver_python_excludes_checkout_modules(tmp_path: Path):

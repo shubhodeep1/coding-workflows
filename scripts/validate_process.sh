@@ -127,9 +127,13 @@ done
 python3()
 {
 	local isolation_flag="-E"
-	case "${1:-}" in
-		-|-c|-m) isolation_flag="-I" ;;
-	esac
+	local isolation_arg
+	for isolation_arg in "$@"; do
+		case "${isolation_arg}" in
+			--) break ;;
+			-|-c|-m) isolation_flag="-I"; break ;;
+		esac
+	done
 	env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY \
 		-u TG_BOT_SECRET -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH -u GITHUB_STEP_SUMMARY -u PYTHONPATH \
 		-u BASH_ENV -u ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -3570,7 +3574,8 @@ VALIDATION_IDLE_KILLED=0
 set +e
 # Run validation in background, tee output to log file
 if [ ! -f "${_validate_script_dir}/validate_driver.sh" ] ||
-   ! cmp -s "scripts/validate_driver.sh" "${_validate_script_dir}/validate_driver.sh" ||
+   { [ -e "scripts/validate_driver.sh" ] &&
+     ! cmp -s "scripts/validate_driver.sh" "${_validate_script_dir}/validate_driver.sh"; } ||
    ! env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u PYTHONPATH \
      -u GITHUB_ENV -u GITHUB_OUTPUT -u BASH_ENV -u ENV \
      python3 -E "${_validate_script_dir}/render_validation_templates.py" \

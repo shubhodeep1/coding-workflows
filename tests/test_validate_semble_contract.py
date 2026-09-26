@@ -345,7 +345,7 @@ def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 	assert 'if semble_query_block "${query_text}" "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" "Validate Self-Heal Context"; then' in text
 	assert 'self_heal_semble_query="$(build_self_heal_semble_query || true)"' in text
 	assert 'self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"' in text
-	assert 'SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt' in text
+	assert 'bash "${SELF_HEAL_SCRIPT_DIR}/render_prompt.sh" "${SELF_HEAL_SCRIPT_DIR}/../prompts/mode-validate-self-heal.txt"' in text
 	assert 'CURRENT VALIDATION PROMPT FILES (raw on-disk contents with any prior self-heal patches already applied)' in text
 	assert 'cat "prompts/${_target}"' in text
 	assert 'bash scripts/render_prompt.sh "prompts/${_target}"' not in text

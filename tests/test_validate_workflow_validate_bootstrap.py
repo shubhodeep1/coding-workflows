@@ -182,6 +182,8 @@ def test_private_memory_python_ignores_target_sibling_modules(tmp_path: Path) ->
 
 def test_validate_wrapper_rejects_missing_or_mismatched_trusted_driver(tmp_path: Path) -> None:
 	process = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	preflight = process.split("# Run validation in background, tee output to log file", 1)[1]
+	assert '{ [ -e "scripts/validate_driver.sh" ] &&' in preflight
 	function = "ensure_validate_wrapper()\n{" + process.split("ensure_validate_wrapper()\n{", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
 	checkout = tmp_path / "checkout"
 	private = tmp_path / "private/scripts"
@@ -197,6 +199,8 @@ def test_validate_wrapper_rejects_missing_or_mismatched_trusted_driver(tmp_path:
 	assert invoke().returncode != 0
 	assert not (checkout / "validation/validate.sh").exists()
 	(private / "validate_driver.sh").write_text("verified\n", encoding="utf-8")
+	assert invoke().returncode == 0
+	(checkout / "scripts/validate_driver.sh").unlink()
 	assert invoke().returncode == 0
 	(checkout / "scripts/validate_driver.sh").write_text("untrusted\n", encoding="utf-8")
 	assert invoke().returncode != 0
@@ -461,6 +465,8 @@ def test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metach
 
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
+	with tempfile.TemporaryDirectory(prefix="validate-driver-contract-") as td:
+		test_validate_wrapper_rejects_missing_or_mismatched_trusted_driver(Path(td))
 	test_validate_workflow_bootstrap_lists_prompt_assembly_assets()
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
 	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()

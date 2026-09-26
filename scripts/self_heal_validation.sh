@@ -87,15 +87,9 @@ SELF_HEAL_PATCH_TMP="${RUNTIME_DIR}/validate_self_heal_patch.diff"
 CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_stall_guard.sh"
 LEDGER_SUBSTATE_HELPER=""
-for _ledger_candidate in \
-	"${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh" \
-	"scripts/ledger_emit_substate.sh" \
-	".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
-	if [ -f "${_ledger_candidate}" ]; then
-		LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
-		break
-	fi
-done
+if [ -f "${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh" ]; then
+	LEDGER_SUBSTATE_HELPER="${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh"
+fi
 SELF_HEAL_STALL_STATE=""
 
 emit_self_heal_substate()
@@ -359,7 +353,10 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 	echo
 	echo "=== SELF-HEAL TASK ==="
 	echo
-	SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt
+	(cd "${SELF_HEAL_SCRIPT_DIR}/.." && env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN \
+		-u OPENROUTER_API_KEY -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH -u PYTHONPATH \
+		-u BASH_ENV -u ENV SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" \
+		bash "${SELF_HEAL_SCRIPT_DIR}/render_prompt.sh" "${SELF_HEAL_SCRIPT_DIR}/../prompts/mode-validate-self-heal.txt")
 	echo
 	echo "=== SELF-HEAL ATTEMPT ==="
 	echo "attempt_number: $((SELF_HEAL_ATTEMPT + 1))"

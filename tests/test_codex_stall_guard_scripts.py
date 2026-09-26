@@ -576,6 +576,9 @@ def main() -> int:
 	test_stall_guard_caller_contracts_cover_observe_only_mode()
 	test_stall_guard_caller_contracts_cover_kill_mode()
 	test_stall_guard_script_and_callers_keep_the_expected_contract()
+	with tempfile.TemporaryDirectory(prefix="stall-guard-import-") as td:
+		test_stall_guard_excludes_checkout_modules_with_credential_present(Path(td))
+	test_sandbox_preparation_and_self_heal_use_isolated_python_and_stall_guard()
 	print("OK: codex stall guard helper contract holds")
 	return 0
 
