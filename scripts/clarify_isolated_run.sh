@@ -34,7 +34,14 @@ mkdir -m 0755 "${run_root}/source" "${run_root}/results"
 # Include only regular, tracked source files with safe path classes. Never
 # follow a symlink (including parent directories); do not include .git,
 # support checkouts, runner configuration, env files or private keys.
-PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/source" <<'PY'
+# Implement checkouts may keep the Git database outside the working tree.
+# Pass that runner context as positional data, not as interpreter environment.
+git_context=()
+if [ -n "${GIT_DIR:-}" ] || [ -n "${GIT_WORK_TREE:-}" ]; then
+	[ -n "${GIT_DIR:-}" ] && [ -n "${GIT_WORK_TREE:-}" ] || { echo '::error::Clarify Git context incomplete' >&2; exit 1; }
+	git_context=("${GIT_DIR}" "${GIT_WORK_TREE}")
+fi
+env -i PATH=/usr/local/bin:/usr/bin:/bin python3 -I -B - "${run_root}/source" "${git_context[@]}" <<'PY'
 import os
 import pathlib
 import stat
@@ -43,6 +50,13 @@ import sys
 
 root = pathlib.Path.cwd()
 dest = pathlib.Path(sys.argv[1])
+git_command = ["git"]
+if len(sys.argv) == 4:
+    git_dir = pathlib.Path(sys.argv[2])
+    work_tree = pathlib.Path(sys.argv[3])
+    if not git_dir.is_absolute() or not git_dir.is_dir() or not work_tree.is_absolute() or work_tree.resolve() != root.resolve():
+        raise SystemExit("clarify Git context rejected")
+    git_command += ["--git-dir", str(git_dir), "--work-tree", str(root)]
 roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d"}
 root_files = {"README.md", "agents.md", "AGENTS.md", "package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
 suffixes = {".py", ".sh", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql"}
@@ -87,7 +101,7 @@ def copy(path):
     os.chmod(target, 0o644)
 
 try:
-    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).split(b"\0")
+    tracked = subprocess.check_output([*git_command, "ls-files", "-z"], cwd=root).split(b"\0")
     for entry in tracked:
         if entry:
             copy(entry.decode("utf-8"))
