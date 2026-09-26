@@ -2,7 +2,7 @@
 
 - Plan: docs/plans/issue-4545-resolver-index-isolation-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4545-resolver-index-isolation   Final PR: #TBD draft
+- Project branch: claude/implement-plan-issue-4545-resolver-index-isolation   Final PR: #4546 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: n/a (base ai/issue-4512)
