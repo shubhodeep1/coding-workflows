@@ -255,3 +255,51 @@ No `TODO`, `FIXME`, or `HACK` markers were found in the audited workflow and scr
 | Code modularization | `.github/workflows/workflow-log-analysis.yml`, `scripts/label_helpers.sh`, `scripts/check_failure_triage.sh`, shared scripts and tests | Large |
 | Expression size reduction | `.github/workflows/implement.yml`, one staged script, support registries and tests | Medium |
 | Medium/Low fixes | Queue and heal scripts, `scripts/workspace_init.sh`-independent shell checks, targeted regression tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-26)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is ready for direct implementation; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented because a pagination, retry, polling, or race-safety contract is involved.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001 — `RISKY_SKIP`** — `.github/workflows/clarify.yml:583` and `.github/workflows/clarify.yml:585-603`. **Current call count:** 2 logical GETs when semantic caching is enabled; **proposed:** 1 on a successful full-history fetch. **Endpoint:** `GET /repos/{repo}/issues/{issue_number}/comments`.
+
+**Evidence:** The first call writes a bounded, oldest-first comment page to `ISSUE_COMMENTS_FILE`; the second fetches the same oldest-first history with `--paginate --slurp` for `THREAD_HISTORY_FILE`. **Proposed fix:** In the “Fetch issue comments” step, derive the first 50 comments from a successful full-history response while retaining the existing bounded-fetch fallback. **Safety rationale:** `RISKY_SKIP` is required because the second call implements pagination, and its failure currently bypasses semantic caching without failing the first fetch. **Downstream signal:** Do not auto-implement; manually test page boundaries, comments added between requests, and full-history failure while preserving the bounded prompt and fail-open cache behavior.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001 — `RISKY_SKIP`** — `scripts/review_merge_train.sh:255-261`, `scripts/review_merge_train.sh:275-287`, and callers at `scripts/review_merge_train.sh:354-387` and `scripts/review_merge_train.sh:482-486`. **Current call count:** 2 logical GETs when `_mt_upsert_comment` finds an existing marker; **proposed:** 1. **Endpoints:** `GET /repos/{repo}/issues/{pr}/comments` and `GET /repos/{repo}/issues/comments/{comment_id}`.
+
+**Evidence:** `_mt_find_marker_comment_id` selects an ID from comment objects that already contain `.body`; `_mt_upsert_comment` then fetches that comment’s body separately to compare it with the proposed text. **Proposed fix:** Extend `_mt_find_marker_comment_id` to return the latest marker’s ID and body together, and pass both to `_mt_upsert_comment`; retain a targeted GET when the body is unavailable. **Safety rationale:** `RISKY_SKIP` is required because the list call is paginated, and a comment can change between selection and upsert. **Downstream signal:** Do not auto-implement; manually verify latest-marker selection across pages, changed-comment behavior, and the current lookup-failure fallback before reusing the body.
+
+**REUSE-002 — `RISKY_SKIP`** — `scripts/orchestrate_poll_process.sh:10431-10442`. **Current call count:** 2 logical GETs on the snapshot-mismatch branch, or 0 on a cache hit; **proposed:** 1 or 0, respectively. **Endpoint:** `GET /repos/{repo}/pulls/{final_pr}`.
+
+**Evidence:** Adjacent `_safe_gh_jq` calls fetch `.state` and `.merged_at != null` from the same PR when `final_pr_json_snapshot` does not match the recorded PR. **Proposed fix:** In this branch of `finalize_integration_merge_if_needed`, fetch one PR JSON payload and extract both fields, leaving the snapshot-hit path unchanged. **Safety rationale:** `RISKY_SKIP` is required because this is the poller’s final-merge race-defense path; one failed fetch would also replace two independently handled read outcomes. **Downstream signal:** Do not auto-implement; manually test snapshot mismatch, mixed read failures, and a PR changing state during final-merge checks without weakening the subsequent ahead-of-default recheck.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- BATCH-001: `NEEDS_VERIFICATION` — Confirm complete repository-label pagination and per-label error behavior before replacing individual reads.
+- BATCH-002: `RISKY_SKIP` — Standalone-stall polling and search pagination require manual completeness review.
+- API-001: `RISKY_SKIP` — The dispatch-sensitive sweep uses paginated status reads; an incomplete replacement snapshot could permit duplicate dispatch.
+- API-002: `RISKY_SKIP` — Changing calls inside `gh_api_json_to_file`’s retry loop is not an automatic call consolidation.
+- BATCH-003: `RISKY_SKIP` — Paginated latch history and fresh pre-mutation checks in the poller must remain complete and race-safe.
+
+### Summary Counts
+
+*Counts cover net-new findings above; Deep Audit cross-references are excluded.*
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 3 | MERGE-001, REUSE-001, REUSE-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
