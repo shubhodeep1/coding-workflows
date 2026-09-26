@@ -203,6 +203,42 @@ Phases of the unattended pipeline (each is a separate workflow file under
     specific `::error::` line of the captured stage stderr (including the
     resolver's, `resolver_stage_stderr.txt`), redacted
     (`failure-headline`, log prefix `AUTOFIX_FAILURE_HEADLINE`).
+15. **Claude issue implementer** (`clarify.yml` route step,
+    `scripts/claude_issue_route.py`, `scripts/claude_issue_handoff.sh`,
+    `claude-issue-intake.yml`, `scripts/claude_issue_intake.sh`,
+    `.claude/commands/claude-issue-dispatch.md`,
+    `.claude/commands/implement-issue-claude.md`) — standalone issues are
+    implemented by Claude Code by default. On issue open / `/reclarify`,
+    clarify's `Decide clarify route` step routes each issue that would
+    otherwise run Codex clarify. Orchestrator-managed issues (label or
+    `Managed by: AI Orchestrator` body line), tracking / security-audit /
+    retro issues and `^[E2E ` fixtures → codex. Otherwise `ai:codex` → codex,
+    then `ai:claude` → claude, then repo var `AI_ISSUE_IMPLEMENTER` (default
+    `claude`; `codex` switches the repo). A route error falls back to codex.
+    A Claude route skips Codex clarify, claims the issue with `ai:claude`, and
+    sends a `claude-issue` `repository_dispatch` (`claude_issue.v1`, ≤ 10
+    top-level keys) to coding-workflows. The intake validates the repo against
+    `.github/ai/consumer_repos.json` plus coding-workflows and POSTs the
+    **Claude issue dispatcher** routine's `/fire` endpoint (repo var
+    `CLAUDE_ISSUE_ROUTINE_ID`, secret `CLAUDE_ISSUE_ROUTINE_TOKEN`, header
+    `CLAUDE_ISSUE_ROUTINE_BETA`), retrying 408/429/5xx/network errors with
+    2/4/8/16 s backoff. Fire text is fixed keys only, with no issue prose.
+    The routine starts an Opus session in the target repo running
+    `/implement-issue-claude`: a single-phase plan
+    `docs/plans/issue-<N>-<topic>-plan.md` (header `Source issue:`,
+    `Base branch:` from the issue's `Integration branch:` / `Target branch:`
+    line else the default branch, `Security pass: run|skip`), then continues
+    as `/implement-plan-claude` issue mode: project branch
+    `claude/implement-plan-<slug>` forked from the base branch, final PR into
+    it with `Fixes #N` (default base) or an explicit close + `ai:merged` after
+    the final merge (any other base; steps 12–13 skipped). No-clash gates: `plan.yml` / `implement.yml`
+    (`AI_PHASE_GATE_V1 … reason=claude_routed outcome=skip`) and standalone
+    stall recovery (`STALL_SKIP … reason=claude_routed`) ignore issues with
+    `ai:claude` and no `ai:codex`. Failures label `ai:claude-handoff-failed`
+    (handoff / intake) or `ai:claude-blocked` (a CLAUDE.md §28.C stop, asked
+    on the issue). Issue-mode sessions auto-decide every question, start-up
+    checks included (CLAUDE.md §28.A).
+    Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -1410,6 +1446,8 @@ and shipped:
 - `WORKTREE_REGISTER_FAIL`
 - `WORKTREE_DEREGISTER_FAIL`
 - `opencode_agent_failure`
+- `CLAUDE_ISSUE_HANDOFF`
+- `CLAUDE_ISSUE_INTAKE`
 - `AUTOFIX_FAILURE_HEADLINE`
 - `MODEL_CATALOG_BACKFILL`
 - `AUTOFIX_GATE_CLAUDE_FIXER`
@@ -1601,6 +1639,8 @@ LOG_PREFIX.name=WORKTREE_REGISTER_FAIL
 LOG_PREFIX.name=WORKTREE_DEREGISTER_FAIL
 LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
+LOG_PREFIX.name=CLAUDE_ISSUE_HANDOFF
+LOG_PREFIX.name=CLAUDE_ISSUE_INTAKE
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
@@ -1777,6 +1817,12 @@ depend on it.
 
 ## Integration-sync verifier + bootstrap contract
 
+- Source-repo resolver attempts in `scripts/review_conflict_resolve.sh` snapshot the
+  worktree and merge index before invoking the model. An out-of-scope edit gets
+  a bounded scope-feedback retry only after the pre-attempt state is restored
+  and verified; an unsafe restore fails closed. Consumer repos retain the
+  previous path, and the final `check_resolver_diff.sh` commit gate is unchanged.
+
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
 - `.github/workflows/review_autofix.yml` stages required and main-primary helpers from the verified reusable-workflow SHA; PR-head copies are review data, not runtime code. `render_prompt.py`, `review_conflict_resolve.sh` and their dependencies ship with that same workflow commit. Embedded PR-diff template syntax is still handled by `render_prompt.sh` with `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` after assembly, while static templates retain strict validation. Optional support missing from that commit skips the feature; required support fails closed. The model catalog comes from the same commit as the reviewer roster, never from a PR branch or a separately resolved main snapshot.
 - `scripts/review_merge_train.sh` is staged through `REQUIRED_BOOTSTRAP_SCRIPTS` for `review_autofix.yml` and copied best-effort (with `label_helpers.sh`) next to `gh_helpers.sh` by `orchestrate_poll.yml` and `cancel_on_pr_close.yml`, which do not run the full support staging. Both callers treat a missing copy as "skip this tick" so an older `SCRIPT_REF` keeps polling; its own API budget is documented in the script header (CLAUDE.md §15).
@@ -1831,6 +1877,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
+.github/workflows/claude-issue-intake.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml

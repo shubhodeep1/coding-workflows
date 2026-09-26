@@ -1550,7 +1550,8 @@ CI or review events, and never touches the PR. §25 and its
   request the session pushes new commits to**, including PRs opened by a
   slash command (`/seed-repo`, `/investigate-issue`, and the rest).
   `/implement-plan-claude` is the exception: its own Sonnet checker is the
-  check-in for every PR it opens, so it arms no second one.
+  check-in for every PR it opens, so it arms no second one. The same holds
+  for `/implement-issue-claude`, which hands its issue to that chain.
 - **One check-in per PR.** Arm it once the PR exists (right after
   `create_pull_request`, or right after the first push to an existing PR).
   If a check-in is already armed for that PR, a later push does not arm
@@ -1734,6 +1735,13 @@ file via the `@stable` sync.
   `— resume.` stage session the chain starts.
 - A `/verify-activation` run whose `$ARGUMENTS` end with `— unattended`
   (the chain passes that marker at its conformance and activation stages).
+- A session running `/implement-issue-claude` for a standalone issue, **from
+  its first step**. The Claude issue dispatcher routine starts it with
+  nobody at the keyboard, so its start-up checks are auto-decided too. The
+  issue fixes the plan, the plan it writes is always a single phase, and a
+  non-`auto` permission mode is recorded rather than asked. The
+  `/implement-plan-claude` chain it hands to runs in *issue mode*: every
+  stage of it is in scope, start-up checks included.
 
 Nothing else: a standalone session, any other slash command, and
 `/implement-plan-ai` stay under §0/§2 unchanged. (The AI orchestrator
@@ -1771,7 +1779,7 @@ This is an explicit carve-out from §0 and §2 (including §2's
 
 - **Start-up checks** — step 0 (permission mode), step 1 (which plan), and
   step 3 (a plan with no Phases section). The user is still at the
-  keyboard for those.
+  keyboard for those. Issue mode is the exception (§28.A): nobody is.
 - **Failure escalations** — a cap reached (blocked-PR interventions,
   conformance runs, security cycles, validation cycles, verify-activation
   cycles), a security or validation run that did not conclude `success`,
@@ -1780,7 +1788,11 @@ This is an explicit carve-out from §0 and §2 (including §2's
   a merged PR. These are failures, not clarifications: picking a
   "recommended" way past them could skip the security pass or loop
   forever. The chain stops at `Status: BLOCKED` and asks, as the command
-  describes.
+  describes. In issue mode nobody watches the session, so the ask is
+  delivered on the source issue: one comment naming the blocker, the
+  options, and the recommended one, the `ai:claude-blocked` label, and one
+  `PushNotification`. A human answers there and comments `/reclarify` to
+  resume.
 - **Ask-first operations** — §22.B (DigitalOcean mutations), §23.C
   (destructive and administrative GitHub writes, merges included), and
   §24.D (Cloudflare destructive and account-level writes). The chain never
@@ -1820,6 +1832,9 @@ The list is **shown, never re-asked**:
   report, and its completion `PushNotification` carries the count.
 - `/deploy-activate` prints the same list in its opening message, next to
   Step 1, without waiting on it.
+- In issue mode, the source issue's progress comment
+  (`<!-- ai:claude-issue-progress:v1 -->`) carries the same list when the
+  project completes, so the person who filed the issue sees it there.
 
 The human replies `change AD-<n> → <letter>` (or describes the change) in
 the final LIVE report session or in the `/deploy-activate` session, at any
