@@ -467,7 +467,7 @@ clear_stale_serena_codex_config()
     return 0
   fi
 
-  if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${codex_config_path}" <<'PY'
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I - "${codex_config_path}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -809,13 +809,79 @@ emit_serena_fallback()
   emit_event "SERENA_FALLBACK" "target=validate" "phase=${safe_phase}" "reason=${safe_reason}"
 }
 
+publish_validate_serena_config()
+{
+  local isolated_config="$1"
+  local isolated_root="$2"
+  local host_config="${HOME}/.codex/config.toml"
+
+  # This output is produced by a process that read branch-owned files. Do not
+  # source it or copy an arbitrary TOML file into the credentialed host home.
+  [ -f "${isolated_config}" ] && [ ! -L "${isolated_config}" ] && \
+    [ ! -L "${isolated_root}/output/home" ] && \
+    [ ! -L "${HOME}/.codex" ] && [ ! -L "${host_config}" ] || return 1
+  PYTHONDONTWRITEBYTECODE=1 python3 -I - "${isolated_config}" "${isolated_root}" "${host_config}" "${PWD}" <<'PY'
+import os
+from pathlib import Path
+import re
+import sys
+import tomllib
+
+source, root, target, workspace = map(Path, sys.argv[1:])
+if source.stat().st_size > 4096 or source.parent.is_symlink() or source.parent.parent.is_symlink():
+    raise SystemExit(1)
+text = source.read_text(encoding='utf-8')
+data = tomllib.loads(text)
+if set(data) != {'mcp_servers'} or set(data['mcp_servers']) != {'serena'}:
+    raise SystemExit(1)
+serena = data['mcp_servers']['serena']
+if set(serena) != {'command', 'args', 'startup_timeout_sec'} or serena['args'] != [
+    'start-mcp-server', '--context=codex', '--project-from-cwd', '--transport', 'stdio'
+] or type(serena['startup_timeout_sec']) is not int or not 1 <= serena['startup_timeout_sec'] <= 120:
+    raise SystemExit(1)
+command = serena['command']
+if not isinstance(command, str) or not os.path.isabs(command):
+    raise SystemExit(1)
+binary = Path(command).resolve(strict=True)
+runner_local = Path(os.environ['HOME']) / '.local'
+allowed_commands = (Path('/usr/bin/serena'), Path('/usr/local/bin/serena'), runner_local / 'bin/serena')
+# A generated executable in the bootstrap output must never become a host
+# MCP command. Only a runner-owned, pre-existing Serena may be published.
+if Path(command) not in allowed_commands or not binary.is_file() or not os.access(binary, os.X_OK) or not (
+    binary.is_relative_to(Path('/usr')) or binary.is_relative_to(Path('/opt')) or
+    binary.is_relative_to(runner_local)
+) or binary.is_relative_to(workspace.resolve()) or binary.is_relative_to(root.resolve()):
+    raise SystemExit(1)
+if target.exists():
+    original = target.read_text(encoding='utf-8')
+    tomllib.loads(original)
+else:
+    original = ''
+lines = original.splitlines(keepends=True)
+kept = []
+index = 0
+while index < len(lines):
+    if re.fullmatch(r'\[mcp_servers\.serena(?:\.[^\]]+)?\](?:\s*#.*)?\s*', lines[index].strip()):
+        index += 1
+        while index < len(lines) and (not re.match(r'^\s*\[\[?[^\]]+\]\]?', lines[index]) or
+                                      re.fullmatch(r'\[mcp_servers\.serena(?:\.[^\]]+)?\](?:\s*#.*)?\s*', lines[index].strip())):
+            index += 1
+    else:
+        kept.append(lines[index])
+        index += 1
+result = ''.join(kept).rstrip() + '\n\n' + text
+tomllib.loads(result)
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text(result, encoding='utf-8')
+PY
+}
+
 ensure_serena_bootstrap()
 {
   local serena_phase="${1:-general}"
   local bootstrap_env_file=""
-  local env_key=""
-  local env_value=""
   local serena_project_hash=""
+  local serena_output_dir=""
 
   if ! env_is_truthy "${SERENA_ENABLED:-false}"; then
     emit_serena_fallback "${serena_phase}" "disabled"
@@ -851,29 +917,43 @@ ensure_serena_bootstrap()
     return 0
   fi
 
-  bootstrap_env_file="$(mktemp "${RUNTIME_DIR}/serena-bootstrap-env.XXXXXX")"
-  if ! env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET \
-    -u GITHUB_OUTPUT -u GITHUB_PATH -u GITHUB_STEP_SUMMARY -u PYTHONPATH -u BASH_ENV -u ENV \
-    SERENA_FALLBACK_TARGET="validate" \
-    SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" \
-    bash "${_validate_script_dir}/setup_serena.sh"; then
-    echo "::warning::scripts/setup_serena.sh exited non-zero; validation will continue without Serena."
+  # The checkout is data to this step. Only the workspace and this private
+  # output directory are writable in the credentialless bootstrap unit.
+  if [ -n "${RUNNER_TEMP:-}" ] && [ -d "${RUNNER_TEMP}" ] && \
+     [ -f "${_validate_script_dir}/untrusted_process_sandbox.sh" ]; then
+    if serena_output_dir="$(mktemp -d "${RUNNER_TEMP}/validate-serena-bootstrap.XXXXXX")" && \
+       mkdir -m 700 "${serena_output_dir}/output"; then
+      :
+    else
+      serena_output_dir=""
+    fi
+  fi
+  if [ -z "${serena_output_dir}" ] || ! SERENA_FALLBACK_PHASE="${serena_phase}" \
+    bash "${_validate_script_dir}/untrusted_process_sandbox.sh" \
+      --role serena-bootstrap --workspace "${PWD}" \
+      --runtime-dir "${serena_output_dir}" \
+      --writable-output-dir "${serena_output_dir}/output" -- \
+      bash "${_validate_script_dir}/setup_serena.sh"; then
+    echo "::warning::Isolated Serena bootstrap failed; validation will continue without Serena."
     emit_serena_fallback "${serena_phase}" "setup-failure"
     clear_stale_serena_codex_config
     SERENA_AVAILABLE="false"
   else
     SERENA_AVAILABLE="false"
-    while IFS='=' read -r env_key env_value; do
-      case "${env_key}" in
-        SERENA_AVAILABLE)
-          SERENA_AVAILABLE="${env_value}"
-          ;;
-      esac
-    done < "${bootstrap_env_file}"
+    bootstrap_env_file="${serena_output_dir}/output/result.env"
+    if [ -f "${bootstrap_env_file}" ] && [ ! -L "${bootstrap_env_file}" ] && \
+       [ "$(stat -c %s "${bootstrap_env_file}")" -le 128 ] && \
+       [ "$(cat "${bootstrap_env_file}")" = "SERENA_AVAILABLE=true" ] && \
+       publish_validate_serena_config "${serena_output_dir}/output/home/.codex/config.toml" "${serena_output_dir}"; then
+      SERENA_AVAILABLE="true"
+    else
+      emit_serena_fallback "${serena_phase}" "setup-failure"
+      clear_stale_serena_codex_config
+    fi
   fi
-  rm -f "${bootstrap_env_file}"
 
-  if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -f .serena/project.yml ]; then
+  if [ "${SERENA_AVAILABLE}" = "true" ] && [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && \
+     [ -f .serena/project.yml ] && [ ! -L .serena ] && [ ! -L .serena/project.yml ]; then
     serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
     SERENA_PROJECT_BOOTSTRAP_HASH="${serena_project_hash}"
   else

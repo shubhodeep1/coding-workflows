@@ -113,6 +113,8 @@ RENDERED_OUTPUT_ALIASES: dict[str, dict[str, str]] = {
 
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 MAX_SCHEMA_BYTES = 2 * 1024 * 1024
+MAX_MANIFEST_NODES = 10000
+MAX_MANIFEST_DEPTH = 64
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -195,6 +197,22 @@ def load_manifest(manifest_path: Path) -> dict[str, Any]:
 		raise ManifestLoadError(f"Unable to read manifest '{manifest_path}': {exc}") from exc
 
 	try:
+		# Reject references before safe_load constructs a shared (or recursive)
+		# graph, which _stable_value would otherwise expand without a bound.
+		event_count = 0
+		event_depth = 0
+		for event in yaml.parse(manifest_raw):
+			event_count += 1
+			if event_count > MAX_MANIFEST_NODES * 2:
+				raise ManifestLoadError("Manifest exceeds node or depth limit")
+			if isinstance(event, yaml.events.AliasEvent):
+				raise ManifestLoadError("Manifest YAML aliases are not supported")
+			if isinstance(event, (yaml.events.MappingStartEvent, yaml.events.SequenceStartEvent)):
+				event_depth += 1
+				if event_depth > MAX_MANIFEST_DEPTH:
+					raise ManifestLoadError("Manifest exceeds node or depth limit")
+			elif isinstance(event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)):
+				event_depth -= 1
 		manifest = yaml.safe_load(manifest_raw)
 	except yaml.YAMLError as exc:
 		location = ""
@@ -209,6 +227,17 @@ def load_manifest(manifest_path: Path) -> dict[str, Any]:
 		raise ManifestLoadError(
 			f"Manifest root must be a mapping/object, got {type(manifest).__name__} in '{manifest_path}'"
 		)
+	remaining_nodes = MAX_MANIFEST_NODES
+	pending: list[tuple[Any, int]] = [(manifest, 0)]
+	while pending:
+		value, depth = pending.pop()
+		remaining_nodes -= 1
+		if remaining_nodes < 0 or depth > MAX_MANIFEST_DEPTH:
+			raise ManifestLoadError("Manifest exceeds node or depth limit")
+		if isinstance(value, dict):
+			pending.extend((item, depth + 1) for pair in value.items() for item in pair)
+		elif isinstance(value, list):
+			pending.extend((item, depth + 1) for item in value)
 	return manifest
 
 

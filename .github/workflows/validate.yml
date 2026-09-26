@@ -477,7 +477,7 @@ jobs:
           WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true" \
           WORKSPACE_ISSUE_IDENTIFIER="${workspace_identifier}" \
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
-            bash scripts/workspace_init.sh metadata
+            bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/workspace_init.sh" metadata
 
       - name: Restore reusable workspace cache
         if: steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
@@ -510,7 +510,7 @@ jobs:
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
           WORKSPACE_FINGERPRINT="${{ steps.workspace_meta.outputs.workspace_fingerprint }}" \
           WORKSPACE_CACHE_MATCHED_KEY="${workspace_cache_matched_key}" \
-            bash scripts/workspace_init.sh metadata
+            bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/workspace_init.sh" metadata
 
       - name: Finalize workspace contents
         id: workspace_contents
@@ -520,7 +520,8 @@ jobs:
           WORKSPACE_PATH="${{ steps.workspace_state.outputs.workspace_path }}" \
           WORKSPACE_REUSE_ENABLED="${{ steps.workspace_state.outputs.workspace_reuse_enabled }}" \
           WORKSPACE_CACHE_RESTORE_STATE="${{ steps.workspace_state.outputs.workspace_cache_restore_state }}" \
-            bash scripts/workspace_init.sh finalize
+            env -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH -u GITHUB_STEP_SUMMARY \
+              bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/workspace_init.sh" finalize
 
       - name: Activate workspace shell context
         run: |

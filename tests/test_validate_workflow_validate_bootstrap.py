@@ -162,6 +162,114 @@ def test_validate_run_start_memory_uses_private_source() -> None:
 	assert 'bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/validate_process.sh"' in wf
 
 
+def test_validate_workspace_and_serena_bootstrap_use_private_isolated_support() -> None:
+	wf = _workflow_text()
+	assert wf.count('bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/workspace_init.sh" metadata') == 2
+	assert 'env -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH -u GITHUB_STEP_SUMMARY \\\n              bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/workspace_init.sh" finalize' in wf
+	process = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	assert '--role serena-bootstrap --workspace "${PWD}"' in process
+	assert '--writable-output-dir "${serena_output_dir}/output"' in process
+	assert 'publish_validate_serena_config' in process
+	assert 'SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}"' not in process
+	sandbox = (REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh").read_text(encoding="utf-8")
+	assert 'ReadWritePaths=${workspace} ${writable_output_dir}' in sandbox
+	assert '"GITHUB_ENV=${writable_output_dir}/result.env"' in sandbox
+
+
+def test_serena_config_publication_rejects_untrusted_binary_and_output_symlink(tmp_path: Path) -> None:
+	process = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	publisher = process.split("publish_validate_serena_config()\n", 1)[1].split("\nensure_serena_bootstrap()", 1)[0]
+	sandbox_root = tmp_path / "bootstrap"
+	isolated_home = sandbox_root / "output" / "home"
+	isolated_config = isolated_home / ".codex" / "config.toml"
+	isolated_config.parent.mkdir(parents=True)
+	workspace = tmp_path / "workspace"
+	workspace.mkdir()
+	private = tmp_path / "private"
+	private.mkdir()
+	(private / "sentinel").write_text("safe", encoding="utf-8")
+	host_home = tmp_path / "host"
+	host_config = host_home / ".codex" / "config.toml"
+	host_config.parent.mkdir(parents=True)
+	host_config.write_text('[existing]\nvalue = "keep"\n', encoding="utf-8")
+	runner_binary = host_home / ".local" / "bin" / "serena"
+	runner_binary.parent.mkdir(parents=True)
+	runner_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+	runner_binary.chmod(0o755)
+	def publish() -> subprocess.CompletedProcess[str]:
+		return subprocess.run(
+			["bash", "-c", "publish_validate_serena_config()\n" + publisher +
+			 "\npublish_validate_serena_config \"$1\" \"$2\"", "bash", str(isolated_config), str(sandbox_root)],
+			cwd=workspace, env={**os.environ, "HOME": str(host_home), "PYTHONDONTWRITEBYTECODE": "1"},
+			capture_output=True, text=True,
+		)
+
+	def write_config(binary: str) -> None:
+		isolated_config.write_text(
+			'[mcp_servers.serena]\ncommand = ' + json.dumps(binary) + '\n'
+			'args = ["start-mcp-server", "--context=codex", "--project-from-cwd", "--transport", "stdio"]\n'
+			'startup_timeout_sec = 30\n', encoding="utf-8",
+		)
+
+	workspace_binary = workspace / "serena"
+	workspace_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+	workspace_binary.chmod(0o755)
+	write_config(str(workspace_binary))
+	assert publish().returncode != 0
+	assert host_config.read_text(encoding="utf-8") == '[existing]\nvalue = "keep"\n'
+	generated_binary = isolated_home / ".local" / "bin" / "serena"
+	generated_binary.parent.mkdir(parents=True)
+	generated_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+	generated_binary.chmod(0o755)
+	write_config(str(generated_binary))
+	assert publish().returncode != 0
+	assert host_config.read_text(encoding="utf-8") == '[existing]\nvalue = "keep"\n'
+	write_config(str(runner_binary))
+	assert publish().returncode == 0
+	assert "[existing]" in host_config.read_text(encoding="utf-8")
+	assert "[mcp_servers.serena]" in host_config.read_text(encoding="utf-8")
+	isolate_copy = private / "config.toml"
+	isolate_copy.write_text(isolated_config.read_text(encoding="utf-8"), encoding="utf-8")
+	isolate_dir = isolated_home / ".codex"
+	isolate_dir.rename(isolated_home / "config-backup")
+	isolate_dir.symlink_to(private, target_is_directory=True)
+	assert publish().returncode != 0
+	assert (private / "sentinel").read_text(encoding="utf-8") == "safe"
+
+
+def test_serena_bootstrap_role_scrubs_credentials_and_rejects_symlinked_project(tmp_path: Path) -> None:
+	runner_temp = tmp_path / "runner"
+	runtime = runner_temp / "bootstrap"
+	output = runtime / "output"
+	output.mkdir(parents=True)
+	runtime.chmod(0o700)
+	output.chmod(0o700)
+	workspace = tmp_path / "workspace"
+	workspace.mkdir()
+	private = tmp_path / "private"
+	(private / "scripts").mkdir(parents=True)
+	script = private / "scripts" / "setup_serena.sh"
+	script.write_text(
+		'#!/bin/bash\nset -euo pipefail\n'
+		'[[ -z "${GH_TOKEN:-}${GH_PAT:-}${OPENROUTER_API_KEY:-}${GITHUB_OUTPUT:-}" ]]\n'
+		'printf "SERENA_AVAILABLE=true\\n" > "${GITHUB_ENV}"\n', encoding="utf-8",
+	)
+	command = ["bash", str(REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh"),
+		"--role", "serena-bootstrap", "--workspace", str(workspace), "--runtime-dir", str(runtime),
+		"--writable-output-dir", str(output), "--", "bash", str(script)]
+	env = {**os.environ, "RUNNER_TEMP": str(runner_temp), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		"GH_TOKEN": "sentinel", "GH_PAT": "sentinel", "OPENROUTER_API_KEY": "sentinel",
+		"GITHUB_OUTPUT": str(tmp_path / "runner-command-file")}
+	result = subprocess.run(command, env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert (output / "result.env").read_text(encoding="utf-8") == "SERENA_AVAILABLE=true\n"
+	assert not (tmp_path / "runner-command-file").exists()
+	(workspace / ".serena").symlink_to(private, target_is_directory=True)
+	result = subprocess.run(command, env=env, capture_output=True, text=True)
+	assert result.returncode != 0
+	assert not (private / "project.yml").exists()
+
+
 def test_private_memory_python_ignores_target_sibling_modules(tmp_path: Path) -> None:
 	private_scripts = tmp_path / "private/scripts"
 	private_scripts.mkdir(parents=True)

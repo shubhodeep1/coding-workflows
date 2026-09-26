@@ -113,6 +113,29 @@ def test_manifest_only_check_rejects_invalid_yaml_and_unknown_family(tmp_path: P
 	assert not (tmp_path / "validation").exists()
 
 
+def test_manifest_rejects_aliases_unknown_fields_and_excessive_nodes(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	base = yaml.safe_dump(_manifest_payload("python-mongo-flask"))
+	for content, expected in (
+		("type: python-mongo-flask\nslots: {project_name: demo, canary_tools: [curl]}\nextra: &a [a, b]\nunused: [*a, *a]\n", "aliases"),
+		("type: python-mongo-flask\nslots: {project_name: demo, canary_tools: [curl]}\nextra: &loop [*loop]\n", "aliases"),
+		("type: python-mongo-flask\nslots: {project_name: demo, canary_tools: [curl]}\nextra: 1\n", "Additional properties"),
+		("type: python-mongo-flask\nslots: {project_name: demo, canary_tools: [curl], unexpected: 1}\n", "Additional properties"),
+		("type: python-mongo-flask\nslots: {project_name: demo, canary_tools: [curl]}\nextra: " + "[" * 70 + "x" + "]" * 70 + "\n", "node or depth limit"),
+		(base + "\nservices:\n" + "  - x\n" * 10001, "node or depth limit"),
+	):
+		manifest.write_text(content, encoding="utf-8")
+		result = _run_renderer(manifest, tmp_path / "validation")
+		assert result.returncode != 0
+		assert expected in result.stderr
+	manifest.write_text(base, encoding="utf-8")
+	assert _run_renderer(manifest, tmp_path / "validation").returncode == 0
+	known_slots = _manifest_payload("python-mongo-flask")
+	known_slots["slots"].update({"health_path": "/health", "mongo_db_name": "app", "mongo_image": "mongo:7", "test_host_header": "app.local.test", "requirements_file": "requirements.txt"})
+	_write_yaml(manifest, known_slots)
+	assert _run_renderer(manifest, tmp_path / "validation").returncode == 0
+
+
 def test_manifest_rejects_host_shell_and_environment_controls(tmp_path: Path) -> None:
 	manifest = tmp_path / "validate.yml"
 	for family, mutation in (
@@ -331,7 +354,8 @@ def test_renderer_json_pointer_escapes_special_characters() -> None:
 		result = _run_renderer(manifest_path, output_root)
 		assert result.returncode != 0
 		assert "Manifest validation failed" in result.stderr
-		assert "bad~1key~0name" in result.stderr
+		assert "/slots: Additional properties are not allowed" in result.stderr
+		assert "bad/key~name" in result.stderr
 
 
 def test_renderer_fails_invalid_schema_with_actionable_error() -> None:

@@ -81,44 +81,15 @@
         "tap_plan": {
           "type": "integer",
           "minimum": 1
-        }
+        },
+        "requirements_file": {"type": "string"},
+        "health_path": {"type": "string"},
+        "test_host_header": {"type": "string"},
+        "mongo_db_name": {"type": "string"},
+        "mongo_image": {"type": "string"}
       },
-      "additionalProperties": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "integer"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "array",
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "boolean"
-                }
-              ]
-            }
-          }
-        ]
-      }
+      "additionalProperties": false
     }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }

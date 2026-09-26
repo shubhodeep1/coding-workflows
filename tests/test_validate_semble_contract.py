@@ -302,10 +302,10 @@ def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:
 	assert 'ensure_serena_bootstrap()' in text
 	assert 'if ! env_is_truthy "${SERENA_ENABLED:-false}"; then\n    emit_serena_fallback "${serena_phase}" "disabled"\n    clear_stale_serena_codex_config' in text
 	assert 'echo "::notice::scripts/setup_serena.sh is unavailable; validation will continue without Serena."\n    emit_serena_fallback "${serena_phase}" "setup-failure"\n    clear_stale_serena_codex_config' in text
-	assert 'SERENA_FALLBACK_TARGET="validate"' in text
-	assert 'GITHUB_ENV="${bootstrap_env_file}"' in text
+	assert '--role serena-bootstrap --workspace "${PWD}"' in text
+	assert 'bootstrap_env_file="${serena_output_dir}/output/result.env"' in text
 	assert 'bash "${_validate_script_dir}/setup_serena.sh"' in text
-	assert 'echo "::warning::scripts/setup_serena.sh exited non-zero; validation will continue without Serena."\n    emit_serena_fallback "${serena_phase}" "setup-failure"\n    clear_stale_serena_codex_config' in text
+	assert 'echo "::warning::Isolated Serena bootstrap failed; validation will continue without Serena."\n    emit_serena_fallback "${serena_phase}" "setup-failure"\n    clear_stale_serena_codex_config' in text
 	assert 'DISCOVER_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "discover" || true)"' in text
 	assert 'SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "${VALIDATE_TRUSTED_SUPPORT_ROOT}/prompts/mode-validate-discover.txt"' in text
 	assert 'DIAGNOSE_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "diagnose" || true)"' in text
