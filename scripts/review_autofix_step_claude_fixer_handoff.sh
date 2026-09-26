@@ -125,30 +125,47 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
 fi
 
 if [ "${claude_fixer_clean_ledger}" = "true" ] && [ -z "${claude_fixer_failed_checks}" ]; then
-  if [ "${CLAUDE_FIXER_VERIFICATION:-false}" = "true" ]; then
-    # A verdict-triggered pass cannot use restored or incomplete reviewer slots.
-    claude_fixer_fresh_start="${RUNTIME_DIR}/claude_fixer_review_start"
-    claude_fixer_reviewed_slots=0
-    if [ -f "${claude_fixer_fresh_start}" ] && [ -n "${REVIEWER_MODELS:-}" ]; then
-      while IFS= read -r claude_fixer_model; do
-        [ -n "${claude_fixer_model}" ] || continue
-        claude_fixer_safe_model="$(printf '%s' "${claude_fixer_model}" | tr '/.:' '___')"
-        claude_fixer_status="${PREVIOUS_REVIEWS_DIR:-}/status_review_${claude_fixer_safe_model}.txt"
-        claude_fixer_raw="${PREVIOUS_REVIEWS_DIR:-}/review_${claude_fixer_safe_model}.txt"
-        if [ ! -s "${claude_fixer_raw}" ] || [ ! "${claude_fixer_status}" -nt "${claude_fixer_fresh_start}" ] \
-          || [ "$(<"${claude_fixer_status}")" != "success" ] \
-          || ! grep -Eq '^[[:space:]]*NONE[[:space:]]*$' "${claude_fixer_raw}" \
-          || grep -Eq '^[[:space:]]*(File:|Problem:|Requirement:|Evidence of absence:)[[:space:]]*[^[:space:]]' "${claude_fixer_raw}"; then
-          claude_fixer_reviewed_slots=0
-          break
-        fi
-        claude_fixer_reviewed_slots=$((claude_fixer_reviewed_slots + 1))
-      done <<< "${REVIEWER_MODELS}"
-    fi
-    if [ "${claude_fixer_reviewed_slots}" -lt 2 ]; then
-      echo "::warning::Claude-fixer verification lacks fresh independent clean reviewer evidence."
-      claude_fixer_clean_ledger="false"
-    fi
+  # The active roster can be tier-filtered; the configured full roster alone
+  # is not evidence that those slots actually ran. Require every selected
+  # distinct slot to have a fresh successful raw review, on every round.
+  claude_fixer_fresh_start="${RUNTIME_DIR}/claude_fixer_review_start"
+  claude_fixer_active_roster="${RUNTIME_DIR}/reviewer_active_models.txt"
+  claude_fixer_reviewed_slots=0
+  declare -A claude_fixer_seen_slots=()
+  declare -A claude_fixer_seen_safe_slots=()
+  if [ -f "${claude_fixer_fresh_start}" ] && [ -s "${claude_fixer_active_roster}" ] \
+    && [ "${claude_fixer_active_roster}" -nt "${claude_fixer_fresh_start}" ] \
+    && [[ "${REVIEWERS_SUCCESSFUL:-}" =~ ^[1-9][0-9]*$ ]]; then
+    while IFS= read -r claude_fixer_model; do
+      if [ -z "${claude_fixer_model}" ] || [[ ! "${claude_fixer_model}" =~ ^[A-Za-z0-9._:+/-]+$ ]] \
+        || [ -n "${claude_fixer_seen_slots[${claude_fixer_model}]:-}" ] \
+        || ! grep -Fxq -- "${claude_fixer_model}" <(printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'); then
+        claude_fixer_reviewed_slots=0
+        break
+      fi
+      claude_fixer_seen_slots["${claude_fixer_model}"]=1
+      claude_fixer_safe_model="$(printf '%s' "${claude_fixer_model}" | tr '/.:' '___')"
+      if [ -n "${claude_fixer_seen_safe_slots[${claude_fixer_safe_model}]:-}" ]; then
+        claude_fixer_reviewed_slots=0
+        break
+      fi
+      claude_fixer_seen_safe_slots["${claude_fixer_safe_model}"]=1
+      claude_fixer_status="${PREVIOUS_REVIEWS_DIR:-}/status_review_${claude_fixer_safe_model}.txt"
+      claude_fixer_raw="${PREVIOUS_REVIEWS_DIR:-}/review_${claude_fixer_safe_model}.txt"
+      if [ ! -s "${claude_fixer_raw}" ] || [ ! "${claude_fixer_raw}" -nt "${claude_fixer_fresh_start}" ] \
+        || [ ! "${claude_fixer_status}" -nt "${claude_fixer_fresh_start}" ] \
+        || [ "$(<"${claude_fixer_status}")" != "success" ] \
+        || ! grep -Eq '^[[:space:]]*NONE[[:space:]]*$' "${claude_fixer_raw}" \
+        || grep -Eq '^[[:space:]]*(File:|Problem:|Requirement:|Evidence of absence:)[[:space:]]*[^[:space:]]' "${claude_fixer_raw}"; then
+        claude_fixer_reviewed_slots=0
+        break
+      fi
+      claude_fixer_reviewed_slots=$((claude_fixer_reviewed_slots + 1))
+    done < "${claude_fixer_active_roster}"
+  fi
+  if [ "${claude_fixer_reviewed_slots}" -lt 2 ] || [ "${claude_fixer_reviewed_slots}" -ne "${REVIEWERS_SUCCESSFUL}" ]; then
+    echo "::warning::Claude-fixer review lacks fresh independent clean evidence from every selected reviewer slot."
+    claude_fixer_clean_ledger="false"
   fi
 fi
 

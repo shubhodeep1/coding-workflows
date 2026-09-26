@@ -839,6 +839,7 @@ def test_sandbox_scrubs_runner_credentials_and_shell_command_files() -> None:
 			[
 				"bash", str(SANDBOX), "--role", "plan", "--workspace", str(REPO_ROOT),
 				"--config-format", "codex", "--config", str(config_dir), "--runtime-dir", str(root),
+				"--hide-workspace-instructions",
 				"--", "python3", "-c",
 				f"import json,os; json.dump(dict(os.environ), open({str(capture)!r}, 'w'))",
 			],

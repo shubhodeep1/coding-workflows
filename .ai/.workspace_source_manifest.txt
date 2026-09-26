@@ -180,9 +180,15 @@ changelog.d/4452-validate-target-ref-sandbox.md
 changelog.d/4453-claude-fixer-verdict-verification.md
 changelog.d/4455-security-pass-ownership-policy.md
 changelog.d/4464-security-pass-trust-boundaries.md
+changelog.d/4469-validate-hook-output-boundary.md
+changelog.d/4470-trusted-security-audit-exclusions.md
+changelog.d/4472-resolver-symlink-touched-set.md
+changelog.d/4476-pipeline-failure-guards.md
 changelog.d/4477-review-worktree-transfer.md
 changelog.d/4479-trusted-poller-postprocess.md
+changelog.d/4481-validation-renderer-dependency-preflight.md
 changelog.d/4484-authenticate-orchestrator-state.md
+changelog.d/4489-orchestrator-recovery-auth.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
@@ -697,6 +703,7 @@ tests/test_ci_inventory_parity_order_contract.py
 tests/test_ci_poll_test_sharding.py
 tests/test_ci_shared_shell_block_guard.py
 tests/test_clarify_informal_detect.py
+tests/test_claude_md_section_numbers.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
 tests/test_codex_stall_guard_poller.py
@@ -867,6 +874,7 @@ tests/test_test_and_mark_stable_phantom_review_run_filter.py
 tests/test_test_and_mark_stable_phase7_unconflict.py
 tests/test_test_and_mark_stable_plan_polling_guard.py
 tests/test_test_and_mark_stable_review_blocked_budget.py
+tests/test_touched_set_symlink_aware.py
 tests/test_transcript_archive.sh
 tests/test_truncate_to_utf8_byte_cap.py
 tests/test_update_repo_tree.py

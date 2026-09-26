@@ -311,6 +311,22 @@ run_self_heal_codex()
 	local rc=0
 
 	SELF_HEAL_STALL_STATE=""
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		if ! [[ "${VALIDATE_AUTHORIZED_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+		   [ "$(git rev-parse HEAD 2>/dev/null)" != "${VALIDATE_AUTHORIZED_TARGET_SHA}" ] ||
+		   [ ! -f "${SELF_HEAL_SCRIPT_DIR}/untrusted_process_sandbox.sh" ]; then
+			echo "self-heal: authorized head or isolated model launcher is unavailable" >&2
+			return 2
+		fi
+		bash "${SELF_HEAL_SCRIPT_DIR}/untrusted_process_sandbox.sh" \
+			--role judge --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
+			--config-format codex --config "${HOME}/.codex" \
+			--hide-workspace-instructions -- \
+			codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
+			exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access \
+			< "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
+		return $?
+	fi
 	if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
 		stall_status_file="$(mktemp /tmp/self_heal_stall_status.XXXXXX)"
 		set +e

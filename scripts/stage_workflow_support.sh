@@ -471,6 +471,12 @@ setup_context()
 			echo "::error::Explicit validation requires an immutable support ref." >&2
 			exit 1
 		}
+		for support_target_dir in scripts prompts ai-memory; do
+			if [ -L "${support_target_dir}" ] || { [ -e "${support_target_dir}" ] && [ ! -d "${support_target_dir}" ]; }; then
+				echo "::error::Unsafe explicit validation support destination ${support_target_dir}" >&2
+				exit 1
+			fi
+		done
 	fi
 	RESOLVED_SCRIPT_REF="${ORIGINAL_SCRIPT_REF}"
 
@@ -534,6 +540,11 @@ bootstrap_support_roots()
 		echo "::error::Failed to stage workflow support files from ${WORKFLOW_SOURCE_REPO} (${ORIGINAL_SCRIPT_REF} and main fallback)." >&2
 		exit 1
 	fi
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
+	   [ "$(git -C "${SUPPORT_PRIMARY_ROOT}" rev-parse HEAD 2>/dev/null)" != "${ORIGINAL_SCRIPT_REF}" ]; then
+		echo "::error::Explicit validation support checkout is not the verified commit." >&2
+		exit 1
+	fi
 
 	if [ "${RESOLVED_SCRIPT_REF}" != "main" ] && [ -n "${GH_TOKEN:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"; then
 		SUPPORT_MAIN_ROOT="${SUPPORT_STAGE_ROOT}/main"
@@ -550,6 +561,14 @@ copy_from_ref_or_local()
 	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		require_remote="true"
 		allow_main_fallback="false"
+		local target_parent="${target_path}"
+		while [ "${target_parent}" != "." ]; do
+			if [ -L "${target_parent}" ]; then
+				echo "::error::Unsafe explicit validation support destination ${repo_path}" >&2
+				return 1
+			fi
+			target_parent="$(dirname -- "${target_parent}")"
+		done
 	fi
 
 	mkdir -p "$(dirname "${target_path}")"
@@ -562,6 +581,10 @@ copy_from_ref_or_local()
 	fi
 
 	if [ -n "${source_path}" ]; then
+		if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] && [ -L "${source_path}" ]; then
+			echo "::error::Explicit validation support file is a symlink: ${repo_path}" >&2
+			return 1
+		fi
 		if [ -e "${target_path}" ] && [ "${source_path}" -ef "${target_path}" ]; then
 			return 0
 		fi
@@ -685,6 +708,12 @@ stage_optional_preserve_entry()
 	local track_path="$3"
 	local emit_notice="${4:-true}"
 	local tmp_path
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
+	   { [ -L "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ] ||
+	     { [ -e "${repo_path}" ] && [ ! -f "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ]; }; }; then
+		echo "::error::Cannot use target-owned optional support file ${repo_path} for explicit validation." >&2
+		return 1
+	fi
 
 	if [ -f "${repo_path}" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		if [ "${executable}" = "true" ]; then
@@ -750,6 +779,25 @@ stage_required_if_missing_entry()
 	local repo_path="$1"
 	if [ ! -f "${repo_path}" ]; then
 		copy_from_ref_or_local "${repo_path}" "${repo_path}" "false" "true"
+	fi
+}
+
+stage_explicit_target_instruction()
+{
+	local repo_path="$1"
+	local source_path="${SUPPORT_PRIMARY_ROOT}/${repo_path}"
+	local temp_path
+	# An explicit project checkout is untrusted, even when it already has a
+	# file with this name. Never read its instruction bytes as a fallback.
+	if [ -z "${SUPPORT_PRIMARY_ROOT}" ] || [ -L "${source_path}" ] || [ ! -f "${source_path}" ] ||
+	   [ -L "${repo_path}" ] || { [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; }; then
+		echo "::error::Unsafe or missing verified instruction file ${repo_path}" >&2
+		return 1
+	fi
+	temp_path="$(mktemp "./.${repo_path}.XXXXXX")"
+	if ! cp -- "${source_path}" "${temp_path}" || ! mv -f -- "${temp_path}" "${repo_path}"; then
+		rm -f -- "${temp_path}"
+		return 1
 	fi
 }
 
@@ -824,6 +872,12 @@ emit_consumer_gitignore()
 run_overlay_loader()
 {
 	: "${GITHUB_ENV:?GITHUB_ENV must be set}"
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		# A project branch's overlay may replace the trusted validation prompt.
+		# Explicit-target metadata is data, not an operator prompt override.
+		printf 'WORKFLOW_OVERLAY_ENABLED=false\nWORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON=\nWORKFLOW_OVERLAY_REPO_ROOT=\n' >> "${GITHUB_ENV}"
+		return 0
+	fi
 	# WORKFLOW.md overlay is opt-in by file presence; absent file must
 	# stay a no-op while valid prompt overrides flow through render_prompt.py.
 	PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
@@ -905,6 +959,14 @@ stage_validate_support()
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
+		if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+			case "${repo_path}" in
+				unattended_system_instructions.md|ai_pipeline.md)
+					stage_explicit_target_instruction "${repo_path}"
+					continue
+					;;
+			esac
+		fi
 		stage_required_if_missing_entry "${repo_path}"
 	done < <(json_array_lines "required_root_files_if_missing")
 

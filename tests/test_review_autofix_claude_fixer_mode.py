@@ -138,7 +138,7 @@ def test_editor_tail_and_judge_are_skipped_in_fixer_mode():
 
 def test_zero_findings_rounds_still_auto_merge():
 	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
-		assert "(env.CLAUDE_FIXER_CONVERGENCE_REVIEW != 'true' && env.CLAUDE_FIXER_ZERO_FINDINGS == 'true')" in AGENT_STEPS[name]["if"], name
+		assert "(env.CLAUDE_FIXER_MODE != 'true' || env.CLAUDE_FIXER_ZERO_FINDINGS == 'true')" in AGENT_STEPS[name]["if"], name
 
 
 def test_handoff_step_runs_after_reviewers_and_before_the_editor():
@@ -290,7 +290,7 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 """
 
 
-def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, raw_review: str | None = None):
+def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, raw_review: str | None = "NONE\n", selected_models: tuple[str, ...] = ("minimax/minimax-m3", "z-ai/glm-5.2"), failed_slot: bool = False, restored_slot: bool = False):
 	support = tmp / "support"
 	support.mkdir()
 	calls = tmp / "calls.jsonl"
@@ -344,15 +344,22 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		"CLAUDE_FIXER_VERIFICATION": "true" if verification else "false",
 		"REVIEWERS_SUCCESSFUL": "2",
 	}
-	if verification:
-		(tmp / "claude_fixer_review_start").touch()
+	if not pre_review_resolve:
+		start = tmp / "claude_fixer_review_start"
+		start.touch()
+		os.utime(start, (start.stat().st_atime - 2, start.stat().st_mtime - 2))
+		(tmp / "reviewer_active_models.txt").write_text("\n".join(selected_models) + "\n", encoding="utf-8")
 		env["REVIEWER_MODELS"] = "minimax/minimax-m3\nz-ai/glm-5.2"
 		if raw_review is not None:
 			reviews = tmp / "previous_reviews"
 			reviews.mkdir()
-			for model in ("minimax_minimax-m3", "z-ai_glm-5_2"):
-				(reviews / f"review_{model}.txt").write_text(raw_review, encoding="utf-8")
-				(reviews / f"status_review_{model}.txt").write_text("success\n", encoding="utf-8")
+			for idx, model in enumerate(selected_models):
+				safe_model = model.translate(str.maketrans("/.:", "___"))
+				(reviews / f"review_{safe_model}.txt").write_text(raw_review, encoding="utf-8")
+				status_file = reviews / f"status_review_{safe_model}.txt"
+				status_file.write_text("failed\n" if failed_slot and idx == 1 else "success\n", encoding="utf-8")
+				if restored_slot and idx == 1:
+					os.utime(status_file, (start.stat().st_atime - 2, start.stat().st_mtime - 2))
 			env["PREVIOUS_REVIEWS_DIR"] = str(reviews)
 	proc = subprocess.run(["bash", "-c", f'source "{HANDOFF_SCRIPT}"'], env=env, capture_output=True, text=True)
 	gh_calls = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
@@ -423,6 +430,21 @@ def test_verification_requires_fresh_clean_raw_review():
 		assert ("CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env) == clean
 		assert ("CLAUDE_FIXER_VERIFICATION_FAILED=true" in github_env) != clean
 		assert len(calls) == (0 if clean else 1)
+
+
+def test_clean_handoff_requires_two_distinct_fresh_successful_active_slots():
+	for kwargs in (
+		{"selected_models": ("minimax/minimax-m3",)},
+		{"selected_models": ("minimax/minimax-m3", "minimax/minimax-m3")},
+		{"failed_slot": True},
+		{"restored_slot": True},
+		{"raw_review": None},
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, **kwargs)
+		assert proc.returncode == 0, proc.stderr
+		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env, kwargs
+		assert len(calls) == 1, kwargs
 
 
 def test_handoff_failed_checks_alone_are_handed_off():
