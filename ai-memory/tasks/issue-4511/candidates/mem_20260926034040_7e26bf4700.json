@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `024127dbed8f7fe72e128479a926779d9ace15b8`. No integration branch was specified. The `/answer` was auto-posted after clarification found no questions; there are no substantive answers to map to Q-IDs.\n\nScope-mode: Hold Scope\nReuse-audit: extends renderer_dependencies\nScope-mode justification: Isolating both Python invocations and disabling the step\u2019s inherited shell startup file is a complete fix for the reported preflight path, rather than a `cd`-only shortcut. It adds no dependency or external interface and is expected to cost under 30 additional lines and 10 minutes. This follows \u00a76\u2019s Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed priorities.\n\n## Automation and execution\n- Modify the existing renderer-dependency step in `.github/workflows/validate.yml`. It already runs when validation is dispatched through `.github/workflows/internal-validate.yml` or the consumer `workflow-templates/ai-validate.yml` wrapper; no new script, trigger, or supervisor is needed.\n- No database operation, migration gate, or future-removal registry entry applies.\n\n## Files likely to change\n- `.github/workflows/validate.yml` \u2014 isolate the installation and import probe.\n- `tests/test_validate_workflow_validate_bootstrap.py` \u2014 update its existing step contract and add a regression case.\n\n## Functions or modules to implement\n- Keep the `renderer_dependencies` step ID and its existing file-existence gate. For this step only, clear `BASH_ENV` before Bash starts; retain the gate, then run **both** `python3 -m pip` and `python3 -c 'import yaml, jsonschema, jinja2'` from a runner-controlled directory outside the branch workspace, with branch-controlled Python path variables removed from those processes. Preserve the `--user` installation and import-success behavior.\n- Extend the representative bootstrap tests to exercise a workspace containing a malicious `yaml.py` and a branch-directed Python path. Assert the probe does not execute that file or alter the shell startup file, while a successful safe probe still marks dependencies ready.\n\n## Data structures affected\nNone. The existing `steps.renderer_dependencies.outcome` remains the readiness signal.\n\n## API/interface changes\nNone; preserve workflow inputs, outputs, step ID, and renderer dependency names.\n\n## Security considerations\n- **Trust boundary:** repository/workspace files must not become Python modules executed by this host-side probe. The step receives no validation secrets, but its current workspace import can write the `BASH_ENV` file used by later secret-bearing steps.\n- **Authorization:** no new endpoint or privileged surface is introduced; retain the existing validation target authorization and checkout checks.\n- **Input validation and abuse case:** treat the workspace path and Python path environment as untrusted import sources. A PR-supplied `yaml.py` must not execute during installation or the import check, even when `PYTHONPATH` points at it. Clearing `BASH_ENV` alone is insufficient if the probe still executes attacker code that can write other runner files.\n\n## Risks and edge cases\n- **Codebase conflict with a narrow reading of the finding:** `scripts/validate_process.sh:2054` contains another `import yaml, jsonschema, jinja2` probe, inside the later validation process. This plan fixes the reported *earlier* workflow step; it does not claim that the later path is safe. That separate secret-bearing path needs its own trust-boundary assessment.\n- Do not disable the user site globally: the step installs dependencies with `--user`. Preserve failure behavior when installation or the isolated import fails.\n- Keep the step\u2019s file gate before changing directories, so it still checks the staged renderer in the checkout.\n\n## Testing considerations\n- Run the focused bootstrap tests, including the malicious-module regression and existing dependency-failure cases.\n- Validate workflow YAML and run the relevant CI contract checks on the repository\u2019s pinned environment. Confirm `.github/workflows/validate.yml` remains below the 480,000-byte guard.\n\n## Decisions\n### D1 \u2014 Isolate the existing probe in place\n- **Chosen:** Retain the step and readiness contract, but give its Bash shell no startup file and run its Python commands outside the workspace without branch-controlled Python import paths.\n- **Alternatives considered:** Only clear `BASH_ENV`; only change directory; introduce a new helper or workflow.\n- **Why:** Neither single guard prevents both import execution and startup-file tampering. The existing step supplies the required automation without a new surface.\n\n## Pre-execution self-check\nFiles, step contract, trigger, abuse case, and regression test are identified. No clarification or external scalar is required.\n\nPLAN_SELF_CHECK: WARNING: The later `validate_process.sh` import path remains a separate security concern; this plan addresses only the issue\u2019s cited preflight step.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "911c3559edc3bea45b8a90faf949d7bfe874c9a49709b7bfae314f66af8efbe5",
+  "lineage": {
+    "issue_number": 4511,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36215200397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36215200397",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4511"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260926034040_7e26bf4700",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4511,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36215200397"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4511",
+  "timestamps": {
+    "created_at": "2026-09-26T03:40:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
