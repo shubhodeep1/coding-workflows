@@ -169,6 +169,7 @@ changelog.d/4438-implement-plan-claude-fixer-project-branch.md
 changelog.d/4439-audit-plans-implement-plan-claude-gate.md
 changelog.d/4440-implement-plan-auto-decisions.md
 changelog.d/4443-claude-issue-implementer.md
+changelog.d/4447-resolver-scope-retry.md
 changelog.d/4451-pin-security-audit-support.md
 changelog.d/4452-validate-target-ref-sandbox.md
 changelog.d/4453-claude-fixer-verdict-verification.md
@@ -209,6 +210,7 @@ docs/completed/orchestrator-validation-resilience-plan.md
 docs/completed/sub-issue-test-runs-spike.md
 docs/completed/symphony-inspired-improvements-plan.md
 docs/deploy-activation/README.md
+docs/deploy-activation/pr-4443.md
 docs/gsd-future-improvements.md
 docs/hardenaireviewprompt.md
 docs/how-it-works.md
