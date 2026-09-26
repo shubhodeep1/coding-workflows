@@ -552,12 +552,75 @@ def entries():
     return result
 
 
+def index_entries():
+    # Structural fingerprint of the git index (mode, blob id, stage per
+    # path), not a hash of the raw `.git/index` file. The raw file's
+    # bytes change on a plain `git status`/`git diff` stat-cache
+    # refresh with no content change, and on every legitimate `git add`
+    # too, so hashing it cannot tell an allowed resolver stage apart
+    # from an out-of-scope one. `-z` is essential: never parse Git's
+    # quoted/display path format.
+    raw = git("ls-files", "-z", "--stage").split(b"\0")
+    result = []
+    for line in raw:
+        if not line:
+            continue
+        meta, _, raw_path = line.partition(b"\t")
+        mode, obj, stage = meta.split(b" ")
+        path = os.fsdecode(raw_path)
+        if "\n" in path or "\r" in path or "\t" in path or path.startswith("/") or any(
+            part in ("", ".", "..") for part in path.split("/")
+        ):
+            raise ValueError("unsafe resolver path in index")
+        result.append([path, stage.decode(), mode.decode(), obj.decode()])
+    result.sort()
+    return result
+
+
+def merge_head():
+    path = Path(os.fsdecode(git("rev-parse", "--git-path", "MERGE_HEAD").strip()))
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+
 def merge_state():
-    state = []
-    for name in ("index", "MERGE_HEAD"):
-        path = Path(os.fsdecode(git("rev-parse", "--git-path", name).strip()))
-        state.append(hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None)
-    return state
+    return [merge_head(), index_entries()]
+
+
+def _index_by_path(index):
+    grouped = {}
+    for path, stage, mode, obj in index:
+        grouped.setdefault(path, []).append((stage, mode, obj))
+    for rows in grouped.values():
+        rows.sort()
+    return grouped
+
+
+def _assert_index_transition_allowed(saved_index, current_index, allowed):
+    # The resolver model routinely stages an allowed conflicted path
+    # itself before this script's own validation/staging step runs
+    # (that staging is what triggered the ValueError this guards
+    # against — see the incident this function was added for). Accept
+    # that one shape of index change; keep failing closed on anything
+    # else, exactly as before.
+    if current_index == saved_index:
+        return
+    old_by_path = _index_by_path(saved_index)
+    new_by_path = _index_by_path(current_index)
+    for path in old_by_path.keys() | new_by_path.keys():
+        if old_by_path.get(path) == new_by_path.get(path):
+            continue
+        if path not in allowed:
+            raise ValueError("index changed for a path outside the allowed conflicted set")
+        rows = new_by_path.get(path)
+        if not rows or len(rows) != 1 or rows[0][0] != "0":
+            raise ValueError("allowed path did not settle to a single resolved index entry")
+        staged_obj = rows[0][2]
+        try:
+            worktree_obj = git("hash-object", "--", path).decode().strip()
+        except subprocess.CalledProcessError as exc:
+            raise ValueError("allowed path staged without a readable resolved worktree file") from exc
+        if worktree_obj != staged_obj:
+            raise ValueError("allowed path staged content does not match the resolved worktree")
 
 
 try:
@@ -582,8 +645,10 @@ try:
         manifest.write_text(json.dumps({"paths": before, "merge": merge_before}), encoding="utf-8")
     else:
         saved = json.loads(manifest.read_text(encoding="utf-8"))
-        if merge_state() != saved["merge"]:
-            raise ValueError("merge index or MERGE_HEAD changed during resolver attempt")
+        saved_merge_head, saved_index = saved["merge"]
+        current_merge_head, current_index = merge_state()
+        if current_merge_head != saved_merge_head:
+            raise ValueError("MERGE_HEAD changed during resolver attempt")
         current = entries()
         old = saved["paths"]
         changed = sorted(path for path in old.keys() | current.keys() if old.get(path) != current.get(path))
@@ -591,11 +656,14 @@ try:
             allowed = set(Path(allowed_name).read_text(encoding="utf-8").splitlines())
             if not allowed or any(not path or path.startswith("/") or ".." in path.split("/") for path in allowed):
                 raise ValueError("invalid conflicted-paths snapshot")
+            _assert_index_transition_allowed(saved_index, current_index, allowed)
             outside = [path for path in changed if path not in allowed]
             Path(violations_name).write_text("".join(path + "\n" for path in outside), encoding="utf-8")
             if outside:
                 sys.exit(1)
         elif action == "restore":
+            if current_index != saved_index:
+                raise ValueError("index changed during resolver attempt")
             # Check every required copy before unlinking any working-tree file.
             # A missing/corrupt snapshot must fail without partial restoration.
             for path in changed:
@@ -624,6 +692,8 @@ try:
                         shutil.copyfile(snapshot / "files" / path, target)
                         target.chmod(original[1])
         elif action == "verify":
+            if current_index != saved_index:
+                raise ValueError("index changed during resolver attempt")
             if changed:
                 raise ValueError("resolver worktree restore did not match snapshot")
         else:

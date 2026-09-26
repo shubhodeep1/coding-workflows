@@ -587,6 +587,55 @@ def test_scope_snapshot_restore_and_index_fail_closed() -> None:
 		assert _scope_action(repo, env, "restore").returncode == 2
 
 
+def test_scope_check_allows_model_staged_allowed_resolution() -> None:
+	"""Reproduces the workflow-defect from issue #4538 (PR #4531, run
+	36224679302): the resolver model routinely `git add`s an allowed
+	conflicted path itself before this script's own validation/staging
+	step runs. The old `merge_state()` hashed the raw `.git/index`
+	file, which changes on any `git add`, so that legitimate stage
+	made `check` fail closed with `ValueError("merge index or
+	MERGE_HEAD changed during resolver attempt")` even though nothing
+	out of scope happened. `check` must now accept an index transition
+	that only touches an allowed path and whose staged blob matches
+	the resolved worktree content."""
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "conflict.txt").write_text("resolved by the model\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "--", "conflict.txt"], check=True)
+		result = _scope_action(repo, env, "check")
+		assert result.returncode == 0, result.stderr
+		assert Path(env["RESOLVER_SCOPE_VIOLATIONS_FILE"]).read_text() == ""
+
+
+def test_scope_check_rejects_out_of_scope_staged_path() -> None:
+	"""An index change to a path outside the allowed conflicted set
+	must still fail closed (`check` and `restore` both return 2), even
+	though the change never touches `outside.txt`'s worktree content
+	(so the worktree-only `entries()` diff alone could never catch
+	it)."""
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "outside.txt").write_text("unauthorized\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "--", "outside.txt"], check=True)
+		assert _scope_action(repo, env, "check").returncode == 2
+		assert _scope_action(repo, env, "restore").returncode == 2
+
+
+def test_scope_check_rejects_staged_content_mismatching_worktree() -> None:
+	"""An allowed path staged at one content, then edited again in the
+	worktree without re-staging, must fail closed rather than being
+	silently accepted as a match for either version."""
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "conflict.txt").write_text("resolved v1\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "--", "conflict.txt"], check=True)
+		(repo / "conflict.txt").write_text("resolved v2, edited after staging\n", encoding="utf-8")
+		assert _scope_action(repo, env, "check").returncode == 2
+
+
 def test_scope_symlink_restore_preserves_preexisting_target() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		repo, env = _scope_fixture(Path(directory))
@@ -639,6 +688,9 @@ def main() -> int:
 	test_reasoning_default_lowered_to_high()
 	test_scope_retry_restores_full_attempt_and_keeps_final_gate()
 	test_scope_snapshot_restore_and_index_fail_closed()
+	test_scope_check_allows_model_staged_allowed_resolution()
+	test_scope_check_rejects_out_of_scope_staged_path()
+	test_scope_check_rejects_staged_content_mismatching_worktree()
 	test_scope_symlink_restore_preserves_preexisting_target()
 	test_scope_feedback_is_available_for_generic_resolver()
 	print(
