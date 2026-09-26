@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import inspect
 import os
 import re
 import subprocess
@@ -115,6 +116,25 @@ def test_helper_accepts_valid_reused_workspace() -> None:
 		assert result.returncode == 0, result.stderr
 
 
+def test_helper_path_resolution_ignores_checkout_sitecustomize(tmp_path: Path) -> None:
+	workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-42"
+	workspace_path.mkdir(parents=True)
+	marker = tmp_path / "sitecustomize-ran"
+	(workspace_path / "sitecustomize.py").write_text(
+		"import os\nfrom pathlib import Path\nPath(os.environ['SITE_MARKER']).write_text('ran', encoding='utf-8')\n",
+		encoding="utf-8",
+	)
+	result = _run_helper(
+		tmp_path,
+		workspace_path,
+		PYTHONPATH=str(workspace_path),
+		SITE_MARKER=str(marker),
+		OPENROUTER_API_KEY="must-not-leak",
+	)
+	assert result.returncode == 0, result.stderr
+	assert not marker.exists()
+
+
 def test_helper_accepts_launch_from_shared_workspaces_root() -> None:
 	with tempfile.TemporaryDirectory(prefix="workspace-safety-check-") as td:
 		tmp_path = Path(td)
@@ -174,9 +194,9 @@ def test_implement_workflow_stages_and_guards_all_codex_launches() -> None:
 	summary_block = _step_run_text(IMPLEMENT_WORKFLOW, "Generate AI issue summary for PR comment")
 
 	assert "workspace_safety_check.sh" in stage_block
-	assert "bash scripts/workspace_safety_check.sh" in implement_block
-	assert "bash scripts/workspace_safety_check.sh" in repair_block
-	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"' in summary_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/workspace_safety_check.sh"' in implement_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/workspace_safety_check.sh"' in repair_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/workspace_safety_check.sh"' in summary_block
 
 
 def test_ci_and_release_gate_run_workspace_safety_check_tests() -> None:
@@ -196,9 +216,10 @@ def test_review_workflow_bootstraps_and_restages_workspace_safety_helper() -> No
 
 def test_validate_process_guards_codex_attempts_and_short_circuits_exit_78() -> None:
 	text = VALIDATE_PROCESS.read_text(encoding="utf-8")
-	assert 'WORKSPACE_SAFETY_CHECK_HELPER=""' in text
-	assert '".codex-workflow-src/scripts/workspace_safety_check.sh"' in text
-	assert '".codex-workflow-src-main/scripts/workspace_safety_check.sh"' in text
+	assert 'WORKSPACE_SAFETY_CHECK_HELPER="${_validate_script_dir}/workspace_safety_check.sh"' in text
+	assert 'WORKSPACE_SAFETY_CHECK_HELPER=""' not in text
+	assert '".codex-workflow-src/scripts/workspace_safety_check.sh"' not in text
+	assert '".codex-workflow-src-main/scripts/workspace_safety_check.sh"' not in text
 	assert 'bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?' in text
 	assert 'local exit_code="${5:-1}"' in text
 	assert 'exit "${exit_code}"' in text
@@ -238,7 +259,12 @@ def main() -> int:
 	test_functions = [value for key, value in sorted(globals().items()) if key.startswith("test_")]
 	passed = 0
 	for func in test_functions:
-		func()
+		# Script mode has no pytest fixtures; supply tmp_path as pytest would.
+		if "tmp_path" in inspect.signature(func).parameters:
+			with tempfile.TemporaryDirectory() as fixture_tmp_dir:
+				func(tmp_path=Path(fixture_tmp_dir))
+		else:
+			func()
 		passed += 1
 	print(f"OK: {passed} workspace safety checks passed")
 	return 0

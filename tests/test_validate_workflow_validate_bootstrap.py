@@ -99,6 +99,16 @@ def test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_asset
 		assert snippet in wf
 
 
+def test_validate_runtime_action_comes_from_validated_workflow_sha() -> None:
+	wf = _workflow_text()
+	assert "setup-runtime@stable" not in wf
+	assert "uses: ./.codex-workflow-runtime/.github/actions/setup-runtime" in wf
+	assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}" in wf
+	assert "WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}" in wf
+	assert "ref: ${{ fromJSON(toJSON(job)).workflow_sha }}" in wf
+	assert "job.workflow_sha is not an immutable 40-character commit SHA" in wf
+
+
 def test_validate_workflow_bootstrap_lists_prompt_assembly_assets() -> None:
 	wf = _workflow_text()
 	for snippet in (
@@ -122,8 +132,8 @@ def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> Non
 	helper = _helper_text()
 	for snippet in (
 		"WORKFLOW.md overlay is opt-in by file presence",
-		"python3 scripts/load_workflow_overlay.py",
-		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
+		'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"',
+		'--schema-path "${support_root_dir}/ai-memory/schemas/workflow_overlay.v1.json"',
 		'--github-env "${GITHUB_ENV}"',
 	):
 		assert snippet in helper
@@ -131,7 +141,9 @@ def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> Non
 
 def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout() -> None:
 	helper = _helper_text()
-	assert '[ -n "${GH_TOKEN:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"' in helper
+	assert 'if [[ "${ORIGINAL_SCRIPT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then' in helper
+	assert 'Failed to stage workflow support files from immutable ref ${ORIGINAL_SCRIPT_REF}' in helper
+	assert 'if ! [[ "${RESOLVED_SCRIPT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]' in helper
 	assert '[ "${source_path}" -ef "${target_path}" ]' in helper
 	assert "realpath -m" not in helper
 
@@ -139,9 +151,15 @@ def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_mai
 def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
-	assert 'python3 -E -P -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2' in wf
+	dependency_step = wf.split("- name: Install Python dependencies for validation renderer", 1)[1].split("- name: Determine Semble bootstrap state", 1)[0]
+	assert 'python3 -I -B -m venv "${RUNNER_TEMP}/validation-renderer-venv"' in dependency_step
+	assert '"${RUNNER_TEMP}/validation-renderer-venv/bin/python" -I -B -m pip install --disable-pip-version-check --quiet pyyaml jsonschema jinja2' in dependency_step
+	assert '"${RUNNER_TEMP}/validation-renderer-venv/bin" >> "$GITHUB_PATH"' in dependency_step
+	assert "validation-renderer-python" not in dependency_step
+	assert "PYTHONPATH=" not in dependency_step
+	assert "pip install --disable-pip-version-check --quiet --user" not in wf
 	assert "id: renderer_dependencies" in wf
-	assert "python3 -E -P -c 'import yaml, jsonschema, jinja2'" in wf
+	assert "\"${RUNNER_TEMP}/validation-renderer-venv/bin/python\" -I -B -c 'import yaml, jsonschema, jinja2'" in wf
 	assert "VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}" in wf
 	assert "if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'" in wf
 
@@ -155,7 +173,7 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 	assert step_match is not None
 	step = step_match.group("body")
 	assert "          BASH_ENV: ''\n" in step
-	assert 'if [ -f "scripts/render_validation_templates.py" ]; then' in step
+	assert 'if [ -f "${SUPPORT_SCRIPTS_DIR}/render_validation_templates.py" ]; then' in step
 	assert 'cd "${RUNNER_TEMP:?}"' in step
 	script = textwrap.dedent(step.split("        run: |\n", 1)[1])
 	with tempfile.TemporaryDirectory() as tmpdir:
@@ -163,9 +181,11 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 		workspace = root / "workspace"
 		runner_temp = root / "runner-temp"
 		bin_dir = root / "bin"
-		for directory in (workspace / "scripts", runner_temp, bin_dir):
+		support_scripts = root / "support" / "scripts"
+		for directory in (workspace / "scripts", runner_temp, bin_dir, support_scripts):
 			directory.mkdir(parents=True)
-		(workspace / "scripts" / "render_validation_templates.py").touch()
+		(support_scripts / "render_validation_templates.py").touch()
+		venv_wrapper = root / "venv-python"
 		startup_file = root / "shell-startup"
 		startup_marker = root / "sourced-startup"
 		import_marker = root / "imported-yaml"
@@ -175,28 +195,44 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 			f"Path({str(startup_file)!r}).write_text('compromised')\n",
 			encoding="utf-8",
 		)
+		# This branch installs into a venv with python3 -I -B (which implies -E
+		# and -P). The shim builds the venv from wrappers whose pip install and
+		# import probe run the same workspace-isolation assertions.
+		isolation_probe = root / "isolation_probe.py"
+		isolation_probe.write_text(
+			"import importlib, importlib.util, os, pathlib, sys\n"
+			"workspace = pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve()\n"
+			"assert pathlib.Path.cwd() != workspace\n"
+			"assert all(pathlib.Path(p or os.getcwd()).resolve() != workspace for p in sys.path)\n"
+			"for name in ('pip', 'yaml', 'jsonschema', 'jinja2'):\n"
+			"    spec = importlib.util.find_spec(name)\n"
+			"    assert not spec or not spec.origin or pathlib.Path(spec.origin).resolve() != workspace / (name + '.py')\n"
+			"for name in ('yaml', 'jsonschema', 'jinja2'):\n"
+			"    if importlib.util.find_spec(name):\n"
+			"        importlib.import_module(name)\n",
+			encoding="utf-8",
+		)
+		venv_python = (
+			"#!/bin/sh\n"
+			"[ \"$1\" = -I ] && [ \"$2\" = -B ] || exit 21\n"
+			"case \"$3\" in\n"
+			"  -m) [ \"$4\" = pip ] || exit 22;;\n"
+			"  -c) [ \"$4\" = 'import yaml, jsonschema, jinja2' ] || exit 23;;\n"
+			"  *) exit 24;;\n"
+			"esac\n"
+			f"exec \"$REAL_PYTHON3\" -I {isolation_probe}\n"
+		)
 		python_shim = bin_dir / "python3"
 		python_shim.write_text(
 			"#!/bin/sh\n"
-			"[ \"$1\" = -E ] && [ \"$2\" = -P ] || exit 11\n"
-			"case \"$3\" in\n"
-			"  -m) [ \"$4\" = pip ] || exit 12;;\n"
-			"  -c) [ \"$4\" = 'import yaml, jsonschema, jinja2' ] || exit 13;;\n"
-			"  *) exit 14;;\n"
-			"esac\n"
-			"exec \"$REAL_PYTHON3\" -E -P -c '"
-			"import importlib, importlib.util, os, pathlib, sys; "
-			"workspace = pathlib.Path(os.environ[\"GITHUB_WORKSPACE\"]).resolve(); "
-			"assert pathlib.Path.cwd() != workspace; "
-			"assert all(pathlib.Path(p or os.getcwd()).resolve() != workspace for p in sys.path); "
-			"assert all(not (spec := importlib.util.find_spec(name)) or "
-			"not spec.origin or pathlib.Path(spec.origin).resolve() != workspace / (name + \".py\") "
-			"for name in (\"pip\", \"yaml\", \"jsonschema\", \"jinja2\")); "
-			"[importlib.import_module(name) for name in (\"yaml\", \"jsonschema\", \"jinja2\") "
-			"if importlib.util.find_spec(name)]'\n",
+			"[ \"$1\" = -I ] && [ \"$2\" = -B ] && [ \"$3\" = -m ] && [ \"$4\" = venv ] || exit 11\n"
+			"mkdir -p \"$5/bin\"\n"
+			f"cp {venv_wrapper} \"$5/bin/python\"\n"
+			"chmod +x \"$5/bin/python\"\n",
 			encoding="utf-8",
 		)
 		python_shim.chmod(0o755)
+		venv_wrapper.write_text(venv_python, encoding="utf-8")
 		env = os.environ.copy()
 		env.update({
 			"BASH_ENV": "",  # Step env overrides the prior workspace-directed BASH_ENV.
@@ -206,6 +242,8 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 			"PYTHONPATH": str(workspace),
 			"REAL_PYTHON3": sys.executable,
 			"RUNNER_TEMP": str(runner_temp),
+			"SUPPORT_SCRIPTS_DIR": str(support_scripts),
+			"GITHUB_PATH": str(root / "github-path"),
 		})
 		result = subprocess.run(
 			["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
@@ -221,6 +259,21 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 	process_text = VALIDATE_PROCESS.read_text(encoding="utf-8")
 	function_text = process_text.split("run_template_validation_harness_renderer()\n{", 1)[1].split("\n}\n", 1)[0]
 	function_text = "run_template_validation_harness_renderer()\n{" + function_text + "\n}\n"
+	# This branch runs the renderer through the isolated launcher and may
+	# bootstrap a dependency venv first; define both, as validate_process.sh
+	# does before calling the renderer.
+	helpers_text = (REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8")
+	launcher_start = helpers_text.index("_gh_helpers_run_isolated_python()\n")
+	launcher_text = helpers_text[launcher_start:helpers_text.index("\n}\n", launcher_start) + 3]
+	bootstrap_start = process_text.index('VALIDATION_RENDERER_DEPS_VENV_BIN=""\n')
+	bootstrap_text = process_text[bootstrap_start:process_text.index("run_template_validation_harness_renderer()\n", bootstrap_start)]
+	function_text = (
+		"_validate_script_dir=scripts\n"
+		+ launcher_text
+		+ 'validate_run_isolated_python()\n{\n\t_gh_helpers_run_isolated_python "$@"\n}\n'
+		+ bootstrap_text
+		+ function_text
+	)
 	assert "VALIDATION_RENDERER_DEPENDENCIES_READY" in function_text
 	assert "import yaml, jsonschema, jinja2" in function_text
 	for setup_ready, imports_available, expected_status in (
@@ -245,14 +298,20 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 			shim = root / "python3"
 			shim.write_text(
 				"#!/bin/sh\n"
+				# The isolated launcher adds -I -B; a refused venv keeps the
+				# dependency bootstrap from reaching a package index.
+				"[ \"$1\" = '-I' ] && shift\n"
+				"[ \"$1\" = '-B' ] && shift\n"
+				"if [ \"$1\" = '-m' ] && [ \"$2\" = 'venv' ]; then exit 1; fi\n"
 				"if [ \"$1\" = '-c' ] && [ \"$2\" = 'import yaml, jsonschema, jinja2' ]; then\n"
-				"  [ \"$IMPORTS_AVAILABLE\" = 'true' ] && exit 0\n"
+				# Literal values: the isolated launcher runs under env -i.
+				f"  [ '{imports_available}' = 'true' ] && exit 0\n"
 				"  exit 1\n"
 				"fi\n"
 				"case \"$1\" in\n"
 				"  scripts/render_validation_templates.py) touch renderer-invoked; exit 0;;\n"
 				"esac\n"
-				"exec \"$REAL_PYTHON3\" \"$@\"\n",
+				f"exec '{sys.executable}' \"$@\"\n",
 				encoding="utf-8",
 			)
 			shim.chmod(0o755)
@@ -262,6 +321,7 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 				"REAL_PYTHON3": sys.executable,
 				"IMPORTS_AVAILABLE": imports_available,
 				"GENERATE_LOG_FILE": str(root / "renderer.log"),
+				"RUNNER_TEMP": str(root),
 			})
 			env.pop("BASH_ENV", None)
 			if setup_ready:
@@ -378,8 +438,62 @@ def test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metach
 		assert not marker_path.exists()
 
 
+def test_immutable_support_bundle_enforces_dependency_closure_and_path_safety() -> None:
+	helper = _helper_text()
+	assert "stage_immutable_support_bundle()" in helper
+	assert "scripts/emit_event.sh scripts/emit_event.py" in helper
+	assert "scripts/openrouter_prompt_cache.py scripts/semantic_cache.py scripts/memory_injection_patterns.py" in helper
+	assert "Immutable support dependency escapes source checkout" in helper
+	assert "Immutable support dependency must be a regular non-symlink file" in helper
+	assert "Immutable support staging requires WORKFLOW_SUPPORT_REF to be a 40-character commit SHA" in helper
+	assert 'chmod 0555 "${temporary_root}"' in helper
+	assert helper.index('chmod 0555 "${temporary_root}"') < helper.index('chown -R root:root "${temporary_root}"')
+	assert helper.index('chmod 0555 "${temporary_root}"') < helper.index('sudo -n chown -R root:root "${temporary_root}"')
+	immutable_sudo_failure_block = helper.split("Immutable support staging requires root ownership", 1)[1].split("return 1", 1)[0]
+	assert 'chmod u+w "${temporary_root}"' in immutable_sudo_failure_block
+	assert immutable_sudo_failure_block.index('chmod u+w "${temporary_root}"') < immutable_sudo_failure_block.index('rm -rf -- "${temporary_root}"')
+	assert 'GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true' in helper
+	assert 'AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true' in helper
+
+
+def test_validate_support_manifest_requires_memory_and_event_dependencies() -> None:
+	wf = _workflow_text()
+	for required_path in (
+		'"scripts/semantic_cache.py"',
+		'"scripts/memory_injection_patterns.py"',
+		'"scripts/emit_event.sh"',
+		'"scripts/emit_event.py"',
+		'"scripts/self_heal_validation.sh"',
+		'"scripts/semble_helpers.sh"',
+		'"scripts/setup_serena.sh"',
+		'"scripts/ledger_emit_substate.sh"',
+		'"scripts/orchestrate_state_v2.py"',
+		'"scripts/evaluate_behavioural_smoke.py"',
+		'"scripts/run_behavioural_smoke_assertions.sh"',
+		'"scripts/templates/slot_manifest.schema.json"',
+		'"ai-memory/schemas/workflow_overlay.v1.json"',
+		'"unattended_system_instructions.md"',
+		'"ai_pipeline.md"',
+		'"prompts/mode-validate-self-heal.txt"',
+		'"prompts/mode-validate-self-heal-continuation.txt"',
+		'"prompts/contracts/mode-validate-self-heal.yml"',
+	):
+		assert required_path in wf
+	validate_process = (REPO_ROOT / "scripts" / "validate_process.sh").read_text(encoding="utf-8")
+	assert 'model_provider_broker_prepare_codex_readonly nobody' in validate_process
+	assert 'source "${_validate_script_dir}/gh_helpers.sh"' in validate_process
+	assert 'source "${_validate_script_dir}/tg_helpers.sh"' in validate_process
+	assert 'bash "${_validate_script_dir}/self_heal_validation.sh"' in validate_process
+	assert 'candidate="${VALIDATE_SUPPORT_ROOT}/${repo_path}"' in validate_process
+	assert 'cat "${VALIDATE_SUPPORT_ROOT}/unattended_system_instructions.md"' in validate_process
+	assert 'exec bash "${VALIDATION_TRUSTED_DRIVER}" "$@"' in validate_process
+	assert "exec bash scripts/validate_driver.sh" not in validate_process
+	assert "source scripts/gh_helpers.sh" not in validate_process
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
+	test_validate_runtime_action_comes_from_validated_workflow_sha()
 	test_validate_workflow_bootstrap_lists_prompt_assembly_assets()
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
 	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()
@@ -393,6 +507,8 @@ def main() -> int:
 	test_run_validation_repo_checks_override_preserves_quoted_arguments()
 	test_run_validation_repo_checks_override_preserves_env_prefix_assignments()
 	test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metacharacters()
+	test_immutable_support_bundle_enforces_dependency_closure_and_path_safety()
+	test_validate_support_manifest_requires_memory_and_event_dependencies()
 	return 0
 
 

@@ -98,7 +98,7 @@ import os
 import sys
 from pathlib import Path
 
-state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+state_path = Path(__file__).resolve().parent.parent / "gh_state.json"
 state = json.loads(state_path.read_text(encoding="utf-8"))
 args = sys.argv[1:]
 state.setdefault("calls", []).append(args)

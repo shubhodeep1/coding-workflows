@@ -58,6 +58,24 @@ def _workflow_text() -> str:
 	return expanded_review_autofix_text()
 
 
+def test_provider_key_is_scoped_to_model_facing_review_steps() -> None:
+	doc = yaml.safe_load(_workflow_text())
+	job = doc["jobs"]["codex-agent"]
+	assert "OPENROUTER_API_KEY" not in job.get("env", {})
+	steps = {step.get("name"): step for step in job["steps"] if isinstance(step, dict)}
+	for step_name in (
+		"Run reviewer models",
+		"Apply fixes with editor model",
+		"Run interim judge",
+		"Synthesize behavioural smoke",
+		"Run Codex resolver, validate, stage, commit",
+		"Review-blocked judge decision",
+	):
+		assert "OPENROUTER_API_KEY" in steps[step_name].get("env", {})
+	for step_name in ("Collect PR metadata", "Commit changes", "Prepare merge-conflict resolver prompt and pre-snapshot"):
+		assert "OPENROUTER_API_KEY" not in steps[step_name].get("env", {})
+
+
 def _stage_helper_text() -> str:
 	return STAGE_HELPER.read_text(encoding="utf-8")
 
@@ -570,6 +588,7 @@ def _git_clean_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
 		for key, value in os.environ.items()
 		if not key.startswith("GIT_") and key not in {"BASH_ENV", "ENV"}
 	}
+	env.setdefault("SUPPORT_SCRIPTS_DIR", str(REPO_ROOT / "scripts"))
 	if overrides:
 		env.update(overrides)
 	return env
@@ -740,28 +759,35 @@ def _reviewer_iteration_scope_helper_block() -> str:
 	text = _reviewers_text()
 	start = text.index("# ── Reviewer iteration-scoping helpers")
 	end = text.index("# ── End reviewer iteration-scoping helpers", start)
-	return text[start:end]
+	return _reviewer_isolation_helper_block() + "\n" + text[start:end]
+
+
+def _reviewer_isolation_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("reviewer_run_isolated_python() {")
+	end = text.index("\n}\n", start) + len("\n}\n")
+	return f'source "{REPO_ROOT / "scripts" / "gh_helpers.sh"}"\n' + text[start:end]
 
 
 def _reviewer_filter_helper_block() -> str:
 	text = _reviewers_text()
 	start = text.index("# ── Reviewer uninteresting-file filter helpers")
 	end = text.index("# ── End reviewer uninteresting-file filter helpers", start)
-	return text[start:end]
+	return _reviewer_isolation_helper_block() + "\n" + text[start:end]
 
 
 def _reviewer_risk_tier_helper_block() -> str:
 	text = _reviewers_text()
 	start = text.index("# ── Reviewer risk-tier helpers")
 	end = text.index("# ── End reviewer risk-tier helpers", start)
-	return text[start:end]
+	return _reviewer_isolation_helper_block() + "\n" + text[start:end]
 
 
 def _reviewer_failback_helper_block() -> str:
 	text = _reviewers_text()
 	start = text.index("# ── Reviewer failback / health helpers")
 	end = text.index("# ── End reviewer failback / health helpers", start)
-	return text[start:end]
+	return _reviewer_isolation_helper_block() + "\n" + text[start:end]
 
 
 def _reviewer_partial_finalize_budget_helper_block() -> str:
@@ -866,8 +892,11 @@ def _diff_changed_paths(diff_text: str) -> list[str]:
 def _gate_agents_md_materiality_classifier_script() -> str:
 	gate_block = _step_block("Evaluate review gate").splitlines()
 	start_idx = -1
+	materiality_environment_seen = False
 	for idx, line in enumerate(gate_block):
-		if "gate_materiality_json" in line and "python3 - <<'PY'" in line:
+		if 'PR_FILES_JSON="${pr_files_json}"' in line:
+			materiality_environment_seen = True
+		elif materiality_environment_seen and "python3 -I -B - <<'PY'" in line:
 			start_idx = idx + 1
 			break
 	if start_idx < 0:
@@ -2202,6 +2231,7 @@ def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | Non
 		env.update({
 			"RUNTIME_DIR": str(runtime),
 			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 			"EDITOR_SUMMARY_FILE": str(runtime / "editor_summary.txt"),
 			"COMMITTED_FILES_FILE": str(runtime / "committed_files.txt"),
 			"GITHUB_STEP_SUMMARY": str(step_summary),
@@ -2463,7 +2493,7 @@ def _build_partial_finalize_step_context(tmp: Path) -> dict[str, object]:
 	support_scripts_dir = tmp / "support_scripts"
 	support_scripts_dir.mkdir()
 	(support_scripts_dir / "gh_helpers.sh").write_text(
-		"#!/usr/bin/env bash\nset -euo pipefail\ngh_retry() { \"$@\"; }\n",
+		(REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8"),
 		encoding="utf-8",
 	)
 	bin_dir = tmp / "bin"
@@ -2743,7 +2773,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 
 	stage_step_block = _step_block("Stage workflow support files")
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in stage_step_block
-	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in stage_step_block
+	assert '.codex-workflow-src-main' not in stage_step_block
 	assert "REQUIRED_BOOTSTRAP_SCRIPTS=" not in stage_step_block
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}"' not in stage_step_block
 	required_bootstrap_line = next(
@@ -2848,6 +2878,12 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in apply_fixes
 	assert 'failure_class=config_writer_missing' in apply_fixes
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in apply_fixes
+	# The editor runs in review_untrusted_sandbox.sh behind the budgeted
+	# review relay (clarify_openrouter_broker.py review-broker).
+	assert 'review_untrusted_sandbox.sh" run' in apply_fixes
+	assert "--provider-base-url" not in apply_fixes
+	assert "model_provider_broker_stop || echo" in apply_fixes
+	assert "model_provider_broker_stop || original_rc=80" not in apply_fixes
 	assert 'opencode_run_cmd "$@"' in consolidate
 	assert '\twriter\n\t"${REVIEW_CONSOLIDATOR_MODEL}"' in consolidate
 	assert 'opencode_emit_failure_alert review_consolidate writer' in consolidate
@@ -2855,6 +2891,8 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in consolidate
 	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in consolidate
+	assert '--provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"' in consolidate
+	assert consolidate.count("model_provider_broker_exec_sanitized") >= 2
 	assert 'reviewer\n    "${MODEL_EDITOR}"' in rb_judge
 	assert 'writer\n        "${MODEL_EDITOR}"' in rb_judge
 	assert 'OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"' in rb_judge
@@ -2862,6 +2900,10 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in rb_judge
 	assert 'opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in rb_judge
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true' in rb_judge
+	assert '--provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"' in rb_judge
+	assert rb_judge.count("model_provider_broker_exec_sanitized") >= 6
+	assert "\nmodel_provider_broker_stop\n" not in rb_judge
+	assert "      model_provider_broker_stop\n" not in rb_judge
 	assert 'if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then\n  exit 1\nfi' in rb_judge
 	assert 'if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then\n        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"\n        exit 1\n      fi' in rb_judge
 	assert 'opencode_run_cmd "$@"' in resolver
@@ -2870,6 +2912,8 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in resolver
 	assert 'opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in resolver
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in resolver
+	assert "model_provider_broker_stop || echo" in resolver
+	assert "model_provider_broker_stop || _rc=1" not in resolver
 	for converted in (apply_fixes, consolidate, rb_judge, resolver):
 		assert "--ask-for-approval never" not in converted
 	judge_stall_case = rb_judge.index('case "${judge_stall_state}" in')
@@ -4313,7 +4357,8 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert 'issues/${PR_NUMBER}/comments' in advisory_block
 	assert 'AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality' in gate_block
 	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in gate_block
-	assert 'PR_FILES_JSON="${pr_files_json}" python3 - <<\'PY\'' in gate_block
+	assert 'PR_FILES_JSON="${pr_files_json}" \\' in gate_block
+	assert "python3 -I -B - <<'PY'" in gate_block
 	assert 'changed_files: .changed_files' in gate_block
 	assert 'FILES_SKIP_SUPPRESSED="true"' in gate_block
 	assert 'PROTECTED_SKIP_SUPPRESSED="true"' in gate_block
@@ -5018,6 +5063,10 @@ def test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branch
 		"render_prompt.py must be in MAIN_PRIMARY_BOOTSTRAP_SCRIPTS so main-side "
 		"validator fixes reach wedged/in-flight PR branches"
 	)
+	assert "orchestrate_state_v2.py" in main_primary_line, (
+		"orchestrate_state_v2.py must be main-primary so resolver state authentication "
+		"uses the same current contract as review_conflict_prepare.sh"
+	)
 	assert "render_prompt.py" not in optional_line, (
 		"render_prompt.py must not be branch-primary in OPTIONAL_BOOTSTRAP_SCRIPTS"
 	)
@@ -5026,6 +5075,14 @@ def test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branch
 	assert re.search(r"\brender_prompt\.py\b", required_line) is None, (
 		"render_prompt.py must not be branch-primary in REQUIRED_BOOTSTRAP_SCRIPTS"
 	)
+
+
+def test_conflict_prepare_receives_dedicated_state_auth_keyring() -> None:
+	workflow = _workflow_text()
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING:" in workflow
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}" in workflow
+	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	assert '.state_auth.schema_version == "orchestrator_state_auth.v2"' in prepare
 
 
 def test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
@@ -5150,7 +5207,7 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		"${RUNTIME_DIR}/consolidator_raw.txt",
 		"${RUNTIME_DIR}/parser_stats.txt",
 		"${RUNTIME_DIR}/ledger_status.txt",
-		'COMMITTED_FILES_FILE="${committed_files_file}"',
+		'"COMMITTED_FILES_FILE=${committed_files_file}"',
 		"grep -c 'CONSOLIDATOR_OVERRIDDEN:' \"${EDITOR_SUMMARY_FILE}\"",
 		"EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}",
 		"MAX_ITERATIONS_REACHED: ${{ steps.retrigger_guard.outputs.max_iterations_reached }}",
@@ -5475,8 +5532,8 @@ def test_review_partial_finalize_workflow_path_is_wired() -> None:
 
 	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in early_save_block
 	for expected in (
-		'CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}"',
-		'CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}"',
+		'"CURRENT_PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR:-}"',
+		'"CURRENT_RUNTIME_DIR=${RUNTIME_DIR:-}"',
 		'"AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT": "0",',
 		'selected_marker_root / "previous_reviews"',
 		'selected_marker_root / "runtime"',
@@ -5501,9 +5558,9 @@ def test_review_partial_finalize_workflow_path_is_wired() -> None:
 		"resume_round_limit=${resume_round_limit}",
 		"resume_state=${RESUME_STATE}",
 		"resume_should_continue=${RESUME_SHOULD_CONTINUE}",
-		'VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}"',
-		'EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}"',
-		'WITHHELD_REASON="${withheld_reason}"',
+		'"VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}"',
+		'"EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}"',
+		'"WITHHELD_REASON=${withheld_reason}"',
 		'"validation_tail_can_complete": parse_bool("VALIDATION_TAIL_CAN_COMPLETE"),',
 		'"edits_withheld_for_safety": parse_bool("EDITS_WITHHELD_FOR_SAFETY"),',
 		'"withheld_reason": os.environ.get("WITHHELD_REASON", "").strip() or "none",',
@@ -6254,7 +6311,7 @@ def test_reviewer_iteration_scope_fails_open_on_bad_scope_artifacts() -> None:
 def test_reviewer_iteration_scope_uses_targeted_context_helper_and_scoped_semble_labels() -> None:
 	reviewers = _reviewers_text()
 	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${TARGETED_FILE_CONTEXT_SCRIPT:-${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py}"' in reviewers
-	assert 'python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"' in reviewers
+	assert 'reviewer_run_isolated_python "${TARGETED_FILE_CONTEXT_SCRIPT}"' in reviewers
 	assert '--paths-file "${REVIEWER_SCOPE_PATHS_FILE}"' in reviewers
 	assert 'Scoped reviewer focus summary:' in reviewers
 	assert 'Scoped reviewer focus files:' in reviewers
@@ -6330,7 +6387,7 @@ def test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trai
 	ledger_text = "\n".join([
 		"issue-1\tNEW\t0\tREADME.:3\tCORRECTNESS & LOGIC\t[]",
 		"issue-2\tPERSISTING\t1\tgo.mod.:2\tCORRECTNESS & LOGIC\t[]",
-		"issue-3\tRESURGENT\t0\t.env.:1\tCORRECTNESS & LOGIC\t[]",
+		"issue-3\tRESURGENT\t0\t.gitignore.:1\tCORRECTNESS & LOGIC\t[]",
 	]) + "\n"
 	result = _run_prepare_reviewer_scope_harness(
 		last_run_changed_text="scripts/review_run_reviewers.sh\n",
@@ -6339,7 +6396,7 @@ def test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trai
 			"scripts/review_run_reviewers.sh": "scoped shell target\n",
 			"README.": "literal trailing dot\n",
 			"go.mod.": "module example.com/literal\n",
-			".env.": "TOKEN=test\n",
+			".gitignore.": "literal ignore file\n",
 		},
 	)
 
@@ -6348,14 +6405,14 @@ def test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trai
 		"scripts/review_run_reviewers.sh",
 		"README.",
 		"go.mod.",
-		".env.",
+		".gitignore.",
 	]
 	assert "- README. [ledger:NEW]" in result["scope_summary"]
 	assert "- go.mod. [ledger:PERSISTING]" in result["scope_summary"]
-	assert "- .env. [ledger:RESURGENT]" in result["scope_summary"]
+	assert "- .gitignore. [ledger:RESURGENT]" in result["scope_summary"]
 	assert "--- FILE: README." in result["scope_context"]
 	assert "--- FILE: go.mod." in result["scope_context"]
-	assert "--- FILE: .env." in result["scope_context"]
+	assert "--- FILE: .gitignore." in result["scope_context"]
 
 
 def test_reviewer_iteration_scope_prepare_path_preserves_hidden_directory_prefixes() -> None:
@@ -6635,32 +6692,21 @@ def test_review_blocked_judge_merges_are_bound_to_judged_head_sha() -> None:
 	assert '[[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in judge_text, (
 		"review-blocked judge must refuse merge actions without a full evaluated head SHA"
 	)
-	for merge_mode in ("--squash --auto", "--squash"):
-		expected_call = (
-			'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" '
-			f'{merge_mode} --match-head-commit "${{RB_JUDGED_HEAD_SHA}}"'
-		)
-		assert judge_text.count(expected_call) == 2, (
-			f"both review-blocked judge merge actions must bind {merge_mode} to RB_JUDGED_HEAD_SHA"
-		)
 	judge_merge_region = judge_text[judge_text.index("  merge)\n") : judge_text.index("  merge_with_followup)\n")]
 	judge_merge_commands = [line for line in judge_merge_region.splitlines() if 'gh pr merge "${PR_NUMBER}"' in line]
-	assert len(judge_merge_commands) == 4, judge_merge_commands
+	assert judge_merge_commands, judge_merge_commands
 	assert all("--match-head-commit" in line for line in judge_merge_commands), (
 		f"unbound review-blocked judge merge call(s) remain: {judge_merge_commands}"
 	)
+	assert all('"${RB_MERGE_HEAD_SHA}"' in line or '"${RB_JUDGED_HEAD_SHA}"' in line for line in judge_merge_commands)
 	assert '_match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")' in judge_text, (
 		"merge_with_followup must bind to the checked-out judged head, not a later live PR head"
 	)
 	assert '_pr_checks_completed "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"' in judge_text, (
 		"merge_with_followup must validate checks for the same judged head it can merge"
 	)
-	assert judge_text.count('RB_MERGE_READY_LABEL_ALLOWED="false"') == 2, (
-		"both judge merge actions must withhold ready labels until a bound merge request succeeds"
-	)
-	assert 'elif [ "${PR_ALREADY_MERGED:-false}" = "true" ]; then\n      RB_MERGE_READY_LABEL_ALLOWED="true"' in judge_text, (
-		"an already-merged PR must still advance its linked issues without another merge request"
-	)
+	assert 'RB_MERGE_CONFIRMED=false' in judge_text
+	assert 'RB_MERGE_HEAD_SHA' in judge_text
 
 
 def _run_auto_merge_helper_with_fake_gh(
@@ -6973,7 +7019,7 @@ def test_editor_preflight_mode_covers_every_guard() -> None:
 	# commented-out guard or the comment text itself is not a guard.
 	guarded = text.replace("CODEX_STALL_GUARD_HELPER=", ': "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"\nCODEX_STALL_GUARD_HELPER=', 1)
 	assert _editor_preflight_guard_gaps(guarded) == {"OPENROUTER_API_KEY"}
-	covered = guarded.replace("\t\t# same change.\n\t)", "\t\t# same change.\n\t\tOPENROUTER_API_KEY\n\t)", 1)
+	covered = guarded.replace("\t\tGITHUB_ENV\n\t)", "\t\tGITHUB_ENV\n\t\tOPENROUTER_API_KEY\n\t)", 1)
 	assert covered != guarded
 	assert _editor_preflight_guard_gaps(covered) == set()
 
@@ -6998,23 +7044,43 @@ def test_editor_preflight_mode_reports_each_check_and_fails_fast() -> None:
 			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			"RUNTIME_DIR": str(runtime_dir),
 			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			# setup_editor_isolation() (always invoked on a real editor run)
+			# guards these three, so the preflight dry-run requires them too.
+			# GITHUB_WORKSPACE/GITHUB_ENV are ambient on every real Actions
+			# runner step; WORKSPACE_PATH is exported by an earlier step.
+			"WORKSPACE_PATH": str(tmp),
+			"GITHUB_WORKSPACE": str(tmp),
+			"GITHUB_ENV": str(tmp / "github_env"),
 		})
+		# CODEX_HELPERS_PATH is derived unconditionally from SUPPORT_SCRIPTS_DIR
+		# near the top of this script (and hard-required before --preflight can
+		# even dispatch), so a caller-supplied override no longer has any
+		# effect; drop any inherited value instead of asserting on it.
 		env.pop("CODEX_HELPERS_PATH", None)
 		ok = subprocess.run(["bash", str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
 		assert ok.returncode == 0, ok.stderr
-		assert ok.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=ok checks=4 failed=0"
-		for check in ("opencode_helpers", "opencode_config_writer", "opencode_binary", "runtime_dir"):
+		assert ok.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=ok checks=9 failed=0"
+		for check in (
+			"env_RUNTIME_DIR",
+			"env_WORKSPACE_PATH",
+			"env_GITHUB_WORKSPACE",
+			"env_GITHUB_ENV",
+			"opencode_helpers",
+			"opencode_config_writer",
+			"codex_helpers",
+			"opencode_binary",
+			"runtime_dir",
+		):
 			assert f"REVIEW_EDITOR_PREFLIGHT check={check} result=ok " in ok.stderr
 		assert list(runtime_dir.iterdir()) == [], "preflight must not write runtime files"
 
 		(bin_dir / "opencode").unlink()
 		env["PATH"] = str(bin_dir)
 		env["RUNTIME_DIR"] = str(tmp / "missing-runtime")
-		env["CODEX_HELPERS_PATH"] = str(tmp / "missing-codex-helpers.sh")
 		bad = subprocess.run([bash_executable, str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
 		assert bad.returncode == 1, bad.stderr
-		assert bad.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=fail checks=5 failed=3"
-		for check in ("codex_helpers", "opencode_binary", "runtime_dir"):
+		assert bad.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=fail checks=9 failed=2"
+		for check in ("opencode_binary", "runtime_dir"):
 			assert f"REVIEW_EDITOR_PREFLIGHT check={check} result=fail " in bad.stderr
 
 
@@ -7027,7 +7093,7 @@ def _step_explicit_env_names(step_name: str) -> list[str]:
 def test_editor_preflight_step_wiring() -> None:
 	preflight = _step_block('"Preflight: Verify required files before reviewer invocation"')
 	editor_env = _step_explicit_env_names("Apply fixes with editor model")
-	assert editor_env == ["GH_TOKEN", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
+	assert editor_env == ["OPENROUTER_API_KEY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
 	editor = _step_block("Apply fixes with editor model")
 	for name in editor_env:
 		line = next(line.strip() for line in editor.splitlines() if line.strip().startswith(f"{name}:"))
@@ -7260,6 +7326,7 @@ def main() -> int:
 	test_reviewer_filter_stat_harness_handles_brace_expansion_renames()
 	test_reject_verifier_bootstrap_and_stage_order_contract()
 	test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branches()
+	test_conflict_prepare_receives_dedicated_state_auth_keyring()
 	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
@@ -7409,7 +7476,9 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	broker = (REPO_ROOT / "scripts/clarify_openrouter_broker.py").read_text(encoding="utf-8")
 	assert 'REVIEW_PATH = "/api/v1/chat/completions"' in broker
 	assert '"review-broker"' in broker and '"review-bridge"' in broker
-	assert 'self.server.model' in broker
+	# The configured model is the budget policy's only allowed model.
+	assert 'budget = build_budget_state(model)' in broker
+	assert 'frozenset((model,))' in broker
 
 
 def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
@@ -7525,6 +7594,7 @@ def test_review_relay_accepts_only_configured_chat_model() -> None:
 		server.mode = "review-broker"
 		server.model = "openai/gpt-6-sol"
 		server.api_key = "test-only-key"
+		server.budget = broker_module.build_budget_state("openai/gpt-6-sol")
 		thread = threading.Thread(target=server.serve_forever, daemon=True)
 		thread.start()
 		try:

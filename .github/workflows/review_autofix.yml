@@ -77,6 +77,8 @@ on:
         required: true
       OPENROUTER_API_KEY:
         required: true
+      ORCHESTRATOR_STATE_AUTH_KEYRING:
+        required: false
       TG_BOT_SECRET:
         required: false
   workflow_dispatch:
@@ -104,6 +106,13 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: review_autofix
+  MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE || '10' }}
+  MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE || '30' }}
+  MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE || '0.10' }}
+  MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE || '1' }}
+  MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS || '16777216' }}
+  MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS || '1677721600' }}
+  MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD || '' }}
   # Resolve base-branch conflicts BEFORE the reviewer/editor spend when the
   # pre-review merge-topology gate sees a content conflict (default on).
   PRE_REVIEW_CONFLICT_RESOLVE_ENABLED: ${{ vars.PRE_REVIEW_CONFLICT_RESOLVE_ENABLED || 'true' }}
@@ -369,6 +378,7 @@ jobs:
           fetch-depth: 1
           sparse-checkout: scripts/workflow_failure_heal.py
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Verify fingerprint cap support identity
         if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
@@ -887,7 +897,18 @@ jobs:
                   echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error"
                 else
                   terminal_decision=""
-                  if ! terminal_decision="$(PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" GATE_MARKER_AUTHOR_LOGIN="${terminal_marker_author_login}" python3 - <<'PY'
+                  if ! terminal_decision="$(env -i \
+                    HOME="${HOME:-}" \
+                    PATH="${PATH:-/usr/bin:/bin}" \
+                    TMPDIR="${TMPDIR:-/tmp}" \
+                    LANG="C.UTF-8" \
+                    LC_ALL="C.UTF-8" \
+                    PYTHONDONTWRITEBYTECODE="1" \
+                    PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" \
+                    GATE_HEAD_SHA="${pr_head_sha_gate}" \
+                    GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" \
+                    GATE_MARKER_AUTHOR_LOGIN="${terminal_marker_author_login}" \
+                    python3 -I -B - <<'PY'
           import json
           import os
           import re
@@ -1246,7 +1267,15 @@ jobs:
                       # alone. Repo-verified signals such as new top-level
                       # directories remain helper-only and intentionally fail
                       # open on the gate path.
-                      if gate_materiality_json="$(PR_FILES_JSON="${pr_files_json}" python3 - <<'PY'
+                      if gate_materiality_json="$(env -i \
+                        HOME="${HOME:-}" \
+                        PATH="${PATH:-/usr/bin:/bin}" \
+                        TMPDIR="${TMPDIR:-/tmp}" \
+                        LANG="C.UTF-8" \
+                        LC_ALL="C.UTF-8" \
+                        PYTHONDONTWRITEBYTECODE="1" \
+                        PR_FILES_JSON="${pr_files_json}" \
+                        python3 -I -B - <<'PY'
           import json
           import os
           import sys
@@ -1533,6 +1562,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Verify workflow support source
         env:
           WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
@@ -1694,6 +1724,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Verify workflow support source
         env:
           WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}
@@ -2006,6 +2037,7 @@ jobs:
             scripts/workflow_failure_heal.py
             scripts/workflow_failure_heal_autofix_report.sh
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Verify workflow support source
         env:
@@ -2258,7 +2290,6 @@ jobs:
     if: ${{ needs.gate.outputs.should_run == 'true' }}
 
     env:
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       # Head the gate evaluated; the review-autofix-failure:v1 marker on every
       # failure comment records it so the gate's identical-failure cap can
@@ -2372,7 +2403,7 @@ jobs:
       # has no checkout, no LLM, and no working tree, so the ~30 s spent
       # here would be pure waste there.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
         with:
           tool-cache: true
           android: true
@@ -2418,6 +2449,7 @@ jobs:
           filter: blob:none
           token: ${{ secrets.GH_PAT }}
 
+          persist-credentials: false
       - name: Show disk usage (post checkout)
         run: df -h /
 
@@ -2430,7 +2462,11 @@ jobs:
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
           SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
         env:
@@ -2457,6 +2493,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Ensure workflow support source checkout
         run: |
           set -euo pipefail
@@ -2682,6 +2719,7 @@ jobs:
           codex_run_budget_soft_deadline_epoch="$(( job_start_epoch + codex_run_budget_total_secs ))"
 
           mkdir -p "${PREVIOUS_REVIEWS_DIR}" "${RUNTIME_CONTEXT_DIR}"
+          chmod 0711 "${RUNTIME_DIR}"
 
           {
             echo "JOB_START_EPOCH=${job_start_epoch}"
@@ -2690,6 +2728,7 @@ jobs:
             echo "CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=${codex_run_budget_soft_deadline_epoch}"
             echo "CODEX_RUN_BUDGET_TOTAL_SECS=${codex_run_budget_total_secs}"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "PR_CLOSED_SENTINEL_FILE=${RUNTIME_DIR}/pr_closed_sentinel"
             echo "PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR}"
             echo "RUNTIME_CONTEXT_DIR=${RUNTIME_CONTEXT_DIR}"
             echo "PR_PAYLOAD_FILE=${RUNTIME_DIR}/pr_payload.json"
@@ -2820,7 +2859,7 @@ jobs:
       - name: Setup uv for Semble
         if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
         continue-on-error: true
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
 
       - name: Install semble
         if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
@@ -3082,13 +3121,18 @@ jobs:
           ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${PR_NUMBER}"
           ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
           ledger_cache_restored_entries=0
-          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
-            if [ -d "${ledger_cache_staging_root}/${ledger_cache_rel}" ]; then
-              mkdir -p "${ledger_cache_workspace_root}/${ledger_cache_rel}"
-              cp -a "${ledger_cache_staging_root}/${ledger_cache_rel}/." "${ledger_cache_workspace_root}/${ledger_cache_rel}/"
-              ledger_cache_restored_entries=$((ledger_cache_restored_entries + 1))
-            fi
-          done
+          ledger_cache_rel=.ai/review_issue_ledger
+          if [ -d "${ledger_cache_staging_root}/${ledger_cache_rel}" ]; then
+            mkdir -p "${ledger_cache_workspace_root}/${ledger_cache_rel}"
+            cp -a "${ledger_cache_staging_root}/${ledger_cache_rel}/." "${ledger_cache_workspace_root}/${ledger_cache_rel}/"
+            ledger_cache_restored_entries=$((ledger_cache_restored_entries + 1))
+          fi
+          review_runtime_rel=".ai/review_runtime/pr-${PR_NUMBER}"
+          if [ -d "${ledger_cache_staging_root}/${review_runtime_rel}" ]; then
+            mkdir -p "${ledger_cache_workspace_root}/${review_runtime_rel}"
+            cp -a "${ledger_cache_staging_root}/${review_runtime_rel}/." "${ledger_cache_workspace_root}/${review_runtime_rel}/"
+            ledger_cache_restored_entries=$((ledger_cache_restored_entries + 1))
+          fi
           if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}" ]; then
             mkdir -p "$(dirname "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}")"
             cp -a "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}" "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}"
@@ -3100,6 +3144,7 @@ jobs:
         if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 
           current_head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
           if [ -z "${current_head_sha}" ]; then
@@ -3113,11 +3158,13 @@ jobs:
           fi
 
           resume_env_file="$(mktemp)"
-          CURRENT_HEAD_SHA="${current_head_sha}" \
-          RESUME_ROUND_LIMIT="${resume_round_limit}" \
-          CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}" \
-          CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}" \
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_env_file}"
+          _gh_helpers_run_isolated_python \
+            "CURRENT_HEAD_SHA=${current_head_sha}" \
+            "RESUME_ROUND_LIMIT=${resume_round_limit}" \
+            "PR_NUMBER=${PR_NUMBER:-}" \
+            "CURRENT_PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR:-}" \
+            "CURRENT_RUNTIME_DIR=${RUNTIME_DIR:-}" \
+            -- - <<'PY' > "${resume_env_file}"
           from __future__ import annotations
 
           import json
@@ -3444,8 +3491,15 @@ jobs:
           echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false reviewer_count=${#reviewer_models[@]}"
 
       - name: Checkout PR head branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           HEAD_REF="$(jq -r '.headRefName' "${PR_META_FILE}")"
           HEAD_REPO="$(jq -r '.headRepoFullName' "${PR_META_FILE}")"
@@ -3587,6 +3641,7 @@ jobs:
       - name: Count autofix iterations
         id: retrigger_guard
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           FORCE_RB_JUDGE: ${{ (inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true') && 'true' || 'false' }}
           # Orchestrator PR autofix flow (see README §"Orchestrator PR autofix flow"):
@@ -3612,6 +3667,11 @@ jobs:
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           # ----- Orchestrator PR mode classification -----
           orch_pr_mode="other"
@@ -3764,8 +3824,15 @@ jobs:
 
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           echo "Generating reviewer diff context"
           bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair
@@ -4074,8 +4141,7 @@ jobs:
         # with the editor step's explicit env entries, so it sees what the
         # editor will see ("Apply fixes with editor model").
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          REPOSITORY: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}
         run: |
@@ -4324,6 +4390,7 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         id: reviewers
         env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
@@ -4619,8 +4686,7 @@ jobs:
       - name: Apply fixes with editor model
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          REPOSITORY: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           set -euo pipefail
@@ -4782,6 +4848,29 @@ jobs:
             fi
           fi
 
+      - name: Re-check PR state after editor
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          # The start-of-job PR payload predates the long-running editor and
+          # cannot establish that the PR is still open before persistence.
+          # Call gh directly so this credential-bearing step does not source
+          # the branch-primary runtime support bundle.
+          post_editor_pr_state=""
+          for post_editor_pr_state_attempt in 1 2 3; do
+            if post_editor_pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null)"; then
+              break
+            fi
+            [ "${post_editor_pr_state_attempt}" -lt 3 ] && sleep 2
+          done
+          if [ "${post_editor_pr_state}" != "open" ]; then
+            echo "::warning::PR #${PR_NUMBER} is ${post_editor_pr_state:-unavailable} after the editor run; blocking downstream repository mutations."
+            echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Clean up isolated review workspace
         if: always() && env.REVIEW_SANDBOX_ROOT != ''
         run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
@@ -4812,6 +4901,7 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 
           validation_tail_can_complete="true"
           edits_withheld_for_safety="false"
@@ -4822,7 +4912,7 @@ jobs:
             if [ ! -f "${workflow_timeout_source_path}" ]; then
               workflow_timeout_source_path=".github/workflows/review_autofix.yml"
             fi
-            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
+            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(_gh_helpers_run_isolated_python -- -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
               job_timeout_minutes="240"
               resolver_timeout_minutes="170"
             fi
@@ -4873,6 +4963,7 @@ jobs:
       - name: Run interim judge
         if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
@@ -4883,11 +4974,53 @@ jobs:
         if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         continue-on-error: true
         env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_synthesise_smoke.sh"
+
+      - name: Authenticate behavioural smoke bundle
+        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
+        continue-on-error: true
+        env:
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
+        run: |
+          set -euo pipefail
+          round_base="${{ steps.retrigger_guard.outputs.autofix_iteration }}"
+          if ! [[ "${round_base}" =~ ^[0-9]+$ ]]; then
+            round_base=0
+          fi
+          current_round=$((round_base + 1))
+          synth_dir=".ai/review_runtime/pr-${PR_NUMBER}/round-${current_round}/synth"
+          bundle_path="${synth_dir}/synth_round_${current_round}_assertions.json"
+          envelope_path="${synth_dir}/synth_round_${current_round}_assertions.envelope.json"
+          if [ ! -f "${bundle_path}" ]; then
+            exit 0
+          fi
+          reviewed_head_sha="$(git rev-parse HEAD)"
+          if ! env -i \
+            HOME="${HOME:-}" \
+            PATH="${PATH:-/usr/bin:/bin}" \
+            TMPDIR="${TMPDIR:-/tmp}" \
+            LANG="C.UTF-8" \
+            LC_ALL="C.UTF-8" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            ORCHESTRATOR_STATE_AUTH_KEYRING="${ORCHESTRATOR_STATE_AUTH_KEYRING}" \
+            python3 -I -B "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" sign-behavioural-smoke \
+              --bundle-file "${bundle_path}" \
+              --repository "${GITHUB_REPOSITORY}" \
+              --pr-number "${PR_NUMBER}" \
+              --head-sha "${reviewed_head_sha}" \
+              --round "${current_round}" \
+              --producer-run-id "${GITHUB_RUN_ID}" \
+              --producer-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+              --out-file "${envelope_path}"; then
+            rm -rf "${synth_dir}"
+            echo "::error::Behavioural smoke provenance signing failed; unsigned artifacts were removed."
+            exit 1
+          fi
 
       # Save the updated per-PR review runtime state so the next iteration
       # (separate workflow run triggered by pull_request.synchronize after
@@ -4914,13 +5047,18 @@ jobs:
           rm -rf "${ledger_cache_staging_root}"
           mkdir -p "${ledger_cache_staging_root}"
           ledger_cache_staged_entries=0
-          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
-            if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
-              mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
-              cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
-              ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
-            fi
-          done
+          ledger_cache_rel=.ai/review_issue_ledger
+          if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
+            mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
+            cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
+          review_runtime_rel=".ai/review_runtime/pr-${PR_NUMBER}"
+          if [ -d "${ledger_cache_workspace_root}/${review_runtime_rel}" ]; then
+            mkdir -p "${ledger_cache_staging_root}/${review_runtime_rel}"
+            cp -a "${ledger_cache_workspace_root}/${review_runtime_rel}/." "${ledger_cache_staging_root}/${review_runtime_rel}/"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
           if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" ]; then
             mkdir -p "$(dirname "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}")"
             cp -a "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}"
@@ -5354,6 +5492,7 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.CLAUDE_FIXER_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
           # Kill switch for the deterministic union-merge of the generated
           # .ai/.workspace_source_manifest.txt (see the "Deterministic
           # union-merge" block in scripts/review_conflict_prepare.sh).
@@ -5394,8 +5533,7 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.CLAUDE_FIXER_MODE != 'true'
         timeout-minutes: 170
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           RESOLVER_ESCAPE_THRESHOLD_N: ${{ vars.RESOLVER_ESCAPE_THRESHOLD_N || '5' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
@@ -5507,6 +5645,14 @@ jobs:
           # failure is fingerprinted and named in the failure comment.
           bash "${RESOLVER_SCRIPT}" 2> >(tee -a "${RUNTIME_DIR}/resolver_stage_stderr.txt" >&2)
 
+      - name: Actuate validated resolver outcome
+        if: always() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
+        run: |
+          set -euo pipefail
+          bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_actuate.sh"
       - name: Cache linked issues references
         # Claude-branch-review mode skips all the downstream label-mutating
         # steps (Mark linked issues ready to merge, Mark linked issues
@@ -5710,6 +5856,7 @@ jobs:
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
           echo "REVIEW_BREAK_GLASS=false" >> "$GITHUB_ENV"
           echo "REVIEW_BREAK_GLASS_COMMENTER=" >> "$GITHUB_ENV"
 
@@ -5723,7 +5870,10 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> "$GITHUB_ENV"
+          _gh_helpers_run_isolated_python \
+            "PR_ISSUE_COMMENTS_FILE=${PR_ISSUE_COMMENTS_FILE:-}" \
+            "PR_REVIEWS_FILE=${PR_REVIEWS_FILE:-}" \
+            -- - <<'PY' >> "$GITHUB_ENV"
           import json
           import os
           import re
@@ -5772,6 +5922,7 @@ jobs:
         id: rb_judge
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
@@ -6076,7 +6227,11 @@ jobs:
             echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping pre-push gate)."
           fi
 
-          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
 
           # Retry non-fast-forward rejections with fetch+merge.  A concurrent
@@ -6413,13 +6568,18 @@ jobs:
           rm -rf "${ledger_cache_staging_root}"
           mkdir -p "${ledger_cache_staging_root}"
           ledger_cache_staged_entries=0
-          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
-            if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
-              mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
-              cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
-              ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
-            fi
-          done
+          ledger_cache_rel=.ai/review_issue_ledger
+          if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
+            mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
+            cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
+          review_runtime_rel=".ai/review_runtime/pr-${PR_NUMBER}"
+          if [ -d "${ledger_cache_workspace_root}/${review_runtime_rel}" ]; then
+            mkdir -p "${ledger_cache_staging_root}/${review_runtime_rel}"
+            cp -a "${ledger_cache_workspace_root}/${review_runtime_rel}/." "${ledger_cache_staging_root}/${review_runtime_rel}/"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
           if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" ]; then
             mkdir -p "$(dirname "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}")"
             cp -a "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}"
@@ -6858,6 +7018,9 @@ jobs:
                   echo "Review-blocked terminal recommendation is awaiting trusted human approval; suppressing duplicate alert."
                   exit 0
                 fi ;;
+              skip)
+                echo "Review-blocked refusal was already recorded; suppressing duplicate alert."
+                exit 0 ;;
               merge)
                 MSG="Review-blocked judge merged PR as-is" ;;
               fix)
@@ -7430,8 +7593,6 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          rm -rf "${GITHUB_WORKSPACE}/.codex-workflow-src-main"
-
           # Guard: RUNTIME_DIR is only written to $GITHUB_ENV by the
           # Create runtime workspace step.  If an earlier step failed
           # before that step ran, expanding "${RUNTIME_DIR}" under set -u

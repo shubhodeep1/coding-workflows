@@ -11,6 +11,14 @@ poll loop to keep re-doing wave advancement / issue creation each cycle
 
 Subcommands
 -----------
+sign
+    Write a canonical state copy with a context-bound HMAC authentication
+    envelope. The key is read only from ``GH_TOKEN``.
+
+verify
+    Verify the authentication envelope against the expected repository,
+    tracking issue, integration branch, and producer identity.
+
 pack
     Read a state JSON file, split into byte-sized chunks that comfortably
     fit under the comment-body cap, and emit each chunk to a temp file
@@ -66,10 +74,12 @@ import argparse
 import base64
 import binascii
 import hashlib
+import hmac
 import json
+import os
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 # GitHub's hard cap on issue/PR comment body bytes.
@@ -92,11 +102,1207 @@ DEFAULT_CHUNK_SIZE = GITHUB_COMMENT_BODY_CAP - DEFAULT_FRAMING_HEADROOM
 # realising the chain is incomplete.
 MAX_CHUNKS_PER_MANIFEST = 1024
 
+STATE_AUTH_SCHEMA_VERSION = "orchestrator_state_auth.v1"
+STATE_AUTH_ALGORITHM = "hmac-sha256"
+STATE_AUTH_DOMAIN = b"coding-workflows/orchestrator-state/v1"
+STATE_AUTH_V2_SCHEMA_VERSION = "orchestrator_state_auth.v2"
+STATE_AUTH_V2_DOMAIN = b"coding-workflows/orchestrator-state/v2"
+STATE_AUTH_KEYRING_SCHEMA_VERSION = "orchestrator_state_auth_keyring.v1"
+STATE_AUTH_MAX_KEYS = 8
+STATE_AUTH_MIN_KEY_BYTES = 32
+STATE_AUTH_MAX_KEY_BYTES = 64
+STATE_AUTH_MAX_KEYRING_BYTES = 8192
+STATE_AUTH_KEY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+STATE_AUTH_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,255}$")
+STATE_AUTH_MAX_GENERATION = 9_223_372_036_854_775_807
+REFUSAL_AUTH_SCHEMA_VERSION = "review_blocked_decision_refused.v2"
+REFUSAL_AUTH_DOMAIN = b"coding-workflows/review-blocked-decision-refused/v2"
+REFUSAL_REASON_RE = re.compile(r"^[a-z][a-z0-9_-]{0,127}$")
+REFUSAL_MAX_OUTPUT_BYTES = 1_048_576
+RESOLVER_RETRY_SCHEMA_VERSION = "autofix_resolver_retry_state.v2"
+RESOLVER_RETRY_DOMAIN = b"coding-workflows/autofix-resolver-retry-state/v2"
+RESOLVER_RETRY_MAX_BYTES = 262_144
+RESOLVER_RETRY_TIERS = ("strict", "ratio", "count_only", "warn_only")
+RESOLVER_RETRY_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+RESOLVER_RETRY_SIGNED_FIELDS = {
+	"schema_version", "algorithm", "key_id", "producer_id", "repository",
+	"tracking_issue", "integration_branch", "source_pr", "head_sha", "generation",
+	"failure_signature_sha256", "consecutive_failure_count", "threshold",
+	"escalation_threshold", "verification_tier", "regressed_by_resolver_count",
+	"pre_existing_drift_count", "regression_summary", "drift_summary", "escalated",
+	"escalated_at", "updated_at", "signature",
+}
+COMPREHENSIVE_MARKER_SCHEMA_VERSION = "comprehensive_cycle_marker.v1"
+COMPREHENSIVE_MARKER_DOMAIN = b"coding-workflows/comprehensive-cycle-marker/v1"
+COMPREHENSIVE_MARKER_MAX_BYTES = 65_536
+COMPREHENSIVE_MARKER_OPENER = "<!-- COMPREHENSIVE_CYCLE_MARKER_V1"
+COMPREHENSIVE_MARKER_CLOSER = "COMPREHENSIVE_CYCLE_MARKER_V1 -->"
+COMPREHENSIVE_MARKER_WORKFLOW_PATH = ".github/workflows/test-and-mark-stable.yml"
+COMPREHENSIVE_MARKER_SIGNED_FIELDS = {
+	"schema_version", "algorithm", "key_id", "producer_id", "repository",
+	"tracking_issue", "source_doc", "role", "dispatcher_run_id", "smoke_run_id", "smoke_actor_id",
+	"smoke_workflow_path", "smoke_event", "smoke_display_title", "smoke_inputs",
+	"smoke_conclusion", "smoke_head_sha", "cycle_baseline_sha", "promote_sha",
+	"proving_merge_sha", "signature",
+}
+BEHAVIOURAL_SMOKE_SCHEMA_VERSION = "behavioural_smoke_bundle.v1"
+BEHAVIOURAL_SMOKE_DOMAIN = b"coding-workflows/behavioural-smoke-bundle/v1"
+BEHAVIOURAL_SMOKE_MAX_BYTES = 1_048_576
+BEHAVIOURAL_SMOKE_SIGNED_FIELDS = {
+	"schema_version", "algorithm", "key_id", "repository", "pr_number",
+	"head_sha", "round", "producer_run_id", "producer_run_attempt",
+	"bundle_sha256", "signature",
+}
+
 V2_OPENER_RE = re.compile(
 	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
 	re.MULTILINE,
 )
 V2_CLOSER = "ORCHESTRATOR_STATE_V2 -->"
+
+
+def _load_state_document(state_path: Path) -> tuple[dict[str, Any] | None, str | None]:
+	try:
+		state_document = json.loads(state_path.read_text(encoding="utf-8"))
+	except FileNotFoundError:
+		return None, f"state file not found: {state_path}"
+	except UnicodeDecodeError:
+		return None, "state file is not valid UTF-8"
+	except json.JSONDecodeError:
+		return None, "state file is not valid JSON"
+	except OSError:
+		return None, "state file is unreadable"
+	if not isinstance(state_document, dict):
+		return None, "state file is not a JSON object"
+	return state_document, None
+
+
+def _validated_auth_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	repository = args.repository.strip()
+	producer_login = args.producer_login.strip()
+	tracking_issue = args.tracking_issue
+	producer_id = args.producer_id
+	integration_branch = args.integration_branch.strip()
+	repository_segments = repository.split("/")
+	if (
+		len(repository) > 256
+		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+		or any(segment in (".", "..") for segment in repository_segments)
+	):
+		return None, "repository must be an owner/repo slug"
+	if tracking_issue < 1:
+		return None, "tracking issue must be a positive integer"
+	if (
+		STATE_AUTH_BRANCH_RE.fullmatch(integration_branch) is None
+		or integration_branch != f"orchestrator/project-{tracking_issue}"
+	):
+		return None, "integration branch does not match the tracking issue"
+	if producer_id < 1:
+		return None, "producer id must be a positive integer"
+	if not producer_login or len(producer_login) > 100:
+		return None, "producer login is invalid"
+	return {
+		"schema_version": STATE_AUTH_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"producer_id": producer_id,
+		"producer_login": producer_login,
+		"repository": repository,
+		"tracking_issue": tracking_issue,
+		"integration_branch": integration_branch,
+	}, None
+
+
+def _state_auth_key() -> tuple[bytes | None, str | None]:
+	raw_key = os.environ.get("GH_TOKEN", "")
+	if not raw_key:
+		return None, "GH_TOKEN is unavailable"
+	return raw_key.encode("utf-8"), None
+
+
+def _validated_v2_auth_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	legacy_context, context_error = _validated_auth_context(args)
+	if context_error is not None:
+		return None, context_error
+	assert legacy_context is not None
+	return {
+		"schema_version": STATE_AUTH_V2_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"producer_id": legacy_context["producer_id"],
+		"repository": legacy_context["repository"],
+		"tracking_issue": legacy_context["tracking_issue"],
+		"integration_branch": legacy_context["integration_branch"],
+	}, None
+
+
+def _state_auth_keyring() -> tuple[str | None, dict[str, bytes] | None, str | None]:
+	raw_keyring = os.environ.get("ORCHESTRATOR_STATE_AUTH_KEYRING", "")
+	if not raw_keyring:
+		return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING is unavailable"
+	if len(raw_keyring.encode("utf-8")) > STATE_AUTH_MAX_KEYRING_BYTES:
+		return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING is too large"
+	try:
+		keyring_document = json.loads(raw_keyring)
+	except json.JSONDecodeError:
+		return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING is not valid JSON"
+	if not isinstance(keyring_document, dict):
+		return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING must be a JSON object"
+	if keyring_document.get("schema_version") != STATE_AUTH_KEYRING_SCHEMA_VERSION:
+		return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING has an unsupported schema"
+	active_key_id = keyring_document.get("active_key_id")
+	key_entries = keyring_document.get("keys")
+	if not isinstance(active_key_id, str) or STATE_AUTH_KEY_ID_RE.fullmatch(active_key_id) is None:
+		return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING active_key_id is invalid"
+	if not isinstance(key_entries, list) or not 1 <= len(key_entries) <= STATE_AUTH_MAX_KEYS:
+		return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING keys count is invalid"
+	decoded_keys: dict[str, bytes] = {}
+	for key_entry in key_entries:
+		if not isinstance(key_entry, dict) or set(key_entry) != {"key_id", "key_base64"}:
+			return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING contains an invalid key entry"
+		key_id = key_entry.get("key_id")
+		encoded_key = key_entry.get("key_base64")
+		if not isinstance(key_id, str) or STATE_AUTH_KEY_ID_RE.fullmatch(key_id) is None:
+			return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING contains an invalid key id"
+		if key_id in decoded_keys:
+			return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING contains duplicate key ids"
+		if not isinstance(encoded_key, str) or not encoded_key:
+			return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING contains an invalid encoded key"
+		try:
+			decoded_key = base64.b64decode(encoded_key, validate=True)
+		except (binascii.Error, ValueError):
+			return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING contains invalid base64"
+		if not STATE_AUTH_MIN_KEY_BYTES <= len(decoded_key) <= STATE_AUTH_MAX_KEY_BYTES:
+			return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING contains a key with invalid length"
+		decoded_keys[key_id] = decoded_key
+	if active_key_id not in decoded_keys:
+		return None, None, "ORCHESTRATOR_STATE_AUTH_KEYRING active key is missing"
+	return active_key_id, decoded_keys, None
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+	return json.dumps(
+		value,
+		ensure_ascii=False,
+		sort_keys=True,
+		separators=(",", ":"),
+	).encode("utf-8")
+
+
+def _state_auth_generation(state_document: dict[str, Any]) -> int | None:
+	state_auth = state_document.get("state_auth")
+	if not isinstance(state_auth, dict) or "generation" not in state_auth:
+		return 0
+	generation = state_auth.get("generation")
+	if (
+		not isinstance(generation, int)
+		or isinstance(generation, bool)
+		or generation < 0
+		or generation > STATE_AUTH_MAX_GENERATION
+	):
+		return None
+	return generation
+
+
+def _signature_for_state(
+	state_document: dict[str, Any],
+	auth_context: dict[str, Any],
+	auth_key: bytes,
+	domain: bytes = STATE_AUTH_DOMAIN,
+) -> str:
+	unsigned_state = dict(state_document)
+	unsigned_state.pop("state_auth", None)
+	message = b"\n".join((
+		domain,
+		_canonical_json_bytes(auth_context),
+		_canonical_json_bytes(unsigned_state),
+	))
+	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def cmd_sign(args: argparse.Namespace) -> int:
+	state_document, state_error = _load_state_document(Path(args.state_file))
+	if state_error is not None:
+		print(f"state signing failed: {state_error}", file=sys.stderr)
+		return 2
+	auth_context, context_error = _validated_v2_auth_context(args)
+	if context_error is not None:
+		print(f"state signing failed: {context_error}", file=sys.stderr)
+		return 2
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"state signing failed: {key_error}", file=sys.stderr)
+		return 2
+	assert state_document is not None
+	assert auth_context is not None
+	assert active_key_id is not None
+	assert auth_keys is not None
+	if state_document.get("schema_version") != "orchestrate_state.v1":
+		print("state signing failed: unsupported state schema", file=sys.stderr)
+		return 2
+	if state_document.get("integration_branch", "") not in ("", auth_context["integration_branch"]):
+		print("state signing failed: state integration branch does not match the authentication context", file=sys.stderr)
+		return 2
+	previous_generation = _state_auth_generation(state_document)
+	if previous_generation is None or previous_generation >= STATE_AUTH_MAX_GENERATION:
+		print("state signing failed: state authentication generation is invalid or exhausted", file=sys.stderr)
+		return 2
+	signed_auth_context = {
+		**auth_context,
+		"key_id": active_key_id,
+		"generation": previous_generation + 1,
+	}
+	signed_state = dict(state_document)
+	signed_state["state_auth"] = {
+		**signed_auth_context,
+		"signature": _signature_for_state(
+			state_document,
+			signed_auth_context,
+			auth_keys[active_key_id],
+			STATE_AUTH_V2_DOMAIN,
+		),
+	}
+	out_path = Path(args.out_file)
+	try:
+		out_path.write_bytes(_canonical_json_bytes(signed_state) + b"\n")
+		os.chmod(out_path, 0o600)
+	except OSError:
+		print("state signing failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+	state_document, state_error = _load_state_document(Path(args.state_file))
+	if state_error is not None:
+		print(f"state verification failed: {state_error}", file=sys.stderr)
+		return 2
+	assert state_document is not None
+	if state_document.get("schema_version") != "orchestrate_state.v1":
+		return 1
+	state_auth = state_document.get("state_auth")
+	if not isinstance(state_auth, dict):
+		return 1
+	auth_schema_version = state_auth.get("schema_version")
+	if auth_schema_version == STATE_AUTH_V2_SCHEMA_VERSION:
+		if set(state_auth) != {
+			"schema_version",
+			"algorithm",
+			"key_id",
+			"producer_id",
+			"repository",
+			"tracking_issue",
+			"integration_branch",
+			"generation",
+			"signature",
+		}:
+			return 1
+		auth_context, context_error = _validated_v2_auth_context(args)
+		if context_error is not None:
+			print(f"state verification failed: {context_error}", file=sys.stderr)
+			return 2
+		_active_key_id, auth_keys, key_error = _state_auth_keyring()
+		if key_error is not None:
+			print(f"state verification failed: {key_error}", file=sys.stderr)
+			return 2
+		assert auth_keys is not None
+		key_id = state_auth.get("key_id")
+		if not isinstance(key_id, str) or key_id not in auth_keys:
+			return 1
+		auth_key = auth_keys[key_id]
+		signature_domain = STATE_AUTH_V2_DOMAIN
+	elif auth_schema_version == STATE_AUTH_SCHEMA_VERSION:
+		auth_context, context_error = _validated_auth_context(args)
+		if context_error is not None:
+			print(f"state verification failed: {context_error}", file=sys.stderr)
+			return 2
+		auth_key, key_error = _state_auth_key()
+		if key_error is not None:
+			print(f"state verification failed: {key_error}", file=sys.stderr)
+			return 2
+		signature_domain = STATE_AUTH_DOMAIN
+	else:
+		return 1
+	assert auth_context is not None
+	assert auth_key is not None
+	if state_document.get("integration_branch", "") not in ("", auth_context["integration_branch"]):
+		return 1
+	generation = _state_auth_generation(state_document)
+	if generation is None:
+		return 1
+	signed_auth_context = dict(auth_context)
+	if auth_schema_version == STATE_AUTH_V2_SCHEMA_VERSION:
+		signed_auth_context["key_id"] = state_auth["key_id"]
+	if "generation" in state_auth:
+		signed_auth_context["generation"] = generation
+	signature = state_auth.get("signature")
+	if not isinstance(signature, str) or re.fullmatch(r"[0-9a-f]{64}", signature) is None:
+		return 1
+	if any(state_auth.get(field) != expected for field, expected in signed_auth_context.items()):
+		return 1
+	expected_signature = _signature_for_state(state_document, signed_auth_context, auth_key, signature_domain)
+	return 0 if hmac.compare_digest(signature, expected_signature) else 1
+
+
+def cmd_validate_keyring(_args: argparse.Namespace) -> int:
+	_active_key_id, _auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"state keyring validation failed: {key_error}", file=sys.stderr)
+		return 2
+	return 0
+
+
+def _validated_refusal_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	repository = args.repository.strip()
+	if (
+		len(repository) > 256
+		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+		or any(segment in (".", "..") for segment in repository.split("/"))
+	):
+		return None, "repository must be an owner/repo slug"
+	if args.tracking_issue < 1 or args.source_pr < 1 or args.linked_issue < 1 or args.producer_id < 1:
+		return None, "issue, PR, and producer identifiers must be positive integers"
+	if re.fullmatch(r"[0-9a-f]{40}", args.head_sha) is None:
+		return None, "head SHA must be 40 lowercase hexadecimal characters"
+	return {
+		"schema_version": REFUSAL_AUTH_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"producer_id": args.producer_id,
+		"repository": repository,
+		"tracking_issue": args.tracking_issue,
+		"source_pr": args.source_pr,
+		"linked_issue": args.linked_issue,
+		"head_sha": args.head_sha,
+	}, None
+
+
+def _signature_for_refusal(refusal_document: dict[str, Any], auth_key: bytes) -> str:
+	unsigned_document = dict(refusal_document)
+	unsigned_document.pop("signature", None)
+	message = b"\n".join((REFUSAL_AUTH_DOMAIN, _canonical_json_bytes(unsigned_document)))
+	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def cmd_sign_refusal(args: argparse.Namespace) -> int:
+	auth_context, context_error = _validated_refusal_context(args)
+	if context_error is not None:
+		print(f"refusal signing failed: {context_error}", file=sys.stderr)
+		return 2
+	if REFUSAL_REASON_RE.fullmatch(args.refusal_reason) is None:
+		print("refusal signing failed: refusal reason is invalid", file=sys.stderr)
+		return 2
+	output_path = Path(args.rejected_output_file)
+	try:
+		if output_path.stat().st_size > REFUSAL_MAX_OUTPUT_BYTES:
+			print("refusal signing failed: rejected output is too large", file=sys.stderr)
+			return 2
+		rejected_output_digest = hashlib.sha256(output_path.read_bytes()).hexdigest()
+	except OSError:
+		print("refusal signing failed: rejected output is unreadable", file=sys.stderr)
+		return 2
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"refusal signing failed: {key_error}", file=sys.stderr)
+		return 2
+	assert auth_context is not None
+	assert active_key_id is not None
+	assert auth_keys is not None
+	refusal_document = {
+		**auth_context,
+		"key_id": active_key_id,
+		"refusal_reason": args.refusal_reason,
+		"rejected_output_digest": rejected_output_digest,
+	}
+	refusal_document["signature"] = _signature_for_refusal(
+		refusal_document, auth_keys[active_key_id]
+	)
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(refusal_document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("refusal signing failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def cmd_verify_refusal(args: argparse.Namespace) -> int:
+	auth_context, context_error = _validated_refusal_context(args)
+	if context_error is not None:
+		print(f"refusal verification failed: {context_error}", file=sys.stderr)
+		return 2
+	try:
+		refusal_document = json.loads(Path(args.envelope_file).read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+		return 1
+	if not isinstance(refusal_document, dict) or set(refusal_document) != {
+		"schema_version", "algorithm", "key_id", "producer_id", "repository",
+		"tracking_issue", "source_pr", "linked_issue", "head_sha", "refusal_reason",
+		"rejected_output_digest", "signature",
+	}:
+		return 1
+	assert auth_context is not None
+	if any(refusal_document.get(field) != expected for field, expected in auth_context.items()):
+		return 1
+	if REFUSAL_REASON_RE.fullmatch(str(refusal_document.get("refusal_reason", ""))) is None:
+		return 1
+	if re.fullmatch(r"[0-9a-f]{64}", str(refusal_document.get("rejected_output_digest", ""))) is None:
+		return 1
+	if re.fullmatch(r"[0-9a-f]{64}", str(refusal_document.get("signature", ""))) is None:
+		return 1
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"refusal verification failed: {key_error}", file=sys.stderr)
+		return 2
+	assert auth_keys is not None
+	key_id = refusal_document.get("key_id")
+	if not isinstance(key_id, str) or key_id not in auth_keys:
+		return 1
+	expected_signature = _signature_for_refusal(refusal_document, auth_keys[key_id])
+	return 0 if hmac.compare_digest(refusal_document["signature"], expected_signature) else 1
+
+
+def _validated_resolver_retry_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	repository = args.repository.strip()
+	integration_branch = args.integration_branch.strip()
+	if (
+		len(repository) > 256
+		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+		or any(segment in (".", "..") for segment in repository.split("/"))
+	):
+		return None, "repository must be an owner/repo slug"
+	if args.tracking_issue < 1 or args.source_pr < 1 or args.producer_id < 1:
+		return None, "tracking issue, source PR, and producer ID must be positive integers"
+	if integration_branch != f"orchestrator/project-{args.tracking_issue}":
+		return None, "integration branch does not match the tracking issue"
+	if re.fullmatch(r"[0-9a-f]{40}", args.head_sha) is None:
+		return None, "head SHA must be 40 lowercase hexadecimal characters"
+	return {
+		"schema_version": RESOLVER_RETRY_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"producer_id": args.producer_id,
+		"repository": repository,
+		"tracking_issue": args.tracking_issue,
+		"integration_branch": integration_branch,
+		"source_pr": args.source_pr,
+		"head_sha": args.head_sha,
+	}, None
+
+
+def _load_bounded_json_object(path: Path, max_bytes: int) -> dict[str, Any] | None:
+	try:
+		if path.stat().st_size > max_bytes:
+			return None
+		value = json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+		return None
+	return value if isinstance(value, dict) else None
+
+
+def _valid_retry_summary(value: Any) -> bool:
+	return (
+		isinstance(value, list)
+		and len(value) <= 10
+		and all(isinstance(item, str) and len(item.encode("utf-8")) <= 512 for item in value)
+	)
+
+
+def _validate_resolver_retry_document(document: dict[str, Any]) -> bool:
+	if set(document) != RESOLVER_RETRY_SIGNED_FIELDS:
+		return False
+	integer_fields = (
+		"producer_id", "tracking_issue", "source_pr", "generation",
+		"consecutive_failure_count", "threshold", "escalation_threshold",
+		"regressed_by_resolver_count", "pre_existing_drift_count",
+	)
+	if any(not isinstance(document.get(field), int) or isinstance(document.get(field), bool) for field in integer_fields):
+		return False
+	if any(document[field] < 0 for field in integer_fields):
+		return False
+	if min(document["producer_id"], document["tracking_issue"], document["source_pr"], document["generation"], document["threshold"]) < 1:
+		return False
+	if document["escalation_threshold"] < document["threshold"]:
+		return False
+	if document.get("verification_tier") not in RESOLVER_RETRY_TIERS:
+		return False
+	if re.fullmatch(r"[0-9a-f]{40}", str(document.get("head_sha", ""))) is None:
+		return False
+	for digest_field in ("failure_signature_sha256", "signature"):
+		if re.fullmatch(r"[0-9a-f]{64}", str(document.get(digest_field, ""))) is None:
+			return False
+	if not isinstance(document.get("escalated"), bool):
+		return False
+	if RESOLVER_RETRY_TIMESTAMP_RE.fullmatch(str(document.get("updated_at", ""))) is None:
+		return False
+	escalated_at = document.get("escalated_at")
+	if document["escalated"]:
+		if RESOLVER_RETRY_TIMESTAMP_RE.fullmatch(str(escalated_at)) is None:
+			return False
+	elif escalated_at != "":
+		return False
+	return _valid_retry_summary(document.get("regression_summary")) and _valid_retry_summary(document.get("drift_summary"))
+
+
+def _signature_for_resolver_retry(document: dict[str, Any], auth_key: bytes) -> str:
+	unsigned_document = dict(document)
+	unsigned_document.pop("signature", None)
+	message = b"\n".join((RESOLVER_RETRY_DOMAIN, _canonical_json_bytes(unsigned_document)))
+	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def _validated_comprehensive_marker_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	repository = args.repository.strip()
+	tracking_issue = getattr(args, "tracking_issue", 0)
+	if (
+		len(repository) > 256
+		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+		or any(segment in (".", "..") for segment in repository.split("/"))
+	):
+		return None, "repository must be an owner/repo slug"
+	if args.producer_id < 1:
+		return None, "producer id must be a positive integer"
+	if tracking_issue < 0:
+		return None, "tracking issue must be a non-negative integer"
+	return {
+		"schema_version": COMPREHENSIVE_MARKER_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"producer_id": args.producer_id,
+		"repository": repository,
+		"tracking_issue": tracking_issue,
+	}, None
+
+
+def _valid_comprehensive_marker_document(document: dict[str, Any], *, allow_unbound: bool = False) -> bool:
+	if set(document) != COMPREHENSIVE_MARKER_SIGNED_FIELDS:
+		return False
+	for integer_field in ("producer_id", "dispatcher_run_id", "smoke_run_id", "smoke_actor_id"):
+		value = document.get(integer_field)
+		if not isinstance(value, int) or isinstance(value, bool) or value < 1 or value > STATE_AUTH_MAX_GENERATION:
+			return False
+	tracking_issue = document.get("tracking_issue")
+	if not isinstance(tracking_issue, int) or isinstance(tracking_issue, bool) or tracking_issue > STATE_AUTH_MAX_GENERATION:
+		return False
+	if (allow_unbound and tracking_issue != 0) or (not allow_unbound and tracking_issue < 1):
+		return False
+	if document.get("schema_version") != COMPREHENSIVE_MARKER_SCHEMA_VERSION:
+		return False
+	if document.get("algorithm") != STATE_AUTH_ALGORITHM:
+		return False
+	if document.get("role") not in ("proving", "verifying"):
+		return False
+	source_doc = document.get("source_doc")
+	if (
+		not isinstance(source_doc, str)
+		or not 1 <= len(source_doc) <= 512
+		or source_doc.startswith("/")
+		or ".." in source_doc.replace("\\", "/").split("/")
+		or "\\" in source_doc
+	):
+		return False
+	if document.get("smoke_workflow_path") != COMPREHENSIVE_MARKER_WORKFLOW_PATH:
+		return False
+	if document.get("smoke_event") != "workflow_dispatch" or document.get("smoke_conclusion") != "success":
+		return False
+	expected_title = (
+		f"Test & Mark Stable Release [cycle:{document['dispatcher_run_id']};gate-only:true;"
+		"skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]"
+	)
+	if document.get("smoke_display_title") != expected_title:
+		return False
+	if document.get("smoke_inputs") != {
+		"gate_only": "true",
+		"gate_cycle_id": str(document["dispatcher_run_id"]),
+		"skip_e2e": "false",
+		"dry_run": "false",
+		"test_repo": "",
+		"review_workflow_file": "internal-review.yml",
+	}:
+		return False
+	for sha_field in ("smoke_head_sha", "cycle_baseline_sha"):
+		if re.fullmatch(r"[0-9a-f]{40}", str(document.get(sha_field, ""))) is None:
+			return False
+	for optional_sha_field in ("promote_sha", "proving_merge_sha"):
+		optional_sha = document.get(optional_sha_field)
+		if not isinstance(optional_sha, str) or (optional_sha and re.fullmatch(r"[0-9a-f]{40}", optional_sha) is None):
+			return False
+	if document["role"] == "verifying" and (not document["promote_sha"] or not document["proving_merge_sha"]):
+		return False
+	if document["role"] == "proving" and (document["promote_sha"] or document["proving_merge_sha"]):
+		return False
+	if re.fullmatch(r"[0-9a-f]{64}", str(document.get("signature", ""))) is None:
+		return False
+	key_id = document.get("key_id")
+	return isinstance(key_id, str) and STATE_AUTH_KEY_ID_RE.fullmatch(key_id) is not None
+
+
+def _signature_for_comprehensive_marker(document: dict[str, Any], auth_key: bytes) -> str:
+	unsigned_document = dict(document)
+	unsigned_document.pop("signature", None)
+	message = b"\n".join((COMPREHENSIVE_MARKER_DOMAIN, _canonical_json_bytes(unsigned_document)))
+	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def _validated_behavioural_smoke_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	repository = args.repository.strip()
+	if (
+		len(repository) > 256
+		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+		or any(segment in (".", "..") for segment in repository.split("/"))
+	):
+		return None, "repository must be an owner/repo slug"
+	if args.pr_number < 1 or args.round < 1:
+		return None, "PR number and round must be positive integers"
+	if re.fullmatch(r"[0-9a-f]{40}", args.head_sha) is None:
+		return None, "head SHA must be 40 lowercase hexadecimal characters"
+	return {
+		"schema_version": BEHAVIOURAL_SMOKE_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"repository": repository,
+		"pr_number": args.pr_number,
+		"head_sha": args.head_sha,
+		"round": args.round,
+	}, None
+
+
+def _behavioural_smoke_bundle_digest(bundle_path: Path) -> tuple[str | None, bytes | None, str | None]:
+	bundle = _load_bounded_json_object(bundle_path, BEHAVIOURAL_SMOKE_MAX_BYTES)
+	if bundle is None:
+		return None, None, "bundle is invalid or oversized"
+	if (
+		set(bundle) != {"schema_version", "round", "head_sha", "language", "assertions"}
+		or bundle.get("schema_version") != "behavioural_smoke_assertions.v1"
+		or not isinstance(bundle.get("round"), int)
+		or isinstance(bundle.get("round"), bool)
+		or bundle["round"] < 1
+		or re.fullmatch(r"[0-9a-f]{40}", str(bundle.get("head_sha", ""))) is None
+		or bundle.get("language") not in {"shell", "python", "javascript"}
+		or not isinstance(bundle.get("assertions"), list)
+		or len(bundle["assertions"]) > 100
+	):
+		return None, None, "bundle schema is invalid"
+	for row in bundle["assertions"]:
+		if not isinstance(row, dict) or set(row) != {
+			"issue_id", "file", "line_start", "line_end", "severity", "assertion",
+		}:
+			return None, None, "bundle assertion row is invalid"
+		if (
+			not isinstance(row.get("issue_id"), str)
+			or not row["issue_id"]
+			or len(row["issue_id"]) > 512
+			or not isinstance(row.get("file"), str)
+			or not row["file"]
+			or type(row.get("line_start")) is not int
+			or type(row.get("line_end")) is not int
+			or row["line_start"] < 1
+			or row["line_end"] < row["line_start"]
+			or row.get("severity") not in {"must-fix", "nice-to-have"}
+		):
+			return None, None, "bundle assertion metadata is invalid"
+		assertion = row.get("assertion")
+		if not isinstance(assertion, dict) or type(assertion.get("expected_to_fail_until_fixed")) is not bool:
+			return None, None, "bundle assertion object is invalid"
+		assertion_type = assertion.get("type")
+		if assertion_type == "inconclusive":
+			if set(assertion) != {"type", "reason", "expected_to_fail_until_fixed"}:
+				return None, None, "bundle inconclusive assertion is invalid"
+			reason = assertion.get("reason")
+			if not isinstance(reason, str) or not reason or len(reason) > 512:
+				return None, None, "bundle inconclusive reason is invalid"
+			continue
+		if assertion_type not in {"text_present", "text_absent", "literal_count"}:
+			return None, None, "bundle assertion type is invalid"
+		expected_keys = {"type", "path", "literal", "expected_to_fail_until_fixed"}
+		if assertion_type == "literal_count":
+			expected_keys.update({"min_count", "max_count"})
+		if set(assertion) != expected_keys:
+			return None, None, "bundle assertion keys are invalid"
+		path_value = assertion.get("path")
+		if not isinstance(path_value, str) or not path_value or len(path_value) > 512 or "\\" in path_value:
+			return None, None, "bundle assertion path is invalid"
+		path = PurePosixPath(path_value)
+		if (
+			path.is_absolute()
+			or path_value != path.as_posix()
+			or any(part in ("", ".", "..") for part in path.parts)
+			or not path.parts
+			or path.parts[0] in {".git", ".ai", "validation"}
+		):
+			return None, None, "bundle assertion path is invalid"
+		literal = assertion.get("literal")
+		if not isinstance(literal, str) or not literal or len(literal) > 4096:
+			return None, None, "bundle assertion literal is invalid"
+		if assertion_type == "literal_count":
+			minimum = assertion.get("min_count")
+			maximum = assertion.get("max_count")
+			if (
+				type(minimum) is not int
+				or type(maximum) is not int
+				or minimum < 0
+				or maximum < minimum
+				or maximum > 1_000_000
+			):
+				return None, None, "bundle literal-count bounds are invalid"
+	canonical_bundle = _canonical_json_bytes(bundle)
+	return hashlib.sha256(canonical_bundle).hexdigest(), canonical_bundle, None
+
+
+def _signature_for_behavioural_smoke(document: dict[str, Any], auth_key: bytes) -> str:
+	unsigned_document = dict(document)
+	unsigned_document.pop("signature", None)
+	message = b"\n".join((BEHAVIOURAL_SMOKE_DOMAIN, _canonical_json_bytes(unsigned_document)))
+	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def _valid_behavioural_smoke_envelope(document: dict[str, Any]) -> bool:
+	if set(document) != BEHAVIOURAL_SMOKE_SIGNED_FIELDS:
+		return False
+	for integer_field in ("pr_number", "round", "producer_run_id", "producer_run_attempt"):
+		value = document.get(integer_field)
+		if not isinstance(value, int) or isinstance(value, bool) or value < 1 or value > STATE_AUTH_MAX_GENERATION:
+			return False
+	if document.get("schema_version") != BEHAVIOURAL_SMOKE_SCHEMA_VERSION:
+		return False
+	if document.get("algorithm") != STATE_AUTH_ALGORITHM:
+		return False
+	if re.fullmatch(r"[0-9a-f]{40}", str(document.get("head_sha", ""))) is None:
+		return False
+	for digest_field in ("bundle_sha256", "signature"):
+		if re.fullmatch(r"[0-9a-f]{64}", str(document.get(digest_field, ""))) is None:
+			return False
+	key_id = document.get("key_id")
+	return isinstance(key_id, str) and STATE_AUTH_KEY_ID_RE.fullmatch(key_id) is not None
+
+
+def cmd_sign_behavioural_smoke(args: argparse.Namespace) -> int:
+	context, context_error = _validated_behavioural_smoke_context(args)
+	if context_error is not None:
+		print(f"behavioural smoke signing failed: {context_error}", file=sys.stderr)
+		return 2
+	if args.producer_run_id < 1 or args.producer_run_attempt < 1:
+		print("behavioural smoke signing failed: producer run identity is invalid", file=sys.stderr)
+		return 2
+	bundle_digest, canonical_bundle, bundle_error = _behavioural_smoke_bundle_digest(Path(args.bundle_file))
+	if bundle_error is not None:
+		print(f"behavioural smoke signing failed: {bundle_error}", file=sys.stderr)
+		return 2
+	assert canonical_bundle is not None
+	bundle_document = json.loads(canonical_bundle)
+	if bundle_document.get("round") != args.round or bundle_document.get("head_sha") != args.head_sha:
+		print("behavioural smoke signing failed: bundle context does not match signing context", file=sys.stderr)
+		return 2
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"behavioural smoke signing failed: {key_error}", file=sys.stderr)
+		return 2
+	assert context is not None and bundle_digest is not None
+	assert active_key_id is not None and auth_keys is not None
+	document = {
+		**context,
+		"key_id": active_key_id,
+		"producer_run_id": args.producer_run_id,
+		"producer_run_attempt": args.producer_run_attempt,
+		"bundle_sha256": bundle_digest,
+		"signature": "0" * 64,
+	}
+	document["signature"] = _signature_for_behavioural_smoke(document, auth_keys[active_key_id])
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("behavioural smoke signing failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def cmd_verify_behavioural_smoke(args: argparse.Namespace) -> int:
+	context, context_error = _validated_behavioural_smoke_context(args)
+	if context_error is not None:
+		print(f"behavioural smoke verification failed: {context_error}", file=sys.stderr)
+		return 2
+	document = _load_bounded_json_object(Path(args.envelope_file), 65_536)
+	if document is None or not _valid_behavioural_smoke_envelope(document):
+		return 1
+	bundle_digest, canonical_bundle, bundle_error = _behavioural_smoke_bundle_digest(Path(args.bundle_file))
+	if bundle_error is not None:
+		return 1
+	assert context is not None and bundle_digest is not None and canonical_bundle is not None
+	bundle_document = json.loads(canonical_bundle)
+	if bundle_document.get("round") != args.round or bundle_document.get("head_sha") != args.head_sha:
+		return 1
+	if any(document.get(field) != expected for field, expected in context.items()):
+		return 1
+	if document.get("bundle_sha256") != bundle_digest:
+		return 1
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"behavioural smoke verification failed: {key_error}", file=sys.stderr)
+		return 2
+	assert auth_keys is not None
+	key_id = document.get("key_id")
+	if not isinstance(key_id, str) or key_id not in auth_keys:
+		return 1
+	expected_signature = _signature_for_behavioural_smoke(document, auth_keys[key_id])
+	if not hmac.compare_digest(str(document["signature"]), expected_signature):
+		return 1
+	if args.out_file:
+		try:
+			Path(args.out_file).write_bytes(canonical_bundle + b"\n")
+			os.chmod(args.out_file, 0o600)
+		except OSError:
+			print("behavioural smoke verification failed: output file is not writable", file=sys.stderr)
+			return 2
+	return 0
+
+
+def _comprehensive_marker_is_verified(
+	document: dict[str, Any],
+	context: dict[str, Any],
+	auth_keys: dict[str, bytes],
+	*,
+	allow_unbound: bool = False,
+) -> bool:
+	if not _valid_comprehensive_marker_document(document, allow_unbound=allow_unbound):
+		return False
+	if any(document.get(field) != expected for field, expected in context.items()):
+		return False
+	key_id = document.get("key_id")
+	if not isinstance(key_id, str) or key_id not in auth_keys:
+		return False
+	expected_signature = _signature_for_comprehensive_marker(document, auth_keys[key_id])
+	return hmac.compare_digest(str(document["signature"]), expected_signature)
+
+
+def cmd_sign_comprehensive_marker(args: argparse.Namespace) -> int:
+	context, context_error = _validated_comprehensive_marker_context(args)
+	if context_error is not None:
+		print(f"comprehensive marker signing failed: {context_error}", file=sys.stderr)
+		return 2
+	candidate = _load_bounded_json_object(Path(args.candidate_file), COMPREHENSIVE_MARKER_MAX_BYTES)
+	if candidate is None:
+		print("comprehensive marker signing failed: candidate is invalid or oversized", file=sys.stderr)
+		return 2
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"comprehensive marker signing failed: {key_error}", file=sys.stderr)
+		return 2
+	assert context is not None and active_key_id is not None and auth_keys is not None
+	document = {
+		**context,
+		"key_id": active_key_id,
+		"source_doc": candidate.get("source_doc"),
+		"role": candidate.get("role"),
+		"dispatcher_run_id": candidate.get("dispatcher_run_id"),
+		"smoke_run_id": candidate.get("smoke_run_id"),
+		"smoke_actor_id": candidate.get("smoke_actor_id"),
+		"smoke_workflow_path": candidate.get("smoke_workflow_path"),
+		"smoke_event": candidate.get("smoke_event"),
+		"smoke_display_title": candidate.get("smoke_display_title"),
+		"smoke_inputs": candidate.get("smoke_inputs"),
+		"smoke_conclusion": candidate.get("smoke_conclusion"),
+		"smoke_head_sha": candidate.get("smoke_head_sha"),
+		"cycle_baseline_sha": candidate.get("cycle_baseline_sha"),
+		"promote_sha": candidate.get("promote_sha", ""),
+		"proving_merge_sha": candidate.get("proving_merge_sha", ""),
+		"signature": "0" * 64,
+	}
+	if not _valid_comprehensive_marker_document(document, allow_unbound=True):
+		print("comprehensive marker signing failed: candidate fields are invalid", file=sys.stderr)
+		return 2
+	document["signature"] = _signature_for_comprehensive_marker(document, auth_keys[active_key_id])
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("comprehensive marker signing failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def cmd_verify_comprehensive_marker(args: argparse.Namespace) -> int:
+	context, context_error = _validated_comprehensive_marker_context(args)
+	if context_error is not None:
+		print(f"comprehensive marker verification failed: {context_error}", file=sys.stderr)
+		return 2
+	document = _load_bounded_json_object(Path(args.envelope_file), COMPREHENSIVE_MARKER_MAX_BYTES)
+	if document is None:
+		return 1
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"comprehensive marker verification failed: {key_error}", file=sys.stderr)
+		return 2
+	assert context is not None and auth_keys is not None
+	if not _comprehensive_marker_is_verified(document, context, auth_keys, allow_unbound=args.tracking_issue == 0):
+		return 1
+	if args.out_file:
+		try:
+			Path(args.out_file).write_bytes(_canonical_json_bytes(document) + b"\n")
+			os.chmod(args.out_file, 0o600)
+		except OSError:
+			print("comprehensive marker verification failed: output file is not writable", file=sys.stderr)
+			return 2
+	return 0
+
+
+def cmd_bind_comprehensive_marker(args: argparse.Namespace) -> int:
+	context, context_error = _validated_comprehensive_marker_context(args)
+	if context_error is not None:
+		print(f"comprehensive marker binding failed: {context_error}", file=sys.stderr)
+		return 2
+	if context is None or context["tracking_issue"] < 1:
+		print("comprehensive marker binding failed: tracking issue must be a positive integer", file=sys.stderr)
+		return 2
+	document = _load_bounded_json_object(Path(args.envelope_file), COMPREHENSIVE_MARKER_MAX_BYTES)
+	if document is None:
+		return 1
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"comprehensive marker binding failed: {key_error}", file=sys.stderr)
+		return 2
+	assert active_key_id is not None and auth_keys is not None
+	unbound_context = dict(context)
+	unbound_context["tracking_issue"] = 0
+	if not _comprehensive_marker_is_verified(document, unbound_context, auth_keys, allow_unbound=True):
+		return 1
+	bound_document = dict(document)
+	bound_document["tracking_issue"] = context["tracking_issue"]
+	bound_document["key_id"] = active_key_id
+	bound_document["signature"] = "0" * 64
+	if not _valid_comprehensive_marker_document(bound_document):
+		return 1
+	bound_document["signature"] = _signature_for_comprehensive_marker(bound_document, auth_keys[active_key_id])
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(bound_document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("comprehensive marker binding failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def _extract_comprehensive_marker(body: str) -> dict[str, Any] | None:
+	if len(body.encode("utf-8")) > GITHUB_COMMENT_BODY_CAP:
+		return None
+	start = body.find(COMPREHENSIVE_MARKER_OPENER)
+	if start < 0:
+		return None
+	payload_start = body.find("\n", start)
+	if payload_start < 0:
+		return None
+	end = body.find("\n" + COMPREHENSIVE_MARKER_CLOSER, payload_start + 1)
+	if end < 0:
+		return None
+	raw_payload = body[payload_start + 1:end]
+	if len(raw_payload.encode("utf-8")) > COMPREHENSIVE_MARKER_MAX_BYTES:
+		return None
+	try:
+		document = json.loads(raw_payload)
+	except json.JSONDecodeError:
+		return None
+	return document if isinstance(document, dict) else None
+
+
+def cmd_select_comprehensive_marker(args: argparse.Namespace) -> int:
+	context, context_error = _validated_comprehensive_marker_context(args)
+	if context_error is not None:
+		print(f"comprehensive marker selection failed: {context_error}", file=sys.stderr)
+		return 2
+	try:
+		comments_path = Path(args.comments_json)
+		if comments_path.stat().st_size > 32 * 1024 * 1024:
+			raise ValueError("comments payload is oversized")
+		comments = json.loads(comments_path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
+		print("comprehensive marker selection failed: comments JSON is invalid", file=sys.stderr)
+		return 2
+	if not isinstance(comments, list) or len(comments) > 10_000:
+		print("comprehensive marker selection failed: comments payload is invalid", file=sys.stderr)
+		return 2
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"comprehensive marker selection failed: {key_error}", file=sys.stderr)
+		return 2
+	assert context is not None and auth_keys is not None
+	selected: dict[str, Any] | None = None
+	marker_seen = False
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		body = comment.get("body")
+		if not isinstance(body, str) or not re.search(r"(?m)^apply-analysis-source-doc: ", body):
+			continue
+		marker_seen = True
+		if COMPREHENSIVE_MARKER_OPENER not in body:
+			continue
+		user = comment.get("user")
+		if not isinstance(user, dict) or user.get("id") != args.producer_id:
+			continue
+		document = _extract_comprehensive_marker(body)
+		if document is not None and _comprehensive_marker_is_verified(
+			document,
+			context,
+			auth_keys,
+			allow_unbound=args.tracking_issue == 0,
+		):
+			selected = document
+	result = {"marker": selected, "untrusted_marker": marker_seen and selected is None}
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(result) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("comprehensive marker selection failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def _resolver_retry_document_is_verified(
+	document: dict[str, Any],
+	context: dict[str, Any],
+	auth_keys: dict[str, bytes],
+) -> bool:
+	if not _validate_resolver_retry_document(document):
+		return False
+	if any(document.get(field) != expected for field, expected in context.items()):
+		return False
+	key_id = document.get("key_id")
+	if not isinstance(key_id, str) or key_id not in auth_keys:
+		return False
+	expected_signature = _signature_for_resolver_retry(document, auth_keys[key_id])
+	return hmac.compare_digest(str(document["signature"]), expected_signature)
+
+
+def cmd_sign_resolver_retry(args: argparse.Namespace) -> int:
+	context, context_error = _validated_resolver_retry_context(args)
+	if context_error is not None:
+		print(f"resolver retry signing failed: {context_error}", file=sys.stderr)
+		return 2
+	candidate = _load_bounded_json_object(Path(args.candidate_file), RESOLVER_RETRY_MAX_BYTES)
+	if candidate is None:
+		print("resolver retry signing failed: candidate is invalid or oversized", file=sys.stderr)
+		return 2
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"resolver retry signing failed: {key_error}", file=sys.stderr)
+		return 2
+	assert context is not None and active_key_id is not None and auth_keys is not None
+	document = {
+		**context,
+		"key_id": active_key_id,
+		"generation": candidate.get("generation"),
+		"failure_signature_sha256": candidate.get("failure_signature_sha256"),
+		"consecutive_failure_count": candidate.get("consecutive_failure_count"),
+		"threshold": candidate.get("threshold"),
+		"escalation_threshold": candidate.get("escalation_threshold"),
+		"verification_tier": candidate.get("verification_tier"),
+		"regressed_by_resolver_count": candidate.get("regressed_by_resolver_count"),
+		"pre_existing_drift_count": candidate.get("pre_existing_drift_count"),
+		"regression_summary": candidate.get("regression_summary", []),
+		"drift_summary": candidate.get("drift_summary", []),
+		"escalated": candidate.get("escalated"),
+		"escalated_at": candidate.get("escalated_at"),
+		"updated_at": candidate.get("updated_at"),
+		"signature": "0" * 64,
+	}
+	if not _validate_resolver_retry_document(document):
+		print("resolver retry signing failed: candidate fields are invalid", file=sys.stderr)
+		return 2
+	document["signature"] = _signature_for_resolver_retry(document, auth_keys[active_key_id])
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("resolver retry signing failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def cmd_verify_resolver_retry(args: argparse.Namespace) -> int:
+	context, context_error = _validated_resolver_retry_context(args)
+	if context_error is not None:
+		print(f"resolver retry verification failed: {context_error}", file=sys.stderr)
+		return 2
+	document = _load_bounded_json_object(Path(args.envelope_file), RESOLVER_RETRY_MAX_BYTES)
+	if document is None:
+		return 1
+	assert context is not None
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"resolver retry verification failed: {key_error}", file=sys.stderr)
+		return 2
+	assert auth_keys is not None
+	if not _resolver_retry_document_is_verified(document, context, auth_keys):
+		return 1
+	if args.out_file:
+		try:
+			Path(args.out_file).write_bytes(_canonical_json_bytes(document) + b"\n")
+			os.chmod(args.out_file, 0o600)
+		except OSError:
+			print("resolver retry verification failed: output file is not writable", file=sys.stderr)
+			return 2
+	return 0
+
+
+def cmd_select_resolver_retry(args: argparse.Namespace) -> int:
+	context, context_error = _validated_resolver_retry_context(args)
+	if context_error is not None:
+		print(f"resolver retry selection failed: {context_error}", file=sys.stderr)
+		return 2
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"resolver retry selection failed: {key_error}", file=sys.stderr)
+		return 2
+	try:
+		comments_path = Path(args.comments_json)
+		if comments_path.stat().st_size > 32 * 1024 * 1024:
+			raise ValueError("comments payload is oversized")
+		comments = json.loads(comments_path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
+		print("resolver retry selection failed: comments payload is invalid", file=sys.stderr)
+		return 2
+	if not isinstance(comments, list) or len(comments) > 100_000:
+		print("resolver retry selection failed: comments payload is invalid", file=sys.stderr)
+		return 2
+	assert context is not None and auth_keys is not None
+	marker_prefix = "<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n"
+	marker_suffix = "\n-->"
+	selected: tuple[int, int, dict[str, Any]] | None = None
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		comment_id = comment.get("id")
+		user = comment.get("user")
+		body = comment.get("body")
+		if isinstance(body, str):
+			body = body.replace("\r\n", "\n").replace("\r", "\n")
+			if len(body.encode("utf-8")) > RESOLVER_RETRY_MAX_BYTES + 64:
+				continue
+			body = body.rstrip("\n")
+		if (
+			not isinstance(comment_id, int)
+			or isinstance(comment_id, bool)
+			or comment_id < 1
+			or not isinstance(user, dict)
+			or user.get("id") != args.producer_id
+			or not isinstance(body, str)
+			or not body.startswith(marker_prefix)
+			or not body.endswith(marker_suffix)
+		):
+			continue
+		try:
+			document = json.loads(body[len(marker_prefix):-len(marker_suffix)])
+		except (json.JSONDecodeError, ValueError, RecursionError):
+			continue
+		if not isinstance(document, dict) or not _resolver_retry_document_is_verified(document, context, auth_keys):
+			continue
+		candidate = (document["generation"], comment_id, document)
+		if selected is None or candidate[:2] > selected[:2]:
+			selected = candidate
+	if selected is None:
+		return 1
+	result = {"comment_id": selected[1], "envelope": selected[2]}
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(result) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("resolver retry selection failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
 
 
 def _frame(part: int, total: int, manifest: str, payload: bytes) -> bytes:
@@ -241,6 +1447,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
 	# start at part=total so a newer partial write cannot blend with an older
 	# complete chain that happened to use different chunk slicing.
 	active_chain_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+	selected_state_candidate: tuple[int, bytes] | None = None
 	for c in reversed(comments):
 		body = (c or {}).get("body") or ""
 		if "ORCHESTRATOR_STATE_V2" not in body:
@@ -280,6 +1487,24 @@ def cmd_extract(args: argparse.Namespace) -> int:
 				continue
 			digest = hashlib.sha256(decoded).hexdigest()
 			if digest == manifest:
+				if args.prefer_highest_auth_generation:
+					try:
+						state_document = json.loads(decoded)
+					except (UnicodeDecodeError, json.JSONDecodeError):
+						state_document = {}
+					generation = (
+						_state_auth_generation(state_document)
+						if isinstance(state_document, dict)
+						else None
+					)
+					candidate_generation = generation if generation is not None else 0
+					if (
+						selected_state_candidate is None
+						or candidate_generation > selected_state_candidate[0]
+					):
+						selected_state_candidate = (candidate_generation, decoded)
+					active_chain_by_key.pop(chain_key, None)
+					continue
 				# Write raw bytes through the buffer so non-UTF-8
 				# state bytes round-trip unchanged.  In practice the
 				# orchestrator state is JSON (UTF-8) but we never
@@ -290,13 +1515,139 @@ def cmd_extract(args: argparse.Namespace) -> int:
 			# this manifest and keep walking older comments for an
 			# earlier intact chain.
 			active_chain_by_key.pop(chain_key, None)
-	# No complete chain.  Caller falls back to V1 extraction.
+	if selected_state_candidate is not None:
+		# Candidates are visited newest-first and equal generations do not
+		# replace the selection, preserving legacy newest-write-wins behavior.
+		sys.stdout.buffer.write(selected_state_candidate[1])
+		return 0
+	# No complete chain. Caller falls back to V1 extraction.
 	return 1
 
 
 def main() -> int:
 	p = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
 	sub = p.add_subparsers(dest="cmd", required=True)
+	for command_name, command_help, command_func in (
+		("sign", "Write a context-bound authenticated state copy", cmd_sign),
+		("verify", "Verify a context-bound authenticated state copy", cmd_verify),
+	):
+		command_parser = sub.add_parser(command_name, help=command_help)
+		command_parser.add_argument("--state-file", required=True)
+		command_parser.add_argument("--repository", required=True)
+		command_parser.add_argument("--tracking-issue", required=True, type=int)
+		command_parser.add_argument("--integration-branch", required=True)
+		command_parser.add_argument("--producer-id", required=True, type=int)
+		command_parser.add_argument("--producer-login", required=True)
+		if command_name == "sign":
+			command_parser.add_argument("--out-file", required=True)
+		command_parser.set_defaults(func=command_func)
+	p_select_resolver_retry = sub.add_parser(
+		"select-resolver-retry",
+		help="Select the highest-generation authenticated resolver retry state from comments",
+	)
+	p_select_resolver_retry.add_argument("--comments-json", required=True)
+	p_select_resolver_retry.add_argument("--repository", required=True)
+	p_select_resolver_retry.add_argument("--tracking-issue", required=True, type=int)
+	p_select_resolver_retry.add_argument("--integration-branch", required=True)
+	p_select_resolver_retry.add_argument("--source-pr", required=True, type=int)
+	p_select_resolver_retry.add_argument("--head-sha", required=True)
+	p_select_resolver_retry.add_argument("--producer-id", required=True, type=int)
+	p_select_resolver_retry.add_argument("--out-file", required=True)
+	p_select_resolver_retry.set_defaults(func=cmd_select_resolver_retry)
+	for command_name, command_help, command_func in (
+		("sign-resolver-retry", "Sign an authenticated resolver retry-state envelope", cmd_sign_resolver_retry),
+		("verify-resolver-retry", "Verify an authenticated resolver retry-state envelope", cmd_verify_resolver_retry),
+	):
+		command_parser = sub.add_parser(command_name, help=command_help)
+		command_parser.add_argument("--repository", required=True)
+		command_parser.add_argument("--tracking-issue", required=True, type=int)
+		command_parser.add_argument("--integration-branch", required=True)
+		command_parser.add_argument("--source-pr", required=True, type=int)
+		command_parser.add_argument("--head-sha", required=True)
+		command_parser.add_argument("--producer-id", required=True, type=int)
+		if command_name == "sign-resolver-retry":
+			command_parser.add_argument("--candidate-file", required=True)
+			command_parser.add_argument("--out-file", required=True)
+		else:
+			command_parser.add_argument("--envelope-file", required=True)
+			command_parser.add_argument("--out-file")
+		command_parser.set_defaults(func=command_func)
+	p_validate_keyring = sub.add_parser(
+		"validate-keyring",
+		help="Validate the dedicated state-authentication keyring",
+	)
+	p_validate_keyring.set_defaults(func=cmd_validate_keyring)
+	for command_name, command_help, command_func in (
+		("sign-comprehensive-marker", "Sign a comprehensive-cycle marker envelope", cmd_sign_comprehensive_marker),
+		("verify-comprehensive-marker", "Verify a comprehensive-cycle marker envelope", cmd_verify_comprehensive_marker),
+	):
+		command_parser = sub.add_parser(command_name, help=command_help)
+		command_parser.add_argument("--repository", required=True)
+		command_parser.add_argument("--producer-id", required=True, type=int)
+		command_parser.add_argument("--tracking-issue", type=int, default=0)
+		if command_name == "sign-comprehensive-marker":
+			command_parser.add_argument("--candidate-file", required=True)
+			command_parser.add_argument("--out-file", required=True)
+		else:
+			command_parser.add_argument("--envelope-file", required=True)
+			command_parser.add_argument("--out-file")
+		command_parser.set_defaults(func=command_func)
+	p_bind_comprehensive_marker = sub.add_parser(
+		"bind-comprehensive-marker",
+		help="Bind an authenticated comprehensive-cycle marker to its created tracking issue",
+	)
+	p_bind_comprehensive_marker.add_argument("--envelope-file", required=True)
+	p_bind_comprehensive_marker.add_argument("--repository", required=True)
+	p_bind_comprehensive_marker.add_argument("--producer-id", required=True, type=int)
+	p_bind_comprehensive_marker.add_argument("--tracking-issue", required=True, type=int)
+	p_bind_comprehensive_marker.add_argument("--out-file", required=True)
+	p_bind_comprehensive_marker.set_defaults(func=cmd_bind_comprehensive_marker)
+	p_select_comprehensive_marker = sub.add_parser(
+		"select-comprehensive-marker",
+		help="Select the newest producer-authenticated comprehensive-cycle marker",
+	)
+	p_select_comprehensive_marker.add_argument("--comments-json", required=True)
+	p_select_comprehensive_marker.add_argument("--repository", required=True)
+	p_select_comprehensive_marker.add_argument("--producer-id", required=True, type=int)
+	p_select_comprehensive_marker.add_argument("--tracking-issue", required=True, type=int)
+	p_select_comprehensive_marker.add_argument("--out-file", required=True)
+	p_select_comprehensive_marker.set_defaults(func=cmd_select_comprehensive_marker)
+	for command_name, command_help, command_func in (
+		("sign-behavioural-smoke", "Sign a behavioural-smoke assertion bundle", cmd_sign_behavioural_smoke),
+		("verify-behavioural-smoke", "Verify a behavioural-smoke assertion bundle", cmd_verify_behavioural_smoke),
+	):
+		command_parser = sub.add_parser(command_name, help=command_help)
+		command_parser.add_argument("--bundle-file", required=True)
+		command_parser.add_argument("--repository", required=True)
+		command_parser.add_argument("--pr-number", required=True, type=int)
+		command_parser.add_argument("--head-sha", required=True)
+		command_parser.add_argument("--round", required=True, type=int)
+		if command_name == "sign-behavioural-smoke":
+			command_parser.add_argument("--producer-run-id", required=True, type=int)
+			command_parser.add_argument("--producer-run-attempt", required=True, type=int)
+			command_parser.add_argument("--out-file", required=True)
+		else:
+			command_parser.add_argument("--envelope-file", required=True)
+			command_parser.add_argument("--out-file")
+		command_parser.set_defaults(func=command_func)
+	for command_name, command_help, command_func in (
+		("sign-refusal", "Sign a context-bound review-blocked refusal envelope", cmd_sign_refusal),
+		("verify-refusal", "Verify a context-bound review-blocked refusal envelope", cmd_verify_refusal),
+	):
+		command_parser = sub.add_parser(command_name, help=command_help)
+		command_parser.add_argument("--repository", required=True)
+		command_parser.add_argument("--tracking-issue", required=True, type=int)
+		command_parser.add_argument("--source-pr", required=True, type=int)
+		command_parser.add_argument("--linked-issue", required=True, type=int)
+		command_parser.add_argument("--head-sha", required=True)
+		command_parser.add_argument("--producer-id", required=True, type=int)
+		if command_name == "sign-refusal":
+			command_parser.add_argument("--refusal-reason", required=True)
+			command_parser.add_argument("--rejected-output-file", required=True)
+			command_parser.add_argument("--out-file", required=True)
+		else:
+			command_parser.add_argument("--envelope-file", required=True)
+		command_parser.set_defaults(func=command_func)
 	p_pack = sub.add_parser(
 		"pack",
 		help="Split a state JSON file into V2-framed chunk files",
@@ -310,6 +1661,7 @@ def main() -> int:
 		help="Find the latest complete V2 chain in a paginated comments JSON array",
 	)
 	p_extract.add_argument("--comments-json", required=True)
+	p_extract.add_argument("--prefer-highest-auth-generation", action="store_true")
 	p_extract.set_defaults(func=cmd_extract)
 	args = p.parse_args()
 	return args.func(args)

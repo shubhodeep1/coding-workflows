@@ -62,8 +62,11 @@ def test_template_mode_selection_contract_present() -> None:
 	assert 'attempt_render_recovery_after_preflight_failure()' in text
 	assert 'if attempt_render_recovery_after_preflight_failure; then' in text
 	assert 'attempt_self_heal_and_reexec "render"' in text
-	assert "python3_bin=\"$(command -v python3 2>/dev/null || printf '%s' 'python3')\"" in text
-	assert "if ! \"${python3_bin}\" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then" in text
+	# Template rendering runs python3 through the shared isolated-launcher
+	# helper (env -i with a pinned PATH/LANG/PYTHONDONTWRITEBYTECODE, -I -B),
+	# not a bare local python3_bin variable.
+	assert "if ! validate_run_isolated_python -- -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then" in text
+	assert 'renderer_summary="$(PATH="${renderer_path}" validate_run_isolated_python -- "${renderer_script}" \\' in text
 	assert 'Template renderer requires python3 >= 3.9' in text
 	assert 'Template rendering is now the only supported harness generation path.' in text
 
@@ -878,6 +881,10 @@ def test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree() -> None:
 def test_clear_stale_serena_codex_config_removes_only_serena_block() -> None:
 	text = _validate_process_text()
 	cleanup_helper = "clear_stale_serena_codex_config()\n{" + text.split("clear_stale_serena_codex_config()\n{", 1)[1].split('\n\nif [ -z "${SERENA_PROJECT_PREEXISTED}" ]; then', 1)[0]
+	# validate_process.sh defines its isolated Python launcher (which wraps
+	# gh_helpers.sh's _gh_helpers_run_isolated_python) before this function;
+	# supply an equivalent stub here so the extracted function runs the same way.
+	cleanup_helper = 'validate_run_isolated_python() { python3 -I -B "$@"; }\n' + cleanup_helper
 
 	with tempfile.TemporaryDirectory(prefix="validate-serena-config-") as td:
 		root = Path(td)

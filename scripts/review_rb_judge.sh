@@ -38,8 +38,20 @@ for _ledger_candidate in \
   fi
 done
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+review_rb_run_isolated_python()
+{
+  _gh_helpers_run_isolated_python_with_paths \
+    "${SUPPORT_ROOT_DIR:-.}" "${SUPPORT_SCRIPTS_DIR}" -- "$@"
+}
 OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
+CODEX_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
+if [ ! -r "${CODEX_HELPERS_PATH}" ]; then
+  echo "::error::Missing required support script ${CODEX_HELPERS_PATH}" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${CODEX_HELPERS_PATH}"
 # shellcheck source=/dev/null
 if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
   rb_helpers_missing_alert="opencode_agent_failure phase=review_rb_judge role=reviewer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=helpers_missing"
@@ -71,7 +83,8 @@ review_rb_prepare_opencode_config() {
     --model "${MODEL_EDITOR}" \
     --project-path "${workspace}" \
     --config-path "${config_path}" \
-    --serena "${serena_mode}"; then
+    --serena "${serena_mode}" \
+    --provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"; then
     opencode_emit_failure_alert "${phase}" "${role}" "${MODEL_EDITOR}" 1 config_generation || true
     return 1
   fi
@@ -98,6 +111,19 @@ review_rb_strip_opencode_output_file() {
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+review_rb_send_warning()
+(
+  local rb_warning_message="$1"
+  local rb_support_root
+  rb_support_root="$(dirname -- "${SUPPORT_SCRIPTS_DIR}")"
+  if [ -r "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
+    cd "${rb_support_root}" || return 0
+    # shellcheck source=/dev/null
+    source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || return 0
+  fi
+  type tg_send_msg >/dev/null 2>&1 || return 0
+  tg_send_msg "${rb_warning_message}" "WARNING" >/dev/null || true
+)
 # Shared PR check-runs merge gate (_pr_checks_completed). Single source of
 # truth shared with scripts/orchestrate_poll_process.sh so this judge's
 # merge_with_followup gate and the orchestrator's merge gates apply the
@@ -138,7 +164,7 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
       fi
       : > "${_tmp}" 2>/dev/null || { rm -f "${_tmp}"; echo "${_sanitize_warn}" >&2; return 0; }
     fi
-    if command -v python3 >/dev/null 2>&1 && python3 - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
+    if command -v python3 >/dev/null 2>&1 && review_rb_run_isolated_python - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
 from pathlib import Path
 import sys
 
@@ -265,7 +291,7 @@ emit_context_budget_warn_for_prompt() {
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+    review_rb_run_isolated_python - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -340,7 +366,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
       cat "${_p}"
       _emit_bytes="${_size}"
     else
-      PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
+      review_rb_run_isolated_python - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
 import sys
 
 cap = int(sys.argv[2])
@@ -412,7 +438,7 @@ emit_review_rb_lessons_learned_records() {
   telemetry_json="$(printf '%s\n' "${judge_json}" | {
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${PWD}" "${issue_number}" "${pr_number}" <<'PY'
+    review_rb_run_isolated_python - "${PWD}" "${issue_number}" "${pr_number}" <<'PY'
 import json
 import os
 import sys
@@ -512,7 +538,7 @@ render_review_rb_prior_round_decisions_file() {
   fi
 
   tmp_path="$(mktemp)" || return 0
-  if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
+  if review_rb_run_isolated_python - "${ledger_path}" > "${tmp_path}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1062,7 +1088,7 @@ if ! [[ "${PR_DIFF_BYTES_TOTAL}" =~ ^[0-9]+$ ]]; then
   PR_DIFF_BYTES_TOTAL=0
 fi
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
-  if PYTHONDONTWRITEBYTECODE=1 python3 - "${RB_JUDGE_PR_DIFF_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null <<'PY'
+  if review_rb_run_isolated_python - "${RB_JUDGE_PR_DIFF_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
@@ -1103,7 +1129,7 @@ elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
   PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
 else
   printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${REPOSITORY%%/*} repo=${REPOSITORY##*/} pr=${PR_NUMBER}" >&2
-  PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
+  PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {id: .id, author: .user.login, author_id: .user.id, author_type: .user.type, author_association: .author_association, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.id // 0))' 2>/dev/null || echo '[]')"
   PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
   PR_CONTEXT_JSON="$(jq -cn --argjson meta "${PRELOADED_PR_META}" --argjson comments "${PR_ISSUE_COMMENTS}" --argjson review_comments "${PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
 fi
@@ -1124,6 +1150,23 @@ fi
 # The checked-out commit is the code snapshot the judge can inspect. Live PR
 # metadata may advance after checkout, so it is not merge authorization.
 RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
+POST_REVIEW_HEAD_SHA="${RB_JUDGED_HEAD_SHA}"
+RB_PENDING_APPROVAL_REQUEST=""
+RB_PENDING_DECISION_JSON=""
+RB_APPROVAL_PRODUCER_JSON="{}"
+RB_APPROVAL_PRODUCER_ID=""
+# Existing PR and comment reads do not identify the principal behind GH_TOKEN.
+# Resolve it once so only that immutable account ID can mint marker comments.
+RB_APPROVAL_PRODUCER_JSON="$(gh_retry gh api user 2>/dev/null || echo '{}')"
+RB_APPROVAL_PRODUCER_ID="$(printf '%s' "${RB_APPROVAL_PRODUCER_JSON}" | jq -r '.id // empty' 2>/dev/null || true)"
+if command -v review_blocked_find_pending_request >/dev/null 2>&1 \
+  && [ -n "${RB_JUDGED_HEAD_SHA}" ] \
+  && [[ "${RB_APPROVAL_PRODUCER_ID}" =~ ^[1-9][0-9]*$ ]]; then
+  RB_PENDING_APPROVAL_REQUEST="$(review_blocked_find_pending_request "${PR_COMMENTS}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${RB_APPROVAL_PRODUCER_ID}" || true)"
+  if [ -n "${RB_PENDING_APPROVAL_REQUEST}" ]; then
+    RB_PENDING_DECISION_JSON="$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -c '.decision // empty' 2>/dev/null || true)"
+  fi
+fi
 RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/rb_judge_prior_round_decisions.txt"
 if command -v render_review_rb_prior_round_decisions_file >/dev/null 2>&1; then
   render_review_rb_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}"
@@ -1140,7 +1183,7 @@ RB_JUDGE_PR_META_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_meta.json"
 RB_JUDGE_PR_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_comments.json"
 RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_review_comments.json"
 RB_JUDGE_SEMBLE_PREFETCH=""
-trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
+trap 'model_provider_broker_stop >/dev/null 2>&1 || true; _cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -1339,6 +1382,7 @@ JUDGE_ATTEMPT_COUNT="${#JUDGE_ATTEMPT_LEVELS[@]}"
 RB_OPENCODE_WORKSPACE="$(pwd)"
 RB_JUDGE_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_judge_opencode.json"
 RB_FIX_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_fix_opencode.json"
+opencode_model_provider_broker_start
 if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then
   exit 1
 fi
@@ -1358,7 +1402,7 @@ fi
 _recover_judge_json() {
   local src="$1" dst="$2" recovered=""
   [ -s "${src}" ] || return 1
-  recovered="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${src}" <<'PY' 2>/dev/null
+  recovered="$(review_rb_run_isolated_python - "${src}" <<'PY' 2>/dev/null
 import json, sys
 
 src = sys.argv[1]
@@ -1405,6 +1449,11 @@ PY
 RB_JUDGE_PROMPT_SIZE_LOGGED=false
 JUDGE_SUCCESS=false
 JUDGE_STDERR_FILE="${RUNTIME_DIR}/rb_judge_stderr.txt"
+if [ -n "${RB_PENDING_DECISION_JSON}" ]; then
+  printf '%s\n' "${RB_PENDING_DECISION_JSON}" > "${RB_JUDGE_OUTPUT}"
+  JUDGE_SUCCESS=true
+  echo "Reusing pending review-blocked approval request; skipping a new model decision."
+else
 for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   attempt="$((attempt_idx + 1))"
   level="${JUDGE_ATTEMPT_LEVELS[$attempt_idx]}"
@@ -1443,20 +1492,20 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   : > "${RB_JUDGE_OUTPUT}"
   : > "${JUDGE_STDERR_FILE}"
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-    "${CODEX_STALL_GUARD_HELPER}" \
+    model_provider_broker_exec_sanitized "${CODEX_STALL_GUARD_HELPER}" \
       --phase review_rb_judge \
       --stdout-file "${RB_JUDGE_OUTPUT}" \
       --stderr-file "${JUDGE_STDERR_FILE}" \
       --status-file "${judge_stall_status_file}" \
       -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?
   elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    "${CODEX_HEARTBEAT_HELPER}" \
+    model_provider_broker_exec_sanitized "${CODEX_HEARTBEAT_HELPER}" \
       --phase review_rb_judge \
       --stdout-file "${RB_JUDGE_OUTPUT}" \
       --stderr-file "${JUDGE_STDERR_FILE}" \
       -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?
   else
-    "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}" || rc=$?
+    model_provider_broker_exec_sanitized "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}" || rc=$?
   fi
   if judge_stall_state="$(read_codex_stall_guard_state_with_warning "${judge_stall_status_file}" "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT}" )"; then
     :
@@ -1511,6 +1560,8 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
     sleep 10
   fi
 done
+fi
+model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after judge execution." >&2
 
 if [ "${JUDGE_SUCCESS}" != "true" ]; then
   opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR}" "${rc:-1}" attempts_exhausted || true
@@ -1535,7 +1586,7 @@ fi
 # `[ -z "${JUDGE_JSON}" ]` check fires `JUDGE_JSON: unbound variable`
 # under `set -u` and aborts the whole review_autofix job.
 JUDGE_JSON=""
-JUDGE_JSON="$(PYTHONDONTWRITEBYTECODE=1 python3 -c "
+JUDGE_JSON="$(review_rb_run_isolated_python -c "
 import json, re, sys
 
 raw = open('${RB_JUDGE_OUTPUT}', 'r').read()
@@ -1694,11 +1745,81 @@ RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
   echo "**Remaining issues:** ${RB_REMAINING}"
 } > "${RB_JUDGE_COMMENT_FILE}"
 
-post_review_blocked_assessment \
-  "${RB_JUDGE_COMMENT_FILE}" \
-  "${RB_OUTBOUND_REVIEW_STATE}" \
-  "${RB_JUDGED_HEAD_SHA}" \
-  "${POST_REVIEW_HEAD_REF}" || true
+case "${RB_ACTION}" in
+  merge|merge_with_followup|close_and_reissue)
+    printf '\n**Status:** Human approval is required before this terminal recommendation can execute.\n' >> "${RB_JUDGE_COMMENT_FILE}"
+    ;;
+esac
+
+# A pending approval request is published below only after its assessment
+# succeeds. Its presence therefore makes re-posting the same assessment on
+# every review-sweep dispatch unnecessary. If the initial assessment fails,
+# stop terminal recommendations before request creation so a later dispatch
+# can retry instead of permanently suppressing the missing comment.
+if [ -n "${RB_PENDING_DECISION_JSON}" ]; then
+  echo "Pending review-blocked approval request reused; request creation follows a successful judge assessment post, so it is not re-posted."
+elif ! post_review_blocked_assessment \
+    "${RB_JUDGE_COMMENT_FILE}" \
+    "${RB_OUTBOUND_REVIEW_STATE}" \
+    "${RB_JUDGED_HEAD_SHA}" \
+    "${POST_REVIEW_HEAD_REF}"; then
+  echo "::warning::Could not publish review-blocked judge assessment; terminal approval requests will not be created without it."
+  case "${RB_ACTION}" in
+    merge|merge_with_followup|close_and_reissue)
+      echo "judge_skip_reason=assessment_publish_failed" >> "$GITHUB_OUTPUT"
+      exit 0
+      ;;
+  esac
+fi
+
+RB_APPROVAL_REQUEST_ID=""
+case "${RB_ACTION}" in
+  merge|merge_with_followup|close_and_reissue)
+    if ! command -v review_blocked_build_approval_request >/dev/null 2>&1; then
+      echo "::warning::Review-blocked approval helpers unavailable; refusing terminal action (fail-closed)."
+      echo "judge_skip_reason=approval_helper_unavailable" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    if ! [[ "${RB_APPROVAL_PRODUCER_ID}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "::warning::Authenticated approval-request producer is unavailable; refusing terminal action (fail-closed)."
+      echo "judge_skip_reason=approval_producer_unresolved" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    if ! [[ "${RB_JUDGED_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "::warning::Current PR head SHA is unavailable or invalid; refusing terminal approval request."
+      echo "judge_skip_reason=approval_head_unresolved" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    RB_DECISION_DIGEST="$(review_blocked_decision_digest "${JUDGE_JSON}")"
+    RB_APPROVAL_REQUEST=""
+    if [ -n "${RB_PENDING_APPROVAL_REQUEST}" ] \
+      && [ "$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -r '.decision_digest // empty')" = "${RB_DECISION_DIGEST}" ] \
+      && [ "$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -r '.action // empty')" = "${RB_ACTION}" ]; then
+      RB_APPROVAL_REQUEST="${RB_PENDING_APPROVAL_REQUEST}"
+    else
+      RB_APPROVAL_REQUEST="$(review_blocked_build_approval_request "${PR_NUMBER}" "${FIRST_ISSUE:-0}" "${RB_JUDGED_HEAD_SHA}" "${JUDGE_JSON}")"
+      if ! review_blocked_post_approval_request "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST}"; then
+        echo "::warning::Could not publish review-blocked approval request; refusing terminal action."
+        echo "judge_skip_reason=approval_request_publish_failed" >> "$GITHUB_OUTPUT"
+        exit 0
+      fi
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+      echo "judge_action=approval_pending" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=approval_request_created" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    RB_APPROVAL_STATUS="$(review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}" "${REPOSITORY}")"
+    if [ "$(printf '%s' "${RB_APPROVAL_STATUS}" | jq -r '.status // empty')" != "approved" ]; then
+      echo "Review-blocked terminal recommendation remains pending trusted human approval."
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+      echo "judge_action=approval_pending" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=approval_pending" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    RB_APPROVAL_REQUEST_ID="$(printf '%s' "${RB_APPROVAL_REQUEST}" | jq -r '.request_id')"
+    echo "Authenticated human approval accepted for request ${RB_APPROVAL_REQUEST_ID}."
+    ;;
+esac
 
 # -----------------------------------------------------------
 # Execute judge action
@@ -1706,135 +1827,77 @@ post_review_blocked_assessment \
 case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
-
-    # RB_JUDGED_HEAD_SHA is the checked-out head embedded in the judge prompt.
-    # Never substitute the later mergeability poll's head: that could
-    # authorize a concurrent push the judge did not evaluate.
-    if ! [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
-      echo "::warning::Review-blocked judge could not resolve the evaluated head SHA for PR #${PR_NUMBER}; refusing an unbound merge."
-      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
-      echo "judge_skip_reason=unresolved_head_sha" >> "$GITHUB_OUTPUT"
-      exit 0
-    fi
-    RB_MERGE_READY_LABEL_ALLOWED="false"
-
-    # Attempt merge.
-    #
-    # GitHub's REST `pulls` API returns `mergeable` as one of three values:
-    #   - true   : merge is clean
-    #   - false  : real merge conflicts
-    #   - null   : GitHub has not finished computing mergeability yet
-    #              (typical immediately after a push). Mergeability is
-    #              computed asynchronously, so we must poll briefly before
-    #              treating an empty value as a hard failure — otherwise a
-    #              transient `null` is indistinguishable from a real conflict
-    #              in the log.
-    PR_STATE=""
-    PR_MERGEABLE=""
-    _mergeable_attempts="${PR_MERGEABLE_POLL_ATTEMPTS:-6}"
-    _mergeable_sleep="${PR_MERGEABLE_POLL_SLEEP:-5}"
-    _attempt=0
-    while [ "${_attempt}" -lt "${_mergeable_attempts}" ]; do
-      # Use _safe_gh_jq (via gh_retry) so a failed `gh api` response
-      # emits no stdout — preventing the error JSON body from being
-      # concatenated with the `|| echo '{}'` fallback, which would
-      # yield invalid JSON and break the downstream `jq` parses below.
-      _pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-      # GitHub's REST /pulls/{N} returns .state as one of `open` or
-      # `closed` (never `merged` — merged PRs are state=closed +
-      # merged=true). Drop the unreachable `merged` alt for clarity;
-      # this branch only acts when state=open anyway.
-      PR_STATE="$(printf '%s\n' "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed' || echo "")"
-      PR_MERGEABLE="$(printf '%s\n' "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
-      # Stop polling as soon as state is terminal or mergeability is known.
-      if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
+    RB_MERGE_LIVE_JSON="{}"
+    RB_MERGE_STATE=""
+    RB_MERGEABLE=""
+    RB_MERGE_HEAD_SHA=""
+    RB_MERGE_BASE_REF=""
+    RB_MERGE_ALREADY_MERGED="false"
+    RB_MERGE_POLL_ATTEMPTS="${PR_MERGEABLE_POLL_ATTEMPTS:-6}"
+    RB_MERGE_POLL_SLEEP="${PR_MERGEABLE_POLL_SLEEP:-5}"
+    RB_MERGE_POLL_INDEX=0
+    while [ "${RB_MERGE_POLL_INDEX}" -lt "${RB_MERGE_POLL_ATTEMPTS}" ]; do
+      RB_MERGE_LIVE_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+      RB_MERGE_STATE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.state // empty')"
+      RB_MERGEABLE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r 'if .mergeable == true then "true" elif .mergeable == false then "false" else empty end')"
+      RB_MERGE_HEAD_SHA="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.head.sha // empty')"
+      RB_MERGE_BASE_REF="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.base.ref // empty')"
+      RB_MERGE_ALREADY_MERGED="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '(.merged_at != null) or (.merged == true)')"
+      if [ "${RB_MERGE_STATE}" != "open" ] || [ -n "${RB_MERGEABLE}" ]; then
         break
       fi
-      _attempt=$((_attempt + 1))
-      if [ "${_attempt}" -lt "${_mergeable_attempts}" ]; then
-        echo "PR #${PR_NUMBER} mergeable=null (GitHub still computing); retrying in ${_mergeable_sleep}s (${_attempt}/${_mergeable_attempts})."
-        sleep "${_mergeable_sleep}"
+      RB_MERGE_POLL_INDEX=$((RB_MERGE_POLL_INDEX + 1))
+      if [ "${RB_MERGE_POLL_INDEX}" -lt "${RB_MERGE_POLL_ATTEMPTS}" ]; then
+        echo "PR #${PR_NUMBER} mergeable=null (GitHub still computing); retrying in ${RB_MERGE_POLL_SLEEP}s (${RB_MERGE_POLL_INDEX}/${RB_MERGE_POLL_ATTEMPTS})."
+        sleep "${RB_MERGE_POLL_SLEEP}"
       fi
     done
-
-    if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
-      if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-        # NOTE: gh pr merge is intentionally NOT wrapped with gh_retry.
-        # These calls are best-effort (trailing `|| true`); non-
-        # transient failures (branch protection, permissions, merge
-        # queue, 422 merge commit conflicts, etc.) would otherwise
-        # incur ~31s of exponential backoff under gh_retry before
-        # reaching the `|| true` fallthrough. Rate-limit alerts still
-        # fire through every other gh_retry-wrapped call in this
-        # script.
-        if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
-          RB_MERGE_READY_LABEL_ALLOWED="true"
-        else
-          echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
-        fi
-      else
-        RB_MERGE_READY_LABEL_ALLOWED="true"
-      fi
-    elif [ "${PR_ALREADY_MERGED:-false}" = "true" ]; then
-      RB_MERGE_READY_LABEL_ALLOWED="true"
-      echo "PR #${PR_NUMBER} is already merged; advancing linked issues without another merge request."
-    elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
-      echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is."
-      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=false, merge conflicts present."
-    else
-      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null}, cannot merge yet (mergeability still computing or PR not open)."
+    RB_MERGE_CONFIRMED=false
+    if [ "${RB_MERGE_HEAD_SHA}" != "${RB_JUDGED_HEAD_SHA}" ]; then
+      echo "::warning::Approved merge refused because PR #${PR_NUMBER} head changed after the decision."
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+    elif [ "${RB_MERGE_ALREADY_MERGED}" = "true" ]; then
+      RB_MERGE_CONFIRMED=true
+    elif [ "${RB_MERGE_STATE}" = "open" ] && [ "${RB_MERGEABLE}" = "true" ] \
+      && command -v _pr_checks_completed >/dev/null 2>&1 \
+      && PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_CHECKS_SELF_RUN_ID="${GITHUB_RUN_ID:-}" \
+        _pr_checks_completed "${PR_NUMBER}" "${RB_MERGE_HEAD_SHA}" "${RB_MERGE_BASE_REF}" \
+      && [ "${ENABLE_AUTO_MERGE}" = "true" ] \
+      && gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_MERGE_HEAD_SHA}" 2>/dev/null; then
+      RB_MERGE_CONFIRMED=true
     fi
-
-    if [ "${RB_MERGE_READY_LABEL_ALLOWED}" = "true" ]; then
+    if [ "${RB_MERGE_CONFIRMED}" = "true" ]; then
       ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
       while IFS= read -r issue_number; do
         [ -n "${issue_number}" ] || continue
         _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
       done <<< "${ISSUE_NUMBERS}"
+      review_blocked_post_consumed_marker "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST_ID}" "merged" || true
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+      echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+    else
+      if [ "${RB_MERGE_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+        echo "::warning::Approved merge refused because PR #${PR_NUMBER} head changed after the decision."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        echo "judge_skip_reason=approved_merge_precondition_failed" >> "$GITHUB_OUTPUT"
+      elif [ "${RB_MERGE_STATE}" = "open" ] && [ -z "${RB_MERGEABLE}" ]; then
+        echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
+      elif [ "${RB_MERGE_STATE}" = "open" ] && [ "${RB_MERGEABLE}" = "false" ]; then
+        echo "judge_skip_reason=merge_conflict" >> "$GITHUB_OUTPUT"
+      else
+        echo "judge_skip_reason=approved_merge_precondition_failed" >> "$GITHUB_OUTPUT"
+      fi
     fi
-
-    echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-    echo "judge_action=merge" >> "$GITHUB_OUTPUT"
     ;;
 
   fix)
     if [ "${IS_FINAL}" = "true" ]; then
-      echo "Judge returned 'fix' but retries exhausted — treating as merge."
-
-      if ! [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "::warning::Review-blocked judge could not resolve the evaluated head SHA for PR #${PR_NUMBER}; refusing an unbound terminal merge."
-        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
-        echo "judge_skip_reason=unresolved_head_sha" >> "$GITHUB_OUTPUT"
-        exit 0
-      fi
-      RB_MERGE_READY_LABEL_ALLOWED="false"
-
-      # GitHub's REST /pulls/{N} returns .state as one of `open` or
-      # `closed`; drop the unreachable `merged` alt.
-      PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed' || echo "")"
-      if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-        # Best-effort merge — see note above re: gh_retry.
-        if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
-          RB_MERGE_READY_LABEL_ALLOWED="true"
-        else
-          echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
-        fi
-      elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
-        RB_MERGE_READY_LABEL_ALLOWED="true"
-      fi
-
-      if [ "${RB_MERGE_READY_LABEL_ALLOWED}" = "true" ]; then
-        ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-        while IFS= read -r issue_number; do
-          [ -n "${issue_number}" ] || continue
-          _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
-        done <<< "${ISSUE_NUMBERS}"
-      fi
-
+      echo "::warning::Judge returned 'fix' after retries were exhausted; refusing invalid final action."
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-      echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=invalid_final_fix" >> "$GITHUB_OUTPUT"
     else
       echo "Judge is applying fixes to PR #${PR_NUMBER}..."
 
@@ -1853,8 +1916,8 @@ case "${RB_ACTION}" in
         echo "fix_description describing what you changed."
         echo
         # Edit-discipline guidance is scoped to THIS step (the fix
-        # step runs with --sandbox danger-full-access and is expected
-        # to write files). The read-only judge step intentionally
+        # step uses the writer tool policy and is expected to write files).
+        # The read-only judge step intentionally
         # omits this block — its sandbox would silently reject any
         # write, and including it there encouraged the model to
         # re-explore in pursuit of a write it could never land.
@@ -1891,6 +1954,7 @@ __EDIT_DISCIPLINE__
         rb_fix_serena_mode="on"
       fi
       rb_fix_opencode_ready=true
+      opencode_model_provider_broker_start
       if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then
         rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
         exit 1
@@ -1912,20 +1976,20 @@ __EDIT_DISCIPLINE__
       emit_review_rb_substate "review_rb_fix" "judge_fix" "StreamingTurn" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       : > "${RB_FIX_OUTPUT}"
       if [ "${rb_fix_opencode_ready}" = "true" ] && [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-        "${CODEX_STALL_GUARD_HELPER}" \
+        model_provider_broker_exec_sanitized "${CODEX_STALL_GUARD_HELPER}" \
           --phase review_rb_fix \
           --stdout-file "${RB_FIX_OUTPUT}" \
           --stderr-file "${RB_FIX_STDERR}" \
           --status-file "${rb_fix_stall_status_file}" \
           -- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" || rb_fix_rc=$?
       elif [ "${rb_fix_opencode_ready}" = "true" ] && [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-        "${CODEX_HEARTBEAT_HELPER}" \
+        model_provider_broker_exec_sanitized "${CODEX_HEARTBEAT_HELPER}" \
           --phase review_rb_fix \
           --stdout-file "${RB_FIX_OUTPUT}" \
           --stderr-file "${RB_FIX_STDERR}" \
           -- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" || rb_fix_rc=$?
       elif [ "${rb_fix_opencode_ready}" = "true" ]; then
-        "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>"${RB_FIX_STDERR}" || rb_fix_rc=$?
+        model_provider_broker_exec_sanitized "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>"${RB_FIX_STDERR}" || rb_fix_rc=$?
       fi
       if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix OpenCode" )"; then
         :
@@ -1957,6 +2021,7 @@ __EDIT_DISCIPLINE__
         emit_review_rb_substate "review_rb_fix" "judge_fix" "Failed" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       fi
       rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
+      model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after fix execution." >&2
 
       # Check for changes and commit
       if codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
@@ -2035,8 +2100,8 @@ Review-blocked judge applied fixes to unblock the review pipeline.
 Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
 ${RB_FIX_DESC}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}"
-          if git push origin "HEAD:${TARGET_BRANCH}"; then
+          git remote set-url origin "${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}"
+          if git_with_github_auth push origin "HEAD:${TARGET_BRANCH}"; then
             echo "Pushed [judge-fix] commit to ${TARGET_BRANCH}."
             echo "judge_handled=true" >> "$GITHUB_OUTPUT"
             echo "judge_action=fix" >> "$GITHUB_OUTPUT"
@@ -2044,26 +2109,16 @@ ${RB_FIX_DESC}"
             echo "::warning::Failed to push judge fix — falling back to manual intervention."
           fi
         else
-          echo "Judge staged no effective changes. Treating as merge."
-          ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-          while IFS= read -r issue_number; do
-            [ -n "${issue_number}" ] || continue
-            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
-              --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-          done <<< "${ISSUE_NUMBERS}"
+          echo "::warning::Judge fix staged no effective changes; refusing to reinterpret fix as merge."
           echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-          echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+          echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+          echo "judge_skip_reason=fix_no_effective_changes" >> "$GITHUB_OUTPUT"
         fi
       else
-        echo "Judge produced no file changes. Treating as merge."
-        ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-        while IFS= read -r issue_number; do
-          [ -n "${issue_number}" ] || continue
-          gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
-            --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-        done <<< "${ISSUE_NUMBERS}"
+        echo "::warning::Judge fix produced no file changes; refusing to reinterpret fix as merge."
         echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-        echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        echo "judge_skip_reason=fix_no_changes" >> "$GITHUB_OUTPUT"
       fi
     fi
     ;;
@@ -2180,7 +2235,12 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       # stall-recovery cycle to materialize the follow-up.
       MERGE_CONFIRMED="false"
 
-      if [ "${PR_MERGED}" = "true" ]; then
+      if [ "${PR_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+        echo "::warning::Approved merge_with_followup refused because PR #${PR_NUMBER} head changed after the decision."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        echo "judge_skip_reason=approved_merge_precondition_failed" >> "$GITHUB_OUTPUT"
+      elif [ "${PR_MERGED}" = "true" ]; then
         echo "PR #${PR_NUMBER} already merged (merged=true) — proceeding with follow-up creation against the merged base."
         MERGE_CONFIRMED="true"
       elif [ "${PR_STATE}" = "closed" ]; then
@@ -2251,14 +2311,14 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             # gh_retry — see the `merge)` branch for the rationale
             # (best-effort, non-transient failure backoff cost).
             #
-            # `--match-head-commit "${RB_JUDGED_HEAD_SHA}"` binds the merge
-            # to the checked-out head the judge evaluated. If a concurrent
-            # push lands after checkout or before this merge,
+            # `--match-head-commit "${RB_JUDGED_HEAD_SHA}"` binds the
+            # merge to the approved head SHA. If a
+            # concurrent push lands between the poll and this merge,
             # GitHub rejects it — preventing unjudged code from
-            # landing under merge_with_followup's authority. The full-SHA
-            # check above guarantees we never
+            # landing under merge_with_followup's authority. The
+            # head equality check above guarantees we never
             # fall back to an unbound merge: the check-runs gate
-            # requires RB_JUDGED_HEAD_SHA, so reaching here means it's set.
+            # requires PR_HEAD_SHA, so reaching here means it's set.
             _match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")
             if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash "${_match_head_arg[@]}" 2>/dev/null; then
               echo "PR #${PR_NUMBER} merged synchronously."
@@ -2304,13 +2364,13 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         RB_FOLLOWUP_INTEGRATION_BRANCH=""
         RB_FOLLOWUP_PARENT_DECLARED_DEFAULT="false"
         if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
-          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | review_rb_run_isolated_python -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
 print(m.group(1).strip() if m else "")
 ' 2>/dev/null || echo "")"
-          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
+          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | review_rb_run_isolated_python -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE)
@@ -2357,6 +2417,8 @@ print(m.group(1) if m else "")
         fi
         FULL_FOLLOWUP_BODY="${FOLLOWUP_BODY}
 
+<!-- review-blocked-approval-request:${RB_APPROVAL_REQUEST_ID:-not-applicable} -->
+
 ---
 **Merge-with-followup metadata**
 - Source PR: #${PR_NUMBER} (review-blocked judge merged with deferred gap tracked here)
@@ -2372,6 +2434,7 @@ print(m.group(1) if m else "")
         # ai:clarification already attached.
         ensure_label_exists "ai:clarification" "${REPOSITORY}"
         RB_FOLLOWUP_LABELS=("--label" "ai:clarification")
+        RB_FOLLOWUP_REQUIRED_LABELS='["ai:clarification"]'
 
         # Propagate ai:orchestrator-managed from the parent issue when
         # it carries that label — same rationale as the close_and_reissue
@@ -2382,6 +2445,7 @@ print(m.group(1) if m else "")
         if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
           ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
           RB_FOLLOWUP_LABELS+=("--label" "ai:orchestrator-managed")
+          RB_FOLLOWUP_REQUIRED_LABELS="$(printf '%s' "${RB_FOLLOWUP_REQUIRED_LABELS}" | jq -c '. + ["ai:orchestrator-managed"] | unique')"
           echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to merge-with-followup issue."
         fi
 
@@ -2394,24 +2458,38 @@ print(m.group(1) if m else "")
         # so stall recovery / the next judge run notices and re-tries
         # follow-up creation.
         FOLLOWUP_URL=""
-        if FOLLOWUP_URL="$(gh_retry gh issue create \
-            --repo "${REPOSITORY}" \
-            --title "${FOLLOWUP_TITLE}" \
-            --body "${FULL_FOLLOWUP_BODY}" \
-            ${RB_FOLLOWUP_LABELS[@]+"${RB_FOLLOWUP_LABELS[@]}"})"; then
-          echo "Created follow-up issue: ${FOLLOWUP_URL}"
-        else
-          _create_rc=$?
-          echo "::error::Failed to create follow-up issue for merge_with_followup (rc=${_create_rc}; PR #${PR_NUMBER} merge confirmed but deferred gap is NOT tracked). Leaving linked issues in ai:review-blocked so stall recovery / a subsequent judge run can retry follow-up creation. Manual fallback: open an issue describing the gap and reference PR #${PR_NUMBER}."
-          # Emit structured outputs so downstream log analysis can
-          # classify this failure mode explicitly (parity with the
-          # other refusal paths). judge_handled stays at its initial
-          # `false` so the workflow's review-blocked fallback fires
-          # and the linked issues stay in ai:review-blocked for
-          # retry.
+        RB_SUCCESSOR_RESULT="$(review_blocked_prepare_successor_issue "${REPOSITORY}" "${PR_NUMBER}" \
+          "${PR_COMMENTS:-[]}" "${RB_APPROVAL_REQUEST:-}" "${RB_APPROVAL_PRODUCER_ID:-0}" \
+          "followup" "${FOLLOWUP_TITLE}" "${FULL_FOLLOWUP_BODY}" "${RB_FOLLOWUP_REQUIRED_LABELS}")"
+        RB_SUCCESSOR_STATUS="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.status // "inconclusive"')"
+        case "${RB_SUCCESSOR_STATUS}" in
+          valid)
+            FOLLOWUP_URL="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.url')"
+            echo "Reusing authenticated follow-up issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${FOLLOWUP_URL}"
+            ;;
+          not_found)
+            RB_SUCCESSOR_BODY="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.body')"
+            if FOLLOWUP_URL="$(gh_retry gh issue create \
+                 --repo "${REPOSITORY}" \
+                 --title "${FOLLOWUP_TITLE}" \
+                 --body "${RB_SUCCESSOR_BODY}" \
+                 ${RB_FOLLOWUP_LABELS[@]+"${RB_FOLLOWUP_LABELS[@]}"})"; then
+              echo "Created follow-up issue: ${FOLLOWUP_URL}"
+            else
+              rb_followup_create_rc=$?
+              echo "::error::Failed to create authenticated follow-up issue for merge_with_followup (rc=${rb_followup_create_rc}; PR #${PR_NUMBER} merged but deferred gap untracked). Leaving linked issues in ai:review-blocked for retry."
+              review_rb_send_warning "Review-blocked merge_with_followup: PR #${PR_NUMBER} merged but authenticated follow-up creation failed (rc=${rb_followup_create_rc}); the deferred gap is untracked and will be retried."
+              FOLLOWUP_URL=""
+            fi
+            ;;
+          *)
+            echo "::error::Authenticated successor lookup was inconclusive for merge_with_followup; PR #${PR_NUMBER} merged but the deferred gap remains untracked. Leaving linked issues in ai:review-blocked for retry."
+            review_rb_send_warning "Review-blocked merge_with_followup: authenticated successor lookup was inconclusive after PR #${PR_NUMBER} merged; the deferred gap remains untracked and will be retried."
+            ;;
+        esac
+        if [ -z "${FOLLOWUP_URL}" ]; then
           echo "judge_action=skip" >> "$GITHUB_OUTPUT"
           echo "judge_skip_reason=followup_issue_create_failed" >> "$GITHUB_OUTPUT"
-          FOLLOWUP_URL=""
         fi
 
         if [ -n "${FOLLOWUP_URL}" ]; then
@@ -2427,6 +2505,9 @@ print(m.group(1) if m else "")
 
           echo "judge_handled=true" >> "$GITHUB_OUTPUT"
           echo "judge_action=merge_with_followup" >> "$GITHUB_OUTPUT"
+          if command -v review_blocked_post_consumed_marker >/dev/null 2>&1 && [ -n "${RB_APPROVAL_REQUEST_ID:-}" ]; then
+            review_blocked_post_consumed_marker "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST_ID}" "merged_with_followup" || true
+          fi
         fi
       fi
     fi
@@ -2485,7 +2566,11 @@ print(m.group(1) if m else "")
       while :; do
         push_exit=0
         : > "${push_log}"
-        git -C "${worktree_dir}" push -u origin "HEAD:refs/heads/${baseline_branch}" >"${push_log}" 2>&1 || push_exit=$?
+        if command -v git_with_github_auth >/dev/null 2>&1; then
+          git_with_github_auth -C "${worktree_dir}" push -u origin "HEAD:refs/heads/${baseline_branch}" >"${push_log}" 2>&1 || push_exit=$?
+        else
+          git -C "${worktree_dir}" push -u origin "HEAD:refs/heads/${baseline_branch}" >"${push_log}" 2>&1 || push_exit=$?
+        fi
         cat "${push_log}" >&2 || true
         if [ "${push_exit}" -eq 0 ]; then
           exit 0
@@ -2502,17 +2587,24 @@ print(m.group(1) if m else "")
 
     echo "Judge says close PR #${PR_NUMBER} and reissue."
 
-    # Close the PR
-    gh_retry gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
-      --comment "Closed by review-blocked judge — the approach needs rework. A new issue will be created with refined guidance." \
-      2>/dev/null || true
-
-    # Label linked issues as closed
-    ensure_label_exists "ai:closed" "${REPOSITORY}"
-    while IFS= read -r issue_number; do
-      [ -n "${issue_number}" ] || continue
-      _resilient_phase_swap "${issue_number}" "ai:closed" || true
-    done <<< "${ISSUE_NUMBERS}"
+    # Earlier metadata cannot safely authorize close: the API has no
+    # match-head guard, so bind all preparatory side effects to a fresh read.
+    RB_CLOSE_PREFLIGHT_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+    RB_CLOSE_PREFLIGHT_STATE="$(printf '%s' "${RB_CLOSE_PREFLIGHT_JSON}" | jq -r '.state // empty' 2>/dev/null || true)"
+    RB_CLOSE_PREFLIGHT_HEAD_SHA="$(printf '%s' "${RB_CLOSE_PREFLIGHT_JSON}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
+    if ! [[ "${RB_CLOSE_PREFLIGHT_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || [ "${RB_CLOSE_PREFLIGHT_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+      echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} head changed after the decision or could not be resolved."
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
+      exit 0
+    elif [ "${RB_CLOSE_PREFLIGHT_STATE}" != "open" ]; then
+      echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} is no longer open."
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
 
     # Create replacement issue
     NEW_ISSUE_TITLE="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
@@ -2526,6 +2618,7 @@ print(m.group(1) if m else "")
     RB_INVALID_FILE=""
     RB_FILES_CSV=""
     RB_REISSUE_FILES=()
+    RB_REPLACEMENT_CREATED="false"
 
     if [ -n "${NEW_ISSUE_TITLE}" ] && [ -n "${NEW_ISSUE_BODY}" ]; then
       if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then
@@ -2741,6 +2834,8 @@ ${RB_REISSUE_ORCH_METADATA_LINES}"
       fi
       FULL_NEW_BODY="${FULL_NEW_BODY}
 
+<!-- review-blocked-approval-request:${RB_APPROVAL_REQUEST_ID:-not-applicable} -->
+
 ---
 **Review-blocked reissue metadata**
 - Replaces: ${FIRST_ISSUE:+#${FIRST_ISSUE} }(PR #${PR_NUMBER} closed — approach rework)
@@ -2751,7 +2846,6 @@ ${RB_REISSUE_ORCH_METADATA_LINES}"
 - files_touched:
 $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
       fi
-
       # Propagate ai:orchestrator-managed from the parent issue when it
       # carries that label.  Without this, an orchestrator-managed
       # parent's reissue lands with only ai:clarification (added later
@@ -2761,19 +2855,43 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
       # judge-addition issue silently delivers the same work.  Standalone
       # (non-orchestrator) reissues do NOT inherit this label so their
       # human-driven clarify semantics are preserved.
-      RB_PROPAGATE_LABELS=()
+      RB_PROPAGATE_LABELS=("--label" "ai:clarification")
+      RB_REISSUE_REQUIRED_LABELS='["ai:clarification"]'
+      ensure_label_exists "ai:clarification" "${REPOSITORY}"
       if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
         ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
         RB_PROPAGATE_LABELS+=("--label" "ai:orchestrator-managed")
+        RB_REISSUE_REQUIRED_LABELS="$(printf '%s' "${RB_REISSUE_REQUIRED_LABELS}" | jq -c '. + ["ai:orchestrator-managed"] | unique')"
         echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to review-blocked reissue."
       fi
 
-      NEW_URL="$(gh_retry gh issue create \
-        --repo "${REPOSITORY}" \
-        --title "${NEW_ISSUE_TITLE}" \
-        --body "${FULL_NEW_BODY}" \
-        ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"
-      echo "Created replacement issue: ${NEW_URL}"
+      NEW_URL=""
+      RB_SUCCESSOR_RESULT="$(review_blocked_prepare_successor_issue "${REPOSITORY}" "${PR_NUMBER}" \
+        "${PR_COMMENTS:-[]}" "${RB_APPROVAL_REQUEST:-}" "${RB_APPROVAL_PRODUCER_ID:-0}" \
+        "reissue" "${NEW_ISSUE_TITLE}" "${FULL_NEW_BODY}" "${RB_REISSUE_REQUIRED_LABELS}")"
+      RB_SUCCESSOR_STATUS="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.status // "inconclusive"')"
+      if [ "${RB_SUCCESSOR_STATUS}" = "valid" ]; then
+        NEW_URL="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.url')"
+        echo "Reusing authenticated replacement issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${NEW_URL}"
+      elif [ "${RB_SUCCESSOR_STATUS}" = "not_found" ]; then
+        RB_SUCCESSOR_BODY="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.body')"
+        if NEW_URL="$(gh_retry gh issue create \
+            --repo "${REPOSITORY}" \
+            --title "${NEW_ISSUE_TITLE}" \
+            --body "${RB_SUCCESSOR_BODY}" \
+            ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"; then
+          echo "Created authenticated replacement issue: ${NEW_URL}"
+        else
+          rb_reissue_create_rc=$?
+          echo "::error::Failed to create authenticated replacement issue for close_and_reissue (rc=${rb_reissue_create_rc}; PR #${PR_NUMBER} remains open). Leaving linked issues in ai:review-blocked for retry."
+          review_rb_send_warning "Review-blocked close_and_reissue: authenticated replacement creation failed for PR #${PR_NUMBER} (rc=${rb_reissue_create_rc}); the PR remains open and will be retried."
+          NEW_URL=""
+        fi
+      else
+        echo "::error::Authenticated successor lookup was inconclusive for close_and_reissue; refusing replacement adoption or creation and leaving PR #${PR_NUMBER} open for retry."
+        review_rb_send_warning "Review-blocked close_and_reissue: authenticated successor lookup was inconclusive for PR #${PR_NUMBER}; the PR remains open and will be retried."
+      fi
+      [ -n "${NEW_URL}" ] && RB_REPLACEMENT_CREATED="true"
     else
       if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then
         RB_EFFECTIVE_REISSUE_MODE="redo"
@@ -2785,8 +2903,60 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
 
     echo "REISSUE_MODE requested_raw=${RB_REISSUE_MODE_RAW:-<empty>} effective=${RB_EFFECTIVE_REISSUE_MODE} feature_flag=${REISSUE_PRESERVE_BASELINE_ENABLED:-true}"
 
-    echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-    echo "judge_action=close_and_reissue" >> "$GITHUB_OUTPUT"
+    if [ "${RB_REPLACEMENT_CREATED}" = "true" ]; then
+      RB_REISSUE_CLOSE_CONFIRMED=false
+      RB_REISSUE_REPLACEMENT_STALE=false
+      # Baseline and issue creation may take long enough for the head to move;
+      # re-read immediately before the unguarded close mutation.
+      RB_CLOSE_FINAL_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+      RB_CLOSE_FINAL_STATE="$(printf '%s' "${RB_CLOSE_FINAL_JSON}" | jq -r '.state // empty' 2>/dev/null || true)"
+      RB_CLOSE_FINAL_HEAD_SHA="$(printf '%s' "${RB_CLOSE_FINAL_JSON}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
+      if ! [[ "${RB_CLOSE_FINAL_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || [ "${RB_CLOSE_FINAL_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+        echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} head changed while the replacement issue was being created."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
+        RB_REISSUE_REPLACEMENT_STALE=true
+      elif [ "${RB_CLOSE_FINAL_STATE}" != "open" ]; then
+        echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} is no longer open."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
+        RB_REISSUE_REPLACEMENT_STALE=true
+      elif gh_retry gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
+        --comment "Closed after approved review-blocked reissue request ${RB_APPROVAL_REQUEST_ID:-not-applicable}; replacement: ${NEW_URL}." \
+        2>/dev/null; then
+        ensure_label_exists "ai:closed" "${REPOSITORY}"
+        while IFS= read -r issue_number; do
+          [ -n "${issue_number}" ] || continue
+          _resilient_phase_swap "${issue_number}" "ai:closed" || true
+        done <<< "${ISSUE_NUMBERS}"
+        if command -v review_blocked_post_consumed_marker >/dev/null 2>&1 && [ -n "${RB_APPROVAL_REQUEST_ID:-}" ]; then
+          review_blocked_post_consumed_marker "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST_ID}" "closed_and_reissued" || true
+        fi
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=close_and_reissue" >> "$GITHUB_OUTPUT"
+        RB_REISSUE_CLOSE_CONFIRMED=true
+      else
+        echo "::warning::Replacement issue was created but PR #${PR_NUMBER} could not be closed."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        echo "judge_skip_reason=approved_close_failed" >> "$GITHUB_OUTPUT"
+      fi
+      if [ "${RB_REISSUE_REPLACEMENT_STALE}" = "true" ]; then
+        if gh_retry gh issue close "${NEW_URL}" --repo "${REPOSITORY}" \
+          --comment "Closed because approved reissue request ${RB_APPROVAL_REQUEST_ID} became stale before source PR #${PR_NUMBER} could close." 2>/dev/null; then
+          if command -v review_blocked_post_consumed_marker >/dev/null 2>&1; then
+            review_blocked_post_consumed_marker "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST_ID}" "replacement_neutralized" || true
+          fi
+          echo "Closed stale replacement issue ${NEW_URL}."
+        else
+          echo "::warning::Could not close stale replacement issue ${NEW_URL}; manual cleanup may be required."
+        fi
+      fi
+    else
+      echo "judge_skip_reason=replacement_issue_create_failed" >> "$GITHUB_OUTPUT"
+    fi
     ;;
 
   *)

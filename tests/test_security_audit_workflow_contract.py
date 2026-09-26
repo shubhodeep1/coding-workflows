@@ -5,10 +5,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.orchestrate_lib import security_finding_defect_fingerprint
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -16,6 +22,9 @@ CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "security-audit.yml"
 INTERNAL_CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "internal-clarify.yml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "security_audit.sh"
+CODEX_HELPERS_PATH = REPO_ROOT / "scripts" / "codex_helpers.sh"
+RENDER_PROMPT_PATH = REPO_ROOT / "scripts" / "render_prompt.sh"
+ASSEMBLE_PROMPT_PATH = REPO_ROOT / "scripts" / "assemble_prompt.sh"
 _SANITIZED_GIT_ENV_KEYS = ("BASH_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX")
 
 
@@ -118,19 +127,20 @@ sys.exit(1)
 def _install_mock_codex(bin_dir: Path, state_file: Path) -> None:
 	codex_script = r'''#!/usr/bin/env python3
 import json
-import os
 import sys
 from pathlib import Path
 
-state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+state_path = Path(__STATE_PATH__)
+control_path = state_path.with_name("codex-control.json")
+control = json.loads(control_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
 state.setdefault("codex_calls", []).append(sys.argv[1:])
 state.setdefault("codex_stdin", []).append(sys.stdin.read())
 state_path.write_text(json.dumps(state), encoding="utf-8")
-sys.stdout.write(os.environ.get("MOCK_CODEX_OUTPUT", "[]"))
-sys.stderr.write(os.environ.get("MOCK_CODEX_STDERR", ""))
-sys.exit(int(os.environ.get("MOCK_CODEX_EXIT_CODE", "0")))
-'''
+sys.stdout.write(str(control.get("output", "[]")))
+sys.stderr.write(str(control.get("stderr", "")))
+sys.exit(int(control.get("exit_code", 0)))
+'''.replace("__STATE_PATH__", repr(str(state_file)))
 	_write_exec(bin_dir / "codex", codex_script)
 
 
@@ -141,14 +151,32 @@ def _install_security_audit_support_tree(base_dir: Path, *, failure_mode: str) -
 	scripts_dir.mkdir(parents=True, exist_ok=True)
 	prompts_dir.mkdir(parents=True, exist_ok=True)
 
-	for script_name in ("label_helpers.sh", "gh_helpers.sh", "render_prompt.py", "assemble_prompt.sh"):
+	for script_name in (
+		"label_helpers.sh",
+		"gh_helpers.sh",
+		"render_prompt.py",
+		"assemble_prompt.sh",
+	):
 		(scripts_dir / script_name).symlink_to(REPO_ROOT / "scripts" / script_name)
+	(scripts_dir / "orchestrate_lib.py").write_text(
+		(REPO_ROOT / "scripts" / "orchestrate_lib.py").read_text(encoding="utf-8"),
+		encoding="utf-8",
+	)
+	(scripts_dir / "security_audit_fp_exclusions.json").write_text(
+		(REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json").read_text(encoding="utf-8"),
+		encoding="utf-8",
+	)
 
 	render_helper_path = scripts_dir / "render_prompt.sh"
 	if failure_mode == "render_failure":
 		_write_exec(
 			render_helper_path,
-			'#!/usr/bin/env bash\nprintf \'%s\' "${MOCK_RENDER_STDERR:-}" >&2\nexit 23\n',
+			(
+				"#!/usr/bin/env bash\n"
+				"printf '%s\\n' 'test-token Chief Security Officer' >&2\n"
+				"printf '%s\\n' 'bash: /safe/missing-template: No such file or directory' >&2\n"
+				"exit 23\n"
+			),
 		)
 	elif failure_mode != "missing_render_helper":
 		render_helper_path.symlink_to(REPO_ROOT / "scripts" / "render_prompt.sh")
@@ -170,6 +198,7 @@ def _run_security_audit(
 	extra_env: dict | None = None,
 	cwd: Path | None = None,
 	support_failure_mode: str | None = None,
+	support_dir: Path | None = None,
 	script_args: tuple[str, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="security-audit-test-") as td:
@@ -181,10 +210,27 @@ def _run_security_audit(
 		if codex_available:
 			_install_mock_codex(bin_dir, state_file)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
+		control_values = extra_env or {}
+		state_file.with_name("codex-control.json").write_text(
+			json.dumps(
+				{
+					"output": codex_output,
+					"stderr": control_values.get("MOCK_CODEX_STDERR", ""),
+					"exit_code": int(control_values.get("MOCK_CODEX_EXIT_CODE", "0")),
+				}
+			),
+			encoding="utf-8",
+		)
 		codex_home = tmp_path / "codex-home"
 		codex_home.mkdir(parents=True, exist_ok=True)
-		(codex_home / "config.toml").write_text('model = "test/model"\n', encoding="utf-8")
+		(codex_home / "config.toml").write_text(
+			'model = "test/model"\nmodel_reasoning_effort = "xhigh"\n\n'
+			'[model_providers.openrouter]\nbase_url = "https://openrouter.ai/api/v1"\n',
+			encoding="utf-8",
+		)
 
+		runner_temp = tmp_path / "runner-temp"
+		runner_temp.mkdir(parents=True, exist_ok=True)
 		run_cwd = cwd or REPO_ROOT
 		env = os.environ.copy()
 		if Path(run_cwd) != REPO_ROOT:
@@ -207,12 +253,19 @@ def _run_security_audit(
 				"PATH": os.pathsep.join((str(bin_dir), *existing_path_entries)),
 				"PYTHONDONTWRITEBYTECODE": "1",
 				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
+				# Per-test model broker pid/ready files; parallel runs must not
+				# share the /tmp fallback path.
+				"RUNNER_TEMP": str(runner_temp),
 			}
 		)
-		if support_failure_mode is not None:
+		if support_dir is not None:
+			env["SECURITY_AUDIT_SUPPORT_DIR"] = str(support_dir)
+		elif support_failure_mode is not None:
 			env["SECURITY_AUDIT_SUPPORT_DIR"] = str(
 				_install_security_audit_support_tree(tmp_path, failure_mode=support_failure_mode)
 			)
+		else:
+			env["SECURITY_AUDIT_SUPPORT_DIR"] = str(REPO_ROOT)
 		env.update(extra_env or {})
 		proc = subprocess.run(
 			["bash", "--noprofile", "--norc", str(SCRIPT_PATH), *script_args],
@@ -582,6 +635,28 @@ def _audit_exclusions_support_repo(workspace: Path) -> Path:
 	return trusted
 
 
+def _mirror_audit_support(workspace: Path) -> None:
+	"""Copy the tracked support tree into a fake support checkout.
+
+	In the workflow the exclusion catalog and SECURITY_AUDIT_SUPPORT_DIR are
+	the same verified checkout, and security_audit.sh accepts a catalog only
+	beneath SECURITY_AUDIT_SUPPORT_DIR. Existing fixture catalogs are kept.
+	"""
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	tracked = subprocess.run(
+		["git", "ls-files", "-z", "--", "scripts", "prompts"],
+		cwd=REPO_ROOT, env=git_env, check=True, capture_output=True,
+	).stdout.decode("utf-8").split("\0")
+	for relative in filter(None, tracked):
+		source = REPO_ROOT / relative
+		destination = workspace / relative
+		if destination.exists() or source.is_symlink() or not source.is_file():
+			continue
+		destination.parent.mkdir(parents=True, exist_ok=True)
+		destination.write_bytes(source.read_bytes())
+		destination.chmod(source.stat().st_mode & 0o777)
+
+
 def test_security_audit_exclusions_resolution_accepts_only_unchanged_tracked_support() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-support-") as td:
 		workspace = Path(td)
@@ -644,6 +719,7 @@ def test_security_audit_nested_data_cannot_replace_trusted_exclusions() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-trust-boundary-") as td:
 		workspace = Path(td)
 		trusted = _audit_exclusions_support_repo(workspace)
+		_mirror_audit_support(workspace)
 		repo_dir, first_sha, head_sha = _git_fixture_repo(workspace / "audit-data")
 		malicious = repo_dir / "scripts" / "security_audit_fp_exclusions.json"
 		malicious.parent.mkdir()
@@ -665,7 +741,7 @@ def test_security_audit_nested_data_cannot_replace_trusted_exclusions() -> None:
 				codex_output=json.dumps([_finding_payload(finding_id, file_path="file_b.py")]),
 				cwd=repo_dir,
 				extra_env={
-					"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+					"SECURITY_AUDIT_SUPPORT_DIR": str(workspace),
 					"SECURITY_AUDIT_FP_EXCLUSIONS": catalog,
 					**({"SECURITY_AUDIT_TARGET_REF": "feature/audit"} if finding_id == "explicit-branch-finding" else {}),
 					**({"SECURITY_AUDIT_DIFF_BASE": first_sha, "SECURITY_AUDIT_DIFF_HEAD": head_sha} if finding_id == "explicit-branch-finding" else {}),
@@ -682,7 +758,7 @@ def test_security_audit_nested_data_cannot_replace_trusted_exclusions() -> None:
 			codex_output=json.dumps([_finding_payload("must-not-publish", file_path="file_b.py")]),
 			cwd=repo_dir,
 			extra_env={
-				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_SUPPORT_DIR": str(workspace),
 				"SECURITY_AUDIT_FP_EXCLUSIONS": variables.strip().split("=", 1)[1],
 			},
 		)
@@ -758,6 +834,9 @@ def test_security_audit_reusable_concurrency_group_differs_from_consumer_wrapper
 
 def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None:
 	content = SCRIPT_PATH.read_text(encoding="utf-8")
+	codex_helpers_content = CODEX_HELPERS_PATH.read_text(encoding="utf-8")
+	render_prompt_content = RENDER_PROMPT_PATH.read_text(encoding="utf-8")
+	assemble_prompt_content = ASSEMBLE_PROMPT_PATH.read_text(encoding="utf-8")
 	assert '--sandbox read-only' in content
 	assert 'gh_retry gh issue list' in content
 	assert 'gh_retry gh issue create' in content
@@ -772,6 +851,32 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 		'\t\t\tsecurity_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"\n'
 		'\t\t\treturn 1\n'
 	) in content
+	inline_python_launches = [
+		(line_number, line)
+		for line_number, line in enumerate(content.splitlines(), 1)
+		if not line.lstrip().startswith("#")
+		and re.search(r"\bpython3\s+(?:-I\b|-c\b|-(?:\s|$))", line)
+	]
+	assert inline_python_launches == [
+		(next(
+			line_number
+			for line_number, line in enumerate(content.splitlines(), 1)
+			if 'python3 -I -B "$@"' in line
+		), '\t\tpython3 -I -B "$@"')
+	]
+	assert '(cd "${SECURITY_AUDIT_RUNTIME_DIR}" && security_audit_run_isolated_python - \\' in content
+	assert content.count("security_audit_run_isolated_support_command bash") == 2
+	assert 'security_audit_require_file "support-preflight" "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/orchestrate_lib.py"' in content
+	assert '"${SECURITY_AUDIT_ORCHESTRATE_LIB_DIR}" <<\'PY\'' in content
+	assert 'python3 -I -B "${broker_path}"' in codex_helpers_content
+	assert not re.search(r"\bpython3\s+(?:-c\b|-(?:\s|$))", codex_helpers_content)
+	assert codex_helpers_content.count("_codex_helpers_run_isolated_python") == 5
+	assert 'RENDER_PROMPT_PYTHON_ARGS=(-I -B)' in render_prompt_content
+	assert 'ASSEMBLE_PROMPT_PYTHON_ARGS=(-I -B)' in assemble_prompt_content
+	assert "render_prompt_run_isolated_python" in render_prompt_content
+	assert "assemble_prompt_run_isolated_python" in assemble_prompt_content
+	assert "local -a isolated_environment=(env -i" in render_prompt_content
+	assert "local -a isolated_environment=(env -i" in assemble_prompt_content
 
 
 def test_security_audit_uses_workflow_editor_model_with_stable_fallback() -> None:
@@ -925,6 +1030,25 @@ def test_security_audit_missing_render_helper_reports_sanitized_context() -> Non
 		path_suffix="scripts/render_prompt.sh",
 	)
 	assert proc.returncode == 1
+	assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_missing_support_directory_reports_original_path() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-missing-support-") as td:
+		tmp_path = Path(td)
+		missing_support_path = tmp_path / "missing-support"
+		proc, final_state = _run_security_audit(
+			{},
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"SECURITY_AUDIT_SUPPORT_DIR": str(missing_support_path),
+			},
+		)
+
+	assert proc.returncode == 1
+	assert "phase=support-preflight" in proc.stderr
+	assert str(missing_support_path) in proc.stderr
 	assert final_state.get("codex_calls", []) == []
 
 
@@ -1272,6 +1396,186 @@ def test_security_audit_findings_json_filters_without_github_side_effects() -> N
 	assert "=== END UNTRUSTED PROJECT SPECIFICATION ===" in prompt
 	project_spec_context = prompt.split("=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===\n", 1)[1]
 	assert project_spec_context.split("\n=== END UNTRUSTED PROJECT SPECIFICATION ===", 1)[0] == project_spec
+
+
+def test_security_audit_isolated_python_blocks_checkout_startup_forgery_and_local_imports() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-sitecustomize-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, head_sha = _git_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		local_import_marker = tmp_path / "checkout-orchestrate-lib-imported"
+		startup_marker = tmp_path / "checkout-startup-hook-imported"
+		(repo_dir / "orchestrate_lib.py").write_text(
+			"from pathlib import Path\n"
+			f"Path({str(local_import_marker)!r}).write_text('imported', encoding='utf-8')\n"
+			"raise RuntimeError('checkout-local orchestrate_lib imported')\n",
+			encoding="utf-8",
+		)
+		(repo_dir / "sitecustomize.py").write_text(
+			"import atexit\n"
+			"import json\n"
+			"import os\n"
+			"import sys\n"
+			"from pathlib import Path\n"
+			f"Path({str(startup_marker)!r}).write_text('imported', encoding='utf-8')\n"
+			"if sys.argv[0] in {'-', '-c'} and os.environ.get('FORGED_OUTPUT_PATH'):\n"
+			"\tdef forge_output():\n"
+			"\t\tPath(os.environ['FORGED_OUTPUT_PATH']).write_text(json.dumps({\n"
+			"\t\t\t'schema_version': 'security_audit_findings.v1',\n"
+			"\t\t\t'findings': [],\n"
+			"\t\t\t'counts': {'kept': 0, 'suppressed_excluded': 0, 'suppressed_invalid': 0,\n"
+			"\t\t\t\t'suppressed_low_confidence': 0, 'suppressed_out_of_scope': 0, 'suppressed_waived': 0},\n"
+			"\t\t}), encoding='utf-8')\n"
+			"\tatexit.register(forge_output)\n",
+			encoding="utf-8",
+		)
+		finding = _finding_payload("real-finding", file_path="file_b.py")
+		proc, final_state = _run_security_audit(
+			{},
+			cwd=repo_dir,
+			codex_output=json.dumps([finding]),
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"FORGED_OUTPUT_PATH": str(output_path),
+				"PYTHONPATH": str(repo_dir),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["real-finding"]
+	assert payload["counts"]["kept"] == 1
+	assert not local_import_marker.exists()
+	assert not startup_marker.exists()
+
+
+def test_security_audit_ignores_audited_checkout_exclusion_catalog() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-exclusion-provenance-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, head_sha = _git_fixture_repo(tmp_path)
+		support_dir = _install_security_audit_support_tree(tmp_path, failure_mode="")
+		output_path = tmp_path / "findings.json"
+		checkout_catalog = repo_dir / "scripts" / "security_audit_fp_exclusions.json"
+		checkout_catalog.parent.mkdir(parents=True, exist_ok=True)
+		checkout_catalog.write_text(
+			json.dumps(
+				{
+					"schema_version": "security_audit_fp_exclusions.v1",
+					"rules": [
+						{
+							"id": "checkout-controlled-suppression",
+							"reason": "This untrusted rule must never be loaded.",
+							"fields": {"file": "file_b.py"},
+							"contains": {},
+						}
+					],
+				}
+			),
+			encoding="utf-8",
+		)
+		proc, final_state = _run_security_audit(
+			{},
+			cwd=repo_dir,
+			support_dir=support_dir,
+			codex_output=json.dumps([_finding_payload("must-survive", file_path="file_b.py")]),
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+				"SECURITY_AUDIT_FP_EXCLUSIONS": "scripts/security_audit_fp_exclusions.json",
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["must-survive"]
+
+
+def test_security_audit_requires_explicit_support_directory() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-support-provenance-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, _, _ = _git_fixture_repo(tmp_path)
+		proc, final_state = _run_security_audit(
+			{},
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"SECURITY_AUDIT_SUPPORT_DIR": "",
+			},
+		)
+
+	assert proc.returncode != 0
+	assert "error=immutable\\ support\\ directory\\ is\\ required" in proc.stderr
+	assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_rejects_exclusion_catalog_path_escapes() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-exclusion-path-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		support_dir = _install_security_audit_support_tree(tmp_path, failure_mode="")
+		outside_catalog = tmp_path / "outside.json"
+		outside_catalog.write_text(
+			json.dumps({"schema_version": "security_audit_fp_exclusions.v1", "rules": []}),
+			encoding="utf-8",
+		)
+		symlink_catalog = support_dir / "scripts" / "escaping.json"
+		symlink_catalog.symlink_to(outside_catalog)
+
+		for configured_path in ("../outside.json", "scripts/escaping.json", str(outside_catalog)):
+			proc, final_state = _run_security_audit(
+				{},
+				support_dir=support_dir,
+				extra_env={
+					"SECURITY_AUDIT_FP_EXCLUSIONS": configured_path,
+					"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+					"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				},
+			)
+			assert proc.returncode != 0
+			assert "error=exclusion\\ catalog\\ resolves\\ outside\\ the\\ canonical\\ support\\ directory" in proc.stderr
+			assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_rejects_matcherless_exclusion_rules() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-exclusion-matcher-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		support_dir = _install_security_audit_support_tree(tmp_path, failure_mode="")
+		matcherless_catalog = support_dir / "scripts" / "matcherless.json"
+		matcherless_catalog.write_text(
+			json.dumps(
+				{
+					"schema_version": "security_audit_fp_exclusions.v1",
+					"rules": [
+						{
+							"id": "suppress-everything",
+							"reason": "An empty predicate would match every finding.",
+							"fields": {},
+							"contains": {},
+						}
+					],
+				}
+			),
+			encoding="utf-8",
+		)
+		proc, _ = _run_security_audit(
+			{},
+			support_dir=support_dir,
+			codex_output=json.dumps([_finding_payload("must-not-be-suppressed")]),
+			extra_env={
+				"SECURITY_AUDIT_FP_EXCLUSIONS": "scripts/matcherless.json",
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+			},
+		)
+
+	assert proc.returncode != 0
+	assert "requires at least one effective matcher" in proc.stderr
 
 
 def test_security_audit_explicit_diff_scope_filters_changed_files() -> None:
@@ -1649,16 +1953,21 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	"""Accepted findings reach the prompt as accepted and never reach the output.
 
 	The orchestrator's security-pass exhaustion judge and the operator's
-	`/security-pass-waive` command persist waivers; the engine must drop a
-	re-report by exact id and by location (same file and category within the
-	line window), because the auditor mints a new id every run and fix commits
-	move the cited line.
+	`/security-pass-waive` command persist waivers; the engine must drop only
+	one uniquely matching code-context fingerprint. IDs and nearby lines do not
+	authorize suppression.
 	"""
 	with tempfile.TemporaryDirectory(prefix="security-audit-waived-") as fixture_td:
 		tmp_path = Path(fixture_td)
 		repo_dir, first_sha, second_sha, head_sha = _git_fixture_repo_three_commits(tmp_path)
 		output_path = tmp_path / "findings.json"
 		waived_findings_path = tmp_path / "waived-findings.json"
+		location_fingerprint = security_finding_defect_fingerprint(
+			repo_dir,
+			"file_c.py",
+			1,
+			"A04:2021-Insecure Design / STRIDE: Denial of Service",
+		)
 		waived_findings_path.write_text(
 			json.dumps(
 				[
@@ -1673,6 +1982,7 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 					},
 					{
 						"finding_id": "waived-by-location",
+						"defect_fingerprint": location_fingerprint,
 						"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
 						"file": "./file_c.py",
 						"line": 1,
@@ -1708,23 +2018,55 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
-	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot"]
-	assert payload["counts"]["kept"] == 1
-	assert payload["counts"]["suppressed_waived"] == 3
-	assert "waived-findings=3 (line window 40)" in proc.stdout
+	assert [finding["finding_id"] for finding in payload["findings"]] == [
+		"waived-exact",
+		"different-category-same-spot",
+		"waived-id-only",
+	]
+	assert payload["counts"]["kept"] == 3
+	assert payload["counts"]["suppressed_waived"] == 1
+	assert "waived-findings=1 (exact context fingerprints; line window compatibility value ignored)" in proc.stdout
 	prompt = final_state["codex_stdin"][0]
 	assert prompt.count("=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===") == 1
 	assert prompt.count("=== END UNTRUSTED ACCEPTED FINDINGS ===") == 1
 	accepted_block = prompt.split("=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===\n", 1)[1].split(
 		"=== END UNTRUSTED ACCEPTED FINDINGS ===", 1
 	)[0]
-	assert "- `waived-exact` | A04:2021-Insecure Design | medium | file_b.py:1" in accepted_block
-	assert "Accepted because: Bounded blast radius; tracked [untrusted marker removed] [untrusted marker removed]" in accepted_block
 	assert "- `waived-by-location` | A04:2021-Insecure Design / STRIDE: Denial of Service | unknown | file_c.py:1" in accepted_block
-	assert "- `waived-id-only` | uncategorised | unknown | (location not recorded)" in accepted_block
+	assert "waived-exact" not in accepted_block
+	assert "waived-id-only" not in accepted_block
 	assert "Rules for accepted findings:" not in accepted_block
 	assert "Never report an accepted finding again" in prompt
 	assert "An acceptance covers one location." in prompt
+
+
+def test_security_audit_rejects_unfingerprintable_finding_without_aborting() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-fingerprint-invalid-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, _second_sha, head_sha = _git_fixture_repo_three_commits(tmp_path)
+		output_path = tmp_path / "findings.json"
+		(repo_dir / "file_c.py").write_text("x" * 16_385 + "\n", encoding="utf-8")
+		findings = [
+			_finding_payload("invalid-context", file_path="file_c.py"),
+			_finding_payload("valid-context", file_path="file_b.py"),
+		]
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps(findings),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			},
+		)
+
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["valid-context"]
+	assert payload["counts"]["suppressed_invalid"] == 1
 
 
 def test_security_audit_waived_findings_fail_closed_on_malformed_input() -> None:

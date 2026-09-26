@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression guard: prompts/header.txt is staged before it is rendered.
+"""Regression guard: prompts/header.txt is immutable before it is rendered.
 
 Reported from consumer run 28221091844 (shubhodeep1/binance-blessings,
 issue #220): the AI Plan phase failed before posting the implementation plan
@@ -8,28 +8,19 @@ with
   Prompt file not found: prompts/header.txt
   ##[error]Process completed with exit code 1.
 
-plan.yml's staged runner and clarify.yml assemble the Codex prompt with
+plan.yml's staged runner and clarify.yml now assemble the Codex prompt with
 
   REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" \
-    bash scripts/render_prompt.sh prompts/header.txt
+    bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" \
+      "${SUPPORT_PROMPTS_DIR}/header.txt"
 
-render_prompt.sh resolves the bare ``prompts/header.txt`` path relative to the
-working tree and runs ``[ -f prompts/header.txt ]`` *before* delegating to
-render_prompt.py, so the fragment must be staged into ./prompts/ alongside the
-staged scripts/. PR #3411 added the render invocation to both workflows but the
-"Stage workflow support files" step never copied prompts/header.txt out of the
-.codex-workflow-src support checkout, so the first executing plan run after the
-@stable wrapper bump failed deterministically at the static file-existence
-check. header.txt carries only the {{REPO_LEARNINGS}} placeholder (resolved
-from the REPO_LEARNINGS env var) and has no contract, so staging the single
-file is sufficient.
+The immutable-bundle manifest must contain the fragment and callers must render
+the absolute support path, so a checkout copy cannot shadow it.
 
 Two kinds of tests pin the fix:
 
 1. A static contract: every reusable workflow or staged runner that renders
-   ``render_prompt.sh prompts/header.txt`` has workflow staging for
-   prompts/header.txt with the standard .codex-workflow-src ->
-   .codex-workflow-src-main fallback and a hard error when it is unavailable.
+   the header lists it in immutable support and uses SUPPORT_PROMPTS_DIR.
 
 2. A behavioural test that reproduces the runtime layout (scripts/ staged,
    prompts/ absent from the working tree), runs the staging block, and asserts
@@ -56,7 +47,7 @@ HEADER_PROMPT = REPO_ROOT / "prompts" / "header.txt"
 
 # The bare-path render invocation that requires prompts/header.txt on disk.
 HEADER_RENDER_RE = re.compile(
-	r"\bbash\s+scripts/render_prompt\.sh\s+prompts/header\.txt\b"
+	r'\bbash\s+(?:scripts/render_prompt\.sh|"\$\{[A-Za-z0-9_]+\}/render_prompt\.sh")\s+(?:prompts/header\.txt|"\$\{SUPPORT_PROMPTS_DIR(?::\?[^}]*)?\}/header\.txt")'
 )
 
 
@@ -90,21 +81,28 @@ def test_header_prompt_exists() -> None:
 
 
 def test_clarify_sandbox_support_has_main_snapshot_fallback() -> None:
-	"""The sandbox must be staged from the same support refs as the runner."""
+	"""The sandbox must be staged from the same immutable support checkout as the runner.
+
+	clarify.yml stages from a single pinned ``.codex-workflow-src`` checkout and
+	hard-fails when a required file is missing there -- there is no
+	``.codex-workflow-src-main`` moving-ref fallback (that pattern was replaced
+	by the immutable support bundle hardening).
+	"""
 	clarify = (WORKFLOW_DIR / "clarify.yml").read_text(encoding="utf-8")
 	assert 'src=".codex-workflow-src/scripts/${f}"' in clarify
-	assert '.codex-workflow-src-main/scripts/${f}' in clarify
+	assert '.codex-workflow-src-main' not in clarify
 	assert 'sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"' in clarify
-	assert '.codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile' in clarify
 	assert 'echo "::error::Missing clarification sandbox Dockerfile"' in clarify
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in clarify
 
 
 def test_clarify_respond_isolates_every_model_call() -> None:
 	respond = (WORKFLOW_DIR / "orchestrate_clarify_respond.yml").read_text(encoding="utf-8")
-	assert "orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do" in respond
+	# Staging list order is not semantic -- assert the three model-call
+	# support files are staged together, in whatever order the list uses.
+	assert "clarify_isolated_run.sh clarify_openrouter_broker.py model_provider_broker.py orchestrate_parse_and_post_answer.sh" in respond
 	assert 'sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"' in respond
-	assert '.codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile' in respond
+	assert '.codex-workflow-src-main' not in respond
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in respond
 	assert 'printf \'%s\\n\' "${_fetched_scripts[@]}" clarify_sandbox/ .gitignore' in respond
 	assert "--sandbox danger-full-access" not in respond
@@ -131,47 +129,27 @@ def test_render_callers_stage_header_prompt() -> None:
 	)
 	for yml in callers:
 		text = yml.read_text(encoding="utf-8")
-		assert "mkdir -p prompts" in text, (
-			f"{yml.name}: renders prompts/header.txt but never `mkdir -p prompts`"
+		assert '"prompts/header.txt"' in text, (
+			f"{yml.name}: immutable support manifest omits prompts/header.txt"
 		)
-		assert 'install -m 0644 "${src}" prompts/header.txt' in text, (
-			f"{yml.name}: renders prompts/header.txt but never installs it into "
-			f"the working tree"
+		assert '"${SUPPORT_PROMPTS_DIR}/header.txt"' in text, (
+			f"{yml.name}: header render does not use immutable support"
 		)
-		assert 'src=".codex-workflow-src/prompts/header.txt"' in text, (
-			f"{yml.name}: header staging is missing the primary support-source path"
-		)
-		assert '.codex-workflow-src-main/prompts/header.txt' in text, (
-			f"{yml.name}: header staging is missing the main-snapshot fallback"
-		)
-		assert (
-			"::error::Failed to stage required file prompts/header.txt" in text
-		), (
-			f"{yml.name}: header staging must hard-fail when the fragment is "
-			f"unavailable (it is required for prompt assembly)"
-		)
-		assert re.search(
-			r'echo "::error::Failed to stage required file prompts/header\.txt"\n\s+exit 1',
-			text,
-		), (
-			f"{yml.name}: header staging must exit immediately when neither "
-			f"support checkout carries the fragment"
+		assert '.codex-workflow-src-main/prompts/header.txt' not in text, (
+			f"{yml.name}: header staging must not use a mutable main snapshot"
 		)
 
 	plan_workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	plan_runner_text = PLAN_RUNNER.read_text(encoding="utf-8")
-	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in plan_workflow_text
-	assert 'install -m 0644 "${src}" prompts/header.txt' in plan_workflow_text
-	assert 'src=".codex-workflow-src/prompts/header.txt"' in plan_workflow_text
-	assert '.codex-workflow-src-main/prompts/header.txt' in plan_workflow_text
-	assert "::error::Failed to stage required file prompts/header.txt" in plan_workflow_text
+	assert "for f in gh_helpers.sh emit_event.sh emit_event.py run_plan_codex.sh render_prompt.sh" in plan_workflow_text
+	assert '"prompts/header.txt"' in plan_workflow_text
+	assert '.codex-workflow-src-main/prompts/header.txt' not in plan_workflow_text
 	assert HEADER_RENDER_RE.search(plan_runner_text)
 
 
 def _render_header(
 	*,
 	stage_header: bool,
-	prefer_main_snapshot: bool = False,
 	support_header_available: bool = True,
 ) -> subprocess.CompletedProcess[str]:
 	"""Render prompts/header.txt the way plan.yml / clarify.yml do.
@@ -180,22 +158,18 @@ def _render_header(
 	tree, the support checkout under .codex-workflow-src, and prompts/ absent
 	until the staging block runs. When ``stage_header`` is true the exact
 	staging snippet from the workflows runs before the render. When
-	``prefer_main_snapshot`` is true the header exists only in the
-	.codex-workflow-src-main fallback checkout. When
-	``support_header_available`` is false, neither support checkout carries the
-	header fragment and the staging block must hard-fail.
+	``support_header_available`` is false, the immutable support checkout lacks
+	the header fragment and the staging block must hard-fail.
 	"""
 	with tempfile.TemporaryDirectory(prefix="plan-header-staging-") as td:
 		root = Path(td)
 		scripts_dir = root / "scripts"
 		support_prompts = root / ".codex-workflow-src" / "prompts"
-		support_prompts_main = root / ".codex-workflow-src-main" / "prompts"
 		support_scripts = root / ".codex-workflow-src" / "scripts"
 		runtime_dir = root / "rt"
 		for d in (
 			scripts_dir,
 			support_prompts,
-			support_prompts_main,
 			support_scripts,
 			runtime_dir,
 		):
@@ -214,10 +188,7 @@ def _render_header(
 		# The header fragment exists only in the support checkout, mirroring a
 		# consumer repo that ships none of these files.
 		if support_header_available:
-			header_prompt_dir = (
-				support_prompts_main if prefer_main_snapshot else support_prompts
-			)
-			(header_prompt_dir / "header.txt").write_text(
+			(support_prompts / "header.txt").write_text(
 				HEADER_PROMPT.read_text(encoding="utf-8"), encoding="utf-8"
 			)
 		(runtime_dir / "repo_learnings.txt").write_text(
@@ -228,9 +199,6 @@ def _render_header(
 			'mkdir -p prompts\n'
 			'if [ ! -f prompts/header.txt ]; then\n'
 			'  src=".codex-workflow-src/prompts/header.txt"\n'
-			'  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/header.txt" ]; then\n'
-			'    src=".codex-workflow-src-main/prompts/header.txt"\n'
-			'  fi\n'
 			'  if [ ! -f "${src}" ]; then\n'
 			'    echo "::error::Failed to stage required file prompts/header.txt"\n'
 			'    exit 1\n'
@@ -265,30 +233,17 @@ def _render_header(
 
 def test_header_renders_when_staged() -> None:
 	"""With the staging block, the header renders and {{REPO_LEARNINGS}} hydrates."""
-	for prefer_main_snapshot in (False, True):
-		result = _render_header(
-			stage_header=True, prefer_main_snapshot=prefer_main_snapshot
-		)
-		assert result.returncode == 0, (
-			f"render failed unexpectedly (prefer_main_snapshot={prefer_main_snapshot}): "
-			f"rc={result.returncode}\nstderr={result.stderr}"
-		)
-		assert "Prompt file not found" not in result.stderr, (
-			f"staged render still hit the missing-header path "
-			f"(prefer_main_snapshot={prefer_main_snapshot})"
-		)
-		assert "{{REPO_LEARNINGS}}" not in result.stdout, (
-			f"placeholder left unhydrated in rendered header "
-			f"(prefer_main_snapshot={prefer_main_snapshot})"
-		)
-		assert "Learned: prefer batched GraphQL." in result.stdout, (
-			f"REPO_LEARNINGS env value not injected into the rendered header "
-			f"(prefer_main_snapshot={prefer_main_snapshot})"
-		)
+	result = _render_header(stage_header=True)
+	assert result.returncode == 0, (
+		f"render failed unexpectedly: rc={result.returncode}\nstderr={result.stderr}"
+	)
+	assert "Prompt file not found" not in result.stderr
+	assert "{{REPO_LEARNINGS}}" not in result.stdout
+	assert "Learned: prefer batched GraphQL." in result.stdout
 
 
 def test_header_staging_hard_fails_without_any_support_copy() -> None:
-	"""When neither support checkout has header.txt, staging must stop first."""
+	"""When the immutable support checkout lacks header.txt, staging must stop first."""
 	result = _render_header(stage_header=True, support_header_available=False)
 	assert result.returncode != 0
 	assert "::error::Failed to stage required file prompts/header.txt" in result.stdout

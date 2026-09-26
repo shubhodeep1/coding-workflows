@@ -177,7 +177,7 @@ jobs:
           ref: ${{ needs.source.outputs.branch }}
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
 
@@ -367,6 +367,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_semble_prefetch_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_judge_interim_round_trip.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_editor_isolation_preflight.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_process_group_termination.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py
@@ -410,7 +412,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_auto_release_stable.py tests/test_orchestrate_poll_promote_cycle.py tests/test_implement_blocked_verdict_terminalizes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_auto_release_stable.py tests/test_orchestrate_poll_promote_cycle.py tests/test_orchestrate_state_comprehensive_marker.py tests/test_implement_blocked_verdict_terminalizes.py
 
       - name: Prompt files integrity
         run: |

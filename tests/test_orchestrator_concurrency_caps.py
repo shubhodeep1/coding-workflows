@@ -54,6 +54,7 @@ extract_fn() {
 mkdir -p extracted
 {
 	echo 'set -euo pipefail'
+	echo 'ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR="${PWD}/scripts"'
 	echo
 	extract_fn 'phase_cap_state_for_action'
 	echo

@@ -1,0 +1,19 @@
+<!-- changelog: security -->
+- **The model provider broker now budgets input tokens and total cost, and the orchestrator poller consults the trusted commit-status locator when a PR-body locator fails verification.** Closes the two findings the project #3965 security pass waived: `broker-authorizes-arbitrary-paid-requests` (#4090) and `resolver-state-comment-window-eviction` (#4091).
+
+Before this change `scripts/model_provider_broker.py` aggregated only output tokens against the phase budget, so a prompt-injected agent could submit up to 100 near-context-limit prompts whose input spend sat outside every ceiling. Each request now reserves a conservative one-token-per-UTF-8-byte input bound and a worst-case USD cost at the configured price ceilings, including every recognized image input, before it is forwarded; token costs are settled against the provider-reported `usage` (`prompt_tokens` / `input_tokens`) once the response completes. An observed upstream error response or pre-forward failure settles to zero, while an ambiguous transport failure after forwarding starts keeps the full reservation because the provider may have billed it. Three new repo vars control the ceilings and are exported by every model-facing workflow: `MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS` (per request), `MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS`, and `MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD`. Their defaults are derived so they never bite below what `MODEL_PROVIDER_BROKER_MAX_REQUESTS`, the 16 MiB body cap, and the price ceilings already permit; operators tighten them to make the control binding.
+
+In `scripts/orchestrate_poll_process.sh`, the integration-heal path treated a numeric `AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1` PR-body locator as a reason to skip the `ai/resolver-retry-state-locator` commit-status lookup. Anyone who could edit the integration PR body could forge that locator and flood the PR with more than 1,000 comments, so every poll deferred inside the bounded comment scan forever. The body locator is now an untrusted hint: when it is absent, stale, or fails producer/signature verification, the poller scans the commit statuses on the head SHA before falling back to bounded comment discovery.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default per-request input-token ceiling | `16777216` (one token per byte of the 16 MiB body cap) |
+| Default total input-token budget | `1677721600` (100 requests x 16777216) |
+| Default total cost budget | derived: both token budgets + body-bound image count at the price ceilings + 100 x request price |
+| Locator lookup order | PR body hint, then commit status, then bounded comments (10 pages / 32 MiB) |
+
+What this means for operators: no migration is required and no phase changes behaviour at the defaults. To make the spend control binding, set `MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD` (and optionally the input-token vars) as repo vars; an exhausted budget returns HTTP 429 and the phase fails closed exactly as the existing output-token budget does. Resolver retry state on a flooded integration PR now recovers on the next tick as long as the trusted actuator persisted its commit-status locator.
+
+### For contributors
+
+`BrokerPolicy` gains `max_input_tokens`, `max_total_input_tokens`, and `max_total_cost_usd` as trailing defaulted fields, so the positional constructor used by existing tests is unchanged. `BrokerState.reserve_request` and `settle_request` accept optional input-token arguments and keep their two-argument forms. `_extract_token_usage` returns `(output, input)` and the retained `_extract_output_token_usage` delegates to it. The poller change is covered by `test_integration_conflict_forged_body_locator_falls_back_to_status_locator` and `test_integration_conflict_status_locator_repeating_failed_body_hint_falls_back_once` in `tests/test_orchestrate_poll_process.py`.

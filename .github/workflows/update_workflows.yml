@@ -51,6 +51,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Fetch latest workflow templates from coding-workflows@stable
         id: fetch
         env:
@@ -67,9 +68,13 @@ jobs:
 
           # Clone only the workflow-templates and scripts directories (sparse checkout)
           TMPDIR=$(mktemp -d)
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
           git clone --depth 1 --no-checkout \
             --filter=blob:none --sparse \
-            "https://x-access-token:${GH_TOKEN}@github.com/${TEMPLATES_REPO}.git" \
+            "https://github.com/${TEMPLATES_REPO}.git" \
             "${TMPDIR}/upstream"
           cd "${TMPDIR}/upstream"
           # Fetch the release tag explicitly. A long-lived branch also named
@@ -513,8 +518,15 @@ jobs:
 
       - name: Commit and push updates
         if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

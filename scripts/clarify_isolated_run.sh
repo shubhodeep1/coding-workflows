@@ -104,7 +104,13 @@ PY
 # The Docker build context contains only the pinned Dockerfile.
 image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)"
 [ -n "${image}" ] || { echo '::error::Clarify image build failed' >&2; exit 1; }
-env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${MODEL_EDITOR}" PYTHONDONTWRITEBYTECODE=1 \
+# env -i drops everything else; the #4090 budgets must reach the broker.
+broker_budget_env=()
+for budget_var in MAX_REQUESTS MAX_OUTPUT_TOKENS MAX_TOTAL_OUTPUT_TOKENS MAX_INPUT_TOKENS MAX_TOTAL_INPUT_TOKENS MAX_TOTAL_COST_USD MAX_PROMPT_PRICE MAX_COMPLETION_PRICE MAX_REQUEST_PRICE MAX_IMAGE_PRICE; do
+	budget_var="MODEL_PROVIDER_BROKER_${budget_var}"
+	[ -z "${!budget_var:-}" ] || broker_budget_env+=("${budget_var}=${!budget_var}")
+done
+env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${MODEL_EDITOR}" PYTHONDONTWRITEBYTECODE=1 "${broker_budget_env[@]}" \
 	python3 scripts/clarify_openrouter_broker.py broker "${run_root}/socket/provider.sock" &
 broker_pid=$!
 for _ in $(seq 1 50); do

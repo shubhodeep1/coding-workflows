@@ -90,24 +90,25 @@ if [ "${edits_withheld_for_safety}" = "true" ]; then
 fi
 
 resume_eval_file="$(mktemp)"
-CURRENT_HEAD_SHA="${current_head_sha}" \
-PREVIOUS_PROGRESS_FINGERPRINT="${previous_progress_fingerprint}" \
-PREVIOUS_REVIEWS_DIR_PATH="${PREVIOUS_REVIEWS_DIR:-}" \
-RUNTIME_DIR_PATH="${RUNTIME_DIR:-}" \
-EDITOR_SUMMARY_FILE_PATH="${EDITOR_SUMMARY_FILE:-}" \
-COMMITTED_FILES_FILE_PATH="${COMMITTED_FILES_FILE:-}" \
-COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
-INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
-RESUME_ROUND_VALUE="${resume_round}" \
-RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
-PARTIAL_PHASE="${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}" \
-PARTIAL_REASON="${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}" \
-VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
-EDITS_PUSHED="${edits_pushed}" \
-VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}" \
-EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}" \
-WITHHELD_REASON="${withheld_reason}" \
-PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_eval_file}"
+_gh_helpers_run_isolated_python \
+  "CURRENT_HEAD_SHA=${current_head_sha}" \
+  "PREVIOUS_PROGRESS_FINGERPRINT=${previous_progress_fingerprint}" \
+  "PREVIOUS_REVIEWS_DIR_PATH=${PREVIOUS_REVIEWS_DIR:-}" \
+  "RUNTIME_DIR_PATH=${RUNTIME_DIR:-}" \
+  "EDITOR_SUMMARY_FILE_PATH=${EDITOR_SUMMARY_FILE:-}" \
+  "COMMITTED_FILES_FILE_PATH=${COMMITTED_FILES_FILE:-}" \
+  "COMPLETED_SCOPE_CSV=${completed_scope_csv}" \
+  "INCOMPLETE_SCOPE_CSV=${incomplete_scope_csv}" \
+  "RESUME_ROUND_VALUE=${resume_round}" \
+  "RESUME_ROUND_LIMIT_VALUE=${resume_round_limit}" \
+  "PARTIAL_PHASE=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}" \
+  "PARTIAL_REASON=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}" \
+  "VALIDATED_EDITS_COMMITTED=${validated_edits_committed}" \
+  "EDITS_PUSHED=${edits_pushed}" \
+  "VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}" \
+  "EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}" \
+  "WITHHELD_REASON=${withheld_reason}" \
+  -- - <<'PY' > "${resume_eval_file}"
 from __future__ import annotations
 
 import glob
@@ -298,24 +299,27 @@ rm -f "${comment_body_file}"
 partial_marker_dir=".ai/review_runtime/pr-${PR_NUMBER}/round-${resume_round}"
 mkdir -p "${partial_marker_dir}"
 partial_marker_file="${partial_marker_dir}/partial_finalize.json"
-PARTIAL_MARKER_FILE="${partial_marker_file}" \
-PARTIAL_COMMENT_POSTED="${partial_comment_posted}" \
-CURRENT_HEAD_SHA="${current_head_sha}" \
-COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
-INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
-VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
-EDITS_PUSHED="${edits_pushed}" \
-VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}" \
-EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}" \
-WITHHELD_REASON="${withheld_reason}" \
-RESUME_ROUND_VALUE="${resume_round}" \
-RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
-RESUME_STATE_VALUE="${RESUME_STATE}" \
-RESUME_SHOULD_CONTINUE_VALUE="${RESUME_SHOULD_CONTINUE}" \
-PROGRESS_FINGERPRINT_VALUE="${PROGRESS_FINGERPRINT}" \
-PREVIOUS_REVIEWS_DIR_PATH="${PREVIOUS_REVIEWS_DIR:-}" \
-RUNTIME_DIR_PATH="${RUNTIME_DIR:-}" \
-PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+_gh_helpers_run_isolated_python \
+  "PARTIAL_MARKER_FILE=${partial_marker_file}" \
+  "PARTIAL_COMMENT_POSTED=${partial_comment_posted}" \
+  "CURRENT_HEAD_SHA=${current_head_sha}" \
+  "COMPLETED_SCOPE_CSV=${completed_scope_csv}" \
+  "INCOMPLETE_SCOPE_CSV=${incomplete_scope_csv}" \
+  "VALIDATED_EDITS_COMMITTED=${validated_edits_committed}" \
+  "EDITS_PUSHED=${edits_pushed}" \
+  "VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}" \
+  "EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}" \
+  "WITHHELD_REASON=${withheld_reason}" \
+  "RESUME_ROUND_VALUE=${resume_round}" \
+  "RESUME_ROUND_LIMIT_VALUE=${resume_round_limit}" \
+  "RESUME_STATE_VALUE=${RESUME_STATE}" \
+  "RESUME_SHOULD_CONTINUE_VALUE=${RESUME_SHOULD_CONTINUE}" \
+  "PROGRESS_FINGERPRINT_VALUE=${PROGRESS_FINGERPRINT}" \
+  "PREVIOUS_REVIEWS_DIR_PATH=${PREVIOUS_REVIEWS_DIR:-}" \
+  "RUNTIME_DIR_PATH=${RUNTIME_DIR:-}" \
+  "AUTOFIX_PARTIAL_FINALIZE_REASON=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}" \
+  "AUTOFIX_PARTIAL_FINALIZE_PHASE=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}" \
+  -- - <<'PY'
 from __future__ import annotations
 
 import json

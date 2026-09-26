@@ -4,6 +4,25 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+FORCE_TICK_GH_TOKEN="${GH_PAT:-${GH_TOKEN:-}}"
+unset GH_PAT GH_TOKEN
+
+_force_tick_run_isolated_python()
+{
+	if declare -F _gh_helpers_run_isolated_python >/dev/null 2>&1; then
+		_gh_helpers_run_isolated_python -- "$@"
+		return
+	fi
+	env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE=1 \
+		python3 -I -B "$@"
+}
+
 if [ -f "${SCRIPT_DIR}/memory_helpers.sh" ]; then
 	# shellcheck source=memory_helpers.sh
 	source "${SCRIPT_DIR}/memory_helpers.sh" 2>/dev/null || true
@@ -25,10 +44,32 @@ _force_tick_truthy()
 
 _force_tick_now_utc()
 {
-	python3 - <<'PY'
+	_force_tick_run_isolated_python - <<'PY'
 from datetime import datetime, timezone
 
 print(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"))
+PY
+}
+
+_force_tick_make_claim_id()
+{
+	_force_tick_run_isolated_python - "${SCRIPT_DIR}" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+support_scripts_path = Path(sys.argv[1]).resolve(strict=True)
+module_path = support_scripts_path / "ai_memory_lib.py"
+if str(support_scripts_path) not in sys.path:
+	sys.path.insert(0, str(support_scripts_path))
+module_spec = importlib.util.spec_from_file_location("force_tick_ai_memory_lib", module_path)
+if module_spec is None or module_spec.loader is None:
+	raise SystemExit("unable to load canonical ai_memory_lib.py")
+module = importlib.util.module_from_spec(module_spec)
+sys.modules[module_spec.name] = module
+module_spec.loader.exec_module(module)
+
+print(module.make_record_id("force_tick_claim"))
 PY
 }
 
@@ -43,7 +84,7 @@ _force_tick_tracking_issue_from_ref()
 _force_tick_extract_tracking_issue()
 {
 	local body="${1:-}"
-	python3 - <<'PY' "${body}"
+	_force_tick_run_isolated_python - "${body}" <<'PY'
 import re
 import sys
 
@@ -63,13 +104,13 @@ _force_tick_fetch_pull_request_json()
 		return 1
 	fi
 
-	GH_TOKEN="${GH_PAT:-${GH_TOKEN:-}}" gh api "repos/${repository}/pulls/${pr_number}" 2>/dev/null
+	GH_TOKEN="${FORCE_TICK_GH_TOKEN}" gh api "repos/${repository}/pulls/${pr_number}" 2>/dev/null
 }
 
 _force_tick_extract_tracking_issue_from_pull_request_json()
 {
 	local pr_json="${1:-}"
-	python3 - <<'PY' "${pr_json}"
+	_force_tick_run_isolated_python - "${pr_json}" <<'PY'
 import json
 import re
 import sys
@@ -111,7 +152,7 @@ _force_tick_fetch_issue_body()
 
 	# Call GitHub only when the caller did not already supply a tracking issue:
 	# the phase-end callsites do not consistently retain the issue/PR body.
-	GH_TOKEN="${GH_PAT:-${GH_TOKEN:-}}" gh api "repos/${repository}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null
+	GH_TOKEN="${FORCE_TICK_GH_TOKEN}" gh api "repos/${repository}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null
 }
 
 _force_tick_latest_gate_tsv()
@@ -119,7 +160,7 @@ _force_tick_latest_gate_tsv()
 	local wrapper_json="${1:-}"
 	local cooldown_seconds="${2:-30}"
 
-	python3 - <<'PY' "${wrapper_json}" "${cooldown_seconds}"
+	_force_tick_run_isolated_python - "${wrapper_json}" "${cooldown_seconds}" <<'PY'
 import datetime as dt
 import json
 import sys
@@ -163,8 +204,9 @@ _force_tick_render_record_file()
 	local payload_json="${5:?payload json required}"
 	local dispatch_status="${6:?dispatch status required}"
 	local update_dispatch="${7:-false}"
+	local claim_id="${8:-}"
 
-	python3 - <<'PY' "${output_file}" "${wrapper_json}" "${tracking_issue}" "${attempt_timestamp}" "${payload_json}" "${dispatch_status}" "${update_dispatch}"
+	_force_tick_run_isolated_python - "${output_file}" "${wrapper_json}" "${tracking_issue}" "${attempt_timestamp}" "${payload_json}" "${dispatch_status}" "${update_dispatch}" "${claim_id}" <<'PY'
 import json
 import pathlib
 import sys
@@ -182,6 +224,7 @@ except json.JSONDecodeError:
 	payload = {}
 dispatch_status = sys.argv[6]
 update_dispatch = sys.argv[7].lower() == "true"
+claim_id = sys.argv[8]
 
 previous = wrapper.get("record") or {}
 record = {
@@ -190,6 +233,7 @@ record = {
 	"last_attempted_timestamp": attempt_timestamp,
 	"last_attempt_payload": payload,
 	"dispatch_status": dispatch_status,
+	"claim_id": claim_id,
 	"last_dispatch_timestamp": previous.get("last_dispatch_timestamp"),
 	"last_dispatch_payload": previous.get("last_dispatch_payload"),
 }
@@ -205,7 +249,7 @@ _force_tick_json_bool()
 {
 	local wrapper_json="${1:-}"
 	local key="${2:?key required}"
-	python3 - <<'PY' "${wrapper_json}" "${key}"
+	_force_tick_run_isolated_python - "${wrapper_json}" "${key}" <<'PY'
 import json
 import sys
 
@@ -309,7 +353,7 @@ if ! [[ "${cooldown_seconds}" =~ ^[0-9]+$ ]]; then
 	cooldown_seconds=30
 fi
 
-payload_json="$(python3 - <<'PY' "${REASON}" "${SOURCE_WORKFLOW}" "${ISSUE_NUMBER:-${TRACKING_ISSUE}}" "${RUN_ID}"
+payload_json="$(_force_tick_run_isolated_python - "${REASON}" "${SOURCE_WORKFLOW}" "${ISSUE_NUMBER:-${TRACKING_ISSUE}}" "${RUN_ID}" <<'PY'
 import json
 import sys
 
@@ -333,7 +377,7 @@ PY
 
 record_wrapper='{"ok": true, "enabled": true, "hit": false, "record": null}'
 if declare -F memory_force_tick_get >/dev/null 2>&1; then
-	if ! record_wrapper="$(memory_force_tick_get \
+	if ! record_wrapper="$(GH_TOKEN="${FORCE_TICK_GH_TOKEN}" memory_force_tick_get \
 		--repo-root "${REPO_ROOT}" \
 		--repo "${REPOSITORY}" \
 		--tracking-issue "${TRACKING_ISSUE}")"; then
@@ -349,6 +393,7 @@ if [ "${within_cooldown}" = "true" ]; then
 fi
 
 attempt_timestamp="$(_force_tick_now_utc)"
+claim_id="$(_force_tick_make_claim_id)"
 pending_record_file=""
 final_record_file=""
 
@@ -366,10 +411,11 @@ if ! _force_tick_truthy "${FORCE_TICK_ENABLED:-true}"; then
 		"${TRACKING_ISSUE}" \
 		"${attempt_timestamp}" \
 		"${payload_json}" \
-		"disabled" \
-		"false"
+			"disabled" \
+			"false" \
+			"${claim_id}"
 	if declare -F memory_force_tick_put >/dev/null 2>&1; then
-		memory_force_tick_put \
+		GH_TOKEN="${FORCE_TICK_GH_TOKEN}" memory_force_tick_put \
 			--repo-root "${REPO_ROOT}" \
 			--repo "${REPOSITORY}" \
 			--tracking-issue "${TRACKING_ISSUE}" \
@@ -386,43 +432,49 @@ _force_tick_render_record_file \
 	"${TRACKING_ISSUE}" \
 	"${attempt_timestamp}" \
 	"${payload_json}" \
-	"pending" \
-	"false"
+		"pending" \
+		"false" \
+		"${claim_id}"
 
 claim_stored="false"
-if declare -F memory_force_tick_put >/dev/null 2>&1; then
+if ! declare -F memory_force_tick_put >/dev/null 2>&1; then
+	echo "::warning::force-tick memory claim support is unavailable; skipping dispatch to preserve cooldown idempotency."
+	exit 0
+else
 	claim_result='{"ok": true, "enabled": true, "stored": false, "record": null}'
-	if ! claim_result="$(memory_force_tick_put \
+	if ! claim_result="$(GH_TOKEN="${FORCE_TICK_GH_TOKEN}" memory_force_tick_put \
 		--repo-root "${REPO_ROOT}" \
 		--repo "${REPOSITORY}" \
 		--tracking-issue "${TRACKING_ISSUE}" \
 		--record-file "${pending_record_file}")"; then
-		echo "::warning::force-tick memory claim failed unexpectedly; dispatching without persisted cooldown claim."
+		echo "::warning::force-tick memory claim failed unexpectedly; verifying authoritative cooldown state."
 	fi
 	claim_stored="$(_force_tick_json_bool "${claim_result}" stored)"
 	if [ "${claim_stored}" != "true" ]; then
 		peer_wrapper='{"ok": true, "enabled": true, "hit": false, "record": null}'
-		if ! peer_wrapper="$(memory_force_tick_get \
+		if ! peer_wrapper="$(GH_TOKEN="${FORCE_TICK_GH_TOKEN}" memory_force_tick_get \
 			--repo-root "${REPO_ROOT}" \
 			--repo "${REPOSITORY}" \
 			--tracking-issue "${TRACKING_ISSUE}")"; then
-			echo "::warning::force-tick memory re-read failed; continuing without peer cooldown confirmation."
+			echo "::warning::force-tick memory re-read failed; skipping dispatch because claim ownership is unconfirmed."
+			exit 0
 		fi
 		IFS=$'\t' read -r peer_within _peer_timestamp _peer_age < <(_force_tick_latest_gate_tsv "${peer_wrapper}" "${cooldown_seconds}")
 		if [ "${peer_within}" = "true" ]; then
 			echo "Skipping force-tick dispatch for tracking issue #${TRACKING_ISSUE}: another run already claimed the cooldown window."
 			exit 0
 		fi
-		echo "::warning::force-tick memory claim failed; dispatching without persisted cooldown claim."
+		echo "::warning::force-tick memory claim was not persisted; skipping dispatch because claim ownership is unconfirmed."
+		exit 0
 	fi
 fi
 
 poll_workflow="${ORCHESTRATE_POLL_WORKFLOW_FILE:-internal-orchestrate-poll.yml}"
 dispatch_status="failed"
-if [ -z "${REPOSITORY}" ] || [ -z "${GH_PAT:-${GH_TOKEN:-}}" ]; then
+if [ -z "${REPOSITORY}" ] || [ -z "${FORCE_TICK_GH_TOKEN}" ]; then
 	echo "::warning::Skipping force-tick dispatch: repository or GitHub token is unavailable."
 else
-	if GH_TOKEN="${GH_PAT:-${GH_TOKEN:-}}" gh workflow run "${poll_workflow}" --repo "${REPOSITORY}" >/dev/null 2>&1; then
+	if GH_TOKEN="${FORCE_TICK_GH_TOKEN}" gh workflow run "${poll_workflow}" --repo "${REPOSITORY}" >/dev/null 2>&1; then
 		dispatch_status="sent"
 		echo "Dispatched ${poll_workflow} for tracking issue #${TRACKING_ISSUE}."
 	else
@@ -438,9 +490,10 @@ if declare -F memory_force_tick_put >/dev/null 2>&1; then
 		"${TRACKING_ISSUE}" \
 		"${attempt_timestamp}" \
 		"${payload_json}" \
-		"${dispatch_status}" \
-		"$( [ "${dispatch_status}" = "sent" ] && printf 'true' || printf 'false' )"
-	memory_force_tick_put \
+			"${dispatch_status}" \
+			"$( [ "${dispatch_status}" = "sent" ] && printf 'true' || printf 'false' )" \
+			"${claim_id}"
+	GH_TOKEN="${FORCE_TICK_GH_TOKEN}" memory_force_tick_put \
 		--repo-root "${REPO_ROOT}" \
 		--repo "${REPOSITORY}" \
 		--tracking-issue "${TRACKING_ISSUE}" \

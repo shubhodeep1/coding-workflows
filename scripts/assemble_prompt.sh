@@ -92,14 +92,44 @@ resolve_assembly_source_path()
 	printf '%s\n' "${prompt_path}"
 }
 
-if command -v python3 >/dev/null 2>&1; then
-	PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-	PYTHON_BIN="python"
-else
+assemble_prompt_run_isolated_python()
+{
+	local environment_name=""
+	local -a isolated_environment=(env -i
+		HOME="${HOME:-}"
+		PATH="${PATH:-/usr/bin:/bin}"
+		TMPDIR="${TMPDIR:-/tmp}"
+		LANG="C.UTF-8"
+		LC_ALL="C.UTF-8"
+		PYTHONDONTWRITEBYTECODE="1")
+	local -a forwarded_environment_names=(
+		ALLOW_WORKFLOW_EDITS
+		MODEL_FAMILY_OVERLAY
+		PROMPT_PERSONA_PREFIX_ENABLED
+		PROMPT_PRELUDE_REFACTOR_ENABLED
+		SEMBLE_PREFETCH
+		SERENA_TOOL_HINTS
+		UNATTENDED_IDENTITY_REINJECT_ENABLED
+		WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON
+		WORKFLOW_OVERLAY_REPO_ROOT
+	)
+
+	for environment_name in "${forwarded_environment_names[@]}"; do
+		if [ "${!environment_name+x}" = "x" ]; then
+			isolated_environment+=("${environment_name}=${!environment_name}")
+		fi
+	done
+	"${isolated_environment[@]}" python3 "${ASSEMBLE_PROMPT_PYTHON_ARGS[@]}" "$@"
+}
+
+if ! command -v python3 >/dev/null 2>&1; then
 	echo "Python interpreter not found for render_prompt.py" >&2
 	exit 1
 fi
+
+# Isolation is mandatory. PYTHON_ISOLATED_MODE remains accepted for caller
+# compatibility, but no value can disable the clean environment or -I/-B.
+declare -a ASSEMBLE_PROMPT_PYTHON_ARGS=(-I -B)
 
 if ! RENDER_PROMPT_PY="$(resolve_render_prompt_py)"; then
 	echo "render_prompt.py not found for ${PROMPT_FILE}" >&2
@@ -108,7 +138,7 @@ fi
 
 ASSEMBLY_SOURCE_FILE="$(resolve_assembly_source_path "${PROMPT_FILE}")"
 
-exec "${PYTHON_BIN}" "${RENDER_PROMPT_PY}" \
+assemble_prompt_run_isolated_python "${RENDER_PROMPT_PY}" \
 	"${ASSEMBLY_SOURCE_FILE}" \
 	--legacy-mode-name "${MODE_NAME}" \
 	--assemble-only

@@ -422,13 +422,14 @@ _CAPTURE_FUNCTION_SCRIPT = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh
 def _extract_capture_heredoc() -> str:
 	"""Extract the python heredoc embedded in capture_intent_fingerprints_for_merged_subissue.
 
-	The shell function passes the heredoc to python3 with `python3 - "${diff_file}"`.
+	The shell function passes the heredoc to python3 (via the isolated
+	launcher `poller_run_isolated_python`) with `-- - "${diff_file}"`.
 	For test coverage we reuse the exact same script body so the test
 	pins capture's filter behaviour against the live source.
 	"""
 	body = _CAPTURE_FUNCTION_SCRIPT
 	marker_start = body.index("capture_intent_fingerprints_for_merged_subissue()")
-	heredoc_open = body.index("python3 - \"${diff_file}\" <<'PY'", marker_start)
+	heredoc_open = body.index("-- - \"${diff_file}\" <<'PY'", marker_start)
 	heredoc_body_start = body.index("\n", heredoc_open) + 1
 	heredoc_close = body.index("\nPY\n", heredoc_body_start)
 	return body[heredoc_body_start:heredoc_close]

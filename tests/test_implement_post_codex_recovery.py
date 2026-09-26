@@ -131,6 +131,7 @@ def _isolated_test_env(extra_env: dict[str, str] | None = None, *, cwd: Path | N
 
 def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 	env = _isolated_test_env(env, cwd=cwd)
+	env.setdefault("SUPPORT_SCRIPTS_DIR", str(REPO_ROOT / "scripts"))
 	script_path = cwd / "__workflow_step_under_test.sh"
 	script_path.write_text(script, encoding="utf-8")
 	script_path.chmod(0o755)
@@ -415,24 +416,20 @@ calls_path.write_text(json.dumps(calls), encoding="utf-8")
 def _install_mock_codex(bin_dir: Path) -> None:
 	codex_script = r'''#!/usr/bin/env python3
 import json
-import os
 import sys
 from pathlib import Path
 
 args = sys.argv[1:]
 stdin_text = sys.stdin.read()
+runtime_dir = Path(__file__).resolve().parent.parent / "runtime"
 
-calls_file = os.environ.get("MOCK_CODEX_CALLS_FILE")
-if calls_file:
-	with open(calls_file, "a", encoding="utf-8") as handle:
-		handle.write(json.dumps(args))
-		handle.write("\n")
+with (runtime_dir / "codex_calls.log").open("a", encoding="utf-8") as handle:
+	handle.write(json.dumps(args))
+	handle.write("\n")
 
-stdin_file = os.environ.get("MOCK_CODEX_STDIN_FILE")
-if stdin_file:
-	Path(stdin_file).write_text(stdin_text, encoding="utf-8")
+(runtime_dir / "codex_stdin.txt").write_text(stdin_text, encoding="utf-8")
 
-mode = os.environ.get("MOCK_CODEX_MODE", "success")
+mode = (runtime_dir / "mock_codex_mode.txt").read_text(encoding="utf-8").strip()
 if mode == "fail":
 	print("mock codex failure", file=sys.stderr)
 	sys.exit(1)
@@ -440,7 +437,7 @@ if mode == "invalid":
 	print("this is not json")
 	sys.exit(0)
 
-payload = os.environ.get("MOCK_CODEX_OUTPUT", "{}")
+payload = (runtime_dir / "mock_codex_output.json").read_text(encoding="utf-8")
 print(payload)
 sys.exit(0)
 '''
@@ -455,11 +452,15 @@ def _read_gh_state(state_file: Path) -> dict:
 
 def _copy_diagnose_assets(repo_dir: Path) -> None:
 	for rel in (
+		"scripts/codex_helpers.sh",
+		"scripts/codex_model_catalog.json",
 		"scripts/gh_helpers.sh",
 		"scripts/implement_diagnose_post_codex_failure.sh",
+		"scripts/model_provider_broker.py",
 		"scripts/render_prompt.py",
 		"scripts/render_prompt.sh",
 		"scripts/validate_changed_files_syntax.sh",
+		"scripts/write_codex_config.sh",
 		"prompts/contracts/mode-implement-diagnose.yml",
 		"prompts/references/output-contract.txt",
 		"prompts/mode-implement-diagnose.txt",
@@ -516,8 +517,10 @@ def _run_diagnose_step(
 	repo_dir = _prepare_diagnose_repo(tmp_path)
 	runtime_dir = tmp_path / "runtime"
 	bin_dir = tmp_path / "bin"
+	home_dir = tmp_path / "home"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
 	bin_dir.mkdir(parents=True, exist_ok=True)
+	home_dir.mkdir(parents=True, exist_ok=True)
 
 	_install_mock_gh(bin_dir)
 	_install_mock_codex(bin_dir)
@@ -558,11 +561,14 @@ def _run_diagnose_step(
 	log_file = runtime_dir / "implement_diagnose_log.txt"
 	calls_file = runtime_dir / "codex_calls.log"
 	stdin_file = runtime_dir / "codex_stdin.txt"
+	(runtime_dir / "mock_codex_mode.txt").write_text(codex_mode, encoding="utf-8")
+	(runtime_dir / "mock_codex_output.json").write_text(json.dumps(codex_output or {}), encoding="utf-8")
 
 	script = _render_github_expressions(_extract_run_script("Diagnose post-Codex failure and create fix-up issues"))
 	env = os.environ.copy()
 	env.update(
 		{
+			"HOME": str(home_dir),
 			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			"GH_TOKEN": "test-token",
 			"OPENROUTER_API_KEY": "test-openrouter",
@@ -577,6 +583,8 @@ def _run_diagnose_step(
 			"MODEL_EDITOR": "openai/gpt-5.4",
 			"PR_BASE_BRANCH": "orchestrator/project-829",
 			"SERENA_AVAILABLE": "true",
+			"SUPPORT_SCRIPTS_DIR": str(repo_dir / "scripts"),
+			"SUPPORT_PROMPTS_DIR": str(repo_dir / "prompts"),
 			"ISSUE_BODY_FILE": str(issue_body_file),
 			"ISSUE_META_FILE": str(issue_meta_file),
 			"IMPLEMENT_DIAGNOSE_PROMPT_FILE": str(prompt_file),
@@ -1951,10 +1959,10 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert '--repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}"' in implement_run
 	# restore precedes the pre-Codex baseline capture and the attempt loop;
 	# reinstall follows the loop and precedes the transcript archive.
-	assert implement_run.index(restore_call) < implement_run.index("python3 scripts/targeted_file_context.py")
+	assert implement_run.index(restore_call) < implement_run.index('_gh_helpers_run_isolated_python -- "${SUPPORT_SCRIPTS_DIR}/targeted_file_context.py"')
 	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
 	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
-	assert implement_run.rindex("bash scripts/codex_thread_reuse.sh direct-run") < implement_run.index(reinstall_call)
+	assert implement_run.rindex('bash "${SUPPORT_SCRIPTS_DIR}/codex_thread_reuse.sh" direct-run') < implement_run.index(reinstall_call)
 	assert implement_run.index(reinstall_call) < implement_run.index('if [ "${implement_succeeded}" = "true" ]; then')
 	repair_run = _extract_run_script("Attempt post-Codex syntax repair")
 	assert repair_run.count(restore_call) == 1
@@ -1982,19 +1990,37 @@ def test_editor_launches_drop_staged_support_ledger_env() -> None:
 	the post-editor reinstall failed closed. tests/conftest.py strips the same
 	variables, but a review-blocked baseline branch checks out an older
 	conftest.py, so the launch line has to scrub them itself.
+
+	The isolated-writer hardening wraps the launch in CODEX_STALL_GUARD_HELPER
+	(process-group-supervised, per the writer-isolation contract), so the
+	scrub is no longer the line immediately above the launch -- it is still
+	inside the same unbroken backslash-continuation prefix chain that ends in
+	the launch line, which is what actually matters: the scrub is applied to
+	the process that execs codex_thread_reuse.sh.
 	"""
-	for step_name, launch_line in (
-		("Run Codex implementation", "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?"),
-		("Attempt post-Codex syntax repair", "bash scripts/codex_thread_reuse.sh direct-run; then"),
-	):
+	launch_line_re = re.compile(
+		r'^-- bash "\$\{SUPPORT_SCRIPTS_DIR\}/codex_thread_reuse\.sh" direct-run \|\| \w+=\$\?$'
+	)
+	for step_name in ("Run Codex implementation", "Attempt post-Codex syntax repair"):
 		script_lines = _extract_run_script(step_name).splitlines()
-		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]
+		launch_indexes = [idx for idx, line in enumerate(script_lines) if launch_line_re.match(line.strip())]
 		assert len(launch_indexes) == 1, (step_name, launch_indexes)
-		preceding = script_lines[launch_indexes[0] - 1].strip()
-		assert preceding == EDITOR_LEDGER_ENV_SCRUB, (step_name, preceding)
-		# The scrub sits inside the CODEX_THREAD_REUSE_* prefix assignment chain,
-		# so the helper still receives its own configuration.
-		assert script_lines[launch_indexes[0] - 2].rstrip().endswith("\\"), step_name
+		# Walk back up the unbroken backslash-continuation chain feeding the
+		# launch line until the ledger scrub is found, or the chain breaks.
+		idx = launch_indexes[0] - 1
+		found_scrub = False
+		found_stall_guard = False
+		while idx >= 0:
+			line = script_lines[idx].strip()
+			if line == EDITOR_LEDGER_ENV_SCRUB:
+				found_scrub = True
+			if line == '"${CODEX_STALL_GUARD_HELPER}" \\':
+				found_stall_guard = True
+			if not script_lines[idx].rstrip().endswith("\\"):
+				break
+			idx -= 1
+		assert found_scrub, (step_name, "ledger scrub not found in launch's continuation chain")
+		assert found_stall_guard, (step_name, "stall guard supervisor not found in launch's continuation chain")
 	assert _workflow_text().count(EDITOR_LEDGER_ENV_SCRUB) == 2
 
 
@@ -2206,7 +2232,7 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block
-	assert "bash scripts/validate_changed_files_syntax.sh" in validate_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/validate_changed_files_syntax.sh"' in validate_block
 
 
 def test_post_codex_syntax_repair_step_contract() -> None:
@@ -2215,15 +2241,15 @@ def test_post_codex_syntax_repair_step_contract() -> None:
 
 	repair_block = _step_block_text("Attempt post-Codex syntax repair")
 	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
-	assert "prompts/mode-implement-repair.txt" in repair_block
-	assert "scripts/validate_changed_files_syntax.sh" in repair_block
+	assert '${SUPPORT_PROMPTS_DIR}/mode-implement-repair.txt' in repair_block
+	assert '${SUPPORT_SCRIPTS_DIR}/validate_changed_files_syntax.sh' in repair_block
 	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
 	assert "[ \"${max_attempts_raw}\" -lt 0 ]" in repair_block
 	assert "if [ \"${max_attempts}\" -eq 0 ]; then" in repair_block
 	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
 	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
 	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
-	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
 	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
 	assert "Keep apply_patch as the primary write path for repository edits" in repair_block
 
@@ -3342,7 +3368,7 @@ def test_repair_reasoning_heredoc_is_column_zero_after_yaml_strip() -> None:
 	run_indent = len(block[run_idx]) - len(block[run_idx].lstrip(" "))
 	opener_idx = next(
 		i for i, line in enumerate(block)
-		if 'PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${REPAIR_REASONING}" <<\'PY\'' in line
+		if '_gh_helpers_run_isolated_python -- - "${cfg}" "${REPAIR_REASONING}" <<\'PY\'' in line
 	)
 	body_line = block[opener_idx + 1]
 	terminator_idx = next(i for i in range(opener_idx + 1, len(block)) if block[i].strip() == "PY")
@@ -3982,7 +4008,7 @@ def test_codex_blocked_verdict_bail_and_flag() -> None:
 	)
 	# The reason must be logged so the workflow log names WHY the loop
 	# stopped without the operator opening codex_output.txt.
-	escape_helper_source_idx = codex_block.find("source scripts/gh_helpers.sh")
+	escape_helper_source_idx = codex_block.find('source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"')
 	assert 0 <= escape_helper_source_idx < blocked_idx, (
 		"the GitHub Actions annotation escaper must be sourced before the BLOCKED bail"
 	)

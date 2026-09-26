@@ -105,6 +105,41 @@ def test_assemble_prompt_reports_missing_fragment() -> None:
 		assert "_prelude_common.txt" in proc.stderr
 
 
+def test_assemble_prompt_blocks_checkout_python_startup_hooks() -> None:
+	with tempfile.TemporaryDirectory(prefix="assemble_prompt_isolation_") as td:
+		repo_root = Path(td)
+		_copy_prompt_runtime_scripts(repo_root)
+		prompt_file = repo_root / "prompts" / "mode-sample.txt"
+		startup_marker = repo_root / "startup-marker.txt"
+		prompt_file.parent.mkdir(parents=True, exist_ok=True)
+		prompt_file.write_text("safe body\n", encoding="utf-8")
+		(repo_root / "sitecustomize.py").write_text(
+			"import os\n"
+			"from pathlib import Path\n"
+			f"Path({str(startup_marker)!r}).write_text(os.environ.get('ASSEMBLE_SENTINEL_SECRET', ''), encoding='utf-8')\n",
+			encoding="utf-8",
+		)
+		env = _base_env()
+		env.update(
+			{
+				"PYTHONPATH": str(repo_root),
+				"ASSEMBLE_SENTINEL_SECRET": "must-not-reach-python",
+			}
+		)
+		proc = subprocess.run(
+			["bash", str(repo_root / "scripts" / "assemble_prompt.sh"), str(prompt_file)],
+			cwd=str(repo_root),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout == "safe body\n"
+	assert not startup_marker.exists()
+
+
 def test_render_prompt_sh_flag_true_rejects_unsupported_placeholder_expression() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_strict_template_expr_") as td:
 		repo_root = Path(td)

@@ -93,11 +93,18 @@ def _render_reviewer_prompt_with_checklist(*, checklist_enabled: str, prompt_ava
 		return assembled_prompt_file.read_text(encoding="utf-8"), result.stderr
 
 
+def _reviewer_isolated_python_prelude() -> str:
+	reviewers = _read(REVIEWERS)
+	start = reviewers.index("reviewer_run_isolated_python() {")
+	end = reviewers.index("\n}\n", start) + len("\n}\n")
+	return f'source "{REVIEWERS.parent / "gh_helpers.sh"}"\n' + reviewers[start:end]
+
+
 def _normalize_openrouter_usage(log_text: str, *, phase: str, call: str, model: str) -> str:
 	reviewers = _read(REVIEWERS)
 	start = reviewers.index("normalize_openrouter_usage() {")
 	end = reviewers.index("emit_reviewer_substate()", start)
-	block = reviewers[start:end]
+	block = _reviewer_isolated_python_prelude() + "\n" + reviewers[start:end]
 
 	with tempfile.TemporaryDirectory(prefix="normalize-openrouter-usage-") as tmp:
 		tmp_p = Path(tmp)
@@ -132,13 +139,16 @@ def _materialize_opencode_reviewer_text(log_text: str) -> tuple[subprocess.Compl
 	reviewers = _read(REVIEWERS)
 	start = reviewers.index("reviewer_materialize_opencode_json_text() {")
 	end = reviewers.index("mkdir -p", start)
-	block = reviewers[start:end]
+	block = _reviewer_isolated_python_prelude() + "\n" + reviewers[start:end]
 
 	with tempfile.TemporaryDirectory(prefix="materialize-opencode-reviewer-") as tmp:
 		tmp_p = Path(tmp)
 		structured_file = tmp_p / "events.jsonl"
 		text_file = tmp_p / "review.txt"
 		structured_file.write_text(log_text, encoding="utf-8")
+		env = os.environ.copy()
+		env["SUPPORT_SCRIPTS_DIR"] = str(REPO_ROOT / "scripts")
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
 		result = subprocess.run(
 			[
 				"bash",
@@ -151,6 +161,7 @@ def _materialize_opencode_reviewer_text(log_text: str) -> tuple[subprocess.Compl
 				str(text_file),
 			],
 			cwd=str(REPO_ROOT),
+			env=env,
 			capture_output=True,
 			text=True,
 		)
@@ -185,16 +196,19 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert "EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}" in workflow
 	assert "UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}" in workflow
 	assert 'helper=".codex-workflow-src/scripts/stage_workflow_support.sh"' in stage_step_block
-	assert 'helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"' not in stage_step_block
+	assert ".codex-workflow-src-main" not in stage_step_block
 	assert 'WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \\' in stage_step_block
 	assert 'bash "${helper}"' in stage_step_block
-	assert 'Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src}' in stage_step_block
+	assert (
+		'Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src} '
+		'(verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it).'
+	) in stage_step_block
 	assert "render_prompt.py" in main_primary_line
 	assert "nag_reminder.sh" in required_bootstrap_line
 	# build_semble_wrapper.sh stays in the optional-bootstrap loop once the BM25
 	# wrapper was extracted to a shared script (semble 0.1.3 ships no
-	# index/query CLI). render_prompt.py is main-primary so validator fixes from
-	# main reach wedged/in-flight branches immediately.
+	# index/query CLI). render_prompt.py stays in the immutable workflow support
+	# source so validator and executable bootstrap code share one provenance root.
 	assert "assemble_prompt.sh" in required_bootstrap_line
 	assert "render_prompt.py" not in required_bootstrap_line
 	assert "render_prompt.py" not in optional_bootstrap_line
@@ -222,9 +236,11 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
 	assert 'check_soft_file "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"' in preflight_block
 	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_helper
-	assert "for f in emit_event.sh emit_event.py; do" in stage_helper
+	assert "emit_event.sh" in required_bootstrap_line
+	assert "emit_event.py" in required_bootstrap_line
+	assert "semantic_cache.py" in required_bootstrap_line
 	assert "for f in transcript_archive.sh; do" in stage_helper
-	assert 'Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled.' in stage_helper
+	assert "Required bootstrap script '${f}' is missing from verified support commit ${SCRIPT_REF}." in stage_helper
 	assert 'Optional transcript archive helper ${f} is unavailable in checked-out support sources; transcript archiving remains disabled.' in stage_helper
 	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_helper
@@ -279,7 +295,7 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	clear_serena_block = _step_block(workflow, "Clear Serena after editor")
 	detect_serena_block = _step_block(workflow, "Detect preexisting Serena project config")
 
-	assert "astral-sh/setup-uv@v7" in uv_block
+	assert "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78" in uv_block
 	assert "if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')" in uv_block
 	assert "continue-on-error: true" in uv_block
 	assert "if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')" in install_block
@@ -392,7 +408,7 @@ def test_reviewer_checklist_prompt_contract_and_gate() -> None:
 	assert "REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"' in stage_helper
-	assert 'src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"' not in stage_helper
+	assert ".codex-workflow-src-main" not in stage_helper
 	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"' in stage_helper
 	assert 'review-reviewer-checklist.txt not found in checked-out support sources' in stage_helper
 	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-reviewer-checklist.txt"' in reviewers
@@ -600,7 +616,7 @@ def test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append() -> N
 	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in retry_prelude
 	assert 'RESOLVER_SERENA_TOOL_HINTS="$({' in prepare
 	assert '[ "${SERENA_AVAILABLE:-false}" = "true" ]' in prepare
-	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in prepare
+	assert '"SERENA_TOOL_HINTS_RESOLVER=${RESOLVER_SERENA_TOOL_HINTS:-}"' in prepare
 	assert 'Resolver Serena hints:' in prepare
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"' in resolve
 	assert 'RESOLVER_SERENA_TOOL_HINTS="$({' in resolve

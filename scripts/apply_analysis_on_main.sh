@@ -84,16 +84,21 @@ APPLY_ANALYSIS_CYCLE_BASELINE_SHA="${APPLY_ANALYSIS_CYCLE_BASELINE_SHA:-}"
 APPLY_ANALYSIS_SMOKE_SHA="${APPLY_ANALYSIS_SMOKE_SHA:-}"
 APPLY_ANALYSIS_PROMOTE_SHA="${APPLY_ANALYSIS_PROMOTE_SHA:-}"
 APPLY_ANALYSIS_PROVING_MERGE_SHA="${APPLY_ANALYSIS_PROVING_MERGE_SHA:-}"
+APPLY_ANALYSIS_DISPATCHER_RUN_ID="${APPLY_ANALYSIS_DISPATCHER_RUN_ID:-${GITHUB_RUN_ID:-0}}"
+APPLY_ANALYSIS_SMOKE_RUN_ID="${APPLY_ANALYSIS_SMOKE_RUN_ID:-}"
+APPLY_ANALYSIS_SMOKE_ACTOR_ID="${APPLY_ANALYSIS_SMOKE_ACTOR_ID:-}"
 APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE="${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE:-}"
 APPLY_ANALYSIS_LIST_ONLY="${APPLY_ANALYSIS_LIST_ONLY:-false}"
 APPLY_ANALYSIS_DOC_GLOB="${APPLY_ANALYSIS_DOC_GLOB:-analysis/workflow-optimization-*.md}"
 APPLY_ANALYSIS_REPORT_PATH="${APPLY_ANALYSIS_REPORT_PATH:-analysis/recommendation-processing-report.md}"
 APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE="${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE:-internal-orchestrate.yml}"
 APPLY_ANALYSIS_TRACKING_LABEL="${APPLY_ANALYSIS_TRACKING_LABEL:-ai:comprehensive-test-pending}"
-# Same setting the poller uses for its marker parser: comment authors whose
-# author_association is listed (plus github-actions[bot]) may vouch that a
-# doc was dispatched before. Anyone else's comment is ignored.
+# Compatibility-only setting retained for existing workflow inputs. Signed
+# marker selection requires the immutable Actions producer ID; author
+# association grants no authority.
 COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
+COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID="41898282"
+COMPREHENSIVE_CYCLE_MARKER_HELPER="${COMPREHENSIVE_CYCLE_MARKER_HELPER:-${SCRIPT_DIR}/orchestrate_state_v2.py}"
 GITHUB_REF_NAME="${GITHUB_REF_NAME:-main}"
 GITHUB_SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
 GITHUB_SHA="${GITHUB_SHA:-}"
@@ -165,33 +170,40 @@ open_tracking_issue_numbers()
 }
 
 # trusted_marker_comment_present <issue-number> <marker-line>
-# 0 when the issue carries a comment containing <marker-line> as a whole
-# line, posted by github-actions[bot] or an author whose author_association
-# is in COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS; 1 when only
-# untrusted (or no) comments carry it; 2 when the comments could not be read.
+# 0 when the issue carries a producer-authenticated signed marker for the
+# source document, 1 when only untrusted (or no) comments carry it, and 2
+# when comments or signature verification could not be read.
 trusted_marker_comment_present()
 {
 	local issue_number="$1"
 	local marker_line="$2"
-	local found
-	if ! found="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" 2>/dev/null \
-		| jq -r --arg line "${marker_line}" --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
-			($trusted | split(",") | map(ascii_upcase | gsub("^\\s+|\\s+$"; ""))) as $ok
-			| [.[]? | select(((.body // "") | split("\n") | index($line)) != null)
-				| select((.user.login // "") == "github-actions[bot]" or (((.author_association // "") | ascii_upcase) as $a | $ok | index($a)) != null)]
-			| length')"; then
+	local comments_file selected_file source_doc selected_doc
+	comments_file="$(mktemp)"
+	selected_file="$(mktemp)"
+	if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" > "${comments_file}" 2>/dev/null; then
+		rm -f "${comments_file}" "${selected_file}"
 		return 2
 	fi
-	[[ "${found}" =~ ^[0-9]+$ ]] || return 2
-	[ "${found}" -gt 0 ] && return 0
-	return 1
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 "${COMPREHENSIVE_CYCLE_MARKER_HELPER}" select-comprehensive-marker \
+		--comments-json "${comments_file}" \
+		--repository "${GITHUB_REPOSITORY}" \
+		--producer-id "${COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID}" \
+		--tracking-issue "${issue_number}" \
+		--out-file "${selected_file}" >/dev/null 2>&1; then
+		rm -f "${comments_file}" "${selected_file}"
+		return 2
+	fi
+	source_doc="${marker_line#${APPLY_ANALYSIS_SOURCE_DOC_MARKER}: }"
+	selected_doc="$(jq -r '.marker.source_doc // ""' "${selected_file}" 2>/dev/null || true)"
+	rm -f "${comments_file}" "${selected_file}"
+	[ "${selected_doc}" = "${source_doc}" ]
 }
 
 # doc_dispatched_before <path>
 # 0 when a tracking issue (open or closed) carries this doc's marker in a
-# comment from a trusted author, 1 when none does, 2 when the lookup failed.
+# producer-authenticated signed comment, 1 when none does, 2 when lookup failed.
 # The search only finds candidates (it matches any comment body); the
-# author check on each candidate is what makes the answer trustworthy, so a
+# signature and immutable producer-ID check make the answer trustworthy, so a
 # stray comment cannot make the dispatcher skip a doc forever.
 doc_dispatched_before()
 {
@@ -214,7 +226,7 @@ doc_dispatched_before()
 			rc=$?
 		fi
 		[ "${rc}" -eq 2 ] && return 2
-		echo "::warning::Tracking issue #${issue_number} carries the marker for ${doc_path} only in a comment from an untrusted author; ignoring it." >&2
+		echo "::warning::Tracking issue #${issue_number} carries the marker for ${doc_path} only in unauthenticated comments; ignoring it." >&2
 	done <<< "${numbers}"
 	return 1
 }
@@ -336,6 +348,21 @@ ref_sha="${GITHUB_SHA:-${GITHUB_REF_NAME}}"
 doc_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${ref_sha}/${selected_doc}"
 run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
+if [ -z "${ORCHESTRATOR_STATE_AUTH_KEYRING:-}" ] || [ ! -f "${COMPREHENSIVE_CYCLE_MARKER_HELPER}" ]; then
+	echo "::error::A comprehensive-cycle marker requires ORCHESTRATOR_STATE_AUTH_KEYRING and ${COMPREHENSIVE_CYCLE_MARKER_HELPER}."
+	exit 1
+fi
+for marker_id_name in APPLY_ANALYSIS_DISPATCHER_RUN_ID APPLY_ANALYSIS_SMOKE_RUN_ID APPLY_ANALYSIS_SMOKE_ACTOR_ID COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID; do
+	if ! [[ "${!marker_id_name}" =~ ^[1-9][0-9]*$ ]]; then
+		echo "::error::${marker_id_name} must be a positive integer."
+		exit 1
+	fi
+done
+if [ -z "${APPLY_ANALYSIS_CYCLE_BASELINE_SHA}" ] || [ -z "${APPLY_ANALYSIS_SMOKE_SHA}" ]; then
+	echo "::error::Comprehensive-cycle dispatches require baseline and smoke SHAs."
+	exit 1
+fi
+
 project_description="$(cat <<DESC
 Apply analysis recommendations from ${selected_basename}
 
@@ -350,11 +377,56 @@ DESC
 )"
 
 marker_lines="${APPLY_ANALYSIS_SOURCE_DOC_MARKER}: ${selected_doc}
-apply-analysis-role: ${APPLY_ANALYSIS_ROLE}"
+apply-analysis-role: ${APPLY_ANALYSIS_ROLE}
+apply-analysis-dispatcher-run-id: ${APPLY_ANALYSIS_DISPATCHER_RUN_ID}
+apply-analysis-smoke-run-id: ${APPLY_ANALYSIS_SMOKE_RUN_ID}"
 [ -n "${APPLY_ANALYSIS_CYCLE_BASELINE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-cycle-baseline-sha: ${APPLY_ANALYSIS_CYCLE_BASELINE_SHA}"
 [ -n "${APPLY_ANALYSIS_SMOKE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-smoke-sha: ${APPLY_ANALYSIS_SMOKE_SHA}"
 [ -n "${APPLY_ANALYSIS_PROMOTE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-promote-sha: ${APPLY_ANALYSIS_PROMOTE_SHA}"
 [ -n "${APPLY_ANALYSIS_PROVING_MERGE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-proving-merge-sha: ${APPLY_ANALYSIS_PROVING_MERGE_SHA}"
+
+marker_candidate_file="$(mktemp)"
+marker_envelope_file="$(mktemp)"
+trap 'rm -f "${marker_candidate_file:-}" "${marker_envelope_file:-}"' EXIT
+jq -n \
+	--arg source_doc "${selected_doc}" \
+	--arg role "${APPLY_ANALYSIS_ROLE}" \
+	--argjson dispatcher_run_id "${APPLY_ANALYSIS_DISPATCHER_RUN_ID}" \
+	--argjson smoke_run_id "${APPLY_ANALYSIS_SMOKE_RUN_ID}" \
+	--argjson smoke_actor_id "${APPLY_ANALYSIS_SMOKE_ACTOR_ID}" \
+	--arg smoke_head_sha "${APPLY_ANALYSIS_SMOKE_SHA}" \
+	--arg cycle_baseline_sha "${APPLY_ANALYSIS_CYCLE_BASELINE_SHA}" \
+	--arg promote_sha "${APPLY_ANALYSIS_PROMOTE_SHA}" \
+	--arg proving_merge_sha "${APPLY_ANALYSIS_PROVING_MERGE_SHA}" '
+	{
+		source_doc: $source_doc,
+		role: $role,
+		dispatcher_run_id: $dispatcher_run_id,
+		smoke_run_id: $smoke_run_id,
+		smoke_actor_id: $smoke_actor_id,
+		smoke_workflow_path: ".github/workflows/test-and-mark-stable.yml",
+		smoke_event: "workflow_dispatch",
+		smoke_display_title: ("Test & Mark Stable Release [cycle:" + ($dispatcher_run_id | tostring) + ";gate-only:true;skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]"),
+		smoke_inputs: {
+			gate_only: "true",
+			gate_cycle_id: ($dispatcher_run_id | tostring),
+			skip_e2e: "false",
+			dry_run: "false",
+			test_repo: "",
+			review_workflow_file: "internal-review.yml"
+		},
+		smoke_conclusion: "success",
+		smoke_head_sha: $smoke_head_sha,
+		cycle_baseline_sha: $cycle_baseline_sha,
+		promote_sha: $promote_sha,
+		proving_merge_sha: $proving_merge_sha
+	}' > "${marker_candidate_file}"
+PYTHONDONTWRITEBYTECODE=1 python3 "${COMPREHENSIVE_CYCLE_MARKER_HELPER}" sign-comprehensive-marker \
+	--candidate-file "${marker_candidate_file}" \
+	--repository "${GITHUB_REPOSITORY}" \
+	--producer-id "${COMPREHENSIVE_CYCLE_MARKER_PRODUCER_ID}" \
+	--out-file "${marker_envelope_file}"
+marker_envelope="$(cat "${marker_envelope_file}")"
 
 if [ "${APPLY_ANALYSIS_ROLE}" = "verifying" ]; then
 	role_prose="This is the VERIFYING run of a promote cycle: it re-proves the pipeline on top of the proving run's merged changes. When it reaches ready-to-merge, the orchestrator poller promotes \`apply-analysis-promote-sha\` to \`stable\` and holds this project's final merge until that release finishes. Its own merge never promotes anything; the next daily cycle covers it."
@@ -366,6 +438,10 @@ marker_comment="$(cat <<COMMENT
 ## Apply-analysis dispatch
 
 ${marker_lines}
+
+<!-- COMPREHENSIVE_CYCLE_MARKER_V1
+${marker_envelope}
+COMPREHENSIVE_CYCLE_MARKER_V1 -->
 
 Dispatched by ${run_url} for the single source doc above; the tracking issue carries \`${APPLY_ANALYSIS_TRACKING_LABEL}\`. ${role_prose} The marker lines are machine-read by the poller and are the loop guard: this doc is never dispatched automatically again.
 COMMENT

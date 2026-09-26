@@ -42,14 +42,15 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	step = _workflow_step(workflow_text, "Run Codex planning")
 
-	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in workflow_text
+	assert "for f in gh_helpers.sh emit_event.sh emit_event.py run_plan_codex.sh render_prompt.sh" in workflow_text
 	assert "if: env.SKIP_PLAN != 'true'" in step
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
 	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in step
 	assert "TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}" in step
 	assert 'TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"' in PLAN_RUNNER.read_text(encoding="utf-8")
+	assert 'bash "${_run_plan_scripts_dir}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"' in PLAN_RUNNER.read_text(encoding="utf-8")
 	assert step.split("        run: |\n", 1)[1] == (
-		"          bash scripts/run_plan_codex.sh\n"
+		'          bash "${SUPPORT_SCRIPTS_DIR}/run_plan_codex.sh"\n'
 	)
 	assert len(step.encode("utf-8")) < 2_000
 
@@ -86,6 +87,16 @@ def _run_runner(
 
 	(scripts_dir / PLAN_RUNNER.name).write_text(
 		PLAN_RUNNER.read_text(encoding="utf-8"), encoding="utf-8"
+	)
+	_write_executable(
+		scripts_dir / "codex_helpers.sh",
+		"""#!/usr/bin/env bash
+sanitize_codex_prompt_file() { :; }
+model_provider_broker_start() { :; }
+model_provider_broker_stop() { :; }
+model_provider_broker_prepare_codex_readonly() { :; }
+model_provider_broker_exec_unprivileged() { shift; "$@"; }
+""",
 	)
 	_write_executable(
 		scripts_dir / "render_prompt.sh",
@@ -183,6 +194,7 @@ esac
 			"MOCK_LOG_DIR": str(runtime_dir),
 			"MODEL_EDITOR": "primary/model",
 			"MODEL_EDITOR_FALLBACK": "fallback/model",
+			"MODEL_REASONING_EFFORT": "xhigh",
 			"PATH": f"{mock_bin_dir}{os.pathsep}{environment['PATH']}",
 			"PLAN_DIAGRAMS_OPTIONAL": "true",
 			"PLAN_PROGRESS_COMMENT_ID": "12345",
@@ -191,6 +203,7 @@ esac
 			"PLANNING_CONTEXT_FILE": str(runtime_dir / "planning_context.txt"),
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"RUNTIME_DIR": str(runtime_dir),
+			"SUPPORT_PROMPTS_DIR": str(prompts_dir),
 			"TOOL_CALL_BUDGET": "40",
 		}
 	)
@@ -224,7 +237,7 @@ def test_primary_success_preserves_prompt_order_and_outputs() -> None:
 	assert _read_lines(runtime_dir / "codex-args.log") == [
 		"--ask-for-approval never -c model_verbosity=low "
 		"-c include_apply_patch_tool=true exec --skip-git-repo-check "
-		"--model primary/model --sandbox danger-full-access"
+		"--model primary/model --sandbox read-only"
 	]
 	assert (runtime_dir / "codex_log.txt").is_file()
 	assert _read_lines(runtime_dir / "gh.log") == [

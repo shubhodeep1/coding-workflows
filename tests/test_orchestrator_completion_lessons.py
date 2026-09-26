@@ -260,6 +260,8 @@ def _emitter_script(state_file: Path) -> str:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	return (
 		"set -euo pipefail\n"
+		+ 'ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR="${PWD}/scripts"\n'
+		+ _extract_bash_function(script, "poller_run_isolated_python() {")
 		+ _extract_bash_function(script, "is_truthy() {")
 		+ _extract_bash_function(script, "record_orchestrator_lesson_event() {")
 		+ _extract_bash_function(script, "emit_orchestrator_completion_lessons() {")

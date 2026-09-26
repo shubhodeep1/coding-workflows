@@ -140,7 +140,13 @@ finish()
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}" PYTHONDONTWRITEBYTECODE=1 \
+# env -i drops everything else; the #4090 budgets must reach the broker.
+broker_budget_env=()
+for budget_var in MAX_REQUESTS MAX_OUTPUT_TOKENS MAX_TOTAL_OUTPUT_TOKENS MAX_INPUT_TOKENS MAX_TOTAL_INPUT_TOKENS MAX_TOTAL_COST_USD MAX_PROMPT_PRICE MAX_COMPLETION_PRICE MAX_REQUEST_PRICE MAX_IMAGE_PRICE; do
+	budget_var="MODEL_PROVIDER_BROKER_${budget_var}"
+	[ -z "${!budget_var:-}" ] || broker_budget_env+=("${budget_var}=${!budget_var}")
+done
+env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}" PYTHONDONTWRITEBYTECODE=1 "${broker_budget_env[@]}" \
 	python3 "${support}/clarify_openrouter_broker.py" review-broker "${root}/socket/provider.sock" &
 broker_pid=$!
 for _ in $(seq 1 50); do

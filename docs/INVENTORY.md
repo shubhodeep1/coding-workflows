@@ -47,6 +47,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
+- `.github/workflows/claude-issue-intake.yml` — Claude Issue Intake: receives standalone issues routed to Claude and starts the Claude session that implements them.
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
 - `.github/workflows/drift-audit.yml` — GitHub Actions workflow: Drift Audit.
 - `.github/workflows/forward-merge-stable-to-main.yml` — GitHub Actions workflow: Forward-merge stable to main.
@@ -120,6 +121,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
 - `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
 - `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
+- `scripts/claude_issue_handoff.sh` — Run by `clarify.yml` when `claude_issue_route.py` routes a standalone issue to Claude: claims it with the `ai:claude` label and hands it to the Claude issue implementer.
+- `scripts/claude_issue_intake.sh` — Run by `claude-issue-intake.yml`: validates one `claude-issue` payload with `claude_issue_route.py` and fires one run of the Claude issue dispatcher routine.
+- `scripts/claude_issue_route.py` — Routes standalone issues (not managed by the AI orchestrator) to the Claude issue implementer or the Codex pipeline.
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
 - `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.
@@ -139,8 +143,10 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/dev/test_watchdog_helpers.sh` — Shell regression tests for watchdog_helpers.sh.
 - `scripts/dev/test_write_guard.sh` — Shell regression tests for write_guard.sh.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
+- `scripts/editor_isolation_preflight.sh` — Validate unprivileged editor filesystem and credential isolation before model launch.
 - `scripts/emit_event.py` — Fail-open append-only JSONL mirror for stable workflow event prefixes.
 - `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
+- `scripts/evaluate_behavioural_smoke.py` — Evaluates an authenticated declarative behavioural-smoke assertion bundle (`behavioural_smoke_assertions.v1`) inside the isolation sandbox.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch` — Fixture asset for phase-b-risk-tier-always-full.patch.
@@ -178,6 +184,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/memory_helpers.sh` — Shell helper for memory helpers.
 - `scripts/memory_injection_patterns.py` — Advisory prompt-injection regex roster for AI-memory candidate writes.
 - `scripts/memory_maintenance_extract_learnings.py` — Extract repository learnings for the memory-maintenance workflow.
+- `scripts/model_provider_broker.py` — Bounded loopback proxy that keeps upstream model credentials out of model-process environments.
 - `scripts/nag_reminder.sh` — Fail-open reminder injection helper for long-running unattended wrapper loops.
 - `scripts/opencode_helpers.sh` — Shared OpenCode command, output, bootstrap, and alert helpers.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
@@ -205,6 +212,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_partial_finalize.sh` — body of the review_autofix.yml "Post partial finalize comment and persist runtime marker" step (sourced by the step; skips with a warning when the script cannot be found).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
+- `scripts/review_conflict_actuate.sh` — Trusted post-resolver actuator for signed retry state and GitHub side effects.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
@@ -225,6 +233,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_untrusted_sandbox.sh` — Prepare the disposable review workspace and run the OpenCode writer without host credentials.
 - `scripts/review_untrusted_workspace.py` — Validate review snapshot paths, baselines and editor changes before transfer.
 - `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
+- `scripts/run_behavioural_smoke_assertions.sh` — Runs a synthesised behavioural-smoke assertion bundle through `evaluate_behavioural_smoke.py` in a trusted, isolated sandbox for validation.
 - `scripts/run_plan_codex.sh` — Plan-phase Codex runner extracted from workflow YAML.
 - `scripts/run_validation_repo_checks.sh` — Shell helper for run validation repo checks.
 - `scripts/run_workspace_hook.sh` — Shell helper for run workspace hook.
@@ -239,6 +248,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-6-luna, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-6-luna to widen analysis coverage.
+- `scripts/sync_contract_list_union.py` — Deterministically merge validated append-only contract entrypoint-list conflicts.
+- `scripts/sync_contract_list_union.requirements.txt` — Hash-lock PyYAML for the isolated contract-list union helper environment.
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
 - `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.
@@ -263,6 +274,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/workflow_failure_heal_intake.sh` — Diagnose an escalated workflow failure report in coding-workflows, enforce heal dedup/lineage/budget rules, and open the heal issue.
 - `scripts/workflow_failure_heal_pr_reconcile.sh` — When a coding-workflows pull request closes, close the heal PRs stacked on its head branch (source not merged) or move their heal commits onto the source base and re-point them (source merged).
 - `scripts/workflow_failure_heal_report.sh` — Report a human-needed escalation from a consumer (or this repo) to coding-workflows with linked failed runs and the wrapper release pin.
+- `scripts/workflow_log_output_contract.py` — Validate and atomically publish untrusted workflow-log model output.
 - `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
 - `scripts/workflow_retro_fanout.sh` — Post weekly workflow retros to consumer repositories from the centralized fan-out job.
 - `scripts/workflow_wrapper_refs.py` — Render consumer workflow wrappers with immutable reusable-workflow references.

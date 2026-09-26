@@ -116,7 +116,34 @@ def test_pr_meta_fallback_precedes_pull_fetch_in_target_steps() -> None:
 		assert meta_pos < fetch_call_pos, f"{step_name}: expected PR_META_FILE fallback before GH fetch"
 
 
+def test_post_merge_jobs_use_only_immutable_workflow_support() -> None:
+	# Support-identity resolution for these jobs comes from the gate job's
+	# gate-verified `resolve_support` outputs (needs.gate.outputs.review_support_*),
+	# not from the reusable-workflow `job` context — see
+	# test_review_support_identity_is_bound_across_jobs in
+	# test_review_autofix_review_pipeline_contract.py, which is the other half
+	# of this contract and asserts `job.workflow_` is absent from these jobs.
+	text = _workflow_text()
+	for job_name, next_job_name in (
+		("post-merge-validate-dispatch", "post-merge-force-poll"),
+		("post-merge-force-poll", "deterministic-skip-merge"),
+	):
+		start = text.index(f"  {job_name}:")
+		next_job = text.find(f"\n  {next_job_name}:", start + 3)
+		job = text[start:] if next_job == -1 else text[start:next_job]
+		assert "WORKFLOW_REPOSITORY: ${{ needs.gate.outputs.review_support_repo }}" in job
+		assert "WORKFLOW_REF: ${{ needs.gate.outputs.review_support_ref }}" in job
+		assert "WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}" in job
+		assert "ref: ${{ needs.gate.outputs.review_support_sha }}" in job
+		assert "continue-on-error: true" not in job
+		assert "'stable'" not in job
+		assert "job.workflow_" not in job
+		assert "Unverified workflow support checkout" in job
+		assert 'git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}"' in job
+
+
 if __name__ == "__main__":
 	test_target_steps_use_shared_helper_and_remove_inline_phase_array()
 	test_pr_meta_fallback_precedes_pull_fetch_in_target_steps()
+	test_post_merge_jobs_use_only_immutable_workflow_support()
 	print("PASS")

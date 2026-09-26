@@ -79,8 +79,14 @@ jobs:
             scripts/validate_process.sh
           )
           ci_guard_required_codex_scanned="$(IFS=,; echo "${ci_guard_required_codex_files[*]}")"
+          # The broker-isolated Codex launches configure Codex through the
+          # model_provider_broker_prepare_codex_{readonly,writer} helpers in
+          # scripts/codex_helpers.sh (same shared module, broker base URL and
+          # isolated CODEX_HOME). A call to either one satisfies the check;
+          # a mention in a comment does not.
           for ci_guard_file in "${ci_guard_required_codex_files[@]}"; do
-            if ! grep -q 'codex_config_assemble' "${ci_guard_file}"; then
+            if ! grep -q 'codex_config_assemble' "${ci_guard_file}" \
+              && ! grep -Eq '^[[:space:]]*model_provider_broker_prepare_codex_(readonly|writer)[[:space:]]' "${ci_guard_file}"; then
               ci_guard_report_failure \
                 "codex-config-shared-helper" \
                 "required-helper-missing" \
@@ -188,7 +194,7 @@ jobs:
           done
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
 
@@ -572,6 +578,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_editor_isolation_preflight.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_process_group_termination.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
@@ -606,6 +614,7 @@ jobs:
             tests/test_apply_analysis_on_main.py \
             tests/test_auto_release_stable.py \
             tests/test_orchestrate_poll_promote_cycle.py \
+            tests/test_orchestrate_state_comprehensive_marker.py \
             tests/test_implement_blocked_verdict_terminalizes.py
 
       - name: Implement files_touched scope guard unit tests
@@ -687,6 +696,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_git_auth_hygiene.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py
 
@@ -796,6 +806,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_pending_approval_comment.py
 
       - name: Shared PR check-runs merge gate (pr_checks_lib) tests
         run: |

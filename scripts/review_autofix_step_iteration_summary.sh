@@ -5,6 +5,7 @@
 # starts runs). The step sources this file in its own shell, so the step's
 # if:, env: and continue-on-error: stay in the workflow; edit those there.
 set -euo pipefail
+source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
 
 count_nonempty_lines()
 {
@@ -159,19 +160,41 @@ partial_finalize_validation_tail_can_complete="${AUTOFIX_PARTIAL_FINALIZE_VALIDA
 partial_finalize_edits_withheld_for_safety="${AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY:-false}"
 partial_finalize_withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-none}"
 
+review_summary_environment=()
+for review_summary_environment_name in \
+  RUNTIME_DIR PREVIOUS_REVIEWS_DIR EDITOR_SUMMARY_FILE REVIEW_CONSOLIDATOR_ENABLED \
+  AUTOFIX_REVIEWERS_FAILED AUTOFIX_EDITOR_EMPTY_NOOP EDITOR_CHANGES_LOST EDITOR_NOOP_SUSPICIOUS \
+  EDITOR_NOOP_REFUSAL EDITOR_NOOP_RECOVERABLE_FAILURE PR_CLOSED \
+  MAX_ITERATIONS_REACHED DID_COMMIT LEDGER_ONLY_COMMIT LEDGER_ONLY_COMMIT_STRICT \
+  AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE \
+  AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON \
+  AUTOFIX_STALE_BASE_SKIP AUTOFIX_EDITS_PUSHED CAN_PUSH CONFLICT_RESOLVED \
+  SKIP_JUDGE JUDGE_HANDLED JUDGE_ACTION JUDGE_SKIP_REASON RB_JUDGE_STATUS \
+  AUTOFIX_PARTIAL_FINALIZE_REQUESTED AUTOFIX_PARTIAL_FINALIZE_REASON \
+  AUTOFIX_PARTIAL_FINALIZE_PHASE AUTOFIX_PARTIAL_COMMENT_POSTED \
+  AUTOFIX_RESUME_RESTORED AUTOFIX_RESUME_HEAD_SHA AUTOFIX_RESUME_ROUND_LIMIT \
+  AUTOFIX_RESUME_STATE AUTOFIX_RESUME_SHOULD_CONTINUE AUTOFIX_RESUME_REASON \
+  AUTOFIX_RESUME_PHASE AUTOFIX_RESUME_COMMENT_POSTED AUTOFIX_RESUME_COMPLETED_SCOPE \
+  AUTOFIX_RESUME_INCOMPLETE_SCOPE CHANGES_LOST_REDISPATCHED; do
+  if [ "${!review_summary_environment_name+x}" = "x" ]; then
+    review_summary_environment+=("${review_summary_environment_name}=${!review_summary_environment_name}")
+  fi
+done
+
 structured_summary_line="$(
-  BUDGET_ELAPSED_SECS="${budget_elapsed_secs}" \
-  BUDGET_TOTAL_SECS="${budget_total_secs}" \
-  BUDGET_REMAINING_SECS="${budget_remaining_secs}" \
-  RESUME_ROUND_SUMMARY="${resume_round}" \
-  REVIEWER_BUNDLE_FILE="${reviewer_bundle_file}" \
-  FLOOR_TAGS_FILE="${floor_tags_file}" \
-  CONSOLIDATOR_RAW_FILE="${consolidator_raw_file}" \
-  PARSER_STATS_FILE="${parser_stats_file}" \
-  LEDGER_STATUS_FILE="${ledger_status_file}" \
-  COMMITTED_FILES_FILE="${committed_files_file}" \
-  PYTHONDONTWRITEBYTECODE=1 \
-  python3 - <<'PY' || true
+  _gh_helpers_run_isolated_python \
+    "${review_summary_environment[@]}" \
+    "BUDGET_ELAPSED_SECS=${budget_elapsed_secs}" \
+    "BUDGET_TOTAL_SECS=${budget_total_secs}" \
+    "BUDGET_REMAINING_SECS=${budget_remaining_secs}" \
+    "RESUME_ROUND_SUMMARY=${resume_round}" \
+    "REVIEWER_BUNDLE_FILE=${reviewer_bundle_file}" \
+    "FLOOR_TAGS_FILE=${floor_tags_file}" \
+    "CONSOLIDATOR_RAW_FILE=${consolidator_raw_file}" \
+    "PARSER_STATS_FILE=${parser_stats_file}" \
+    "LEDGER_STATUS_FILE=${ledger_status_file}" \
+    "COMMITTED_FILES_FILE=${committed_files_file}" \
+    -- - <<'PY' || true
 from __future__ import annotations
 
 import glob

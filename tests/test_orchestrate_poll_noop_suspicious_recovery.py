@@ -106,8 +106,8 @@ def test_sweep_uses_shared_audit_helper():
 	shared helper, not a local re-implementation. Otherwise the poller
 	and the workflow can disagree about what "audit healthy" means."""
 	sweep = _sweep_block()
-	assert "source scripts/validate_editor_audit.sh" in sweep, (
-		"Sweep must source scripts/validate_editor_audit.sh — "
+	assert 'source "${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/validate_editor_audit.sh"' in sweep, (
+		"Sweep must source ${ORCHESTRATE_POLL_SUPPORT_SCRIPTS_DIR}/validate_editor_audit.sh — "
 		"never re-implement the arithmetic check inline."
 	)
 	assert "validate_editor_audit_arithmetic" in sweep, (

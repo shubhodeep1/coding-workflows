@@ -8,6 +8,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
+REVIEWED_CODEX_ACTION_SHA = "f03b8d657a63d64b87324e8a1047a8b90d3221e0"
+REVIEWED_SETUP_NODE_ACTION_SHA = "249970729cb0ef3589644e2896645e5dc5ba9c38"
+REVIEWED_SETUP_PYTHON_ACTION_SHA = "ece7cb06caefa5fff74198d8649806c4678c61a1"
+REVIEWED_SETUP_UV_ACTION_SHA = "37802adc94f370d6bfd71619e3f0bf239e1f3b78"
+REVIEWED_FREE_DISK_SPACE_ACTION_SHA = "54081f138730dfa15788a46383842cd2f914a1be"
 
 REQUIRED_RESOLVER_WORKFLOWS = {
 	"plan.yml",
@@ -80,6 +85,34 @@ def test_allowlist_entries_have_rationale() -> None:
 		assert rationale.strip(), f"Missing allow-list rationale for {workflow_name}"
 
 
+def test_remote_codex_runtime_actions_are_immutable() -> None:
+	paths = [REPO_ROOT / ".github" / "actions" / "setup-runtime" / "action.yml", *WORKFLOWS_DIR.glob("*.yml")]
+	runtime_action_text = paths[0].read_text(encoding="utf-8")
+	assert f"actions/setup-node@{REVIEWED_SETUP_NODE_ACTION_SHA}" in runtime_action_text
+	assert f"actions/setup-python@{REVIEWED_SETUP_PYTHON_ACTION_SHA}" in runtime_action_text
+	for path in paths:
+		text = path.read_text(encoding="utf-8")
+		assert "install-codex@stable" not in text, path
+		assert "setup-runtime@stable" not in text, path
+		assert "Intentionally use the released action ref as the rollout boundary" not in text, path
+		for line in text.splitlines():
+			if "uses: actions/setup-node@" in line:
+				assert line.rstrip().endswith(f"actions/setup-node@{REVIEWED_SETUP_NODE_ACTION_SHA}"), (path, line)
+			if "uses: actions/setup-python@" in line:
+				assert line.rstrip().endswith(f"actions/setup-python@{REVIEWED_SETUP_PYTHON_ACTION_SHA}"), (path, line)
+			if "uses: astral-sh/setup-uv@" in line:
+				assert line.rstrip().endswith(f"astral-sh/setup-uv@{REVIEWED_SETUP_UV_ACTION_SHA}"), (path, line)
+			if "uses: jlumbroso/free-disk-space@" in line:
+				assert line.rstrip().endswith(
+					f"jlumbroso/free-disk-space@{REVIEWED_FREE_DISK_SPACE_ACTION_SHA}"
+				), (path, line)
+			if "shubhodeep1/coding-workflows/.github/actions/install-codex@" in line:
+				assert line.rstrip().endswith(f"install-codex@{REVIEWED_CODEX_ACTION_SHA}"), (path, line)
+		for cache_block in text.split("- name: Cache Codex CLI")[1:]:
+			cache_key_line = next(line.strip() for line in cache_block.splitlines() if line.strip().startswith("key:"))
+			assert REVIEWED_CODEX_ACTION_SHA in cache_key_line, (path, cache_key_line)
+
+
 def test_required_workflows_enforce_integration_ref_contract() -> None:
 	resolver_step = "- name: Resolve integration ref"
 	resolver_id = "id: refctx"
@@ -91,6 +124,9 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		"sed -nE 's/^- Integration branch:",
 		"grep -Eq '^orchestrator/project-[0-9]+$'",
 		"/git/ref/heads/",
+		'resolver_ref="stable"',
+		"resolver_stage_fallback",
+		"--branch main",
 	)
 
 	# Keep the GitHub ref-lookup ban shared so future baseline-resolution logic
@@ -156,6 +192,19 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		resolver_idx = wf.find(resolver_step)
 		checkout_resolver_idx = wf.find(checkout_resolver_step) if checkout_resolver_step else -1
 		checkout_ref_idx = wf.find(checkout_ref)
+		resolver_block = wf[resolver_idx:checkout_ref_idx]
+		assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}" in resolver_block
+		assert "WORKFLOW_DEFINITION_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}" in resolver_block
+		assert 'resolver_ref="${WORKFLOW_DEFINITION_SHA,,}"' in resolver_block
+		assert 'git -C "${resolver_stage_primary}" init --quiet' in resolver_block
+		assert 'fetch --quiet --depth 1 origin "${resolver_ref}"' in resolver_block
+		assert "Failed to stage canonical integration resolver at immutable ref ${resolver_ref}." in resolver_block
+		assert "Canonical integration resolver script not found in staged source." in resolver_block
+		assert "Canonical integration resolver failed." in resolver_block
+		assert "Failed to stage canonical integration resolver at immutable ref ${resolver_ref}; falling back to default branch." not in resolver_block
+		assert "Canonical integration resolver script not found in staged source; falling back to default branch." not in resolver_block
+		assert "Canonical integration resolver failed; falling back to default branch." not in resolver_block
+		assert resolver_block.count('echo "ref=" >> "$GITHUB_OUTPUT"') == 1
 		assert resolver_idx != -1 and checkout_ref_idx != -1 and resolver_idx < checkout_ref_idx, (
 			f"{workflow_name} must resolve integration ref before refctx-bound checkout"
 		)
@@ -168,6 +217,7 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
+	test_remote_codex_runtime_actions_are_immutable()
 	test_required_workflows_enforce_integration_ref_contract()
 	return 0
 

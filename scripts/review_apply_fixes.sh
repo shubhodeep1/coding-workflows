@@ -1,8 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The editor consumes untrusted PR content. Repository actuator credentials
+# must remain in separate trusted workflow steps so prompt injection cannot
+# read or exfiltrate them from this process environment.
+#
+# Sanitize rather than refuse: this script is staged from the PR branch
+# (REQUIRED_BOOTSTRAP_SCRIPTS in scripts/stage_workflow_support.sh) while the
+# reusable workflow that invokes it is pinned to main, so a caller that still
+# injects a credential into the editor step is expected during the rollout
+# window. Scrubbing here keeps the isolation property under either caller;
+# a hard refusal deadlocks the very PR that ships the fix (run 34180518975).
+for editor_forbidden_credential_name in GH_TOKEN GH_PAT GITHUB_TOKEN ORCHESTRATOR_STATE_AUTH_KEYRING TG_BOT_SECRET; do
+	if [ -n "${!editor_forbidden_credential_name+x}" ]; then
+		echo "::notice::Scrubbed ${editor_forbidden_credential_name} from the review editor environment; model-facing processes run without repository credentials." >&2
+		unset "${editor_forbidden_credential_name}"
+	fi
+done
+unset editor_forbidden_credential_name
+
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR}/watchdog_helpers.sh"
+
+: "${RUNTIME_DIR:?RUNTIME_DIR must be set}"
+# Default the sentinel path instead of hard-requiring the workflow to export
+# it. On the workflow source repo the reusable review_autofix.yml runs @main
+# while this script is staged from the PR head SHA, so a `:?` guard here
+# aborts the editor before any model call whenever the running YAML predates
+# the export (runs 34257678201 / 34266425657 on PR #4057). This mirrors the
+# default already used by review_run_reviewers.sh and
+# summarize_reviewer_consensus.sh; the path check below still rejects any
+# override that points outside the protected runtime location.
+PR_CLOSED_SENTINEL_FILE="${PR_CLOSED_SENTINEL_FILE:-${RUNTIME_DIR}/pr_closed_sentinel}"
+if [ "${PR_CLOSED_SENTINEL_FILE}" != "${RUNTIME_DIR}/pr_closed_sentinel" ]; then
+	echo "::error::PR_CLOSED_SENTINEL_FILE must be the protected runtime sentinel." >&2
+	exit 1
+fi
 
 if [ ! -f "${WATCHDOG_HELPERS}" ]; then
 	echo "::error::Missing required support script ${WATCHDOG_HELPERS}" >&2
@@ -15,18 +48,11 @@ if command -v codex_run_budget_export >/dev/null 2>&1; then
 	codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"
 fi
 
-# Source rate-limit-aware GH API helpers (provides gh_retry and the
-# Telegram admin alert on GH API rate-limit events).
+# Source prompt-input and UTF-8 sanitization helpers. This model-facing
+# process performs no authenticated GitHub operations.
 if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
-fi
-# Fallback: if gh_helpers.sh was not sourced (missing file, unset
-# SUPPORT_SCRIPTS_DIR), define a pass-through so subsequent
-# `gh_retry gh ...` calls still execute — without the rate-limit
-# retry/alert behaviour, but without hard-failing under `set -e`.
-if ! command -v gh_retry >/dev/null 2>&1; then
-  gh_retry() { "$@"; }
 fi
 
 # _embed_input_file + _init_prompt_budget / _cleanup_prompt_budget live
@@ -46,8 +72,21 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+
+review_apply_run_isolated_python()
+{
+  _gh_helpers_run_isolated_python_with_paths \
+    "${SUPPORT_ROOT_DIR:-.}" "${SUPPORT_SCRIPTS_DIR:-scripts}" -- "$@"
+}
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+CODEX_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_helpers.sh"
+if [ ! -r "${CODEX_HELPERS_PATH}" ]; then
+  echo "::error::Missing required support script ${CODEX_HELPERS_PATH}" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${CODEX_HELPERS_PATH}"
 # shellcheck source=/dev/null
 if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
   editor_helpers_missing_alert="opencode_agent_failure phase=review_apply_fixes role=writer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=helpers_missing"
@@ -60,6 +99,17 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>
   fi
   echo "${editor_helpers_missing_alert}" >&2
   exit 1
+fi
+# Isolation preflight: probes, as the unprivileged editor identity, every
+# path the sandboxed launch below must reach and names the first denied
+# component. Fail-open when the helper is absent (an older support bundle):
+# the launch itself still fails closed, just without the diagnosis.
+EDITOR_ISOLATION_PREFLIGHT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/editor_isolation_preflight.sh"
+if [ -f "${EDITOR_ISOLATION_PREFLIGHT_HELPER}" ]; then
+  # shellcheck source=/dev/null
+  source "${EDITOR_ISOLATION_PREFLIGHT_HELPER}"
+else
+  echo "::warning::editor_isolation_preflight.sh is not in the support bundle; editor isolation runs without the path preflight." >&2
 fi
 if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
   editor_config_writer_missing_alert="opencode_agent_failure phase=review_apply_fixes role=writer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=config_writer_missing"
@@ -120,6 +170,10 @@ review_apply_fixes_preflight()
 		# A function named setup_editor_isolation, where a branch defines one,
 		# adds its prerequisite checks to this function in dry-run form in the
 		# same change.
+		RUNTIME_DIR
+		WORKSPACE_PATH
+		GITHUB_WORKSPACE
+		GITHUB_ENV
 	)
 	local preflight_checks=0
 	local preflight_failed=0
@@ -157,8 +211,13 @@ review_apply_fixes_preflight()
 	else
 		_review_apply_fixes_preflight_result opencode_config_writer fail "unreadable:${OPENCODE_CONFIG_WRITER_PATH}"
 	fi
-	# CODEX_HELPERS_PATH is not used by this script on main; a caller that
-	# sets it gets the readability check, an unset value is not a failure.
+	# CODEX_HELPERS_PATH is now always derived from SUPPORT_SCRIPTS_DIR near
+	# the top of this script and hard-required before this function can even
+	# be reached (a missing/unreadable file exits the script outright), so
+	# this check is always exercised and, by construction, always reports ok
+	# once we get this far. It stays a defensive `-n` check (rather than an
+	# unconditional one) so a future caller that clears CODEX_HELPERS_PATH
+	# before invoking --preflight does not silently skip this evidence line.
 	if [ -n "${CODEX_HELPERS_PATH:-}" ]; then
 		if [ -r "${CODEX_HELPERS_PATH}" ]; then
 			_review_apply_fixes_preflight_result codex_helpers ok "${CODEX_HELPERS_PATH}"
@@ -193,6 +252,340 @@ fi
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 LESSONS_LEARNED_ENABLED="${LESSONS_LEARNED_ENABLED:-true}"
+EDITOR_ISOLATION_USER="nobody"
+EDITOR_ISOLATION_ACTIVE="false"
+EDITOR_ISOLATION_OWNER_UID=""
+EDITOR_ISOLATION_OWNER_GID=""
+EDITOR_ISOLATION_GIT_MODE=""
+EDITOR_ISOLATION_COMMAND_DIR=""
+EDITOR_ISOLATION_COMMAND_DIR_MODE=""
+EDITOR_ISOLATION_HOME=""
+EDITOR_ISOLATION_TMP=""
+EDITOR_ISOLATION_UID=""
+EDITOR_ISOLATION_GID=""
+EDITOR_ISOLATION_PROCESS_GROUP_FILE=""
+
+setup_editor_isolation() {
+  local resolved_workspace resolved_source isolation_uid
+  : "${WORKSPACE_PATH:?WORKSPACE_PATH must be set for editor isolation}"
+  : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE must be set for editor isolation}"
+  : "${GITHUB_ENV:?GITHUB_ENV must be set for editor isolation}"
+  # opencode_helpers.sh (sourced above) moves the provider key into
+  # OPENCODE_HELPERS_PROVIDER_API_KEY and unsets OPENROUTER_API_KEY so
+  # model-facing processes never inherit it; accept either name so an
+  # older helper copy that leaves the variable in place still passes.
+  : "${OPENCODE_HELPERS_PROVIDER_API_KEY:-${OPENROUTER_API_KEY:?OPENROUTER_API_KEY must be set for editor isolation}}"
+  command -v sudo >/dev/null 2>&1 || {
+    echo "::error::sudo is required for unprivileged editor isolation." >&2
+    return 1
+  }
+  sudo -n true >/dev/null 2>&1 || {
+    echo "::error::Passwordless sudo is required for unprivileged editor isolation." >&2
+    return 1
+  }
+  id "${EDITOR_ISOLATION_USER}" >/dev/null 2>&1 || {
+    echo "::error::Unprivileged editor identity '${EDITOR_ISOLATION_USER}' is unavailable." >&2
+    return 1
+  }
+  isolation_uid="$(id -u "${EDITOR_ISOLATION_USER}")"
+  if [ "${isolation_uid}" = "$(id -u)" ]; then
+    echo "::error::Editor isolation identity must differ from the runner identity." >&2
+    return 1
+  fi
+  resolved_workspace="$(realpath -e -- "${WORKSPACE_PATH}")" || return 1
+  resolved_source="$(realpath -e -- "${GITHUB_WORKSPACE}")" || return 1
+  if [ "$(realpath -e -- "$(pwd)")" != "${resolved_workspace}" ] \
+    || [ "${resolved_workspace}" = "${resolved_source}" ] \
+    || [ -e "${resolved_workspace}/.git" ]; then
+    echo "::error::Editor must run from the detached workspace without Git metadata." >&2
+    return 1
+  fi
+  EDITOR_ISOLATION_COMMAND_DIR="$(dirname -- "${GITHUB_ENV}")"
+  if [ -n "${RUNNER_TEMP:-}" ]; then
+    case "${EDITOR_ISOLATION_COMMAND_DIR}" in
+      "${RUNNER_TEMP}"/*) ;;
+      *)
+        echo "::error::Runner command files are outside RUNNER_TEMP; refusing unsafe editor launch." >&2
+        return 1
+        ;;
+    esac
+  fi
+  EDITOR_ISOLATION_OWNER_UID="$(id -u)"
+  EDITOR_ISOLATION_OWNER_GID="$(id -g)"
+  EDITOR_ISOLATION_UID="${isolation_uid}"
+  EDITOR_ISOLATION_GID="$(id -g "${EDITOR_ISOLATION_USER}")"
+  EDITOR_ISOLATION_GIT_MODE="$(stat -c '%a' "${resolved_source}/.git")" || return 1
+  EDITOR_ISOLATION_COMMAND_DIR_MODE="$(stat -c '%a' "${EDITOR_ISOLATION_COMMAND_DIR}")" || return 1
+  EDITOR_ISOLATION_HOME="${RUNTIME_DIR}/editor-sandbox/home"
+  EDITOR_ISOLATION_TMP="${RUNTIME_DIR}/editor-sandbox/tmp"
+  mkdir -p "${EDITOR_ISOLATION_HOME}" "${EDITOR_ISOLATION_TMP}"
+  # Close the source checkout's Git metadata (the remote URL carries the
+  # repository token) and the runner command files before any ancestor
+  # directory is opened to the editor identity below. The modes recorded
+  # above are put back by cleanup_editor_isolation, or by
+  # _editor_isolation_setup_rollback when setup fails past this point.
+  chmod 0700 "${resolved_source}/.git" "${EDITOR_ISOLATION_COMMAND_DIR}" || return 1
+  # Open the secret-free support bundle and RUNTIME_DIR traversal to the
+  # editor identity, then prove every launch path is reachable as that
+  # identity before spending an attempt. Runs 34304993091 / 34320556598
+  # (PR #4057) lost three attempts each to
+  # `opencode_helpers.sh: Permission denied` with no indication of which
+  # directory closed the path; the probe prints `first_denied=<component>`.
+  if command -v editor_isolation_prepare_shared_paths >/dev/null 2>&1; then
+    editor_isolation_prepare_shared_paths
+  fi
+  # GitHub-hosted runners keep /home/runner at 0750, which closes every
+  # RUNNER_TEMP path (support bundle, detached workspace) to the editor
+  # identity: runs 34335652907 / 34337926193 (PR #4057) reported
+  # first_denied=/home/runner mode=drwxr-x---. Grant traverse-only (o+x)
+  # on such ancestors for this attempt; cleanup_editor_isolation restores
+  # the recorded modes once the attempt ends.
+  if command -v editor_isolation_open_ancestor_traverse >/dev/null 2>&1 \
+    && ! editor_isolation_open_ancestor_traverse "${EDITOR_ISOLATION_USER}"; then
+    echo "::error::Editor isolation could not open traverse-only access on an ancestor directory for identity '${EDITOR_ISOLATION_USER}'; see EDITOR_ISOLATION_ANCESTOR_TRAVERSE_DENIED lines above." >&2
+    _editor_isolation_setup_rollback
+    return 1
+  fi
+  if command -v editor_isolation_preflight_probe >/dev/null 2>&1 \
+    && editor_isolation_preflight_enabled \
+    && ! editor_isolation_preflight_probe "${EDITOR_ISOLATION_USER}"; then
+    echo "::error::Editor isolation preflight failed for identity '${EDITOR_ISOLATION_USER}'; see EDITOR_ISOLATION_PREFLIGHT_DENIED lines above for the first denied path component." >&2
+    _editor_isolation_setup_rollback
+    return 1
+  fi
+  EDITOR_ISOLATION_ACTIVE="true"
+  sudo -n chown -R "${EDITOR_ISOLATION_UID}:${EDITOR_ISOLATION_GID}" \
+    "${resolved_workspace}" "${RUNTIME_DIR}/editor-sandbox" || return 1
+  sudo -n chmod 0700 "${EDITOR_ISOLATION_HOME}" "${EDITOR_ISOLATION_TMP}" || return 1
+}
+
+# Undo the protections and ancestor grants applied by a setup_editor_isolation
+# call that failed before EDITOR_ISOLATION_ACTIVE was armed (the exit trap's
+# cleanup_editor_isolation only acts once it is).
+_editor_isolation_setup_rollback() {
+  local rollback_rc=0
+  if command -v editor_isolation_restore_ancestor_traverse >/dev/null 2>&1; then
+    editor_isolation_restore_ancestor_traverse || rollback_rc=1
+  fi
+  chmod "${EDITOR_ISOLATION_GIT_MODE}" "${GITHUB_WORKSPACE}/.git" || rollback_rc=1
+  chmod "${EDITOR_ISOLATION_COMMAND_DIR_MODE}" "${EDITOR_ISOLATION_COMMAND_DIR}" || rollback_rc=1
+  if [ "${rollback_rc}" -ne 0 ]; then
+    echo "::error::Failed to restore protected-path permissions after a failed editor isolation setup." >&2
+  fi
+  return "${rollback_rc}"
+}
+
+cleanup_editor_isolation() {
+  local cleanup_rc=0
+  if [ "${EDITOR_ISOLATION_ACTIVE}" = "true" ]; then
+    if [ -n "${EDITOR_ISOLATION_PROCESS_GROUP_FILE}" ]; then
+      if ! command -v editor_isolation_verify_process_group_stopped >/dev/null 2>&1 \
+        || ! editor_isolation_verify_process_group_stopped "${EDITOR_ISOLATION_PROCESS_GROUP_FILE}" "${EDITOR_ISOLATION_USER}"; then
+        echo "::error::Refusing to restore editor workspace ownership while the isolated process group may still be alive." >&2
+        return 1
+      fi
+      rm -f -- "${EDITOR_ISOLATION_PROCESS_GROUP_FILE}"
+      EDITOR_ISOLATION_PROCESS_GROUP_FILE=""
+    fi
+    sudo -n chown -R "${EDITOR_ISOLATION_OWNER_UID}:${EDITOR_ISOLATION_OWNER_GID}" \
+      "${WORKSPACE_PATH}" "${RUNTIME_DIR}/editor-sandbox" || cleanup_rc=1
+    chmod "${EDITOR_ISOLATION_GIT_MODE}" "${GITHUB_WORKSPACE}/.git" || cleanup_rc=1
+    chmod "${EDITOR_ISOLATION_COMMAND_DIR_MODE}" "${EDITOR_ISOLATION_COMMAND_DIR}" || cleanup_rc=1
+    # Close the ancestors (e.g. /home/runner) last, after the workspace is
+    # back under runner ownership and the protected paths are restored.
+    if command -v editor_isolation_restore_ancestor_traverse >/dev/null 2>&1; then
+      editor_isolation_restore_ancestor_traverse || cleanup_rc=1
+    fi
+    EDITOR_ISOLATION_ACTIVE="false"
+  fi
+  if [ "${cleanup_rc}" -ne 0 ]; then
+    echo "::error::Failed to restore runner ownership or protected-path permissions after editor execution." >&2
+  fi
+  return "${cleanup_rc}"
+}
+
+# _editor_process_identity <pid>
+#   Prints the process UID and start-time ticks from one /proc snapshot.
+_editor_process_identity() {
+  local identity_pid="$1" identity_stat_text identity_stat_tail identity_uid
+  local -a identity_stat_fields=()
+  [[ "${identity_pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ -e "/proc/${identity_pid}/stat" ] || return 1
+  identity_stat_text="$(<"/proc/${identity_pid}/stat")" || return 1
+  identity_stat_tail="${identity_stat_text##*) }"
+  read -r -a identity_stat_fields <<< "${identity_stat_tail}"
+  identity_uid="$(stat -c '%u' -- "/proc/${identity_pid}" 2>/dev/null || true)"
+  [[ "${identity_uid}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${identity_stat_fields[19]:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s %s' "${identity_uid}" "${identity_stat_fields[19]}"
+}
+
+# _editor_process_group_from_guard <guard_pid>
+#   Fallback locator for the isolated editor's process group when the stall
+#   guard published no usable ledger: the guard starts exactly one child (the
+#   `sudo` wrapper) in a new session, so that child's PID is the group ID.
+#   Prints the PGID only while the guard still matches the identity captured
+#   by its parent, or nothing when it cannot be determined unambiguously.
+_editor_process_group_from_guard() {
+  local guard_pid="$1" own_pgid candidate_pid candidate_pgid found="" guard_identity
+  [[ "${guard_pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ -n "${EDITOR_ISOLATION_EXPECTED_GUARD_UID:-}" ] \
+    && [ -n "${EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS:-}" ] || return 1
+  guard_identity="$(_editor_process_identity "${guard_pid}")" || return 1
+  if [ "${guard_identity}" != "${EDITOR_ISOLATION_EXPECTED_GUARD_UID} ${EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS}" ]; then
+    echo "::error::EDITOR_PROCESS_GROUP_GUARD_IDENTITY_MISMATCH guard_pid=${guard_pid}" >&2
+    return 1
+  fi
+  own_pgid="$(ps -o pgid= -p "${BASHPID:-$$}" 2>/dev/null | tr -d '[:space:]')"
+  while read -r candidate_pid candidate_pgid; do
+    [[ "${candidate_pid}" =~ ^[1-9][0-9]*$ ]] || continue
+    # Only a session leader (pid == pgid) outside our own group qualifies;
+    # the guard's transient pgrep/ps helpers share the guard's group.
+    [ "${candidate_pid}" = "${candidate_pgid}" ] || continue
+    [ "${candidate_pgid}" != "${own_pgid}" ] || continue
+    [ "${candidate_pgid}" -gt 1 ] || continue
+    if [ -n "${found}" ] && [ "${found}" != "${candidate_pgid}" ]; then
+      return 1
+    fi
+    found="${candidate_pgid}"
+  done < <(ps -o pid=,pgid= --ppid "${guard_pid}" 2>/dev/null || true)
+  [ -n "${found}" ] || return 1
+  printf '%s' "${found}"
+}
+
+# _editor_isolated_group_has_survivors <pgid>
+#   True while a live (non-zombie) process owned by EDITOR_ISOLATION_USER is
+#   still in <pgid>. A killed child whose parent has not reaped it yet is a
+#   zombie that pgrep still lists; it holds no resources and cannot write to
+#   the workspace, so it must not count as a survivor.
+_editor_isolated_group_has_survivors() {
+  local survivor_pid survivor_state survivor_stat_path survivor_stat_text survivor_stat_tail
+  local survivor_pid_list survivor_probe_status
+  if survivor_pid_list="$(pgrep -u "${EDITOR_ISOLATION_USER}" -g "$1" 2>/dev/null)"; then
+    survivor_probe_status=0
+  else
+    survivor_probe_status=$?
+    [ "${survivor_probe_status}" -eq 1 ] && return 1
+    echo "::error::EDITOR_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_USER} pgid=$1 rc=${survivor_probe_status}" >&2
+    return 2
+  fi
+  while read -r survivor_pid; do
+    if ! [[ "${survivor_pid}" =~ ^[0-9]+$ ]]; then
+      echo "::error::EDITOR_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_USER} pgid=$1 reason=invalid_member_pid" >&2
+      return 2
+    fi
+    survivor_stat_path="/proc/${survivor_pid}/stat"
+    if ! survivor_stat_text="$(<"${survivor_stat_path}")"; then
+      [ ! -e "${survivor_stat_path}" ] && continue
+      echo "::error::EDITOR_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_USER} pgid=$1 pid=${survivor_pid} reason=stat_unreadable" >&2
+      return 2
+    fi
+    survivor_stat_tail="${survivor_stat_text##*) }"
+    survivor_state="${survivor_stat_tail%% *}"
+    if ! [[ "${survivor_state}" =~ ^[A-Za-z]$ ]]; then
+      echo "::error::EDITOR_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_USER} pgid=$1 pid=${survivor_pid} reason=stat_malformed" >&2
+      return 2
+    fi
+    [ "${survivor_state}" = "Z" ] && continue
+    return 0
+  done <<< "${survivor_pid_list}"
+  return 1
+}
+
+terminate_editor_attempt_process_group() {
+  local guard_pid="$1" process_group_file="$2"
+  local termination_rc=0 member_status=1 fallback_pgid="" guard_cleanup_identity="" verify_index
+  if [ -n "${guard_pid}" ] && [ -n "${process_group_file}" ] && [ -s "${process_group_file}" ] \
+    && command -v editor_isolation_signal_process_group >/dev/null 2>&1; then
+    if ! editor_isolation_signal_process_group "${process_group_file}" "${EDITOR_ISOLATION_USER}" TERM "${guard_pid}"; then
+      termination_rc=1
+    fi
+    sleep 5
+    if editor_isolation_process_group_has_members "${process_group_file}" "${EDITOR_ISOLATION_USER}" "${guard_pid}"; then
+      member_status=0
+    else
+      member_status=$?
+    fi
+    if [ "${member_status}" -eq 0 ]; then
+      editor_isolation_signal_process_group "${process_group_file}" "${EDITOR_ISOLATION_USER}" KILL "${guard_pid}" || termination_rc=1
+    elif [ "${member_status}" -ne 1 ]; then
+      termination_rc=1
+    fi
+    if ! editor_isolation_verify_process_group_stopped "${process_group_file}" "${EDITOR_ISOLATION_USER}" "${guard_pid}"; then
+      termination_rc=1
+    fi
+  else
+    # No usable ledger (the guard died before publishing it, or the helper
+    # is not sourced). Killing only the runner-owned guard would leave the
+    # `nobody` editor tree running: locate the group through the guard's
+    # child instead and take it down with the same privileged signals.
+    if fallback_pgid="$(_editor_process_group_from_guard "${guard_pid}")"; then
+      echo "::warning::EDITOR_PROCESS_GROUP_FALLBACK guard_pid=${guard_pid} pgid=${fallback_pgid} reason=ledger_unavailable" >&2
+      timeout --kill-after=2s 10s sudo -n kill -TERM -- "-${fallback_pgid}" 2>/dev/null || termination_rc=1
+      sleep 5
+      if _editor_isolated_group_has_survivors "${fallback_pgid}"; then
+        member_status=0
+      else
+        member_status=$?
+      fi
+      if [ "${member_status}" -ne 1 ]; then
+        timeout --kill-after=2s 10s sudo -n kill -KILL -- "-${fallback_pgid}" 2>/dev/null || termination_rc=1
+        [ "${member_status}" -eq 0 ] || termination_rc=1
+      fi
+      for (( verify_index = 0; verify_index < 20; verify_index++ )); do
+        if _editor_isolated_group_has_survivors "${fallback_pgid}"; then
+          member_status=0
+        else
+          member_status=$?
+          [ "${member_status}" -eq 1 ] && break
+          termination_rc=1
+          break
+        fi
+        sleep 0.1
+      done
+      if _editor_isolated_group_has_survivors "${fallback_pgid}"; then
+        member_status=0
+      else
+        member_status=$?
+      fi
+      if [ "${member_status}" -eq 0 ]; then
+        echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_SURVIVOR user=${EDITOR_ISOLATION_USER} pgid=${fallback_pgid} source=guard_child" >&2
+        termination_rc=1
+      elif [ "${member_status}" -ne 1 ]; then
+        termination_rc=1
+      fi
+    else
+      echo "::error::EDITOR_PROCESS_GROUP_TERMINATION_UNRESOLVED guard_pid=${guard_pid} reason=ledger_unavailable_and_no_guard_child; terminating the guard only." >&2
+      sleep 5
+      termination_rc=1
+    fi
+  fi
+
+  # The editor group is handled first. The guard normally exits after its
+  # child; this bounded fallback prevents a signalling failure from hanging
+  # the parent wait while cleanup remains fail-closed on group survivors.
+  if [ -n "${guard_pid}" ] && kill -0 "${guard_pid}" 2>/dev/null; then
+    guard_cleanup_identity="$(_editor_process_identity "${guard_pid}" || true)"
+    if [ "${guard_cleanup_identity}" = "${EDITOR_ISOLATION_EXPECTED_GUARD_UID:-} ${EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS:-}" ]; then
+      kill -TERM "${guard_pid}" 2>/dev/null || true
+      sleep 1
+      kill -KILL "${guard_pid}" 2>/dev/null || true
+    else
+      echo "::error::EDITOR_PROCESS_GROUP_GUARD_IDENTITY_MISMATCH guard_pid=${guard_pid} stage=guard_cleanup" >&2
+      termination_rc=1
+    fi
+  fi
+  return "${termination_rc}"
+}
+
+editor_isolation_exit_trap() {
+  local original_rc="$1"
+  trap - EXIT
+  cleanup_editor_isolation || original_rc=80
+  model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after editor execution." >&2
+  [ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true
+  exit "${original_rc}"
+}
 
 run_editor_codex_attempt() {
   local prompt_file="$1"
@@ -200,6 +593,7 @@ run_editor_codex_attempt() {
   local stderr_target="$3"
   local activity_file="$4"
   local status_file="$5"
+  local process_group_file="${6:-}"
 
   # EDITOR_ATTEMPT_MODEL lets the retry loop switch the editor model per
   # attempt (capacity-fallback to MODEL_EDITOR_FALLBACK on the final attempt;
@@ -210,6 +604,7 @@ run_editor_codex_attempt() {
   local editor_opencode_serena="off"
   local editor_workspace
   local -a editor_opencode_cmd
+  local -a stall_guard_args
   editor_workspace="$(pwd)"
 
   # Serena's host executable/config is not available inside the isolated
@@ -227,6 +622,7 @@ run_editor_codex_attempt() {
     "${editor_opencode_config}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
     return 79
   fi
+  chmod 0444 "${editor_opencode_config}" || return 79
   editor_opencode_cmd=(
     bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run
     "${prompt_file}"
@@ -241,15 +637,22 @@ run_editor_codex_attempt() {
   fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-    exec "${CODEX_STALL_GUARD_HELPER}" \
-      --phase review_apply_fixes \
-      --stdout-file "${stdout_file}" \
-      --activity-file "${activity_file}" \
-      --status-file "${status_file}" \
+    stall_guard_args=(
+      --phase review_apply_fixes
+      --stdout-file "${stdout_file}"
+      --activity-file "${activity_file}"
+      --status-file "${status_file}"
+    )
+    if [ -n "${process_group_file}" ]; then
+      stall_guard_args+=(--process-group-file "${process_group_file}")
+    fi
+    OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY:-${OPENROUTER_API_KEY:-}}" \
+      exec "${CODEX_STALL_GUARD_HELPER}" "${stall_guard_args[@]}" \
       -- "${editor_opencode_cmd[@]}" < "${prompt_file}" 2>"${stderr_target}"
   fi
 
-  exec "${editor_opencode_cmd[@]}" < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
+  OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY:-${OPENROUTER_API_KEY:-}}" \
+    exec "${editor_opencode_cmd[@]}" < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
 }
 
 emit_context_budget_warn_for_prompt() {
@@ -269,7 +672,7 @@ emit_context_budget_warn_for_prompt() {
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+    review_apply_run_isolated_python - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -329,7 +732,7 @@ emit_lessons_learned_for_out_of_plan_fix() {
   telemetry_json="$(printf '%s\n' "${current_diff_paths}" | {
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
+    review_apply_run_isolated_python - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
 import json
 import os
 import sys
@@ -551,7 +954,14 @@ prepare_judge_interim_priors()
 		return 0
 	fi
 
-	merged_count="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${prior_json}" "${JUDGE_INTERIM_PRIORS_FILE}" <<'PY'
+	merged_count="$(env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE=1 \
+		python3 -I -B - "${prior_json}" "${JUDGE_INTERIM_PRIORS_FILE}" <<'PY'
 import json
 import re
 import sys
@@ -889,7 +1299,7 @@ consolidate_script=""
 if autofix_resume_can_reuse_stage "consolidator" "${CONSOLIDATOR_RAW_FILE}"; then
 	echo "Resume: reusing cached consolidator_raw.txt from same-head partial state."
 elif consolidate_script="$(resolve_support_script review_consolidate.sh)"; then
-  if ! bash "${consolidate_script}"; then
+  if ! OPENROUTER_API_KEY="${OPENCODE_HELPERS_PROVIDER_API_KEY}" bash "${consolidate_script}"; then
     echo "::warning::review_consolidate.sh failed; continuing"
   fi
 else
@@ -1014,7 +1424,7 @@ append_semble_query_section() {
 
 if [ -n "${_targeted_paths_source}" ]; then
   targeted_file_context_args=(
-    python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"
+    review_apply_run_isolated_python "${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"
     --paths-file "${_targeted_paths_source}"
     --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
     --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
@@ -1882,7 +2292,14 @@ JOB_TIMEOUT_SECS=$(( REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED * 60 ))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 _hb_tmpdir=""
 _hb_fifo=""
-trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EXIT
+MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${MODEL_EDITOR_FALLBACK:+,${MODEL_EDITOR_FALLBACK}}" opencode_model_provider_broker_start
+trap 'editor_isolation_exit_trap $?' EXIT
+# The writer runs in the disposable review sandbox (review_untrusted_sandbox.sh:
+# no checkout Git metadata, credentials, runner command files or network
+# beyond the model relay), so the unprivileged-identity launch
+# (setup_editor_isolation) no longer wraps it. The sandbox fails closed when
+# its prerequisites are missing; cleanup_editor_isolation stays a no-op
+# unless setup_editor_isolation was armed.
 
 # Match only standalone OpenAI-style refusal lines, not incidental prose in
 # an otherwise-valid structured summary (for example an Ignored suggestions
@@ -1906,8 +2323,9 @@ if nag_reminder_enabled; then
 fi
 editor_silent_rounds=0
 while [ "${attempt}" -le "${editor_max_attempts}" ]; do
-  # Early exit if PR was closed/merged (detected by reviewer or editor watchdog)
-  if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+  # Preserve an earlier trusted PR-state decision without performing any
+  # authenticated repository reads from the model-facing process.
+  if [ -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
     echo "PR #${PR_NUMBER} was closed/merged — skipping editor."
     echo "PR_CLOSED=true" >> "$GITHUB_ENV"
     exit 0
@@ -1958,6 +2376,18 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     echo "Editor attempt ${attempt}: capping wall time to ${attempt_wall}s (budget-limited, ${remaining}s remain)."
   fi
 
+  # Broker policy-rejection snapshot for this attempt. The broker started
+  # above lives for the whole retry loop, so a deterministic 4xx it returns
+  # (request cap, output-token budget, unauthorized model) is returned to
+  # every later attempt and to the capacity fallback model too. Compare
+  # after the attempt to stop retrying instead of burning the remaining
+  # attempts (PR #4077, runs 34663517732 / 34654303940: three attempts and
+  # the fallback all failed on the same HTTP 429, ~18 minutes per round).
+  attempt_broker_rejections_before="0"
+  if command -v model_provider_broker_policy_rejection_count >/dev/null 2>&1; then
+    attempt_broker_rejections_before="$(model_provider_broker_policy_rejection_count 2>/dev/null || echo 0)"
+  fi
+
   tmp_output="$(mktemp)"
   tmp_err="$(mktemp)"
 
@@ -1967,10 +2397,17 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   editor_start="$(date +%s)"
   codex_pid_file="$(mktemp /tmp/codex_pid_editor.XXXXXX)"
   stall_status_file="$(mktemp /tmp/editor_stall_status.XXXXXX)"
+  process_group_file=""
+  # The process-group ledger proves an unprivileged-identity editor stopped;
+  # it applies only when setup_editor_isolation armed that identity.
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ] && [ "${EDITOR_ISOLATION_ACTIVE}" = "true" ]; then
+    process_group_file="$(mktemp "${RUNTIME_DIR}/editor_process_group.XXXXXX")"
+    chmod 0600 -- "${process_group_file}"
+    EDITOR_ISOLATION_PROCESS_GROUP_FILE="${process_group_file}"
+  fi
 
   # ── Background watchdog: heartbeat + network-activity aware ──
   (
-    wd_iter=0
     while true; do
       sleep 15
       wd_now="$(date +%s)"
@@ -1982,15 +2419,22 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       # Hard wall-time limit (budget-aware)
       if [ "${wall_secs}" -ge "${attempt_wall}" ]; then
         echo "Editor killed — wall time ${attempt_wall}s exceeded (attempt ${attempt})." >&2
-        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-        if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+        cpid=""
+        EDITOR_ISOLATION_EXPECTED_GUARD_UID=""
+        EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS=""
+        read -r cpid EDITOR_ISOLATION_EXPECTED_GUARD_UID EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS < "${codex_pid_file}" || true
+        terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" \
+          || echo "::error::EDITOR_PROCESS_GROUP_TERMINATION_FAILED attempt=${attempt} trigger=wall_time; the post-attempt survivor check refuses workspace ownership restoration." >&2
         rm -f "${hb_file}"
         exit 143
       fi
 
       # Idle check with network-activity probe
       if [ "${idle_secs}" -ge "${EDITOR_IDLE_TIMEOUT}" ]; then
-        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        cpid=""
+        EDITOR_ISOLATION_EXPECTED_GUARD_UID=""
+        EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS=""
+        read -r cpid EDITOR_ISOLATION_EXPECTED_GUARD_UID EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS < "${codex_pid_file}" || true
         net_active=false
         probe_pid="$(resolve_editor_network_probe_pid "${cpid}" || true)"
         if [ -n "${probe_pid}" ] && [ -d "/proc/${probe_pid}/fd" ]; then
@@ -2005,25 +2449,13 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
           printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
         else
           echo "Editor killed — no output for ${idle_secs}s and no active network connections (idle limit: ${EDITOR_IDLE_TIMEOUT}s, attempt ${attempt})." >&2
-          if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+          terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" \
+            || echo "::error::EDITOR_PROCESS_GROUP_TERMINATION_FAILED attempt=${attempt} trigger=idle; the post-attempt survivor check refuses workspace ownership restoration." >&2
           rm -f "${hb_file}"
           exit 142
         fi
       fi
 
-      # PR state check — abort if PR was merged/closed (~every 2 min)
-      wd_iter=$((wd_iter + 1))
-      if [ $((wd_iter % 8)) -eq 0 ]; then
-        pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
-        if [ "${pr_state}" != "open" ]; then
-          echo "Editor aborted — PR #${PR_NUMBER} is ${pr_state} (attempt ${attempt})." >&2
-          touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
-          cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-          if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
-          rm -f "${hb_file}"
-          exit 144
-        fi
-      fi
     done
   ) &
   wd_pid=$!
@@ -2096,10 +2528,11 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   emit_editor_substate "StreamingTurn" "${attempt}"
   (
     trap '' PIPE
-    PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
+    PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}" "${process_group_file}"
   ) &
   codex_bg_pid=$!
-  echo "${codex_bg_pid}" > "${codex_pid_file}"
+  codex_guard_identity="$(_editor_process_identity "${codex_bg_pid}" || true)"
+  printf '%s %s\n' "${codex_bg_pid}" "${codex_guard_identity}" > "${codex_pid_file}"
   cmd_rc=0
   wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
   # Drain the stderr FIFO, but never block on it indefinitely. The
@@ -2147,6 +2580,30 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # already exited is the expected outcome on every watchdog-kill path.
   kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
+  if [ -n "${process_group_file}" ]; then
+    if [ ! -s "${process_group_file}" ] \
+      && { [ "${cmd_rc}" -eq 78 ] || [ "${cmd_rc}" -eq 79 ] \
+        || { [ "${cmd_rc}" -eq 0 ] \
+          && grep -qxF 'state=unguarded' "${stall_status_file}" 2>/dev/null; } \
+        || { [ "${cmd_rc}" -eq 126 ] \
+          && grep -qxF 'state=isolated_guard_unavailable' "${stall_status_file}" 2>/dev/null; }; }; then
+      : # A documented pre-launch or Python-less path created no editor group ledger.
+      if [ "${cmd_rc}" -eq 0 ] || [ "${cmd_rc}" -eq 126 ]; then
+        : > "${stall_status_file}"
+      fi
+    elif [ ! -s "${process_group_file}" ]; then
+      echo "::error::Editor attempt ${attempt}: the stall guard published no process-group ledger (exit=${cmd_rc}); cannot prove the isolated editor stopped, refusing workspace ownership restoration." >&2
+      exit 80
+    elif ! editor_isolation_verify_process_group_stopped "${process_group_file}" "${EDITOR_ISOLATION_USER}" "${codex_bg_pid}"; then
+      echo "::error::Editor attempt ${attempt} left an isolated process-group survivor; refusing workspace ownership restoration." >&2
+      exit 80
+    fi
+    rm -f -- "${process_group_file}"
+    EDITOR_ISOLATION_PROCESS_GROUP_FILE=""
+  fi
+  if ! cleanup_editor_isolation; then
+    exit 80
+  fi
   if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
     echo "::error::Review sandbox result transfer was incomplete; refusing editor fallback." >&2
     exit 1
@@ -2200,13 +2657,9 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     exit 1
   fi
 
-  if [ "${cmd_rc}" -ne 0 ] && [ "${cmd_rc}" -ne 78 ] && [ "${attempt}" -eq "${editor_max_attempts}" ]; then
-    opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" attempt_failed || true
-  fi
-
   if [ "${cmd_rc}" -eq 78 ]; then
     echo "Editor attempt ${attempt}: workspace_safety_violation; aborting without retry."
-    if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    if [ -z "${PR_NUMBER:-}" ] || [ ! -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
       emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
     fi
     cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
@@ -2518,7 +2971,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       cat "${tmp_err}"
     fi
   fi
-  if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+  if [ -z "${PR_NUMBER:-}" ] || [ ! -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
     case "${stall_state}:${cmd_rc}" in
       killed:*|*:137|*:142)
         emit_editor_substate "Stalled" "${attempt}" "${tmp_err}"
@@ -2533,6 +2986,38 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   fi
   cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
   cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+  # ── Broker policy-rejection short-circuit ──
+  # A failed attempt during which the broker recorded new 4xx rejections
+  # (see the snapshot above) cannot be helped by another attempt or by the
+  # fallback model: the same broker instance answers them, and its policy
+  # decision is deterministic for the rest of this run. Log the rejection,
+  # emit the broker-specific failure class on non-final attempts, preserve
+  # the existing attempt_failed class on the final attempt, and leave the
+  # loop. The fallback summary below still classifies this as
+  # recoverable_failure (a fresh run gets a fresh broker), so the workflow's
+  # partial-finalize handling and no-op validator sentinels stay unchanged.
+  attempt_broker_rejections_after="${attempt_broker_rejections_before}"
+  if command -v model_provider_broker_policy_rejection_count >/dev/null 2>&1; then
+    attempt_broker_rejections_after="$(model_provider_broker_policy_rejection_count 2>/dev/null || echo "${attempt_broker_rejections_before}")"
+  fi
+  if [ "${cmd_rc}" -ne 0 ] \
+    && [ "${attempt_broker_rejections_after}" -gt "${attempt_broker_rejections_before}" ] 2>/dev/null; then
+    attempt_broker_last_rejection=""
+    if command -v model_provider_broker_last_policy_rejection >/dev/null 2>&1; then
+      attempt_broker_last_rejection="$(model_provider_broker_last_policy_rejection 2>/dev/null || true)"
+    fi
+    echo "EDITOR_BROKER_POLICY_REJECTION attempt=${attempt} model=${EDITOR_ATTEMPT_MODEL} rc=${cmd_rc} new_rejections=$(( attempt_broker_rejections_after - attempt_broker_rejections_before )) total_rejections=${attempt_broker_rejections_after} ${attempt_broker_last_rejection:-status=unknown} — the model provider broker rejected this attempt's requests; further attempts share the same broker policy, breaking out of the retry loop."
+    if [ "${attempt}" -lt "${editor_max_attempts}" ]; then
+      opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" broker_policy_rejection || true
+    else
+      opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" attempt_failed || true
+    fi
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
+    break
+  fi
+  if [ "${cmd_rc}" -ne 0 ] && [ "${cmd_rc}" -ne 78 ] && [ "${attempt}" -eq "${editor_max_attempts}" ]; then
+    opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" attempt_failed || true
+  fi
   # ── Safety-policy refusal short-circuit ──
   # An OpenAI-style refusal as the final-channel output (despite the
   # cache-busting nonce above sometimes failing to defeat very sticky
@@ -2554,7 +3039,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 done
 
 # If PR was closed/merged during editor execution, exit cleanly
-if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+if [ -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
   echo "PR #${PR_NUMBER} was closed/merged — skipping editor fallback."
   echo "PR_CLOSED=true" >> "$GITHUB_ENV"
   exit 0

@@ -7,9 +7,12 @@ lineage handling, compaction, and branch-safe persistence for `ai-memory`.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import fcntl
 import hashlib
+import importlib
+import importlib.util
 import json
 import logging
 import math
@@ -29,33 +32,66 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-try:
-    from openrouter_prompt_cache import add_ephemeral_cache_breakpoint, should_retry_without_breakpoint
-except ModuleNotFoundError:
-    from scripts.openrouter_prompt_cache import add_ephemeral_cache_breakpoint, should_retry_without_breakpoint
+
+def _import_support_module(module_name: str) -> Any:
+    """Import a support dependency and enforce immutable provenance when requested."""
+    if os.environ.get("AI_MEMORY_STRICT_IMMUTABLE_SUPPORT", "").lower() == "true":
+        support_scripts_value = os.environ.get("SUPPORT_SCRIPTS_DIR", "")
+        if not support_scripts_value:
+            raise RuntimeError("strict immutable-support mode requires SUPPORT_SCRIPTS_DIR")
+        support_scripts_path = Path(support_scripts_value).resolve(strict=True)
+        module_candidate_path = support_scripts_path / f"{module_name}.py"
+        if module_candidate_path.is_symlink():
+            raise RuntimeError(f"support module {module_name} must not be a symlink")
+        module_file_path = module_candidate_path.resolve(strict=True)
+        if module_file_path.parent != support_scripts_path or not module_file_path.is_file():
+            raise RuntimeError(
+                f"support module {module_name} resolved outside immutable support directory"
+            )
+        module_spec = importlib.util.spec_from_file_location(module_name, module_file_path)
+        if module_spec is None or module_spec.loader is None:
+            raise RuntimeError(f"support module {module_name} has no loadable file specification")
+        imported_module = importlib.util.module_from_spec(module_spec)
+        previous_module = sys.modules.get(module_name)
+        sys.modules[module_name] = imported_module
+        try:
+            module_spec.loader.exec_module(imported_module)
+        except BaseException:
+            if previous_module is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous_module
+            raise
+        return imported_module
+
+    try:
+        imported_module = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        imported_module = importlib.import_module(f"scripts.{module_name}")
+    return imported_module
+
+
+_openrouter_prompt_cache_module = _import_support_module("openrouter_prompt_cache")
+add_ephemeral_cache_breakpoint = _openrouter_prompt_cache_module.add_ephemeral_cache_breakpoint
+should_retry_without_breakpoint = _openrouter_prompt_cache_module.should_retry_without_breakpoint
 
 try:
-    from semantic_cache import (
-        DEFAULT_EMBEDDING_BASE_URL as _SEARCH_EMBEDDING_BASE_URL_DEFAULT,
-        DEFAULT_EMBEDDING_MODEL as _SEARCH_EMBEDDING_MODEL_DEFAULT,
-    )
+    _semantic_cache_module = _import_support_module("semantic_cache")
+    _SEARCH_EMBEDDING_BASE_URL_DEFAULT = _semantic_cache_module.DEFAULT_EMBEDDING_BASE_URL
+    _SEARCH_EMBEDDING_MODEL_DEFAULT = _semantic_cache_module.DEFAULT_EMBEDDING_MODEL
 except ModuleNotFoundError:
-    try:
-        from scripts.semantic_cache import (
-            DEFAULT_EMBEDDING_BASE_URL as _SEARCH_EMBEDDING_BASE_URL_DEFAULT,
-            DEFAULT_EMBEDDING_MODEL as _SEARCH_EMBEDDING_MODEL_DEFAULT,
-        )
-    except ModuleNotFoundError:
-        _SEARCH_EMBEDDING_MODEL_DEFAULT = "openai/text-embedding-3-small"
-        _SEARCH_EMBEDDING_BASE_URL_DEFAULT = "https://openrouter.ai/api/v1"
+    if os.environ.get("AI_MEMORY_STRICT_IMMUTABLE_SUPPORT", "").lower() == "true":
+        raise
+    _SEARCH_EMBEDDING_MODEL_DEFAULT = "openai/text-embedding-3-small"
+    _SEARCH_EMBEDDING_BASE_URL_DEFAULT = "https://openrouter.ai/api/v1"
 
 try:
-    from memory_injection_patterns import scan as _scan_memory_injection_patterns
+    _memory_injection_patterns_module = _import_support_module("memory_injection_patterns")
+    _scan_memory_injection_patterns = _memory_injection_patterns_module.scan
 except ModuleNotFoundError:
-    try:
-        from scripts.memory_injection_patterns import scan as _scan_memory_injection_patterns
-    except ModuleNotFoundError:
-        _scan_memory_injection_patterns = None
+    if os.environ.get("AI_MEMORY_STRICT_IMMUTABLE_SUPPORT", "").lower() == "true":
+        raise
+    _scan_memory_injection_patterns = None
 
 _log = logging.getLogger(__name__)
 
@@ -3108,6 +3144,19 @@ def _git_subprocess_env() -> dict[str, str]:
     env = dict(os.environ)
     for name in _GIT_LOCATION_ENV_VARS:
         env.pop(name, None)
+    # Authenticate networked git subprocesses without persisting a credential
+    # helper or embedding a token in the clone URL. Git ignores this
+    # command-scoped header for local/file remotes.
+    token = env.get("GH_PAT") or env.get("GH_TOKEN") or ""
+    if token:
+        auth = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+        try:
+            config_count = int(env.get("GIT_CONFIG_COUNT", "0"))
+        except ValueError:
+            config_count = 0
+        env["GIT_CONFIG_COUNT"] = str(config_count + 1)
+        env[f"GIT_CONFIG_KEY_{config_count}"] = "http.extraHeader"
+        env[f"GIT_CONFIG_VALUE_{config_count}"] = f"Authorization: Basic {auth}"
     return env
 
 
@@ -3159,18 +3208,9 @@ def _file_lock(lock_name: str) -> Any:
 
 
 def _inject_token_into_url(url: str, token: str) -> str:
-    """Embed a GitHub token into an HTTPS origin URL for authenticated clones.
-
-    Converts ``https://github.com/owner/repo`` →
-    ``https://x-access-token:TOKEN@github.com/owner/repo``.
-    SSH and file URLs are returned unchanged.
-    """
-    if not url.startswith("https://"):
-        return url
-    # Already has embedded credentials — leave as-is.
-    if "@" in url.split("//", 1)[-1].split("/", 1)[0]:
-        return url
-    return url.replace("https://", f"https://x-access-token:{token}@", 1)
+    """Compatibility shim that always returns a credential-free URL."""
+    del token
+    return re.sub(r"^(https?://)[^/@]+@", r"\1", url)
 
 
 def _resolve_origin_url(repo_root: Path) -> str:
@@ -3195,14 +3235,10 @@ def _resolve_origin_url(repo_root: Path) -> str:
         url = process.stdout.strip()
     else:
         url = str(repo_root.resolve())
-    # When running in CI the origin URL from actions/checkout is bare HTTPS
-    # (https://github.com/owner/repo) with no embedded credentials.  Subprocess
-    # git-clone calls therefore fail with "could not read Username".  If a
-    # GH_TOKEN env-var is available, inject it so clones authenticate properly.
-    token = os.environ.get("GH_TOKEN", "")
-    if token and url.startswith("https://"):
-        url = _inject_token_into_url(url, token)
-    return url
+    # Older workflow runs may have persisted userinfo in origin. Never copy it
+    # into a subprocess argument or error message; authentication is supplied by
+    # `_git_subprocess_env` for each child process instead.
+    return re.sub(r"^(https?://)[^/@]+@", r"\1", url)
 
 
 def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:

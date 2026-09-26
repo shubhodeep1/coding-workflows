@@ -12,6 +12,9 @@ import json
 import os
 import subprocess
 import tempfile
+import base64
+import hashlib
+import hmac
 from pathlib import Path
 
 import yaml
@@ -19,6 +22,63 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "apply_analysis_on_main.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "promote-main-to-stable.yml"
+MARKER_KEY = b"k" * 32
+MARKER_KEYRING = json.dumps({
+	"schema_version": "orchestrator_state_auth_keyring.v1",
+	"active_key_id": "test-key",
+	"keys": [{"key_id": "test-key", "key_base64": base64.b64encode(MARKER_KEY).decode("ascii")}],
+})
+
+
+def _signed_marker_comment(source_doc: str, tracking_issue: int = 700) -> dict:
+	document = {
+		"schema_version": "comprehensive_cycle_marker.v1",
+		"algorithm": "hmac-sha256",
+		"key_id": "test-key",
+		"producer_id": 41898282,
+		"repository": "owner/repo",
+		"tracking_issue": tracking_issue,
+		"source_doc": source_doc,
+		"role": "proving",
+		"dispatcher_run_id": 42,
+		"smoke_run_id": 500,
+		"smoke_actor_id": 1234,
+		"smoke_workflow_path": ".github/workflows/test-and-mark-stable.yml",
+		"smoke_event": "workflow_dispatch",
+		"smoke_display_title": "Test & Mark Stable Release [cycle:42;gate-only:true;skip-e2e:false;dry-run:false;test-repo:;review-workflow:internal-review.yml]",
+		"smoke_inputs": {
+			"gate_only": "true",
+			"gate_cycle_id": "42",
+			"skip_e2e": "false",
+			"dry_run": "false",
+			"test_repo": "",
+			"review_workflow_file": "internal-review.yml",
+		},
+		"smoke_conclusion": "success",
+		"smoke_head_sha": "b" * 40,
+		"cycle_baseline_sha": "c" * 40,
+		"promote_sha": "",
+		"proving_merge_sha": "",
+		"signature": "0" * 64,
+	}
+	unsigned = dict(document)
+	unsigned.pop("signature")
+	payload = json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+	document["signature"] = hmac.new(
+		MARKER_KEY,
+		b"coding-workflows/comprehensive-cycle-marker/v1\n" + payload,
+		hashlib.sha256,
+	).hexdigest()
+	return {
+		"body": (
+			f"apply-analysis-source-doc: {source_doc}\n"
+			"<!-- COMPREHENSIVE_CYCLE_MARKER_V1\n"
+			+ json.dumps(document, sort_keys=True, separators=(",", ":"))
+			+ "\nCOMPREHENSIVE_CYCLE_MARKER_V1 -->"
+		),
+		"user": {"login": "github-actions[bot]", "id": 41898282},
+		"author_association": "NONE",
+	}
 
 MOCK_GH = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -83,6 +143,10 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, docs: list[s
 	(repo / "analysis").mkdir()
 	# The script cds to its own parent's parent, so install it inside the temp repo.
 	(repo / "scripts" / "apply_analysis_on_main.sh").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+	(repo / "scripts" / "orchestrate_state_v2.py").write_text(
+		(REPO_ROOT / "scripts" / "orchestrate_state_v2.py").read_text(encoding="utf-8"),
+		encoding="utf-8",
+	)
 	for doc in docs or []:
 		(repo / doc).write_text("# rec\n", encoding="utf-8")
 	if report is not None:
@@ -106,6 +170,11 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, docs: list[s
 			"GITHUB_RUN_ID": "42",
 			"GITHUB_REF_NAME": "main",
 			"GITHUB_OUTPUT": str(output_file),
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": MARKER_KEYRING,
+			"APPLY_ANALYSIS_CYCLE_BASELINE_SHA": "c" * 40,
+			"APPLY_ANALYSIS_SMOKE_SHA": "b" * 40,
+			"APPLY_ANALYSIS_SMOKE_RUN_ID": "500",
+			"APPLY_ANALYSIS_SMOKE_ACTOR_ID": "1234",
 			"PYTHONDONTWRITEBYTECODE": "1",
 		}
 	)
@@ -164,6 +233,7 @@ def test_dispatches_oldest_unprocessed_doc_bound_by_label_and_marker_inputs() ->
 	state = {
 		"open_tracking": [_tracking(3)],
 		"search_hits": {"analysis/workflow-optimization-2026-08-30.md": 1},
+		"issue_comments": [_signed_marker_comment("analysis/workflow-optimization-2026-08-30.md")],
 	}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(
@@ -215,7 +285,7 @@ def test_untrusted_marker_comment_does_not_mark_a_doc_as_dispatched() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state, docs=docs)
 	assert proc.returncode == 0, proc.stderr + proc.stdout
-	assert "only in a comment from an untrusted author" in proc.stderr
+	assert "only in unauthenticated comments" in proc.stderr
 	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md" in proc.stdout
 	assert len(final["dispatches"]) == 1
 
@@ -260,7 +330,11 @@ def test_list_only_reports_unprocessed_docs_without_dispatching() -> None:
 		"analysis/workflow-optimization-2026-09-03.md",
 	]
 	report = "- `analysis/workflow-optimization-2026-08-30.md`\n"
-	state = {"open_tracking": [_tracking(7, "ai:comprehensive-test-pending")], "search_hits": {"analysis/workflow-optimization-2026-09-01.md": 1}}
+	state = {
+		"open_tracking": [_tracking(7, "ai:comprehensive-test-pending")],
+		"search_hits": {"analysis/workflow-optimization-2026-09-01.md": 1},
+		"issue_comments": [_signed_marker_comment("analysis/workflow-optimization-2026-09-01.md")],
+	}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state, docs=docs, report=report, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
 	assert proc.returncode == 0, proc.stderr
@@ -319,6 +393,7 @@ def test_promote_workflow_cycle_job_runs_the_cycle_script_daily() -> None:
 	assert run_step["env"]["PROMOTE_CYCLE_MAX_ATTEMPTS"] == "${{ vars.PROMOTE_CYCLE_MAX_ATTEMPTS || '3' }}"
 	assert 18000 + 1800 < cycle["timeout-minutes"] * 60
 	assert run_step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT || github.token }}"
+	assert run_step["env"]["ORCHESTRATOR_STATE_AUTH_KEYRING"] == "${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}"
 	promote = wf["jobs"]["promote"]
 	assert promote["if"] == "github.event_name == 'workflow_dispatch'"
 	assert promote["concurrency"] == {"group": "promote-main-to-stable", "cancel-in-progress": False}
@@ -332,7 +407,7 @@ def test_release_gate_only_mode_contract() -> None:
 	gate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8"))
 	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_only"]["default"] is False
 	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_cycle_id"]["default"] == ""
-	assert "[cycle:{0}]" in gate["run-name"]
+	assert "[cycle:{0};gate-only:{1};skip-e2e:{2};dry-run:{3};test-repo:{4};review-workflow:{5}]" in gate["run-name"]
 	assert gate["jobs"]["release"]["if"] == "${{ success() && !inputs.gate_only }}"
 	assert "!inputs.gate_only" in gate["jobs"]["sync-to-main"]["if"]
 	source_run = gate["jobs"]["source"]["steps"][0]["run"]
@@ -351,16 +426,26 @@ def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
 	inputs = orchestrate["on"]["workflow_call"]["inputs"]
 	assert inputs["tracking_labels"]["default"] == ""
 	assert inputs["tracking_comment"]["default"] == ""
+	assert orchestrate["on"]["workflow_call"]["secrets"]["ORCHESTRATOR_STATE_AUTH_KEYRING"]["required"] is False
 	internal = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "internal-orchestrate.yml").read_text(encoding="utf-8"))
 	assert internal["jobs"]["orchestrate"]["with"]["tracking_labels"] == "${{ inputs.tracking_labels }}"
 	assert internal["jobs"]["orchestrate"]["with"]["tracking_comment"] == "${{ inputs.tracking_comment }}"
 	text = (REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8")
 	assert "TRACKING_LABELS_INPUT: ${{ inputs.tracking_labels }}" in text
-	assert "source scripts/label_helpers.sh" in text.split("- name: Create tracking issue", 1)[1]
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"' in text.split("- name: Create tracking issue", 1)[1]
 	assert "TRACKING_ISSUE_COMMENT_POSTED" in text
+	assert "TRACKING_COMMENT_TOKEN: ${{ github.token }}" in text
+	assert "TRACKING_COMMENT_CALLER_ACTOR_ID: ${{ github.actor_id }}" in text
+	assert "orchestrate_lib.py orchestrate_state_v2.py render_prompt.sh" in text
+	assert 'GH_TOKEN="${TRACKING_COMMENT_TOKEN}" gh_retry gh api' in text
 	# Bindings are all-or-nothing: a failed label or marker comment closes the
 	# freshly created issue and fails the run so the dispatcher can retry.
 	create_step = text.split("- name: Create tracking issue", 1)[1].split("- name: Create integration branch", 1)[0]
+	assert 'orchestrate_state_v2.py" select-comprehensive-marker' in create_step
+	assert 'orchestrate_state_v2.py" bind-comprehensive-marker' in create_step
+	assert '--tracking-issue "${TRACKING_ISSUE_NUMBER}"' in create_step
+	assert ".marker.smoke_actor_id // 0" in create_step
+	assert '_binding_failed_stage="comment-auth"' in create_step
 	assert "TRACKING_ISSUE_BINDING_FAILED" in create_step
 	assert "gh issue close" in create_step
 	assert '--remove-label "${TRACKING_LABELS_INPUT}"' in create_step

@@ -36,6 +36,7 @@ IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
 	full_env = os.environ.copy()
+	full_env.setdefault("SUPPORT_SCRIPTS_DIR", str(REPO_ROOT / "scripts"))
 	full_env["PYTHONDONTWRITEBYTECODE"] = "1"
 	full_env["GITHUB_REPOSITORY"] = "owner/repo"
 	if env:
@@ -682,6 +683,8 @@ def _run_safety_check(
 	github_output.write_text("", encoding="utf-8")
 
 	env = os.environ.copy()
+
+	env.setdefault("SUPPORT_SCRIPTS_DIR", str(REPO_ROOT / "scripts"))
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
 	env["ISSUE_NUMBER"] = issue_number
@@ -728,6 +731,8 @@ def _run_plan_existing_pr_gate(
 	github_env.write_text("", encoding="utf-8")
 
 	env = os.environ.copy()
+
+	env.setdefault("SUPPORT_SCRIPTS_DIR", str(REPO_ROOT / "scripts"))
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
 	env["ISSUE_NUMBER"] = issue_number
@@ -1146,6 +1151,7 @@ def test_plan_gate_fails_closed_when_timeline_lookup_errors():
 		github_env = tmp / "github_env"
 		github_env.write_text("", encoding="utf-8")
 		env = os.environ.copy()
+		env.setdefault("SUPPORT_SCRIPTS_DIR", str(REPO_ROOT / "scripts"))
 		env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
 		env["ISSUE_NUMBER"] = "4073"
 		env["GITHUB_ENV"] = str(github_env)
@@ -1214,6 +1220,8 @@ def _run_create_pr_recovery(
 	github_output.write_text("", encoding="utf-8")
 
 	env = os.environ.copy()
+
+	env.setdefault("SUPPORT_SCRIPTS_DIR", str(REPO_ROOT / "scripts"))
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
 	env["ISSUE_NUMBER"] = issue_number

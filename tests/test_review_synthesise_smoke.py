@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import inspect
 import json
 import os
@@ -235,339 +236,79 @@ def _make_issue(issue_id: str, line_start: int, line_end: int, symptom: str) -> 
 	}
 
 
-def test_review_synthesise_smoke_writes_manifest_and_cached_wrappers() -> None:
-	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_ok_") as td:
-		workspace = Path(td)
-		runtime_dir = workspace / "runtime"
-		runtime_dir.mkdir(parents=True, exist_ok=True)
-		mock_bin_dir = workspace / "mock_bin"
-		head_sha = _seed_repo_with_autofix_commit(workspace)
-		_write_judge_artifact(
-			workspace,
-			head_sha,
-			[
-				_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix"),
-				_make_issue("src/module.py:4:stale-value", 4, 4, "Fallback branch still uses stale value"),
-			],
-		)
-		_install_mock_codex(
-			mock_bin_dir,
-			stdout_text=json.dumps(
-				[
-					{
-						"path": "validation/tests/suggested_branch_check.sh",
-						"content": "python3 - <<'PY'\nprint('still present')\nraise SystemExit(1)\nPY",
-						"expected_to_fail_until_fixed": True,
-					},
-					{
-						"path": "validation/tests/suggested_stale_value.sh",
-						"content": "node - <<'NODE'\nconsole.log('cleared')\nprocess.exit(0)\nNODE",
-						"expected_to_fail_until_fixed": True,
-					},
-				]
-			)
-			+ "\n",
-		)
-		env = _base_env(workspace, runtime_dir, mock_bin_dir)
-
-		result = subprocess.run(
-			["bash", str(SYNTH_SCRIPT)],
-			cwd=workspace,
-			env=env,
-			capture_output=True,
-			text=True,
-			timeout=60,
-		)
-
-		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
-		combined_output = result.stdout + result.stderr
-		assert result.returncode == 0, combined_output
-		assert manifest.exists(), combined_output
-		payload = json.loads(manifest.read_text(encoding="utf-8"))
-		assert payload["round"] == 1
-		assert payload["head_sha"] == head_sha
-		assert payload["language"] == "python"
-		assert len(payload["files"]) == 2
-		assert [row["slug"] for row in payload["files"]] == [
-			"src_module_py_2_branch_check",
-			"src_module_py_4_stale_value",
-		]
-		assert payload["files"][0]["target_relpath"] == "validation/tests/synth_round_1_src_module_py_2_branch_check.sh"
-		assert payload["files"][1]["target_relpath"] == "validation/tests/synth_round_1_src_module_py_4_stale_value.sh"
-		for row in payload["files"]:
-			wrapper_path = workspace / row["cache_relpath"]
-			assert wrapper_path.exists(), wrapper_path
-			wrapper_text = wrapper_path.read_text(encoding="utf-8")
-			assert "BEHAVIOURAL_SMOKE_PRESENT_PASSED" in wrapper_text
-			assert "BEHAVIOURAL_SMOKE_PRESENT_FAILED" in wrapper_text
-			assert "BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE" in wrapper_text
-		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=2 round=1 language=python" in combined_output
-
-
-def test_review_synthesise_smoke_fails_open_on_malformed_output() -> None:
-	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_failopen_") as td:
-		workspace = Path(td)
-		runtime_dir = workspace / "runtime"
-		runtime_dir.mkdir(parents=True, exist_ok=True)
-		mock_bin_dir = workspace / "mock_bin"
-		head_sha = _seed_repo_with_autofix_commit(workspace)
-		_write_judge_artifact(
-			workspace,
-			head_sha,
-			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
-		)
-		_install_mock_codex(mock_bin_dir, stdout_text='{"action":"fix"}\n')
-		env = _base_env(workspace, runtime_dir, mock_bin_dir)
-
-		result = subprocess.run(
-			["bash", str(SYNTH_SCRIPT)],
-			cwd=workspace,
-			env=env,
-			capture_output=True,
-			text=True,
-			timeout=60,
-		)
-
-		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
-		combined_output = result.stdout + result.stderr
-		assert result.returncode == 0, combined_output
-		assert not manifest.exists(), combined_output
-		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output
-
-
-def test_review_synthesise_smoke_surfaces_codex_stderr_on_failure() -> None:
-	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_stderr_") as td:
-		workspace = Path(td)
-		runtime_dir = workspace / "runtime"
-		runtime_dir.mkdir(parents=True, exist_ok=True)
-		mock_bin_dir = workspace / "mock_bin"
-		head_sha = _seed_repo_with_autofix_commit(workspace)
-		_write_judge_artifact(
-			workspace,
-			head_sha,
-			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
-		)
-		_install_mock_codex(
-			mock_bin_dir,
-			stdout_text="",
-			stderr_text="mock model lookup failed\n",
-			exit_code=1,
-		)
-		env = _base_env(workspace, runtime_dir, mock_bin_dir)
-
-		result = subprocess.run(
-			["bash", str(SYNTH_SCRIPT)],
-			cwd=workspace,
-			env=env,
-			capture_output=True,
-			text=True,
-			timeout=60,
-		)
-
-		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
-		combined_output = result.stdout + result.stderr
-		assert result.returncode == 0, combined_output
-		assert not manifest.exists(), combined_output
-		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=llm_failed round=1" in combined_output
-		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_BEGIN" in result.stderr
-		assert "mock model lookup failed" in result.stderr
-		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_END" in result.stderr
-
-
-def test_review_synthesise_smoke_fails_open_on_wrong_item_count() -> None:
-	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_count_mismatch_") as td:
-		workspace = Path(td)
-		runtime_dir = workspace / "runtime"
-		runtime_dir.mkdir(parents=True, exist_ok=True)
-		mock_bin_dir = workspace / "mock_bin"
-		head_sha = _seed_repo_with_autofix_commit(workspace)
-		_write_judge_artifact(
-			workspace,
-			head_sha,
-			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
-		)
-		_install_mock_codex(
-			mock_bin_dir,
-			stdout_text=json.dumps(
-				[
-					{
-						"path": "validation/tests/first.sh",
-						"content": "echo first\nexit 1",
-						"expected_to_fail_until_fixed": True,
-					},
-					{
-						"path": "validation/tests/second.sh",
-						"content": "echo second\nexit 1",
-						"expected_to_fail_until_fixed": True,
-					},
-				]
-			)
-			+ "\n",
-		)
-		env = _base_env(workspace, runtime_dir, mock_bin_dir)
-
-		result = subprocess.run(
-			["bash", str(SYNTH_SCRIPT)],
-			cwd=workspace,
-			env=env,
-			capture_output=True,
-			text=True,
-			timeout=60,
-		)
-
-		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
-		combined_output = result.stdout + result.stderr
-		assert result.returncode == 0, combined_output
-		assert not manifest.exists(), combined_output
-		assert "could not validate synthesis output" in combined_output
-		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output
-
-
-def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
-	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_unsafe_") as td:
-		workspace = Path(td)
-		runtime_dir = workspace / "runtime"
-		runtime_dir.mkdir(parents=True, exist_ok=True)
-		mock_bin_dir = workspace / "mock_bin"
-		head_sha = _seed_repo_with_autofix_commit(workspace)
-		_write_judge_artifact(
-			workspace,
-			head_sha,
-			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
-		)
-		env = _base_env(workspace, runtime_dir, mock_bin_dir)
-		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
-
-		for content in (
-			'printf hello#;eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'AWK=eval\n$AWK "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'coproc eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'coproc\\\n eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'coproc /bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
-			'coproc env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'coproc\\\n env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'/bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
-			'/usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
-			'bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
-			'eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'exec /bin/false\nbehavioural_smoke_inconclusive "unsafe"',
-			'env -S "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
-			'env --split-string="printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
-			'source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
-			'. ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
-			'cmd & eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'cmd |& eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'> /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'2>/dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'env -u SOME_VAR eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'sudo eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'sudo -u root eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'time eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'time -o /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'time --format %E eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'time -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'time /usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'! eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'timeout 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'timeout 10s eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'timeout -s KILL 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'xargs eval\nbehavioural_smoke_inconclusive "unsafe"',
-			'xargs -d , eval\nbehavioural_smoke_inconclusive "unsafe"',
-			'command -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'builtin -- source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
-			'if eval "$PAYLOAD"; then behavioural_smoke_inconclusive "unsafe"; fi',
-		):
-			_install_mock_codex(
-				mock_bin_dir,
-				stdout_text=json.dumps(
-					[
-						{
-							"path": "validation/tests/unsafe.sh",
-							"content": content,
-							"expected_to_fail_until_fixed": True,
-						}
-					]
-				)
-				+ "\n",
-			)
-
-			result = subprocess.run(
-				["bash", str(SYNTH_SCRIPT)],
-				cwd=workspace,
-				env=env,
-				capture_output=True,
-				text=True,
-				timeout=60,
-			)
-
-			combined_output = result.stdout + result.stderr
-			assert result.returncode == 0, f"{content}: {combined_output}"
-			assert "could not validate synthesis output" in combined_output, f"{content}: {combined_output}"
-			assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output, f"{content}: {combined_output}"
-			assert not manifest.exists(), f"{content}: {combined_output}"
-
-
-def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> None:
-	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_lang_") as td:
-		workspace = Path(td)
-		runtime_dir = workspace / "runtime"
-		runtime_dir.mkdir(parents=True, exist_ok=True)
-		mock_bin_dir = workspace / "mock_bin"
-		head_sha = _seed_repo_with_autofix_commit(workspace)
-		(workspace / "requirements-dev.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
-		_write_judge_artifact(workspace, head_sha, [])
-		_install_mock_codex(mock_bin_dir, stdout_text="[]\n")
-		env = _base_env(workspace, runtime_dir, mock_bin_dir)
-		env["BEHAVIOURAL_SMOKE_LANG"] = " pythoon \n second-line "
-
-		result = subprocess.run(
-			["bash", str(SYNTH_SCRIPT)],
-			cwd=workspace,
-			env=env,
-			capture_output=True,
-			text=True,
-			timeout=60,
-		)
-
-		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
-		combined_output = result.stdout + result.stderr
-		assert result.returncode == 0, combined_output
-		payload = json.loads(manifest.read_text(encoding="utf-8"))
-		assert payload["language"] == "python"
-		assert "::warning::Invalid BEHAVIOURAL_SMOKE_LANG 'pythoon%0Asecond-line'; falling back to repo auto-detection." in result.stdout
-		assert "Invalid BEHAVIOURAL_SMOKE_LANG" not in result.stderr
-		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=0 round=1 language=python" in combined_output
-
-
-def test_behavioural_smoke_emit_warning_is_best_effort_when_fd3_is_closed() -> None:
-	function_text = _extract_shell_function(SYNTH_SCRIPT, "behavioural_smoke_emit_warning")
-	result = subprocess.run(
-		[
-			"bash",
-			"-c",
-			"set -euo pipefail\n"
-			"exec 3>&-\n"
-			+ function_text
-			+ "behavioural_smoke_emit_warning $'broken\\nwarning'\n"
-			+ "echo after\n",
-		],
+def _run_synth(workspace: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	clean_env = env.copy()
+	for key in (
+		"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+		"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "BASH_ENV", "ENV",
+	):
+		clean_env.pop(key, None)
+	return subprocess.run(
+		["bash", str(SYNTH_SCRIPT)],
+		cwd=workspace,
+		env=clean_env,
 		capture_output=True,
 		text=True,
 		timeout=60,
 	)
 
-	assert result.returncode == 0, result.stdout + result.stderr
-	assert result.stdout.strip() == "after"
-	assert result.stderr == ""
+
+def _keyring(key_id: str = "active", key: bytes = b"a" * 32) -> str:
+	return json.dumps({
+		"schema_version": "orchestrator_state_auth_keyring.v1",
+		"active_key_id": key_id,
+		"keys": [{"key_id": key_id, "key_base64": base64.b64encode(key).decode("ascii")}],
+	})
 
 
-def test_review_synthesise_smoke_clamps_large_timeout_values() -> None:
-	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_timeout_") as td:
+def _bundle(head_sha: str, assertion: dict[str, object] | None = None) -> dict[str, object]:
+	return {
+		"schema_version": "behavioural_smoke_assertions.v1",
+		"round": 1,
+		"head_sha": head_sha,
+		"language": "python",
+		"assertions": [
+			{
+				"issue_id": "src/module.py:2:branch-check",
+				"file": "src/module.py",
+				"line_start": 2,
+				"line_end": 3,
+				"severity": "must-fix",
+				"assertion": assertion or {
+					"type": "text_absent",
+					"path": "src/module.py",
+					"literal": "if True:",
+					"expected_to_fail_until_fixed": True,
+				},
+			}
+		],
+	}
+
+
+def _sign_bundle(bundle_path: Path, envelope_path: Path, head_sha: str, keyring: str) -> subprocess.CompletedProcess[str]:
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["ORCHESTRATOR_STATE_AUTH_KEYRING"] = keyring
+	return subprocess.run(
+		[
+			"python3", "-I", "-B", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+			"sign-behavioural-smoke", "--bundle-file", str(bundle_path),
+			"--repository", "owner/repo", "--pr-number", "4242", "--head-sha", head_sha,
+			"--round", "1", "--producer-run-id", "9001", "--producer-run-attempt", "1",
+			"--out-file", str(envelope_path),
+		],
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+
+
+def test_review_synthesise_smoke_writes_declarative_bundle_only() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_bundle_") as td:
 		workspace = Path(td)
 		runtime_dir = workspace / "runtime"
-		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runtime_dir.mkdir(parents=True)
 		mock_bin_dir = workspace / "mock_bin"
 		head_sha = _seed_repo_with_autofix_commit(workspace)
 		_write_judge_artifact(
@@ -577,140 +318,287 @@ def test_review_synthesise_smoke_clamps_large_timeout_values() -> None:
 		)
 		_install_mock_codex(
 			mock_bin_dir,
-			stdout_text=json.dumps(
-				[
-					{
-						"path": "validation/tests/suggested_branch_check.sh",
-						"content": "echo still-present\nexit 1",
-						"expected_to_fail_until_fixed": True,
-					}
-				]
-			)
-			+ "\n",
+			stdout_text=json.dumps([{
+				"type": "text_absent",
+				"path": "src/module.py",
+				"literal": "if True:",
+				"expected_to_fail_until_fixed": True,
+			}]) + "\n",
 		)
-		timeout_capture = _install_mock_timeout(mock_bin_dir)
-		env = _base_env(workspace, runtime_dir, mock_bin_dir)
-		env["BEHAVIOURAL_SMOKE_TIMEOUT_S"] = "99999999999999999999"
-		env["MOCK_TIMEOUT_DURATION_FILE"] = str(timeout_capture)
-
-		result = subprocess.run(
-			["bash", str(SYNTH_SCRIPT)],
-			cwd=workspace,
-			env=env,
-			capture_output=True,
-			text=True,
-			timeout=60,
-		)
-
-		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
-		combined_output = result.stdout + result.stderr
-		assert result.returncode == 0, combined_output
-		assert manifest.exists(), combined_output
-		assert timeout_capture.read_text(encoding="utf-8").strip() == "120"
-		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=1 round=1 language=python" in combined_output
+		result = _run_synth(workspace, _base_env(workspace, runtime_dir, mock_bin_dir))
+		bundle_path = workspace / ".ai/review_runtime/pr-4242/round-1/synth/synth_round_1_assertions.json"
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert bundle_path.exists(), result.stdout + result.stderr
+		payload = json.loads(bundle_path.read_text(encoding="utf-8"))
+		assert payload["schema_version"] == "behavioural_smoke_assertions.v1"
+		assert payload["head_sha"] == head_sha
+		assert payload["assertions"][0]["assertion"]["type"] == "text_absent"
+		assert not list(bundle_path.parent.glob("*.sh"))
+		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=1" in result.stdout
 
 
-def test_generated_wrappers_report_pass_fail_and_inconclusive_advisory_states() -> None:
-	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_wrappers_") as td:
+def test_review_synthesise_smoke_rejects_executable_and_unsafe_assertions() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_reject_") as td:
 		workspace = Path(td)
 		runtime_dir = workspace / "runtime"
-		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runtime_dir.mkdir(parents=True)
 		mock_bin_dir = workspace / "mock_bin"
 		head_sha = _seed_repo_with_autofix_commit(workspace)
-		issues = [
-			_make_issue("src/module.py:2:cleared", 2, 2, "Cleared issue"),
-			_make_issue("src/module.py:3:present", 3, 3, "Present issue"),
-			_make_issue("src/module.py:4:unknown", 4, 4, "Unknown issue"),
-		]
-		_write_judge_artifact(workspace, head_sha, issues)
-		_install_mock_codex(
-			mock_bin_dir,
-			stdout_text=json.dumps(
-				[
-					{
-						"path": "validation/tests/cleared.sh",
-						"content": "echo cleared\nexit 0",
-						"expected_to_fail_until_fixed": True,
-					},
-					{
-						"path": "validation/tests/present.sh",
-						"content": "echo still-present\nexit 1",
-						"expected_to_fail_until_fixed": True,
-					},
-					{
-						"path": "validation/tests/unknown.sh",
-						"content": "echo inconclusive\nexit 2",
-						"expected_to_fail_until_fixed": True,
-					},
-				]
-			)
-			+ "\n",
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		(workspace / "linked.py").symlink_to(workspace / "src/module.py")
+		(workspace / "oversized.txt").write_bytes(b"x" * (1_048_576 + 1))
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		invalid_items = (
+			{"path": "check.sh", "content": "python3 -c 'print(1)'", "expected_to_fail_until_fixed": True},
+			{"type": "shell", "path": "src/module.py", "literal": "gh api", "expected_to_fail_until_fixed": True},
+			{"type": "text_present", "path": "../outside", "literal": "x", "expected_to_fail_until_fixed": True},
+			{"type": "text_present", "path": ".git/config", "literal": "x", "expected_to_fail_until_fixed": True},
+			{"type": "text_present", "path": "validation/validate.env", "literal": "x", "expected_to_fail_until_fixed": True},
+			{"type": "text_present", "path": "linked.py", "literal": "x", "expected_to_fail_until_fixed": True},
+			{"type": "text_present", "path": "oversized.txt", "literal": "x", "expected_to_fail_until_fixed": True},
+		)
+		for item in invalid_items:
+			_install_mock_codex(mock_bin_dir, stdout_text=json.dumps([item]) + "\n")
+			result = _run_synth(workspace, env)
+			assert result.returncode == 0
+			assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed" in result.stdout + result.stderr
+			assert not (workspace / ".ai/review_runtime/pr-4242/round-1/synth/synth_round_1_assertions.json").exists()
+
+
+def test_review_synthesise_smoke_fails_open_on_malformed_and_wrong_count_output() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_failopen_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
 		)
 		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		for output in ('{"action":"fix"}\n', '[]\n'):
+			_install_mock_codex(mock_bin_dir, stdout_text=output)
+			result = _run_synth(workspace, env)
+			assert result.returncode == 0
+			assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed" in result.stdout + result.stderr
 
+
+def test_review_synthesise_smoke_surfaces_model_stderr_on_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_stderr_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(mock_bin_dir, stderr_text="mock model lookup failed\n", exit_code=1)
+		result = _run_synth(workspace, _base_env(workspace, runtime_dir, mock_bin_dir))
+		assert result.returncode == 0
+		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=llm_failed" in result.stdout + result.stderr
+		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_BEGIN" in result.stderr
+		assert "mock model lookup failed" in result.stderr
+
+
+def test_review_synthesise_smoke_zero_issues_and_invalid_language_fallback() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_zero_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		(workspace / "requirements-dev.txt").write_text("pytest==9.1.1\n", encoding="utf-8")
+		_write_judge_artifact(workspace, head_sha, [])
+		_install_mock_codex(mock_bin_dir, stdout_text="[]\n")
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		env["BEHAVIOURAL_SMOKE_LANG"] = " pythoon \n second-line "
+		result = _run_synth(workspace, env)
+		bundle_path = workspace / ".ai/review_runtime/pr-4242/round-1/synth/synth_round_1_assertions.json"
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert json.loads(bundle_path.read_text(encoding="utf-8"))["assertions"] == []
+		assert "language=python" in result.stdout
+		assert "Invalid BEHAVIOURAL_SMOKE_LANG" in result.stdout
+
+
+def test_review_synthesise_smoke_clamps_oversized_timeout() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_timeout_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(mock_bin_dir, stdout_text=json.dumps([{
+			"type": "literal_count",
+			"path": "src/module.py",
+			"literal": "if True:",
+			"min_count": 0,
+			"max_count": 0,
+			"expected_to_fail_until_fixed": True,
+		}]) + "\n")
+		timeout_capture = _install_mock_timeout(mock_bin_dir)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		env["MOCK_TIMEOUT_DURATION_FILE"] = str(timeout_capture)
+		env["BEHAVIOURAL_SMOKE_TIMEOUT_S"] = "99999999999999999999"
+		result = _run_synth(workspace, env)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert timeout_capture.read_text(encoding="utf-8").strip() == "120"
+
+
+def test_behavioural_smoke_provenance_rejects_wrong_context_and_tampering() -> None:
+	with tempfile.TemporaryDirectory(prefix="behavioural_smoke_auth_") as td:
+		root = Path(td)
+		head_sha = "a" * 40
+		bundle_path = root / "bundle.json"
+		envelope_path = root / "envelope.json"
+		bundle_path.write_text(json.dumps(_bundle(head_sha), sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+		keyring = _keyring()
+		signed = _sign_bundle(bundle_path, envelope_path, head_sha, keyring)
+		assert signed.returncode == 0, signed.stderr
+		env = os.environ.copy()
+		env["ORCHESTRATOR_STATE_AUTH_KEYRING"] = keyring
+		base_command = [
+			"python3", "-I", "-B", str(REPO_ROOT / "scripts/orchestrate_state_v2.py"),
+			"verify-behavioural-smoke", "--bundle-file", str(bundle_path), "--envelope-file", str(envelope_path),
+			"--repository", "owner/repo", "--pr-number", "4242", "--head-sha", head_sha, "--round", "1",
+		]
+		assert subprocess.run(base_command, env=env, timeout=60).returncode == 0
+		wrong_head = base_command.copy()
+		wrong_head[wrong_head.index("--head-sha") + 1] = "b" * 40
+		assert subprocess.run(wrong_head, env=env, timeout=60).returncode == 1
+		tampered = _bundle(head_sha)
+		tampered["assertions"][0]["assertion"]["literal"] = "tampered"
+		bundle_path.write_text(json.dumps(tampered), encoding="utf-8")
+		assert subprocess.run(base_command, env=env, timeout=60).returncode == 1
+		env["ORCHESTRATOR_STATE_AUTH_KEYRING"] = _keyring("other", b"b" * 32)
+		assert subprocess.run(base_command, env=env, timeout=60).returncode == 1
+
+
+def test_declarative_evaluator_reports_states_without_executing_commands() -> None:
+	with tempfile.TemporaryDirectory(prefix="behavioural_smoke_eval_") as td:
+		repo = Path(td)
+		(repo / "src").mkdir()
+		(repo / "validation/tests").mkdir(parents=True)
+		(repo / "src/module.py").write_text("danger = 'present'\n", encoding="utf-8")
+		head_sha = "a" * 40
+		bundle = _bundle(head_sha)
+		bundle["assertions"] = [
+			{**bundle["assertions"][0], "assertion": {"type": "text_present", "path": "src/module.py", "literal": "present", "expected_to_fail_until_fixed": True}},
+			{**bundle["assertions"][0], "issue_id": "absent", "assertion": {"type": "text_absent", "path": "src/module.py", "literal": "present", "expected_to_fail_until_fixed": True}},
+			{**bundle["assertions"][0], "issue_id": "unknown", "assertion": {"type": "inconclusive", "reason": "runtime behavior required", "expected_to_fail_until_fixed": True}},
+		]
+		bundle_path = repo / "validation/tests/synth_round_1_assertions.json"
+		bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
 		result = subprocess.run(
-			["bash", str(SYNTH_SCRIPT)],
+			["python3", "-I", "-B", str(REPO_ROOT / "scripts/evaluate_behavioural_smoke.py"), str(repo), str(bundle_path)],
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "BEHAVIOURAL_SMOKE_PRESENT_PASSED" in result.stdout
+		assert "BEHAVIOURAL_SMOKE_PRESENT_FAILED" in result.stdout
+		assert "BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE" in result.stdout
+		assert result.stdout.count("ok ") == 3
+
+
+def test_materializer_accepts_only_signed_current_pr_head_bundle() -> None:
+	with tempfile.TemporaryDirectory(prefix="behavioural_smoke_materialize_") as td:
+		workspace = Path(td)
+		head_sha = "a" * 40
+		keyring = _keyring()
+		synth_dir = workspace / ".ai/review_runtime/pr-4242/round-1/synth"
+		synth_dir.mkdir(parents=True)
+		bundle_path = synth_dir / "synth_round_1_assertions.json"
+		envelope_path = synth_dir / "synth_round_1_assertions.envelope.json"
+		bundle_path.write_text(json.dumps(_bundle(head_sha), sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+		assert _sign_bundle(bundle_path, envelope_path, head_sha, keyring).returncode == 0
+		function_text = _extract_shell_function(VALIDATE_PROCESS, "materialize_synthesised_behavioural_smoke_tests")
+		env = os.environ.copy()
+		for key in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+			env.pop(key, None)
+		env.update({
+			"VALIDATION_INCLUDE_SYNTHESISED": "true",
+			"BEHAVIOURAL_SMOKE_SOURCE_PR": "4242",
+			"BEHAVIOURAL_SMOKE_SOURCE_HEAD_SHA": head_sha,
+			"GITHUB_REPOSITORY": "owner/repo",
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": keyring,
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		})
+		result = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + function_text + "materialize_synthesised_behavioural_smoke_tests\n"],
 			cwd=workspace,
 			env=env,
 			capture_output=True,
 			text=True,
 			timeout=60,
 		)
+		target = workspace / "validation/tests/synth_round_1_assertions.json"
 		assert result.returncode == 0, result.stdout + result.stderr
-
-		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
-		payload = json.loads(manifest.read_text(encoding="utf-8"))
-		markers = {
-			"src/module.py:2:cleared": "BEHAVIOURAL_SMOKE_PRESENT_PASSED",
-			"src/module.py:3:present": "BEHAVIOURAL_SMOKE_PRESENT_FAILED",
-			"src/module.py:4:unknown": "BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE",
-		}
-		for row in payload["files"]:
-			wrapper_path = workspace / row["cache_relpath"]
-			wrapper_result = subprocess.run(
-				["bash", str(wrapper_path)],
-				cwd=workspace,
-				capture_output=True,
-				text=True,
-				timeout=60,
-			)
-			assert wrapper_result.returncode == 0, wrapper_result.stdout + wrapper_result.stderr
-			assert markers[row["issue_id"]] in wrapper_result.stdout
-			assert "ok 1 - behavioural smoke" in wrapper_result.stdout
+		assert target.exists(), result.stdout + result.stderr
+		assert "Materialized authenticated behavioural smoke assertions" in result.stdout
+		bundle_path.write_text(json.dumps(_bundle("b" * 40)), encoding="utf-8")
+		target.unlink()
+		tampered = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + function_text + "materialize_synthesised_behavioural_smoke_tests\n"],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+		assert tampered.returncode == 0
+		assert not target.exists()
+		assert "Failed to verify/materialize" in tampered.stderr
 
 
-def test_review_autofix_workflow_wires_behavioural_smoke_after_interim_judge() -> None:
-	workflow = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
-	stage_helper = STAGE_HELPER.read_text(encoding="utf-8")
+def test_workflows_wire_authenticated_scoped_behavioural_smoke() -> None:
+	review_workflow = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
 	validate_workflow = VALIDATE_WORKFLOW.read_text(encoding="utf-8")
-	assert "BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED: ${{ vars.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED || 'false' }}" in workflow
-	assert "BEHAVIOURAL_SMOKE_LANG: ${{ vars.BEHAVIOURAL_SMOKE_LANG || '' }}" in workflow
-	assert "BEHAVIOURAL_SMOKE_MODEL: ${{ vars.BEHAVIOURAL_SMOKE_MODEL || 'openai/gpt-6-luna' }}" in workflow
-	assert "BEHAVIOURAL_SMOKE_TIMEOUT_S: ${{ vars.BEHAVIOURAL_SMOKE_TIMEOUT_S || '120' }}" in workflow
-	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}" in workflow
-	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}" in validate_workflow
-	bootstrap_line = next(
-		(line for line in stage_helper.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line),
-		"",
-	)
-	assert "review_synthesise_smoke.sh" in bootstrap_line
-	assert "prompts/behavioural-smoke-synthesise.txt" in stage_helper
-	judge_idx = workflow.find("- name: Run interim judge")
-	synth_idx = workflow.find("- name: Synthesize behavioural smoke")
-	ledger_idx = workflow.find("- name: Save review-issue ledger")
-	assert judge_idx != -1, "review_autofix.yml missing the Run interim judge step"
-	assert synth_idx != -1, "review_autofix.yml missing the behavioural smoke synthesis step"
-	assert ledger_idx != -1, "review_autofix.yml missing the Save review-issue ledger step"
-	assert judge_idx < synth_idx < ledger_idx, (
-		"Behavioural smoke synthesis must run after interim judge and before the review-runtime cache save."
-	)
-	step_block = workflow[synth_idx : synth_idx + 600]
-	assert "env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true'" in step_block
-	assert "env.JUDGE_INTERIM_ENABLED == 'true'" in step_block
-	assert 'timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
-	assert '--model "${BEHAVIOURAL_SMOKE_MODEL}"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
-	assert 'opencode_run_cmd "$@"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
-	assert 'command -v codex' not in SYNTH_SCRIPT.read_text(encoding="utf-8")
+	assert review_workflow.index("- name: Synthesize behavioural smoke") < review_workflow.index("- name: Authenticate behavioural smoke bundle")
+	assert "sign-behavioural-smoke" in review_workflow
+	assert 'review_runtime_rel=".ai/review_runtime/pr-${PR_NUMBER}"' in review_workflow
+	assert 'rm -rf "${workspace_root}/.ai/review_runtime"' in validate_workflow
+	assert "steps.behavioural_smoke_pr.outputs.head_sha" in validate_workflow
+	assert 'review_runtime_rel=".ai/review_runtime/pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}"' in validate_workflow
+	for support_path in (
+		"scripts/orchestrate_state_v2.py",
+		"scripts/evaluate_behavioural_smoke.py",
+		"scripts/run_behavioural_smoke_assertions.sh",
+	):
+		assert support_path in validate_workflow
+
+
+def test_sandbox_launcher_is_secret_free_networkless_and_read_only() -> None:
+	launcher = (REPO_ROOT / "scripts/run_behavioural_smoke_assertions.sh").read_text(encoding="utf-8")
+	launcher_prelude = launcher.split("SCRIPT_DIR=", 1)[0]
+	assert "unset BASH_ENV ENV GH_TOKEN GH_PAT" in launcher
+	for actions_environment_name in (
+		"ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL",
+	):
+		assert actions_environment_name in launcher_prelude
+	assert "*_TOKEN|*_SECRET|*_KEY" in launcher_prelude
+	assert "compgen -e" in launcher_prelude
+	assert 'env -i PATH="${PATH}" TMPDIR="${TMPDIR}"' in launcher
+	assert "unshare --mount --net --pid" in launcher
+	assert "mount -o remount,bind,ro" in launcher
+	assert 'mount -t tmpfs -o ro,nosuid,nodev,noexec,size=4096 tmpfs "${sandbox_repo}/.git"' in launcher
+	assert "setpriv --reuid=65534 --regid=65534 --clear-groups --no-new-privs" in launcher
+	assert "env -i HOME=/tmp PATH=/usr/bin:/bin" in launcher
 
 
 def test_review_synthesise_smoke_is_registered_in_ci_workflows() -> None:
@@ -719,357 +607,20 @@ def test_review_synthesise_smoke_is_registered_in_ci_workflows() -> None:
 		assert "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py" in workflow, workflow_path
 
 
-def test_validate_workflows_restore_cached_behavioural_smoke_artifacts() -> None:
-	validate_workflow = VALIDATE_WORKFLOW.read_text(encoding="utf-8")
-	internal_validate_workflow = INTERNAL_VALIDATE_WORKFLOW.read_text(encoding="utf-8")
-	review_workflow = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
-
-	assert "description: \"Review PR number for restoring cached behavioural smoke artifacts (0 to auto-detect from tracking issue)\"" in validate_workflow
-	assert "- name: Normalize behavioural smoke include flag" in validate_workflow
-	assert "id: behavioural_smoke_gate" in validate_workflow
-	assert "- name: Resolve behavioural smoke source PR" in validate_workflow
-	assert "if: steps.behavioural_smoke_gate.outputs.enabled == 'true'" in validate_workflow
-	assert "- name: Restore behavioural smoke runtime cache" in validate_workflow
-	assert ".ai/review_runtime/" in validate_workflow
-	assert "review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-" in validate_workflow
-
-	assert "pr_number:" in internal_validate_workflow
-	assert "pr_number: ${{ inputs.pr_number || '0' }}" in internal_validate_workflow
-
-	dispatch_idx = review_workflow.find("Dispatching standalone validation for linked issue")
-	assert dispatch_idx != -1, "review_autofix.yml missing standalone validation dispatch"
-	dispatch_block = review_workflow[dispatch_idx : dispatch_idx + 500]
-	assert '-f tracking_issue="0"' in dispatch_block
-	assert '-f pr_number="${PR_NUMBER}"' in dispatch_block
-
-
-def test_validate_driver_can_exclude_synthesised_smoke_files() -> None:
-	with tempfile.TemporaryDirectory(prefix="validate_driver_synth_gate_") as td:
-		test_dir = Path(td) / "validation" / "tests"
-		test_dir.mkdir(parents=True, exist_ok=True)
-		for name in ("00_canary.sh", "10_regular.sh", "synth_round_1_issue.sh", "_helpers.sh"):
-			path = test_dir / name
-			path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-			path.chmod(0o755)
-
-		function_text = _extract_shell_function(VALIDATE_DRIVER, "discover_tests")
-		base_script = (
-			"set -euo pipefail\n"
-			f"TEST_DIR={test_dir}\n"
-			"COMPOSE_LOG=/dev/null\n"
-			"CANARY_PATTERN=*canary*.sh\n"
-			"CANARY_REQUIRED=0\n"
-			"HELPER_PATTERN=_*.sh\n"
-			"TEST_FILES=()\n"
-			"CANARY_TEST=''\n"
-			"fail_fast() { echo \"FAIL:$1:$2\" >&2; exit 99; }\n"
-		)
-
-		include_true = subprocess.run(
-			[
-				"bash",
-				"-c",
-				base_script
-				+ "VALIDATION_INCLUDE_SYNTHESISED=true\n"
-				+ function_text
-				+ "discover_tests\nprintf '%s\\n' \"${TEST_FILES[@]}\"\n",
-			],
-			capture_output=True,
-			text=True,
-			check=True,
-			timeout=60,
-		)
-		include_false = subprocess.run(
-			[
-				"bash",
-				"-c",
-				base_script
-				+ "VALIDATION_INCLUDE_SYNTHESISED=false\n"
-				+ function_text
-				+ "discover_tests\nprintf '%s\\n' \"${TEST_FILES[@]}\"\n",
-			],
-			capture_output=True,
-			text=True,
-			check=True,
-			timeout=60,
-		)
-
-		included_paths = include_true.stdout.splitlines()
-		excluded_paths = include_false.stdout.splitlines()
-		assert str(test_dir / "10_regular.sh") in included_paths
-		assert str(test_dir / "10_regular.sh") in excluded_paths
-		assert str(test_dir / "synth_round_1_issue.sh") in included_paths
-		assert str(test_dir / "synth_round_1_issue.sh") not in excluded_paths
-		assert str(test_dir / "_helpers.sh") not in included_paths
-		assert "excluded 1 synthesised behavioural smoke script(s)" in include_false.stderr
-
-
-def test_validate_process_materializes_latest_cached_synthesised_smoke_tests() -> None:
-	with tempfile.TemporaryDirectory(prefix="validate_process_synth_materialize_") as td:
-		workspace = Path(td)
-
-		round1_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth"
-		round3_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-3" / "synth"
-		round1_dir.mkdir(parents=True, exist_ok=True)
-		round3_dir.mkdir(parents=True, exist_ok=True)
-
-		old_wrapper = round1_dir / "synth_round_1_old_issue.sh"
-		old_wrapper.write_text("#!/usr/bin/env bash\necho old\n", encoding="utf-8")
-		old_wrapper.chmod(0o755)
-		(round1_dir / "synth_round_1_manifest.json").write_text(
-			json.dumps(
-				{
-					"round": 1,
-					"head_sha": "oldsha",
-					"language": "python",
-					"source_artifact": ".ai/review_runtime/pr-4242/round-1/judge_interim.json",
-					"target_manifest_relpath": "validation/tests/synth_round_1_manifest.json",
-					"files": [
-						{
-							"issue_id": "old",
-							"file": "src/module.py",
-							"line_start": 1,
-							"line_end": 1,
-							"severity": "must-fix",
-							"slug": "old_issue",
-							"cache_relpath": ".ai/review_runtime/pr-4242/round-1/synth/synth_round_1_old_issue.sh",
-							"target_relpath": "validation/tests/synth_round_1_old_issue.sh",
-							"suggested_path": "validation/tests/synth_round_1_old_issue.sh",
-							"expected_to_fail_until_fixed": True,
-						}
-					],
-				},
-				indent=2,
-			)
-			+ "\n",
-			encoding="utf-8",
-		)
-
-		latest_wrapper = round3_dir / "synth_round_3_latest_issue.sh"
-		latest_wrapper.write_text("#!/usr/bin/env bash\necho latest\n", encoding="utf-8")
-		latest_wrapper.chmod(0o755)
-		(round3_dir / "synth_round_3_manifest.json").write_text(
-			json.dumps(
-				{
-					"round": 3,
-					"head_sha": "newsha",
-					"language": "python",
-					"source_artifact": ".ai/review_runtime/pr-4242/round-3/judge_interim.json",
-					"target_manifest_relpath": "validation/tests/synth_round_3_manifest.json",
-					"files": [
-						{
-							"issue_id": "latest",
-							"file": "src/module.py",
-							"line_start": 3,
-							"line_end": 3,
-							"severity": "must-fix",
-							"slug": "latest_issue",
-							"cache_relpath": ".ai/review_runtime/pr-4242/round-3/synth/synth_round_3_latest_issue.sh",
-							"target_relpath": "validation/tests/synth_round_3_latest_issue.sh",
-							"suggested_path": "validation/tests/synth_round_3_latest_issue.sh",
-							"expected_to_fail_until_fixed": True,
-						}
-					],
-				},
-				indent=2,
-			)
-			+ "\n",
-			encoding="utf-8",
-		)
-
-		function_text = _extract_shell_function(VALIDATE_PROCESS, "materialize_synthesised_behavioural_smoke_tests")
-
-		disabled = subprocess.run(
-			[
-				"bash",
-				"-c",
-				"set -euo pipefail\n"
-				+ "VALIDATION_INCLUDE_SYNTHESISED=false\n"
-				+ function_text
-				+ "materialize_synthesised_behavioural_smoke_tests\n",
-			],
-			cwd=workspace,
-			capture_output=True,
-			text=True,
-			check=True,
-			timeout=60,
-		)
-		assert "skipping synthesised behavioural smoke materialization" in disabled.stderr
-		assert not (workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh").exists()
-
-		enabled = subprocess.run(
-			[
-				"bash",
-				"-c",
-				"set -euo pipefail\n"
-				+ "VALIDATION_INCLUDE_SYNTHESISED=true\n"
-				+ function_text
-				+ "materialize_synthesised_behavioural_smoke_tests\n",
-			],
-			cwd=workspace,
-			capture_output=True,
-			text=True,
-			check=True,
-			timeout=60,
-		)
-
-		latest_target = workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh"
-		latest_manifest = workspace / "validation" / "tests" / "synth_round_3_manifest.json"
-		old_target = workspace / "validation" / "tests" / "synth_round_1_old_issue.sh"
-
-		assert "Materialized synthesised behavioural smoke tests" in enabled.stdout
-		assert latest_target.exists()
-		assert latest_target.read_text(encoding="utf-8") == latest_wrapper.read_text(encoding="utf-8")
-		assert os.access(latest_target, os.X_OK)
-		assert latest_manifest.exists()
-		assert json.loads(latest_manifest.read_text(encoding="utf-8"))["round"] == 3
-		assert not old_target.exists()
-
-
-def test_validate_process_skips_wrapper_copy_when_manifest_target_is_invalid() -> None:
-	with tempfile.TemporaryDirectory(prefix="validate_process_synth_manifest_invalid_") as td:
-		workspace = Path(td)
-
-		round3_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-3" / "synth"
-		round3_dir.mkdir(parents=True, exist_ok=True)
-		latest_wrapper = round3_dir / "synth_round_3_latest_issue.sh"
-		latest_wrapper.write_text("#!/usr/bin/env bash\necho latest\n", encoding="utf-8")
-		latest_wrapper.chmod(0o755)
-		(round3_dir / "synth_round_3_manifest.json").write_text(
-			json.dumps(
-				{
-					"round": 3,
-					"head_sha": "newsha",
-					"language": "python",
-					"source_artifact": ".ai/review_runtime/pr-4242/round-3/judge_interim.json",
-					"target_manifest_relpath": "../outside.json",
-					"files": [
-						{
-							"issue_id": "latest",
-							"file": "src/module.py",
-							"line_start": 3,
-							"line_end": 3,
-							"severity": "must-fix",
-							"slug": "latest_issue",
-							"cache_relpath": ".ai/review_runtime/pr-4242/round-3/synth/synth_round_3_latest_issue.sh",
-							"target_relpath": "validation/tests/synth_round_3_latest_issue.sh",
-							"suggested_path": "validation/tests/synth_round_3_latest_issue.sh",
-							"expected_to_fail_until_fixed": True,
-						}
-					],
-				},
-				indent=2,
-			)
-			+ "\n",
-			encoding="utf-8",
-		)
-
-		function_text = _extract_shell_function(VALIDATE_PROCESS, "materialize_synthesised_behavioural_smoke_tests")
-		result = subprocess.run(
-			[
-				"bash",
-				"-c",
-				"set -euo pipefail\n"
-				+ "VALIDATION_INCLUDE_SYNTHESISED=true\n"
-				+ function_text
-				+ "materialize_synthesised_behavioural_smoke_tests\n",
-			],
-			cwd=workspace,
-			capture_output=True,
-			text=True,
-			check=True,
-			timeout=60,
-		)
-
-		latest_target = workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh"
-		assert not latest_target.exists()
-		assert not (workspace / "outside.json").exists()
-		assert "skipping synthesised smoke materialization because target_manifest_relpath is invalid" in result.stderr
-		assert "Materialized synthesised behavioural smoke tests" not in result.stdout
-
-
-def test_validate_process_warns_when_synth_sources_are_missing() -> None:
-	with tempfile.TemporaryDirectory(prefix="validate_process_synth_missing_") as td:
-		workspace = Path(td)
-
-		round3_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-3" / "synth"
-		round3_dir.mkdir(parents=True, exist_ok=True)
-		(round3_dir / "synth_round_3_manifest.json").write_text(
-			json.dumps(
-				{
-					"round": 3,
-					"head_sha": "newsha",
-					"language": "python",
-					"source_artifact": ".ai/review_runtime/pr-4242/round-3/judge_interim.json",
-					"target_manifest_relpath": "validation/tests/synth_round_3_manifest.json",
-					"files": [
-						{
-							"issue_id": "latest",
-							"file": "src/module.py",
-							"line_start": 3,
-							"line_end": 3,
-							"severity": "must-fix",
-							"slug": "latest_issue",
-							"cache_relpath": ".ai/review_runtime/pr-4242/round-3/synth/missing_wrapper.sh",
-							"target_relpath": "validation/tests/synth_round_3_latest_issue.sh",
-							"suggested_path": "validation/tests/synth_round_3_latest_issue.sh",
-							"expected_to_fail_until_fixed": True,
-						}
-					],
-				},
-				indent=2,
-			)
-			+ "\n",
-			encoding="utf-8",
-		)
-
-		function_text = _extract_shell_function(VALIDATE_PROCESS, "materialize_synthesised_behavioural_smoke_tests")
-		result = subprocess.run(
-			[
-				"bash",
-				"-c",
-				"set -euo pipefail\n"
-				+ "VALIDATION_INCLUDE_SYNTHESISED=true\n"
-				+ function_text
-				+ "materialize_synthesised_behavioural_smoke_tests\n",
-			],
-			cwd=workspace,
-			capture_output=True,
-			text=True,
-			check=True,
-			timeout=60,
-		)
-
-		manifest_target = workspace / "validation" / "tests" / "synth_round_3_manifest.json"
-		assert manifest_target.exists()
-		assert "missing synthesised smoke source" in result.stderr
-		assert "listed 1 file(s) but none were materialized into validation/tests" in result.stderr
-		assert "Materialized synthesised behavioural smoke tests" not in result.stdout
-
-
 def main() -> int:
-	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	test_funcs = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
 	passed = 0
 	failed = 0
-
 	for func in test_funcs:
-		name = func.__name__
 		try:
-			params = list(inspect.signature(func).parameters)
-			if params:
-				raise TypeError(f"unsupported test signature for {name}: {params}")
 			func()
-			print(f"  PASS  {name}")
+			print(f"  PASS  {func.__name__}")
 			passed += 1
-		except AssertionError as e:
-			print(f"  FAIL  {name}: {e}")
+		except Exception as exc:
+			print(f"  FAIL  {func.__name__}: {type(exc).__name__}: {exc}")
 			failed += 1
-		except Exception as e:
-			print(f"  ERROR {name}: {type(e).__name__}: {e}")
-			failed += 1
-
 	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
-	return 1 if failed > 0 else 0
+	return 1 if failed else 0
 
 
 if __name__ == "__main__":

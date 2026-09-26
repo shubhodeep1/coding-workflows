@@ -319,7 +319,7 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 			assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in workflow_text
 			assert 'bash "${helper}"' in workflow_text
 			assert 'bash "${helper}" validate' not in workflow_text
-			assert 'if [ "${1:-}" = "validate" ]; then\n\tmain_validate "$@"\nelse\n\tstage_review_runtime_support\nfi' in stage_helper_text
+			assert 'if [ "${1:-}" = "validate" ] || [ "${1:-}" = "immutable-bundle" ]; then\n\tmain_validate "$@"\nelse\n\tstage_review_runtime_support\nfi' in stage_helper_text
 			assert "WORKFLOW.md overlay is opt-in by file presence" in stage_helper_text
 			assert '--github-env "${GITHUB_ENV}"' in stage_helper_text
 			continue
@@ -336,18 +336,27 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 			assert "WORKFLOW.md overlay is opt-in by file presence" in workflow_text, workflow_path
 			assert '--github-env "${GITHUB_ENV}"' in workflow_text, workflow_path
 
-	assert 'python3 scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "clarify.yml").read_text(encoding="utf-8")
-	assert 'python3 scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
-	assert 'python3 scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
+	assert 'python3 "${clarify_immutable_support_root}/scripts/load_workflow_overlay.py"' in (REPO_ROOT / ".github" / "workflows" / "clarify.yml").read_text(encoding="utf-8")
+	assert 'python3 "${plan_immutable_support_root}/scripts/load_workflow_overlay.py"' in (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
+	assert 'python3 "${implement_immutable_support_root}/scripts/load_workflow_overlay.py"' in (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
+	for workflow_name, support_root_name in (
+		("clarify.yml", "clarify_immutable_support_root"),
+		("plan.yml", "plan_immutable_support_root"),
+		("implement.yml", "implement_immutable_support_root"),
+	):
+		workflow_text = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+		assert '"ai-memory/schemas/workflow_overlay.v1.json"' in workflow_text
+		assert f'--schema-path "${{{support_root_name}}}/ai-memory/schemas/workflow_overlay.v1.json"' in workflow_text
+		assert '--schema-path "ai-memory/schemas/workflow_overlay.v1.json"' not in workflow_text
 	review_autofix_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	assert 'bash "${helper}"' in review_autofix_text
 	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"' in stage_helper_text
 	assert '--schema-path "${SUPPORT_AI_MEMORY_DIR}/schemas/workflow_overlay.v1.json"' in stage_helper_text
 	assert 'WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"' in (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text(encoding="utf-8")
 	for snippet in (
-		"python3 scripts/load_workflow_overlay.py",
+		'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"',
 		'--repo-root "${REPO_ROOT}"',
-		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
+		'--schema-path "${support_root_dir}/ai-memory/schemas/workflow_overlay.v1.json"',
 		'--github-env "${GITHUB_ENV}"',
 	):
 		assert snippet in stage_helper_text

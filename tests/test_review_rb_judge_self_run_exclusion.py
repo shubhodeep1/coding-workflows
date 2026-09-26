@@ -97,7 +97,10 @@ def _rb_judge_local_sanitize_fallback_block() -> str:
 	assert block.count("if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then") == 1
 	assert "sanitize_codex_prompt_file() {" in block
 	assert "Local prompt sanitization fallback could not sanitize" in block
-	return block
+	# review_rb_judge.sh defines its isolated Python launcher before this
+	# block; supply it here so the extracted fallback runs the same way.
+	launcher = 'review_rb_run_isolated_python() { python3 -I -B "$@"; }\n'
+	return launcher + block
 
 
 # ---------------------------------------------------------------------------

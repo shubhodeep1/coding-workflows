@@ -187,7 +187,7 @@ cleanup_temp_files()
 collect_prompt_placeholders()
 {
 	local placeholder_source_file="$1"
-	"${PYTHON_BIN}" - <<'PY' "${placeholder_source_file}"
+	render_prompt_run_isolated_python - <<'PY' "${placeholder_source_file}"
 import pathlib
 import re
 import sys
@@ -196,6 +196,36 @@ text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 for name in sorted(set(re.findall(r"\{\{([A-Za-z0-9_]+)\}\}", text))):
 	print(name)
 PY
+}
+
+render_prompt_run_isolated_python()
+{
+	local environment_name=""
+	local -a isolated_environment=(env -i
+		HOME="${HOME:-}"
+		PATH="${PATH:-/usr/bin:/bin}"
+		TMPDIR="${TMPDIR:-/tmp}"
+		LANG="C.UTF-8"
+		LC_ALL="C.UTF-8"
+		PYTHONDONTWRITEBYTECODE="1")
+	local -a forwarded_environment_names=(
+		ALLOW_WORKFLOW_EDITS
+		MODEL_FAMILY_OVERLAY
+		PROMPT_PERSONA_PREFIX_ENABLED
+		PROMPT_PRELUDE_REFACTOR_ENABLED
+		SEMBLE_PREFETCH
+		SERENA_TOOL_HINTS
+		UNATTENDED_IDENTITY_REINJECT_ENABLED
+		WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON
+		WORKFLOW_OVERLAY_REPO_ROOT
+	)
+
+	for environment_name in "${forwarded_environment_names[@]}"; do
+		if [ "${!environment_name+x}" = "x" ]; then
+			isolated_environment+=("${environment_name}=${!environment_name}")
+		fi
+	done
+	"${isolated_environment[@]}" python3 "${RENDER_PROMPT_PYTHON_ARGS[@]}" "$@"
 }
 
 append_render_var()
@@ -209,14 +239,14 @@ append_render_var()
 	RENDER_ARGS+=(--var "${name}=${value}")
 }
 
-if command -v python3 >/dev/null 2>&1; then
-	PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-	PYTHON_BIN="python"
-else
+if ! command -v python3 >/dev/null 2>&1; then
 	echo "Python interpreter not found for render_prompt.py" >&2
 	exit 1
 fi
+
+# Isolation is mandatory. PYTHON_ISOLATED_MODE remains accepted for caller
+# compatibility, but no value can disable the clean environment or -I/-B.
+declare -a RENDER_PROMPT_PYTHON_ARGS=(-I -B)
 
 if ! RENDER_PROMPT_PY="$(resolve_render_prompt_py)"; then
 	echo "render_prompt.py not found for ${PROMPT_FILE}" >&2
@@ -247,7 +277,7 @@ declare -A RENDER_VARS_SEEN=()
 declare -a RENDER_ARGS=()
 
 RENDER_ARGS=(
-	"${PYTHON_BIN}" "${RENDER_PROMPT_PY}" "${RENDER_INPUT_FILE}"
+	render_prompt_run_isolated_python "${RENDER_PROMPT_PY}" "${RENDER_INPUT_FILE}"
 	--legacy-mode-name "${MODE_NAME}"
 )
 
@@ -308,9 +338,4 @@ while IFS= read -r placeholder_name; do
 	fi
 done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
 
-if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
-	"${RENDER_ARGS[@]}"
-	exit 0
-fi
-
-exec "${RENDER_ARGS[@]}"
+"${RENDER_ARGS[@]}"

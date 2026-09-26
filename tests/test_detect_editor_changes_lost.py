@@ -406,7 +406,10 @@ def test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback() -> None:
 	assert "CODEX_THREAD_REUSE_ENABLED requested; OpenCode editor uses the fresh full-prompt path." in contents
 	assert "|^Changes made:" in contents
 	assert '[ "${cmd_rc}" -ne 78 ] && [ "${attempt}" -eq "${editor_max_attempts}" ]' in contents
-	assert contents.count("return 79") == 2
+	# Two config_generation/bootstrap-failure returns plus the editor-isolation
+	# hardening return that locks the freshly-bootstrapped opencode config
+	# read-only (chmod 0444) before the unprivileged editor identity runs.
+	assert contents.count("return 79") == 3
 	assert contents.index('if [ "${cmd_rc}" -eq 79 ]; then') < contents.index(
 		'if [ "${cmd_rc}" -ne 0 ] && [ "${cmd_rc}" -ne 78 ]'
 	)

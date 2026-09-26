@@ -244,7 +244,7 @@ def test_clarify_agent_runs_only_in_isolated_container() -> None:
 	wf = _read(CLARIFY_WF)
 	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
 	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
-	assert "codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py claude_issue_route.py claude_issue_handoff.sh; do" in wf
+	assert "codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py model_provider_broker.py claude_issue_route.py claude_issue_handoff.sh; do" in wf
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in wf
 	assert "--network none --read-only --cap-drop ALL --security-opt no-new-privileges" in runner
 	assert "--sandbox read-only" in runner
@@ -288,7 +288,9 @@ def test_clarify_broker_rejects_other_routes_and_streams_without_leaking_key() -
 			assert host == "openrouter.ai"
 
 		def request(self, method, path, body, headers):
-			if body == b'{"model":"openai/gpt-6-sol","fail":true}':
+			# The broker forwards its normalized body (token limit and price
+			# ceilings added), so match the marker rather than exact bytes.
+			if b'"fail":true' in body:
 				raise OSError("private-sentinel")
 			seen.append((method, path, body, headers))
 
@@ -303,6 +305,7 @@ def test_clarify_broker_rejects_other_routes_and_streams_without_leaking_key() -
 		broker.mode = "broker"
 		broker.api_key = "private-sentinel"
 		broker.model = "openai/gpt-6-sol"
+		broker.budget = module.build_budget_state("openai/gpt-6-sol")
 		bridge = http.server.HTTPServer(("127.0.0.1", 0), module.Relay)
 		bridge.mode = "bridge"
 		bridge.socket_path = str(Path(td) / "broker.sock")
@@ -338,7 +341,8 @@ def test_clarify_broker_rejects_other_routes_and_streams_without_leaking_key() -
 			assert response.status == 200
 			assert response.read() == b'data: first\n\ndata: second\n\n'
 			assert len(seen) == 1
-			assert seen[0] == ("POST", "/api/v1/responses", b'{"model":"openai/gpt-6-sol"}', {"Content-Type": "application/json", "Authorization": "Bearer private-sentinel"})
+			normalized_body, _limit = broker.budget.policy.normalize_request("/api/v1/responses", b'{"model":"openai/gpt-6-sol"}')
+			assert seen[0] == ("POST", "/api/v1/responses", normalized_body, {"Content-Type": "application/json", "Authorization": "Bearer private-sentinel"})
 			assert "private-sentinel" not in str(response.headers)
 			connection.request("POST", "/api/v1/responses", b'{"model":"openai/gpt-6-sol","fail":true}', {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder"})
 			failed_response = connection.getresponse()

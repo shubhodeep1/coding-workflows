@@ -6,6 +6,11 @@
 # if:, env: and continue-on-error: stay in the workflow; edit those there.
 set -euo pipefail
 
+git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=http.extraHeader
+export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+
 if [ ! -x "${SUPPORT_SCRIPTS_DIR}/check_external_branch_advance.sh" ]; then
   echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping pre-review stale-base gate)."
 else
@@ -42,7 +47,7 @@ if ! git reset --hard HEAD; then
   echo "::warning::git reset --hard HEAD failed during pre-review merge-topology gate; fail-open to reviewer path."
   exit 0
 fi
-if ! git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main -e pre_assembled_static.txt; then
+if ! git clean -ffdx -e .codex-workflow-src -e pre_assembled_static.txt; then
   echo "::warning::git clean -ffdx failed during pre-review merge-topology gate; fail-open to reviewer path."
   exit 0
 fi
@@ -109,8 +114,8 @@ cleanup_pre_review_merge_probe() {
     git merge --abort >/dev/null 2>&1 || true
   fi
   git reset --hard HEAD >/dev/null 2>&1 || true
-  git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main -e pre_assembled_static.txt >/dev/null 2>&1 || true
-  for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+  git clean -ffdx -e .codex-workflow-src -e pre_assembled_static.txt >/dev/null 2>&1 || true
+  for d in scripts prompts ai-memory .codex-workflow-src; do
     if [ -d "${MERGE_STASH}/${d}" ]; then
       cp -a "${MERGE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${MERGE_STASH}/${d}" "${d}" 2>/dev/null || true
     fi
@@ -121,7 +126,7 @@ cleanup_pre_review_merge_probe() {
 }
 trap 'cleanup_pre_review_merge_probe $?' EXIT
 
-for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+for d in scripts prompts ai-memory .codex-workflow-src; do
   if [ -d "${d}" ]; then
     if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
       while IFS= read -r f; do
@@ -135,7 +140,7 @@ for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main;
     fi
   fi
 done
-git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main -e pre_assembled_static.txt 2>/dev/null || true
+git clean -ffdx -e .codex-workflow-src -e pre_assembled_static.txt 2>/dev/null || true
 
 echo "=== pre-review merge working tree state ==="
 git status --porcelain 2>/dev/null || true

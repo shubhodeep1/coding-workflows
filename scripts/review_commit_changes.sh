@@ -67,6 +67,8 @@ set -euo pipefail
 
 _review_commit_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
+source "${_review_commit_script_dir}/gh_helpers.sh"
+# shellcheck source=/dev/null
 source "${_review_commit_script_dir}/write_guard.sh"
 
 if [ -z "${COMMITTED_FILES_FILE:-}" ]; then
@@ -497,7 +499,7 @@ else
   OVERLAP_REPORT_FILE="$(mktemp)"
   OVERLAP_VALIDATION_STDERR_FILE="$(mktemp)"
   set +e
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
+  _gh_helpers_run_isolated_python -- - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
 import re
 import subprocess
 import sys
@@ -634,7 +636,7 @@ PY
           printf -- '- %s\n' "${changed_file}"
         done
   } > "${COMMITTED_FILES_FILE}"
-  git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
+  git remote set-url origin "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}"
   # NOTE: do NOT push here. The push is deferred to the final
   # "Push all pending commits" step so that conflict resolution,
   # labeling, and auto-merge complete before the synchronize event

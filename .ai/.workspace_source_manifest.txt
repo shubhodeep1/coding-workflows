@@ -147,6 +147,30 @@ analysis/workflow-optimization-2026-09-25.md
 analysis/workflow-optimization-2026-09-26.md
 changelog.d/.gitkeep
 changelog.d/3576-security-audit-uncapped-followups.md
+changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
+changelog.d/3965-orchestrator-state-author-identity.md
+changelog.d/3965-rb-judge-pending-approval-comment-dedupe.md
+changelog.d/3965-review-autofix-security-boundaries-cycle-3.md
+changelog.d/3965-review-security-boundaries.md
+changelog.d/3965-security-pass-cycle-5.md
+changelog.d/3965-security-pass-fix-cycle-2.md
+changelog.d/3965-security-pass-hardening.md
+changelog.d/3965-security-pass-loop-convergence.md
+changelog.d/3965-security-pass-pyyaml-duplicate-key-hardening.md
+changelog.d/3965-security-pass-waiver-marker-auth.md
+changelog.d/3965-sync-contract-list-union.md
+changelog.d/3996-forged-state-resolver-scope.md
+changelog.d/4075-editor-isolation-process-group-kill.md
+changelog.d/4088-broker-policy-rejection-fail-fast.md
+changelog.d/4088-resolver-agent-home-preflight.md
+changelog.d/4088-resolver-stall-guard-nesting.md
+changelog.d/4090-broker-input-cost-budgets-status-first-locator.md
+changelog.d/4092-security-pass-cycle-6-immutable-support.md
+changelog.d/4113-security-isolation.md
+changelog.d/4134-auto-apply-analysis-and-stable-release.md
+changelog.d/4175-python-isolation.md
+changelog.d/4216-orchestrator-security-isolation-hardening.md
+changelog.d/4255-python-startup-isolation.md
 changelog.d/4305-editor-checksum-and-gate-retry-queueing.md
 changelog.d/4305-editor-checksum-summary-warning.md
 changelog.d/4327-review-failure-fingerprint-cap.md
@@ -183,8 +207,11 @@ changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
 changelog.d/implement-plan-failed-run-blocks.md
 changelog.d/noop-sweep-fingerprint-cap-skip.md
+changelog.d/orchestrator-state-auth-yaml-bounds.md
 changelog.d/post-push-pr-status-check-in.md
 changelog.d/review-autofix-workflow-size-limit.md
+changelog.d/review-blocked-stale-head-merge.md
+changelog.d/security-audit-concurrency-deadlock.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -422,6 +449,7 @@ scripts/dev/test_watchdog_helpers.sh
 scripts/dev/test_write_guard.sh
 scripts/dispatch_and_watch_workflow_run.sh
 scripts/drift_audit.sh
+scripts/editor_isolation_preflight.sh
 scripts/emit_event.py
 scripts/emit_event.sh
 scripts/files_touched_scope_guard.py
@@ -461,6 +489,7 @@ scripts/mcp_handshake_probe.py
 scripts/memory_helpers.sh
 scripts/memory_injection_patterns.py
 scripts/memory_maintenance_extract_learnings.py
+scripts/model_provider_broker.py
 scripts/nag_reminder.sh
 scripts/opencode_helpers.sh
 scripts/openrouter_prompt_cache.py
@@ -488,6 +517,7 @@ scripts/review_autofix_step_merge_topology_gate.sh
 scripts/review_autofix_step_partial_finalize.sh
 scripts/review_collect_pr_metadata.sh
 scripts/review_commit_changes.sh
+scripts/review_conflict_actuate.sh
 scripts/review_conflict_prepare.sh
 scripts/review_conflict_resolve.sh
 scripts/review_consolidate.sh
@@ -522,6 +552,8 @@ scripts/slop_scan_local.py
 scripts/stage_workflow_support.sh
 scripts/summarize_reviewer_consensus.sh
 scripts/summarize_unselected_runs.py
+scripts/sync_contract_list_union.py
+scripts/sync_contract_list_union.requirements.txt
 scripts/targeted_file_context.py
 scripts/task_state.py
 scripts/templates/serena_project.yml.j2
@@ -546,6 +578,7 @@ scripts/workflow_failure_heal_autofix_report.sh
 scripts/workflow_failure_heal_intake.sh
 scripts/workflow_failure_heal_pr_reconcile.sh
 scripts/workflow_failure_heal_report.sh
+scripts/workflow_log_output_contract.py
 scripts/workflow_retro.py
 scripts/workflow_retro_fanout.sh
 scripts/workflow_wrapper_refs.py
@@ -704,6 +737,7 @@ tests/test_drift_audit_job.py
 tests/test_e2e_editor_smoke_canary.py
 tests/test_editor_capacity_fallback_contract.py
 tests/test_editor_changes_lost_redispatch_budget.py
+tests/test_editor_isolation_preflight.py
 tests/test_editor_watchdog_kill_contract.py
 tests/test_emit_event.sh
 tests/test_emit_event_concurrent.sh
@@ -716,6 +750,7 @@ tests/test_fingerprint_state_selfheal.py
 tests/test_generate_resource_id.py
 tests/test_gh_helpers_list_runs_method.py
 tests/test_gh_helpers_parse_reset_header.py
+tests/test_git_auth_hygiene.py
 tests/test_header_render.sh
 tests/test_identity_recall_render.sh
 tests/test_implement_blocked_verdict_terminalizes.py
@@ -738,6 +773,7 @@ tests/test_mcp_handshake_probe.py
 tests/test_memory_maintenance_contract_noop.py
 tests/test_memory_record_schema.py
 tests/test_merge_probe.py
+tests/test_model_provider_broker.py
 tests/test_nag_reminder.sh
 tests/test_nag_reminder_phases.sh
 tests/test_nightly_validation_selftest_workflow_contract.py
@@ -753,6 +789,8 @@ tests/test_orchestrate_poll_process.py
 tests/test_orchestrate_poll_promote_cycle.py
 tests/test_orchestrate_poll_stages_readiness_script.py
 tests/test_orchestrate_poll_workflow_contract.py
+tests/test_orchestrate_state_comprehensive_marker.py
+tests/test_orchestrate_state_resolver_retry.py
 tests/test_orchestrator_completion_lessons.py
 tests/test_orchestrator_concurrency_caps.py
 tests/test_overlap_validation_fallback.py
@@ -806,11 +844,15 @@ tests/test_review_autofix_sweep_zero_candidate_fast_exit.py
 tests/test_review_autofix_terminal_same_head_gate.py
 tests/test_review_commit_changelog_fragment_preserved.py
 tests/test_review_commit_new_files_preserved.py
+tests/test_review_conflict_resolve_agent_home_preflight.py
 tests/test_review_conflict_resolve_reasoning_step_down.py
 tests/test_review_conflict_resolve_retry_prelude_render.py
 tests/test_review_conflict_resolve_retry_state.py
 tests/test_review_conflict_resolve_smoke_deterministic.py
+tests/test_review_conflict_resolve_stall_guard_nesting.py
+tests/test_review_editor_broker_policy_rejection_fail_fast.py
 tests/test_review_editor_fifo_drain.py
+tests/test_review_editor_process_group_termination.py
 tests/test_review_floor_rules.py
 tests/test_review_issue_ledger.py
 tests/test_review_judge_interim_round_trip.py
@@ -819,6 +861,7 @@ tests/test_review_merge_train.py
 tests/test_review_parse_consolidator.py
 tests/test_review_pipeline_integration.py
 tests/test_review_rb_judge_label_propagation.py
+tests/test_review_rb_judge_pending_approval_comment.py
 tests/test_review_rb_judge_reference_staging.py
 tests/test_review_rb_judge_reissue_baseline.py
 tests/test_review_rb_judge_self_run_exclusion.py
@@ -847,6 +890,7 @@ tests/test_state_snapshot.py
 tests/test_subissue_closing_pr.py
 tests/test_summarize_reviewer_consensus_sandbox_pin.py
 tests/test_summarize_unselected_runs.py
+tests/test_sync_contract_list_union.py
 tests/test_targeted_file_context.py
 tests/test_task_state.py
 tests/test_task_state_unblock.py
@@ -898,6 +942,7 @@ tests/test_workflow_failure_heal_pr_reconcile.py
 tests/test_workflow_file_size_limit.py
 tests/test_workflow_gh_retry_fallback_contract.py
 tests/test_workflow_log_analysis_failure_contract.py
+tests/test_workflow_log_output_contract.py
 tests/test_workflow_overlay_core.py
 tests/test_workflow_overlay_orchestrator.py
 tests/test_workflow_retro.py

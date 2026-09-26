@@ -24,7 +24,7 @@ fi
 wf_source="${WORKFLOW_SOURCE_REPO}"
 workspace_root="${GITHUB_WORKSPACE:-$PWD}"
 
-# Always stage runtime support files out of tree so main-primary
+# Always stage runtime support files out of tree so immutable-source
 # bootstrap helpers never overwrite the source-repo PR worktree
 # before reviewer/editor snapshots are taken.
 SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -50,30 +50,21 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_claude_fixer_handoff.sh"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh emit_event.sh emit_event.py pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py cost_audit.py codex_helpers.sh model_provider_broker.py codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh editor_isolation_preflight.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_conflict_actuate.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_claude_fixer_handoff.sh"
 # Keep this registry for compatibility, but all runtime files now come from
 # the same verified workflow commit as the required bootstrap scripts.
 #
-# render_prompt.py is main-primary because it validates arbitrary embedded
-# PR-diff text before every reviewer/editor call. A false-positive in that
-# validator (e.g. a lone `${{` in the diff tripping the unmatched-delimiter
-# check, fixed on main by #3593) otherwise wedges the review of any in-flight
-# PR whose branch predates the fix — the very PR that surfaced the bug can
-# never carry the fix on its own branch. Sourcing it main-primary lets a
-# render_prompt fix on main immediately protect wedged branches, matching the
-# resolver-safety rationale above. It stays fail-open: some refs still ship a
-# self-contained render_prompt.sh, so when the backend is absent from both refs
-# bootstrap preserves that ref's bundled bash renderer instead of hard-failing.
+# render_prompt.py validates arbitrary embedded PR-diff text before every
+# reviewer/editor call. Keep it in this compatibility-named list so it is
+# staged in lockstep with the immutable reusable-workflow definition. It stays
+# optional because older workflow-definition commits may ship a self-contained
+# render_prompt.sh without the Python backend.
 #
-# opencode_helpers.sh / write_opencode_config.sh are main-primary because
-# review_conflict_resolve.sh (already main-primary above) sources them from
-# SUPPORT_SCRIPTS_DIR and hard-fails with failure_class=helpers_missing when
-# absent. Staging them from the same snapshot as the resolver keeps the
-# resolver and its dependencies in lockstep, so a main-side resolver change
-# can never land in a bundle whose helpers came from an older ref.
-MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"
-# Optional bootstrap scripts: allowed to be missing from both
-# refs.  The bootstrap emits a warning and continues — callers
+# opencode_helpers.sh / write_opencode_config.sh stay beside the resolver so
+# the resolver and dependencies always come from one reviewed commit.
+MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py orchestrate_state_v2.py review_conflict_resolve.sh review_conflict_prepare.sh review_conflict_actuate.sh model_provider_broker.py render_prompt.py opencode_helpers.sh write_opencode_config.sh"
+# Optional bootstrap scripts may be missing from the immutable source.
+# The bootstrap emits a warning and continues — callers
 # that depend on these must themselves tolerate absence.  Keep
 # this list empty unless a genuinely optional helper is added;
 # the default should always be "required".
@@ -125,15 +116,6 @@ for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
-
-	for f in emit_event.sh emit_event.py; do
-	  src=".codex-workflow-src/scripts/${f}"
-  if [ ! -f "${src}" ]; then
-    echo "::warning::Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled."
-    continue
-	  fi
-	  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
-	done
 
 	for f in transcript_archive.sh; do
 	  src=".codex-workflow-src/scripts/${f}"
@@ -388,9 +370,160 @@ WORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT="shubhodeep1/coding-workflows"
 usage()
 {
 	cat <<'EOF' >&2
-Usage: scripts/stage_workflow_support.sh validate --manifest <path>
+Usage:
+  scripts/stage_workflow_support.sh validate --manifest <path>
+  scripts/stage_workflow_support.sh immutable-bundle --manifest <path> --source-root <path> --destination-root <path>
 EOF
 	exit 64
+}
+
+stage_immutable_support_bundle()
+{
+	local manifest_path="$1" source_root="$2" destination_root="$3"
+	local source_real source_head destination_parent destination_real temporary_root repo_path source_path target_path mode
+	local support_scripts_dir support_prompts_dir
+	local -a required_paths=()
+	declare -A required_set=() executable_set=()
+
+	require_command jq
+	require_command realpath
+	[ -f "${manifest_path}" ] || { echo "::error::Immutable support manifest '${manifest_path}' does not exist." >&2; return 1; }
+	source_real="$(realpath -e -- "${source_root}")" || return 1
+	if [ "$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR \
+		git -C "${source_real}" rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]; then
+		echo "::error::Immutable support source '${source_real}' is not a git checkout." >&2
+		return 1
+	fi
+	if ! [[ "${WORKFLOW_SUPPORT_REF:-}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		echo "::error::Immutable support staging requires WORKFLOW_SUPPORT_REF to be a 40-character commit SHA." >&2
+		return 1
+	fi
+	source_head="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR \
+		git -C "${source_real}" rev-parse HEAD 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+	if [ "${source_head}" != "${WORKFLOW_SUPPORT_REF,,}" ]; then
+		echo "::error::Immutable support source HEAD does not match WORKFLOW_SUPPORT_REF." >&2
+		return 1
+	fi
+
+	destination_parent="$(dirname -- "${destination_root}")"
+	mkdir -p "${destination_parent}"
+	destination_parent="$(realpath -e -- "${destination_parent}")" || return 1
+	case "${destination_parent}/$(basename -- "${destination_root}")" in
+		"${RUNNER_TEMP:?RUNNER_TEMP must be set}"/*) ;;
+		*) echo "::error::Immutable support destination must be beneath RUNNER_TEMP." >&2; return 1 ;;
+	esac
+	temporary_root="$(mktemp -d "${destination_parent}/.immutable-support.XXXXXX")"
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		required_paths+=("${repo_path}")
+		required_set["${repo_path}"]=1
+	done < <(jq -r '
+		(.required_scripts // [])[],
+		(.required_python_modules // [])[],
+		(.required_prompts // [])[],
+		(.required_files // [])[],
+		(.required_remote_when_external_scripts // [])[],
+		(.optional_preserve_scripts_before_templates // [])[],
+		(.optional_preserve_scripts_after_schemas // [])[],
+		(.model_catalog_path // empty)
+	' "${manifest_path}")
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		executable_set["${repo_path}"]=1
+	done < <(jq -r '
+		(.executable_files // [])[],
+		(.required_scripts // [])[],
+		(.required_python_modules // [])[],
+		(.required_remote_when_external_scripts // [])[],
+		(.optional_preserve_scripts_before_templates // [])[],
+		(.optional_preserve_scripts_after_schemas // [])[]
+	' "${manifest_path}")
+
+	if [ -n "${required_set[scripts/gh_helpers.sh]:-}" ]; then
+		for repo_path in scripts/emit_event.sh scripts/emit_event.py; do
+			if [ -z "${required_set[${repo_path}]:-}" ]; then
+				echo "::error::Immutable support manifest omits required gh_helpers.sh dependency ${repo_path}." >&2
+				rm -rf -- "${temporary_root}"
+				return 1
+			fi
+		done
+	fi
+	if [ -n "${required_set[scripts/ai_memory_lib.py]:-}" ]; then
+		for repo_path in scripts/openrouter_prompt_cache.py scripts/semantic_cache.py scripts/memory_injection_patterns.py; do
+			if [ -z "${required_set[${repo_path}]:-}" ]; then
+				echo "::error::Immutable support manifest omits required ai_memory_lib.py dependency ${repo_path}." >&2
+				rm -rf -- "${temporary_root}"
+				return 1
+			fi
+		done
+	fi
+
+	for repo_path in "${required_paths[@]}"; do
+		case "${repo_path}" in
+			/*|.|..|../*|*/../*|*/..|*//*|*\\*)
+				echo "::error::Invalid immutable support path '${repo_path}'." >&2
+				rm -rf -- "${temporary_root}"
+				return 1
+				;;
+		esac
+		source_path="$(realpath -e -- "${source_real}/${repo_path}")" || {
+			echo "::error::Missing immutable support dependency '${repo_path}'." >&2
+			rm -rf -- "${temporary_root}"
+			return 1
+		}
+		case "${source_path}" in
+			"${source_real}"/*) ;;
+			*) echo "::error::Immutable support dependency escapes source checkout: ${repo_path}." >&2; rm -rf -- "${temporary_root}"; return 1 ;;
+		esac
+		if [ ! -f "${source_path}" ] || [ -L "${source_real}/${repo_path}" ]; then
+			echo "::error::Immutable support dependency must be a regular non-symlink file: ${repo_path}." >&2
+			rm -rf -- "${temporary_root}"
+			return 1
+		fi
+		target_path="${temporary_root}/${repo_path}"
+		mkdir -p "$(dirname -- "${target_path}")"
+		mode=0444
+		if [ -n "${executable_set[${repo_path}]:-}" ]; then
+			mode=0555
+		fi
+		install -m "${mode}" "${source_path}" "${target_path}"
+	done
+
+	if [ -e "${destination_root}" ]; then
+		echo "::error::Immutable support destination already exists: ${destination_root}." >&2
+		rm -rf -- "${temporary_root}"
+		return 1
+	fi
+	chmod -R go-w "${temporary_root}"
+	chmod 0555 "${temporary_root}"
+	if [ "$(id -u)" -eq 0 ]; then
+		chown -R root:root "${temporary_root}"
+	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+		sudo -n chown -R root:root "${temporary_root}"
+	elif [ "${GITHUB_ACTIONS:-false}" != "true" ]; then
+		echo "::notice::Passwordless sudo is unavailable outside GitHub Actions; retaining current ownership for immutable-support validation."
+	else
+		echo "::error::Immutable support staging requires root ownership but passwordless sudo is unavailable." >&2
+		chmod u+w "${temporary_root}" 2>/dev/null || true
+		rm -rf -- "${temporary_root}"
+		return 1
+	fi
+	mv -- "${temporary_root}" "${destination_root}"
+	destination_real="$(realpath -e -- "${destination_root}")" || return 1
+	support_scripts_dir="${destination_real}/scripts"
+	support_prompts_dir="${destination_real}/prompts"
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		{
+			printf 'SUPPORT_ROOT_DIR=%s\n' "${destination_real}"
+			printf 'SUPPORT_SCRIPTS_DIR=%s\n' "${support_scripts_dir}"
+			printf 'SUPPORT_PROMPTS_DIR=%s\n' "${support_prompts_dir}"
+			printf 'GH_HELPERS_STRICT_IMMUTABLE_SUPPORT=true\n'
+			printf 'AI_MEMORY_STRICT_IMMUTABLE_SUPPORT=true\n'
+		} >> "${GITHUB_ENV}"
+	fi
+	printf 'SUPPORT_ROOT_DIR=%s\nSUPPORT_SCRIPTS_DIR=%s\nSUPPORT_PROMPTS_DIR=%s\n' \
+		"${destination_real}" "${support_scripts_dir}" "${support_prompts_dir}"
 }
 
 require_command()
@@ -414,6 +547,8 @@ parse_args()
 	TARGET_NAME="${1:-}"
 	shift || true
 	MANIFEST_PATH=""
+	SOURCE_ROOT=""
+	DESTINATION_ROOT=""
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 			--manifest)
@@ -421,6 +556,16 @@ parse_args()
 					usage
 				fi
 				MANIFEST_PATH="$2"
+				shift 2
+				;;
+			--source-root)
+				[ "$#" -ge 2 ] || usage
+				SOURCE_ROOT="$2"
+				shift 2
+				;;
+			--destination-root)
+				[ "$#" -ge 2 ] || usage
+				DESTINATION_ROOT="$2"
 				shift 2
 				;;
 			*)
@@ -432,7 +577,7 @@ parse_args()
 	if [ -z "${TARGET_NAME}" ] || [ -z "${MANIFEST_PATH}" ]; then
 		usage
 	fi
-	if [ "${TARGET_NAME}" != "validate" ]; then
+	if [ "${TARGET_NAME}" != "validate" ] && [ "${TARGET_NAME}" != "immutable-bundle" ]; then
 		echo "::error::Unsupported workflow support target '${TARGET_NAME}'." >&2
 		exit 1
 	fi
@@ -483,7 +628,7 @@ checkout_support_ref()
 {
 	local ref="$1"
 	local dest="$2"
-	local server_host remote_url
+	local server_host remote_url auth_header
 
 	if [ -z "${GH_TOKEN:-}" ]; then
 		echo "::error::GH_TOKEN is required to stage workflow support files." >&2
@@ -494,18 +639,23 @@ checkout_support_ref()
 	server_host="${server_host#https://}"
 	server_host="${server_host#http://}"
 	server_host="${server_host%/}"
-	remote_url="https://x-access-token:${GH_TOKEN}@${server_host}/${WORKFLOW_SOURCE_REPO}"
+	remote_url="https://${server_host}/${WORKFLOW_SOURCE_REPO}"
+	auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
 
 	rm -rf "${dest}"
-	mkdir -p "$(dirname "${dest}")"
-	if [[ "${ref}" =~ ^[0-9a-f]{40}$ ]]; then
-		if git clone --quiet --no-tags --depth 1 --branch main "${remote_url}" "${dest}" 2>/dev/null &&
-		   git -C "${dest}" fetch --quiet --depth 1 origin "${ref}" 2>/dev/null &&
-		   git -C "${dest}" checkout --quiet --detach FETCH_HEAD 2>/dev/null &&
-		   [ "$(git -C "${dest}" rev-parse HEAD)" = "${ref}" ]; then
+	if [[ "${ref}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		mkdir -p "${dest}"
+		git -C "${dest}" init --quiet
+		git -C "${dest}" remote add origin "${remote_url}"
+		if git -c "http.extraHeader=Authorization: Basic ${auth_header}" -C "${dest}" fetch --quiet --depth 1 origin "${ref}" \
+			&& git -C "${dest}" checkout --quiet --detach FETCH_HEAD; then
 			return 0
 		fi
-	elif git clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
+		rm -rf "${dest}"
+		return 1
+	fi
+	mkdir -p "$(dirname "${dest}")"
+	if git -c "http.extraHeader=Authorization: Basic ${auth_header}" clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
 		return 0
 	fi
 	rm -rf "${dest}"
@@ -517,7 +667,13 @@ bootstrap_support_roots()
 	SUPPORT_PRIMARY_ROOT=""
 	SUPPORT_MAIN_ROOT=""
 
-	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+	if [[ "${ORIGINAL_SCRIPT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		if ! checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
+			echo "::error::Failed to stage workflow support files from immutable ref ${ORIGINAL_SCRIPT_REF}." >&2
+			exit 1
+		fi
+		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
+	elif [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
 	elif checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
 		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
@@ -530,7 +686,10 @@ bootstrap_support_roots()
 		exit 1
 	fi
 
-	if [ "${RESOLVED_SCRIPT_REF}" != "main" ] && [ -n "${GH_TOKEN:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"; then
+	if ! [[ "${RESOLVED_SCRIPT_REF}" =~ ^[0-9a-fA-F]{40}$ ]] \
+		&& [ "${RESOLVED_SCRIPT_REF}" != "main" ] \
+		&& [ -n "${GH_TOKEN:-}" ] \
+		&& checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"; then
 		SUPPORT_MAIN_ROOT="${SUPPORT_STAGE_ROOT}/main"
 	fi
 }
@@ -818,12 +977,15 @@ emit_consumer_gitignore()
 
 run_overlay_loader()
 {
+	local support_root_dir
 	: "${GITHUB_ENV:?GITHUB_ENV must be set}"
+	: "${SUPPORT_SCRIPTS_DIR:?SUPPORT_SCRIPTS_DIR must point to immutable support}"
+	support_root_dir="$(realpath -e -- "${SUPPORT_SCRIPTS_DIR}/..")"
 	# WORKFLOW.md overlay is opt-in by file presence; absent file must
 	# stay a no-op while valid prompt overrides flow through render_prompt.py.
-	PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+	PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py" \
 		--repo-root "${REPO_ROOT}" \
-		--schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
+		--schema-path "${support_root_dir}/ai-memory/schemas/workflow_overlay.v1.json" \
 		--github-env "${GITHUB_ENV}"
 }
 
@@ -837,7 +999,7 @@ stage_validate_support()
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
-		stage_required_entry "${repo_path}" "true" "${repo_path#scripts/}" "false"
+		stage_required_entry "${repo_path}" "true" "${repo_path#scripts/}" "true"
 	done < <(json_array_lines "required_scripts")
 
 	while IFS= read -r repo_path; do
@@ -912,6 +1074,13 @@ stage_validate_support()
 main_validate()
 {
 	parse_args "$@"
+	if [ "${TARGET_NAME}" = "immutable-bundle" ]; then
+		if [ -z "${SOURCE_ROOT}" ] || [ -z "${DESTINATION_ROOT}" ]; then
+			usage
+		fi
+		stage_immutable_support_bundle "${MANIFEST_PATH}" "${SOURCE_ROOT}" "${DESTINATION_ROOT}"
+		return
+	fi
 	setup_context
 	bootstrap_support_roots
 
@@ -925,7 +1094,7 @@ main_validate()
 	esac
 }
 
-if [ "${1:-}" = "validate" ]; then
+if [ "${1:-}" = "validate" ] || [ "${1:-}" = "immutable-bundle" ]; then
 	main_validate "$@"
 else
 	stage_review_runtime_support

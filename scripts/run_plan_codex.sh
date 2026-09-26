@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source scripts/gh_helpers.sh 2>/dev/null || true
+_run_plan_scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "${GH_HELPERS_STRICT_IMMUTABLE_SUPPORT:-false}" = "true" ]; then
+	source "${_run_plan_scripts_dir}/gh_helpers.sh"
+else
+	source "${_run_plan_scripts_dir}/gh_helpers.sh" 2>/dev/null || true
+fi
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+source "${_run_plan_scripts_dir}/codex_helpers.sh"
 TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"
 
 PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-plan-inline.txt"
@@ -231,9 +237,9 @@ EOF
   # Inject the configurable tool call budget before the static heredoc
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
   echo
-  bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+  bash "${_run_plan_scripts_dir}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"
   echo
-  REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash scripts/render_prompt.sh prompts/header.txt
+  REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash "${_run_plan_scripts_dir}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}/header.txt"
   echo
   echo "=== AI MEMORY CONTEXT ==="
   cat "${RUNTIME_DIR}/memory_context.txt"
@@ -254,6 +260,10 @@ if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
 fi
 
+MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${MODEL_EDITOR_FALLBACK:+,${MODEL_EDITOR_FALLBACK}}" model_provider_broker_start
+trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
+model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
+
 max_attempts=3
 for attempt in $(seq 1 "${max_attempts}"); do
   echo "Codex planning attempt ${attempt}/${max_attempts}..."
@@ -270,7 +280,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     attempt_model="${MODEL_EDITOR_FALLBACK}"
     echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
   fi
-  if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+  if model_provider_broker_exec_unprivileged nobody codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox read-only < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
     if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
       echo "Codex planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."

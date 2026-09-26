@@ -137,18 +137,20 @@ memory_ensure_branch()
 	fi
 
 	local branch="${AI_MEMORY_BRANCH:-ai-memory}"
-	local token="${GH_TOKEN:-}"
 
-	# Resolve authenticated origin URL
+	# Resolve a credential-free origin URL; _memory_git supplies auth per command.
 	local origin_url
 	origin_url="$(git remote get-url origin 2>/dev/null || echo "")"
 	if [[ -z "${origin_url}" ]]; then
 		_memory_warn "ensure-branch: no origin remote configured"
 		return 0
 	fi
+	if [[ "${origin_url}" =~ ^(https?://)[^/@]+@(.+)$ ]]; then
+		origin_url="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+	fi
 
 	# Check if branch exists on remote
-	if git ls-remote --heads origin "${branch}" 2>/dev/null | grep -q "${branch}"; then
+	if _memory_git ls-remote --heads origin "${branch}" 2>/dev/null | grep -q "${branch}"; then
 		return 0
 	fi
 
@@ -177,7 +179,7 @@ memory_ensure_branch()
 		echo "AI memory branch — created automatically." > ai-memory/README.md
 		git add ai-memory/README.md
 		git commit --quiet -m "Initialize ai-memory branch"
-		git push origin "${branch}" 2>&1
+		_memory_git push origin "${branch}" 2>&1
 	) || {
 		_memory_warn "ensure-branch: failed to create '${branch}' (fail-open)"
 		rm -rf "${temp_dir}"
@@ -542,7 +544,6 @@ _memory_force_tick_remote_url()
 	local repo_root=""
 	local repository=""
 	local origin_url=""
-	local token=""
 	local server_url="${GITHUB_SERVER_URL:-https://github.com}"
 	local server_host=""
 
@@ -564,9 +565,11 @@ _memory_force_tick_remote_url()
 
 	if [ -n "${repo_root}" ] && [ -d "${repo_root}/.git" ]; then
 		origin_url="$(git -C "${repo_root}" remote get-url origin 2>/dev/null || echo "")"
+		if [[ "${origin_url}" =~ ^(https?://)[^/@]+@(.+)$ ]]; then
+			origin_url="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+		fi
 	fi
 
-	token="${GH_PAT:-${GH_TOKEN:-}}"
 	if [ -n "${origin_url}" ]; then
 		case "${origin_url}" in
 			/*|./*|../*|file://*)
@@ -578,11 +581,11 @@ _memory_force_tick_remote_url()
 		esac
 	fi
 
-	if [ -n "${token}" ] && [ -n "${repository}" ]; then
+	if [ -n "${repository}" ]; then
 		server_host="${server_url#https://}"
 		server_host="${server_host#http://}"
 		server_host="${server_host%/}"
-		printf 'https://x-access-token:%s@%s/%s\n' "${token}" "${server_host}" "${repository}"
+		printf 'https://%s/%s\n' "${server_host}" "${repository}"
 		return 0
 	fi
 
@@ -594,11 +597,23 @@ _memory_force_tick_remote_url()
 	return 1
 }
 
+_memory_git()
+{
+	local auth_token="${GH_PAT:-${GH_TOKEN:-}}"
+	local auth_header=""
+	if [ -z "${auth_token}" ]; then
+		git "$@"
+		return
+	fi
+	auth_header="$(printf 'x-access-token:%s' "${auth_token}" | base64 | tr -d '\n')"
+	git -c "http.extraHeader=Authorization: Basic ${auth_header}" "$@"
+}
+
 _memory_force_tick_remote_branch_exists()
 {
 	local remote_url="${1:?remote url required}"
 	local branch="${2:?branch required}"
-	git ls-remote --heads "${remote_url}" "${branch}" 2>/dev/null | awk '{print $2}' | grep -Fxq "refs/heads/${branch}"
+	_memory_git ls-remote --heads "${remote_url}" "${branch}" 2>/dev/null | awk '{print $2}' | grep -Fxq "refs/heads/${branch}"
 }
 
 _memory_force_tick_ensure_branch()
@@ -624,7 +639,7 @@ _memory_force_tick_ensure_branch()
 		git add "${memory_root}/README.md"
 		git commit --quiet -m "Initialize ${branch}"
 		git remote add origin "${remote_url}"
-		git push origin "${branch}" >/dev/null 2>&1
+		_memory_git push origin "${branch}" >/dev/null 2>&1
 	) || {
 		rm -rf "${tmp_dir}"
 		return 1
@@ -638,7 +653,14 @@ _memory_force_tick_collision_wrapper()
 	local incoming_file="${2:?incoming file required}"
 	local cooldown_seconds="${3:-30}"
 
-	python3 - <<'PY' "${current_file}" "${incoming_file}" "${cooldown_seconds}"
+	env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE=1 \
+		python3 -I -B - "${current_file}" "${incoming_file}" "${cooldown_seconds}" <<'PY'
 import datetime as dt
 import json
 import pathlib
@@ -683,14 +705,33 @@ except ValueError:
 if not current or not incoming:
 	raise SystemExit(0)
 
+if current.get("dispatch_status") == "disabled":
+	raise SystemExit(0)
+
 current_ts = _latest(current)
 incoming_ts = _latest(incoming)
-if not current_ts or not incoming_ts or current_ts == incoming_ts:
+current_claim_id = current.get("claim_id")
+incoming_claim_id = incoming.get("claim_id")
+matching_final_transition = (
+	current.get("dispatch_status") == "pending"
+	and incoming.get("dispatch_status") in {"sent", "failed"}
+	and isinstance(current_claim_id, str)
+	and current_claim_id
+	and incoming_claim_id == current_claim_id
+	and incoming.get("last_attempted_timestamp") == current.get("last_attempted_timestamp")
+	and incoming.get("last_attempt_payload") == current.get("last_attempt_payload")
+)
+if matching_final_transition:
+	raise SystemExit(0)
+
+if not current_ts or not incoming_ts:
+	print(json.dumps({"ok": True, "enabled": True, "stored": False, "record": current}))
 	raise SystemExit(0)
 
 current_dt = _parse(current_ts)
 incoming_dt = _parse(incoming_ts)
 if current_dt is None or incoming_dt is None:
+	print(json.dumps({"ok": True, "enabled": True, "stored": False, "record": current}))
 	raise SystemExit(0)
 
 age_seconds = max(0, int((incoming_dt - current_dt).total_seconds()))
@@ -767,7 +808,7 @@ memory_force_tick_get()
 	fi
 
 	tmp_dir="$(mktemp -d)"
-	if ! git clone --quiet --depth 1 --branch "${memory_branch}" "${remote_url}" "${tmp_dir}" >/dev/null 2>&1; then
+	if ! _memory_git clone --quiet --depth 1 --branch "${memory_branch}" "${remote_url}" "${tmp_dir}" >/dev/null 2>&1; then
 		rm -rf "${tmp_dir}"
 		_memory_warn "force-tick-get failed to clone ${memory_branch} (fail-open)"
 		_memory_telemetry '{"op":"force-tick-get","ok":false,"fail_open":true,"source":"shell"}' >&2
@@ -784,7 +825,14 @@ memory_force_tick_get()
 	fi
 
 	local record_wrapper=""
-	if ! record_wrapper="$(python3 - <<'PY' "${record_path}"
+	if ! record_wrapper="$(env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE=1 \
+		python3 -I -B - "${record_path}" <<'PY'
 import json
 import pathlib
 import sys
@@ -883,7 +931,7 @@ memory_force_tick_put()
 	fi
 
 	tmp_dir="$(mktemp -d)"
-	if ! git clone --quiet --depth 1 --branch "${memory_branch}" "${remote_url}" "${tmp_dir}" >/dev/null 2>&1; then
+	if ! _memory_git clone --quiet --depth 1 --branch "${memory_branch}" "${remote_url}" "${tmp_dir}" >/dev/null 2>&1; then
 		rm -rf "${tmp_dir}"
 		_memory_warn "force-tick-put failed to clone ${memory_branch} (fail-open)"
 		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
@@ -893,6 +941,28 @@ memory_force_tick_put()
 
 	target_path="${tmp_dir}/${memory_root}/runs/force_tick/${tracking_issue}.json"
 	if [ -f "${target_path}" ]; then
+		if cmp -s "${target_path}" "${record_file}"; then
+			local unchanged_wrapper=""
+			unchanged_wrapper="$(env -i \
+				HOME="${HOME:-}" \
+				PATH="${PATH:-/usr/bin:/bin}" \
+				TMPDIR="${TMPDIR:-/tmp}" \
+				LANG="C.UTF-8" \
+				LC_ALL="C.UTF-8" \
+				PYTHONDONTWRITEBYTECODE=1 \
+				python3 -I -B - "${target_path}" <<'PY'
+import json
+import pathlib
+import sys
+
+record = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(json.dumps({"ok": True, "enabled": True, "stored": False, "record": record}))
+PY
+			)"
+			rm -rf "${tmp_dir}"
+			printf '%s\n' "${unchanged_wrapper}"
+			return 0
+		fi
 		local collision_wrapper=""
 		collision_wrapper="$(_memory_force_tick_collision_wrapper "${target_path}" "${record_file}" "${cooldown_seconds}" || true)"
 		if [ -n "${collision_wrapper}" ]; then
@@ -919,7 +989,7 @@ memory_force_tick_put()
 			:
 		else
 			git commit --quiet -m "ai-memory: update force tick #${tracking_issue}"
-			git push origin "${memory_branch}" >/dev/null 2>&1
+			_memory_git push origin "${memory_branch}" >/dev/null 2>&1
 		fi
 	) || {
 		rm -rf "${tmp_dir}"
@@ -930,7 +1000,14 @@ memory_force_tick_put()
 	}
 
 	local stored_wrapper=""
-	if ! stored_wrapper="$(python3 - <<'PY' "${target_path}"
+	if ! stored_wrapper="$(env -i \
+		HOME="${HOME:-}" \
+		PATH="${PATH:-/usr/bin:/bin}" \
+		TMPDIR="${TMPDIR:-/tmp}" \
+		LANG="C.UTF-8" \
+		LC_ALL="C.UTF-8" \
+		PYTHONDONTWRITEBYTECODE=1 \
+		python3 -I -B - "${target_path}" <<'PY'
 import json
 import pathlib
 import sys

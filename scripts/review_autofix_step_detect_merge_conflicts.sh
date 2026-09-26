@@ -6,6 +6,11 @@
 # if:, env: and continue-on-error: stay in the workflow; edit those there.
 set -euo pipefail
 
+git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=http.extraHeader
+export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+
 echo "Checking for merge conflicts"
 echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
 echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
@@ -31,7 +36,7 @@ git reset --hard HEAD
 # Use -ffdx: double-force clears nested git repos (-ff), and -x also
 # removes files matching .gitignore so nothing
 # ignored can survive to block the upcoming merge simulation.
-git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main
+git clean -ffdx -e .codex-workflow-src
 
 # The scripts may have been removed during artifact cleanup in the
 # commit step (caller repos delete fetched scripts before committing)
@@ -41,9 +46,6 @@ for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh tg_helpers.sh la
   if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
     mkdir -p "${SUPPORT_SCRIPTS_DIR}"
     src="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/${f}"
-    if [ ! -f "${src}" ] && [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/${f}" ]; then
-      src="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/${f}"
-    fi
     if [ ! -f "${src}" ]; then
       echo "::warning::${f} not found in checked-out support source; downstream steps that need it will fail with a specific error."
       rm -f "${SUPPORT_SCRIPTS_DIR}/${f}"
@@ -120,7 +122,7 @@ git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
 # "Entry … not uptodate. Cannot merge." errors and prevents
 # git merge --abort from resetting cleanly afterward.
 MERGE_STASH="$(mktemp -d)"
-for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+for d in scripts prompts ai-memory .codex-workflow-src; do
   if [ -d "${d}" ]; then
     if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
       # Directory contains tracked files — move only the untracked
@@ -146,7 +148,7 @@ done
 # git merge refuses to proceed when an untracked working-tree file
 # would be overwritten; this ensures the tree is fully clean before
 # the merge simulation.  Tracked files are never removed by git clean.
-git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main 2>/dev/null || true
+git clean -ffdx -e .codex-workflow-src 2>/dev/null || true
 
 # Guardrail diagnostics: emit working tree state before merge so any
 # future untracked-file collision is immediately obvious in CI logs.
@@ -231,7 +233,7 @@ if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]
 fi
 
 # Restore the stashed dirs so later steps have them available.
-for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+for d in scripts prompts ai-memory .codex-workflow-src; do
   if [ -d "${MERGE_STASH}/${d}" ]; then
     # Use cp + rm instead of mv to handle the case where the merge
     # already created the directory (e.g. scripts/ from main).

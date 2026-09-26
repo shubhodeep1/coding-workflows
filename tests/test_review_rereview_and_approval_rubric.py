@@ -34,7 +34,7 @@ def _install_mock_opencode(mock_bin_dir: Path, output_fixture: Path, *, exit_cod
 		"set -euo pipefail\n\n"
 			"if [ \"${1:-}\" = \"--version\" ]; then printf '1.18.23\\n'; exit 0; fi\n"
 			"if [ \"${1:-}\" != \"run\" ]; then echo \"mock-opencode supports only run\" >&2; exit 2; fi\n"
-			"cat \"${MOCK_OPENCODE_OUTPUT_FILE}\"\n"
+			f"cat {shlex.quote(str(output_file))}\n"
 			f"exit {exit_code}\n",
 			encoding="utf-8",
 		)
@@ -70,7 +70,14 @@ def _run_consolidator(
 	mock_output, mock_config_writer = _install_mock_opencode(mock_bin, FIXTURES / output_fixture_name, exit_code=codex_exit_code)
 	effective_support_dir = support_scripts_dir or (REPO_ROOT / "scripts")
 	if support_scripts_dir is not None:
+		shutil.copy2(REPO_ROOT / "scripts" / "gh_helpers.sh", effective_support_dir / "gh_helpers.sh")
 		shutil.copy2(REPO_ROOT / "scripts" / "opencode_helpers.sh", effective_support_dir / "opencode_helpers.sh")
+		(effective_support_dir / "codex_helpers.sh").write_text(
+			"model_provider_broker_start()\n{\n\texport MODEL_PROVIDER_BROKER_BASE_URL='http://127.0.0.1:1'\n}\n"
+			"model_provider_broker_stop()\n{\n\t:\n}\n"
+			"model_provider_broker_exec_sanitized()\n{\n\t\"$@\"\n}\n",
+			encoding="utf-8",
+		)
 
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -170,6 +177,7 @@ def _render_rb_judge_prompt(
 			f"source {shlex.quote(str(GH_HELPERS))}\n"
 			+ "\n\n".join(
 				[
+					_extract_shell_function(script_text, "review_rb_run_isolated_python"),
 					_extract_shell_function(script_text, "flag_enabled"),
 					_extract_shell_function(script_text, "append_review_rb_semble_query_section"),
 					_extract_shell_function(script_text, "render_review_rb_semble_prefetch"),
@@ -230,6 +238,9 @@ def _extract_shell_function(script_text: str, name: str) -> str:
 		if line.startswith(f"{name}() {{"):
 			start = idx
 			break
+		if line == f"{name}()" and idx + 1 < len(lines) and lines[idx + 1] == "{":
+			start = idx
+			break
 	if start is None:
 		raise AssertionError(f"could not locate function {name}() in review_rb_judge.sh")
 	for end in range(start + 1, len(lines)):
@@ -263,7 +274,7 @@ def _extract_break_glass_python_snippet() -> str:
 	python_start = None
 	python_end = None
 	for idx in range(step_start, step_end):
-		if "python3 - <<'PY' >> \"$GITHUB_ENV\"" in lines[idx]:
+		if "-- - <<'PY' >> \"$GITHUB_ENV\"" in lines[idx]:
 			python_start = idx + 1
 			break
 	if python_start is None:
@@ -331,7 +342,13 @@ def test_prompts_and_workflow_wire_rereview_and_review_state_contract() -> None:
 
 
 def test_consolidator_injects_prior_round_decisions_and_logs_rereview_skip() -> None:
-	result, runtime_dir = _run_consolidator("phase_f_residual_suppressed.txt")
+	with tempfile.TemporaryDirectory(prefix="consolidator-prior-round-") as td:
+		support_scripts_dir = Path(td) / "support"
+		support_scripts_dir.mkdir(parents=True, exist_ok=True)
+		result, runtime_dir = _run_consolidator(
+			"phase_f_residual_suppressed.txt",
+			support_scripts_dir=support_scripts_dir,
+		)
 	assert result.returncode == 0, result.stderr
 
 	prompt = (runtime_dir / "review_consolidator_prompt.txt").read_text(encoding="utf-8")
@@ -379,7 +396,13 @@ def test_consolidator_does_not_treat_all_overrides_as_wontfix() -> None:
 
 
 def test_consolidator_allows_worsened_prior_issue_to_reemit() -> None:
-	result, runtime_dir = _run_consolidator("phase_f_worsened_reemit.txt")
+	with tempfile.TemporaryDirectory(prefix="consolidator-worsened-reemit-") as td:
+		support_scripts_dir = Path(td) / "support"
+		support_scripts_dir.mkdir(parents=True, exist_ok=True)
+		result, runtime_dir = _run_consolidator(
+			"phase_f_worsened_reemit.txt",
+			support_scripts_dir=support_scripts_dir,
+		)
 	assert result.returncode == 0, result.stderr
 
 	raw = (runtime_dir / "consolidator_raw.txt").read_text(encoding="utf-8")
@@ -485,7 +508,7 @@ def test_review_blocked_judge_hides_review_state_when_rubric_disabled() -> None:
 	comment_block = _extract_shell_block(
 		script_text,
 		'JUDGE_COMMENT="## Review-Blocked Judge Decision"',
-		'\n\npost_review_blocked_assessment',
+		'\n\ncase "${RB_ACTION}" in',
 	)
 
 	with tempfile.TemporaryDirectory(prefix="rb-judge-review-state-") as td:

@@ -299,8 +299,17 @@ if args[:2] == ["issue", "create"]:
 	print(f"https://github.com/{repo}/issues/{next_num}")
 	sys.exit(0)
 
+if args[:2] == ["issue", "close"]:
+	state.setdefault("issue_close_args", []).append(args)
+	save()
+	sys.exit(0)
+
 if args[:2] == ["pr", "close"]:
 	state.setdefault("pr_close_args", []).append(args)
+	if state.get("pr_close_should_fail", False):
+		save()
+		sys.stderr.write("mock gh: simulated PR close failure\n")
+		sys.exit(1)
 	save()
 	sys.exit(0)
 
@@ -339,14 +348,23 @@ if args[:1] == ["api"]:
 	api_responses = state.get("api_responses", {}) or {}
 	matched = None
 	api_response_sequences = state.get("api_response_sequences", {}) or {}
-	for pattern, responses in api_response_sequences.items():
-		if pattern and pattern in path and responses:
-			matched = responses.pop(0)
-			break
-	for pattern, resp in api_responses.items():
-		if matched is None and pattern and pattern in path:
-			matched = resp
-			break
+	# The most specific (longest) matching pattern wins across both tables,
+	# so a "pulls/42" sequence never answers a "pulls/42/files" request.
+	candidates = [
+		(len(pattern), "sequence", pattern)
+		for pattern, responses in api_response_sequences.items()
+		if pattern and pattern in path and responses
+	] + [
+		(len(pattern), "response", pattern)
+		for pattern in api_responses
+		if pattern and pattern in path
+	]
+	if candidates:
+		_, source, pattern = max(candidates, key=lambda candidate: candidate[0])
+		if source == "sequence":
+			matched = api_response_sequences[pattern].pop(0)
+		else:
+			matched = api_responses[pattern]
 	save()
 	if matched is not None:
 		# Honour `--jq` server-side filtering: emit the filtered string,
@@ -399,7 +417,9 @@ set -euo pipefail
 {xpg_echo_line}gh_retry() {{ "$@"; }}
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
-_safe_gh_jq() {{ :; }}
+_safe_gh_jq() {{ gh api "$@"; }}
+review_blocked_prepare_successor_issue() {{ jq -cn --arg body "$8" '{{status:"not_found",url:null,body:$body}}'; }}
+review_rb_send_warning() {{ :; }}
 flag_enabled() {{ case "${{1,,}}" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }}
 
 GITHUB_OUTPUT="{github_output}"
@@ -421,6 +441,11 @@ def _run_close_and_reissue(
 	pr_view_head_ref_oid: str | None = None,
 	precreate_baseline_branch: bool = False,
 	enable_xpg_echo: bool = False,
+	approved_close_head_sha: str | None = None,
+	live_close_head_sha: str | None = None,
+	final_close_head_sha: str | None = None,
+	pr_close_should_fail: bool = False,
+	issue_create_should_fail: bool = False,
 	extra_env: dict[str, str] | None = None,
 	api_responses: dict[str, object] | None = None,
 ) -> dict:
@@ -447,17 +472,33 @@ def _run_close_and_reissue(
 		run_cwd = tmp_path
 		repo_head_before = ""
 		repo_branch_before = ""
+		resolved_live_close_head_sha = live_close_head_sha or "a" * 40
 		if repo_files is not None:
 			run_cwd, repo_head_before, repo_branch_before = _bootstrap_repo_with_remote(tmp_path, repo_files)
 			resolved_head_ref_oid = pr_view_head_ref_oid or repo_head_before
 			if resolved_head_ref_oid == "__UPPER_REPO_HEAD__":
 				resolved_head_ref_oid = repo_head_before.upper()
 			mock_state["pr_view_head_ref_oid"] = resolved_head_ref_oid
+			resolved_live_close_head_sha = live_close_head_sha or resolved_head_ref_oid.lower()
 			if precreate_baseline_branch:
 				expected_baseline_branch = f"ai/reissue-baseline/pr-42-{repo_head_before[:12]}-777-1"
 				_git(["git", "branch", expected_baseline_branch], cwd=run_cwd)
 		elif pr_view_head_ref_oid is not None:
 			mock_state["pr_view_head_ref_oid"] = pr_view_head_ref_oid
+			resolved_live_close_head_sha = live_close_head_sha or pr_view_head_ref_oid
+		initial_close_response = {
+			"state": "open",
+			"head": {"sha": resolved_live_close_head_sha},
+		}
+		final_close_response = {
+			"state": "open",
+			"head": {"sha": final_close_head_sha or resolved_live_close_head_sha},
+		}
+		mock_state["api_response_sequences"] = {
+			"pulls/42": [initial_close_response, final_close_response],
+		}
+		mock_state["pr_close_should_fail"] = pr_close_should_fail
+		mock_state["issue_create_should_fail"] = issue_create_should_fail
 		if api_responses:
 			mock_state["api_responses"] = dict(api_responses)
 		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
@@ -501,9 +542,11 @@ def _run_close_and_reissue(
 			"FIRST_ISSUE_LABELS_JSON": json.dumps(parent_label_set),
 			"JUDGE_JSON": judge_json,
 			"RB_ACTION": "close_and_reissue",
+			"RB_APPROVAL_REQUEST_ID": "review_blocked_approval_20260907010101_0123456789",
 			"REISSUE_PRESERVE_BASELINE_ENABLED": reissue_preserve_baseline_enabled,
 			"GITHUB_RUN_ID": "777",
 			"GITHUB_RUN_ATTEMPT": "1",
+			"POST_REVIEW_HEAD_SHA": approved_close_head_sha or resolved_live_close_head_sha.lower(),
 		}
 		if extra_env:
 			env.update({str(k): str(v) for k, v in extra_env.items()})
@@ -553,12 +596,9 @@ def test_orchestrator_managed_parent_propagates_label_to_reissue() -> None:
 		f"reissue must carry --label when parent is orchestrator-managed; "
 		f"got args: {args}"
 	)
-	# Find the value that follows --label
-	idx = args.index("--label")
-	assert args[idx + 1] == "ai:orchestrator-managed", (
-		f"reissue --label must be exactly 'ai:orchestrator-managed'; "
-		f"got: {args[idx + 1]!r}"
-	)
+	label_values = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--label"]
+	assert "ai:clarification" in label_values
+	assert "ai:orchestrator-managed" in label_values
 
 	# ensure_label_exists must be called for the propagated label so the
 	# repo has the label definition before `gh issue create` references it.
@@ -602,6 +642,52 @@ def test_empty_parent_label_set_does_not_propagate() -> None:
 		f"reissue must NOT inherit ai:orchestrator-managed when parent "
 		f"label set is empty; got args: {args}"
 	)
+
+
+def test_close_and_reissue_refuses_head_changed_after_approval() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		approved_close_head_sha="a" * 40,
+		live_close_head_sha="b" * 40,
+	)
+
+	assert state.get("issue_create_args", []) == []
+	assert state.get("pr_close_args", []) == []
+	assert "judge_handled=true" in state["_github_output"]
+	assert "approved_close_precondition_failed" in state["_github_output"]
+	assert "head changed after the decision" in state["_stdout"]
+
+
+def test_close_and_reissue_rechecks_head_after_replacement_creation() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		approved_close_head_sha="a" * 40,
+		live_close_head_sha="a" * 40,
+		final_close_head_sha="b" * 40,
+	)
+
+	assert len(state.get("issue_create_args", [])) == 1
+	assert len(state.get("issue_close_args", [])) == 1
+	assert state.get("pr_close_args", []) == []
+	assert "judge_handled=true" in state["_github_output"]
+	assert "approved_close_precondition_failed" in state["_github_output"]
+	assert "head changed while the replacement issue was being created" in state["_stdout"]
+	assert "Closed stale replacement issue" in state["_stdout"]
+
+
+def test_close_and_reissue_preserves_retry_state_when_pr_close_fails() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		pr_close_should_fail=True,
+	)
+
+	assert len(state.get("issue_create_args", [])) == 1
+	assert len(state.get("pr_close_args", [])) == 1
+	assert state.get("issue_close_args", []) == []
+	assert "judge_handled=true" in state["_github_output"]
+	assert "judge_action=skip" in state["_github_output"]
+	assert "judge_skip_reason=approved_close_failed" in state["_github_output"]
+	assert "Closed stale replacement issue" not in state["_stdout"]
 
 
 def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:
@@ -1725,6 +1811,9 @@ set -euo pipefail
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
+review_blocked_prepare_successor_issue() {{ jq -cn --arg body "$8" '{{status:"not_found",url:null,body:$body}}'; }}
+review_rb_send_warning() {{ :; }}
+review_rb_run_isolated_python() {{ python3 -I -B "$@"; }}
 sleep() {{ :; }}
 source "{pr_checks_lib_path}"
 
@@ -1746,6 +1835,7 @@ def _run_merge_with_followup(
 	pr_mergeable: object = True,  # bool or None (=mergeability still computing)
 	pr_merged: bool = False,  # GitHub's `.merged` field — authoritative did-this-land signal
 	pr_head_sha: str = "abcdef1234567890abcdef1234567890abcdef12",
+	post_review_head_sha: str | None = None,
 	enable_auto_merge: str = "true",
 	issue_create_should_fail: bool = False,
 	check_runs_state: str = "success",  # "success" (all complete + green) or "pending" (one in_progress)
@@ -1874,6 +1964,7 @@ def _run_merge_with_followup(
 			"ENABLE_AUTO_MERGE": enable_auto_merge,
 			"ORCH_INTEGRATION_BRANCH_PATTERN": orch_integration_branch_pattern,
 			"RB_JUDGED_HEAD_SHA": pr_head_sha,
+			"POST_REVIEW_HEAD_SHA": post_review_head_sha or pr_head_sha,
 			# Speed up both polling loops — one attempt is enough
 			# because the mock returns the configured value
 			# deterministically on the first call (sync merge succeeds
@@ -2124,6 +2215,24 @@ def test_merge_with_followup_creates_followup_when_pr_already_merged() -> None:
 	assert "judge_handled=true" in state["_github_output"]
 
 
+def test_merge_with_followup_refuses_unapproved_live_or_merged_head() -> None:
+	approved_head_sha = "a" * 40
+	for pr_state, pr_mergeable, pr_merged in (("open", True, False), ("closed", None, True)):
+		state = _run_merge_with_followup(
+			parent_label_set=["ai:orchestrator-managed"],
+			pr_state=pr_state,
+			pr_mergeable=pr_mergeable,
+			pr_merged=pr_merged,
+			pr_head_sha="b" * 40,
+			post_review_head_sha=approved_head_sha,
+		)
+		assert state.get("issue_create_args", []) == []
+		assert "pr_merge_calls" not in state
+		assert "judge_handled=true" in state["_github_output"]
+		assert "judge_action=skip" in state["_github_output"]
+		assert "judge_skip_reason=approved_merge_precondition_failed" in state["_github_output"]
+
+
 def test_merge_with_followup_skips_when_pr_closed_without_merge() -> None:
 	"""PR is closed but NOT merged (e.g. operator rejected and closed
 	manually) → MERGE_CONFIRMED stays false → NO follow-up issue
@@ -2183,6 +2292,20 @@ def test_merge_with_followup_does_not_advance_when_issue_create_fails() -> None:
 		f"ai:ready-to-merge must NOT be ensured when issue create failed "
 		f"(label swap is gated on issue-create success). Got: {ensure_labels}"
 	)
+	assert "Failed to create authenticated follow-up issue" in state["_stdout"]
+	assert "rc=1" in state["_stdout"]
+
+
+def test_close_and_reissue_reports_replacement_creation_failure() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		issue_create_should_fail=True,
+	)
+	assert len(state.get("issue_create_args", [])) == 1
+	assert state.get("pr_close_args", []) == []
+	assert "Failed to create authenticated replacement issue" in state["_stdout"]
+	assert "rc=1" in state["_stdout"]
+	assert "judge_skip_reason=replacement_issue_create_failed" in state["_github_output"]
 
 
 def test_merge_with_followup_preserves_judge_json_bytes_under_xpg_echo() -> None:

@@ -12,6 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 VALIDATE_DRIVER = REPO_ROOT / "scripts" / "validate_driver.sh"
+VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
 
 
 def _extract_shell_function(path: Path, function_name: str) -> str:
@@ -64,7 +65,7 @@ def _run_discover_tests(workspace: Path, *, include_synthesised: str | None) -> 
 	function_text = _extract_shell_function(VALIDATE_DRIVER, "discover_tests")
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
-	env["TEST_DIR"] = "validation/tests"
+	env["TEST_DIR"] = str(workspace / "validation" / "tests")
 	env["HELPER_PATTERN"] = "_*.sh"
 	env["CANARY_PATTERN"] = "*canary*.sh"
 	env["CANARY_REQUIRED"] = "1"
@@ -83,6 +84,7 @@ def _run_discover_tests(workspace: Path, *, include_synthesised: str | None) -> 
 		+ "discover_tests\n"
 		+ "printf 'CANARY_TEST=%s\\n' \"${CANARY_TEST}\"\n"
 		+ "printf 'TEST_FILE=%s\\n' \"${TEST_FILES[@]}\"\n"
+		+ "printf 'SYNTH_ASSERTION_FILE=%s\\n' \"${SYNTH_ASSERTION_FILES[@]}\"\n"
 	)
 
 	return subprocess.run(
@@ -110,13 +112,21 @@ def _parse_canary(stdout: str) -> str:
 	raise AssertionError("missing CANARY_TEST line")
 
 
+def _parse_synth_assertion_files(stdout: str) -> list[str]:
+	return [
+		line.split("=", 1)[1]
+		for line in stdout.splitlines()
+		if line.startswith("SYNTH_ASSERTION_FILE=") and line.split("=", 1)[1]
+	]
+
+
 def _seed_test_dir(workspace: Path) -> None:
 	test_dir = workspace / "validation" / "tests"
 	_write_exec(test_dir / "00_canary.sh")
 	_write_exec(test_dir / "20_health.sh")
 	_write_exec(test_dir / "_helper.sh")
-	_write_exec(test_dir / "synth_round_4_issue.sh")
-	(test_dir / "synth_round_4_manifest.json").write_text("{}\n", encoding="utf-8")
+	_write_exec(test_dir / "synth_round_4_legacy.sh")
+	(test_dir / "synth_round_4_assertions.json").write_text("{}\n", encoding="utf-8")
 
 
 def test_discover_tests_includes_synthesised_scripts_by_default() -> None:
@@ -126,13 +136,16 @@ def test_discover_tests_includes_synthesised_scripts_by_default() -> None:
 
 		result = _run_discover_tests(workspace, include_synthesised=None)
 		assert result.returncode == 0, result.stdout + result.stderr
-		assert _parse_canary(result.stdout) == "validation/tests/00_canary.sh"
+		assert _parse_canary(result.stdout) == str(workspace / "validation/tests/00_canary.sh")
 		assert _parse_test_files(result.stdout) == [
-			"validation/tests/00_canary.sh",
-			"validation/tests/20_health.sh",
-			"validation/tests/synth_round_4_issue.sh",
+			str(workspace / "validation/tests/00_canary.sh"),
+			str(workspace / "validation/tests/20_health.sh"),
 		]
-		assert "synth_round_4_manifest.json" not in result.stdout
+		assert str(workspace / "validation/tests/synth_round_4_assertions.json") not in _parse_test_files(result.stdout)
+		assert _parse_synth_assertion_files(result.stdout) == [
+			str(workspace / "validation/tests/synth_round_4_assertions.json")
+		]
+		assert str(workspace / "validation/tests/synth_round_4_legacy.sh") not in _parse_test_files(result.stdout)
 
 
 def test_discover_tests_excludes_only_synthesised_scripts_when_disabled() -> None:
@@ -142,13 +155,22 @@ def test_discover_tests_excludes_only_synthesised_scripts_when_disabled() -> Non
 
 		result = _run_discover_tests(workspace, include_synthesised="false")
 		assert result.returncode == 0, result.stdout + result.stderr
-		assert _parse_canary(result.stdout) == "validation/tests/00_canary.sh"
+		assert _parse_canary(result.stdout) == str(workspace / "validation/tests/00_canary.sh")
 		assert _parse_test_files(result.stdout) == [
-			"validation/tests/00_canary.sh",
-			"validation/tests/20_health.sh",
+			str(workspace / "validation/tests/00_canary.sh"),
+			str(workspace / "validation/tests/20_health.sh"),
 		]
-		assert "validation/tests/_helper.sh" not in result.stdout
-		assert "validation/tests/synth_round_4_issue.sh" not in result.stdout
+		assert str(workspace / "validation/tests/_helper.sh") not in result.stdout
+		assert _parse_synth_assertion_files(result.stdout) == []
+		assert "excluded 2 legacy executable or disabled declarative behavioural smoke artifact(s)" in result.stderr
+
+
+def test_fallback_driver_excludes_legacy_shell_and_uses_trusted_evaluator() -> None:
+	text = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	assert '[[ "${test_script_candidate##*/}" == synth_round_*.sh ]]' in text
+	assert 'excluded legacy executable behavioural smoke artifact' in text
+	assert 'run_behavioural_smoke_assertions.sh' in text
+	assert "find \"${TEST_DIR}\" -maxdepth 1 -type f -name 'synth_round_*_assertions.json'" in text
 
 
 def main() -> int:

@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,6 +21,17 @@ IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 RESOLVER_SCRIPT = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
+
+
+def _extract_shell_function(path: Path, function_name: str) -> str:
+	text = path.read_text(encoding="utf-8")
+	start = text.index(f"{function_name}()\n{{")
+	next_function = text.find("\n_", start + 2)
+	while next_function >= 0 and not text[next_function + 1:].startswith("_force_tick_"):
+		next_function = text.find("\n_", next_function + 2)
+	if next_function < 0:
+		raise AssertionError(f"unable to find end of {function_name}")
+	return text[start:next_function] + "\n"
 
 
 def _run(cmd: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -268,6 +280,7 @@ def test_force_tick_dispatches_and_writes_state() -> None:
 	record = _read_force_tick_record(work_repo, 3042)
 	assert record["tracking_issue"] == 3042
 	assert record["dispatch_status"] == "sent"
+	assert re.fullmatch(r"force_tick_claim_\d{14}_[0-9a-f]{10}", str(record["claim_id"]))
 	assert record["last_dispatch_payload"] == {
 		"issue": 501,
 		"reason": "implement-pr-created",
@@ -427,10 +440,12 @@ def test_memory_force_tick_put_refuses_same_window_overwrite_for_new_attempt() -
 	)
 	assert seed.returncode == 0, seed.stderr
 
+	shared_timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 	current_record = {
 		"schema_version": "force_tick.v1",
 		"tracking_issue": 3042,
-		"last_attempted_timestamp": _iso_seconds_ago(1),
+		"last_attempted_timestamp": shared_timestamp,
+		"claim_id": "force_tick_claim_20260923000000_aaaaaaaaaa",
 		"last_attempt_payload": {
 			"issue": 501,
 			"reason": "review-blocked",
@@ -446,7 +461,8 @@ def test_memory_force_tick_put_refuses_same_window_overwrite_for_new_attempt() -
 	incoming_record = {
 		"schema_version": "force_tick.v1",
 		"tracking_issue": 3042,
-		"last_attempted_timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+		"last_attempted_timestamp": shared_timestamp,
+		"claim_id": "force_tick_claim_20260923000000_bbbbbbbbbb",
 		"last_attempt_payload": {
 			"issue": 501,
 			"reason": "review-blocked",
@@ -464,12 +480,91 @@ def test_memory_force_tick_put_refuses_same_window_overwrite_for_new_attempt() -
 	assert payload["record"]["last_attempted_timestamp"] == current_record["last_attempted_timestamp"]
 	stored = _read_force_tick_record(work_repo, 3042)
 	assert stored["last_attempted_timestamp"] == current_record["last_attempted_timestamp"]
+	assert stored["claim_id"] == current_record["claim_id"]
+
+
+def test_memory_force_tick_put_allows_only_matching_pending_final_transition() -> None:
+	_, work_repo = _create_repo()
+	seed, _ = _run_force_tick(
+		work_repo,
+		{501: "- Tracking issue: #3042\n- Managed by: AI Orchestrator\n"},
+		args=["--issue", "501", "--reason", "seed", "--source-workflow", "test", "--run-id", "1"],
+	)
+	assert seed.returncode == 0, seed.stderr
+	timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+	payload = {"issue": 501, "reason": "review-blocked", "run_id": 9001, "source_workflow": "review_autofix"}
+	pending = {
+		"schema_version": "force_tick.v1",
+		"tracking_issue": 3042,
+		"claim_id": "force_tick_claim_20260923000000_aaaaaaaaaa",
+		"last_attempted_timestamp": timestamp,
+		"last_attempt_payload": payload,
+		"dispatch_status": "pending",
+		"last_dispatch_timestamp": None,
+		"last_dispatch_payload": None,
+	}
+	_write_force_tick_record(work_repo, 3042, pending)
+	matching_final = {
+		**pending,
+		"dispatch_status": "sent",
+		"last_dispatch_timestamp": timestamp,
+		"last_dispatch_payload": payload,
+	}
+	matching_result = _run_memory_force_tick_put(work_repo, tracking_issue=3042, record=matching_final)
+	assert matching_result.returncode == 0, matching_result.stderr
+	assert json.loads(matching_result.stdout)["stored"] is True
+	assert _read_force_tick_record(work_repo, 3042)["dispatch_status"] == "sent"
+
+
+def test_memory_force_tick_put_rejects_mismatched_final_claim_and_unchanged_write() -> None:
+	_, work_repo = _create_repo()
+	seed, _ = _run_force_tick(
+		work_repo,
+		{501: "- Tracking issue: #3042\n- Managed by: AI Orchestrator\n"},
+		args=["--issue", "501", "--reason", "seed", "--source-workflow", "test", "--run-id", "1"],
+	)
+	assert seed.returncode == 0, seed.stderr
+	timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+	pending = {
+		"schema_version": "force_tick.v1",
+		"tracking_issue": 3042,
+		"claim_id": "force_tick_claim_20260923000000_aaaaaaaaaa",
+		"last_attempted_timestamp": timestamp,
+		"last_attempt_payload": {"issue": 501},
+		"dispatch_status": "pending",
+		"last_dispatch_timestamp": None,
+		"last_dispatch_payload": None,
+	}
+	_write_force_tick_record(work_repo, 3042, pending)
+	unchanged = _run_memory_force_tick_put(work_repo, tracking_issue=3042, record=pending)
+	assert json.loads(unchanged.stdout)["stored"] is False
+	mismatched_final = {**pending, "claim_id": "force_tick_claim_20260923000000_bbbbbbbbbb", "dispatch_status": "failed"}
+	mismatch = _run_memory_force_tick_put(work_repo, tracking_issue=3042, record=mismatched_final)
+	assert json.loads(mismatch.stdout)["stored"] is False
+	assert _read_force_tick_record(work_repo, 3042) == pending
 
 
 def test_memory_helpers_export_force_tick_wrappers() -> None:
 	text = MEMORY_HELPERS.read_text(encoding="utf-8")
 	assert "memory_force_tick_get()" in text
 	assert "memory_force_tick_put()" in text
+
+
+def test_force_tick_claim_id_loads_from_flat_immutable_support_directory() -> None:
+	with tempfile.TemporaryDirectory(prefix="force-tick-flat-support-") as td:
+		flat_support = Path(td)
+		for source in (REPO_ROOT / "scripts").glob("*.py"):
+			shutil.copy2(source, flat_support / source.name)
+		script = (
+			"set -euo pipefail\n"
+			f"SCRIPT_DIR={shlex.quote(str(flat_support))}\n"
+			+ _extract_shell_function(FORCE_TICK_SCRIPT, "_force_tick_run_isolated_python")
+			+ _extract_shell_function(FORCE_TICK_SCRIPT, "_force_tick_make_claim_id")
+			+ "_force_tick_make_claim_id\n"
+		)
+		result = _run(["bash", "-c", script], cwd=REPO_ROOT)
+		assert result.returncode == 0, result.stderr
+		assert re.fullmatch(r"force_tick_claim_\d{14}_[0-9a-f]{10}\n", result.stdout)
 
 
 def test_phase_end_paths_call_shared_force_tick_helper() -> None:
@@ -482,10 +577,10 @@ def test_phase_end_paths_call_shared_force_tick_helper() -> None:
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/orchestrate_force_tick.sh"' in implement_text
 	assert "orchestrate_force_tick.sh" in review_text
 	assert review_text.count("orchestrate_force_tick.sh") >= 4
-	assert "bash scripts/orchestrate_force_tick.sh" in validate_text
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh"' in validate_text
 	assert "orchestrate_force_tick.sh" in resolver_text
 	assert 'gh workflow run "${_poll_workflow}"' not in resolver_text
-	assert "Immediate orchestrator-poll dispatch helper failed" in resolver_text
+	assert 'ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"' in resolver_text
 
 
 def main() -> int:

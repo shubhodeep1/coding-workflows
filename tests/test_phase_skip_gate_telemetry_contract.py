@@ -181,9 +181,12 @@ def test_orchestrate_clarify_respond_gate_steps_emit_stable_telemetry() -> None:
 	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_metadata reason=not_orchestrator_managed outcome=skip issue=${ISSUE_NUMBER}" in metadata_block
 
 	parse_block = _step_block(ORCH_CLARIFY_RESPOND_WF, "Parse and post answer")
-	assert "bash scripts/orchestrate_parse_and_post_answer.sh" in parse_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_parse_and_post_answer.sh"' in parse_block
 
 	helper_text = _read(ORCH_PARSE_ANSWER_SCRIPT)
+	assert helper_text.count("python3 -I -B -c") == 2
+	assert "from scripts.ai_memory_lib" not in helper_text
+	assert "sys.path.insert(0, sys.argv[1]); from ai_memory_lib import compute_normalized_sha256" in helper_text
 	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=command_claim reason=already_processed outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}" in helper_text
 	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=command_claim reason=claimed_elsewhere outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}" in helper_text
 	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=escalate_requested outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} cycle=${CYCLE} max_cycles=${MAX_CYCLES}" in helper_text

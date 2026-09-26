@@ -13,6 +13,7 @@ Hard constraints:
   - prompts/mode-validate-fix-harness.txt
   - prompts/mode-validate-diagnose.txt
 - Harness recovery for template-mode render/lint failures is renderer-driven in validate_process.sh; DO NOT attempt to patch validation/* harness artifacts or route those fixes through freehand harness edits.
+- Template-mode reruns consume local self-heal overrides only for `mode-validate-discover.txt` and `mode-validate-diagnose.txt`. Return an empty patch instead of targeting the generate/fix-harness prompts, which are retained for upstream compatibility but are not rendered by the current validation rerun.
 - You MUST NOT propose edits to any other file (including scripts/, workflow YAML, or any other prompt).
 - You MUST NOT rename, remove, or repurpose any identifier, field name, JSON key, label, env var, or tool name referenced by these prompts. Additive clarifications only.
 - You MUST NOT change the declared output JSON schema of any prompt. You may tighten wording or add guidance, but the shape of the contract is immutable.

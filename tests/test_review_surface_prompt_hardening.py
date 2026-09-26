@@ -233,16 +233,18 @@ def _render_integration_conflict_prompt(tmp_p: Path, payload: str) -> str:
 	start = next(
 		i
 		for i in range(end, -1, -1)
-		if script_lines[i].lstrip().startswith("PROMPT_TPL=")
+		if script_lines[i].strip() == '_gh_helpers_run_isolated_python \\'
 	)
 	block = (
 		'PROMPT_TPL="${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"\n'
 		"set -euo pipefail\n"
+		f'source "{GH_HELPERS}"\n'
 		+ "".join(script_lines[start : end + 1])
 	)
 	env = os.environ.copy()
 	env.update({
 		"SUPPORT_PROMPTS_DIR": str(REPO_ROOT / "prompts"),
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 		"RUNTIME_DIR": str(runtime),
 		"CONFLICT_RESOLVER_PROMPT_FILE": str(prompt_file),
 		"TARGET_BRANCH": "orchestrator/project-9999",
@@ -333,8 +335,25 @@ def test_phase_e_review_surface_prompts_keep_injected_fence_text_as_data() -> No
 	)
 
 
+def test_integration_conflict_state_selection_requires_designated_producer_authentication() -> None:
+	prepare_body = CONFLICT_PREPARE.read_text(encoding="utf-8")
+	assert "gh_retry gh api user" in prepare_body
+	assert 'select((.user.id // 0) == $producer_id)' in prepare_body
+	assert r'test("\\[bot\\]$")' not in prepare_body
+	assert 'IN("OWNER", "MEMBER", "COLLABORATOR")' not in prepare_body
+	assert 'orchestrate_state_v2.py" verify' in prepare_body
+	assert '--repository "${GITHUB_REPOSITORY}"' in prepare_body
+	assert '--tracking-issue "${INTEGRATION_TRACKING_NUM}"' in prepare_body
+	assert '--integration-branch "${TARGET_BRANCH}"' in prepare_body
+	assert "--export-resolver-safe-fingerprints" in prepare_body
+	assert "--prefer-highest-auth-generation" in prepare_body
+	assert "failed at comments-json-merge" in prepare_body
+	assert "failed at producer-filter" in prepare_body
+
+
 def main() -> int:
 	test_phase_e_review_surface_prompts_keep_injected_fence_text_as_data()
+	test_integration_conflict_state_selection_requires_designated_producer_authentication()
 	print("OK: review-surface prompt hardening preserves injected fence bait as data")
 	return 0
 

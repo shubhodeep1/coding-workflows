@@ -309,7 +309,7 @@ fi
 # Build linked issue context file for reviewer/editor prompts.
 _linked_json_file="$(mktemp)"
 printf '%s' "${_linked_context_raw}" > "${_linked_json_file}"
-PYTHONDONTWRITEBYTECODE=1 python3 - "${_linked_json_file}" "${LINKED_ISSUE_CONTEXT_FILE}" <<'PYLINKED'
+_gh_helpers_run_isolated_python -- - "${_linked_json_file}" "${LINKED_ISSUE_CONTEXT_FILE}" <<'PYLINKED'
 import json
 import sys
 
@@ -341,7 +341,12 @@ PYLINKED
 rm -f "${_linked_json_file}"
 echo "Linked issue context bytes: $(wc -c < "${LINKED_ISSUE_CONTEXT_FILE}" | tr -d '[:space:]')"
 
-PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+_gh_helpers_run_isolated_python \
+	"PR_ISSUE_COMMENTS_FILE=${PR_ISSUE_COMMENTS_FILE}" \
+	"PR_REVIEWS_FILE=${PR_REVIEWS_FILE}" \
+	"PR_REVIEW_COMMENTS_FILE=${PR_REVIEW_COMMENTS_FILE}" \
+	"PR_ALL_COMMENTS_CONTEXT_FILE=${PR_ALL_COMMENTS_CONTEXT_FILE}" \
+	-- - <<'PY'
 import json
 import os
 from datetime import datetime, timezone

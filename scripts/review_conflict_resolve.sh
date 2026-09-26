@@ -27,7 +27,6 @@
 #   IS_INTEGRATION_SYNC             "true" when acting on an orchestrator integration branch.
 #   INTEGRATION_FINGERPRINTS_FILE   Fingerprints payload written by the prepare step.
 #   INTEGRATION_BRANCH_NAME / TARGET_BRANCH  Branch identifiers used by the verifier.
-#   GH_PAT                          GitHub token used to rewrite the origin remote URL.
 #   GITHUB_REPOSITORY               owner/repo slug (auto-set).
 #
 # Outputs:
@@ -113,6 +112,7 @@ WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_
 ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+CODEX_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_helpers.sh"
 # The staged bundle and the verified workflow checkout are the only runtime
 # sources. Older releases once used a moving main snapshot to supply missing
 # dependencies (drhyg_ecommerce_automation runs 33278423340 / 33279585316);
@@ -145,6 +145,12 @@ if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER
     OPENCODE_CONFIG_WRITER_PATH="${_resolver_fallback_path}"
   fi
 fi
+if [ ! -r "${CODEX_HELPERS_PATH}" ]; then
+  echo "::error::codex_helpers.sh is required for brokered resolver execution."
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${CODEX_HELPERS_PATH}"
 # shellcheck source=/dev/null
 if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
   resolver_helpers_missing_alert="opencode_agent_failure phase=review_conflict_resolve role=writer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=helpers_missing"
@@ -303,6 +309,12 @@ if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 fi
 
+resolver_run_isolated_python()
+{
+  _gh_helpers_run_isolated_python_with_paths \
+    "${SUPPORT_ROOT_DIR:-.}" "${SUPPORT_SCRIPTS_DIR:-scripts}" -- "$@"
+}
+
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
@@ -325,49 +337,19 @@ RESOLVER_SERENA_TOOL_HINTS="$({
   fi
 }; )"
 
-_RESOLVER_DISPATCH_FIRED=0
-_dispatch_integration_judge_now() {
-  [ "${_RESOLVER_DISPATCH_FIRED}" -eq 1 ] && return 0
-  _RESOLVER_DISPATCH_FIRED=1
-
-  if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
-    return 0
-  fi
-  if [ ! -f "${ORCHESTRATE_FORCE_TICK_HELPER}" ]; then
-    echo "::warning::Skipping immediate orchestrator-poll dispatch: ${ORCHESTRATE_FORCE_TICK_HELPER} is unavailable. Cron tick will pick up the integration-sync stall within 5 min."
-    return 0
-  fi
-
-  local dispatch_token="${GH_PAT:-${GH_TOKEN:-}}"
-  local repo_slug="${GITHUB_REPOSITORY:-}"
-
-  if ! [[ "${repo_slug}" =~ ^[^/]+/[^/]+$ ]]; then
-    echo "::warning::Skipping immediate orchestrator-poll dispatch: GITHUB_REPOSITORY is missing or invalid (${repo_slug:-<unset>}). Cron tick will pick up the integration-sync stall within 5 min."
-    return 0
-  fi
-
-  GH_PAT="${dispatch_token}" \
-  GH_TOKEN="${dispatch_token}" \
-  GITHUB_REPOSITORY="${repo_slug}" \
-  bash "${ORCHESTRATE_FORCE_TICK_HELPER}" \
-    --repo "${repo_slug}" \
-    --issue "${PR_NUMBER:-}" \
-    --reason "resolver-failed" \
-    --source-workflow "review_conflict_resolve" \
-    --run-id "${GITHUB_RUN_ID:-}" || echo "::warning::Immediate orchestrator-poll dispatch helper failed; cron tick will pick up the integration-sync stall within 5 min."
+_resolver_restore_agent_access()
+{
+  return 0
 }
 
-# EXIT trap — fires the dispatch on any non-zero exit from this
-# script (resolver loop exhaustion, no-progress, allowlist guard,
-# check_resolver_diff failure).  Idempotent (function early-returns
-# after first call).  The exit-0 paths (no staged changes after
-# resolver) intentionally bypass the dispatch — the resolver
-# succeeded in deciding no commit was needed.
-_resolver_exit_trap() {
-  local _rc=$?
-  if [ "${_rc}" -ne 0 ]; then
-    _dispatch_integration_judge_now || true
-  fi
+_resolver_exit_trap()
+{
+	local _rc=$?
+	_resolver_restore_agent_access || _rc=1
+	model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after resolver execution." >&2
+	if [ "${_rc}" -ne 0 ] && [ -n "${GITHUB_ENV:-}" ]; then
+		echo "RESOLVER_ACTUATION_REQUIRED=true" >> "${GITHUB_ENV}"
+	fi
   return "${_rc}"
 }
 trap _resolver_exit_trap EXIT
@@ -468,6 +450,87 @@ _current_reasoning_effort="${_resolver_reasoning_effort}"
 _apply_resolver_reasoning_effort "${_current_reasoning_effort}"
 RESOLVER_OPENCODE_CONFIG="${RUNTIME_DIR}/resolver_opencode.json"
 RESOLVER_OPENCODE_WORKSPACE="$(pwd)"
+RESOLVER_ISOLATION_USER="${RESOLVER_ISOLATION_USER:-nobody}"
+RESOLVER_AGENT_ACL_BACKUP="${RUNTIME_DIR}/resolver-agent-access.acl"
+MODEL_PROVIDER_BROKER_AGENT_HOME="${RUNTIME_DIR}/resolver-agent-home"
+export MODEL_PROVIDER_BROKER_AGENT_HOME
+
+# Sandbox-home preflight. Every review_autofix resolver run on this lineage
+# since f03b8d6 (#4071) has died on the mkdir below with
+#   mkdir: cannot create directory '<RUNTIME_DIR>/resolver-agent-home': Permission denied
+# (runs 34746616712 on PR #4077; 34960984494 and 34992257788 on PR #4088),
+# although review_conflict_prepare.sh had just created files in the same
+# RUNTIME_DIR and the editor path creates its own sandbox there without
+# trouble. The log never said who the process was or what the directory
+# looked like at that moment, so record identity, ownership, mode, ACLs and
+# mount first. Also inspect an existing sandbox home because a stale,
+# inaccessible child can fail the mkdir even when RUNTIME_DIR itself is usable.
+#
+# Log contract (stable prefixes, see agents.md "Stable log prefixes"):
+#   RESOLVER_AGENT_HOME_PREFLIGHT uid=<n> euid=<n> user=<name> runtime_dir=<path>
+#     owner=<u:g> mode=<octal> type=<kind> parent_dir=owner=<u:g> mode=<octal>
+#     acl=<entries|none|unavailable> mount=<target fstype options|unknown>
+#     agent_home_exists=<bool> agent_home_symlink=<bool> agent_home_directory=<bool>
+#     agent_home_writable=<bool> agent_home_searchable=<bool>
+#     agent_home_stat=<details|absent> agent_home_acl=<entries|none|unavailable|not-applicable>
+#   ::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=<path> exists=<bool>
+#     writable=<bool> searchable=<bool> uid=<n> euid=<n> user=<name>
+#     owner=<u:g> mode=<octal> type=<kind>
+#     agent_home_exists=<bool> agent_home_symlink=<bool> agent_home_directory=<bool> ...
+_resolver_agent_home_preflight()
+{
+	local runtime_parent="${1:?runtime dir required}"
+	local parent_stat="" grandparent_stat="" parent_acl="unavailable" parent_mount=""
+	local agent_home_stat="absent" agent_home_acl="not-applicable"
+	local exists_flag="false" writable_flag="false" searchable_flag="false"
+	local agent_home_exists_flag="false" agent_home_symlink_flag="false" agent_home_directory_flag="false"
+	local agent_home_writable_flag="false" agent_home_searchable_flag="false" agent_home_ready_flag="true"
+	parent_stat="$(stat -c 'owner=%U:%G mode=%a type=%F' -- "${runtime_parent}" 2>&1 | tr '\n' ' ' || true)"
+	grandparent_stat="$(stat -c 'owner=%U:%G mode=%a' -- "$(dirname -- "${runtime_parent}")" 2>&1 | tr '\n' ' ' || true)"
+	if command -v getfacl >/dev/null 2>&1; then
+		if ! parent_acl="$(getfacl -p -- "${runtime_parent}" 2>/dev/null | grep -v '^#' | grep -v '^$' | tr '\n' ',')"; then
+			parent_acl="unavailable"
+		elif [ -z "${parent_acl}" ]; then
+			parent_acl="none"
+		fi
+	fi
+	if command -v findmnt >/dev/null 2>&1; then
+		parent_mount="$(findmnt -n -o TARGET,FSTYPE,OPTIONS --target "${runtime_parent}" 2>/dev/null | head -n 1 | tr -s '[:space:]' ' ' | sed 's/[[:space:]]*$//' || true)"
+	fi
+	[ -d "${runtime_parent}" ] && exists_flag="true"
+	[ -w "${runtime_parent}" ] && writable_flag="true"
+	[ -x "${runtime_parent}" ] && searchable_flag="true"
+	if [ -e "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] || [ -L "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ]; then
+		agent_home_exists_flag="true"
+		agent_home_acl="unavailable"
+		agent_home_stat="$(stat -c 'owner=%U:%G mode=%a type=%F' -- "${MODEL_PROVIDER_BROKER_AGENT_HOME}" 2>&1 | tr '\n' ' ' || true)"
+		[ -L "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] && agent_home_symlink_flag="true"
+		[ -d "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] && agent_home_directory_flag="true"
+		[ -w "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] && agent_home_writable_flag="true"
+		[ -x "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] && agent_home_searchable_flag="true"
+		if command -v getfacl >/dev/null 2>&1; then
+			if ! agent_home_acl="$(getfacl -p -- "${MODEL_PROVIDER_BROKER_AGENT_HOME}" 2>/dev/null | grep -v '^#' | grep -v '^$' | tr '\n' ',')"; then
+				agent_home_acl="unavailable"
+			elif [ -z "${agent_home_acl}" ]; then
+				agent_home_acl="none"
+			fi
+		fi
+		if [ "${agent_home_symlink_flag}" = "true" ] || [ "${agent_home_directory_flag}" != "true" ] || [ "${agent_home_writable_flag}" != "true" ] || [ "${agent_home_searchable_flag}" != "true" ]; then
+			agent_home_ready_flag="false"
+		fi
+	fi
+	echo "RESOLVER_AGENT_HOME_PREFLIGHT uid=$(id -u) euid=${EUID} user=$(id -un 2>/dev/null || echo unknown) runtime_dir=${runtime_parent} ${parent_stat% } parent_dir=${grandparent_stat% } acl=${parent_acl} mount=${parent_mount:-unknown} agent_home_exists=${agent_home_exists_flag} agent_home_symlink=${agent_home_symlink_flag} agent_home_directory=${agent_home_directory_flag} agent_home_writable=${agent_home_writable_flag} agent_home_searchable=${agent_home_searchable_flag} agent_home_stat=${agent_home_stat% } agent_home_acl=${agent_home_acl}"
+	if [ "${exists_flag}" != "true" ] || [ "${writable_flag}" != "true" ] || [ "${searchable_flag}" != "true" ] || [ "${agent_home_ready_flag}" != "true" ]; then
+		echo "::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=${runtime_parent} exists=${exists_flag} writable=${writable_flag} searchable=${searchable_flag} uid=$(id -u) euid=${EUID} user=$(id -un 2>/dev/null || echo unknown) ${parent_stat% } agent_home_exists=${agent_home_exists_flag} agent_home_symlink=${agent_home_symlink_flag} agent_home_directory=${agent_home_directory_flag} agent_home_writable=${agent_home_writable_flag} agent_home_searchable=${agent_home_searchable_flag} agent_home_stat=${agent_home_stat% }; the resolver sandbox home cannot be created under RUNTIME_DIR by this identity, refusing to start the broker or OpenCode." >&2
+		return 1
+	fi
+	return 0
+}
+_resolver_agent_home_preflight "${RUNTIME_DIR}" || exit 1
+mkdir -p "${MODEL_PROVIDER_BROKER_AGENT_HOME}/tmp" "${MODEL_PROVIDER_BROKER_AGENT_HOME}/.cache"
+chmod 0700 "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
+opencode_model_provider_broker_start
+sudo -n chown -R "${RESOLVER_ISOLATION_USER}" "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
 resolver_opencode_serena="off"
 if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
   resolver_opencode_serena="on"
@@ -477,10 +540,12 @@ if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
   --model "${MODEL_EDITOR}" \
   --project-path "${RESOLVER_OPENCODE_WORKSPACE}" \
   --config-path "${RESOLVER_OPENCODE_CONFIG}" \
-  --serena "${resolver_opencode_serena}"; then
+  --serena "${resolver_opencode_serena}" \
+  --provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"; then
   opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" 1 config_generation || true
   exit 1
 fi
+chmod 0444 "${RESOLVER_OPENCODE_CONFIG}"
 if ! opencode_require_bootstrap review_conflict_resolve writer "${MODEL_EDITOR}" \
   "${RESOLVER_OPENCODE_CONFIG}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
   exit 1
@@ -494,6 +559,56 @@ RESOLVER_FP_VIOLATIONS_PREV_FILE="${RUNTIME_DIR}/resolver_fp_violations_prev.txt
 RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt"
 RESOLVER_FP_BASELINE_STATE_FILE="${RUNTIME_DIR}/resolver_fp_baseline_state.json"
 RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact.json"
+RESOLVER_RETRY_STATE_VERIFIED_FILE="${RESOLVER_RETRY_STATE_VERIFIED_FILE:-${RUNTIME_DIR}/resolver_retry_state_verified.json}"
+RESOLVER_RETRY_STATE_CANDIDATE_FILE="${RESOLVER_RETRY_STATE_CANDIDATE_FILE:-${RUNTIME_DIR}/resolver_retry_state_candidate.json}"
+
+_resolver_restore_agent_access()
+{
+  if [ -s "${RESOLVER_AGENT_ACL_BACKUP:-/nonexistent}" ] && command -v setfacl >/dev/null 2>&1; then
+    setfacl --restore="${RESOLVER_AGENT_ACL_BACKUP}" >/dev/null 2>&1 || return 1
+    : > "${RESOLVER_AGENT_ACL_BACKUP}"
+  fi
+  return 0
+}
+
+_resolver_prepare_agent_access()
+{
+	local resolver_path parent_path opencode_binary git_directory
+	if ! command -v getfacl >/dev/null 2>&1 || ! command -v setfacl >/dev/null 2>&1; then
+		echo "::error::getfacl/setfacl are required for unprivileged resolver execution; refusing privileged fallback."
+		return 1
+	fi
+	opencode_binary="$(command -v opencode 2>/dev/null || true)"
+	git_directory="$(git rev-parse --git-dir)"
+	{
+		getfacl -p "${RESOLVER_OPENCODE_WORKSPACE}"
+		getfacl -p "${git_directory}"
+		while IFS= read -r resolver_path; do
+			[ -n "${resolver_path}" ] || continue
+			parent_path="$(dirname -- "${resolver_path}")"
+			while [ "${parent_path}" != "." ] && [ "${parent_path}" != "/" ]; do
+				getfacl -p "${parent_path}"
+				parent_path="$(dirname -- "${parent_path}")"
+			done
+			[ ! -e "${resolver_path}" ] || getfacl -p "${resolver_path}"
+		done < "${RESOLVER_ALLOWLIST_FILE}"
+	} > "${RESOLVER_AGENT_ACL_BACKUP}"
+	setfacl -m "u:${RESOLVER_ISOLATION_USER}:rwx" "${RESOLVER_OPENCODE_WORKSPACE}"
+	model_provider_broker_grant_read_path "${RESOLVER_OPENCODE_CONFIG}" "${RESOLVER_ISOLATION_USER}"
+	model_provider_broker_grant_read_path "${SUPPORT_SCRIPTS_DIR}" "${RESOLVER_ISOLATION_USER}"
+	[ -z "${opencode_binary}" ] || model_provider_broker_grant_read_path "${opencode_binary}" "${RESOLVER_ISOLATION_USER}"
+	while IFS= read -r resolver_path; do
+    [ -n "${resolver_path}" ] || continue
+    parent_path="$(dirname -- "${resolver_path}")"
+    while [ "${parent_path}" != "." ] && [ "${parent_path}" != "/" ]; do
+      setfacl -m "u:${RESOLVER_ISOLATION_USER}:rwx" "${parent_path}"
+      parent_path="$(dirname -- "${parent_path}")"
+    done
+    [ ! -e "${resolver_path}" ] || setfacl -m "u:${RESOLVER_ISOLATION_USER}:rw" "${resolver_path}"
+  done < "${RESOLVER_ALLOWLIST_FILE}"
+	chmod 0700 "${git_directory}"
+}
+
 RESOLVER_SCOPE_SNAPSHOT_DIR="${RUNTIME_DIR}/resolver_scope_snapshot"
 RESOLVER_SCOPE_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_scope_violations.txt"
 
@@ -736,8 +851,9 @@ _capture_fingerprints_baseline()
     return 0
   fi
   local _baseline_capture_exit=0
-  INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+  _gh_helpers_run_isolated_python \
+    "INTEGRATION_BRANCH_NAME=${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+    -- "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
       --baseline-fingerprints-state "${RESOLVER_FP_BASELINE_STATE_FILE}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" || _baseline_capture_exit=$?
   if [ "${_baseline_capture_exit}" -ne 0 ] || [ ! -s "${RESOLVER_FP_BASELINE_STATE_FILE}" ]; then
@@ -762,24 +878,20 @@ _select_fingerprint_verification_tier()
   if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
     return 0
   fi
-  if [ ! -f "${PR_PAYLOAD_FILE:-/nonexistent}" ]; then
-    RESOLVER_FP_VERIFICATION_TIER_REASON="missing_pr_payload"
+  if [ ! -f "${RESOLVER_RETRY_STATE_VERIFIED_FILE:-/nonexistent}" ]; then
+    RESOLVER_FP_VERIFICATION_TIER_REASON="missing_verified_retry_state"
     return 0
   fi
 
   local _tier_json
-  if ! _tier_json="$(RESOLVER_ESCAPE_THRESHOLD_N="${RESOLVER_ESCAPE_THRESHOLD_N:-5}" PR_PAYLOAD_FILE="${PR_PAYLOAD_FILE}" python3 - <<'PY'
+  if ! _tier_json="$(_gh_helpers_run_isolated_python \
+    "RESOLVER_ESCAPE_THRESHOLD_N=${RESOLVER_ESCAPE_THRESHOLD_N:-5}" \
+    "RESOLVER_RETRY_STATE_VERIFIED_FILE=${RESOLVER_RETRY_STATE_VERIFIED_FILE}" \
+    -- - <<'PY'
 from __future__ import annotations
 
 import json
 import os
-import re
-
-
-RETRY_STATE_BLOCK_PATTERN = re.compile(
-    r"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n(.*?)\n-->",
-    flags=re.S,
-)
 
 
 def _parse_positive_int(value: object, default: int) -> int:
@@ -798,19 +910,6 @@ def _parse_nonnegative_int(value: object, default: int) -> int:
     return parsed if parsed >= 0 else default
 
 
-def _extract_retry_state(body: str) -> dict[str, object] | None:
-    normalized = (body or "").replace("\r\n", "\n").replace("\r", "\n")
-    matches = RETRY_STATE_BLOCK_PATTERN.findall(normalized)
-    for raw in reversed(matches):
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return None
-
-
 def _select_tier(count: int, threshold: int) -> str:
     if count >= threshold * 3:
         return "warn_only"
@@ -822,7 +921,7 @@ def _select_tier(count: int, threshold: int) -> str:
 
 
 threshold = _parse_positive_int(os.environ.get("RESOLVER_ESCAPE_THRESHOLD_N"), 5)
-payload_path = os.environ.get("PR_PAYLOAD_FILE", "")
+payload_path = os.environ.get("RESOLVER_RETRY_STATE_VERIFIED_FILE", "")
 try:
     with open(payload_path, "r", encoding="utf-8") as fh:
         payload = json.load(fh)
@@ -831,26 +930,9 @@ except Exception:
     raise SystemExit(0)
 
 if not isinstance(payload, dict):
-    print(json.dumps({"tier": "strict", "reason": "malformed_pr_payload"}, ensure_ascii=True))
+    print(json.dumps({"tier": "strict", "reason": "malformed_verified_retry_state"}, ensure_ascii=True))
     raise SystemExit(0)
-
-head = payload.get("head") or {}
-head_sha = str(head.get("sha", "") or "").strip()
-if not head_sha:
-    print(json.dumps({"tier": "strict", "reason": "missing_head_sha"}, ensure_ascii=True))
-    raise SystemExit(0)
-
-retry_state = _extract_retry_state(str(payload.get("body", "") or ""))
-if not isinstance(retry_state, dict):
-    print(json.dumps({"tier": "strict", "reason": "no_retry_state"}, ensure_ascii=True))
-    raise SystemExit(0)
-
-retry_state_head_sha = str(retry_state.get("head_sha", "") or "").strip()
-if retry_state_head_sha != head_sha:
-    print(json.dumps({"tier": "strict", "reason": "retry_state_head_sha_mismatch"}, ensure_ascii=True))
-    raise SystemExit(0)
-
-count = _parse_nonnegative_int(retry_state.get("consecutive_failure_count"), 0)
+count = _parse_nonnegative_int(payload.get("consecutive_failure_count"), 0)
 print(
     json.dumps(
         {
@@ -881,6 +963,7 @@ PY
 
 _select_fingerprint_verification_tier
 echo "Integration fingerprint verification tier selected: ${RESOLVER_FP_VERIFICATION_TIER} (${RESOLVER_FP_VERIFICATION_TIER_REASON})."
+_resolver_prepare_agent_access
 
 # _restore_attempt_base: restore every snapshotted allowlist file to
 # its post-merge-replay content.  Used between retries so each
@@ -1028,17 +1111,18 @@ _build_retry_prompt() {
   # uses the uppercased key, matching the convention every existing
   # caller binds against; any key whose corresponding env var is
   # unset is replaced with the empty string.
-  PRELUDE_TPL="${_prelude_tpl}" \
-    ORIGINAL_PROMPT_FILE="${CONFLICT_RESOLVER_PROMPT_FILE}" \
-    PREVIOUS_ATTEMPT_NUMBER="${_prev_attempt}" \
-    MAX_ATTEMPTS="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" \
-    MARKER_VIOLATION_COUNT="${_marker_count}" \
-    MARKER_VIOLATION_FILES="${_marker_list}" \
-    FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
-    FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
-    SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}" \
-    PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
-    python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); tpl=re.sub(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', lambda m: os.environ.get(m.group(1).upper(), ''), tpl); orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
+  _gh_helpers_run_isolated_python \
+    "PRELUDE_TPL=${_prelude_tpl}" \
+    "ORIGINAL_PROMPT_FILE=${CONFLICT_RESOLVER_PROMPT_FILE}" \
+    "PREVIOUS_ATTEMPT_NUMBER=${_prev_attempt}" \
+    "MAX_ATTEMPTS=${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" \
+    "MARKER_VIOLATION_COUNT=${_marker_count}" \
+    "MARKER_VIOLATION_FILES=${_marker_list}" \
+    "FINGERPRINT_VIOLATION_COUNT=${_fp_count}" \
+    "FINGERPRINT_VIOLATION_DETAILS=${_fp_details}" \
+    "SERENA_TOOL_HINTS_RESOLVER=${RESOLVER_SERENA_TOOL_HINTS:-}" \
+    "PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
+    -- -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); tpl=re.sub(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', lambda m: os.environ.get(m.group(1).upper(), ''), tpl); orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
     > "${RESOLVER_RETRY_PROMPT_FILE}"
   if [ "${_failure_kind}" = "timeout" ]; then
     _retry_prompt_outcome="timeout-prelude"
@@ -1112,8 +1196,9 @@ _verify_fingerprints_soft() {
       --verification-tier "${RESOLVER_FP_VERIFICATION_TIER}"
     )
   fi
-  INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+  _gh_helpers_run_isolated_python \
+    "INTEGRATION_BRANCH_NAME=${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+    -- "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
       "${_verifier_args[@]}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" \
       > "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" 2>&1 || RESOLVER_FP_EXIT=$?
@@ -1136,14 +1221,28 @@ _verify_fingerprints_soft() {
 }
 
 # _build_resolver_retry_state_artifact: emit a machine-readable JSON
-# payload describing the current fingerprint failure set plus the
-# updated AUTOFIX_RESOLVER_RETRY_STATE_V1 PR-body block.  The helper
+# payload describing the current fingerprint failure set plus the candidate
+# fields for a producer-authenticated V2 comment. The legacy V1 render helpers
+# below remain diagnostic/test compatibility code and grant no runtime authority.
 # deliberately reuses the verifier module's baseline/dedup logic so the
 # state block is keyed off the same normalized fp_key set that
 # compare-mode verification actually enforced.
 _build_resolver_retry_state_artifact()
 {
-  python3 - <<'PY'
+  _gh_helpers_run_isolated_python \
+    "SUPPORT_SCRIPTS_DIR=${SUPPORT_SCRIPTS_DIR}" \
+    "PR_PAYLOAD_FILE=${PR_PAYLOAD_FILE:-}" \
+    "PR_ISSUE_COMMENTS_FILE=${PR_ISSUE_COMMENTS_FILE:-}" \
+    "INTEGRATION_FINGERPRINTS_FILE=${INTEGRATION_FINGERPRINTS_FILE:-}" \
+    "RESOLVER_FP_BASELINE_STATE_FILE=${RESOLVER_FP_BASELINE_STATE_FILE:-}" \
+    "RESOLVER_RETRY_STATE_VERIFIED_FILE=${RESOLVER_RETRY_STATE_VERIFIED_FILE:-}" \
+    "RESOLVER_ESCAPE_THRESHOLD_N=${RESOLVER_ESCAPE_THRESHOLD_N:-5}" \
+    "RESOLVER_RETRY_STATE_MAX_ITEMS=${RESOLVER_RETRY_STATE_MAX_ITEMS:-10}" \
+    "GITHUB_REPOSITORY=${GITHUB_REPOSITORY:-}" \
+    "GITHUB_SERVER_URL=${GITHUB_SERVER_URL:-https://github.com}" \
+    "GITHUB_RUN_ID=${GITHUB_RUN_ID:-}" \
+    "PR_NUMBER=${PR_NUMBER:-}" \
+    -- - <<'PY'
 # AUTOFIX_RESOLVER_RETRY_STATE_PY_BEGIN
 from __future__ import annotations
 
@@ -1468,7 +1567,11 @@ def build_resolver_retry_state_artifact(
         json.dumps(signature_members, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     ).hexdigest()
 
-    previous_state = extract_retry_state_from_body(body) or {}
+    previous_state, _previous_state_error = _load_json_path(
+        os.environ.get("RESOLVER_RETRY_STATE_VERIFIED_FILE", ""),
+        dict,
+        {},
+    )
     previous_head_sha = str(previous_state.get("head_sha", "") or "")
     previous_signature = str(
         previous_state.get("failure_signature_sha256", previous_state.get("last_failure_signature", "")) or ""
@@ -1699,75 +1802,39 @@ _persist_resolver_retry_state_from_current_failure()
     return 0
   fi
 
-  local _body_file _count _signature _verification_tier _tier_downgrade_marker
-  _body_file="$(mktemp)"
-  jq -r '.body // ""' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" > "${_body_file}"
-  if [ ! -s "${_body_file}" ]; then
-    echo "::warning::Resolver retry-state artifact produced an empty PR body; skipping persistence."
-    rm -f "${_body_file}"
-    return 0
+  local _previous_generation=0
+  if [ -s "${RESOLVER_RETRY_STATE_VERIFIED_FILE:-/nonexistent}" ]; then
+    _previous_generation="$(jq -r '.generation // 0' "${RESOLVER_RETRY_STATE_VERIFIED_FILE}" 2>/dev/null || echo 0)"
   fi
-  if ! gh_retry gh pr edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body-file "${_body_file}" >/dev/null; then
-    echo "::warning::Failed to persist AUTOFIX_RESOLVER_RETRY_STATE_V1 to PR #${PR_NUMBER}; skipping escalation side effects so poller state does not drift from GitHub."
-    rm -f "${_body_file}"
-    return 0
+  if ! [[ "${_previous_generation}" =~ ^[0-9]+$ ]]; then
+    _previous_generation=0
   fi
-  _sync_local_pr_body_from_file "${_body_file}"
-  rm -f "${_body_file}"
+  jq --argjson generation "$((_previous_generation + 1))" '
+    .retry_state
+    | {
+        generation: $generation,
+        failure_signature_sha256,
+        consecutive_failure_count,
+        threshold,
+        escalation_threshold,
+        verification_tier,
+        regressed_by_resolver_count,
+        pre_existing_drift_count,
+        regression_summary: [.last_regressed_by_resolver[]?.fp_key | @json][0:10],
+        drift_summary: [.last_pre_existing_drift[]?.fp_key | @json][0:10],
+        escalated,
+        escalated_at,
+        updated_at
+      }
+  ' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" > "${RESOLVER_RETRY_STATE_CANDIDATE_FILE}.tmp"
+  mv "${RESOLVER_RETRY_STATE_CANDIDATE_FILE}.tmp" "${RESOLVER_RETRY_STATE_CANDIDATE_FILE}"
+  chmod 0600 "${RESOLVER_RETRY_STATE_CANDIDATE_FILE}"
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "RESOLVER_RETRY_STATE_CANDIDATE_FILE=${RESOLVER_RETRY_STATE_CANDIDATE_FILE}" >> "${GITHUB_ENV}"
+    echo "RESOLVER_ACTUATION_REQUIRED=true" >> "${GITHUB_ENV}"
+  fi
+  echo "Prepared AUTOFIX_RESOLVER_RETRY_STATE_V2 candidate for trusted actuation."
 
-  _count="$(jq -r '.consecutive_failure_count // 0' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo 0)"
-  _signature="$(jq -r '.failure_signature_sha256 // ""' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo "")"
-  _verification_tier="$(jq -r '.verification_tier // .retry_state.verification_tier // "strict"' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo strict)"
-  echo "Persisted AUTOFIX_RESOLVER_RETRY_STATE_V1 to PR #${PR_NUMBER} (count=${_count}, signature=${_signature}, tier=${_verification_tier})."
-  _tier_downgrade_marker="$(jq -r '.tier_downgrade_marker // empty' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo "")"
-  if [ -n "${_tier_downgrade_marker}" ]; then
-    echo "${_tier_downgrade_marker}"
-  fi
-
-  if [ "$(jq -r '.escalated // false' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo false)" != "true" ]; then
-    return 0
-  fi
-
-  echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
-
-  if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh" ]; then
-    # shellcheck source=/dev/null
-    source "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh" 2>/dev/null || true
-  fi
-  if type ensure_label_exists >/dev/null 2>&1; then
-    ensure_label_exists "ai:resolver-escalated" "${GITHUB_REPOSITORY}" || true
-  fi
-  gh_retry gh issue edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:resolver-escalated" >/dev/null 2>&1 \
-    || echo "::warning::Failed to apply ai:resolver-escalated to PR #${PR_NUMBER}."
-
-  local _comment_id _comment_file _comment_payload _comment_present=false
-  _comment_id="$(jq -r '.existing_escalation_comment_id // empty' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo "")"
-  _comment_file="$(mktemp)"
-  jq -r '.summary_comment_body // ""' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" > "${_comment_file}"
-  if [ -n "${_comment_id}" ] && [[ "${_comment_id}" =~ ^[0-9]+$ ]]; then
-    _comment_payload="$(mktemp)"
-    jq -n --rawfile body "${_comment_file}" '{body: $body}' > "${_comment_payload}"
-    if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${_comment_id}" --input "${_comment_payload}" >/dev/null 2>&1; then
-      _comment_present=true
-    else
-      echo "::warning::Failed to refresh resolver escalation summary comment #${_comment_id} on PR #${PR_NUMBER}."
-    fi
-    rm -f "${_comment_payload}"
-  elif [ -s "${_comment_file}" ]; then
-    _comment_payload="$(mktemp)"
-    jq -n --rawfile body "${_comment_file}" '{body: $body}' > "${_comment_payload}"
-    if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input "${_comment_payload}" >/dev/null 2>&1; then
-      _comment_present=true
-    else
-      echo "::warning::Failed to post resolver escalation summary comment on PR #${PR_NUMBER}."
-    fi
-    rm -f "${_comment_payload}"
-  fi
-  rm -f "${_comment_file}"
-
-  if [ "${_comment_present}" = "true" ]; then
-    echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
-  fi
 }
 
 # Pre-load the conflicted files into the resolver prompt so the model
@@ -1787,7 +1854,7 @@ TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_cont
 : > "${TARGETED_FILES_CONTEXT_FILE}"
 if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT}" ]; then
   targeted_file_context_args=(
-    python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"
+    resolver_run_isolated_python "${TARGETED_FILE_CONTEXT_SCRIPT}"
     --paths-file "${RESOLVER_ALLOWLIST_FILE}"
     --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
     --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
@@ -2073,7 +2140,25 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     "${RESOLVER_OPENCODE_CONFIG}"
     "${RESOLVER_OPENCODE_WORKSPACE}"
   )
+  # The stall guard / heartbeat wrapper must run as the workflow runner and
+  # wrap the `sudo -n -u <user> -- env -i ...` launch as its child — the
+  # same nesting scripts/review_apply_fixes.sh uses for the editor. The
+  # wrapper opens tmp_output and _stall_status_file (runner-owned, mode
+  # 0600 from mktemp) and writes runner-owned heartbeats; nested inside the
+  # sudo it ran as RESOLVER_ISOLATION_USER and every attempt died with
+  # `PermissionError: [Errno 13] Permission denied: '/tmp/tmp.XXXX'` before
+  # OpenCode started (PR #4088, run 35182160034). The guard also recognises
+  # the `sudo -n -u <user> --` prefix and switches to privileged
+  # process-group signalling, so stalls are killed as <user> via sudo.
+  # `timeout` stays inside the sudo, as before, so it runs as <user>.
+  resolver_unprivileged_cmd=()
   _run_codex=true
+  if ! model_provider_broker_unprivileged_argv_into resolver_unprivileged_cmd "${RESOLVER_ISOLATION_USER}" \
+      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      "${resolver_opencode_cmd[@]}"; then
+    _codex_exit=1
+    _run_codex=false
+  fi
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
       _codex_exit=$?
@@ -2085,22 +2170,20 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     emit_conflict_resolver_substate "InitializingSession" "${attempt}"
     emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
     if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        "${CODEX_STALL_GUARD_HELPER}" \
+      "${CODEX_STALL_GUARD_HELPER}" \
         --phase review_conflict_resolve \
         --stdout-file "${tmp_output}" \
         --status-file "${_stall_status_file}" \
-        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
+        -- "${resolver_unprivileged_cmd[@]}" < "${_effective_prompt_file}" \
         || _codex_exit=$?
     elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        "${CODEX_HEARTBEAT_HELPER}" \
+      "${CODEX_HEARTBEAT_HELPER}" \
         --phase review_conflict_resolve \
         --stdout-file "${tmp_output}" \
-        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
+        -- "${resolver_unprivileged_cmd[@]}" < "${_effective_prompt_file}" \
         || _codex_exit=$?
     else
-      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      model_provider_broker_exec_unprivileged "${RESOLVER_ISOLATION_USER}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
         "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" > "${tmp_output}" \
         || _codex_exit=$?
     fi
@@ -2422,8 +2505,9 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
           --verification-tier "${RESOLVER_FP_VERIFICATION_TIER}"
         )
       fi
-      INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-        python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      _gh_helpers_run_isolated_python \
+        "INTEGRATION_BRANCH_NAME=${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+        -- "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
           "${_final_verifier_args[@]}" \
           "${INTEGRATION_FINGERPRINTS_FILE}" || _final_fp_exit=$?
       if [ "${_final_fp_exit}" -eq 1 ]; then
@@ -2766,7 +2850,7 @@ if [ -n "$(git status --porcelain)" ]; then
   # ============================================================
 
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
-  git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
+  git remote set-url origin "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}"
   # NOTE: push deferred to final "Push all pending commits" step.
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
   echo "Conflicts resolved and committed (push deferred)"
