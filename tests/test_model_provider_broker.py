@@ -966,6 +966,30 @@ def test_brokered_requests_settle_input_and_cost_from_upstream_usage() -> None:
 		def close(self) -> None:
 			pass
 
+	# As in test_brokered_stream_settles_budget_from_upstream_usage: the
+	# relayed Content-Length lets the client finish before the handler's
+	# finally block settles, so post() waits for every admitted request to
+	# settle before the budget assertions read the state.
+	admitted_requests = 0
+	settled_requests = 0
+	original_reserve_request = state.reserve_request
+	original_settle_request = state.settle_request
+
+	def counting_reserve_request(*args: object, **kwargs: object) -> bool:
+		nonlocal admitted_requests
+		admitted = original_reserve_request(*args, **kwargs)
+		if admitted:
+			admitted_requests += 1
+		return admitted
+
+	def counting_settle_request(*args: object, **kwargs: object) -> None:
+		nonlocal settled_requests
+		original_settle_request(*args, **kwargs)
+		settled_requests += 1
+
+	state.reserve_request = counting_reserve_request  # type: ignore[method-assign]
+	state.settle_request = counting_settle_request  # type: ignore[method-assign]
+
 	original_connection = module.http.client.HTTPSConnection
 	module.http.client.HTTPSConnection = _FakeConnection  # type: ignore[misc]
 	server = module.BrokerServer(("127.0.0.1", 0), state)
@@ -981,9 +1005,14 @@ def test_brokered_requests_settle_input_and_cost_from_upstream_usage() -> None:
 			)
 			try:
 				with urllib.request.urlopen(request, timeout=5) as response:
-					return response.status, response.read().decode("utf-8")
+					result = (response.status, response.read().decode("utf-8"))
 			except urllib.error.HTTPError as error:
-				return error.code, error.read().decode("utf-8")
+				result = (error.code, error.read().decode("utf-8"))
+			deadline = time.monotonic() + 5
+			while settled_requests < admitted_requests and time.monotonic() < deadline:
+				time.sleep(0.01)
+			assert settled_requests == admitted_requests, "broker handler did not settle its reservation"
+			return result
 
 		usage_stream = (
 			b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
