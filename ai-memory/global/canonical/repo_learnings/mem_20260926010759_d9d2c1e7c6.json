@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow changes are commonly guarded by focused contract tests alongside script-level tests.",
   "timestamps": {
     "created_at": "2026-09-26T01:07:59Z",
