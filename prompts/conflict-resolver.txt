@@ -37,6 +37,13 @@ Rules:
 - Do not generate scripts.
 - Do not modify GitHub workflow files except when resolving merge conflicts.
 - Do not access the network.
+- Do not stage, unstage, commit, or otherwise change the Git index or merge
+  state: never run `git add`, `git rm`, `git restore --staged`, `git reset`,
+  `git checkout`, `git stash`, `git commit`, `git merge`, or
+  `git update-index`. Only edit files in the working tree. The workflow
+  verifies your edits and stages them itself; any index change makes the run
+  fail with no commit. Read-only commands (`git status`, `git diff`,
+  `git grep`) are fine.
 
 Edit-tool discipline (use your available file-editing tools with fallbacks,
 verify-after-write, and avoid `sed -i`/`perl -i`/`awk` for multi-line edits)
