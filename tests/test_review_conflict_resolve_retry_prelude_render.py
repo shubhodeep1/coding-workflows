@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import os
 import re
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -581,6 +582,138 @@ def test_scope_check_precedes_retry_success_and_preserves_final_guard() -> None:
 	assert 'if ! _restore_attempt_base; then' in src
 
 
+def _scope_fixture(tmp: Path) -> tuple[Path, dict[str, str]]:
+	repo = tmp / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	for name in ("conflict.txt", "outside.txt"):
+		(repo / name).write_text("base\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "--", "conflict.txt", "outside.txt"], check=True)
+	subprocess.run(
+		["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+		check=True,
+	)
+	(repo / "conflict.txt").write_text("pre-attempt merge conflict\n", encoding="utf-8")
+	(repo / "previously-untracked.txt").write_text("keep me\n", encoding="utf-8")
+	allowed = tmp / "conflicted_paths.txt"
+	allowed.write_text("conflict.txt\n", encoding="utf-8")
+	return repo, {
+		"RESOLVER_SCOPE_SNAPSHOT_DIR": str(tmp / "snapshot"),
+		"RESOLVER_SCOPE_VIOLATIONS_FILE": str(tmp / "violations.txt"),
+		"CONFLICTED_PATHS_FILE": str(allowed),
+	}
+
+
+def _scope_action(repo: Path, env: dict[str, str], action: str) -> subprocess.CompletedProcess[str]:
+	src = _resolve_script_text()
+	start = src.index("_resolver_scope_state() {")
+	end = src.index("\n}\n", start) + 2
+	clean_env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")}
+	return subprocess.run(
+		["bash", "-c", src[start:end] + f"\n_resolver_scope_state {action}\n"],
+		cwd=repo, env={**clean_env, **env}, capture_output=True, text=True, check=False,
+	)
+
+
+def test_scope_retry_restores_full_attempt_and_keeps_final_gate() -> None:
+	src = _resolve_script_text()
+	loop = src[src.index('attempt=1\nwhile '):src.index('\ndone\n', src.index('attempt=1\nwhile '))]
+	assert loop.index("_resolver_scope_state capture") < loop.index('"${resolver_opencode_cmd[@]}"')
+	assert loop.index("_resolver_scope_state check") < loop.index('if [ "${_codex_exit}" -ne 0 ]; then')
+	assert loop.index("_resolver_scope_state check") < loop.index('if [ "${_marker_count}" -eq 0 ]')
+	assert "_resolver_scope_state restore || ! _resolver_scope_state verify" in loop
+	assert '"${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh"' in src
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "conflict.txt").write_text("bad resolution\n", encoding="utf-8")
+		(repo / "outside.txt").write_text("unauthorized\n", encoding="utf-8")
+		(repo / "outside.txt").chmod(0o755)
+		(repo / "previously-untracked.txt").unlink()
+		(repo / "new-untracked.txt").write_text("new\n", encoding="utf-8")
+		assert _scope_action(repo, env, "check").returncode == 1
+		assert set(Path(env["RESOLVER_SCOPE_VIOLATIONS_FILE"]).read_text().splitlines()) == {
+			"outside.txt", "previously-untracked.txt", "new-untracked.txt",
+		}
+		assert _scope_action(repo, env, "restore").returncode == 0
+		assert _scope_action(repo, env, "verify").returncode == 0
+		assert (repo / "conflict.txt").read_text() == "pre-attempt merge conflict\n"
+		assert (repo / "outside.txt").read_text() == "base\n"
+		assert (repo / "outside.txt").stat().st_mode & 0o111 == 0
+		assert (repo / "previously-untracked.txt").read_text() == "keep me\n"
+		assert not (repo / "new-untracked.txt").exists()
+		(repo / "outside.txt").chmod(0o755)
+		assert _scope_action(repo, env, "check").returncode == 1
+		assert _scope_action(repo, env, "restore").returncode == 0
+		assert _scope_action(repo, env, "verify").returncode == 0
+		# A clean second attempt is still subject to the unchanged final gate.
+		(repo / "conflict.txt").write_text("good resolution\n", encoding="utf-8")
+		assert _scope_action(repo, env, "check").returncode == 0
+		touched = Path(directory) / "touched.txt"
+		touched.write_text("conflict.txt\n", encoding="utf-8")
+		result = subprocess.run(
+			["bash", str(REPO_ROOT / "scripts/check_resolver_diff.sh"),
+			 "--conflicted-set", env["CONFLICTED_PATHS_FILE"], "--touched-set", str(touched), "--repo-root", str(repo)],
+			env={key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")},
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+
+
+def test_scope_snapshot_restore_and_index_fail_closed() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		Path(env["CONFLICTED_PATHS_FILE"]).unlink()
+		assert _scope_action(repo, env, "capture").returncode != 0
+		Path(env["CONFLICTED_PATHS_FILE"]).write_text("conflict.txt\n")
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "outside.txt").write_text("unauthorized\n")
+		assert _scope_action(repo, env, "check").returncode == 1
+		(Path(env["RESOLVER_SCOPE_SNAPSHOT_DIR"]) / "files/outside.txt").unlink()
+		assert _scope_action(repo, env, "restore").returncode != 0
+		assert _scope_action(repo, env, "verify").returncode != 0
+		assert _scope_action(repo, env, "capture").returncode == 0
+		subprocess.run(["git", "add", "--", "outside.txt"], cwd=repo, check=True)
+		assert _scope_action(repo, env, "check").returncode == 2
+		assert _scope_action(repo, env, "restore").returncode == 2
+
+
+def test_scope_symlink_restore_preserves_preexisting_target() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		(repo / "previously-untracked.txt").unlink()
+		(repo / "previously-untracked.txt").symlink_to("outside.txt")
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "previously-untracked.txt").unlink()
+		(repo / "previously-untracked.txt").write_text("replaced link\n")
+		assert _scope_action(repo, env, "check").returncode == 1
+		assert _scope_action(repo, env, "restore").returncode == 0
+		assert _scope_action(repo, env, "verify").returncode == 0
+		assert (repo / "previously-untracked.txt").is_symlink()
+		assert (repo / "previously-untracked.txt").readlink() == Path("outside.txt")
+
+
+def test_scope_feedback_is_available_for_generic_resolver() -> None:
+	src = _resolve_script_text()
+	fn = src[src.index("_build_retry_prompt() {"):src.index("\n}\n", src.index("_build_retry_prompt() {")) + 2]
+	assert fn.index('if [ "${_failure_kind}" = "scope" ]') < fn.index('if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]')
+	assert '_retry_prompt_outcome="scope-prelude"' in fn
+	assert '"${_prev_attempt_failure_kind:-validation}"' in src
+	with tempfile.TemporaryDirectory() as directory:
+		prompt = Path(directory) / "original.txt"
+		retry = Path(directory) / "retry.txt"
+		prompt.write_text("Only resolve the merge conflict.\n", encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", fn + '\n_build_retry_prompt 1 /nonexistent /nonexistent scope; printf "%s" "${_retry_prompt_outcome}"'],
+			env={**os.environ, "IS_INTEGRATION_SYNC": "false", "CONFLICT_RESOLVER_PROMPT_FILE": str(prompt),
+			     "RESOLVER_RETRY_PROMPT_FILE": str(retry)}, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout == "scope-prelude"
+		assert "outside the captured conflicted-paths set" in retry.read_text()
+		assert retry.read_text().endswith(prompt.read_text())
+
+
 def main() -> int:
 	test_dependency_fallback_prefers_main_then_script_ref_checkout()
 	test_dependency_fallback_gates_workspace_scripts_and_fails_closed()
@@ -596,6 +729,10 @@ def main() -> int:
 	test_retry_loop_reads_retry_prompt_outcome_for_log_dispatch()
 	test_reasoning_default_lowered_to_high()
 	test_scope_check_precedes_retry_success_and_preserves_final_guard()
+	test_scope_retry_restores_full_attempt_and_keeps_final_gate()
+	test_scope_snapshot_restore_and_index_fail_closed()
+	test_scope_symlink_restore_preserves_preexisting_target()
+	test_scope_feedback_is_available_for_generic_resolver()
 	print(
 		"OK: review_conflict_resolve outcome-aware retry-prelude "
 		"contract holds (validation + timeout preludes, "
