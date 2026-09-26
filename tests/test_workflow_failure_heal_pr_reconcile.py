@@ -34,6 +34,10 @@ SOURCE_PR = 4323
 HEAL_ISSUE = 4342
 HEAL_PR = 4349
 HEAL_BRANCH = f"ai/issue-{HEAL_ISSUE}"
+# A Claude issue-mode heal project (/implement-plan-claude "Issue Mode").
+CLAUDE_BRANCH = f"claude/implement-plan-issue-{HEAL_ISSUE}-fix-resolver-scope"
+CLAUDE_FINAL_PR = 4500
+CLAUDE_INNER_PR = 4501
 
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, subprocess, sys
@@ -63,7 +67,13 @@ if method == "GET" and path == f"repos/{state['repo']}/issues":
 	out = [issue for issue in state["issues"] if fields.get("labels") in issue["labels"]]
 elif method == "GET" and path == f"repos/{state['repo']}/pulls":
 	owner = state["repo"].split("/")[0]
-	out = [pr for pr in state["pulls"] if pr["state"] == "open" and f"{owner}:{pr['head']['ref']}" == fields.get("head")]
+	out = [
+		pr for pr in state["pulls"]
+		if pr["state"] == "open"
+		and ("head" not in fields or f"{owner}:{pr['head']['ref']}" == fields["head"])
+		and ("base" not in fields or pr["base"]["ref"] == fields["base"])
+		and ("head" in fields or "base" in fields)
+	]
 elif method == "PATCH" and path.startswith(f"repos/{state['repo']}/pulls/"):
 	number = int(path.rsplit("/", 1)[1])
 	if "base" in fields and os.environ.get("FAKE_GH_FAIL_BASE_PATCH") == "1":
@@ -97,7 +107,7 @@ def _commit(work: Path, name: str, content: str, message: str) -> str:
 	return _git(work, "rev-parse", "HEAD")
 
 
-def _stage(tmp: Path, *, heal_touches_source: bool = False, heal_base: str = SOURCE_BRANCH) -> dict:
+def _stage(tmp: Path, *, heal_touches_source: bool = False, heal_base: str = SOURCE_BRANCH, claude: bool = False, claude_head_repo: str = REPO) -> dict:
 	"""Origin with base, source PR head (refs/pull), a heal branch cut from an older source head, a squash merge."""
 	origin = tmp / "origin.git"
 	_git(tmp, "init", "-q", "--bare", str(origin))
@@ -111,7 +121,8 @@ def _stage(tmp: Path, *, heal_touches_source: bool = False, heal_base: str = SOU
 	_git(seed, "checkout", "-q", "-b", SOURCE_BRANCH)
 	_commit(seed, "source.txt", "v1\n", "source 1")
 	# The heal branch forks from the source head of that time ...
-	_git(seed, "checkout", "-q", "-b", HEAL_BRANCH)
+	heal_branch = CLAUDE_BRANCH if claude else HEAL_BRANCH
+	_git(seed, "checkout", "-q", "-b", heal_branch)
 	if heal_touches_source:
 		_commit(seed, "source.txt", "healed\n", "heal fix")
 	else:
@@ -120,7 +131,7 @@ def _stage(tmp: Path, *, heal_touches_source: bool = False, heal_base: str = SOU
 	# ... and the source PR moves on afterwards (e16fdfd -> 07e76f9 on #4323).
 	_git(seed, "checkout", "-q", SOURCE_BRANCH)
 	source_sha = _commit(seed, "source.txt", "v2\n", "source 2")
-	_git(seed, "push", "-q", "origin", f"{HEAL_BRANCH}:refs/heads/{HEAL_BRANCH}", f"{SOURCE_BRANCH}:refs/heads/{SOURCE_BRANCH}", f"{source_sha}:refs/pull/{SOURCE_PR}/head")
+	_git(seed, "push", "-q", "origin", f"{heal_branch}:refs/heads/{heal_branch}", f"{SOURCE_BRANCH}:refs/heads/{SOURCE_BRANCH}", f"{source_sha}:refs/pull/{SOURCE_PR}/head")
 	work = tmp / "work"
 	_git(tmp, "clone", "-q", "-b", BASE, str(origin), str(work))
 	bin_dir = tmp / "bin"
@@ -138,6 +149,14 @@ def _stage(tmp: Path, *, heal_touches_source: bool = False, heal_base: str = SOU
 			{"number": HEAL_PR, "state": "open", "head": {"ref": HEAL_BRANCH, "sha": heal_sha}, "base": {"ref": heal_base}, "labels": [{"name": "ai:merge-queued"}]},
 		],
 	}
+	if claude:
+		state["pulls"] = [
+			# The project's final PR into the heal target, and a phase PR into the project branch.
+			{"number": CLAUDE_FINAL_PR, "state": "open", "head": {"ref": CLAUDE_BRANCH, "sha": heal_sha, "repo": {"full_name": claude_head_repo}}, "base": {"ref": heal_base}},
+			{"number": CLAUDE_INNER_PR, "state": "open", "head": {"ref": f"{CLAUDE_BRANCH}-phase-1", "sha": heal_sha, "repo": {"full_name": REPO}}, "base": {"ref": CLAUDE_BRANCH}},
+			# Another heal issue's project whose number shares the prefix: never touched.
+			{"number": 4502, "state": "open", "head": {"ref": f"claude/implement-plan-issue-{HEAL_ISSUE}0-other", "sha": heal_sha, "repo": {"full_name": REPO}}, "base": {"ref": heal_base}},
+		]
 	state_file = tmp / "state.json"
 	state_file.write_text(json.dumps(state), encoding="utf-8")
 	return {"origin": origin, "seed": seed, "work": work, "bin": bin_dir, "state_file": state_file, "heal_sha": heal_sha, "source_sha": source_sha}
@@ -350,3 +369,70 @@ def test_workflow_runs_reconcile_on_pr_close_only() -> None:
 	assert "scripts/workflow_failure_heal_pr_reconcile.sh" in steps[1]["run"]
 	# The existing cancel job is unchanged.
 	assert workflow["jobs"]["cancel"]["uses"] == "shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@main"
+
+
+# --- Claude issue-mode heal projects -----------------------------------------------
+
+
+def test_claude_project_unmerged_source_closes_final_pr_inner_prs_and_issue() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		stage = _stage(Path(tmp_name), claude=True)
+		result, state = _run(stage, merged=False)
+		assert result.returncode == 0, result.stderr
+		assert f"claude_heal_pr heal_pr={CLAUDE_FINAL_PR} project_branch={CLAUDE_BRANCH} heal_issue={HEAL_ISSUE}" in result.stdout
+		assert f"closed heal_pr={CLAUDE_FINAL_PR} heal_issue={HEAL_ISSUE} source_pr={SOURCE_PR} reason=source_closed_unmerged" in result.stdout
+		assert f"closed_inner inner_pr={CLAUDE_INNER_PR} project_branch={CLAUDE_BRANCH}" in result.stdout
+		assert _writes(state, "PATCH", f"pulls/{CLAUDE_FINAL_PR}")[0]["fields"] == {"state": "closed"}
+		assert _writes(state, "PATCH", f"pulls/{CLAUDE_INNER_PR}")[0]["fields"] == {"state": "closed"}
+		assert _writes(state, "PATCH", f"issues/{HEAL_ISSUE}")[0]["fields"] == {"state": "closed", "state_reason": "not_planned"}
+		assert "was closed because its source pull request" in _writes(state, "POST", f"issues/{CLAUDE_INNER_PR}/comments")[0]["fields"]["body"]
+		# The prefix-sharing project and the branch itself are untouched.
+		assert not any("4502" in w["path"] for w in state["writes"])
+		assert _origin_ref(stage, f"refs/heads/{CLAUDE_BRANCH}") == stage["heal_sha"]
+
+
+def test_claude_project_merged_source_moves_project_branch_and_repoints_final_pr() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		stage = _stage(Path(tmp_name), claude=True)
+		base_sha = _squash_merge_source(stage)
+		result, state = _run(stage, merged=True)
+		assert result.returncode == 0, result.stderr
+		assert f"retargeted heal_pr={CLAUDE_FINAL_PR} heal_branch={CLAUDE_BRANCH} source_pr={SOURCE_PR} base={BASE}" in result.stdout, result.stdout
+		new_head = _origin_ref(stage, f"refs/heads/{CLAUDE_BRANCH}")
+		assert _is_ancestor(stage, stage["heal_sha"], new_head)
+		assert _is_ancestor(stage, base_sha, new_head)
+		assert _git(stage["origin"], "diff", "--name-only", base_sha, new_head) == "heal.txt"
+		assert _writes(state, "PATCH", f"pulls/{CLAUDE_FINAL_PR}")[0]["fields"] == {"base": BASE}
+		# Inner PRs keep targeting the (now updated) project branch; the issue stays open.
+		assert not _writes(state, "PATCH", f"pulls/{CLAUDE_INNER_PR}")
+		assert not _writes(state, "PATCH", f"issues/{HEAL_ISSUE}")
+
+
+def test_claude_project_merged_source_with_conflict_closes_everything() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		stage = _stage(Path(tmp_name), claude=True, heal_touches_source=True)
+		_squash_merge_source(stage)
+		result, state = _run(stage, merged=True)
+		assert f"closed heal_pr={CLAUDE_FINAL_PR} heal_issue={HEAL_ISSUE} source_pr={SOURCE_PR} reason=source_merged_merge_conflict" in result.stdout, result.stdout
+		assert f"closed_inner inner_pr={CLAUDE_INNER_PR}" in result.stdout
+		assert _origin_ref(stage, f"refs/heads/{CLAUDE_BRANCH}") == stage["heal_sha"]
+
+
+def test_claude_project_from_a_fork_is_ignored() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		stage = _stage(Path(tmp_name), claude=True, claude_head_repo="someone/fork")
+		result, state = _run(stage, merged=False)
+		assert result.returncode == 0, result.stderr
+		assert "claude_heal_pr" not in result.stdout
+		assert not state.get("writes")
+
+
+def test_claude_final_prs_are_listed_by_base_once_per_run() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		stage = _stage(Path(tmp_name), claude=True)
+		_squash_merge_source(stage)
+		result, state = _run(stage, merged=True)
+		listings = [c for c in state["calls"] if "repos/%s/pulls" % REPO in c and any(a.startswith("base=") for a in c)]
+		bases = sorted(a for c in listings for a in c if a.startswith("base="))
+		# Source head + source base for the final PRs; no per-issue base listing.
+		assert bases == sorted([f"base={SOURCE_BRANCH}", f"base={BASE}"]), bases
