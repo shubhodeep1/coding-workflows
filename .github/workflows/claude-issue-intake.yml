@@ -13,13 +13,16 @@ name: Claude Issue Intake
 #      the setup smoke test.
 #
 # scripts/claude_issue_intake.sh validates the repo against
-# .github/ai/consumer_repos.json (plus this repo), then POSTs to the /fire
-# endpoint of ONE claude.ai routine ("Claude issue dispatcher",
-# CLAUDE_ISSUE_ROUTINE_ID / CLAUDE_ISSUE_ROUTINE_TOKEN). The routine follows
-# .claude/commands/claude-issue-dispatch.md and starts an Opus session in the
-# target repo running `/implement-issue-claude <issue url>`. New consumer repos
-# are covered as soon as they are registered (CLAUDE.md §14); no per-repo
-# routine exists. See README "Claude issue implementer".
+# .github/ai/consumer_repos.json (plus this repo), then queues the issue as one
+# `ai:claude-issue-queue` issue in this repo, opened with the job's
+# GITHUB_TOKEN so no workflow reacts to it. The Claude issue pickup session
+# (.claude/commands/claude-issue-pickup.md, woken hourly) starts an Opus
+# session in the target repo running `/implement-issue-claude <issue url>` for
+# each queued item; claude-issue-queue-watchdog.yml alerts when an item waits
+# too long. The intake no longer fires the "Claude issue dispatcher" routine:
+# a routine run has no claude-code-remote tools and cannot start that session
+# (issue #4525). New consumer repos are covered as soon as they are registered
+# (CLAUDE.md §14). See README "Claude issue implementer".
 
 "on":
   repository_dispatch:
@@ -38,6 +41,7 @@ name: Claude Issue Intake
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: claude-issue-intake-${{ github.event.client_payload.repo || inputs.repo }}-${{ github.event.client_payload.issue_number || inputs.issue_number }}
@@ -54,9 +58,10 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GITHUB_REPOSITORY: ${{ github.repository }}
+      # The queue lives in this repo; GITHUB_TOKEN writes do not start workflows.
+      CLAUDE_ISSUE_QUEUE_TOKEN: ${{ github.token }}
+      # Deprecated (#4525): read only to log that the routine is no longer fired.
       CLAUDE_ISSUE_ROUTINE_ID: ${{ vars.CLAUDE_ISSUE_ROUTINE_ID || '' }}
-      CLAUDE_ISSUE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ISSUE_ROUTINE_TOKEN }}
-      CLAUDE_ISSUE_ROUTINE_BETA: ${{ vars.CLAUDE_ISSUE_ROUTINE_BETA || 'experimental-cc-routine-2026-04-01' }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -100,6 +105,7 @@ jobs:
               ;;
           esac
 
+      # Kept name (§6); since #4525 this step queues the issue instead of firing the routine.
       - name: Fire the Claude issue dispatcher routine
         run: |
           set -euo pipefail

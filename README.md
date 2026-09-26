@@ -1156,7 +1156,8 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
 | `workflow-log-analysis.yml` | `workflow_dispatch` (typically called from comprehensive-test-and-release / test-and-mark-stable smoke gates) | Periodic Codex audit of workflow runs (analyze, deep-audit, api-redundancy passes); see [`probably_unnecessary_but_read_if_stuck.md`](probably_unnecessary_but_read_if_stuck.md) for the runbook |
 | `check_failure_triage.yml` | `check_run.completed` (failure) | LLM diagnoses a failing PR check and opens an `ai:check-triage` issue for the pipeline to fix. On by default; disable via `CHECK_FAILURE_TRIAGE_ENABLED=false`; see "Check Failure Triage Phase" below |
-| `claude-issue-intake.yml` | coding-workflows only: `repository_dispatch` (`claude-issue`), `workflow_dispatch` | Fires the Claude issue dispatcher routine for a standalone issue routed to Claude by `clarify.yml`; see "Claude issue implementer" |
+| `claude-issue-intake.yml` | coding-workflows only: `repository_dispatch` (`claude-issue`), `workflow_dispatch` | Queues a standalone issue routed to Claude by `clarify.yml` as an `ai:claude-issue-queue` issue for the Claude issue pickup; see "Claude issue implementer" |
+| `claude-issue-queue-watchdog.yml` | coding-workflows only: `schedule` (hourly, :17), `workflow_dispatch` | Labels queue items nobody picked up within `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (default 3) `ai:claude-issue-queue-stale` and sends a Telegram ERROR; see "Claude issue implementer" |
 | `workflow_failure_heal.yml` | `issues.labeled`, `pull_request.labeled` (human-needed escalation labels) | Reports an `ai:needs-human` / terminal-latch escalation to coding-workflows, whose `workflow-failure-heal-intake.yml` diagnoses the failed runs and opens an `ai:workflow-heal` issue for the pipeline to fix (in coding-workflows for workflow defects, in the consumer for consumer defects). On by default; disable via `WORKFLOW_HEAL_ENABLED=false`; see "Workflow Failure Heal" below |
 
 <!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
@@ -1201,13 +1202,22 @@ mode).
    `scripts/claude_issue_handoff.sh` sends a `claude-issue`
    `repository_dispatch` to coding-workflows with `GH_PAT`.
 3. `claude-issue-intake.yml` (coding-workflows only) validates the repo
-   against `.github/ai/consumer_repos.json` plus coding-workflows, then fires
-   the **Claude issue dispatcher** routine
-   (`scripts/claude_issue_intake.sh`). A repo registered per CLAUDE.md §14
-   is covered automatically, including repos onboarded later.
-4. The routine follows `.claude/commands/claude-issue-dispatch.md` and starts
-   an Opus session in the target repo running `/implement-issue-claude <url>`.
-   That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
+   against `.github/ai/consumer_repos.json` plus coding-workflows, then queues
+   the issue as one `ai:claude-issue-queue` issue in coding-workflows
+   (`scripts/claude_issue_intake.sh`), opened with the job's `GITHUB_TOKEN`
+   so no workflow reacts to it, and comments "queued" on the issue. A repo
+   registered per CLAUDE.md §14 is covered automatically, including repos
+   onboarded later.
+4. The **Claude issue pickup** (`.claude/commands/claude-issue-pickup.md`), a
+   relay of low-effort Sonnet sessions woken hourly, reads the queue
+   (`claude_issue_route.py queue-pending`) and, following
+   `.claude/commands/claude-issue-dispatch.md` step 2, starts an Opus session
+   in the target repo running `/implement-issue-claude <url>` for each item,
+   then closes the queue issue. An issue therefore waits up to about an hour
+   before its session starts. A claude.ai routine cannot do this step: a
+   routine run gets no claude-code-remote tools (`create_session`,
+   `send_later`), so it can start neither the implementation session nor any
+   later stage (issue #4525). That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
    as `/implement-plan-claude` in issue mode. The project is built on the
    branch the issue names in an `Integration branch:` / `Target branch:` line:
    a security follow-up on its project's branch, a heal issue on `stable` or
@@ -1234,10 +1244,15 @@ security fix cannot spawn follow-ups of follow-ups.
 | Send one issue to Claude in a `codex` repo | Add `ai:claude`, then comment `/reclarify` |
 | Retry a failed handoff or resume a blocked issue | Comment `/reclarify` |
 
-**Failure modes.** A rejected dispatch, an unregistered repo, a missing
-routine id or token, or a failed `/fire` call labels the issue
-`ai:claude-handoff-failed`, comments how to retry or switch, and sends a
-Telegram ERROR. A Claude session that must stop (CLAUDE.md §28.C: an
+**Failure modes.** A rejected dispatch, an unregistered repo, or a failed
+queue read or write labels the issue `ai:claude-handoff-failed`, comments how
+to retry or switch, and sends a Telegram ERROR. A queue item still open after
+`CLAUDE_ISSUE_QUEUE_STALE_HOURS` (repo variable, default 3) means the pickup
+relay stopped: `claude-issue-queue-watchdog.yml` labels it
+`ai:claude-issue-queue-stale` and sends a Telegram ERROR with the restart
+command. A session without the claude-code-remote tools never implements an
+issue itself: `/implement-issue-claude` and the dispatcher stop with
+`ai:claude-blocked` instead (CLAUDE.md §28.C). A Claude session that must stop (CLAUDE.md §28.C: an
 exhausted cap, a failed security or validation run, an ask-first operation,
 a missing base branch) comments once on the issue, labels it
 `ai:claude-blocked`, and sends a push notification; answer there and comment
@@ -1246,35 +1261,31 @@ itself errors, clarify falls back to the Codex pipeline with a warning, so no
 issue is dropped.
 
 **One-time setup (coding-workflows owner).** Do this before the change is
-promoted to `@stable`. Until then every consumer's Claude-routed issues fail
-the handoff.
+promoted to `@stable`; until the pickup runs, Claude-routed issues wait in
+the queue and the watchdog alerts after 3 hours.
 
-1. In claude.ai → Code → Routines, create a routine named
-   **Claude issue dispatcher**: repository `shubhodeep1/coding-workflows`,
-   model Opus, the environment the other Claude sessions use, and this prompt:
-   `Follow .claude/commands/claude-issue-dispatch.md for the issue described
-   in the routine-fire-payload block.`
-2. Edit the routine, add an **API** trigger, copy the `trig_…` id from its
-   URL, and generate a token.
-3. In coding-workflows, set repository variable `CLAUDE_ISSUE_ROUTINE_ID` to
-   that id and secret `CLAUDE_ISSUE_ROUTINE_TOKEN` to the token.
+1. From a claude.ai cloud session on coding-workflows in **Auto mode**, run
+   `/claude-issue-pickup start`. It starts the relay: a `Claude issue pickup —
+   next wake …` session and a one-shot trigger named `Claude issue pickup:
+   next wake`, re-armed by every wake. `/claude-issue-pickup start — restart`
+   replaces a stopped relay, and `/claude-issue-pickup stop` stops it.
+2. Smoke test: open an issue here, or run **Claude Issue Intake** manually
+   with a repo and issue number. The issue gets a "queued" comment
+   (`ai:claude-issue-dispatched:v1`) linking an `ai:claude-issue-queue`
+   issue. Within about an hour the pickup closes that queue issue with a
+   `Dispatched:` session link, and the implementation session posts its
+   progress comment, writes `docs/plans/issue-<N>-*-plan.md`, and opens the
+   project branch and draft final PR.
 
-   **Rotating the token.** Regenerate it from the routine's API trigger modal
-   (Routines → Claude issue dispatcher → Edit → API trigger → Regenerate) —
-   the old token stops working immediately — then update the secret with
-   `gh secret set CLAUDE_ISSUE_ROUTINE_TOKEN -R shubhodeep1/coding-workflows`
-   and paste the new value at the interactive prompt, so it never lands in
-   shell history. Until the secret is updated, intake runs fail with
-   HTTP 401 and issues get `ai:claude-handoff-failed`; comment `/reclarify`
-   on them once the secret is current.
-4. Smoke test: open an issue here, or run **Claude Issue Intake** manually
-   with a repo and issue number. The issue should get an "intake fired"
-   comment with the dispatcher session link, and then a progress comment from
-   the implementation session. If the routine cannot start sessions
-   (`create_session`), the dispatcher attaches the repo and runs the first
-   stage itself (`claude-issue-dispatch.md` step 3).
+The "Claude issue dispatcher" routine and its `CLAUDE_ISSUE_ROUTINE_ID` /
+`CLAUDE_ISSUE_ROUTINE_TOKEN` settings are deprecated: the intake no longer
+fires the routine (it only logs `routine_deprecated` when the variable is
+set) and no longer binds the token. You can delete the routine, the variable
+and the secret. A routine still configured with
+`.claude/commands/claude-issue-dispatch.md` stops at its step 3 without
+implementing anything.
 
-Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`.
+Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`, `CLAUDE_ISSUE_QUEUE_WATCHDOG`.
 
 ### Check Failure Triage Phase
 
@@ -1572,7 +1583,7 @@ through `clarify → plan → implement → review`.
 | `GH_PAT` | All workflows | GitHub PAT with repo access |
 | `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, memory_maintenance | OpenRouter API key for LLM access and AI memory keyword extraction |
 | `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Telegram bot token (optional; also used for message cleanup) |
-| `CLAUDE_ISSUE_ROUTINE_TOKEN` | claude-issue-intake (coding-workflows only) | API token of the "Claude issue dispatcher" routine (generated once in claude.ai → Routines). Never needed in consumer repos. |
+| `CLAUDE_ISSUE_ROUTINE_TOKEN` | none (deprecated) | Formerly the API token of the "Claude issue dispatcher" routine. Since #4525 the intake queues issues for the Claude issue pickup and no longer binds this secret; it can be deleted. Never needed in consumer repos. |
 
 ## Required Variables
 
@@ -1813,8 +1824,9 @@ through `clarify → plan → implement → review`.
 | `VERBOSITY_WORKFLOW_HEAL` | `low` | coding-workflows only. Codex verbosity for the heal diagnosis call. |
 | `AI_ISSUE_IMPLEMENTER` | `claude` | clarify (every repo). Who implements standalone (non-orchestrator) issues: `claude` hands them to the Claude issue implementer, `codex` keeps the clarify → plan → implement pipeline. Any other value warns and uses `claude`. Per-issue `ai:codex` / `ai:claude` labels win; orchestrator issues and `[E2E …]` fixtures always stay on Codex. See "Claude issue implementer". |
 | `CLAUDE_ISSUE_UPSTREAM_REPO` | `shubhodeep1/coding-workflows` | clarify (every repo). Repository that receives the `claude-issue` `repository_dispatch`. |
-| `CLAUDE_ISSUE_ROUTINE_ID` | — | coding-workflows only. `trig_…` id of the "Claude issue dispatcher" routine that `claude-issue-intake.yml` fires. Unset → every Claude-routed issue gets `ai:claude-handoff-failed`. |
-| `CLAUDE_ISSUE_ROUTINE_BETA` | `experimental-cc-routine-2026-04-01` | coding-workflows only. `anthropic-beta` header sent to the routine `/fire` endpoint; bump when the routines API moves to a new dated header. |
+| `CLAUDE_ISSUE_ROUTINE_ID` | — | Deprecated (#4525), coding-workflows only. The intake no longer fires the "Claude issue dispatcher" routine; when set it only logs `routine_deprecated`. Can be deleted. |
+| `CLAUDE_ISSUE_ROUTINE_BETA` | `experimental-cc-routine-2026-04-01` | Deprecated (#4525), unused: the intake no longer calls the routine `/fire` endpoint. |
+| `CLAUDE_ISSUE_QUEUE_STALE_HOURS` | `3` | coding-workflows only. Age after which `claude-issue-queue-watchdog.yml` flags an open `ai:claude-issue-queue` item `ai:claude-issue-queue-stale` and sends a Telegram ERROR (the pickup relay has stopped). |
 
 ## Semantic Cache (Clarification Only)
 

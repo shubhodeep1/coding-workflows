@@ -224,6 +224,14 @@
     "ai:claude-blocked": {
       "color": "b60205",
       "description": "Claude issue session stopped on a hard blocker; see the latest issue comment"
+    },
+    "ai:claude-issue-queue": {
+      "color": "5319e7",
+      "description": "Queue item for the Claude issue pickup (coding-workflows only; opened by the intake, closed by the pickup)"
+    },
+    "ai:claude-issue-queue-stale": {
+      "color": "b60205",
+      "description": "Claude issue queue item nobody picked up in time; restart the pickup with /claude-issue-pickup start — restart"
     }
   },
   "phase_groups": [

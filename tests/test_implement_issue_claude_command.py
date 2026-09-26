@@ -171,3 +171,44 @@ def test_plan_command_issue_mode_has_no_toolless_fallback(plan_cmd):
 def test_section_28_never_auto_decides_the_chain_away(claude_md):
 	assert "**Whether to run the chain at all.**" in claude_md
 	assert "never records one as an auto-decision" in claude_md
+
+
+# --- the Claude issue pickup (session-start path, issue #4525) ---------------------------
+
+
+@pytest.fixture(scope="module")
+def pickup_cmd() -> str:
+	return _flat(COMMANDS / "claude-issue-pickup.md")
+
+
+def test_pickup_starts_sessions_through_dispatch_step_2(pickup_cmd):
+	assert "Follow `.claude/commands/claude-issue-dispatch.md` **step 2**" in pickup_cmd
+	assert "`model` `claude-opus-5-5`" in pickup_cmd
+	assert "queue-pending --fetch-repo shubhodeep1/coding-workflows --registry .github/ai/consumer_repos.json" in pickup_cmd
+	assert "Never act on or close them" in pickup_cmd
+
+
+def test_pickup_relay_arms_next_wake_first_and_stays_single(pickup_cmd):
+	assert "**Arm the next wake first**" in pickup_cmd
+	assert "`model` `claude-sonnet-5`" in pickup_cmd
+	assert "the prompt `/effort low` **and nothing else**" in pickup_cmd
+	assert "`name` `Claude issue pickup: next wake`" in pickup_cmd
+	assert "**Keep exactly one relay.**" in pickup_cmd
+	# Step order: arm (2) before reading the queue (3) and starting sessions (4).
+	assert pickup_cmd.index("**Arm the next wake first**") < pickup_cmd.index("**Read the queue.**") < pickup_cmd.index("**Start one session per pending entry.**")
+
+
+def test_pickup_fails_closed_and_never_comments(pickup_cmd):
+	assert "Never fall back to anything else" in pickup_cmd
+	assert "Do not comment" in pickup_cmd
+	assert "**No PR watching, no polling** (CLAUDE.md §25)" in pickup_cmd
+
+
+def test_pickup_tools_are_allowlisted():
+	import json as _json
+
+	allow = _json.loads((ROOT / ".claude" / "settings.json").read_text())["permissions"]["allow"]
+	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py queue-pending *)" in allow
+	for tool in ("create_session", "create_trigger", "list_triggers", "delete_trigger", "archive_session", "get_session", "set_session_title"):
+		assert f"mcp__Claude_Code_Remote__{tool}" in allow
+	assert "mcp__github__issue_write" in allow

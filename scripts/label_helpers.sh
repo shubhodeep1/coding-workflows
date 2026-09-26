@@ -77,6 +77,8 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:codex"]="0e8a16"
 	["ai:claude-handoff-failed"]="b60205"
 	["ai:claude-blocked"]="b60205"
+	["ai:claude-issue-queue"]="5319e7"
+	["ai:claude-issue-queue-stale"]="b60205"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -136,6 +138,8 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:codex"]="Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
 	["ai:claude-handoff-failed"]="Claude issue handoff failed; comment /reclarify to retry or add ai:codex to switch"
 	["ai:claude-blocked"]="Claude issue session stopped on a hard blocker; see the latest issue comment"
+	["ai:claude-issue-queue"]="Queue item for the Claude issue pickup (coding-workflows only; opened by the intake, closed by the pickup)"
+	["ai:claude-issue-queue-stale"]="Claude issue queue item nobody picked up in time; restart the pickup with /claude-issue-pickup start — restart"
 )
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'

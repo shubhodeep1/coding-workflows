@@ -212,3 +212,26 @@ Copy this block when adding a new entry:
   - `rg -n 'write_opencode_config\.sh' .github/workflows scripts --glob '!scripts/write_opencode_config.sh'` returns no matches.
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
 - **Owner:** @shubhodeep1
+
+### `.claude/commands/claude-issue-pickup.md` (Claude issue pickup relay)
+
+- **Introduced in:** #4531 (2026-09-26)
+- **Type:** supervisor
+- **Removal trigger:** when a claude.ai routine run (or another automatic session start) gets the claude-code-remote tools (`create_session`, `send_later`), so the intake can start implementation sessions directly again; otherwise permanent — review annually.
+- **Removal preflight checks:**
+  - A replacement start path is live: an issue routed to Claude gets its `/implement-issue-claude` session (progress comment `<!-- ai:claude-issue-progress:v1 -->` plus a `claude/implement-plan-issue-<N>-*` branch) without an `ai:claude-issue-queue` item.
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=open"` returns `[]` (nothing is waiting for the pickup).
+  - `/claude-issue-pickup stop` reports its trigger deleted, and `list_triggers` shows no `Claude issue pickup: next wake` trigger.
+  - `scripts/claude_issue_intake.sh` no longer opens queue issues (`rg -n 'queue-issue' scripts/claude_issue_intake.sh` returns nothing).
+- **Owner:** @shubhodeep1
+
+### `.github/workflows/claude-issue-queue-watchdog.yml` + `scripts/claude_issue_queue_watchdog.sh`
+
+- **Introduced in:** #4531 (2026-09-26)
+- **Type:** long-running
+- **Removal trigger:** together with the Claude issue pickup relay above (it only watches that relay's queue).
+- **Removal preflight checks:**
+  - The pickup entry above has been removed, i.e. its preflight checks passed.
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=all&per_page=1"` shows no queue item created after the removal of the queue path.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_claude_issue_route.py` returns exit code 0 after the watchdog tests are removed with it.
+- **Owner:** @shubhodeep1

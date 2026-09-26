@@ -1,16 +1,18 @@
 <!-- changelog: fixed -->
-- **A Claude issue session that cannot run the issue-mode chain now stops and says so on the issue, instead of shipping a direct edit.** The routing comment also reports reason `default` when `AI_ISSUE_IMPLEMENTER` is unset.
+- **Claude-routed issues now get their full issue-mode project again: an hourly pickup session starts the implementation session instead of the routine.** A session that cannot run the chain now stops on the issue instead of shipping a direct edit.
 
-The smoke test on issue #4525 showed that the "Claude issue dispatcher" routine run has no claude-code-remote tools (`create_session`, `send_later`, `get_session`, `add_repo`). Its fallback then implemented the issue in-session as auto-decision AD-1: no plan, no project branch, and no conformance, security or validation pass. `.claude/commands/claude-issue-dispatch.md` step 3 and `/implement-issue-claude` step 0 now fail closed. They post one `<!-- ai:claude-blocked:v1 -->` comment naming the blocker and the options, add `ai:claude-blocked`, and end. CLAUDE.md §28.C now lists running the chain, its security pass and its validation as never auto-decided away. `/implement-plan-claude` issue mode no longer uses the local-session fallbacks.
+The smoke test on issue #4525 showed that a claude.ai routine run has no claude-code-remote tools (`create_session`, `send_later`, `get_session`, `add_repo`). So the "Claude issue dispatcher" could not start the implementation session. Its fallback implemented the issue in-session as auto-decision AD-1: no plan, no project branch, and no conformance, security or validation pass. `claude-issue-intake.yml` now queues each routed issue as an `ai:claude-issue-queue` issue in coding-workflows. The new `/claude-issue-pickup` relay, a low-effort Sonnet session woken hourly, starts the Opus `/implement-issue-claude` session for each item and closes it. `claude-issue-queue-watchdog.yml` alerts when an item waits too long. `claude-issue-dispatch.md`, `/implement-issue-claude` and CLAUDE.md §28.C now fail closed with `ai:claude-blocked` when the session tools are missing. The routed comment also reports reason `default` when `AI_ISSUE_IMPLEMENTER` is unset.
 
 | The numbers that matter | Value |
 | --- | --- |
-| Smoke-test issue | #4525 (dispatcher session `session_015RqYR4nvFgjzaLLtyshGnb`) |
-| Label on a stopped issue | `ai:claude-blocked` |
-| Routing reason when the variable is unset | `default` (was `repo_var`) |
+| Longest wait before the implementation session starts | about 60 minutes (one pickup wake) |
+| Sessions started per pickup wake | at most 10 (the rest wait for the next wake) |
+| Watchdog cadence / stale threshold | hourly at :17 / `CLAUDE_ISSUE_QUEUE_STALE_HOURS`, default 3 |
+| New labels | `ai:claude-issue-queue`, `ai:claude-issue-queue-stale` |
+| Deprecated, unused | `CLAUDE_ISSUE_ROUTINE_ID`, `CLAUDE_ISSUE_ROUTINE_TOKEN`, `CLAUDE_ISSUE_ROUTINE_BETA` |
 
-What this means for operators: until a session-start path with `create_session` is in place, a routine-dispatched issue waits with `ai:claude-blocked` rather than being merged without its security and validation passes. Start `/implement-issue-claude <issue url>` from a claude.ai cloud session in Auto mode, or add `ai:codex` and comment `/reclarify`.
+What this means for operators: start the relay once with `/claude-issue-pickup start` from a claude.ai cloud session on coding-workflows in Auto mode. If Telegram reports stale queue items, run `/claude-issue-pickup start — restart`. The "Claude issue dispatcher" routine and its variable and secret can be deleted. Consumer repos need no change.
 
 ### For contributors
 
-`clarify.yml` now passes `vars.AI_ISSUE_IMPLEMENTER || ''`, so `scripts/claude_issue_route.py` applies its own `claude` default. Contract tests are in `tests/test_implement_issue_claude_command.py`.
+`scripts/claude_issue_route.py` gains `queue-issue`, `queue-pending` (with `--fetch-repo`, one REST read) and `queue-stale`. Only queue issues opened by `github-actions[bot]` for registered repos are acted on. The queue issue is created with `GITHUB_TOKEN`, so neither it nor the pickup's close starts a workflow. `clarify.yml` passes `vars.AI_ISSUE_IMPLEMENTER || ''`. Tests are in `tests/test_claude_issue_route.py` and `tests/test_implement_issue_claude_command.py`; the removal-registry entries are in `docs/scripts-pending-removal.md`.
