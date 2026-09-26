@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `85e1f972c26364aabac22c62fb835693bea52154` on `orchestrator/project-4559`; it matches the issue\u2019s integration branch.\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/e2e_smoke_canary_b.txt`\nScope-mode justification: The complete change is a one-line replacement in the existing canary file. No shortcut or expansion is needed; preserving the independent file boundary satisfies Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed (`unattended_system_instructions.md` \u00a76).\n\n## Automation and execution\n- **Change type:** Modify an existing file only; no new script, scheduler wiring, or supervisor.\n- **Entry point:** The existing `.github/workflows/test-and-mark-stable.yml` smoke-test flow specifies canary B at line 4635. Do not edit that workflow.\n- **Database gate and removal registry:** Not applicable.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt` only.\n\n## Implementation\nKeep line 1 exactly `status: ok`. Replace line 2, currently `decompose-run: 25567947079`, with exactly `decompose-run: 36242690892`. Do not change the first canary or add other lines.\n\n## Data structures affected\nThe two-line plain-text canary only.\n\n## API/interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the stale run line\n- **Chosen:** Replace line 2 in place.\n- **Alternatives considered:** Append another run line or edit the workflow.\n- **Why:** The issue requires the specified value as line 2 and restricts changes to canary B.\n\n## Security considerations\nNo new endpoint or authorization surface. Treat the issue-provided run ID as data, write only the specified literal, and verify the file boundary so untrusted issue text cannot broaden the edit.\n\n## Risks and edge cases\nThe workflow description says \u201cappend\u201d a second line, while this tracked file already has one. Replacing that stale line achieves the required two-line result without creating a duplicate. The first canary is independent and must remain untouched.\n\n## Testing and verification\nCheck the first two lines for exact content. Run `git diff --check` and confirm `git diff --name-only` lists only `tests/e2e_smoke_canary_b.txt`; inspect the diff for the single-line replacement.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d1c96515a097b52982aa74060eafdc03fc2888cb22713d89f0a35433ee601fd3",
+  "lineage": {
+    "issue_number": 4564,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36243361120",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36243361120",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4564"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260926125821_59da0d6295",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4564,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36243361120"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4564",
+  "timestamps": {
+    "created_at": "2026-09-26T12:58:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
