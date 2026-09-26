@@ -1264,6 +1264,15 @@ the handoff.
    URL, and generate a token.
 3. In coding-workflows, set repository variable `CLAUDE_ISSUE_ROUTINE_ID` to
    that id and secret `CLAUDE_ISSUE_ROUTINE_TOKEN` to the token.
+
+   **Rotating the token.** Regenerate it from the routine's API trigger modal
+   (Routines → Claude issue dispatcher → Edit → API trigger → Regenerate) —
+   the old token stops working immediately — then update the secret with
+   `gh secret set CLAUDE_ISSUE_ROUTINE_TOKEN -R shubhodeep1/coding-workflows`
+   and paste the new value at the interactive prompt, so it never lands in
+   shell history. Until the secret is updated, intake runs fail with
+   HTTP 401 and issues get `ai:claude-handoff-failed`; comment `/reclarify`
+   on them once the secret is current.
 4. Smoke test: open an issue here, or run **Claude Issue Intake** manually
    with a repo and issue number. The issue should get an "intake fired"
    comment with the dispatcher session link, and then a progress comment from

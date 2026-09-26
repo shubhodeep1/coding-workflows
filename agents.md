@@ -736,7 +736,19 @@ alone, then a one-shot `create_trigger` into it carrying the instructions,
 because `/effort low` is not applied when more text follows it in one prompt
 (CLAUDE.md §26.B). It runs `.claude/scripts/check_in_status.py`, re-arms
 itself with `send_later` every 60 minutes, and, when the wait is over, starts
-the next **stage session** on the model the operator picked. Every stage (a
+the next **stage session** on the model the operator picked. There is **one
+checker per project** (`implement-plan <slug> — checker`), created by the
+first stage and reused for every wait: each later stage hands it the next
+wait through a one-shot trigger instead of creating a new checker, because
+claude-code-remote refuses `create_session`, `send_later`, and
+`create_trigger` 8 parent links below a root session, and a checker per
+stage added two links per hand-off (a project stalled that way at its
+fourth security cycle on 2026-09-25). Every stage archives stray checkers
+for its plan (including older `… — waiting: …` ones) and deletes the reused
+checker's stale check-ins before handing it a wait; the checker is archived
+when the project ends. A depth-limit refusal stops the project as
+`BLOCKED` with a notification and a resume prompt instead of falling back
+to a session-local cron. Every stage (a
 phase, a review round, the conformance
 audit (`/verify-activation — scope conformance`, run after the last phase
 and before the security pass, and again after any Claude-written
@@ -753,7 +765,9 @@ that wait (`create_trigger` with `persistent_session_id` and a 7-day
 `run_once_at` the checker renews at every check-in; `update_trigger` to
 one minute out, never touching the prompt) so that session re-reads the
 PR state, runs the blocked-PR fix, and writes any action-needed report
-itself. Merged PRs, review rounds, finished runs, and resolved issue lists
+itself. A scheduled Routine fire creates no session, so the hand-back adds
+no parent link, and it leaves the project checker running for the next
+wait. Merged PRs, review rounds, finished runs, and resolved issue lists
 still start a fresh stage session, and a failed hand-back falls back to a
 fresh `… — blocked PR` stage session. New projects work on a
 project branch `claude/implement-plan-<slug>` with a draft final PR into the
@@ -770,7 +784,7 @@ tools (`send_later`, `create_session`, `archive_session`, the trigger tools)
 prompt on every call whatever the allowlist says, and Haiku 4.5 cannot run
 in Auto mode, which is why the checker is Sonnet. Progress between
 stages is persisted in `docs/implement-plan/<slug>.md`
-(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt. Only the chain archives its own sessions: a `… — waiting: …` checker
+(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt. Only the chain archives its own sessions: the project checker
 holds the project's only pending check-in, so archiving it by hand stalls the
 project until the 24h safety net fires. To nudge a stalled project, start the
 next stage session by hand with a `— resume.` block; to stop one, delete its
