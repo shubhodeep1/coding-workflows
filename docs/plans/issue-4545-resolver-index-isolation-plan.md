@@ -1,5 +1,5 @@
 Source issue: shubhodeep1/coding-workflows#4545 (https://github.com/shubhodeep1/coding-workflows/issues/4545)
-Base branch: ai/issue-4512
+Base branch: main (was ai/issue-4512, which merged into main as #4516 on 2026-09-26)
 Security pass: skip (ai:workflow-heal: automation-produced issue)
 
 # Isolate the conflict resolver's model attempt from the real Git index
