@@ -152,4 +152,4 @@ def test_renderer_runs_with_bootstrapped_venv_on_path() -> None:
 	# The venv lives outside RUNTIME_DIR, which is uploaded as the artifact.
 	assert '"${RUNNER_TEMP:-/tmp}/validate-renderer-deps-venv-' in _extracted_function()
 	# printf must not parse the probe's closing marker as an option.
-	assert "printf '%s\\n' '--- end python3 environment probe ---'" in renderer
+	assert "printf -- '--- end python3 environment probe ---\\n'" in renderer

@@ -244,7 +244,7 @@ def test_clarify_agent_runs_only_in_isolated_container() -> None:
 	wf = _read(CLARIFY_WF)
 	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
 	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
-	assert "codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py model_provider_broker.py; do" in wf
+	assert "codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py model_provider_broker.py claude_issue_route.py claude_issue_handoff.sh; do" in wf
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in wf
 	assert "--network none --read-only --cap-drop ALL --security-opt no-new-privileges" in runner
 	assert "--sandbox read-only" in runner

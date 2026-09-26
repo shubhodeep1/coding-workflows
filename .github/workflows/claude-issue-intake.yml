@@ -1,0 +1,106 @@
+---
+name: Claude Issue Intake
+
+# Receives standalone issues routed to Claude and starts the Claude session
+# that implements them. Two entry points:
+#
+#   1. `repository_dispatch` (event type `claude-issue`), sent by
+#      scripts/claude_issue_handoff.sh from the reusable clarify workflow in a
+#      consumer repository (or in this repo) when
+#      scripts/claude_issue_route.py routes an opened / `/reclarify`-ed issue
+#      to Claude (the default; AI_ISSUE_IMPLEMENTER=codex switches a repo back).
+#   2. `workflow_dispatch` with a repo + issue number, for manual re-fires and
+#      the setup smoke test.
+#
+# scripts/claude_issue_intake.sh validates the repo against
+# .github/ai/consumer_repos.json (plus this repo), then POSTs to the /fire
+# endpoint of ONE claude.ai routine ("Claude issue dispatcher",
+# CLAUDE_ISSUE_ROUTINE_ID / CLAUDE_ISSUE_ROUTINE_TOKEN). The routine follows
+# .claude/commands/claude-issue-dispatch.md and starts an Opus session in the
+# target repo running `/implement-issue-claude <issue url>`. New consumer repos
+# are covered as soon as they are registered (CLAUDE.md §14); no per-repo
+# routine exists. See README "Claude issue implementer".
+
+"on":
+  repository_dispatch:
+    types:
+      - claude-issue
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "owner/repo of the issue (must be registered in .github/ai/consumer_repos.json or be this repo)"
+        required: true
+        type: string
+      issue_number:
+        description: "Issue number"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-issue-intake-${{ github.event.client_payload.repo || inputs.repo }}-${{ github.event.client_payload.issue_number || inputs.issue_number }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      CLAUDE_ISSUE_ROUTINE_ID: ${{ vars.CLAUDE_ISSUE_ROUTINE_ID || '' }}
+      CLAUDE_ISSUE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ISSUE_ROUTINE_TOKEN }}
+      CLAUDE_ISSUE_ROUTINE_BETA: ${{ vars.CLAUDE_ISSUE_ROUTINE_BETA || 'experimental-cc-routine-2026-04-01' }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Materialize the intake payload
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # TRUST BOUNDARY: both sources are external to this run. They are
+          # bound as env (never interpolated into the script) and re-validated
+          # by scripts/claude_issue_route.py before any field is used.
+          CLIENT_PAYLOAD_JSON: ${{ toJson(github.event.client_payload) }}
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/claude-issue-intake-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
+          PAYLOAD_FILE="${RUNTIME_DIR}/payload.json"
+          echo "CLAUDE_ISSUE_PAYLOAD_FILE=${PAYLOAD_FILE}" >> "$GITHUB_ENV"
+          case "${EVENT_NAME}" in
+            repository_dispatch)
+              printf '%s' "${CLIENT_PAYLOAD_JSON}" > "${PAYLOAD_FILE}"
+              ;;
+            workflow_dispatch)
+              jq -n --arg repo "${INPUT_REPO}" --arg num "${INPUT_ISSUE_NUMBER}" \
+                '{schema_version: "claude_issue.v1", repo: $repo, issue_number: ($num | tonumber? // 0), trigger: "manual", skip_security_pass: false, reporter_run_url: ""}' \
+                > "${PAYLOAD_FILE}"
+              ;;
+            *)
+              echo "::error::Unsupported event ${EVENT_NAME}"
+              exit 1
+              ;;
+          esac
+
+      - name: Fire the Claude issue dispatcher routine
+        run: |
+          set -euo pipefail
+          bash scripts/claude_issue_intake.sh

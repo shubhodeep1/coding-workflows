@@ -5851,6 +5851,26 @@ def test_staged_support_guards_refetch_when_graphql_comments_are_unavailable() -
 	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
 
 
+def test_standalone_stall_recovery_skips_claude_claimed_issues() -> None:
+	"""Claude-claimed standalone issues (ai:claude, no ai:codex) belong to the
+	Claude issue flow; stall recovery must not re-issue a Codex phase."""
+	claimed = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval", "ai:claude"],
+		issue_comments=["routine comment"],
+		env_overrides={},
+	)
+	claimed_log = claimed["stdout"] + claimed["stderr"]
+	assert "STALL_SKIP issue=700 reason=claude_routed action=none" in claimed_log
+	assert not any(comment["body"].startswith("/approved") for comment in claimed["issues"]["700"]["comments"])
+
+	switched = _run_latch_release_tick(
+		issue_labels=["ai:awaiting-approval", "ai:claude", "ai:codex"],
+		issue_comments=["routine comment"],
+		env_overrides={},
+	)
+	assert "reason=claude_routed" not in switched["stdout"] + switched["stderr"]
+
+
 def test_standalone_staged_support_guard_reuses_conclusive_comment_cache() -> None:
 	result = _run_latch_release_tick(
 		issue_labels=["ai:awaiting-approval"],

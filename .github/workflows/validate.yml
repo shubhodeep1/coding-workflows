@@ -809,12 +809,14 @@ jobs:
             --metadata-json "${metadata_json}"
 
       - name: Install Python dependencies for validation renderer
+        id: renderer_dependencies
         run: |
           set -euo pipefail
 
           if [ -f "${SUPPORT_SCRIPTS_DIR}/render_validation_templates.py" ]; then
             python3 -I -B -m venv "${RUNNER_TEMP}/validation-renderer-venv"
             "${RUNNER_TEMP}/validation-renderer-venv/bin/python" -I -B -m pip install --disable-pip-version-check --quiet pyyaml jsonschema jinja2
+            "${RUNNER_TEMP}/validation-renderer-venv/bin/python" -I -B -c 'import yaml, jsonschema, jinja2'
             printf '%s\n' "${RUNNER_TEMP}/validation-renderer-venv/bin" >> "$GITHUB_PATH"
           else
             echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
@@ -975,6 +977,7 @@ jobs:
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
           MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
           VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
+          VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
           BEHAVIOURAL_SMOKE_SOURCE_PR: ${{ steps.behavioural_smoke_pr.outputs.pr_number }}

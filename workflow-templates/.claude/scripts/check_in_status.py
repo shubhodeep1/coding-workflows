@@ -31,16 +31,11 @@ failed (the JSON then carries `error` and `done` is false).
     is older than --stuck-hours (default 6), AND no workflow run on the head
     branch is queued or in progress. With --terminal-only (the §26 status
     check-in) only merged / closed count.
-  * Claude-fixer PR (head ref starts with `claude/implement-plan-`, where
-    review_autofix.yml runs the reviewer panel but hands the fixes to the
-    Claude session): also done, with `state: review-round` or
-    `state: conflict`, when a trusted `ai:claude-fixer-handoff:v1` comment
-    names the current head and no `ai:claude-fixer-verdict:v1` comment
-    answers it yet (only a dedicated Bot comment bearing the matching head,
-    round, and ledger digest answers it, when CLAUDE_FIXER_VERDICT_BOT_LOGIN
-    is configured in the checker environment); and done with `state: conflict` as soon as the PR is
-    conflicted with no workflow run active (no 6-hour wait: no review run
-    fires for a conflict the base branch caused).
+  * Claude-fixer PR (head ref starts with `claude/implement-plan-`): also
+    done for an authenticated, completed review hand-off on the current head
+    with no matching dedicated-bot verdict, or for a merge conflict when no
+    workflow run is active (no 6-hour wait). An empty
+    CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN disables comment hand-offs.
   * Run: `status` is `completed` (any conclusion). `state` is `completed`
     only for a `success` conclusion and `failed` for any other, so a checker
     routes a failed run to its block stage.
@@ -49,8 +44,8 @@ failed (the JSON then carries `error` and `done` is false).
 API budget (CLAUDE.md §15): REST only, never GraphQL. PR mode issues 1 call
 (`pulls/N`), one call per 100 check runs when the PR is not conflicted, and
 at most 3 further calls when a failure is old (head commit, queued runs,
-in-progress runs). A Claude-fixer PR adds one call per 100 PR comments and,
-when conflicted, the 2 active-run reads. Run mode issues 1 call. Issues mode issues one call per
+in-progress runs). A Claude-fixer PR adds one call per 100 PR comments, at
+most one hand-off run read, and 3 active-run reads when needed. Run mode issues 1 call. Issues mode issues one call per
 issue; the checker lists at most the few follow-ups one security cycle opens.
 Every call goes through `gh api`, which in Claude Code on the web is
 authenticated by the session's agent proxy.
@@ -74,7 +69,6 @@ DEFAULT_STUCK_HOURS = 6.0
 MAX_PAGINATED_API_PAGES = 10
 # review_autofix.yml's Claude-fixer mode (CLAUDE_FIXER_HEAD_PREFIX there).
 CLAUDE_FIXER_HEAD_PREFIX = "claude/implement-plan-"
-TRUSTED_COMMENT_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 FIXER_HANDOFF_RE = re.compile(
 	r"<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=([0-9a-f]{40}) round=(\d+) -->"
 )
@@ -86,6 +80,14 @@ FIXER_HANDOFF_LEDGER_RE = re.compile(
 FIXER_VERDICT_LEDGER_RE = re.compile(
 	r"^<!-- ai:claude-fixer-verdict:v2 head=([0-9a-f]{40}) round=(\d+) ledger=([0-9a-f]{64}) -->$",
 	re.MULTILINE,
+)
+FIXER_HANDOFF_HEADER_RE = re.compile(
+	r"## Review round ([1-9][0-9]*): (findings handed to the Claude session|merge conflict, handed to the Claude session)"
+)
+FIXER_WORKFLOW_PATHS = (
+	".github/workflows/review_autofix.yml",
+	".github/workflows/internal-review.yml",
+	".github/workflows/ai-review.yml",
 )
 
 
@@ -217,9 +219,9 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 	return {"done": True, "state": "stuck", "reason": f"PR #{number} stuck: {problem}, head {age_hours:.1f}h old, no workflow run active on {head_ref}"}
 
 
-def _active_run_count(repo: str, head_ref: str) -> int:
+def _active_run_count(repo: str, head_ref: str, include_pending: bool = False) -> int:
 	active = 0
-	for status in ("queued", "in_progress"):
+	for status in (("queued", "in_progress", "pending") if include_pending else ("queued", "in_progress")):
 		listing = gh_api(f"repos/{repo}/actions/runs?branch={head_ref}&status={status}&per_page=1")
 		active += int(listing.get("total_count") or 0)
 	return active
@@ -228,54 +230,97 @@ def _active_run_count(repo: str, head_ref: str) -> int:
 def _check_claude_fixer_pr(repo: str, number: int, head_sha: str, head_ref: str, conflicted: bool) -> dict | None:
 	"""Return the hand-off verdict for a Claude-fixer PR, or None to fall through.
 
-	The review workflow posts `ai:claude-fixer-handoff:v1` (findings or
-	conflict) for the head it reviewed; the stage session answers with
-	`ai:claude-fixer-verdict:v1` for that head when it found nothing left to
-	fix. Only comments from trusted author associations count, and only
-	markers naming the current head: a push supersedes every earlier round.
+	Only the configured workflow account's complete hand-off for the current
+	head can wake a round. A bot's ledger-bound verdict must follow that
+	particular hand-off. The workflow run must finish before the fixer starts.
 	"""
-	if not head_sha:
-		raise ValueError("PR head sha is empty")
+	if not isinstance(head_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+		raise ValueError("PR head sha must be 40 lowercase hex characters")
 	comments = gh_api_list(f"repos/{repo}/issues/{number}/comments")
 	latest_handoff = None
 	answered = False
 	# The bot login must be configured in the checker session as well as the
 	# workflow. A collaborator's head-only verdict never ends a review round.
 	fixer_bot_login = os.environ.get("CLAUDE_FIXER_VERDICT_BOT_LOGIN", "")
-	for comment in comments:
+	# Checker credentials may differ from the workflow's posting credentials.
+	# Without an explicit workflow author, comments cannot authorize a hand-off.
+	fixer_handoff_author_login = os.environ.get("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "")
+	# Issue comments are ordered by ascending GitHub ID; never let a later
+	# quoted or stale marker supersede the workflow's actual comment.
+	for comment in sorted(comments, key=lambda entry: entry.get("id") if type(entry.get("id")) is int else 0):
+		comment_id = comment.get("id")
+		if type(comment_id) is not int or comment_id <= 0:
+			continue
 		body = comment.get("body") or ""
 		if not isinstance(body, str):
 			continue
-		current_head_handoff = False
-		if comment.get("author_association") in TRUSTED_COMMENT_ASSOCIATIONS:
-			for match in FIXER_HANDOFF_RE.finditer(body):
-				if match.group(2) != head_sha or match.group(0) not in body.splitlines():
-					continue
-				ledger_match = next((entry for entry in FIXER_HANDOFF_LEDGER_RE.finditer(body)
-					if entry.group(1) == head_sha and entry.group(2) == match.group(3)), None)
-				latest_handoff = (match.group(1), int(match.group(3)), ledger_match.group(3) if ledger_match else "")
-				answered = False
-				current_head_handoff = True
-				break
-		if current_head_handoff:
+		lines = body.splitlines()
+		user = comment.get("user")
+		if (fixer_handoff_author_login and isinstance(user, dict)
+			and user.get("login") == fixer_handoff_author_login):
+			header = FIXER_HANDOFF_HEADER_RE.fullmatch(lines[0]) if lines else None
+			markers = [match for line in lines if (match := FIXER_HANDOFF_RE.fullmatch(line))]
+			if header and len(markers) == 1:
+				marker = markers[0]
+				kind, issued_head, round_text = marker.groups()
+				expected_heading = ("findings handed to the Claude session" if kind == "findings"
+					else "merge conflict, handed to the Claude session")
+				if (issued_head == head_sha and round_text == header.group(1)
+					and header.group(2) == expected_heading):
+					ledger_markers = [match for line in lines if (match := FIXER_HANDOFF_LEDGER_RE.fullmatch(line))]
+					if (kind == "conflict" and not ledger_markers) or (
+						kind == "findings" and len(ledger_markers) == 1
+						and ledger_markers[0].group(1, 2) == (head_sha, round_text)
+					):
+						# Parse only the workflow's own run link, not arbitrary links in
+						# reviewer text or quoted comments.
+						run_line_prefix = (f"Reviewed head: `{head_sha}` (" if kind == "findings"
+							else f"The head `{head_sha}` conflicts with its base branch, so the reviewer panel did not run (")
+						run_lines = [line for line in lines if line.startswith(run_line_prefix)]
+						run_link_pattern = re.compile(
+							re.escape(run_line_prefix) + r"\[workflow run\]\((https://[^/\s)]+/"
+							+ re.escape(repo) + r"/actions/runs/([1-9][0-9]*))\)\)\."
+						)
+						run_link = run_link_pattern.fullmatch(run_lines[0]) if len(run_lines) == 1 else None
+						if run_link:
+							latest_handoff = (kind, int(round_text),
+								ledger_markers[0].group(3) if ledger_markers else "",
+								int(run_link.group(2)), run_link.group(1), comment_id)
+							answered = False
+							continue
+		if not latest_handoff or not latest_handoff[2] or not fixer_bot_login or comment_id <= latest_handoff[5]:
 			continue
-		if not latest_handoff or not latest_handoff[2] or not fixer_bot_login:
-			continue
-		user = comment.get("user") or {}
 		if not isinstance(user, dict) or user.get("login") != fixer_bot_login or user.get("type") != "Bot":
 			continue
-		if any(match.group(1) == head_sha and match.group(0) in body.splitlines()
-			for match in FIXER_VERDICT_RE.finditer(body)):
-			for match in FIXER_VERDICT_LEDGER_RE.finditer(body):
-				if (match.group(1), int(match.group(2)), match.group(3)) == (head_sha, latest_handoff[1], latest_handoff[2]):
-					answered = True
+		verdict_markers = [match for line in lines if (match := FIXER_VERDICT_RE.fullmatch(line))]
+		verdict_ledgers = [match for line in lines if (match := FIXER_VERDICT_LEDGER_RE.fullmatch(line))]
+		if (len(verdict_markers) == len(verdict_ledgers) == 1
+			and verdict_markers[0].group(1) == head_sha
+			and (verdict_ledgers[0].group(1), int(verdict_ledgers[0].group(2)), verdict_ledgers[0].group(3))
+				== (head_sha, latest_handoff[1], latest_handoff[2])):
+			answered = True
+	if latest_handoff is not None and not answered:
+		kind, round_number, _, run_id, run_url, _ = latest_handoff
+		# This is a separate read: neither the PR nor its comment establishes
+		# the run's result, repository, workflow, or reviewed branch/head.
+		review_run = gh_api(f"repos/{repo}/actions/runs/{run_id}")
+		review_repo = review_run.get("repository")
+		review_path = review_run.get("path")
+		if (review_run.get("id") != run_id or review_run.get("html_url") != run_url
+			or not isinstance(review_repo, dict) or review_repo.get("full_name") != repo
+			or not isinstance(review_path, str) or review_path.split("@", 1)[0] not in FIXER_WORKFLOW_PATHS
+			or review_run.get("head_sha") != head_sha or review_run.get("head_branch") != head_ref
+			or review_run.get("status") != "completed" or review_run.get("conclusion") != "success"):
+			return {"done": False, "state": "open", "reason": f"PR #{number} waiting for verified completed review run {run_id}"}
 	if conflicted:
-		active = _active_run_count(repo, head_ref)
+		active = _active_run_count(repo, head_ref, include_pending=True)
 		if active:
 			return {"done": False, "state": "open", "reason": f"PR #{number} has a merge conflict, but {active} workflow run(s) on {head_ref} are still queued or running"}
 		return {"done": True, "state": "conflict", "reason": f"PR #{number} has a merge conflict on head {head_sha[:12]} and no workflow run is active"}
 	if latest_handoff is not None and not answered:
-		kind, round_number, _ = latest_handoff
+		active = _active_run_count(repo, head_ref, include_pending=True)
+		if active:
+			return {"done": False, "state": "open", "reason": f"PR #{number} has a review hand-off, but {active} workflow run(s) on {head_ref} are still queued or running"}
 		state = "review-round" if kind == "findings" else "conflict"
 		detail = "reviewer findings" if kind == "findings" else "a merge conflict"
 		return {

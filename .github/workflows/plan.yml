@@ -526,6 +526,15 @@ jobs:
             exit 0
           fi
           ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}")"
+          # Claude-claimed issues (ai:claude without an ai:codex switch) are
+          # implemented by the Claude issue flow (scripts/claude_issue_route.py);
+          # a manual /answer must not start a competing Codex plan.
+          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null; then
+            echo "Issue #${ISSUE_NUMBER} is claimed by the Claude issue implementer (ai:claude). Skipping planning run."
+            echo "AI_PHASE_GATE_V1 phase=plan gate=trigger_validation reason=claude_routed outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:planning") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is already in ai:planning phase."
           elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:clarification") != null' >/dev/null; then

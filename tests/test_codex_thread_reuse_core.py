@@ -597,7 +597,9 @@ def test_validate_workflow_contains_thread_reuse_bootstrap() -> None:
 	assert "CODEX_THREAD_REUSE_ENABLED: ${{ vars.CODEX_THREAD_REUSE_ENABLED || 'false' }}" in text
 	# The staging helper runs from the trusted support clone, never the target checkout.
 	assert 'support_sha="$(git -C "${helper_stage_dir}" rev-parse HEAD)"' in text
-	assert 'bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"' in text
+	assert 'WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"' in text
+	assert 'helper_path="scripts/stage_workflow_support.sh"' not in text
+	assert 'bash "${helper_path}" validate --manifest "${manifest_path}"' not in text
 	assert '"scripts/codex_thread_reuse.sh"' in text
 	assert '"prompts/mode-validate-self-heal-continuation.txt"' in text
 	assert '"prompts/contracts/mode-validate-self-heal-continuation.yml"' in text

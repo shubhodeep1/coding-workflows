@@ -203,6 +203,42 @@ Phases of the unattended pipeline (each is a separate workflow file under
     specific `::error::` line of the captured stage stderr (including the
     resolver's, `resolver_stage_stderr.txt`), redacted
     (`failure-headline`, log prefix `AUTOFIX_FAILURE_HEADLINE`).
+15. **Claude issue implementer** (`clarify.yml` route step,
+    `scripts/claude_issue_route.py`, `scripts/claude_issue_handoff.sh`,
+    `claude-issue-intake.yml`, `scripts/claude_issue_intake.sh`,
+    `.claude/commands/claude-issue-dispatch.md`,
+    `.claude/commands/implement-issue-claude.md`) — standalone issues are
+    implemented by Claude Code by default. On issue open / `/reclarify`,
+    clarify's `Decide clarify route` step routes each issue that would
+    otherwise run Codex clarify. Orchestrator-managed issues (label or
+    `Managed by: AI Orchestrator` body line), tracking / security-audit /
+    retro issues and `^[E2E ` fixtures → codex. Otherwise `ai:codex` → codex,
+    then `ai:claude` → claude, then repo var `AI_ISSUE_IMPLEMENTER` (default
+    `claude`; `codex` switches the repo). A route error falls back to codex.
+    A Claude route skips Codex clarify, claims the issue with `ai:claude`, and
+    sends a `claude-issue` `repository_dispatch` (`claude_issue.v1`, ≤ 10
+    top-level keys) to coding-workflows. The intake validates the repo against
+    `.github/ai/consumer_repos.json` plus coding-workflows and POSTs the
+    **Claude issue dispatcher** routine's `/fire` endpoint (repo var
+    `CLAUDE_ISSUE_ROUTINE_ID`, secret `CLAUDE_ISSUE_ROUTINE_TOKEN`, header
+    `CLAUDE_ISSUE_ROUTINE_BETA`), retrying 408/429/5xx/network errors with
+    2/4/8/16 s backoff. Fire text is fixed keys only, with no issue prose.
+    The routine starts an Opus session in the target repo running
+    `/implement-issue-claude`: a single-phase plan
+    `docs/plans/issue-<N>-<topic>-plan.md` (header `Source issue:`,
+    `Base branch:` from the issue's `Integration branch:` / `Target branch:`
+    line else the default branch, `Security pass: run|skip`), then continues
+    as `/implement-plan-claude` issue mode: project branch
+    `claude/implement-plan-<slug>` forked from the base branch, final PR into
+    it with `Fixes #N` (default base) or an explicit close + `ai:merged` after
+    the final merge (any other base; steps 12–13 skipped). No-clash gates: `plan.yml` / `implement.yml`
+    (`AI_PHASE_GATE_V1 … reason=claude_routed outcome=skip`) and standalone
+    stall recovery (`STALL_SKIP … reason=claude_routed`) ignore issues with
+    `ai:claude` and no `ai:codex`. Failures label `ai:claude-handoff-failed`
+    (handoff / intake) or `ai:claude-blocked` (a CLAUDE.md §28.C stop, asked
+    on the issue). Issue-mode sessions auto-decide every question, start-up
+    checks included (CLAUDE.md §28.A).
+    Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -1052,8 +1088,11 @@ committing the corresponding file:
   `before_run`, `after_run`, and `before_remove`; missing files are a no-op.
   Validate's four hooks run from trusted support in a tokenless, network-disabled
   container against a bounded, screened workspace copy, never the host checkout
-  or its `.git`. Isolation/transfer errors stop validation even for nonfatal
-  hooks. An explicit `validate.yml` `target_ref` requires exactly one open
+  or its `.git`. Only non-executable, simple-name `.txt` data under
+  `validation/hook-output/<hook>/` may be replayed to the host; it must not be
+  sourced or executed. Any other changed or deleted path rejects the entire
+  replay as an isolation/transfer failure, stopping validation even for
+  nonfatal hooks. An explicit `validate.yml` `target_ref` requires exactly one open
   trusted-author same-repo project PR targeting the default branch; checkout
   pins and verifies that PR's SHA without persisting checkout credentials.
   Empty `target_ref` retains integration/default selection.
@@ -1598,6 +1637,8 @@ and shipped:
 - `MODEL_PROVIDER_BROKER_REJECT`
 - `EDITOR_BROKER_POLICY_REJECTION`
 - `opencode_agent_failure`
+- `CLAUDE_ISSUE_HANDOFF`
+- `CLAUDE_ISSUE_INTAKE`
 - `AUTOFIX_FAILURE_HEADLINE`
 - `MODEL_CATALOG_BACKFILL`
 - `AUTOFIX_GATE_CLAUDE_FIXER`
@@ -1795,6 +1836,8 @@ LOG_PREFIX.name=MODEL_PROVIDER_BROKER_REJECT
 LOG_PREFIX.name=EDITOR_BROKER_POLICY_REJECTION
 LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
+LOG_PREFIX.name=CLAUDE_ISSUE_HANDOFF
+LOG_PREFIX.name=CLAUDE_ISSUE_INTAKE
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
@@ -1981,6 +2024,12 @@ depend on it.
 - Hardening around that compatibility contract caps each base/ours/theirs input at 1 MiB, limits each entrypoint list to 4,096 strings of at most 4,096 characters, rejects nested/non-string values, runs the helper under an immutable 10-second timeout, and requires both sync boundaries to equal `orchestrator/project-${TRACKING_NUM}`.
 - `scripts/orchestrate_state_v2.py` signs V2 state and verifies retained V2 keys through `ORCHESTRATOR_STATE_AUTH_KEYRING`; `GH_TOKEN` is consulted only when verifying legacy V1 signatures for immediate migration. `scripts/verify_integration_fingerprints.py --export-resolver-safe-fingerprints` emits only bounded escaped-literal fingerprints with normalized non-`.git` repository paths whose positive issue IDs are present as merged wave entries; malformed entries are omitted before resolver scope expansion.
 - Promote-cycle comments use the separate `comprehensive_cycle_marker.v1` domain in `scripts/orchestrate_state_v2.py`. The dispatcher signs an unbound envelope covering source/role/dispatcher and smoke-run evidence plus promotion SHAs; after tracking-issue creation, `orchestrate.yml` verifies it from immutable support, requires the signed smoke actor to match the authenticated dispatcher, and re-signs it with the new tracking-issue number before bot-authored posting. Readers require that exact issue binding and producer ID `41898282`, so a copied envelope cannot authorize another project. The poller re-fetches the smoke run before promotion, and the API-reported display title attests the coverage-affecting gate inputs (`gate_only`, `skip_e2e`, `dry_run`, `test_repo`, and `review_workflow_file`) instead of trusting the signed envelope's self-report alone. Authentication failures remove `ai:comprehensive-test-pending` automatically so the scheduled cycle can retry without manual intervention; operational marker lookup failures keep the label and defer callback processing. Only a pre-dispatch verifying merge enters the bounded marker hold; proving and legacy merges proceed, while dispatched promotions continue from persisted state. `COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS` remains accepted for compatibility but grants no authority.
+- Source-repo resolver attempts in `scripts/review_conflict_resolve.sh` snapshot the
+  worktree and merge index before invoking the model. An out-of-scope edit gets
+  a bounded scope-feedback retry only after the pre-attempt state is restored
+  and verified; an unsafe restore fails closed. Consumer repos retain the
+  previous path, and the final `check_resolver_diff.sh` commit gate is unchanged.
+
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
 - `.github/workflows/review_autofix.yml` stages `orchestrate_state_v2.py`, `verify_integration_fingerprints.py`, `review_conflict_prepare.sh`, `review_conflict_resolve.sh`, `render_prompt.py`, `opencode_helpers.sh`, and `write_opencode_config.sh` through `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS`, whose historical name is retained but whose source is now the one gate-verified reusable-workflow support commit (`needs.gate.outputs.review_support_sha`; for source-repository PRs the gate uses protected `main`'s commit rather than the PR head). `render_prompt.py` therefore stays in lockstep with the reviewed reusable workflow definition rather than a mutable branch. The reviewer/editor prompt bodies embed arbitrary PR-diff + comment text that can carry literal `{{...}}` / `{%...%}` tokens, so their post-embed render calls pass `--skip-syntax-validation` (opt-in via `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` in `render_prompt.sh`) while placeholder substitution still runs. Static template renders remain strict. Optional assets may fail open only when absent from that same immutable source; executable code never falls back to a PR or mutable ref. PR-head copies are review data, not runtime code; required support fails closed, and the model catalog comes from the same commit as the reviewer roster, never from a PR branch or a separately resolved main snapshot.
 - `scripts/review_conflict_resolve.sh` prepares retry-state candidates that the trusted actuator signs and persists as producer-authenticated `AUTOFIX_RESOLVER_RETRY_STATE_V2` comments per final PR/head SHA, keyed by normalized fingerprint failure signature. `RESOLVER_ESCAPE_THRESHOLD_N` is the per-tier same-head, same-signature step size: multiples advance `strict` → `ratio` → `count_only` → `warn_only`, emit `FINGERPRINT_TIER_DOWNGRADED_V1`, and after the next multiple the actuator labels the **final PR issue** `ai:resolver-escalated` and records `escalated_at` for poller-side suppression / branch-rebuild gating. Legacy V1 PR-body blocks are diagnostic compatibility text only and never select the runtime tier.
@@ -2035,6 +2084,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
+.github/workflows/claude-issue-intake.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml

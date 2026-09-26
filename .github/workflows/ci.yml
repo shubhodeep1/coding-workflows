@@ -432,6 +432,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py
 
+      - name: Claude issue implementer tests (routing, handoff, intake, §28 command contract)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_issue_route.py tests/test_implement_issue_claude_command.py
+
       - name: CLAUDE.md section numbering guard (§6 identifiers)
         run: |
           set -euo pipefail
@@ -582,6 +587,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
 
       - name: Validation lint rule unit tests
         run: |
