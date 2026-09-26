@@ -230,3 +230,11 @@ def test_stage_sessions_claim_before_fixing(text):
 	assert "[Claim the head](#claims) (`--kind review` for findings, `--kind conflict` for a conflict)" in text
 	assert "[claim the head](#claims) (`--kind blocked`, or `--kind ci` for a stuck PR)" in text
 	assert "the §26.H hand-back cap does not apply to its PRs" in text
+
+
+def test_issue_mode_follows_a_base_branch_that_merged(text):
+	"""Q27: a stranded issue-mode project moves onto the branch its base merged into."""
+	assert "**A base branch that merges moves the project.**" in text
+	assert '`gh api "repos/<owner>/<repo>/pulls?state=closed&head=<owner>:<issue base>"`' in text
+	assert "retarget the final PR (`mcp__github__update_pull_request` with `base` = `<new base>`)" in text
+	assert "a move onto the default branch switches the final PR's body to `Fixes #<N>`" in text
