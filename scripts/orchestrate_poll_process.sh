@@ -15792,6 +15792,14 @@ run_standalone_stall_recovery() {
       continue
     fi
 
+    # Claude-claimed issues (ai:claude without an ai:codex switch) are driven
+    # by the Claude issue flow's own check-in chain; re-issuing a Codex phase
+    # here would start a competing implementation.
+    if echo "${labels_json}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null 2>&1; then
+      echo "STALL_SKIP issue=${issue_num} reason=claude_routed action=none"
+      continue
+    fi
+
     # Resolve both values through the shared Python predicates in one call so
     # the standalone path cannot drift from managed stall detection.  Safe
     # defaults first: under `set -euo pipefail` an empty read (python

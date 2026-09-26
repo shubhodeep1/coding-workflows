@@ -9,7 +9,9 @@
 .claude/commands/apply-analysis.md
 .claude/commands/apply-url.md
 .claude/commands/audit-plans.md
+.claude/commands/claude-issue-dispatch.md
 .claude/commands/deploy-activate.md
+.claude/commands/implement-issue-claude.md
 .claude/commands/implement-plan-ai.md
 .claude/commands/implement-plan-claude.md
 .claude/commands/investigate-issue.md
@@ -42,6 +44,7 @@
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
+.github/workflows/claude-issue-intake.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml
@@ -165,6 +168,7 @@ changelog.d/4432-isolate-review-pr-execution.md
 changelog.d/4438-implement-plan-claude-fixer-project-branch.md
 changelog.d/4439-audit-plans-implement-plan-claude-gate.md
 changelog.d/4440-implement-plan-auto-decisions.md
+changelog.d/4443-claude-issue-implementer.md
 changelog.d/4451-pin-security-audit-support.md
 changelog.d/4452-validate-target-ref-sandbox.md
 changelog.d/4453-claude-fixer-verdict-verification.md
@@ -394,6 +398,9 @@ scripts/clarify_informal_detect.py
 scripts/clarify_isolated_run.sh
 scripts/clarify_openrouter_broker.py
 scripts/clarify_sandbox/Dockerfile
+scripts/claude_issue_handoff.sh
+scripts/claude_issue_intake.sh
+scripts/claude_issue_route.py
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
 scripts/codex_model_catalog.json
@@ -675,6 +682,7 @@ tests/test_ci_inventory_parity_order_contract.py
 tests/test_ci_poll_test_sharding.py
 tests/test_ci_shared_shell_block_guard.py
 tests/test_clarify_informal_detect.py
+tests/test_claude_issue_route.py
 tests/test_claude_md_section_numbers.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
@@ -709,6 +717,7 @@ tests/test_gh_helpers_parse_reset_header.py
 tests/test_header_render.sh
 tests/test_identity_recall_render.sh
 tests/test_implement_blocked_verdict_terminalizes.py
+tests/test_implement_issue_claude_command.py
 tests/test_implement_plan_claude_command.py
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
@@ -909,7 +918,9 @@ workflow-templates/.claude/commands/analyze-log.md
 workflow-templates/.claude/commands/apply-analysis.md
 workflow-templates/.claude/commands/apply-url.md
 workflow-templates/.claude/commands/audit-plans.md
+workflow-templates/.claude/commands/claude-issue-dispatch.md
 workflow-templates/.claude/commands/deploy-activate.md
+workflow-templates/.claude/commands/implement-issue-claude.md
 workflow-templates/.claude/commands/implement-plan-ai.md
 workflow-templates/.claude/commands/implement-plan-claude.md
 workflow-templates/.claude/commands/investigate-issue.md
