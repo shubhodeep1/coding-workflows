@@ -178,10 +178,12 @@ changelog.d/4470-trusted-security-audit-exclusions.md
 changelog.d/4472-resolver-symlink-touched-set.md
 changelog.d/4476-pipeline-failure-guards.md
 changelog.d/4481-validation-renderer-dependency-preflight.md
+changelog.d/4507-wire-overlay-core-test-into-ci.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
 changelog.d/implement-plan-failed-run-blocks.md
+changelog.d/implement-plan-one-checker-per-project.md
 changelog.d/noop-sweep-fingerprint-cap-skip.md
 changelog.d/post-push-pr-status-check-in.md
 changelog.d/review-autofix-workflow-size-limit.md
