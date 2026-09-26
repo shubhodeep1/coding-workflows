@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-26T13:47:16Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-closed guard that hashes raw .git/index bytes breaks on read-only Git commands (git status refreshes stat data); compare `git ls-files -s -v -z` instead.",
+  "phase": "implement_plan",
+  "pr_number": 4571,
+  "record_id": "lesson-implement-plan-672cfdb4eca494211035c02c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4552-resolver-scope-staged-entries",
+    "file:scripts/review_conflict_resolve.sh"
+  ]
+}
