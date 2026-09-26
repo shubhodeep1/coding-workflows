@@ -1946,6 +1946,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
 .github/workflows/claude-issue-intake.yml
+.github/workflows/claude-issue-queue-watchdog.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml
