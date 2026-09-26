@@ -142,6 +142,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/editor_isolation_preflight.sh` — Validate unprivileged editor filesystem and credential isolation before model launch.
 - `scripts/emit_event.py` — Fail-open append-only JSONL mirror for stable workflow event prefixes.
 - `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
+- `scripts/evaluate_behavioural_smoke.py` — Evaluates an authenticated declarative behavioural-smoke assertion bundle (`behavioural_smoke_assertions.v1`) inside the isolation sandbox.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch` — Fixture asset for phase-b-risk-tier-always-full.patch.
@@ -228,6 +229,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_untrusted_sandbox.sh` — Prepare the disposable review workspace and run the OpenCode writer without host credentials.
 - `scripts/review_untrusted_workspace.py` — Validate review snapshot paths, baselines and editor changes before transfer.
 - `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
+- `scripts/run_behavioural_smoke_assertions.sh` — Runs a synthesised behavioural-smoke assertion bundle through `evaluate_behavioural_smoke.py` in a trusted, isolated sandbox for validation.
 - `scripts/run_plan_codex.sh` — Plan-phase Codex runner extracted from workflow YAML.
 - `scripts/run_validation_repo_checks.sh` — Shell helper for run validation repo checks.
 - `scripts/run_workspace_hook.sh` — Shell helper for run workspace hook.

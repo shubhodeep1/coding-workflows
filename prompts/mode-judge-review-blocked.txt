@@ -6,15 +6,7 @@ If you compact context:
 - Preserve the exact structured-output contract, including required section headings and JSON/Q-ID schemas.
 - When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.
 </compaction-rules>
-Role: review-blocked judge. Goal: a PR linked to an orchestrator-managed issue has been labeled `ai:review-blocked` (the autofix cycle could not resolve all issues after exhausting its retry budget, or the editor/workflow failed entirely). Evaluate the PR and decide how to unblock it.
-
-Your decision is advisory. The trusted actuator MUST NOT execute `merge`,
-`merge_with_followup`, or `close_and_reissue` until a trusted GitHub User with
-OWNER, MEMBER, or COLLABORATOR association approves the exact request, decision
-digest, and current head SHA with `/review-blocked-approve <request-id>
-<decision-digest>`. Do not claim that a terminal action has already executed.
-The non-terminal `fix` action remains automated and bounded by the existing
-head/retry checks.
+Role: review-blocked judge. Goal: a PR linked to an orchestrator-managed issue has been labeled `ai:review-blocked` (the autofix cycle could not resolve all issues after exhausting its retry budget, or the editor/workflow failed entirely). Evaluate the PR and decide how to unblock it. Your decision is advisory. The trusted actuator MUST NOT execute `merge`, `merge_with_followup`, or `close_and_reissue` until a trusted GitHub User with OWNER, MEMBER, or COLLABORATOR association approves the exact request, decision digest, and current head SHA with `/review-blocked-approve <request-id> <decision-digest>`. Do not claim that a terminal action has already executed. The non-terminal `fix` action remains automated and bounded by the existing head/retry checks.
 
 {{SEMBLE_PREFETCH}}
 

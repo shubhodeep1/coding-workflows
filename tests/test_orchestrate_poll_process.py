@@ -17683,7 +17683,16 @@ def test_state_auth_key_rotation_accepts_retained_previous_key_and_rejects_unkno
 
 def test_state_auth_legacy_v1_signature_remains_verifiable_for_migration():
 	import argparse
-	import scripts.orchestrate_state_v2 as state_auth_helper
+	import importlib.util
+
+	# Load by path: CI also runs this module as a script, where the repo
+	# root (and so the `scripts` package) is not on sys.path.
+	state_auth_spec = importlib.util.spec_from_file_location(
+		"orchestrate_state_v2_legacy_auth_test", REPO_ROOT / "scripts" / "orchestrate_state_v2.py"
+	)
+	assert state_auth_spec is not None and state_auth_spec.loader is not None
+	state_auth_helper = importlib.util.module_from_spec(state_auth_spec)
+	state_auth_spec.loader.exec_module(state_auth_helper)
 
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
@@ -19480,26 +19489,28 @@ def test_invalid_signed_state_from_designated_producer_fails_closed():
 	assert result["merge_calls"] == []
 
 
-@pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR"])
-def test_associated_user_cannot_override_designated_state_producer(association: str):
-	seed_state = _base_state(status="in_progress")
-	seed_state["integration_branch"] = "orchestrator/project-192"
-	forged_state = dict(seed_state)
-	forged_state["integration_branch"] = "orchestrator/project-999"
-	result = _run_poller(
-		state=seed_state,
-		enable_validation="false",
-		max_validate_cycles="3",
-		tracking_comments=[{
-			"body": _state_comment(forged_state),
-			"user": {"login": "maintainer", "id": 1001},
-			"author_association": association,
-		}],
-		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
-	)
-	assert result["merge_calls"]
-	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
+def test_associated_user_cannot_override_designated_state_producer():
+	# A loop rather than pytest.mark.parametrize: CI also runs this module
+	# as a script (test names as argv), which cannot supply parameters.
+	for association in ("OWNER", "MEMBER", "COLLABORATOR"):
+		seed_state = _base_state(status="in_progress")
+		seed_state["integration_branch"] = "orchestrator/project-192"
+		forged_state = dict(seed_state)
+		forged_state["integration_branch"] = "orchestrator/project-999"
+		result = _run_poller(
+			state=seed_state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_comments=[{
+				"body": _state_comment(forged_state),
+				"user": {"login": "maintainer", "id": 1001},
+				"author_association": association,
+			}],
+			issue_labels={10: ["ai:implementing"]},
+			existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
+		)
+		assert result["merge_calls"], association
+		assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"]), association
 
 
 def test_unauthenticated_state_without_trusted_fallback_allows_safe_reconstruction():

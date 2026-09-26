@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import inspect
 import os
 import re
 import subprocess
@@ -258,7 +259,12 @@ def main() -> int:
 	test_functions = [value for key, value in sorted(globals().items()) if key.startswith("test_")]
 	passed = 0
 	for func in test_functions:
-		func()
+		# Script mode has no pytest fixtures; supply tmp_path as pytest would.
+		if "tmp_path" in inspect.signature(func).parameters:
+			with tempfile.TemporaryDirectory() as fixture_tmp_dir:
+				func(tmp_path=Path(fixture_tmp_dir))
+		else:
+			func()
 		passed += 1
 	print(f"OK: {passed} workspace safety checks passed")
 	return 0

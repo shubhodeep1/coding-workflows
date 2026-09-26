@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -3119,7 +3120,12 @@ def main() -> int:
 	for func in test_funcs:
 		name = func.__name__
 		try:
-			func()
+			# Script mode has no pytest fixtures; supply tmp_path as pytest would.
+			if "tmp_path" in inspect.signature(func).parameters:
+				with tempfile.TemporaryDirectory() as fixture_tmp_dir:
+					func(tmp_path=Path(fixture_tmp_dir))
+			else:
+				func()
 			print(f"  PASS  {name}")
 			passed += 1
 		except Exception as e:

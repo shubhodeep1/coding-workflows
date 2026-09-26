@@ -2,9 +2,11 @@
 """Security contracts for model-visible Git metadata and terminal approvals."""
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -446,7 +448,12 @@ def test_outsider_cannot_forge_request_or_consumed_markers() -> None:
 def main() -> int:
 	for name, value in sorted(globals().items()):
 		if name.startswith("test_") and callable(value):
-			value()
+			# Script mode has no pytest fixtures; supply tmp_path as pytest would.
+			if "tmp_path" in inspect.signature(value).parameters:
+				with tempfile.TemporaryDirectory() as fixture_tmp_dir:
+					value(tmp_path=Path(fixture_tmp_dir))
+			else:
+				value()
 	print("OK: git authentication and review-blocked approval security contracts hold")
 	return 0
 
