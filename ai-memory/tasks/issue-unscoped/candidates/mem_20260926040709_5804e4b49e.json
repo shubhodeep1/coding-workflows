@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR's stated goal (commit message and changelog) is that \"a pull request that breaks the overlay loader or the staging of stage_workflow_support.sh now fails CI instead of passing unnoticed\" and that the test be added \"next to its sibling test_workflow_overlay_orchestrator.py.\"\n  expected_change_site: .github/workflows/mark-stable.yml (after line 399) and .github/workflows/test-and-mark-stable.yml (after line 4207)\n  confidence=[3]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: grep for `test_workflow_overlay_core` across .github/workflows/*.yml returns exactly one match (ci.yml:577). Both release gates run the sibling test in their \"family direct-run tests\" steps but neither runs the core test. The release gates are the promotion gate to stable (the artifact consumers sync from), so a breakage in the overlay loader/staging that reaches main or stable outside a PR CI run (merge commit, forward-merge, direct push) would still pass the release gate unnoticed \u2014 the exact failure mode the PR exists to prevent. The changelog explicitly states \"The release gates in mark-stable.yml and test-and-mark-stable.yml are unchanged,\" so the editor should confirm whether this scoping is intentional or an oversight; if intentional, no change is needed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The PR's stated goal (commit message and changelog) is that \"a pull request that breaks the overlay loader or the staging of stage_workflow_support.sh now fails CI instead of passing unnoticed\" and that the test be added \"next to its sibling test_workflow_overlay_orchestrator.py.\"\n  Expected change site: .github/workflows/mark-stable.yml (after line 399) and .github/workflows/test-and-mark-stable.yml (after line 4207), mirroring the sibling test_workflow_overlay_orchestrator.py placement \u2014 the sibling runs in all three workflows (ci.yml:576, mark-stable.yml:399, test-and-mark-stable.yml:4207); this PR adds test_workflow_overlay_core.py to only ci.yml:577.\n  Evidence of absence: grep for `test_workflow_overlay_core` across .github/workflows/*.yml returns exactly one match (ci.yml:577). Both release gates run the sibling test in their \"family direct-run tests\" steps but neither runs the core test. The release gates are the promotion gate to stable (the artifact consumers sync from), so a breakage in the overlay loader/staging that reaches main or stable outside a PR CI run (merge commit, forward-merge, direct push) would still pass the release gate unnoticed \u2014 the exact failure mode the PR exists to prevent. The changelog explicitly states \"The release gates in mark-stable.yml and test-and-mark-stable.yml are unchanged,\" so the editor should confirm whether this scoping is intentional or an oversight; if intentional, no change is needed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3209404436eeb18cd601e43e430fbc14c23cbbb18c95d4991d86aa83d6871ab2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36216310247",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36216310247",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260926040709_5804e4b49e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36216310247"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-26T04:07:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
