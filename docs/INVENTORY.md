@@ -47,6 +47,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
+- `.github/workflows/claude-issue-intake.yml` — Claude Issue Intake: receives standalone issues routed to Claude and starts the Claude session that implements them.
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
 - `.github/workflows/drift-audit.yml` — GitHub Actions workflow: Drift Audit.
 - `.github/workflows/forward-merge-stable-to-main.yml` — GitHub Actions workflow: Forward-merge stable to main.
@@ -120,6 +121,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
 - `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
 - `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
+- `scripts/claude_issue_handoff.sh` — Run by `clarify.yml` when `claude_issue_route.py` routes a standalone issue to Claude: claims it with the `ai:claude` label and hands it to the Claude issue implementer.
+- `scripts/claude_issue_intake.sh` — Run by `claude-issue-intake.yml`: validates one `claude-issue` payload with `claude_issue_route.py` and fires one run of the Claude issue dispatcher routine.
+- `scripts/claude_issue_route.py` — Routes standalone issues (not managed by the AI orchestrator) to the Claude issue implementer or the Codex pipeline.
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
 - `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.
