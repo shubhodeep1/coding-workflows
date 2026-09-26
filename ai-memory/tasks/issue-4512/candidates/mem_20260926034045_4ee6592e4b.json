@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Selective Expansion\nReuse-audit: extends `run_template_validation_harness_renderer` and the existing renderer-dependency step.\nScope-mode justification: Fixing only the import at `scripts/validate_process.sh:2054` would leave the workflow\u2019s earlier dependency probe and the renderer invocation exposed to branch-controlled Python paths. Covering all three is the complete fix. Under \u00a76 Core Priorities, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed; the modest additional scope is necessary to preserve the security boundary.\n\n## Automation and execution\n- Extend existing code; no new standalone script, supervisor, database operation, or removal-registry entry.\n- Entry point remains `.github/workflows/internal-validate.yml` (`workflow_dispatch`) or the consumer `workflow-templates/ai-validate.yml` wrapper, both calling `.github/workflows/validate.yml`. No new trigger or operator-run step is needed.\n\n## Planning ref and clarification\n- Planning checkout: `main` at `024127dbed8f7fe72e128479a926779d9ace15b8`.\n- The clarifier asked no Q-ID questions; `/answer [auto-answered-by-clarify]` confirms that no human answer is pending.\n- Integration-branch metadata is empty. The context reports its mismatch as *unknown*, not an identified mismatch with `main`.\n\n## Files likely to change\n- `.github/workflows/validate.yml` \u2014 secure renderer dependency installation and its pre-credential probe.\n- `scripts/validate_process.sh` \u2014 secure credentialed probes and renderer invocation.\n- `tests/test_validate_workflow_validate_bootstrap.py` \u2014 extend the existing workflow/preflight contract and executable fixture.\n- `tests/test_validate_process_template_mode.py` \u2014 update assertions affected by interpreter isolation.\n- `changelog.d/4512-validate-renderer-import-isolation.md` \u2014 security-fix fragment; do not edit `CHANGELOG.md` directly.\n\n## Functions or modules to implement\nUse the existing renderer-dependency step and `run_template_validation_harness_renderer()` as the representative pattern. Install the existing three dependencies into a per-run virtual environment under the trusted `RUNTIME_DIR`, rather than importing or running pip from the branch workspace. Run installation and probes from a trusted empty directory, with branch-controlled Python paths excluded. The setup step must confirm, before the credentialed validation step, that `yaml`, `jsonschema`, and `jinja2` resolve to installed packages in that environment.\n\nIn `run_template_validation_harness_renderer()`, use that interpreter for **all** Python `-c` probes and for the renderer itself. Resolve the renderer\u2019s script path before changing directories, run from the trusted directory, and check dependency origins before importing them. Use isolated Python mode so neither the working directory, script directory, user site, nor `PYTHON*` environment variables add branch-controlled imports. Python documents those `-I` properties; a virtual environment provides a separate installed-package site so retaining the workflow\u2019s current `--user` installation would not suffice. ([docs.python.org](https://docs.python.org/3/using/cmdline.html?utm_source=openai))\n\n## Data structures affected\nNo persisted schema or result format changes. Preserve `VALIDATION_RENDERER_DEPENDENCIES_READY`, renderer exit code `14`, and the existing generation-failure reporting. Derive the interpreter location from the existing `RUNTIME_DIR`; do not require a new externally supplied environment variable.\n\n## API/interface changes\nNo new endpoint, workflow input, or external interface. Keep the existing `validate.yml` step ID and callable-workflow contract.\n\n## Security considerations\nThe trust boundary is the checked-out PR workspace versus the runner-side interpreter that later runs with `GH_TOKEN`, `OPENROUTER_API_KEY`, and `TG_BOT_SECRET`. No new authorization surface is introduced; validation retains its existing workflow permissions. Treat the workspace, Python path variables, and module origins as untrusted input. Reject missing dependencies, an unexpected interpreter environment, and modules resolving outside its installed-package directories without importing the suspect module or logging credentials. Test both root-level `yaml.py` and a shadow module beside the renderer, including symlink/path-origin cases. A clean probe must not authorize a later invocation using a different interpreter or import path.\n\n## Risks and edge cases\n- **Codebase conflict with a probe-only fix:** `.github/workflows/validate.yml` already runs `python3 -c 'import yaml, jsonschema, jinja2'` from the activated workspace, and the later renderer execution has its own import path. Both require coverage, not just the cited line.\n- `-I` excludes `--user` packages; installing into the trusted virtual environment is necessary to retain dependency availability. ([docs.python.org](https://docs.python.org/3/using/cmdline.html?utm_source=openai))\n- A failed installation or origin check must leave rendering failed with its existing diagnostic path, not retry an unsafe system/user-site import.\n- The workflow\u2019s `BASH_ENV` activates the branch workspace. Use an in-shell directory change for probes; do not assume a newly launched Bash starts in the trusted directory.\n\n## Decisions\n### D1 \u2014 Isolate the renderer\u2019s complete Python path\n- **Chosen:** One trusted per-run dependency environment for installation, pre-credential verification, credentialed probes, and renderer execution.\n- **Alternatives considered:** Change only the cited import; change the probe\u2019s working directory while retaining `--user` packages and the existing renderer invocation.\n- **Why:** Neither alternative closes every identified route by which branch-controlled modules can execute with validation credentials.\n\n## Testing considerations\nExtend the existing preflight fixture to demonstrate that shadow modules never execute or receive credential sentinels, while installed dependencies still permit rendering. Cover missing packages, an origin outside the trusted environment, and the existing `READY=false`/exit-14 behavior. Update exact-command contract assertions without weakening their checks. Run the focused tests, shell syntax check, workflow lint, and workflow-size guard on the repository\u2019s configured toolchain.\n\n## Pre-execution self-check\nThe affected workflow, function, entry points, and representative tests were inspected. No private scalar, new API contract, or integration-branch value is needed to implement this plan. Assumption: the existing runner-created `RUNTIME_DIR` remains outside the branch workspace.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "eb9e2b4ef86901eab6ce2bdbb2096eb68f124296b3bb1b8f3cd1cbed6be685c9",
+  "lineage": {
+    "issue_number": 4512,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36215202172",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36215202172",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4512"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260926034045_4ee6592e4b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4512,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36215202172"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4512",
+  "timestamps": {
+    "created_at": "2026-09-26T03:40:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
