@@ -103,6 +103,10 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MODEL_PROVIDER_PROXY_MAX_REQUESTS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_REQUESTS || '64' }}
+  MODEL_PROVIDER_PROXY_MAX_CONCURRENCY: ${{ vars.MODEL_PROVIDER_PROXY_MAX_CONCURRENCY || '1' }}
+  MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS || '65536' }}
+  MODEL_PROVIDER_PROXY_MAX_SPEND_USD: ${{ vars.MODEL_PROVIDER_PROXY_MAX_SPEND_USD || '25' }}
   UNATTENDED_PHASE: review_autofix
   # Resolve base-branch conflicts BEFORE the reviewer/editor spend when the
   # pre-review merge-topology gate sees a content conflict (default on).
@@ -248,7 +252,9 @@ env:
   REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-
     codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh
     review_run_reviewers.sh render_prompt.sh assemble_prompt.sh
-    nag_reminder.sh opencode_helpers.sh write_opencode_config.sh
+    nag_reminder.sh opencode_helpers.sh untrusted_process_sandbox.sh
+    model_provider_proxy.py package_download_proxy.py post_agent_workspace_guard.py write_opencode_config.sh
+    review_pre_review_merge_topology.sh review_detect_merge_conflicts.sh review_append_iteration_summary.sh
   REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
     render_prompt.py
   # The workflow-failure-heal reporter pair the failure-path step "Report
@@ -505,7 +511,7 @@ jobs:
             # suppression below), and changed_files (to verify the paginated
             # path list before either skip branch can run).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), head_repo: (.head.repo.full_name // ""), author_login: (.user.login // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
@@ -788,6 +794,7 @@ jobs:
                 CLAUDE_FIXER_VERIFY="true"
                 SHOULD_RUN="true"
                 SKIP_REASON=""
+                FORCE_FULL_REVIEW_TIER="true"
               else
                 claude_fixer_converged_detail="handoff_or_verdict_missing"
               fi
@@ -850,7 +857,7 @@ jobs:
           # response or the comments response, so eligible dispatches issue one
           # GET /user plus one paginated GET /issues/{n}/comments, shared with
           # the fingerprint cap below through gate_fetch_marker_comments.
-          if [ "${SHOULD_RUN}" = "true" ] \
+          if [ "${SHOULD_RUN}" = "true" ] && [ "${CLAUDE_FIXER_CONVERGED}" != "true" ] \
             && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
             && [ "${CLAUDE_FIXER_VERIFY}" != "true" ] \
             && [ "${AUTOFIX_SKIP_TERMINAL_SAME_HEAD:-true}" != "false" ] \
@@ -1098,6 +1105,8 @@ jobs:
           DET_SKIP_REASON=""
           if [ "${SHOULD_RUN}" = "true" ] && [ "${CLAUDE_FIXER}" != "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             FORCE_REVIEW="false"
+            # A verified convergence request always requires a new full panel.
+            [ "${CLAUDE_FIXER_CONVERGED}" != "true" ] || FORCE_REVIEW="true"
             if printf "%s" "${PR_TITLE}" | grep -Fq "[force-review]"; then
               FORCE_REVIEW="true"
             fi
@@ -1950,7 +1959,7 @@ jobs:
   # direct gate-to-merge path. Convergence only authorizes codex-agent review;
   # its fresh clean result uses the ordinary head-bound auto-merge step.
   claude-fixer-auto-merge:
-    needs: gate
+    needs: [gate, codex-agent]
     runs-on: ubuntu-latest
     if: ${{ needs.gate.outputs.claude_fixer_verify == 'legacy_disabled' }}
     steps:
@@ -2092,31 +2101,32 @@ jobs:
           fi
           pr_json="${work_dir}/pr_payload.json"
           if ! gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "${pr_json}" 2>/dev/null; then
-            echo "::warning::Could not fetch PR #${PR_NUMBER}; labeling the PR itself ai:review-blocked without linked-issue resolution."
-            printf '{}' > "${pr_json}"
+            echo "::warning::Could not verify PR #${PR_NUMBER}; skipping cap labels."
+            exit 0
           fi
           pr_state="$(jq -r '.state // ""' "${pr_json}" 2>/dev/null || echo "")"
           current_head="$(jq -r '.head.sha // ""' "${pr_json}" 2>/dev/null || echo "")"
+          if ! jq -e --argjson pr "${PR_NUMBER}" '.number == $pr' "${pr_json}" >/dev/null 2>&1; then
+            echo "::warning::PR identity mismatch; skipping cap labels."
+            exit 0
+          fi
           if [ "${pr_state}" = "closed" ]; then
             echo "AUTOFIX_FINGERPRINT cap=skipped pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=pr_closed"
             exit 0
           fi
-          if [ -n "${current_head}" ] && [ "${current_head}" != "${PR_HEAD_SHA}" ]; then
+          if [ "${pr_state}" != "open" ] || ! [[ "${current_head}" =~ ^[0-9a-f]{40}$ ]] \
+            || [ "${current_head}" != "${PR_HEAD_SHA}" ]; then
             # A push landed after the gate: the new head has no identical
             # failures yet and gets its own run.
             echo "AUTOFIX_FINGERPRINT cap=skipped pr=${PR_NUMBER} head=${PR_HEAD_SHA} current_head=${current_head} reason=head_moved"
             exit 0
           fi
 
-          # Linked issues: strict current-repo closing-keyword refs and
-          # repo-scoped issue URLs in the PR title/body (the same fallback the
-          # workflow-failure review-blocked step uses).
+          # Only workflow-owned branch lineage authorizes an issue label.
+          # PR title/body and closing references are controlled by the PR author.
           issue_numbers=""
-          pr_text="$(jq -r '[.title // "", .body // ""] | join(" ")' "${pr_json}" 2>/dev/null || echo "")"
-          if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
-            issue_numbers="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${pr_text}" || true)"
-          else
-            echo "::warning::extract_repo_scoped_issue_refs_from_text unavailable; labeling the PR itself."
+          if type verified_review_blocked_issue_from_pr >/dev/null 2>&1; then
+            issue_numbers="$(verified_review_blocked_issue_from_pr "${pr_json}" "${REPOSITORY}" "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" "${PR_NUMBER}" || true)"
           fi
 
           ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
@@ -2209,6 +2219,8 @@ jobs:
 
   codex-agent:
     needs: gate
+    outputs:
+      claude_fixer_review_clean: ${{ steps.claude_fixer_handoff.outputs.clean_review }}
     # Display name surfaces the gate's no-PR claude_branch_review decision in
     # the GitHub Checks UI. Only claude/** pushes without an open PR use the
     # reviewer-comment path; PR-backed claude/** branches keep the normal
@@ -2260,6 +2272,16 @@ jobs:
 
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PYTHONSAFEPATH: '1'
+      PYTHONPATH: ''
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: credential.helper
+      GIT_CONFIG_VALUE_0: >-
+        !f() { [ "$1" = get ] || exit 1; host=""; while IFS= read -r line; do
+        case "$line" in host=*) host="${line#host=}" ;; esac; done;
+        [ "$host" = "${GITHUB_SERVER_URL#https://}" ] && [ -n "${REVIEW_GIT_CREDENTIAL_DIR:-}" ] || exit 1;
+        IFS= read -r token < "${REVIEW_GIT_CREDENTIAL_DIR}/token" || [ -n "$token" ] || exit 1;
+        [ -n "$token" ] && printf 'username=x-access-token\npassword=%s\n' "$token"; }; f
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       # Head the gate evaluated; the review-autofix-failure:v1 marker on every
       # failure comment records it so the gate's identical-failure cap can
@@ -2346,6 +2368,7 @@ jobs:
       # findings and no failing check still enable auto-merge here, and the
       # iteration cap + review-blocked judge still apply. See the gate.
       CLAUDE_FIXER_MODE: ${{ needs.gate.outputs.claude_fixer }}
+      CLAUDE_FIXER_CONVERGENCE_REVIEW: ${{ needs.gate.outputs.claude_fixer_converged || 'false' }}
       CLAUDE_FIXER_VERIFICATION: ${{ needs.gate.outputs.claude_fixer_verify }}
       # No-PR claude-branch-review path overrides (push events on claude/**
       # without an open PR).  Read by "Collect PR metadata" and
@@ -2386,6 +2409,17 @@ jobs:
       - name: Show disk usage (post free-disk-space)
         run: df -h /
 
+      - name: Prepare host Git credential
+        env:
+          REVIEW_GIT_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [ -n "${REVIEW_GIT_TOKEN:-}" ] || exit 1
+          credential_dir="$(mktemp -d "${RUNNER_TEMP%/}/review-git-credential-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
+          printf '%s\n' "${REVIEW_GIT_TOKEN}" > "${credential_dir}/token"
+          echo "REVIEW_GIT_CREDENTIAL_DIR=${credential_dir}" >> "$GITHUB_ENV"
+
       - name: Checkout repo
         uses: actions/checkout@v5
         with:
@@ -2418,20 +2452,10 @@ jobs:
           # checkout itself, so reviewers see the working tree as usual.
           filter: blob:none
           token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
 
       - name: Show disk usage (post checkout)
         run: df -h /
-
-      - name: Configure git auth for memory helper clones
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
-          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
-          SERVER_HOST="${SERVER_HOST#http://}"
-          SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
         env:
@@ -2457,6 +2481,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout
         run: |
@@ -2467,6 +2492,7 @@ jobs:
           fi
 
       - name: Stage workflow support files
+        id: stage_workflow_support
         run: |
           set -euo pipefail
           helper=".codex-workflow-src/scripts/stage_workflow_support.sh"
@@ -2483,6 +2509,48 @@ jobs:
           SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
           SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+          echo "PYTHONPATH=${SUPPORT_SCRIPTS_DIR}" >> "$GITHUB_ENV"
+
+          # Keep every metadata producer, validator, and commit producer on
+          # the independently verified workflow-commit snapshot.
+          security_sensitive_support_files=(
+            verify_integration_fingerprints.py
+            review_collect_pr_metadata.sh
+            files_touched_scope_guard.py
+            post_agent_workspace_guard.py
+            check_resolver_diff.sh
+            review_apply_fixes.sh
+            review_commit_changes.sh
+            review_conflict_prepare.sh
+            review_conflict_resolve.sh
+            review_rb_judge.sh
+            trusted_git_write.sh
+            untrusted_process_sandbox.sh
+          )
+          security_sensitive_support_root=".codex-workflow-src"
+          for security_sensitive_support_file in "${security_sensitive_support_files[@]}"; do
+            security_sensitive_support_src="${security_sensitive_support_root}/scripts/${security_sensitive_support_file}"
+            if [ ! -f "${security_sensitive_support_src}" ]; then
+              echo "::error::Required security-sensitive support set is incomplete in ${security_sensitive_support_root}; refusing to mix support snapshots."
+              exit 1
+            fi
+          done
+          for metadata_guard_support_file in verify_integration_fingerprints.py review_collect_pr_metadata.sh files_touched_scope_guard.py post_agent_workspace_guard.py check_resolver_diff.sh check_workflow_script_refs.py untrusted_process_sandbox.sh; do
+            install -m 0755 \
+              "${security_sensitive_support_root}/scripts/${metadata_guard_support_file}" \
+              "${SUPPORT_SCRIPTS_DIR}/${metadata_guard_support_file}"
+          done
+          for commit_producer_support_file in review_apply_fixes.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh review_rb_judge.sh trusted_git_write.sh; do
+            install -m 0755 \
+              "${security_sensitive_support_root}/scripts/${commit_producer_support_file}" \
+              "${SUPPORT_SCRIPTS_DIR}/${commit_producer_support_file}"
+          done
+          post_agent_workspace_guard_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" 2>/dev/null | awk '{print $1}')"
+          if ! [[ "${post_agent_workspace_guard_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not anchor post-agent workspace guard."
+            exit 1
+          fi
+          echo "POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256=${post_agent_workspace_guard_sha256}" >> "$GITHUB_ENV"
 
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
             backfill_src=".codex-workflow-src/scripts/transcript_archive.sh"
@@ -2567,6 +2635,23 @@ jobs:
               rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
             fi
           fi
+
+          publish_review_support_sha256()
+          {
+            local output_name="$1" support_path="$2" support_sha256
+            support_sha256="$(sha256sum "${support_path}" 2>/dev/null | awk '{print $1}')"
+            if ! [[ "${support_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::Could not anchor required review support ${support_path}."
+              exit 1
+            fi
+            echo "${output_name}=${support_sha256}" >> "$GITHUB_OUTPUT"
+          }
+          publish_review_support_sha256 scope_guard_sha256 "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"
+          publish_review_support_sha256 resolver_guard_sha256 "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh"
+          publish_review_support_sha256 review_commit_changes_sha256 "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
+          publish_review_support_sha256 review_conflict_prepare_sha256 "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"
+          publish_review_support_sha256 review_conflict_resolve_sha256 "${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
+          publish_review_support_sha256 review_rb_judge_sha256 "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh"
 
       - name: Show disk usage (post support-source staging)
         run: df -h /
@@ -2659,6 +2744,9 @@ jobs:
           set -euo pipefail
 
           RUNTIME_DIR="/tmp/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
+          POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-review-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
+          install -m 0755 "${SUPPORT_SCRIPTS_DIR}/check_workflow_script_refs.py" "${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py"
+          echo "POST_AGENT_VALIDATION_CHECKER=${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py" >> "$GITHUB_ENV"
           PREVIOUS_REVIEWS_DIR="${RUNTIME_DIR}/previous_reviews"
           RUNTIME_CONTEXT_DIR="${RUNTIME_DIR}/runtime_context"
           job_start_epoch="$(date +%s)"
@@ -2691,6 +2779,7 @@ jobs:
             echo "CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=${codex_run_budget_soft_deadline_epoch}"
             echo "CODEX_RUN_BUDGET_TOTAL_SECS=${codex_run_budget_total_secs}"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "POST_AGENT_ARTIFACT_DIR=${POST_AGENT_ARTIFACT_DIR}"
             echo "PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR}"
             echo "RUNTIME_CONTEXT_DIR=${RUNTIME_CONTEXT_DIR}"
             echo "PR_PAYLOAD_FILE=${RUNTIME_DIR}/pr_payload.json"
@@ -2961,13 +3050,20 @@ jobs:
           } > ./pre_assembled_static.txt
 
       - name: Collect PR metadata
+        id: collect_pr_metadata
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          # Keep the stage's stderr for the failure fingerprint ("Assemble
-          # failure evidence"); it still reaches the step log through tee.
+          # Capture stderr for the failure fingerprint without changing the
+          # authenticated metadata artifact used by the scope guard.
           bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh" 2> >(tee -a "${RUNTIME_DIR}/collect_metadata_stderr.txt" >&2)
+          linked_issue_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}' || true)"
+          if ! [[ "${linked_issue_metadata_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not publish the linked-issue metadata integrity digest."
+            exit 1
+          fi
+          echo "linked_issue_metadata_sha256=${linked_issue_metadata_sha256}" >> "$GITHUB_OUTPUT"
 
       - name: Retrieve reviewer memory context (fail-open)
         run: |
@@ -4075,7 +4171,8 @@ jobs:
         # with the editor step's explicit env entries, so it sees what the
         # editor will see ("Apply fixes with editor model").
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          BASH_ENV: ""
+          ENV: ""
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}
@@ -4320,16 +4417,22 @@ jobs:
             exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
-
       - name: Run reviewer models
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         id: reviewers
         env:
+          BASH_ENV: ""
+          ENV: ""
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           set -euo pipefail
+          if [ "${CLAUDE_FIXER_MODE:-false}" = "true" ]; then
+            # Every clean merge requires independent evidence from this run.
+            export AUTOFIX_RESUME_RESTORED=false
+            touch "${RUNTIME_DIR}/claude_fixer_review_start"
+          fi
           materiality_pid=""
           case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on)
@@ -4499,6 +4602,7 @@ jobs:
       # resolver, or export CLAUDE_FIXER_ZERO_FINDINGS=true so the auto-merge
       # step runs. Body: scripts/review_autofix_step_claude_fixer_handoff.sh.
       - name: Hand review round to Claude session (Claude-fixer mode)
+        id: claude_fixer_handoff
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CLAUDE_FIXER_MODE == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -4506,6 +4610,7 @@ jobs:
           HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
           HEAD_REF: ${{ env.TARGET_BRANCH }}
           CLAUDE_FIXER_ROUND_INDEX: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          CLAUDE_FIXER_CONVERGENCE_REVIEW: ${{ needs.gate.outputs.claude_fixer_converged || 'false' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_fixer_handoff.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_fixer_handoff.sh"
@@ -4584,6 +4689,117 @@ jobs:
           # A failed install is best-effort; a failed isolation boundary is not.
           bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
 
+      - name: Prepare Python validation dependencies (isolated)
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
+        run: |
+          set -euo pipefail
+          install_failed=false
+          if [ -f requirements.txt ] || { [ -f pyproject.toml ] && [ ! -f package.json ]; }; then
+            echo "Preparing Python dependencies in a disposable secretless container"
+            review_dependency_git_mask="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-dependency-git.XXXXXX")"
+            review_dependency_suffix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${RANDOM}"
+            review_dependency_network="review-dependency-${review_dependency_suffix}"
+            review_dependency_proxy="review-dependency-proxy-${review_dependency_suffix}"
+            review_dependency_installer="review-dependency-installer-${review_dependency_suffix}"
+            review_dependency_volume="review-python-${review_dependency_suffix}"
+            review_dependency_cleanup()
+            {
+              docker rm -f "${review_dependency_installer}" "${review_dependency_proxy}" >/dev/null 2>&1 || true
+              docker network rm "${review_dependency_network}" >/dev/null 2>&1 || true
+              rm -rf -- "${review_dependency_git_mask}"
+            }
+            review_dependency_proxy_ready()
+            {
+              for review_dependency_proxy_probe_attempt in $(seq 1 30); do
+                timeout 2 docker exec "${review_dependency_proxy}" python -c "import socket; socket.create_connection(('127.0.0.1', 8080), 1).close()" >/dev/null 2>&1 && return 0
+                sleep 0.5
+              done
+              return 1
+            }
+            trap review_dependency_cleanup EXIT
+            trap 'exit 1' HUP INT TERM
+            python_install_command='python -m venv /review-venv'
+            if [ -f requirements.txt ]; then
+              python_install_command="${python_install_command} && /review-venv/bin/pip install -r requirements.txt"
+            else
+              python_install_command="${python_install_command} && (/review-venv/bin/pip install '.[dev]' || /review-venv/bin/pip install .)"
+            fi
+            python_install_command="${python_install_command} && /review-venv/bin/pip install pytest"
+            if ! docker volume create "${review_dependency_volume}" >/dev/null \
+                || ! docker network create --internal "${review_dependency_network}" >/dev/null \
+                || ! docker run --rm --network "${review_dependency_network}" --read-only --cap-drop ALL --cap-add CHOWN \
+                  --volume "${review_dependency_volume}:/review-venv" \
+                  python:3.12-slim chown "$(id -u):$(id -g)" /review-venv \
+                || ! docker run --detach --rm --name "${review_dependency_proxy}" \
+                  --network bridge --read-only --cap-drop ALL --security-opt no-new-privileges \
+                  --volume "${SUPPORT_SCRIPTS_DIR}/package_download_proxy.py:/package_download_proxy.py:ro" \
+                  python:3.12-slim python /package_download_proxy.py \
+                || ! review_dependency_proxy_ready \
+                || ! docker network connect --alias dependency-proxy \
+                  "${review_dependency_network}" "${review_dependency_proxy}" \
+                || ! docker run --rm --name "${review_dependency_installer}" \
+                --network "${review_dependency_network}" \
+                --read-only --cap-drop ALL --security-opt no-new-privileges \
+                --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+                --user "$(id -u):$(id -g)" \
+                --env HOME=/tmp/agent-home \
+                --env HTTP_PROXY=http://dependency-proxy:8080 \
+                --env HTTPS_PROXY=http://dependency-proxy:8080 \
+                --env http_proxy=http://dependency-proxy:8080 \
+                --env https_proxy=http://dependency-proxy:8080 \
+                --env PIP_DISABLE_PIP_VERSION_CHECK=1 \
+                --volume "${PWD}:/workspace:ro" \
+                --volume "${review_dependency_git_mask}:/workspace/.git:ro" \
+                --volume "${review_dependency_volume}:/review-venv" \
+                --workdir /workspace \
+                python:3.12-slim sh -ceu "${python_install_command}"; then
+              install_failed=true
+              docker volume rm -f "${review_dependency_volume}" >/dev/null 2>&1 || true
+            else
+              {
+                echo "REVIEW_PYTHON_DEPENDENCY_VOLUME=${review_dependency_volume}"
+              } >> "$GITHUB_ENV"
+            fi
+            review_dependency_cleanup
+            trap - EXIT HUP INT TERM
+          fi
+          if [ "${install_failed}" = "true" ]; then
+            echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
+          fi
+          # The Python branch above can report success while installing
+          # nothing.  A pyproject.toml that carries only a tool table (for
+          # example `[tool.pytest.ini_options]`) has no `[project]` table, so
+          # setuptools' legacy fallback builds an `UNKNOWN-0.0.0` package,
+          # `pip install -e .` exits 0, `install_failed` stays false, and no
+          # warning is emitted -- yet pytest is still not importable.  The
+          # editor then cannot run the repository's pytest suites and
+          # improvises no-install import shims instead, which is exactly what
+          # every autofix round on PR #4029 reported. Probe the prepared
+          # interpreter only in the credentialless validation container;
+          # never import from the PR checkout on the privileged host.
+          pytest_bootstrap_wanted=false
+          if [ -f pytest.ini ] || [ -f conftest.py ] || [ -f tests/conftest.py ]; then
+            pytest_bootstrap_wanted=true
+          elif [ -f pyproject.toml ] && grep -q '^\[tool\.pytest\.ini_options\]' pyproject.toml 2>/dev/null; then
+            pytest_bootstrap_wanted=true
+          elif [ -f setup.cfg ] && grep -q '^\[tool:pytest\]' setup.cfg 2>/dev/null; then
+            pytest_bootstrap_wanted=true
+          elif [ -f tox.ini ] && grep -q '^\[pytest\]' tox.ini 2>/dev/null; then
+            pytest_bootstrap_wanted=true
+          fi
+          if [ "${pytest_bootstrap_wanted}" = "true" ]; then
+            if [ -n "${REVIEW_PYTHON_DEPENDENCY_VOLUME:-}" ] && timeout 30 docker run --rm \
+              --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+              --volume "${REVIEW_PYTHON_DEPENDENCY_VOLUME}:/review-venv:ro" \
+              --workdir /tmp python:3.12-slim /review-venv/bin/python -I -c 'import pytest' >/dev/null 2>&1; then
+              echo "Repository declares pytest configuration and pytest is already importable."
+            else
+              echo "::warning::pytest is not importable from the safely prepared environment; refusing privileged host installation."
+              echo "::warning::pytest is declared by this repository but could not be installed; the editor cannot run its pytest suites and will fall back to ad-hoc validation."
+            fi
+          fi
+
       - name: Switch reasoning effort for editor
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         run: |
@@ -4620,7 +4836,8 @@ jobs:
       - name: Apply fixes with editor model
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          BASH_ENV: ""
+          ENV: ""
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
@@ -4862,13 +5079,62 @@ jobs:
             echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"
           } >> "$GITHUB_ENV"
 
+      - name: Validate Python changes in secretless container
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.REVIEW_PYTHON_DEPENDENCY_VOLUME != ''
+        run: |
+          set -euo pipefail
+          review_python_test_targets=()
+          while IFS= read -r -d '' review_python_candidate; do
+            [ -f "${review_python_candidate}" ] || continue
+            case "${review_python_candidate}" in
+              tests/*.py|test_*.py|*_test.py) review_python_test_targets+=("${review_python_candidate}") ;;
+            esac
+          done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.py'; git ls-files --others --exclude-standard -z -- '*.py'; } | sort -zu)
+          if [ "${#review_python_test_targets[@]}" -eq 0 ]; then
+            echo "No editor-changed Python test targets; skipping repository-wide pytest execution."
+            exit 0
+          fi
+          review_validation_git_mask="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-validation-git.XXXXXX")"
+          review_validation_cleanup()
+          {
+            rm -rf -- "${review_validation_git_mask}"
+          }
+          trap review_validation_cleanup EXIT HUP INT TERM
+          timeout 900 docker run --rm \
+            --network none \
+            --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp/agent-home \
+            --env PYTHONPATH=/workspace:/workspace/src \
+            --env PYTHONDONTWRITEBYTECODE=1 \
+            --volume "${PWD}:/workspace:ro" \
+            --volume "${review_validation_git_mask}:/workspace/.git:ro" \
+            --volume "${REVIEW_PYTHON_DEPENDENCY_VOLUME}:/review-venv:ro" \
+            --workdir /workspace \
+            python:3.12-slim /review-venv/bin/python -m pytest "${review_python_test_targets[@]}"
+
       - name: Commit changes
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         id: commit_changes
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
+          REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}
+          REVIEW_COMMIT_CHANGES_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.review_commit_changes_sha256 }}
         run: |
           set -euo pipefail
+          linked_issue_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}')"
+          if [ "${linked_issue_metadata_sha256}" != "${LINKED_ISSUE_METADATA_EXPECTED_SHA256}" ]; then
+            echo "::error::Refusing to commit: linked-issue metadata changed after collection."
+            exit 1
+          fi
+          review_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+          review_commit_changes_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh" 2>/dev/null | awk '{print $1}')"
+          if [ "${review_scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ] \
+            || [ "${review_commit_changes_actual_sha256}" != "${REVIEW_COMMIT_CHANGES_EXPECTED_SHA256}" ]; then
+            echo "::error::Refusing to commit: generated-advisory review guard support changed after staging."
+            exit 1
+          fi
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
 
       - name: Run interim judge
@@ -5330,7 +5596,6 @@ jobs:
             exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
-
       - name: Prepare merge-conflict resolver prompt and pre-snapshot
         # Split from "Run Codex resolver, validate, stage, commit" below so
         # that neither run: block exceeds GitHub Actions' 21,000-char
@@ -5355,6 +5620,9 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.CLAUDE_FIXER_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
+          REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}
+          REVIEW_CONFLICT_PREPARE_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.review_conflict_prepare_sha256 }}
           # Kill switch for the deterministic union-merge of the generated
           # .ai/.workspace_source_manifest.txt (see the "Deterministic
           # union-merge" block in scripts/review_conflict_prepare.sh).
@@ -5363,6 +5631,13 @@ jobs:
           CONFLICT_MANIFEST_UNION_ENABLED: ${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}
         run: |
           set -euo pipefail
+          prepare_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+          prepare_producer_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh" 2>/dev/null | awk '{print $1}')"
+          if [ "${prepare_scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ] \
+            || [ "${prepare_producer_actual_sha256}" != "${REVIEW_CONFLICT_PREPARE_EXPECTED_SHA256}" ]; then
+            echo "::error::Refusing deterministic merge resolution: generated-advisory guard support changed after staging."
+            exit 1
+          fi
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"
 
       - name: Run Codex resolver, validate, stage, commit
@@ -5395,8 +5670,13 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.CLAUDE_FIXER_MODE != 'true'
         timeout-minutes: 170
         env:
+          BASH_ENV: ""
+          ENV: ""
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
+          REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}
+          REVIEW_CONFLICT_RESOLVE_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.review_conflict_resolve_sha256 }}
           RESOLVER_ESCAPE_THRESHOLD_N: ${{ vars.RESOLVER_ESCAPE_THRESHOLD_N || '5' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
@@ -5434,6 +5714,11 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
         run: |
           set -euo pipefail
+          resolver_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+          if [ "${resolver_scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ]; then
+            echo "::error::Refusing merge resolution: generated-advisory scope validator changed after staging."
+            exit 1
+          fi
           echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"
           if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
             source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
@@ -5474,9 +5759,15 @@ jobs:
           # conflated missing-file with parse-failure under a single
           # "unavailable/unparseable" label.
           _probe_resolver() {
-            local path="$1" err
+            local path="$1" err candidate_sha256
             if [ ! -f "${path}" ]; then
               printf '%s\n' "missing"
+              return
+            fi
+            candidate_sha256="$(sha256sum "${path}" 2>/dev/null | awk '{print $1}')"
+            if [ -n "${REVIEW_CONFLICT_RESOLVE_EXPECTED_SHA256:-}" ] \
+              && [ "${candidate_sha256}" != "${REVIEW_CONFLICT_RESOLVE_EXPECTED_SHA256}" ]; then
+              printf '%s\n' "digest_mismatch"
               return
             fi
             # `bash -n` writes diagnostics to stderr only; merge them
@@ -5773,7 +6064,13 @@ jobs:
         id: rb_judge
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
         env:
+          BASH_ENV: ""
+          ENV: ""
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          LINKED_ISSUE_METADATA_EXPECTED_SHA256: ${{ steps.collect_pr_metadata.outputs.linked_issue_metadata_sha256 }}
+          REVIEW_SCOPE_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.scope_guard_sha256 }}
+          REVIEW_RESOLVER_GUARD_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.resolver_guard_sha256 }}
+          REVIEW_RB_JUDGE_EXPECTED_SHA256: ${{ steps.stage_workflow_support.outputs.review_rb_judge_sha256 }}
           REPOSITORY: ${{ github.repository }}
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
@@ -5785,6 +6082,15 @@ jobs:
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
           set -euo pipefail
+          rb_scope_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py" 2>/dev/null | awk '{print $1}')"
+          rb_resolver_guard_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" 2>/dev/null | awk '{print $1}')"
+          rb_judge_actual_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" 2>/dev/null | awk '{print $1}')"
+          if [ "${rb_scope_guard_actual_sha256}" != "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256}" ] \
+            || [ "${rb_resolver_guard_actual_sha256}" != "${REVIEW_RESOLVER_GUARD_EXPECTED_SHA256}" ] \
+            || [ "${rb_judge_actual_sha256}" != "${REVIEW_RB_JUDGE_EXPECTED_SHA256}" ]; then
+            echo "::error::Refusing review-blocked judge execution: generated-advisory guard support changed after staging."
+            exit 1
+          fi
           # Graceful-degradation wrapper.  The judge has two recognised
           # failure modes:
           #   exit 2 — transient bash syntax error from runner FS races;
@@ -5864,31 +6170,21 @@ jobs:
             }
           fi
 
-          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+          ISSUE_NUMBERS=""
+          if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] \
+            || ! jq -e --argjson pr "${PR_NUMBER}" '.number == $pr and .state == "open"' "${PR_PAYLOAD_FILE:-/dev/null}" >/dev/null 2>&1; then
+            echo "::warning::PR metadata unavailable; skipping review-blocked labels."
+            exit 0
           fi
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: strict current-repo closing-keyword refs and repo-scoped issue URLs/paths only.
-            PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
-            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
-              PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
-            fi
-            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
-              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
-            else
-              ISSUE_NUMBERS=""
-            fi
-            if [ -z "${ISSUE_NUMBERS}" ]; then
-              echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
-              exit 0
-            fi
-            echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
+          if type verified_review_blocked_issue_from_pr >/dev/null 2>&1; then
+            ISSUE_NUMBERS="$(verified_review_blocked_issue_from_pr "${PR_PAYLOAD_FILE}" "${REPOSITORY}" "" "${PR_NUMBER}" || true)"
           fi
 
           ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
+          if [ -z "${ISSUE_NUMBERS}" ]; then
+            gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null
+            exit 0
+          fi
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
@@ -6077,85 +6373,16 @@ jobs:
             echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping pre-push gate)."
           fi
 
-          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
-
-          # Retry non-fast-forward rejections with fetch+merge.  A concurrent
-          # push to ${TARGET_BRANCH} (another workflow run, a human push, a
-          # sibling autofix job) during this ~30-minute job would otherwise
-          # cause an unrecoverable `! [rejected] (fetch first)` failure and
-          # lose the deferred autofix / [ai-merge-resolve] commit.  We merge
-          # the advanced remote tip into our local HEAD and retry up to 3
-          # times with exponential backoff.
-          #
-          # Why `git merge` and NOT `git rebase` here: the conflict-resolver
-          # step above (see the "NOTE: git is intentionally left in merge
-          # state" block around the `git commit -m "[ai-merge-resolve]…"`
-          # call) deliberately creates the ai-merge-resolve commit as a
-          # real two-parent merge commit.  That second parent is load-
-          # bearing — without it, git's merge-base walker rewinds to the
-          # original merge base on every subsequent `git merge` attempt
-          # and re-raises the identical conflict (observed on PR #908,
-          # which left the PR in mergeable_state=dirty).  A plain
-          # `git rebase` would flatten that merge commit into a single-
-          # parent commit and resurrect the exact bug PR #908 was designed
-          # to fix.  `git rebase --rebase-merges` would rewrite the merge
-          # commit SHA too.  `git merge` preserves the existing commit
-          # exactly and simply adds another merge commit on top when
-          # origin has genuinely advanced — never rewriting history and
-          # never clobbering other pushers' commits (no --force / no
-          # --force-with-lease on this path).  If the merge itself would
-          # introduce new conflicts we abort the merge and fail loudly —
-          # we must never silently resurrect conflict markers that the
-          # resolver just cleared.
-          max_push_attempts=3
-          push_attempt=1
-          push_backoff=2
-          push_stderr_file="$(mktemp)"
-          trap 'rm -f "${push_stderr_file}"' EXIT
-          while :; do
-            push_exit=0
-            # Capture BOTH stdout and stderr: `git push` normally emits
-            # rejection details on stderr, but remote helpers and some
-            # git versions can surface `! [rejected]` / `non-fast-forward`
-            # on stdout, which would cause stderr-only classification to
-            # mis-route a retryable failure to the hard-fail branch.
-            git push origin "HEAD:${TARGET_BRANCH}" >"${push_stderr_file}" 2>&1 || push_exit=$?
-            cat "${push_stderr_file}" >&2
-            if [ "${push_exit}" -eq 0 ]; then
-              echo "Push complete."
-              echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"
-              break
-            fi
-            if ! grep -qE '\[rejected\].*\((fetch first|non-fast-forward)\)' "${push_stderr_file}"; then
-              echo "::error::git push failed (exit ${push_exit}) for a reason other than [rejected] (fetch first/non-fast-forward); not retrying."
-              exit "${push_exit}"
-            fi
-            if [ "${push_attempt}" -ge "${max_push_attempts}" ]; then
-              echo "::error::git push still rejected as non-fast-forward after ${max_push_attempts} attempts; giving up."
-              exit 1
-            fi
-            echo "::warning::git push rejected as non-fast-forward (attempt ${push_attempt}/${max_push_attempts}); fetching ${TARGET_BRANCH} and merging before retry in ${push_backoff}s."
-            sleep "${push_backoff}"
-            push_backoff=$((push_backoff * 2))
-            push_attempt=$((push_attempt + 1))
-            fetch_attempt=1
-            while ! git fetch origin "${TARGET_BRANCH}"; do
-              if [ "${fetch_attempt}" -ge 2 ]; then
-                echo "::error::git fetch origin ${TARGET_BRANCH} failed twice during push-retry; giving up to avoid pushing a stale tree."
-                exit 1
-              fi
-              echo "::warning::git fetch origin ${TARGET_BRANCH} failed during push-retry (attempt ${fetch_attempt}/2); retrying in 2s."
-              fetch_attempt=$((fetch_attempt + 1))
-              sleep 2
-            done
-            if ! git merge --no-edit --no-ff "origin/${TARGET_BRANCH}"; then
-              echo "::error::git merge origin/${TARGET_BRANCH} failed — merge would introduce new conflicts. Aborting merge and failing the job; refusing to silently resurrect conflict markers."
-              git merge --abort || true
-              exit 1
-            fi
-            : > "${push_stderr_file}"
-          done
+          pending_head_sha="$(git rev-parse HEAD)"
+          GH_TOKEN="${GH_TOKEN}" bash "${SUPPORT_SCRIPTS_DIR}/trusted_git_write.sh" push \
+            --repo . \
+            --branch "${TARGET_BRANCH}" \
+            --expected-local-head "${pending_head_sha}" \
+            --expected-remote-head "${INITIAL_HEAD_SHA}" \
+            --remote-url "https://github.com/${GITHUB_REPOSITORY}.git"
+          echo "Push complete."
+          echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"
 
       - name: Resolve addressed PR review threads
         # The editor stage audits every PR review comment it saw (the
@@ -6991,7 +7218,7 @@ jobs:
           echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${failure_reason} fp=${failure_fp} degraded=${failure_degraded:-1}"
 
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.CLAUDE_FIXER_CONVERGENCE_REVIEW != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -7025,28 +7252,18 @@ jobs:
 
           ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
 
-          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+          ISSUE_NUMBERS=""
+          if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] \
+            || ! jq -e --argjson pr "${PR_NUMBER}" '.number == $pr and .state == "open"' "${PR_PAYLOAD_FILE:-/dev/null}" >/dev/null 2>&1; then
+            echo "::warning::PR metadata unavailable; skipping review-blocked labels."
+            exit 0
           fi
-
+          if type verified_review_blocked_issue_from_pr >/dev/null 2>&1; then
+            ISSUE_NUMBERS="$(verified_review_blocked_issue_from_pr "${PR_PAYLOAD_FILE}" "${REPOSITORY}" "" "${PR_NUMBER}" || true)"
+          fi
           if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: strict current-repo closing-keyword refs and repo-scoped issue URLs/paths only.
-            PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
-            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
-              PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
-            fi
-            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
-              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
-            else
-              ISSUE_NUMBERS=""
-            fi
-            if [ -z "${ISSUE_NUMBERS}" ]; then
-              echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
-              exit 0
-            fi
-            echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
+            gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null
+            exit 0
           fi
 
           while IFS= read -r issue_number; do
@@ -7061,7 +7278,7 @@ jobs:
         # reported as the step that failed the job — the job's red status
         # already reflects the original failure that triggered this path.
         continue-on-error: true
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.CLAUDE_FIXER_CONVERGENCE_REVIEW != 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -7102,7 +7319,9 @@ jobs:
           # itself prove editor execution succeeded (fallback summaries
           # can also be posted). Keep this branch wording limited to
           # that invariant.
-          if [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
+          if [ "${CLAUDE_FIXER_CONVERGENCE_REVIEW:-false}" = "true" ]; then
+            BODY="AI Claude-fixer re-review did not complete on this head. Auto-merge remains disabled; the scheduled sweep can retry after checks or reviewers recover. [View workflow run](${RUN_URL})."
+          elif [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
             BODY="$(cat <<EOF
           **AI review/autofix encountered a post-editor failure — needs human intervention**
 
@@ -7431,6 +7650,12 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          if [[ "${REVIEW_GIT_CREDENTIAL_DIR:-}" =~ ^${RUNNER_TEMP}/review-git-credential-[0-9]+-[0-9]+\.[A-Za-z0-9]+$ ]]; then
+            rm -rf -- "${REVIEW_GIT_CREDENTIAL_DIR}"
+          fi
+          if [ -n "${REVIEW_PYTHON_DEPENDENCY_VOLUME:-}" ]; then
+            docker volume rm -f "${REVIEW_PYTHON_DEPENDENCY_VOLUME}" >/dev/null 2>&1 || true
+          fi
           rm -rf "${GITHUB_WORKSPACE}/.codex-workflow-src-main"
 
           # Guard: RUNTIME_DIR is only written to $GITHUB_ENV by the
@@ -7440,6 +7665,9 @@ jobs:
           # error.  Skip cleanly when unset (nothing to clean up anyway).
           if [ -n "${RUNTIME_DIR:-}" ]; then
             rm -rf "${RUNTIME_DIR}"
+          fi
+          if [[ "${POST_AGENT_ARTIFACT_DIR:-}" =~ ^${RUNNER_TEMP}/post-agent-review-[0-9]+-[0-9]+\.[A-Za-z0-9]+$ ]]; then
+            rm -rf -- "${POST_AGENT_ARTIFACT_DIR}"
           fi
 
           # Also clean the failure-log staging dir so successive runs on

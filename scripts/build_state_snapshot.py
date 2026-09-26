@@ -520,6 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--memory-branch", default="ai-memory")
 	parser.add_argument("--memory-root-relative", default="ai-memory")
 	parser.add_argument("--memory-root-dir", default="")
+	parser.add_argument("--schema-root", default="", help="Trusted memory root for snapshot schema validation")
 	return parser
 
 
@@ -549,6 +550,8 @@ def main(argv: list[str] | None = None) -> int:
 		memory_branch=args.memory_branch,
 		memory_root_relative=args.memory_root_relative,
 	)
+	if args.schema_root:
+		schema_memory_root = Path(args.schema_root).resolve()
 	try:
 		snapshot = build_state_snapshot(
 			repo_root=repo_root,

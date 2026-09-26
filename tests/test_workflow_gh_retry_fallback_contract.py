@@ -172,6 +172,15 @@ def test_safe_fetch_steps_define_canonical_safe_gh_jq_fallback() -> None:
 def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallback() -> None:
 	for relative_path in BOOTSTRAPPED_GH_HELPER_WORKFLOWS:
 		text = _workflow_text(relative_path)
+		if relative_path.endswith("orchestrate_poll.yml"):
+			# The poller freezes privileged audit support from the same checkout;
+			# a moving main fallback would break that SHA-bound trust boundary.
+			assert "path: .codex-workflow-src" in text
+			assert 'git -C .codex-workflow-src rev-parse HEAD)" = "${SCRIPT_REF}"' in text
+			assert "Checkout workflow support source fallback for gh retry" not in text
+			assert 'src=".codex-workflow-src/scripts/gh_helpers.sh"' in text
+			assert 'install -m 0755 "${src}" scripts/gh_helpers.sh' in text
+			continue
 		fallback_step = (
 			"Checkout workflow support source fallback for gh retry"
 			if relative_path.endswith("orchestrate_poll.yml")

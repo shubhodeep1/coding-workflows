@@ -195,7 +195,7 @@ memory_record_run_event()
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-run-event "$@" || {
+	env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-run-event "$@" || {
 		_memory_warn "record-run-event failed (fail-open)"
 		_memory_telemetry '{"op":"record-run-event","ok":false,"fail_open":true,"source":"shell"}' >&2
 		return 0
@@ -209,7 +209,7 @@ memory_record_candidate()
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-candidate "$@" || {
+	env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-candidate "$@" || {
 		_memory_warn "record-candidate failed (fail-open)"
 		_memory_telemetry '{"op":"record-candidate","ok":false,"fail_open":true,"source":"shell"}' >&2
 		return 0
@@ -230,7 +230,7 @@ memory_retrieve()
 		shift
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" retrieve --output-file "${output_file}" "$@" 2>&1 || {
+	env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" retrieve --output-file "${output_file}" "$@" 2>&1 || {
 		_memory_warn "retrieve failed (fail-open)"
 		_memory_retrieve_fallback "${output_file}" "unavailable"
 		_memory_telemetry '{"op":"retrieve","ok":false,"fail_open":true,"source":"shell"}'
@@ -247,7 +247,7 @@ memory_validation_history_get()
 	fi
 
 	local get_result
-	if get_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" validation-history get "$@")"; then
+	if get_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" validation-history get "$@")"; then
 		printf '%s\n' "${get_result}"
 		return 0
 	fi
@@ -269,7 +269,7 @@ memory_validation_history_append()
 	fi
 
 	local append_result
-	if append_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" validation-history append "$@")"; then
+	if append_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" validation-history append "$@")"; then
 		printf '%s\n' "${append_result}"
 		return 0
 	fi
@@ -291,7 +291,7 @@ memory_validation_discovery_get()
 	fi
 
 	local get_result
-	if get_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" validation-discovery get "$@")"; then
+	if get_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" validation-discovery get "$@")"; then
 		printf '%s\n' "${get_result}"
 		return 0
 	fi
@@ -313,7 +313,7 @@ memory_validation_discovery_append()
 	fi
 
 	local append_result
-	if append_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" validation-discovery append "$@")"; then
+	if append_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" validation-discovery append "$@")"; then
 		printf '%s\n' "${append_result}"
 		return 0
 	fi
@@ -335,7 +335,7 @@ memory_operator_bypass_audit_get()
 	fi
 
 	local get_result
-	if get_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" operator-bypass-audit get "$@")"; then
+	if get_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" operator-bypass-audit get "$@")"; then
 		printf '%s\n' "${get_result}"
 		return 0
 	fi
@@ -357,7 +357,7 @@ memory_operator_bypass_audit_append()
 	fi
 
 	local append_result
-	if append_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" operator-bypass-audit append "$@")"; then
+	if append_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" operator-bypass-audit append "$@")"; then
 		printf '%s\n' "${append_result}"
 		return 0
 	fi
@@ -379,7 +379,7 @@ memory_revalidate_events_get()
 	fi
 
 	local get_result
-	if get_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" revalidate-events get "$@")"; then
+	if get_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" revalidate-events get "$@")"; then
 		printf '%s\n' "${get_result}"
 		return 0
 	fi
@@ -401,7 +401,7 @@ memory_revalidate_events_append()
 	fi
 
 	local append_result
-	if append_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" revalidate-events append "$@")"; then
+	if append_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" revalidate-events append "$@")"; then
 		printf '%s\n' "${append_result}"
 		return 0
 	fi
@@ -423,7 +423,7 @@ memory_processed_command_check()
 	fi
 
 	local check_result
-	if check_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-check "$@")"; then
+	if check_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-check "$@")"; then
 		printf '%s\n' "${check_result}"
 		return 0
 	fi
@@ -445,7 +445,7 @@ memory_processed_command_list()
 	fi
 
 	local list_result
-	if list_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-list "$@")"; then
+	if list_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-list "$@")"; then
 		printf '%s\n' "${list_result}"
 		return 0
 	fi
@@ -467,7 +467,7 @@ memory_clarify_loop_guard()
 	fi
 
 	local guard_result
-	if guard_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" clarify-loop-guard "$@")"; then
+	if guard_result="$(env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" clarify-loop-guard "$@")"; then
 		printf '%s\n' "${guard_result}"
 		return 0
 	fi
@@ -494,7 +494,7 @@ memory_finalize_task()
 	# hit an unresolvable add/add rebase conflict on the same lineage file. Fail
 	# open like the sibling post-PR bookkeeping helpers instead of propagating a
 	# non-zero exit into the caller's `set -euo pipefail` step.
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" finalize-task "$@" || {
+	env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" finalize-task "$@" || {
 		_memory_warn "finalize-task failed (fail-open)"
 		_memory_telemetry '{"op":"finalize-task","ok":false,"fail_open":true,"source":"shell"}' >&2
 		return 0
@@ -508,7 +508,7 @@ memory_promote()
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" promote "$@"
+	env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" promote "$@"
 }
 
 memory_processed_command_claim()
@@ -519,7 +519,7 @@ memory_processed_command_claim()
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-claim "$@"
+	env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-claim "$@"
 }
 
 memory_processed_command_complete()
@@ -530,7 +530,7 @@ memory_processed_command_complete()
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-complete "$@" || {
+	env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python3 -E "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-complete "$@" || {
 		_memory_warn "processed-command-complete failed (fail-open)"
 		_memory_telemetry '{"op":"processed-command-complete","ok":false,"fail_open":true,"source":"shell"}'
 		return 0
@@ -638,7 +638,8 @@ _memory_force_tick_collision_wrapper()
 	local incoming_file="${2:?incoming file required}"
 	local cooldown_seconds="${3:-30}"
 
-	python3 - <<'PY' "${current_file}" "${incoming_file}" "${cooldown_seconds}"
+	env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u PYTHONPATH -u GITHUB_ENV -u GITHUB_OUTPUT \
+		PYTHONDONTWRITEBYTECODE=1 python3 -I - <<'PY' "${current_file}" "${incoming_file}" "${cooldown_seconds}"
 import datetime as dt
 import json
 import pathlib
@@ -784,7 +785,8 @@ memory_force_tick_get()
 	fi
 
 	local record_wrapper=""
-	if ! record_wrapper="$(python3 - <<'PY' "${record_path}"
+	if ! record_wrapper="$(env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u PYTHONPATH -u GITHUB_ENV -u GITHUB_OUTPUT \
+		PYTHONDONTWRITEBYTECODE=1 python3 -I - <<'PY' "${record_path}"
 import json
 import pathlib
 import sys
@@ -930,7 +932,8 @@ memory_force_tick_put()
 	}
 
 	local stored_wrapper=""
-	if ! stored_wrapper="$(python3 - <<'PY' "${target_path}"
+	if ! stored_wrapper="$(env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u PYTHONPATH -u GITHUB_ENV -u GITHUB_OUTPUT \
+		PYTHONDONTWRITEBYTECODE=1 python3 -I - <<'PY' "${target_path}"
 import json
 import pathlib
 import sys

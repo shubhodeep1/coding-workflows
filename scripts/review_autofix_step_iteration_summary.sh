@@ -5,6 +5,9 @@
 # starts runs). The step sources this file in its own shell, so the step's
 # if:, env: and continue-on-error: stay in the workflow; edit those there.
 set -euo pipefail
+# Run summary parsing away from model-writable repository startup files.
+unset BASH_ENV ENV
+cd "${RUNNER_TEMP:?RUNNER_TEMP is required for safe summary startup}"
 
 count_nonempty_lines()
 {

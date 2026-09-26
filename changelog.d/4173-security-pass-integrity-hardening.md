@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Harden security-pass convergence boundaries.** Rebinding now verifies deterministic merge-tree equality, waivers use provenance-bound keys, deleted guards remain blocking, every plan and commit path verifies server-anchored generated-advisory bodies, metadata, validators, and producers before enforcing exact-file scope, remote deduplication verifies CRLF-normalized canonical footers, and advisory queues no longer discard rows.

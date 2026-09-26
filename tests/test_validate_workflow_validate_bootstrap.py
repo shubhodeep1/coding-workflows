@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import subprocess
 import sys
@@ -123,7 +124,7 @@ def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> Non
 	helper = _helper_text()
 	for snippet in (
 		"WORKFLOW.md overlay is opt-in by file presence",
-		"python3 scripts/load_workflow_overlay.py",
+		'python3 -E "${SUPPORT_PRIMARY_ROOT}/scripts/load_workflow_overlay.py"',
 		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
 		'--github-env "${GITHUB_ENV}"',
 	):
@@ -137,6 +138,184 @@ def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_mai
 	assert "realpath -m" not in helper
 
 
+def test_validation_optional_executable_replaces_branch_owned_copy(tmp_path: Path) -> None:
+	staging = _helper_text()
+	fn = "stage_optional_preserve_entry()\n{" + staging.split("stage_optional_preserve_entry()\n{", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+	workspace = tmp_path / "workspace"
+	verified = tmp_path / "verified"
+	for root, body in ((workspace, "echo branch"), (verified, "echo verified")):
+		path = root / "scripts/install_semble.sh"
+		path.parent.mkdir(parents=True)
+		path.write_text(body, encoding="utf-8")
+	program = fn + 'copy_from_ref_or_local() { cp "${SUPPORT_PRIMARY_ROOT}/$1" "$2"; }\nrecord_fetched_script() { :; }\n'
+	program += 'stage_optional_preserve_entry scripts/install_semble.sh true install_semble.sh\n'
+	env = {**os.environ, "TARGET_NAME": "validate", "SUPPORT_PRIMARY_ROOT": str(verified)}
+	env.pop("BASH_ENV", None)
+	result = subprocess.run(["bash", "-c", program], cwd=workspace, env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert (workspace / "scripts/install_semble.sh").read_text(encoding="utf-8") == "echo verified"
+
+
+def test_validate_run_start_memory_uses_private_source() -> None:
+	wf = _workflow_text()
+	step = wf.split("- name: Record validation run start", 1)[1].split("- name: Install Python dependencies", 1)[0]
+	assert 'source "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/memory_helpers.sh"' in step
+	assert "source scripts/memory_helpers.sh" not in step
+	assert 'bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/validate_process.sh"' in wf
+
+
+def test_validate_workspace_and_serena_bootstrap_use_private_isolated_support() -> None:
+	wf = _workflow_text()
+	assert wf.count('bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/workspace_init.sh" metadata') == 2
+	assert 'env -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH -u GITHUB_STEP_SUMMARY \\\n              bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/workspace_init.sh" finalize' in wf
+	process = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	assert '--role serena-bootstrap --workspace "${PWD}"' in process
+	assert '--writable-output-dir "${serena_output_dir}/output"' in process
+	assert 'publish_validate_serena_config' in process
+	assert 'SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}"' not in process
+	sandbox = (REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh").read_text(encoding="utf-8")
+	assert 'ReadWritePaths=${workspace} ${writable_output_dir}' in sandbox
+	assert '"GITHUB_ENV=${writable_output_dir}/result.env"' in sandbox
+
+
+def test_serena_config_publication_rejects_untrusted_binary_and_output_symlink(tmp_path: Path) -> None:
+	process = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	publisher = process.split("publish_validate_serena_config()\n", 1)[1].split("\nensure_serena_bootstrap()", 1)[0]
+	sandbox_root = tmp_path / "bootstrap"
+	isolated_home = sandbox_root / "output" / "home"
+	isolated_config = isolated_home / ".codex" / "config.toml"
+	isolated_config.parent.mkdir(parents=True)
+	workspace = tmp_path / "workspace"
+	workspace.mkdir()
+	private = tmp_path / "private"
+	private.mkdir()
+	(private / "sentinel").write_text("safe", encoding="utf-8")
+	host_home = tmp_path / "host"
+	host_config = host_home / ".codex" / "config.toml"
+	host_config.parent.mkdir(parents=True)
+	host_config.write_text('[existing]\nvalue = "keep"\n', encoding="utf-8")
+	runner_binary = host_home / ".local" / "bin" / "serena"
+	runner_binary.parent.mkdir(parents=True)
+	runner_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+	runner_binary.chmod(0o755)
+	def publish() -> subprocess.CompletedProcess[str]:
+		return subprocess.run(
+			["bash", "-c", "publish_validate_serena_config()\n" + publisher +
+			 "\npublish_validate_serena_config \"$1\" \"$2\"", "bash", str(isolated_config), str(sandbox_root)],
+			cwd=workspace, env={**os.environ, "HOME": str(host_home), "PYTHONDONTWRITEBYTECODE": "1"},
+			capture_output=True, text=True,
+		)
+
+	def write_config(binary: str) -> None:
+		isolated_config.write_text(
+			'[mcp_servers.serena]\ncommand = ' + json.dumps(binary) + '\n'
+			'args = ["start-mcp-server", "--context=codex", "--project-from-cwd", "--transport", "stdio"]\n'
+			'startup_timeout_sec = 30\n', encoding="utf-8",
+		)
+
+	workspace_binary = workspace / "serena"
+	workspace_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+	workspace_binary.chmod(0o755)
+	write_config(str(workspace_binary))
+	assert publish().returncode != 0
+	assert host_config.read_text(encoding="utf-8") == '[existing]\nvalue = "keep"\n'
+	generated_binary = isolated_home / ".local" / "bin" / "serena"
+	generated_binary.parent.mkdir(parents=True)
+	generated_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+	generated_binary.chmod(0o755)
+	write_config(str(generated_binary))
+	assert publish().returncode != 0
+	assert host_config.read_text(encoding="utf-8") == '[existing]\nvalue = "keep"\n'
+	write_config(str(runner_binary))
+	assert publish().returncode == 0
+	assert "[existing]" in host_config.read_text(encoding="utf-8")
+	assert "[mcp_servers.serena]" in host_config.read_text(encoding="utf-8")
+	isolate_copy = private / "config.toml"
+	isolate_copy.write_text(isolated_config.read_text(encoding="utf-8"), encoding="utf-8")
+	isolate_dir = isolated_home / ".codex"
+	isolate_dir.rename(isolated_home / "config-backup")
+	isolate_dir.symlink_to(private, target_is_directory=True)
+	assert publish().returncode != 0
+	assert (private / "sentinel").read_text(encoding="utf-8") == "safe"
+
+
+def test_serena_bootstrap_role_scrubs_credentials_and_rejects_symlinked_project(tmp_path: Path) -> None:
+	runner_temp = tmp_path / "runner"
+	runtime = runner_temp / "bootstrap"
+	output = runtime / "output"
+	output.mkdir(parents=True)
+	runtime.chmod(0o700)
+	output.chmod(0o700)
+	workspace = tmp_path / "workspace"
+	workspace.mkdir()
+	private = tmp_path / "private"
+	(private / "scripts").mkdir(parents=True)
+	script = private / "scripts" / "setup_serena.sh"
+	script.write_text(
+		'#!/bin/bash\nset -euo pipefail\n'
+		'[[ -z "${GH_TOKEN:-}${GH_PAT:-}${OPENROUTER_API_KEY:-}${GITHUB_OUTPUT:-}" ]]\n'
+		'printf "SERENA_AVAILABLE=true\\n" > "${GITHUB_ENV}"\n', encoding="utf-8",
+	)
+	command = ["bash", str(REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh"),
+		"--role", "serena-bootstrap", "--workspace", str(workspace), "--runtime-dir", str(runtime),
+		"--writable-output-dir", str(output), "--", "bash", str(script)]
+	env = {**os.environ, "RUNNER_TEMP": str(runner_temp), "UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		"GH_TOKEN": "sentinel", "GH_PAT": "sentinel", "OPENROUTER_API_KEY": "sentinel",
+		"GITHUB_OUTPUT": str(tmp_path / "runner-command-file")}
+	result = subprocess.run(command, env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert (output / "result.env").read_text(encoding="utf-8") == "SERENA_AVAILABLE=true\n"
+	assert not (tmp_path / "runner-command-file").exists()
+	(workspace / ".serena").symlink_to(private, target_is_directory=True)
+	result = subprocess.run(command, env=env, capture_output=True, text=True)
+	assert result.returncode != 0
+	assert not (private / "project.yml").exists()
+
+
+def test_private_memory_python_ignores_target_sibling_modules(tmp_path: Path) -> None:
+	private_scripts = tmp_path / "private/scripts"
+	private_scripts.mkdir(parents=True)
+	(private_scripts / "memory_helpers.sh").write_bytes((REPO_ROOT / "scripts/memory_helpers.sh").read_bytes())
+	(private_scripts / "ai_memory.py").write_text("import json\nprint(json.dumps({'ok': True}))\n", encoding="utf-8")
+	checkout = tmp_path / "checkout"
+	(checkout / "scripts").mkdir(parents=True)
+	marker = tmp_path / "imported-branch-module"
+	(checkout / "scripts/json.py").write_text(f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+	result = subprocess.run(["bash", "-c", 'source "$1"; memory_record_run_event', "bash",
+		str(private_scripts / "memory_helpers.sh")], cwd=checkout,
+		env={**os.environ, "PYTHONPATH": str(checkout / "scripts"), "GH_TOKEN": "sentinel",
+			"PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True, timeout=20)
+	assert result.returncode == 0, result.stderr
+	assert not marker.exists()
+	assert '{"ok": true}' in result.stdout
+
+
+def test_validate_wrapper_rejects_missing_or_mismatched_trusted_driver(tmp_path: Path) -> None:
+	process = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	preflight = process.split("# Run validation in background, tee output to log file", 1)[1]
+	assert '{ [ -e "scripts/validate_driver.sh" ] &&' in preflight
+	function = "ensure_validate_wrapper()\n{" + process.split("ensure_validate_wrapper()\n{", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+	checkout = tmp_path / "checkout"
+	private = tmp_path / "private/scripts"
+	(checkout / "scripts").mkdir(parents=True)
+	private.mkdir(parents=True)
+	(checkout / "scripts/validate_driver.sh").write_text("verified\n", encoding="utf-8")
+	env = {**os.environ, "_validate_script_dir": str(private)}
+	env.pop("BASH_ENV", None)
+	def invoke() -> subprocess.CompletedProcess[str]:
+		return subprocess.run(["bash", "-c", function + "ensure_validate_wrapper"], cwd=checkout,
+			env=env, capture_output=True, text=True)
+
+	assert invoke().returncode != 0
+	assert not (checkout / "validation/validate.sh").exists()
+	(private / "validate_driver.sh").write_text("verified\n", encoding="utf-8")
+	assert invoke().returncode == 0
+	(checkout / "scripts/validate_driver.sh").unlink()
+	assert invoke().returncode == 0
+	(checkout / "scripts/validate_driver.sh").write_text("untrusted\n", encoding="utf-8")
+	assert invoke().returncode != 0
+
+
 def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
@@ -145,11 +324,96 @@ def test_validate_workflow_passes_template_default_env() -> None:
 	assert 'python3 -I -m venv "${RUNTIME_DIR}/renderer-venv"' in wf
 	assert '"${RUNTIME_DIR}/renderer-venv/bin/python" -I -m pip --isolated install --disable-pip-version-check --quiet pyyaml jsonschema jinja2' in wf
 	assert "id: renderer_dependencies" in wf
+	assert 'if [ -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/render_validation_templates.py" ]; then' in wf
 	assert '"${RUNTIME_DIR}/renderer-venv/bin/python" -I -c' in wf
 	assert 'if pathlib.Path(sys.prefix).resolve() != environment:' in wf
 	assert 'pathlib.Path(spec.origin).resolve().is_relative_to(root)' in wf
 	assert "VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}" in wf
-	assert "if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'" in wf
+	assert "steps.workspace_after_create_hook.outcome == 'success' && steps.workspace_before_run_hook.outcome == 'success'" in wf
+
+
+def test_validate_prerequisites_and_credential_free_failure_tail() -> None:
+	import yaml
+
+	steps = yaml.safe_load(_workflow_text())["jobs"]["validate"]["steps"]
+	by_name = {step["name"]: step for step in steps}
+	condition = by_name["Run validation process"]["if"]
+	for step_id in (
+		"verified_checkout", "runtime", "support_files", "workspace_meta",
+		"workspace_state", "workspace_contents", "workspace_after_create_hook",
+		"workspace_before_run_hook",
+	):
+		assert f"steps.{step_id}.outcome == 'success'" in condition
+		assert f"steps.{step_id}.outcome != 'failure'" not in condition
+	assert "always()" not in condition
+	for step_name in ("Run workspace after_run hook", "Emit Serena stats", "Record validation candidate", "Record validation run end", "Force orchestrate poll after validation finalization", "Run workspace before_remove hook", "Upload validation artifacts"):
+		assert "steps.validate_run.outcome != 'skipped'" in by_name[step_name]["if"]
+	collector = by_name["Collect validation status"]
+	assert collector["if"] == "always()"
+	assert "GH_TOKEN" not in collector.get("env", {})
+	assert "${RUNNER_TEMP}/validate-status-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in collector["run"]
+	assert 'bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/validate_process.sh"' in by_name["Run validation process"]["run"]
+
+
+def test_bootstrap_failure_status_without_runtime_or_credentials(tmp_path: Path) -> None:
+	import yaml
+
+	steps = yaml.safe_load(_workflow_text())["jobs"]["validate"]["steps"]
+	collector = next(step for step in steps if step["name"] == "Collect validation status")
+	output = tmp_path / "output"
+	env = {key: value for key, value in os.environ.items() if key not in ("GH_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "BASH_ENV")}
+	env.update({"RUNTIME_DIR": "", "RUNNER_TEMP": str(tmp_path), "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(output)})
+	result = subprocess.run(["bash", "-c", collector["run"]], cwd=tmp_path, env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert "status=error" in output.read_text(encoding="utf-8")
+	assert (tmp_path / "validate-status-123-1" / "validation_status.json").is_file()
+
+
+def test_validate_template_inventory_rejects_untrusted_entries(tmp_path: Path) -> None:
+	staging = _helper_text()
+	program = staging.split('python3 -I - "${MANIFEST_PATH}" "${REPO_ROOT}" "${SUPPORT_PRIMARY_ROOT}" "${trusted_root}" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
+	manifest = {"optional_copy_files": []}
+	source = tmp_path / "source"
+	target = tmp_path / "target"
+	source.mkdir()
+	target.mkdir()
+	for directory in ("scripts", "prompts", "ai-memory"):
+		(source / directory).mkdir()
+	for family in ("_shared", "node-runtime"):
+		rel = f"workflow-templates/validation-harness/{family}/example.j2"
+		manifest["optional_copy_files"].append(rel)
+		asset = source / rel
+		asset.parent.mkdir(parents=True, exist_ok=True)
+		asset.write_text("trusted", encoding="utf-8")
+	manifest_file = tmp_path / "manifest.json"
+	manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+	import_marker = tmp_path / "host-json-imported"
+	(target / "json.py").write_text(f"open({str(import_marker)!r}, 'w').close()\n", encoding="utf-8")
+	def check() -> int:
+		private = tmp_path / "private"
+		if private.exists():
+			import shutil
+			shutil.rmtree(private)
+		return subprocess.run([sys.executable, "-I", "-c", program, str(manifest_file), str(target), str(source), str(private)], cwd=target, capture_output=True, text=True).returncode
+	assert check() == 0
+	assert not import_marker.exists()
+	for family in ("_shared", "node-runtime"):
+		asset = target / f"workflow-templates/validation-harness/{family}/example.j2"
+		asset.parent.mkdir(parents=True, exist_ok=True)
+		asset.write_text("trusted", encoding="utf-8")
+		assert check() == 0
+		asset.write_text("tampered", encoding="utf-8")
+		assert check() != 0
+		asset.unlink()
+		asset.symlink_to(source / manifest["optional_copy_files"][0])
+		assert check() != 0
+		asset.unlink()
+		extra = asset.parent / "extra.j2"
+		extra.write_text("{{ 1 + 1 }}", encoding="utf-8")
+		assert check() != 0
+		extra.unlink()
+	(source / manifest["optional_copy_files"][0]).unlink()
+	assert check() != 0
 
 
 def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup() -> None:
@@ -161,17 +425,19 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 	assert step_match is not None
 	step = step_match.group("body")
 	assert "          BASH_ENV: ''\n" in step
-	assert 'if [ -f "scripts/render_validation_templates.py" ]; then' in step
+	assert 'if [ -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/render_validation_templates.py" ]; then' in step
 	assert 'cd "${RUNTIME_DIR}/renderer-empty"' in step
 	script = textwrap.dedent(step.split("        run: |\n", 1)[1])
 	with tempfile.TemporaryDirectory() as tmpdir:
 		root = Path(tmpdir)
 		workspace = root / "workspace"
+		trusted_support = root / "trusted-support"
 		runtime_dir = root / "runtime"
 		bin_dir = root / "bin"
-		for directory in (workspace / "scripts", runtime_dir, bin_dir):
+		for directory in (workspace / "scripts", trusted_support / "scripts", runtime_dir, bin_dir):
 			directory.mkdir(parents=True)
 		(workspace / "scripts" / "render_validation_templates.py").touch()
+		(trusted_support / "scripts" / "render_validation_templates.py").touch()
 		startup_file = root / "shell-startup"
 		startup_marker = root / "sourced-startup"
 		import_marker = root / "imported-yaml"
@@ -221,6 +487,7 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 			"PYTHONPATH": str(workspace),
 			"REAL_PYTHON3": sys.executable,
 			"RUNTIME_DIR": str(runtime_dir),
+			"VALIDATE_TRUSTED_SUPPORT_ROOT": str(trusted_support),
 		})
 		result = subprocess.run(
 			["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
@@ -241,7 +508,7 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 	assert "VALIDATION_RENDERER_DEPENDENCIES_READY" in function_text
 	assert "import yaml, jsonschema, jinja2" in function_text
 	assert '"${renderer_python}" -I -c' in function_text
-	assert '"${renderer_python}" -I "${renderer_workspace}/${renderer_script}"' in function_text
+	assert '"${renderer_python}" -I "${renderer_script}"' in function_text
 	for setup_ready, imports_available, expected_status in (
 		("true", "false", 14),
 		("false", "true", 14),
@@ -289,6 +556,7 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 				"REAL_PYTHON3": sys.executable,
 				"IMPORTS_AVAILABLE": imports_available,
 				"GENERATE_LOG_FILE": str(root / "renderer.log"),
+				"VALIDATE_TRUSTED_SUPPORT_ROOT": str(root),
 			})
 			env.pop("BASH_ENV", None)
 			if setup_ready:
@@ -315,8 +583,10 @@ def test_renderer_isolated_imports_ignore_workspace_shadows_and_reject_external_
 	with tempfile.TemporaryDirectory() as tmpdir:
 		root = Path(tmpdir)
 		workspace = root / "workspace"
+		trusted_support = root / "trusted-support"
 		runtime_dir = root / "runtime"
 		workspace.mkdir()
+		(trusted_support / "scripts").mkdir(parents=True)
 		(runtime_dir / "renderer-empty").mkdir(parents=True)
 		venv.EnvBuilder(with_pip=False).create(runtime_dir / "renderer-venv")
 		python = runtime_dir / "renderer-venv" / "bin" / "python"
@@ -334,21 +604,24 @@ def test_renderer_isolated_imports_ignore_workspace_shadows_and_reject_external_
 			"workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
 			"workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2",
 		):
-			path = workspace / asset
+			path = (workspace if asset == ".ai/validate.yml" else trusted_support) / asset
 			path.parent.mkdir(parents=True, exist_ok=True)
 			path.touch()
-		renderer = workspace / "scripts" / "render_validation_templates.py"
+		renderer = trusted_support / "scripts" / "render_validation_templates.py"
 		renderer.write_text(
 			'import yaml, jsonschema, jinja2\n'
 			'print("isolated renderer ran")\n', encoding="utf-8",
 		)
 		leak_marker = root / "leaked"
 		shadow = 'import os\nfrom pathlib import Path\nPath(os.environ["LEAK_MARKER"]).write_text(os.environ["GH_TOKEN"])\n'
+		(workspace / "scripts").mkdir()
+		(workspace / "scripts" / "render_validation_templates.py").write_text(shadow, encoding="utf-8")
 		(workspace / "yaml.py").write_text(shadow, encoding="utf-8")
 		(workspace / "scripts" / "yaml.py").write_text(shadow, encoding="utf-8")
 		env = os.environ.copy()
 		env.update({
 			"RUNTIME_DIR": str(runtime_dir),
+			"VALIDATE_TRUSTED_SUPPORT_ROOT": str(trusted_support),
 			"GENERATE_LOG_FILE": str(root / "renderer.log"),
 			"VALIDATION_RENDERER_DEPENDENCIES_READY": "true",
 			"GH_TOKEN": "fixture-secret",
@@ -489,6 +762,8 @@ def test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metach
 
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
+	with tempfile.TemporaryDirectory(prefix="validate-driver-contract-") as td:
+		test_validate_wrapper_rejects_missing_or_mismatched_trusted_driver(Path(td))
 	test_validate_workflow_bootstrap_lists_prompt_assembly_assets()
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
 	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()

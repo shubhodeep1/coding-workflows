@@ -21,6 +21,8 @@ name: AI Orchestrate Poller (Reusable)
     secrets:
       GH_PAT:
         required: true
+      ORCHESTRATOR_STATE_SIGNING_KEY:
+        required: false
       OPENROUTER_API_KEY:
         required: true
       TG_BOT_SECRET:
@@ -28,6 +30,10 @@ name: AI Orchestrate Poller (Reusable)
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MODEL_PROVIDER_PROXY_MAX_REQUESTS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_REQUESTS || '64' }}
+  MODEL_PROVIDER_PROXY_MAX_CONCURRENCY: ${{ vars.MODEL_PROVIDER_PROXY_MAX_CONCURRENCY || '1' }}
+  MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS: ${{ vars.MODEL_PROVIDER_PROXY_MAX_OUTPUT_TOKENS || '65536' }}
+  MODEL_PROVIDER_PROXY_MAX_SPEND_USD: ${{ vars.MODEL_PROVIDER_PROXY_MAX_SPEND_USD || '25' }}
   UNATTENDED_PHASE: orchestrate_poll
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
@@ -56,6 +62,17 @@ env:
 jobs:
   poll:
     runs-on: ubuntu-latest
+    env:
+      PYTHONSAFEPATH: '1'
+      PYTHONPATH: ''
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: credential.helper
+      GIT_CONFIG_VALUE_0: >-
+        !f() { [ "$1" = get ] || exit 1; host=""; while IFS= read -r line; do
+        case "$line" in host=*) host="${line#host=}" ;; esac; done;
+        [ "$host" = "${GITHUB_SERVER_URL#https://}" ] && [ -n "${REVIEW_GIT_CREDENTIAL_DIR:-}" ] || exit 1;
+        IFS= read -r token < "${REVIEW_GIT_CREDENTIAL_DIR}/token" || [ -n "$token" ] || exit 1;
+        [ -n "$token" ] && printf 'username=x-access-token\npassword=%s\n' "$token"; }; f
     concurrency:
       # Only one poller per repo at a time; newer runs queue instead of
       # killing the active run (which may be mid-way through conflict
@@ -65,12 +82,21 @@ jobs:
 
     steps:
       - name: Create runtime workspace
+        env:
+          REVIEW_GIT_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          umask 077
+          [ -n "${REVIEW_GIT_TOKEN:-}" ] || exit 1
+          credential_dir="$(mktemp -d "${RUNNER_TEMP%/}/poller-git-credential-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
+          printf '%s\n' "${REVIEW_GIT_TOKEN}" > "${credential_dir}/token"
+          echo "REVIEW_GIT_CREDENTIAL_DIR=${credential_dir}" >> "$GITHUB_ENV"
           RUNTIME_DIR="/tmp/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${RUNTIME_DIR}"
+          POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-poller-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
           {
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "POST_AGENT_ARTIFACT_DIR=${POST_AGENT_ARTIFACT_DIR}"
             echo "STATE_FILE=${RUNTIME_DIR}/state.json"
             echo "JUDGE_PROMPT_FILE=${RUNTIME_DIR}/judge_prompt.txt"
             echo "JUDGE_OUTPUT_FILE=${RUNTIME_DIR}/judge_output.txt"
@@ -81,18 +107,34 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Resolve workflow support ref for gh retry
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          # Resolve once for this job. Neither a moving main fallback nor the
+          # integration checkout is an executable support authority.
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+            branch_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
+            [ "$(jq -r '.protected // false' <<< "${branch_json}")" = "true" ] || exit 1
+            support_sha="$(jq -r '.commit.sha // empty' <<< "${branch_json}")"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+            support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
+            object_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
+            for depth in 1 2 3; do
+              [ "${object_type}" = "tag" ] || break
+              [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
+              support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
+              object_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
+            done
+            [ "${object_type}" = "commit" ] || exit 1
           fi
+          [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "SCRIPT_REF=${support_sha}" >> "$GITHUB_ENV"
 
       - name: Checkout workflow support source for gh retry
         id: checkout_pre_support_source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -100,25 +142,12 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
-
-      - name: Checkout workflow support source fallback for gh retry
-        if: ${{ steps.checkout_pre_support_source.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout for gh retry
         run: |
           set -euo pipefail
-          if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
-            exit 1
-          fi
+          [ "$(git -C .codex-workflow-src rev-parse HEAD)" = "${SCRIPT_REF}" ] || exit 1
 
       - name: Checkout workflow support source main snapshot for gh retry
         if: ${{ env.SCRIPT_REF != 'main' }}
@@ -130,15 +159,13 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage gh retry helper
         run: |
           set -euo pipefail
 
           src=".codex-workflow-src/scripts/gh_helpers.sh"
-          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/gh_helpers.sh" ]; then
-            src=".codex-workflow-src-main/scripts/gh_helpers.sh"
-          fi
           if [ ! -f "${src}" ]; then
             echo "::error::Missing required support script gh_helpers.sh in shubhodeep1/coding-workflows@${SCRIPT_REF}"
             exit 1
@@ -237,17 +264,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
-
-      - name: Configure git auth for memory helper clones
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
-          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
-          SERVER_HOST="${SERVER_HOST#http://}"
-          SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          persist-credentials: false
 
       - name: Setup Node.js
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -319,15 +336,9 @@ jobs:
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
-          else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
-          fi
+          [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] || exit 1
 
       - name: Checkout workflow support source
-        continue-on-error: true
         id: checkout_support_source
         uses: actions/checkout@v5
         with:
@@ -336,26 +347,13 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
-
-      - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
-          if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
-            exit 1
-          fi
+          [ "$(git -C .codex-workflow-src rev-parse HEAD)" = "${SCRIPT_REF}" ] || exit 1
 
       - name: Checkout workflow support source main snapshot
         if: ${{ env.SCRIPT_REF != 'main' }}
@@ -367,20 +365,19 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow support files
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
+          echo "PYTHONPATH=${GITHUB_WORKSPACE}/.codex-workflow-src/scripts" >> "$GITHUB_ENV"
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py security_audit.sh security_audit_causality.py files_touched_scope_guard.py check_resolver_diff.sh check_workflow_script_refs.py verify_integration_fingerprints.py worktree_registry.sh worktree_gc.sh; do
             src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
               exit 1
@@ -388,6 +385,56 @@ jobs:
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
+
+          # Freeze the privilege-boundary helpers before any model process can
+          # write the checkout. The poller refuses to source these from the
+          # model-writable worktree at runtime.
+          for f in untrusted_process_sandbox.sh model_provider_proxy.py trusted_git_write.sh post_agent_workspace_guard.py check_resolver_diff.sh files_touched_scope_guard.py; do
+            install -m 0755 "scripts/${f}" "${RUNTIME_DIR}/${f}"
+          done
+          # The integration checkout can replace scripts/ later in this job.
+          # Refuse an unverified fallback: lessons fail open, but project code
+          # must never become the executable fallback after checkout.
+          lesson_support_sha="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)"
+          lesson_support_verified=false
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "${lesson_support_sha}" = "${SCRIPT_REF}" ]; then
+            lesson_support_verified=true
+          fi
+          if [ "${lesson_support_verified}" = true ] \
+            && [ -f .codex-workflow-src/scripts/orchestrate_lib.py ] \
+            && cmp -s scripts/orchestrate_lib.py .codex-workflow-src/scripts/orchestrate_lib.py; then
+            install -m 0755 .codex-workflow-src/scripts/orchestrate_lib.py "${RUNTIME_DIR}/orchestrate_lib.py"
+          else
+            echo "::warning::Lesson helper support ref is unverified; lesson events will fail open without executing the project checkout."
+          fi
+          # Private, SHA-bound executable bundle: the integration checkout can
+          # overwrite scripts/ and prompts/ but cannot write this directory.
+          [ "${lesson_support_verified}" = true ] || exit 1
+          trusted_support_root="$(mktemp -d "${RUNNER_TEMP%/}/poller-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXX")"
+          mkdir -p "${trusted_support_root}/scripts" "${trusted_support_root}/ai-memory/schemas" "${trusted_support_root}/.github/ai"
+          for f in security_audit.sh codex_heartbeat.sh write_codex_config.sh render_prompt.sh render_prompt.py assemble_prompt.sh security_audit_causality.py untrusted_process_sandbox.sh ai_memory_lib.py orchestrate_lib.py openrouter_prompt_cache.py semantic_cache.py memory_injection_patterns.py codex_model_catalog.json security_audit_fp_exclusions.json orchestrate_state_v2.py ai_labels.py check_integration_pr_readiness.py worktree_gc.sh worktree_registry.sh repo_root.py ai_memory.py memory_helpers.sh tg_helpers.sh gh_helpers.sh emit_event.sh emit_event.py build_state_snapshot.py blocker_check.py task_state.py verify_integration_fingerprints.py validate_editor_audit.sh; do
+            [ -f ".codex-workflow-src/scripts/${f}" ] && [ ! -L ".codex-workflow-src/scripts/${f}" ] || exit 1
+            install -m 0600 ".codex-workflow-src/scripts/${f}" "${trusted_support_root}/scripts/${f}"
+          done
+          for f in run_ledger_entry.v1.json state_snapshot.v1.json; do
+            [ -f ".codex-workflow-src/ai-memory/schemas/${f}" ] && [ ! -L ".codex-workflow-src/ai-memory/schemas/${f}" ] || exit 1
+            install -m 0600 ".codex-workflow-src/ai-memory/schemas/${f}" "${trusted_support_root}/ai-memory/schemas/${f}"
+          done
+          [ -f .codex-workflow-src/.github/ai/label_contract.v1.json ] && [ ! -L .codex-workflow-src/.github/ai/label_contract.v1.json ] || exit 1
+          install -m 0600 .codex-workflow-src/.github/ai/label_contract.v1.json "${trusted_support_root}/.github/ai/label_contract.v1.json"
+          [ -d .codex-workflow-src/prompts ] && [ ! -L .codex-workflow-src/prompts ] || exit 1
+          cp -R .codex-workflow-src/prompts "${trusted_support_root}/prompts"
+          [ -z "$(find "${trusted_support_root}/prompts" -type l -print -quit)" ] || exit 1
+          printf '%s\n' "${SCRIPT_REF}" > "${trusted_support_root}/.support_sha"
+          chmod -R go-rwx "${trusted_support_root}"
+          {
+            echo "POLLER_TRUSTED_SUPPORT_DIR=${trusted_support_root}"
+            echo "POLLER_TRUSTED_SUPPORT_SHA=${SCRIPT_REF}"
+          } >> "$GITHUB_ENV"
+          for f in post_agent_workspace_guard.py files_touched_scope_guard.py; do
+            install -m 0755 "scripts/${f}" "${POST_AGENT_ARTIFACT_DIR}/${f}"
+          done
+          install -m 0755 scripts/check_workflow_script_refs.py "${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py"
 
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
@@ -672,6 +719,7 @@ jobs:
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORCHESTRATOR_STATE_SIGNING_KEY: ${{ secrets.ORCHESTRATOR_STATE_SIGNING_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
@@ -685,6 +733,9 @@ jobs:
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
+          SECURITY_PASS_LINE_OWNERSHIP: ${{ vars.SECURITY_PASS_LINE_OWNERSHIP || 'project-lines' }}
+          SECURITY_PASS_OWNERSHIP_CONTEXT_LINES: ${{ vars.SECURITY_PASS_OWNERSHIP_CONTEXT_LINES || '3' }}
+          SECURITY_PASS_ADVISORY_FOLLOWUP_CAP: ${{ vars.SECURITY_PASS_ADVISORY_FOLLOWUP_CAP || '5' }}
           SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
           MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
           MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
@@ -813,18 +864,28 @@ jobs:
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
       - name: Run worktree registry GC
-        run: bash scripts/worktree_gc.sh
+        run: |
+          set -euo pipefail
+          [ -n "${POLLER_TRUSTED_SUPPORT_DIR:-}" ] && [ -n "${POLLER_TRUSTED_SUPPORT_SHA:-}" ] || exit 1
+          [ "$(cat "${POLLER_TRUSTED_SUPPORT_DIR}/.support_sha")" = "${POLLER_TRUSTED_SUPPORT_SHA}" ] || exit 1
+          for f in worktree_gc.sh worktree_registry.sh ai_memory.py ai_memory_lib.py; do
+            [ -f "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/${f}" ] && [ ! -L "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/${f}" ] || exit 1
+          done
+          WORKTREE_REGISTRY_ROOT="${GITHUB_WORKSPACE}" PYTHONSAFEPATH=1 bash "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/worktree_gc.sh"
 
       - name: Build state snapshot
-        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        if: ${{ success() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
           SNAPSHOT_DIR="${RUNTIME_DIR}/state-snapshot"
           mkdir -p "${SNAPSHOT_DIR}"
 
-          python3 scripts/build_state_snapshot.py \
+          [ -n "${POLLER_TRUSTED_SUPPORT_DIR:-}" ] && [ "$(cat "${POLLER_TRUSTED_SUPPORT_DIR}/.support_sha")" = "${POLLER_TRUSTED_SUPPORT_SHA:-}" ] || exit 1
+          [ -f "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/build_state_snapshot.py" ] && [ ! -L "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/build_state_snapshot.py" ] || exit 1
+          PYTHONDONTWRITEBYTECODE=1 python3 -I "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/build_state_snapshot.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
+            --schema-root "${POLLER_TRUSTED_SUPPORT_DIR}/ai-memory" \
             --tracking-issues-file "${RUNTIME_DIR}/tracking_issues.json" \
             --trackers-dir "${RUNTIME_DIR}/state_snapshot_trackers" \
             --actions-runs-file "${RUNTIME_DIR}/state_snapshot_actions_runs.json" \
@@ -833,7 +894,7 @@ jobs:
             --memory-root-relative "${AI_MEMORY_ROOT:-ai-memory}"
 
       - name: Upload state snapshot artifact
-        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        if: ${{ success() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
         # Non-fatal on purpose. The artifact is a secondary, best-effort copy;
         # consumers read state.json from the `state-snapshot` branch when that
         # branch's independently retried, best-effort publication succeeds.
@@ -854,7 +915,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish state snapshot branch
-        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' && env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true' }}
+        if: ${{ success() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' && env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -894,7 +955,7 @@ jobs:
           cp "${SNAPSHOT_FILE}" "${PUBLISH_DIR}/state.json"
           cp "${SNAPSHOT_FILE}" "${PUBLISH_DIR}/snapshots/${TICK_SLUG}.json"
 
-          python3 - "${PUBLISH_DIR}/snapshots" "${HISTORY_DEPTH}" <<'PY'
+          PYTHONDONTWRITEBYTECODE=1 python3 -I - "${PUBLISH_DIR}/snapshots" "${HISTORY_DEPTH}" <<'PY'
           from pathlib import Path
           import sys
 
@@ -953,12 +1014,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f scripts/memory_helpers.sh ]; then
-            echo "::warning::memory helpers not found; skipping poll end event"
+          if [ -z "${POLLER_TRUSTED_SUPPORT_DIR:-}" ] || [ -z "${POLLER_TRUSTED_SUPPORT_SHA:-}" ] \
+            || [ "$(cat "${POLLER_TRUSTED_SUPPORT_DIR}/.support_sha" 2>/dev/null || true)" != "${POLLER_TRUSTED_SUPPORT_SHA}" ] \
+            || [ ! -f "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/memory_helpers.sh" ] \
+            || [ -L "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/memory_helpers.sh" ]; then
+            echo "::warning::verified memory helpers not found; skipping poll end event"
             exit 0
           fi
 
-          source scripts/memory_helpers.sh || true
+          export PYTHONSAFEPATH=1
+          source "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/memory_helpers.sh" || true
 
           if [ "${{ job.status }}" = "success" ]; then
             EVENT_STATUS="ok"
@@ -993,12 +1058,23 @@ jobs:
           # tail; only the workflow name, failing step name, and run
           # URL are sent.
           set -uo pipefail
-          if [ ! -f scripts/tg_helpers.sh ]; then
-            echo "::warning::tg_helpers.sh not found; cannot send job-failure TG alert"
+          # This failure path must also work when support staging did not run.
+          # Never source a helper from the mutable project checkout.
+          support_dir="${POLLER_TRUSTED_SUPPORT_DIR:-}"
+          if [ -z "${support_dir}" ] || [ -z "${POLLER_TRUSTED_SUPPORT_SHA:-}" ] \
+            || [ "$(cat "${support_dir}/.support_sha" 2>/dev/null || true)" != "${POLLER_TRUSTED_SUPPORT_SHA}" ] \
+            || [ ! -f "${support_dir}/scripts/tg_helpers.sh" ] || [ -L "${support_dir}/scripts/tg_helpers.sh" ] \
+            || [ ! -f "${support_dir}/scripts/gh_helpers.sh" ] || [ -L "${support_dir}/scripts/gh_helpers.sh" ]; then
+            echo "::warning::Verified Telegram support unavailable; sending minimal checkout-independent failure alert"
+            if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
+              curl -fsS --max-time 15 -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+                --data-urlencode "chat_id=${TG_ADMIN_CHAT_ID}" \
+                --data-urlencode "text=Workflow failed: ${GITHUB_WORKFLOW:-orchestrate_poll}; run: ${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null 2>&1 || true
+            fi
             exit 0
           fi
           # shellcheck disable=SC1091
-          source scripts/tg_helpers.sh
+          source "${support_dir}/scripts/tg_helpers.sh"
 
           run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           workflow_name="${GITHUB_WORKFLOW:-orchestrate_poll}"
@@ -1026,3 +1102,17 @@ jobs:
           msg+=$'\n'"Run: ${run_url}"
 
           tg_send_msg "${msg}" "ERROR" >/dev/null || true
+
+      - name: Cleanup post-agent artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ "${REVIEW_GIT_CREDENTIAL_DIR:-}" =~ ^${RUNNER_TEMP}/poller-git-credential-[0-9]+-[0-9]+\.[A-Za-z0-9]+$ ]]; then
+            rm -rf -- "${REVIEW_GIT_CREDENTIAL_DIR}"
+          fi
+          if [[ "${POST_AGENT_ARTIFACT_DIR:-}" =~ ^${RUNNER_TEMP}/post-agent-poller-[0-9]+-[0-9]+\.[A-Za-z0-9]+$ ]]; then
+            rm -rf -- "${POST_AGENT_ARTIFACT_DIR}"
+          fi
+          if [[ "${POLLER_TRUSTED_SUPPORT_DIR:-}" =~ ^${RUNNER_TEMP}/poller-support-[0-9]+-[0-9]+\.[A-Za-z0-9]+$ ]]; then
+            rm -rf -- "${POLLER_TRUSTED_SUPPORT_DIR}"
+          fi

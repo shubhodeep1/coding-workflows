@@ -291,6 +291,7 @@ def _cmd_unblock_dependents(args: argparse.Namespace) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description=__doc__)
+	parser.add_argument("--repo-root", default="", help="Repository whose .tasks/ mirror to update (default: script checkout)")
 	subparsers = parser.add_subparsers(dest="command", required=True)
 
 	mirror_parser = subparsers.add_parser("mirror-state", help="Mirror wave issue state into .tasks/")
@@ -308,6 +309,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
 	parser = _build_parser()
 	args = parser.parse_args(argv)
+	if args.repo_root:
+		global REPO_ROOT
+		REPO_ROOT = Path(args.repo_root).resolve()
 	return int(args.func(args))
 
 

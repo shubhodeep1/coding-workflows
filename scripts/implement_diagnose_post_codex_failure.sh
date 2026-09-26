@@ -48,6 +48,11 @@
 
 set -euo pipefail
 IMPLEMENT_DIAGNOSE_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMPLEMENT_DIAGNOSE_MODE="${IMPLEMENT_DIAGNOSE_MODE:-legacy}"
+case "${IMPLEMENT_DIAGNOSE_MODE}" in
+	diagnose|publish|legacy) ;;
+	*) echo "::error::Invalid IMPLEMENT_DIAGNOSE_MODE" >&2; exit 2 ;;
+esac
 # shellcheck disable=SC1091
 source "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry &>/dev/null || gh_retry() { "$@"; }
@@ -146,7 +151,7 @@ if not replaced:
 config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")
 PY
 }
-if ! patch_diagnose_reasoning_into_config; then
+if [ "${IMPLEMENT_DIAGNOSE_MODE}" != "publish" ] && ! patch_diagnose_reasoning_into_config; then
   echo "::warning::Failed to patch ~/.codex/config.toml for diagnose reasoning; leaving existing config unchanged."
 fi
 
@@ -183,21 +188,23 @@ fetch_fallback_issue_json() {
 # (partial write, truncated download, etc.); the API path
 # itself falls back to '[]' so the failure path still
 # degrades safely.
-ISSUE_LABELS_JSON=""
-if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
-  ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
-fi
-if [ -z "${ISSUE_LABELS_JSON}" ]; then
-  fetch_fallback_issue_json
-  ISSUE_LABELS_JSON="$(printf '%s' "${FALLBACK_ISSUE_JSON}" | jq -c '[.labels[]?.name]' 2>/dev/null || true)"
-fi
-if [ -z "${ISSUE_LABELS_JSON}" ]; then
-  ISSUE_LABELS_JSON='[]'
-fi
-if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
-  echo "Issue #${ISSUE_NUMBER} already has ai:implementation-failed label; skipping post-Codex diagnosis."
-  echo "handled=true" >> "$GITHUB_OUTPUT"
-  exit 0
+if [ "${IMPLEMENT_DIAGNOSE_MODE}" != "diagnose" ]; then
+  ISSUE_LABELS_JSON=""
+  if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
+    ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+  fi
+  if [ -z "${ISSUE_LABELS_JSON}" ]; then
+    fetch_fallback_issue_json
+    ISSUE_LABELS_JSON="$(printf '%s' "${FALLBACK_ISSUE_JSON}" | jq -c '[.labels[]?.name]' 2>/dev/null || true)"
+  fi
+  if [ -z "${ISSUE_LABELS_JSON}" ]; then
+    ISSUE_LABELS_JSON='[]'
+  fi
+  if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
+    echo "Issue #${ISSUE_NUMBER} already has ai:implementation-failed label; skipping post-Codex diagnosis."
+    echo "handled=true" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
 fi
 
 if [ -z "${RUNTIME_DIR:-}" ]; then
@@ -255,27 +262,29 @@ ensure_implement_fixup_labels() {
 # not become parseable on retry, so we let the unknown-step fallback
 # handle them rather than burning extra API calls.
 FAILED_STEP_JOBS_JSON=""
-FAILED_STEP_NAME=""
-for _attempt in 1 2 3; do
-  FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
-  if ! printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -e 'type == "object" and (.jobs | type == "array")' >/dev/null 2>&1; then
-    FAILED_STEP_JOBS_JSON='{"jobs":[]}'
-    break
-  fi
-  FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
-    [.jobs[].steps[]
-      | select(
-          .conclusion == "failure"
-          or .conclusion == "cancelled"
-          or .conclusion == "timed_out"
-          or .conclusion == "action_required"
-        )
-    ]
-    | first
-    | .name // ""' 2>/dev/null || true)"
-  [ -n "${FAILED_STEP_NAME}" ] && break
-  [ "${_attempt}" -lt 3 ] && sleep 4 || true
-done
+FAILED_STEP_NAME="${IMPLEMENT_DIAGNOSE_FAILED_STEP_NAME:-}"
+if [ -z "${FAILED_STEP_NAME}" ] && [ "${IMPLEMENT_DIAGNOSE_MODE}" != "diagnose" ]; then
+  for _attempt in 1 2 3; do
+    FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
+    if ! printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -e 'type == "object" and (.jobs | type == "array")' >/dev/null 2>&1; then
+      FAILED_STEP_JOBS_JSON='{"jobs":[]}'
+      break
+    fi
+    FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
+      [.jobs[].steps[]
+        | select(
+            .conclusion == "failure"
+            or .conclusion == "cancelled"
+            or .conclusion == "timed_out"
+            or .conclusion == "action_required"
+          )
+      ]
+      | first
+      | .name // ""' 2>/dev/null || true)"
+    [ -n "${FAILED_STEP_NAME}" ] && break
+    [ "${_attempt}" -lt 3 ] && sleep 4 || true
+  done
+fi
 if [ -z "${FAILED_STEP_NAME}" ]; then
   FAILED_STEP_NAME="unknown-step"
 fi
@@ -311,7 +320,11 @@ if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
   # metadata" before re-hitting the API.  jq failure (e.g.
   # truncated/partial file) falls through to the safe API
   # path rather than killing the step under set -euo pipefail.
-  fetch_issue_body_to_file "${ISSUE_BODY_FILE}"
+  if [ "${IMPLEMENT_DIAGNOSE_MODE}" = "diagnose" ]; then
+    : > "${ISSUE_BODY_FILE}"
+  else
+    fetch_issue_body_to_file "${ISSUE_BODY_FILE}"
+  fi
 fi
 
 TRACKING_ISSUE_NUM="$(sed -nE 's/.*Tracking issue:[[:space:]]*#([0-9]+).*/\1/p' "${ISSUE_BODY_FILE}" | head -n1 | tr -d '\r')"
@@ -389,7 +402,8 @@ ensure_diagnose_asset() {
   return 0
 }
 
-DIAGNOSE_MODE_PROMPT_TEMPLATE="prompts/mode-implement-diagnose.txt"
+if [ "${IMPLEMENT_DIAGNOSE_MODE}" != "publish" ]; then
+DIAGNOSE_MODE_PROMPT_TEMPLATE="${IMPLEMENT_DIAGNOSE_TRUSTED_PROMPT_FILE:-prompts/mode-implement-diagnose.txt}"
 if ! ensure_diagnose_asset "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" "prompts/mode-implement-diagnose.txt"; then
   DIAGNOSE_MODE_PROMPT_TEMPLATE="${RUNTIME_DIR}/mode-implement-diagnose.fallback.txt"
   cat > "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" <<'EOF'
@@ -583,6 +597,7 @@ build_diagnose_semble_query "${DIAGNOSE_SEMBLE_QUERY_FILE}"
     semble_query_block "$(cat "${DIAGNOSE_SEMBLE_QUERY_FILE}")" 6 "Implement Diagnose Context" || true
   fi
 } > "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
+fi
 
 extract_last_json_with_key() {
   local source_file="$1"
@@ -644,6 +659,124 @@ with open(output_file, "w", encoding="utf-8") as handle:
 PY
 }
 
+normalize_diagnose_result() {
+  local source_file="$1"
+  local destination_file="$2"
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${source_file}" "${destination_file}" <<'PY'
+import json
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path, PurePosixPath
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+payload = json.loads(source.read_text(encoding="utf-8"))
+if not isinstance(payload, dict) or payload.get("status") not in {"needs_fixes", "harness_error", "infeasible"}:
+	raise SystemExit("invalid diagnose status")
+
+
+def bounded_text(name: str, maximum: int, *, required: bool = False) -> str:
+	value = payload.get(name, "")
+	if not isinstance(value, str) or len(value) > maximum or (required and not value.strip()):
+		raise SystemExit(f"invalid {name}")
+	return value
+
+
+diagnosis = bounded_text("diagnosis", 20000, required=True)
+hypothesis = bounded_text("hypothesis", 20000)
+harness_fixes = bounded_text("harness_fixes", 20000)
+evidence = payload.get("evidence_trace", [])
+if not isinstance(evidence, list) or len(evidence) > 100:
+	raise SystemExit("invalid evidence_trace")
+normalized_evidence = []
+for row in evidence:
+	if not isinstance(row, dict):
+		raise SystemExit("invalid evidence row")
+	file_name = row.get("file", "")
+	if not isinstance(file_name, str) or len(file_name) > 500:
+		raise SystemExit("invalid evidence file")
+	if file_name:
+		file_path = PurePosixPath(file_name)
+		if file_path.is_absolute() or ".." in file_path.parts or any(ord(char) < 32 for char in file_name):
+			raise SystemExit("unsafe evidence file")
+	line = row.get("line")
+	if line is not None and (isinstance(line, bool) or not isinstance(line, int) or line < 1):
+		raise SystemExit("invalid evidence line")
+	function_name = row.get("function")
+	if function_name is not None and (not isinstance(function_name, str) or len(function_name) > 500):
+		raise SystemExit("invalid evidence function")
+	observation = row.get("observation", "")
+	if not isinstance(observation, str) or not observation.strip() or len(observation) > 10000:
+		raise SystemExit("invalid evidence observation")
+	normalized_evidence.append(
+		{"file": file_name, "line": line, "function": function_name, "observation": observation}
+	)
+
+fix_issues = payload.get("fix_issues", [])
+if not isinstance(fix_issues, list) or len(fix_issues) > 10:
+	raise SystemExit("invalid fix_issues")
+normalized_issues = []
+issue_ids = set()
+for row in fix_issues:
+	if not isinstance(row, dict):
+		raise SystemExit("invalid fix issue")
+	issue_id = row.get("id")
+	if not isinstance(issue_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,120}", issue_id) is None:
+		raise SystemExit("invalid fix issue id")
+	if issue_id in issue_ids:
+		raise SystemExit("duplicate fix issue id")
+	issue_ids.add(issue_id)
+	title = row.get("title")
+	body = row.get("body")
+	priority = row.get("priority")
+	dependencies = row.get("depends_on", [])
+	if not isinstance(title, str) or not title.strip() or len(title) > 256:
+		raise SystemExit("invalid fix issue title")
+	if not isinstance(body, str) or not body.strip() or len(body) > 50000:
+		raise SystemExit("invalid fix issue body")
+	if isinstance(priority, bool) or not isinstance(priority, int) or not 1 <= priority <= 10:
+		raise SystemExit("invalid fix issue priority")
+	if not isinstance(dependencies, list) or len(dependencies) > 10 or any(not isinstance(item, str) for item in dependencies):
+		raise SystemExit("invalid fix issue dependencies")
+	normalized_issues.append(
+		{"id": issue_id, "title": title, "body": body, "priority": priority, "depends_on": dependencies}
+	)
+if any(dependency not in issue_ids for row in normalized_issues for dependency in row["depends_on"]):
+	raise SystemExit("unknown fix issue dependency")
+
+normalized = {
+	"status": payload["status"],
+	"diagnosis": diagnosis,
+	"evidence_trace": normalized_evidence,
+	"hypothesis": hypothesis,
+	"fix_issues": normalized_issues,
+	"harness_fixes": harness_fixes,
+}
+destination.parent.mkdir(parents=True, exist_ok=True)
+temporary_name = ""
+try:
+	with tempfile.NamedTemporaryFile(
+		mode="w", encoding="utf-8", dir=destination.parent,
+		prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+	) as temporary:
+		temporary_name = temporary.name
+		json.dump(normalized, temporary, ensure_ascii=True, indent=2, sort_keys=True)
+		temporary.write("\n")
+		temporary.flush()
+		os.fsync(temporary.fileno())
+	os.replace(temporary_name, destination)
+except BaseException:
+	if temporary_name:
+		try:
+			os.unlink(temporary_name)
+		except OSError:
+			pass
+	raise
+PY
+}
+
 format_diagnose_trace_section() {
   local result_file="$1"
   jq -r '
@@ -662,15 +795,44 @@ format_diagnose_trace_section() {
 }
 
 DIAGNOSE_SUCCESS=false
-if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
-  sanitize_codex_prompt_file "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
-fi
-if timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access \
-  < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
-  2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2); then
-  if extract_last_json_with_key "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "status" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"; then
+if [ "${IMPLEMENT_DIAGNOSE_MODE}" = "publish" ]; then
+  PUBLISH_NORMALIZED_RESULT="${IMPLEMENT_DIAGNOSE_RESULT_FILE}.publish-normalized"
+  if normalize_diagnose_result "${IMPLEMENT_DIAGNOSE_RESULT_FILE}" "${PUBLISH_NORMALIZED_RESULT}"; then
+    mv "${PUBLISH_NORMALIZED_RESULT}" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"
     DIAGNOSE_SUCCESS=true
+  else
+    rm -f "${PUBLISH_NORMALIZED_RESULT}"
   fi
+else
+  if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+    sanitize_codex_prompt_file "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
+  fi
+  DIAGNOSE_RAW_RESULT_FILE="${IMPLEMENT_DIAGNOSE_RESULT_FILE}.raw"
+  diagnose_command=(
+    timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}s"
+    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true
+    exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox read-only
+  )
+  if [ "${IMPLEMENT_DIAGNOSE_MODE}" = "diagnose" ]; then
+    diagnose_command=(
+      bash "${IMPLEMENT_DIAGNOSE_SANDBOX_HELPER:-${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/untrusted_process_sandbox.sh}"
+      --role diagnose
+      --workspace "${GITHUB_WORKSPACE:-${PWD}}"
+      --config-format codex
+      --config "${CODEX_HOME:-${HOME}/.codex}"
+      --runtime-dir "${RUNTIME_DIR}"
+      -- "${diagnose_command[@]}"
+    )
+  fi
+  if "${diagnose_command[@]}" \
+    < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
+    2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2); then
+    if extract_last_json_with_key "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "status" "${DIAGNOSE_RAW_RESULT_FILE}" \
+      && normalize_diagnose_result "${DIAGNOSE_RAW_RESULT_FILE}" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"; then
+      DIAGNOSE_SUCCESS=true
+    fi
+  fi
+  rm -f "${DIAGNOSE_RAW_RESULT_FILE}"
 fi
 
 if [ "${DIAGNOSE_SUCCESS}" != "true" ]; then
@@ -686,7 +848,7 @@ if [ "${DIAGNOSE_SUCCESS}" != "true" ]; then
   jq -n \
     --arg diagnosis "Codex diagnose failed or returned invalid JSON. Fallback fix-up issue created with raw captured diagnostics." \
     --arg body "${FALLBACK_BODY}" \
-    --arg capture_file "${CAPTURE_FILE}" \
+    --arg capture_file "post_codex_validation_errors.txt" \
     --arg trace_observation "${FALLBACK_TRACE_OBSERVATION}" \
     --arg hypothesis "${FALLBACK_HYPOTHESIS}" \
     '{
@@ -712,6 +874,16 @@ if [ "${DIAGNOSE_SUCCESS}" != "true" ]; then
       ],
       harness_fixes: ""
     }' > "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"
+fi
+
+if ! normalize_diagnose_result "${IMPLEMENT_DIAGNOSE_RESULT_FILE}" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}.normalized"; then
+  echo "::error::Deterministic diagnose fallback failed validation." >&2
+  exit 1
+fi
+mv "${IMPLEMENT_DIAGNOSE_RESULT_FILE}.normalized" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"
+
+if [ "${IMPLEMENT_DIAGNOSE_MODE}" = "diagnose" ]; then
+  exit 0
 fi
 
 DIAG_STATUS="$(jq -r '.status // "harness_error"' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"

@@ -22,6 +22,9 @@
 #   RUNTIME_DIR                       Ephemeral per-run directory.
 #   PRE_EDITOR_STATE_FILE             Optional snapshot of pre-editor tree state.
 #   PRE_EDITOR_DIFF_BASELINE_FILE     Optional pre-editor baseline diff file.
+#   LINKED_ISSUE_METADATA_FILE        Batched linked-issue body/authorship JSON
+#                                     produced by review_collect_pr_metadata.sh.
+#                                     Defaults to ${RUNTIME_DIR}/linked_issue_metadata.json.
 #   PRE_EDITOR_UNTRACKED_FILE         Optional sorted NUL-delimited list of paths
 #                                     that were untracked before the editor ran
 #                                     (both repo kinds). Consumer repos use it to keep
@@ -36,7 +39,6 @@
 #   LAST_RUN_DIFF_FILE                Diff from previous autofix iteration.
 #   EDITOR_SUMMARY_FILE               Editor-produced summary (used by overlap validation).
 #   REVIEW_LEDGER_PATH                Path to review-issue ledger (defaults to .ai/review_issue_ledger/pr-${PR_NUMBER}.txt). Gitignored; persisted across autofix iterations via actions/cache in review_autofix.yml.
-#   GH_PAT                            GitHub token used to rewrite the origin remote URL.
 #   GITHUB_REPOSITORY                 owner/repo slug (auto-set by GitHub Actions).
 #
 # Outputs:
@@ -68,6 +70,23 @@ set -euo pipefail
 _review_commit_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${_review_commit_script_dir}/write_guard.sh"
+
+POST_AGENT_ARTIFACT_DIR="${POST_AGENT_ARTIFACT_DIR:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}}"
+REVIEW_VALIDATOR_OUTPUT_DIR="${POST_AGENT_ARTIFACT_DIR}/validator-output-review-commit"
+mkdir -p "${REVIEW_VALIDATOR_OUTPUT_DIR}"
+
+run_review_validator_python() {
+  local sandbox_helper="${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh"
+  if [ -x "${sandbox_helper}" ]; then
+    bash "${sandbox_helper}" \
+      --role validator --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+      --writable-output-dir "${REVIEW_VALIDATOR_OUTPUT_DIR}" \
+      -- /usr/bin/python3 -I -S "$@"
+    return $?
+  fi
+  echo "::error::Review validator sandbox is unavailable." >&2
+  return 1
+}
 
 if [ -z "${COMMITTED_FILES_FILE:-}" ]; then
   if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
@@ -482,6 +501,88 @@ if [ "${PROTECTED_LEAKED}" = "true" ]; then
   printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
 fi
 
+# >>> files_touched scope-enforcement guard (review) >>>
+# Generated security advisories are exact-file tasks. Re-check the staged
+# review-editor delta against the authenticated linked-issue metadata so a
+# later [ai-autofix] commit cannot widen an implementation that passed the
+# plan and implement guards. This path is deliberately fail-closed.
+review_advisory_rows_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review-advisory-rows.XXXXXX")"
+# Same default as review_collect_pr_metadata.sh: the workflow exporting the
+# runtime env may predate this artifact (self-repo reviews run PR-head helpers
+# under review_autofix.yml@main), so derive the per-run path when unset.
+if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+  LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
+fi
+if [ ! -f "${LINKED_ISSUE_METADATA_FILE:-/nonexistent}" ]; then
+  echo "::error::Refusing to commit: linked-issue metadata is unavailable."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
+review_advisory_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}')"
+if ! [[ "${LINKED_ISSUE_METADATA_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+    || [ "${review_advisory_metadata_sha256}" != "${LINKED_ISSUE_METADATA_EXPECTED_SHA256}" ]; then
+  echo "::error::Refusing to commit: linked-issue metadata changed after collection."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
+if ! jq -e 'type == "array" and all(.[]; type == "object")' "${LINKED_ISSUE_METADATA_FILE}" >/dev/null 2>&1; then
+  echo "::error::Refusing to commit: linked-issue metadata is malformed."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
+if jq -e 'any(.[]; has("_collection_status"))' "${LINKED_ISSUE_METADATA_FILE}" >/dev/null 2>&1; then
+  echo "::error::Refusing to commit: linked-issue metadata collection is unresolved."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
+if ! jq -c '[.[] | select(((.body // "") | contains("**Generated security advisory metadata**")))]' \
+    "${LINKED_ISSUE_METADATA_FILE}" > "${review_advisory_rows_file}"; then
+  echo "::error::Refusing to commit: linked-issue metadata is malformed."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
+review_advisory_count="$(jq -r 'length' "${review_advisory_rows_file}")"
+if [ "${review_advisory_count}" -gt 1 ]; then
+  echo "::error::Refusing to commit: multiple generated security advisories are linked to one PR."
+  rm -f "${review_advisory_rows_file}"
+  exit 1
+fi
+if [ "${review_advisory_count}" -eq 1 ]; then
+  review_advisory_body_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review-advisory-body.XXXXXX")"
+  review_advisory_staged_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review-advisory-staged.XXXXXX")"
+  jq -rj '.[0].body // ""' "${review_advisory_rows_file}" > "${review_advisory_body_file}"
+  printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${review_advisory_staged_file}"
+  review_advisory_author_association="$(jq -r '.[0].author_association // ""' "${review_advisory_rows_file}")"
+  review_advisory_author_login="$(jq -r '.[0].author_login // ""' "${review_advisory_rows_file}")"
+  review_advisory_scope_rc=30
+  if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+  review_scope_validator_cmd=(
+    bash "${SUPPORT_SCRIPTS_DIR:-scripts}/untrusted_process_sandbox.sh"
+    --role validator --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}"
+    -- /usr/bin/python3 -I -S
+  )
+    set +e
+    review_advisory_violations="$("${review_scope_validator_cmd[@]}" "${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py" \
+      --issue-body-file "${review_advisory_body_file}" \
+      --staged-file "${review_advisory_staged_file}" \
+      --issue-author-association "${review_advisory_author_association}" \
+      --issue-author-login "${review_advisory_author_login}" \
+      --generated-advisory-mode required)"
+    review_advisory_scope_rc=$?
+    set -e
+  fi
+  rm -f "${review_advisory_body_file}" "${review_advisory_staged_file}"
+  if [ "${review_advisory_scope_rc}" -ne 0 ]; then
+    echo "::error::Refusing to commit: generated security advisory review edits exceed the exact cited-file scope or metadata validation failed."
+    printf '%s\n' "${review_advisory_violations:-}" | sed '/^$/d;s/^/  - /'
+    rm -f "${review_advisory_rows_file}"
+    exit 1
+  fi
+  echo "Generated security advisory review scope guard: all staged paths match the exact cited file."
+fi
+rm -f "${review_advisory_rows_file}"
+# <<< files_touched scope-enforcement guard (review) <<<
+
 REVIEW_WRITE_GUARD_STAGED_FILE="$(mktemp "${TMPDIR:-/tmp}/review-write-guard-staged.XXXXXX")"
 printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${REVIEW_WRITE_GUARD_STAGED_FILE}"
 if ! write_guard_check review_editor "${REVIEW_WRITE_GUARD_STAGED_FILE}"; then
@@ -494,10 +595,10 @@ if git diff --cached --quiet; then
   echo "No repository changes to commit."
   echo "- none" > "${COMMITTED_FILES_FILE}"
 else
-  OVERLAP_REPORT_FILE="$(mktemp)"
+  OVERLAP_REPORT_FILE="$(mktemp "${REVIEW_VALIDATOR_OUTPUT_DIR}/overlap-report.XXXXXX")"
   OVERLAP_VALIDATION_STDERR_FILE="$(mktemp)"
   set +e
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
+  run_review_validator_python - "${LAST_RUN_DIFF_FILE}" "${OVERLAP_REPORT_FILE}" "${PWD}" 2>"${OVERLAP_VALIDATION_STDERR_FILE}" <<'PY'
 import re
 import subprocess
 import sys
@@ -505,10 +606,11 @@ from collections import defaultdict
 
 last_run_diff_path = sys.argv[1]
 overlap_report_path = sys.argv[2]
+repo_root = sys.argv[3]
 
 hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 file_re = re.compile(r"^\+\+\+ b/(.+)$")
-staged_cmd = ["git", "diff", "--cached", "--unified=0", "--no-color"]
+staged_cmd = ["git", "-C", repo_root, "diff", "--cached", "--unified=0", "--no-color"]
 staged_diff = subprocess.run(staged_cmd, check=True, capture_output=True, text=True).stdout.splitlines()
 
 def parse_ranges(lines, use_side):
@@ -627,14 +729,14 @@ PY
   fi
   rm -f "${OVERLAP_REPORT_FILE}" "${OVERLAP_VALIDATION_STDERR_FILE}"
 
-  git commit -m "[ai-autofix] apply PR fixes"
+  bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/trusted_git_write.sh" \
+    commit --repo . --message "[ai-autofix] apply PR fixes"
   {
     git diff-tree --no-commit-id --name-only -r -z HEAD \
       | while IFS= read -r -d '' changed_file; do
           printf -- '- %s\n' "${changed_file}"
         done
   } > "${COMMITTED_FILES_FILE}"
-  git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
   # NOTE: do NOT push here. The push is deferred to the final
   # "Push all pending commits" step so that conflict resolution,
   # labeling, and auto-merge complete before the synchronize event

@@ -17,12 +17,15 @@ if [ "${_TG_HELPERS_LOADED:-}" = "true" ]; then
 fi
 _TG_HELPERS_LOADED="true"
 
-# Source rate-limit helpers (provides curl_gh_api)
+# Source rate-limit helpers from the same directory as this helper, not the
+# current checkout (which may have changed since support was staged).
 # shellcheck source=gh_helpers.sh
-if [ -f "scripts/gh_helpers.sh" ]; then
+_TG_HELPERS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${_TG_HELPERS_SCRIPT_DIR}/gh_helpers.sh" ]; then
 	# shellcheck disable=SC1091
-	source scripts/gh_helpers.sh
+	source "${_TG_HELPERS_SCRIPT_DIR}/gh_helpers.sh"
 fi
+unset _TG_HELPERS_SCRIPT_DIR
 # Fallback: if curl_gh_api is not available, pass through to plain curl
 if ! type curl_gh_api >/dev/null 2>&1; then
 	curl_gh_api() { curl "$@"; }

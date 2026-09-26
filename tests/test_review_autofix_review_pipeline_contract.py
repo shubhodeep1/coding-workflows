@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import http.client
 import importlib.util
 import io
@@ -150,6 +151,10 @@ if args[:1] == ["api"]:
 		sys.stdout.write("HTTP/1.1 200 OK\nx-ratelimit-reset: 0\n")
 		sys.exit(0)
 	api_responses = state.get("api_responses", {}) or {}
+	if path == "graphql" and state.get("fail_closing_issues_graphql") and any("closingIssuesReferences" in arg for arg in args):
+		save()
+		sys.stderr.write("mock gh: synthetic closingIssuesReferences failure\n")
+		sys.exit(1)
 	matched = None
 	for pattern, response in sorted(api_responses.items(), key=lambda item: len(item[0]), reverse=True):
 		if pattern and pattern in path:
@@ -163,10 +168,15 @@ if args[:1] == ["api"]:
 	save()
 	if jq_filter == ".default_branch":
 		print((matched or {}).get("default_branch", ""))
-	elif jq_filter == ".data.repository.pullRequest.closingIssuesReferences.nodes // []":
-		nodes = (((matched or {}).get("data") or {}).get("repository") or {}).get("pullRequest") or {}
-		nodes = ((nodes.get("closingIssuesReferences") or {}).get("nodes") or [])
-		print(json.dumps(nodes))
+	elif "pullRequest.closingIssuesReferences" in jq_filter:
+		pull_request = (((matched or {}).get("data") or {}).get("repository") or {}).get("pullRequest")
+		if (matched or {}).get("errors") or not isinstance(pull_request, dict) or not isinstance(pull_request.get("closingIssuesReferences"), dict):
+			print(json.dumps({"_collection_status": "unresolved"}))
+		else:
+			connection = dict(pull_request["closingIssuesReferences"])
+			connection.setdefault("nodes", [])
+			connection.setdefault("pageInfo", {"hasNextPage": False})
+			print(json.dumps(connection))
 	elif jq_filter == '{number: (.number // 0), title: (.title // ""), body: (.body // "")}':
 		print(json.dumps({
 			"number": (matched or {}).get("number", 0) or 0,
@@ -195,6 +205,7 @@ def _run_review_collect_pr_metadata_harness(
 	head_sha_override: str,
 	base_ref_override: str,
 	review_break_glass_enabled: str = "false",
+	linked_issue_metadata_env: bool = True,
 	mock_state: dict[str, object],
 ) -> dict[str, object]:
 	with tempfile.TemporaryDirectory(prefix="review-collect-pr-metadata-") as td:
@@ -215,6 +226,7 @@ def _run_review_collect_pr_metadata_harness(
 			"pr_reviews": runtime_dir / "pr_reviews.json",
 			"pr_review_comments": runtime_dir / "pr_review_comments.json",
 			"linked_issue_context": runtime_dir / "linked_issue_context.txt",
+			"linked_issue_metadata": runtime_dir / "linked_issue_metadata.json",
 			"comments_context": runtime_dir / "pr_all_comments_context.txt",
 			"pr_diff": runtime_dir / "pr_diff.patch",
 			"github_env": runtime_dir / "github_env.txt",
@@ -228,6 +240,7 @@ def _run_review_collect_pr_metadata_harness(
 			"GITHUB_REPOSITORY": "owner/repo",
 			"GITHUB_REPOSITORY_OWNER": "owner",
 			"GH_TOKEN": "test-token",
+			"GH_RETRY_MAX_ATTEMPTS": "1",
 			"PR_NUMBER": pr_number,
 			"CLAUDE_BRANCH_REVIEW_MODE": claude_branch_review_mode,
 			"HEAD_REF_OVERRIDE_INPUT": head_ref_override,
@@ -239,11 +252,17 @@ def _run_review_collect_pr_metadata_harness(
 			"PR_REVIEWS_FILE": str(files["pr_reviews"]),
 			"PR_REVIEW_COMMENTS_FILE": str(files["pr_review_comments"]),
 			"LINKED_ISSUE_CONTEXT_FILE": str(files["linked_issue_context"]),
+			"LINKED_ISSUE_METADATA_FILE": str(files["linked_issue_metadata"]),
 			"PR_ALL_COMMENTS_CONTEXT_FILE": str(files["comments_context"]),
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"GITHUB_ENV": str(files["github_env"]),
 			"REVIEW_BREAK_GLASS_ENABLED": review_break_glass_enabled,
 			})
+		if not linked_issue_metadata_env:
+			# Older workflow contract: the export is absent and only the
+			# per-run directory is known. The helper must default the path.
+			env.pop("LINKED_ISSUE_METADATA_FILE", None)
+			env["RUNTIME_DIR"] = str(runtime_dir)
 
 		result = subprocess.run(
 			["bash", str(METADATA_HELPER)],
@@ -273,6 +292,7 @@ def _run_review_collect_pr_metadata_harness(
 			"pr_reviews": json.loads(files["pr_reviews"].read_text(encoding="utf-8")),
 			"pr_review_comments": json.loads(files["pr_review_comments"].read_text(encoding="utf-8")),
 			"linked_issue_context": files["linked_issue_context"].read_text(encoding="utf-8"),
+			"linked_issue_metadata": json.loads(files["linked_issue_metadata"].read_text(encoding="utf-8")),
 			"comments_context": files["comments_context"].read_text(encoding="utf-8"),
 			"pr_diff": files["pr_diff"].read_text(encoding="utf-8"),
 		}
@@ -2201,6 +2221,7 @@ def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | Non
 		env = os.environ.copy()
 		env.update({
 			"RUNTIME_DIR": str(runtime),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 			"PREVIOUS_REVIEWS_DIR": str(reviews),
 			"EDITOR_SUMMARY_FILE": str(runtime / "editor_summary.txt"),
 			"COMMITTED_FILES_FILE": str(runtime / "committed_files.txt"),
@@ -2744,6 +2765,12 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 	stage_step_block = _step_block("Stage workflow support files")
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in stage_step_block
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in stage_step_block
+	assert "id: stage_workflow_support" in stage_step_block
+	assert "publish_review_support_sha256 scope_guard_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_commit_changes_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_conflict_prepare_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_conflict_resolve_sha256" in stage_step_block
+	assert "publish_review_support_sha256 review_rb_judge_sha256" in stage_step_block
 	assert "REQUIRED_BOOTSTRAP_SCRIPTS=" not in stage_step_block
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}"' not in stage_step_block
 	required_bootstrap_line = next(
@@ -3099,17 +3126,88 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	required_bootstrap_line = next(
 		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
 	)
+	main_primary_bootstrap_line = next(
+		line for line in _stage_helper_text().splitlines() if "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=" in line
+	)
 	block = _step_block("Collect PR metadata")
 	helper_text = METADATA_HELPER.read_text(encoding="utf-8")
 
 	assert METADATA_HELPER.exists(), f"missing helper: {METADATA_HELPER}"
 	assert "review_collect_pr_metadata.sh" in required_bootstrap_line, required_bootstrap_line
+	assert "review_collect_pr_metadata.sh" in main_primary_bootstrap_line, main_primary_bootstrap_line
+	for security_sensitive_support_file in (
+		"review_collect_pr_metadata.sh",
+		"files_touched_scope_guard.py",
+		"review_commit_changes.sh",
+		"review_conflict_prepare.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+	):
+		assert security_sensitive_support_file in main_primary_bootstrap_line, main_primary_bootstrap_line
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"' in block
+	stage_block = _step_block("Stage workflow support files")
+	assert 'security_sensitive_support_root=".codex-workflow-src"' in stage_block
+	assert 'security_sensitive_support_root=".codex-workflow-src"' in stage_block
+	assert stage_block.index('if [ ! -f "${security_sensitive_support_src}" ]; then') < stage_block.index('install -m 0755 \\')
+	for security_sensitive_support_file in (
+		"review_collect_pr_metadata.sh",
+		"files_touched_scope_guard.py",
+		"review_commit_changes.sh",
+		"review_conflict_prepare.sh",
+		"review_conflict_resolve.sh",
+		"review_rb_judge.sh",
+	):
+		assert security_sensitive_support_file in stage_block
 	assert 'gh_retry "${PR_PAYLOAD_FILE}"' not in block
 	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in helper_text
 	assert 'gh_retry_to_file "${outfile}" gh "$@"' in helper_text
 	assert 'review_collect_pr_metadata.XXXXXX' in helper_text
 	assert '::error::Unable to determine PR base branch' in helper_text
+	assert 'LINKED_ISSUE_METADATA_EXPECTED_SHA256=%s' in helper_text
+	assert 'id: collect_pr_metadata' in block
+	assert 'linked_issue_metadata_sha256=${linked_issue_metadata_sha256}' in block
+	assert "awk '{print $1}' || true" in block
+
+
+def test_review_blocked_writer_revalidates_scope_guard_digest_before_execution() -> None:
+	rb_judge = RB_JUDGE.read_text(encoding="utf-8")
+	writer_end = rb_judge.index("# Check for changes and commit")
+	digest_check = rb_judge.index("verify_review_scope_guard_integrity", writer_end)
+	guard_execution = rb_judge.index('run_review_rb_validator_python "${SUPPORT_SCRIPTS_DIR}/files_touched_scope_guard.py"', digest_check)
+
+	assert writer_end < digest_check < guard_execution
+	assert '[[ "${REVIEW_SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]' in rb_judge
+	assert '[[ "${scope_guard_actual_sha256}" =~ ^[0-9a-f]{64}$ ]]' in rb_judge
+	assert 'scope_guard_actual_sha256="$(sha256sum "${scope_guard_path}"' in rb_judge
+
+	function_match = re.search(
+		r"(?ms)^verify_review_scope_guard_integrity\(\)\n\{.*?^\}\n",
+		rb_judge,
+	)
+	assert function_match, "missing scope-guard integrity helper"
+	with tempfile.TemporaryDirectory(prefix="test_rb_scope_guard_mutation_") as td:
+		support_scripts_dir = Path(td) / "scripts"
+		support_scripts_dir.mkdir()
+		scope_guard_path = support_scripts_dir / "files_touched_scope_guard.py"
+		scope_guard_path.write_text("trusted validator\n", encoding="utf-8")
+		expected_sha256 = hashlib.sha256(scope_guard_path.read_bytes()).hexdigest()
+		scope_guard_path.write_text("writer replacement\n", encoding="utf-8")
+		env = os.environ.copy()
+		env.update(
+			{
+				"SUPPORT_SCRIPTS_DIR": str(support_scripts_dir),
+				"REVIEW_SCOPE_GUARD_EXPECTED_SHA256": expected_sha256,
+			}
+		)
+		proc = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{function_match.group(0)}\nverify_review_scope_guard_integrity"],
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		assert proc.returncode != 0
+		assert "scope validator changed after the writer ran" in proc.stdout + proc.stderr
 
 
 def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None:
@@ -3498,6 +3596,7 @@ def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> No
 	assert result["pr_reviews"] == []
 	assert result["pr_review_comments"] == []
 	assert result["linked_issue_context"] == "No linked issues found."
+	assert result["linked_issue_metadata"] == []
 	assert "issue_comments_count: 0" in result["comments_context"]
 	assert "reviews_count: 0" in result["comments_context"]
 	assert "review_comments_count: 0" in result["comments_context"]
@@ -3512,6 +3611,129 @@ def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> No
 	assert not any(call[:2] == ["api", "graphql"] for call in result["mock_state"]["calls"])
 	assert not any(call[:2] == ["pr", "diff"] for call in result["mock_state"]["calls"])
 	assert not any("repos/owner/repo/pulls/" in " ".join(call) for call in result["mock_state"]["calls"])
+
+
+def test_review_collect_pr_metadata_helper_defaults_linked_issue_metadata_file_from_runtime_dir() -> None:
+	# Self-repo reviews run the PR-head helper under review_autofix.yml@main,
+	# which may not export LINKED_ISSUE_METADATA_FILE yet (PR #4174, run
+	# 35552937934 failed with "required env LINKED_ISSUE_METADATA_FILE is
+	# unset"). The helper must derive the path from RUNTIME_DIR, write the
+	# artifact there, and publish the resolved path for later steps.
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="",
+		claude_branch_review_mode="true",
+		head_ref_override="claude/test-no-pr",
+		head_sha_override="deadbeef",
+		base_ref_override="",
+		linked_issue_metadata_env=False,
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo": {"default_branch": "main"},
+			},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == []
+	assert result["github_env"]["LINKED_ISSUE_METADATA_FILE"].endswith("/runtime/linked_issue_metadata.json")
+	assert result["github_env"]["LINKED_ISSUE_METADATA_EXPECTED_SHA256"] == hashlib.sha256(b"[]\n").hexdigest()
+	assert "required env LINKED_ISSUE_METADATA_FILE is unset" not in result["stderr"]
+
+
+def test_review_collect_pr_metadata_helper_marks_failed_link_lookup_unresolved() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+			},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
+	assert result["linked_issue_context"] == "No linked issues found."
+	assert "Failed to fetch linked issues via GraphQL" in result["stdout"]
+
+
+def test_review_collect_pr_metadata_helper_accepts_complete_fallback_after_primary_failure() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"fail_closing_issues_graphql": True,
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7",
+					"base": {"ref": "main"},
+					"head": {"ref": "feature/ref", "sha": "abc123", "repo": {"full_name": "owner/repo"}},
+				},
+				"graphql": {
+					"data": {"repository": {"i0": {
+						"__typename": "Issue", "number": 7, "title": "Recovered issue",
+						"body": "Recovered body", "authorAssociation": "MEMBER",
+						"author": {"login": "trusted-maintainer"},
+					}}},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == [{
+		"number": 7,
+		"title": "Recovered issue",
+		"body": "Recovered body",
+		"author_association": "MEMBER",
+		"author_login": "trusted-maintainer",
+	}]
+	assert "Linked-issue body-text fallback resolved 1 issue(s)" in result["stdout"]
+
+
+def test_review_collect_pr_metadata_helper_fails_closed_on_truncated_primary_page() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title", "body": "", "base": {"ref": "main"},
+					"head": {"ref": "feature/ref", "sha": "abc123", "repo": {"full_name": "owner/repo"}},
+				},
+				"graphql": {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {
+					"nodes": [], "pageInfo": {"hasNextPage": True},
+				}}}}},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
+	assert "metadata exceeds the 50-issue GraphQL page" in result["stdout"]
 
 
 def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default() -> None:
@@ -3576,6 +3798,8 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 								"number": 7,
 								"title": "Linked fallback issue",
 								"body": "Linked fallback body",
+								"authorAssociation": "MEMBER",
+								"author": {"login": "trusted-maintainer"},
 							},
 						},
 					},
@@ -3599,6 +3823,15 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 		"Issue #7: Linked fallback issue",
 		"Linked fallback body",
 	]
+	assert result["linked_issue_metadata"] == [
+		{
+			"number": 7,
+			"title": "Linked fallback issue",
+			"body": "Linked fallback body",
+			"author_association": "MEMBER",
+			"author_login": "trusted-maintainer",
+		}
+	]
 	assert "issue_comments_count: 1" in result["comments_context"]
 	assert "reviews_count: 0" in result["comments_context"]
 	assert "review_comments_count: 1" in result["comments_context"]
@@ -3617,6 +3850,8 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 	assert len(graphql_call_texts) == 2
 	fallback_call = next(call for call in graphql_call_texts if "issueOrPullRequest(number:" in call)
 	assert "i0: issueOrPullRequest(number: 7)" in fallback_call
+	assert "authorAssociation" in fallback_call
+	assert "author { login }" in fallback_call
 	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
 	assert not any("repos/owner/repo/pulls/42/reviews" in call for call in call_texts)
 
@@ -3846,10 +4081,11 @@ def test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_e
 		},
 	)
 
-	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert "LINKED_ISSUES_JSON" not in result["github_env"]
 	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7]"
+	assert result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
 	assert result["linked_issue_context"] == "No linked issues found."
-	assert "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration failed; skipping" in result["stdout"]
+	assert "exact-file scope metadata remains unresolved" in result["stdout"]
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
 	assert len([call for call in call_texts if call.startswith("api graphql ")]) == 2
 	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
@@ -3902,7 +4138,8 @@ def test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_e
 	assert partial_result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7,8]"
 	assert "Issue #7: Linked fallback issue" in partial_result["linked_issue_context"]
 	assert "Issue #8:" not in partial_result["linked_issue_context"]
-	assert "Linked-issue body-text fallback resolved 1 issue(s) for context" in partial_result["stdout"]
+	assert partial_result["linked_issue_metadata"] == [{"_collection_status": "unresolved"}]
+	assert "exact-file scope metadata remains unresolved" in partial_result["stdout"]
 	assert (
 		"::warning::Linked-issue body-text fallback: batched GraphQL issue hydration returned partial data "
 		"(hydrated 1 of 2 references); continuing with available context."
@@ -5057,8 +5294,15 @@ def test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain() -> 
 	)
 
 
+def _review_pipeline_summary_contract_block() -> str:
+	step_block = _step_block("Append review pipeline iteration summary")
+	assert '### Review Pipeline — Iteration ${iteration_label}' in step_block
+	assert 'review_autofix_step_iteration_summary.sh' in WORKFLOW.read_text(encoding='utf-8')
+	return step_block
+
+
 def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
-	block = _step_block("Append review pipeline iteration summary")
+	block = _review_pipeline_summary_contract_block()
 	assert "### Review Pipeline — Iteration ${iteration_label}" in block
 	assert "REVIEW_AUTOFIX_RUN_SUMMARY_V1" in block
 	assert "printf '\\n### Review Autofix Run Summary\\n\\n' >> \"${GITHUB_STEP_SUMMARY}\"" in block
@@ -5627,7 +5871,7 @@ def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
 
 
 def test_review_pipeline_summary_finalize_reason_marks_partial_runs() -> None:
-	block = _step_block("Append review pipeline iteration summary")
+	block = _review_pipeline_summary_contract_block()
 	assert re.search(
 		r'if resume_state in \{"no_progress", "round_budget_exhausted"\} and not resume_should_continue:\n\s+return resume_state\n\s+if partial_finalize:\n\s+return "partial_finalize"',
 		block,
@@ -5886,7 +6130,7 @@ def test_push_step_exports_edits_pushed_sentinel_for_summary_contract() -> None:
 
 
 def test_review_pipeline_summary_finalize_reason_distinguishes_push_not_allowed() -> None:
-	block = _step_block("Append review pipeline iteration summary")
+	block = _review_pipeline_summary_contract_block()
 	assert re.search(
 		r'if max_iterations_reached and not skip_judge:.*?return "rb_judge_review_blocked"\n\s+if push_needed and not push_allowed:\n\s+return "push_not_allowed"\n\s+if push_needed and not edits_pushed:\n\s+return "push_failed"',
 		block,
@@ -6402,19 +6646,13 @@ def _run_dependency_install_step(
 ) -> dict[str, str]:
 	"""Execute the container's dependency-install body against a synthetic repo.
 
-	`pip` and `python3` are stubbed on PATH so nothing is really installed:
-	the `python3` stub reports pytest importability from `pytest_importable`
+	`pip`, `python3`, and `docker` are stubbed on PATH so nothing is really installed:
+	the isolated Docker probe reports pytest importability from `pytest_importable`
 	and records every invocation.  Returns the step's stdout/stderr under
 	"output" and the recorded stub invocations under "calls".
 	"""
-	workflow_step = _step_run_script("Install project dependencies (best-effort)")
-	assert 'review_untrusted_sandbox.sh" prepare' in workflow_step
-	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
-	script = helper.split('--workdir /source "${image}" /bin/bash -c \'\n', 1)[1].split("\n\t\t' ||", 1)[0]
-	# The isolation helper creates the venv before this body executes; the
-	# unit stub supplies pip/python3 on PATH without installing packages.
-	script = script.replace('python3 -m venv --system-site-packages /source/.review-venv || exit 1', ':')
-	script = script.replace('export PATH=/source/.review-venv/bin:$PATH', ':')
+	workflow_step = _step_run_script("Prepare Python validation dependencies (isolated)")
+	script = "set -euo pipefail\npytest_bootstrap_wanted=false" + workflow_step.split("pytest_bootstrap_wanted=false", 1)[1]
 	with tempfile.TemporaryDirectory(prefix="autofix-dep-install-") as td:
 		root = Path(td)
 		repo = root / "repo"
@@ -6439,11 +6677,17 @@ def _run_dependency_install_step(
 			"esac\n"
 			"exit 0\n" % (0 if pytest_importable else 1)
 		)
-		for stub in ("pip", "python3"):
+		(bin_dir / "docker").write_text(
+			'#!/bin/sh\necho "docker $*" >> "$STUB_CALL_LOG"\n'
+			'case "$*" in *"/review-venv/bin/python -I -c import pytest"*) exit %d ;; esac\nexit 1\n'
+			% (0 if pytest_importable else 1)
+		)
+		for stub in ("docker", "pip", "python3"):
 			(bin_dir / stub).chmod(0o755)
 		env = _git_clean_env()
 		env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
 		env["STUB_CALL_LOG"] = str(log_path)
+		env["REVIEW_PYTHON_DEPENDENCY_VOLUME"] = "fixture-volume"
 		completed = subprocess.run(
 			["bash", str(script_path)],
 			cwd=str(repo),
@@ -6459,20 +6703,38 @@ def _run_dependency_install_step(
 		}
 
 
-def test_dependency_install_bootstraps_pytest_when_pyproject_declares_it() -> None:
-	"""A tool-only pyproject must still leave pytest importable for the editor.
-
-	`pip install -e .` exits 0 on a pyproject.toml that carries no [project]
-	table (setuptools builds an UNKNOWN-0.0.0 package), so the pre-existing
-	`install_failed` guard never fires and pytest silently stays missing.
-	"""
+def test_dependency_install_never_bootstraps_pytest_on_the_privileged_host() -> None:
+	"""Missing pytest must not trigger a PR-controlled host installation."""
 	result = _run_dependency_install_step(
 		{"pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" in result["calls"], result["calls"]
-	assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
-	assert "pytest is not importable" in result["output"], result["output"]
+	assert 'review_untrusted_sandbox.sh" prepare' in _step_run_script("Install project dependencies (best-effort)")
+	assert "python3 -m pip install pytest" not in result["calls"], result["calls"]
+	assert "refusing privileged host installation" in result["output"], result["output"]
+
+
+def test_dependency_install_container_uses_allowlisted_network_proxy() -> None:
+	step = _step_run_script("Prepare Python validation dependencies (isolated)")
+	assert '--network none --read-only --cap-drop ALL' in step
+	assert '/review-venv/bin/python -I -c \'import pytest\'' in step
+	assert 'docker network create --internal "${review_dependency_network}"' in step
+	assert '--network "${review_dependency_network}"' in step
+	assert "HTTP_PROXY=http://dependency-proxy:8080" in step
+	assert 'docker exec "${review_dependency_proxy}" python -c' in step and '|| ! review_dependency_proxy_ready \\' in step
+	assert '${SUPPORT_SCRIPTS_DIR}/package_download_proxy.py:/package_download_proxy.py:ro' in step
+	assert '--volume "${review_dependency_git_mask}:/workspace/.git:ro"' in step
+	assert "trap review_dependency_cleanup EXIT" in step
+	assert "docker rm -f" in step
+	install_step = _step_run_script("Install project dependencies (best-effort)")
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'review_untrusted_sandbox.sh" prepare' in install_step
+	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run' in helper
+	assert '--mount "type=bind,src=${root}/source,dst=/source"' in helper
+	assert '--mount "type=bind,src=${workspace}' not in helper
+	assert "trap 'env -i" in helper
+	assert "GH_TOKEN" not in step
+	assert "GH_PAT" not in step
 
 
 def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
@@ -6480,19 +6742,20 @@ def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
 		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert "python3 -m pip install pytest" not in result["calls"], result["calls"]
 	assert (
 		"::warning::pytest is declared by this repository but could not be installed"
 		in result["output"]
 	), result["output"]
 
 
-def test_dependency_install_bootstraps_pytest_for_nested_conftest() -> None:
+def test_dependency_install_does_not_host_install_pytest_for_nested_conftest() -> None:
 	result = _run_dependency_install_step(
 		{"tests/conftest.py": ""},
 		pytest_importable=False,
 	)
-	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert "python3 -m pip install pytest" not in result["calls"], result["calls"]
+	assert "refusing privileged host installation" in result["output"], result["output"]
 
 
 def test_dependency_install_skips_pytest_bootstrap_when_already_importable() -> None:
@@ -6842,6 +7105,31 @@ def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
 	assert 'FINGERPRINT_CAP_SUPPORT_VERIFIED:-false' in gate_job
 
 
+def test_review_blocked_issue_lineage_rejects_untrusted_pr_data(tmp_path: Path) -> None:
+	pr_path = tmp_path / "pr.json"
+	base = {
+		"number": 42, "state": "open",
+		"user": {"login": "workflow-bot"},
+		"head": {"ref": "ai/issue-71", "repo": {"full_name": "o/r"}},
+		"title": "https://github.com/o/r/issues/72",
+		"body": "Fixes #72",
+	}
+	for data, issue_payload, expected in (
+		(base, '{"number":71}', "71"),
+		({**base, "head": {"ref": "evil/issue-71", "repo": {"full_name": "o/r"}}}, '{"number":71}', ""),
+		({**base, "head": {"ref": "ai/issue-71", "repo": {"full_name": "fork/r"}}}, '{"number":71}', ""),
+		({**base, "user": {"login": "attacker"}}, '{"number":71}', ""),
+		(base, '{"number":71,"pull_request":{}}', ""),
+	):
+		pr_path.write_text(json.dumps(data), encoding="utf-8")
+		run = subprocess.run(
+			["bash", "-c", f'source "{REPO_ROOT}/scripts/label_helpers.sh"; gh_retry() {{ printf "%s\\n" "$MOCK_ISSUE"; }}; verified_review_blocked_issue_from_pr "$PR_FILE" o/r workflow-bot 42'],
+			env={**os.environ, "PR_FILE": str(pr_path), "MOCK_ISSUE": issue_payload},
+			capture_output=True, text=True,
+		)
+		assert run.stdout.strip() == expected
+
+
 def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	job = _job_block("fingerprint-cap-block")
 	assert "needs: gate" in job
@@ -6858,9 +7146,10 @@ def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	already = job.index("AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=")
 	assert already < job.index('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"')
 	assert already < job.index('ensure_label_exists "ai:review-blocked"')
-	# One PR read; linked issues via the strict title/body fallback, else the PR.
+	# One PR read; only verified workflow-owned branch lineage can label an issue.
 	assert job.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
-	assert "extract_repo_scoped_issue_refs_from_text" in job
+	assert "verified_review_blocked_issue_from_pr" in job
+	assert "extract_repo_scoped_issue_refs_from_text" not in job
 	assert 'set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"' in job
 	assert '"repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked"' in job
 	assert "**AI review/autofix stopped: identical failure repeated**" in job
@@ -7027,9 +7316,9 @@ def _step_explicit_env_names(step_name: str) -> list[str]:
 def test_editor_preflight_step_wiring() -> None:
 	preflight = _step_block('"Preflight: Verify required files before reviewer invocation"')
 	editor_env = _step_explicit_env_names("Apply fixes with editor model")
-	assert editor_env == ["GH_TOKEN", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
+	assert editor_env == ["BASH_ENV", "ENV", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
 	editor = _step_block("Apply fixes with editor model")
-	for name in editor_env:
+	for name in ("REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"):
 		line = next(line.strip() for line in editor.splitlines() if line.strip().startswith(f"{name}:"))
 		assert line in preflight, name
 	assert "REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}" in preflight
@@ -7102,6 +7391,7 @@ def test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop() -> None
 	text = _stage_helper_text()
 	start = text.index("for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do")
 	loop = text[start:text.index("\ndone\n", start)]
+	assert 'main_primary_bootstrap_root=".codex-workflow-src"' in text
 	assert 'src=".codex-workflow-src/scripts/${f}"' in loop
 	assert '.codex-workflow-src-main' not in loop
 
@@ -7226,6 +7516,10 @@ def main() -> int:
 	test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 	test_collect_pr_check_runs_helper_top_level_exception_is_fail_open()
 	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
+	test_review_collect_pr_metadata_helper_defaults_linked_issue_metadata_file_from_runtime_dir()
+	test_review_collect_pr_metadata_helper_marks_failed_link_lookup_unresolved()
+	test_review_collect_pr_metadata_helper_accepts_complete_fallback_after_primary_failure()
+	test_review_collect_pr_metadata_helper_fails_closed_on_truncated_primary_page()
 	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
 	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()
 	test_review_collect_pr_metadata_helper_fails_open_on_non_array_batch_input()
@@ -7300,15 +7594,19 @@ def main() -> int:
 	test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trailing_punctuation()
 	test_reviewer_iteration_scope_prepare_path_preserves_hidden_directory_prefixes()
 	test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_helper()
-	test_dependency_install_bootstraps_pytest_when_pyproject_declares_it()
+	test_dependency_install_never_bootstraps_pytest_on_the_privileged_host()
+	test_dependency_install_container_uses_allowlisted_network_proxy()
 	test_dependency_install_warns_when_pytest_bootstrap_does_not_take()
-	test_dependency_install_bootstraps_pytest_for_nested_conftest()
+	test_dependency_install_does_not_host_install_pytest_for_nested_conftest()
 	test_dependency_install_skips_pytest_bootstrap_when_already_importable()
 	test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos()
 	test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha()
 	test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha()
 	test_review_blocked_judge_merges_are_bound_to_judged_head_sha()
 	test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha()
+	test_review_python_dependencies_never_enter_host_path()
+	test_review_commits_and_pushes_use_trusted_git_boundary()
+	test_conflict_resolver_authorizes_mixed_marker_and_fingerprint_hunks()
 	test_identical_failure_fingerprint_cap_gate_wiring()
 	test_identical_failure_fingerprint_cap_block_job_wiring()
 	test_identical_failure_fingerprint_marker_on_every_failure_comment()
@@ -7327,6 +7625,145 @@ def main() -> int:
 	test_review_relay_main_preserves_invoked_mode()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
+
+
+def test_review_python_dependencies_never_enter_host_path() -> None:
+	workflow = WORKFLOW.read_text(encoding="utf-8")
+	install_block = _step_block("Install project dependencies (best-effort)")
+	python_validation_block = _step_block("Prepare Python validation dependencies (isolated)")
+	assert ".ai/review-venv" not in python_validation_block
+	assert 'echo "PATH=' not in python_validation_block
+	assert 'echo "VIRTUAL_ENV=' not in python_validation_block
+	assert 'review_untrusted_sandbox.sh" prepare' in install_block
+	assert "pip install" not in install_block
+	assert '"${review_dependency_volume}:/review-venv"' in python_validation_block
+	validation_block = _step_block("Validate Python changes in secretless container")
+	assert "--network none" in validation_block
+	assert '"${PWD}:/workspace:ro"' in validation_block
+	assert "--env PYTHONPATH=/workspace:/workspace/src" in validation_block
+	assert 'review_python_test_targets=()' in validation_block
+	assert "tests/*.py|test_*.py|*_test.py" in validation_block
+	assert 'skipping repository-wide pytest execution' in validation_block
+	assert '/review-venv/bin/python -m pytest "${review_python_test_targets[@]}"' in validation_block
+	cleanup_block = _step_block("Cleanup temporary artifacts")
+	assert 'docker volume rm -f "${REVIEW_PYTHON_DEPENDENCY_VOLUME}"' in cleanup_block
+
+
+def test_review_commits_and_pushes_use_trusted_git_boundary() -> None:
+	workflow = WORKFLOW.read_text(encoding="utf-8")
+	push_block = _step_block("Push all pending commits")
+	assert "trusted_git_write.sh" in push_block
+	assert "--expected-remote-head \"${INITIAL_HEAD_SHA}\"" in push_block
+	assert "git remote set-url" not in push_block
+	assert 'git push origin "HEAD:${TARGET_BRANCH}"' not in push_block
+	for script_name in ("review_commit_changes.sh", "review_conflict_prepare.sh", "review_conflict_resolve.sh"):
+		script = (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+		assert "trusted_git_write.sh" in script
+
+
+def test_conflict_resolver_authorizes_mixed_marker_and_fingerprint_hunks() -> None:
+	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	python_start = prepare.index("import base64\nimport difflib\nimport json\n")
+	python_body = prepare[python_start:prepare.index("\nPY\n  then", python_start)]
+	with tempfile.TemporaryDirectory(prefix="mixed-resolver-boundary-", dir=Path.home()) as directory:
+		repo = Path(directory) / "repo"
+		repo.mkdir()
+		subprocess.run(["git", "init", "-q", str(repo)], check=True)
+		(repo / "conflict.txt").write_text("prefix\nours\nsuffix\n", encoding="utf-8")
+		(repo / "fingerprint.txt").write_text("keep\nREQUIRED\nend\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+		subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "head"],
+			check=True,
+		)
+		(repo / "conflict.txt").write_text(
+			"prefix\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> origin/main\nsuffix\n",
+			encoding="utf-8",
+		)
+		(repo / "fingerprint.txt").write_text("keep\nFORBIDDEN\nend\n", encoding="utf-8")
+		(repo / "resurrected.txt").write_bytes(b"must be deleted\0\n")
+		subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+		expected_tree = subprocess.check_output(["git", "-C", str(repo), "write-tree"], text=True).strip()
+		conflicted = Path(directory) / "conflicted.txt"
+		touched = Path(directory) / "touched.txt"
+		spans = Path(directory) / "spans.json"
+		clean_manifest = Path(directory) / "clean.tsv"
+		violations = Path(directory) / "violations.json"
+		conflicted.write_text("conflict.txt\nfingerprint.txt\nresurrected.txt\n", encoding="utf-8")
+		touched.write_text("conflict.txt\nfingerprint.txt\nresurrected.txt\n", encoding="utf-8")
+		clean_manifest.write_text("", encoding="utf-8")
+		violations.write_text(
+			json.dumps([
+				{"kind": "must_contain", "path": "fingerprint.txt", "regex": "REQUIRED"},
+				{"kind": "must_not_contain", "path": "fingerprint.txt", "regex": "FORBIDDEN"},
+				{"kind": "must_not_exist", "path": "resurrected.txt", "regex": None},
+			]),
+			encoding="utf-8",
+		)
+		generated = subprocess.run(
+			["python3", "-", str(repo), str(conflicted), str(spans), expected_tree, str(violations)],
+			input=python_body,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert generated.returncode == 0, generated.stderr
+		manifest = json.loads(spans.read_text(encoding="utf-8"))
+		assert manifest["conflict.txt"]["authorization"] == "conflict-markers"
+		assert manifest["fingerprint.txt"]["authorization"] == "fingerprint-hunks"
+		assert manifest["resurrected.txt"]["authorization"] == "fingerprint-delete"
+		(repo / "conflict.txt").write_text("prefix\nresolved\nsuffix\n", encoding="utf-8")
+		(repo / "fingerprint.txt").write_text("keep\nREQUIRED\nend\n", encoding="utf-8")
+		(repo / "resurrected.txt").unlink()
+		command = [
+			"bash", str(REPO_ROOT / "scripts" / "check_resolver_diff.sh"),
+			"--repo-root", str(repo), "--conflicted-set", str(conflicted), "--touched-set", str(touched),
+			"--conflict-spans", str(spans), "--clean-manifest", str(clean_manifest), "--strict-manifests",
+		]
+		artifact_dir = Path(directory) / "validator-artifacts"
+		artifact_dir.mkdir(mode=0o700)
+		validator_env = _git_clean_env()
+		validator_env.update({
+			"RUNNER_TEMP": directory,
+			"POST_AGENT_VALIDATION_SANDBOX": str(REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh"),
+			"POST_AGENT_VALIDATION_RUNTIME_DIR": str(artifact_dir),
+			"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+		})
+		accepted = subprocess.run(command, env=validator_env, capture_output=True, text=True, check=False)
+		assert accepted.returncode == 0, accepted.stderr
+		(repo / "fingerprint.txt").write_text("tampered\nREQUIRED\nend\n", encoding="utf-8")
+		rejected = subprocess.run(command, env=validator_env, capture_output=True, text=True, check=False)
+		assert rejected.returncode == 1
+		assert "outside conflict spans" in rejected.stderr
+
+
+def test_conflict_resolver_requires_span_and_clean_tree_manifests() -> None:
+	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	resolve = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	guard = (REPO_ROOT / "scripts" / "check_resolver_diff.sh").read_text(encoding="utf-8")
+	assert 'CONFLICT_SPANS_FILE="${RUNTIME_DIR}/resolver_conflict_spans.json"' in prepare
+	assert 'CLEAN_MERGE_MANIFEST_FILE="${RUNTIME_DIR}/resolver_clean_manifest.tsv"' in prepare
+	assert "git merge-tree --write-tree HEAD" in prepare
+	assert '--conflict-spans "${CONFLICT_SPANS_FILE}"' in resolve
+	assert '--clean-manifest "${CLEAN_MERGE_MANIFEST_FILE}"' in resolve
+	assert "--strict-manifests" in resolve
+	assert "strict mode requires --conflict-spans and --clean-manifest" in guard
+	assert "--list-violations-json" in prepare
+
+
+def test_review_blocked_writers_require_head_bound_fix_targets_and_spans() -> None:
+	standalone = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	prompt = (REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt").read_text(encoding="utf-8")
+	for writer in (standalone, poller):
+		assert "--build-review-fix-authorization" in writer
+		assert "--validate-review-fix-authorization" in writer
+		assert "fix_targets" in writer
+		assert "--conflict-spans" in writer
+		assert "--strict-manifests" in writer
+	assert 'git add -A -- .' not in poller[poller.index('fix)'):poller.index('merge_with_followup)', poller.index('fix)'))]
+	assert '"fix_targets"' in prompt
+	assert "trusted targets exist, do not choose `fix`." in prompt
 
 
 def _run_model_catalog_backfill(tmp: Path, staged_catalog: dict | str, main_catalog: dict | str | None) -> tuple[subprocess.CompletedProcess[str], Path]:
@@ -7395,6 +7832,11 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
 	stage = _stage_helper_text()
 	assert 'review_untrusted_sandbox.sh" prepare' in step
+	assert 'if [ "${WORKSPACE_PATH+x}" ]; then' in helper
+	assert 'workspace="${WORKSPACE_PATH}"' in helper
+	assert 'workspace="${GITHUB_WORKSPACE:-$PWD}"' in helper
+	assert '"${root}/workspace-identity"' in helper
+	assert 'cmp -s "${root}/workspace-identity"' in helper
 	assert "pip install" not in step and "npm ci" not in step
 	assert "--network none --read-only --cap-drop ALL" in helper
 	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run' in helper
@@ -7417,9 +7859,14 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		root = Path(td)
 		host = root / "host"
+		runner_checkout = root / "runner-checkout"
 		source = root / "isolated" / "source"
 		source.mkdir(parents=True)
 		(host / "scripts").mkdir(parents=True)
+		(runner_checkout / "scripts").mkdir(parents=True)
+		(runner_checkout / "scripts/app.py").write_text("runner checkout\n")
+		subprocess.run(["git", "init", "-q", str(runner_checkout)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=runner_checkout, env=_git_clean_env(), check=True)
 		(host / ".git-credentials").write_text("private-sentinel")
 		(host / "scripts/app.py").write_text("before\n")
 		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
@@ -7450,6 +7897,7 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 			(source / f"scripts/module{module_suffix}").write_text("after\n")
 		assert run("transfer").returncode == 0
 		assert (host / "scripts/app.py").read_text() == "after\n"
+		assert (runner_checkout / "scripts/app.py").read_text() == "runner checkout\n"
 		assert (host / "scripts/new.py").read_text() == "new\n"
 		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
 			assert (host / f"scripts/module{module_suffix}").read_text() == "after\n"
@@ -7463,6 +7911,74 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		(source / "scripts/new.py").symlink_to("/etc/passwd")
 		assert run("transfer").returncode != 0
 		assert (host / "scripts/new.py").read_text() == "new\n"
+		assert (runner_checkout / "scripts/app.py").read_text() == "runner checkout\n"
+
+		# Exercise the shell boundary without Docker: the fake container edits
+		# only its isolated mount; the real snapshot/transfer helper publishes it.
+		fake_bin = root / "bin"
+		fake_bin.mkdir()
+		fake_docker = fake_bin / "docker"
+		fake_docker.write_text(textwrap.dedent("""\
+			#!/usr/bin/env bash
+			if [ "$1" = build ]; then
+				printf 'sha256:%064d\\n' 0
+			elif [ "$1" = run ]; then
+				for arg in "$@"; do
+					case "$arg" in
+						type=bind,src=*,dst=/source)
+							source="${arg#type=bind,src=}"; source="${source%,dst=/source}" ;;
+						esac
+					done
+				case " $* " in
+						*' --network none '*) printf 'sandbox change\\n' > "${source}/scripts/app.py" ;;
+					esac
+			fi
+			"""), encoding="utf-8")
+		fake_docker.chmod(0o755)
+		prompt = root / "prompt.txt"
+		prompt.write_text("edit the file\n")
+		config = root / "config.json"
+		config.write_text(json.dumps({"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}}, "model": "openrouter/openai/gpt-6-sol"}))
+		env_file = root / "github-env"
+		sandbox = REPO_ROOT / "scripts/review_untrusted_sandbox.sh"
+		env = _git_clean_env({
+			"PATH": f"{fake_bin}:{os.environ['PATH']}",
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RUNNER_TEMP": str(root), "RUNTIME_DIR": str(root),
+			"GITHUB_ENV": str(env_file), "GITHUB_WORKSPACE": str(runner_checkout),
+			"WORKSPACE_PATH": str(host), "OPENROUTER_API_KEY": "test-placeholder",
+		})
+		def sandbox_call(action: str, *, sandbox_env: dict[str, str] = env) -> subprocess.CompletedProcess[str]:
+			args = ["bash", str(sandbox), action]
+			if action == "run":
+				args.extend([str(prompt), str(root / "output"), "openai/gpt-6-sol", "high", str(config)])
+			return subprocess.run(args, env=sandbox_env, cwd=runner_checkout, capture_output=True, text=True, check=False)
+		assert sandbox_call("prepare").returncode == 0
+		prepared_root = env_file.read_text().strip().split("=", 1)[1]
+		run_env = {**env, "REVIEW_SANDBOX_ROOT": prepared_root}
+		assert sandbox_call("run", sandbox_env={**run_env, "WORKSPACE_PATH": str(root / "missing")}).returncode != 0
+		assert sandbox_call("run", sandbox_env={**run_env, "WORKSPACE_PATH": ""}).returncode != 0
+		assert sandbox_call("run", sandbox_env={**run_env, "WORKSPACE_PATH": str(runner_checkout)}).returncode != 0
+		redirected = root / "redirected"
+		redirected.symlink_to(runner_checkout, target_is_directory=True)
+		assert sandbox_call("run", sandbox_env={**run_env, "WORKSPACE_PATH": str(redirected)}).returncode != 0
+		assert (host / "scripts/app.py").read_text() == "after\n"
+		assert (runner_checkout / "scripts/app.py").read_text() == "runner checkout\n"
+		assert sandbox_call("run", sandbox_env=run_env).returncode == 0
+		assert (host / "scripts/app.py").read_text() == "sandbox change\n"
+		assert (runner_checkout / "scripts/app.py").read_text() == "runner checkout\n"
+		assert sandbox_call("cleanup", sandbox_env=run_env).returncode == 0
+		assert sandbox_call("prepare", sandbox_env={**env, "WORKSPACE_PATH": str(root / "missing")}).returncode != 0
+
+		# Legacy callers without WORKSPACE_PATH still use GITHUB_WORKSPACE.
+		fallback_env = {key: value for key, value in env.items() if key != "WORKSPACE_PATH"}
+		assert sandbox_call("prepare", sandbox_env=fallback_env).returncode == 0
+		fallback_root = env_file.read_text().splitlines()[-1].split("=", 1)[1]
+		fallback_run_env = {**fallback_env, "REVIEW_SANDBOX_ROOT": fallback_root}
+		assert sandbox_call("run", sandbox_env=fallback_run_env).returncode == 0
+		assert (runner_checkout / "scripts/app.py").read_text() == "sandbox change\n"
+		assert (host / "scripts/app.py").read_text() == "sandbox change\n"
+		assert sandbox_call("cleanup", sandbox_env=fallback_run_env).returncode == 0
 
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:

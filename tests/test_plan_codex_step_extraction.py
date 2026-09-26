@@ -42,9 +42,9 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	step = _workflow_step(workflow_text, "Run Codex planning")
 
-	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in workflow_text
+	assert "for f in gh_helpers.sh run_plan_codex.sh untrusted_process_sandbox.sh model_provider_proxy.py render_prompt.sh" in workflow_text
 	assert "if: env.SKIP_PLAN != 'true'" in step
-	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" not in step
 	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in step
 	assert "TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}" in step
 	assert 'TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"' in PLAN_RUNNER.read_text(encoding="utf-8")
@@ -86,6 +86,20 @@ def _run_runner(
 
 	(scripts_dir / PLAN_RUNNER.name).write_text(
 		PLAN_RUNNER.read_text(encoding="utf-8"), encoding="utf-8"
+	)
+	_write_executable(
+		scripts_dir / "untrusted_process_sandbox.sh",
+		"""#!/usr/bin/env bash
+set -euo pipefail
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+  case "$1" in
+    --role|--workspace|--config-format|--config|--runtime-dir) shift 2 ;;
+    *) exit 64 ;;
+  esac
+done
+[ "${1:-}" = "--" ] && shift
+exec "$@"
+""",
 	)
 	_write_executable(
 		scripts_dir / "render_prompt.sh",
@@ -224,7 +238,7 @@ def test_primary_success_preserves_prompt_order_and_outputs() -> None:
 	assert _read_lines(runtime_dir / "codex-args.log") == [
 		"--ask-for-approval never -c model_verbosity=low "
 		"-c include_apply_patch_tool=true exec --skip-git-repo-check "
-		"--model primary/model --sandbox danger-full-access"
+		"--model primary/model --sandbox read-only"
 	]
 	assert (runtime_dir / "codex_log.txt").is_file()
 	assert _read_lines(runtime_dir / "gh.log") == [
@@ -290,6 +304,17 @@ def test_retry_exhaustion_preserves_failure_exit() -> None:
 	assert _read_lines(runtime_dir / "sleep.log") == ["10", "20"]
 	assert len(_read_lines(runtime_dir / "codex-args.log")) == 3
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == ""
+
+
+def test_planner_checkouts_drop_credentials_and_nested_git_metadata() -> None:
+	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
+	assert workflow_text.count("persist-credentials: false") >= 4
+	cleanup_at = workflow_text.index("      - name: Remove support checkout Git metadata before planning")
+	model_at = workflow_text.index("      - name: Run Codex planning")
+	assert cleanup_at < model_at
+	cleanup_block = workflow_text[cleanup_at:model_at]
+	assert "for support_checkout in .codex-workflow-src .codex-workflow-src-main" in cleanup_block
+	assert 'rm -rf -- "${support_checkout}/.git"' in cleanup_block
 
 
 def main() -> int:

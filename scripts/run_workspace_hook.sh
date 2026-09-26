@@ -106,7 +106,8 @@ run_validate_hook_isolated()
 	}
 	trap 'cleanup_validate_isolation; exit 143' TERM
 	# Snapshot and manifest are separate; the container can only write the copy.
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace_path}" "${isolated_root}" <<'PY'
+	if ! env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u PYTHONPATH -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH \
+		PYTHONDONTWRITEBYTECODE=1 python3 -I - "${workspace_path}" "${isolated_root}" <<'PY'
 import hashlib
 import json
 import os
@@ -205,7 +206,8 @@ PY
 		return "${isolated_status}"
 	fi
 	# Never extract an untrusted tar entry directly onto the host workspace.
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${isolated_root}" <<'PY'
+	if ! env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u PYTHONPATH -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH \
+		PYTHONDONTWRITEBYTECODE=1 python3 -I - "${isolated_root}" <<'PY'
 import os
 from pathlib import Path, PurePosixPath
 import tarfile
@@ -245,7 +247,8 @@ PY
 		return 125
 	fi
 	# Validate the entire returned tree before changing the host workspace.
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace_path}" "${isolated_root}" "${hook}" <<'PY'
+	if ! env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u PYTHONPATH -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH \
+		PYTHONDONTWRITEBYTECODE=1 python3 -I - "${workspace_path}" "${isolated_root}" "${hook}" <<'PY'
 import hashlib
 import json
 import os

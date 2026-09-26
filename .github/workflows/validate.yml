@@ -219,6 +219,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify authorized checkout
+        id: verified_checkout
         env:
           VALIDATE_AUTHORIZED_SHA: ${{ steps.authorized_target.outputs.sha }}
         run: |
@@ -251,6 +252,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: Fetch workflow support files
+        id: support_files
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
@@ -302,6 +304,8 @@ jobs:
               "scripts/memory_injection_patterns.py",
               "scripts/openrouter_prompt_cache.py",
               "scripts/write_codex_config.sh",
+              "scripts/untrusted_process_sandbox.sh",
+              "scripts/model_provider_proxy.py",
               "scripts/codex_helpers.sh",
               "scripts/orchestrate_force_tick.sh",
               "scripts/watchdog_helpers.sh",
@@ -473,7 +477,7 @@ jobs:
           WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true" \
           WORKSPACE_ISSUE_IDENTIFIER="${workspace_identifier}" \
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
-            bash scripts/workspace_init.sh metadata
+            bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/workspace_init.sh" metadata
 
       - name: Restore reusable workspace cache
         if: steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
@@ -506,16 +510,18 @@ jobs:
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
           WORKSPACE_FINGERPRINT="${{ steps.workspace_meta.outputs.workspace_fingerprint }}" \
           WORKSPACE_CACHE_MATCHED_KEY="${workspace_cache_matched_key}" \
-            bash scripts/workspace_init.sh metadata
+            bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/workspace_init.sh" metadata
 
       - name: Finalize workspace contents
+        id: workspace_contents
         run: |
           set -euo pipefail
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
           WORKSPACE_PATH="${{ steps.workspace_state.outputs.workspace_path }}" \
           WORKSPACE_REUSE_ENABLED="${{ steps.workspace_state.outputs.workspace_reuse_enabled }}" \
           WORKSPACE_CACHE_RESTORE_STATE="${{ steps.workspace_state.outputs.workspace_cache_restore_state }}" \
-            bash scripts/workspace_init.sh finalize
+            env -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH -u GITHUB_STEP_SUMMARY \
+              bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/workspace_init.sh" finalize
 
       - name: Activate workspace shell context
         run: |
@@ -722,7 +728,7 @@ jobs:
           git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
           export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
-          source scripts/memory_helpers.sh
+          source "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/memory_helpers.sh"
           memory_bootstrap --ensure-branch --require memory_record_run_event
           unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
 
@@ -755,7 +761,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -f "scripts/render_validation_templates.py" ]; then
+          if [ -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/render_validation_templates.py" ]; then
             : "${RUNTIME_DIR:?Trusted validation runtime is unavailable}"
             mkdir -m 700 "${RUNTIME_DIR}/renderer-empty"
             cd "${RUNTIME_DIR}/renderer-empty"
@@ -862,13 +868,17 @@ jobs:
             exit 0
           fi
 
-          if [ ! -f "scripts/install_semble.sh" ]; then
+          if [ ! -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/install_semble.sh" ]; then
             echo "::notice::scripts/install_semble.sh is unavailable; validation will continue without Semble."
             exit 0
           fi
 
-          if ! bash scripts/install_semble.sh; then
+          if ! (cd "${VALIDATE_TRUSTED_SUPPORT_ROOT}" && env -i HOME="${HOME}" PATH="${PATH}" \
+            PYTHONDONTWRITEBYTECODE=1 bash "${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/install_semble.sh"); then
             echo "::warning::scripts/install_semble.sh exited non-zero; validation will continue without Semble."
+          elif (cd "${VALIDATE_TRUSTED_SUPPORT_ROOT}" && env -i HOME="${HOME}" PATH="${PATH}" \
+            PYTHONDONTWRITEBYTECODE=1 python3 -E -c 'import semble.version'); then
+            echo "SEMBLE_AVAILABLE=true" >> "$GITHUB_ENV"
           fi
 
       - name: Build semble index
@@ -884,7 +894,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f "scripts/semble_helpers.sh" ]; then
+          if [ ! -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/semble_helpers.sh" ]; then
             echo "::notice::scripts/semble_helpers.sh is unavailable; validation prompts will continue without Semble context."
             {
               echo "SEMBLE_INDEX_AVAILABLE=false"
@@ -901,10 +911,20 @@ jobs:
           # handled here (older @stable refs may not yet ship the script);
           # all other errors are handled inside the script (writes
           # SEMBLE_INDEX_AVAILABLE=false on any error and exits 0).
-          if [ -f scripts/build_semble_wrapper.sh ]; then
-            SEMBLE_INDEX_PATH="${RUNTIME_DIR}/.semble-index" \
-            SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" \
-              bash scripts/build_semble_wrapper.sh
+          if [ -f "${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/build_semble_wrapper.sh" ]; then
+            (cd "${VALIDATE_TRUSTED_SUPPORT_ROOT}" && env -i HOME="${HOME}" PATH="${PATH}" \
+              PYTHONDONTWRITEBYTECODE=1 GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+              SEMBLE_INDEX_PATH="${RUNTIME_DIR}/.semble-index" \
+              SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" \
+              bash "${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/build_semble_wrapper.sh")
+            if [ -f "${RUNTIME_DIR}/.semble-index" ] && [ ! -L "${RUNTIME_DIR}/.semble-index" ] &&
+               [ -f "${RUNTIME_DIR}/semble/bin/semble" ] && [ ! -L "${RUNTIME_DIR}/semble/bin/semble" ]; then
+              {
+                echo "SEMBLE_INDEX_AVAILABLE=true"
+                echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
+                echo "SEMBLE_BIN=${RUNTIME_DIR}/semble/bin/semble"
+              } >> "$GITHUB_ENV"
+            fi
           else
             echo "::notice::scripts/build_semble_wrapper.sh is unavailable; validation prompts will continue without Semble context."
             {
@@ -922,12 +942,13 @@ jobs:
 
       - name: Run validation process
         id: validate_run
-        if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'
+        if: steps.verified_checkout.outcome == 'success' && steps.runtime.outcome == 'success' && steps.support_files.outcome == 'success' && steps.workspace_meta.outcome == 'success' && steps.workspace_state.outcome == 'success' && steps.workspace_contents.outcome == 'success' && steps.workspace_after_create_hook.outcome == 'success' && steps.workspace_before_run_hook.outcome == 'success'
         continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           VALIDATION_TIMEOUT: ${{ inputs.validation_timeout }}
@@ -945,7 +966,7 @@ jobs:
           ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
-          bash scripts/validate_process.sh
+          bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/validate_process.sh"
 
       - name: Run workspace after_run hook
         if: always() && steps.validate_run.outcome != 'skipped'
@@ -986,6 +1007,13 @@ jobs:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
         run: |
           set -euo pipefail
+
+          # Setup can fail before it publishes a runtime directory. Status
+          # collection is credential-free and must not touch the checkout.
+          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ]; then
+            RUNTIME_DIR="${RUNNER_TEMP}/validate-status-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            mkdir -p "${RUNTIME_DIR}"
+          fi
 
           STATUS_FILE_PATH="${RUNTIME_DIR}/validation_status.json"
           METADATA_FILE_PATH="${RUNTIME_DIR}/validation_metadata.json"
@@ -1034,14 +1062,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Emit Serena stats
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
         run: |
           set -euo pipefail
 
-          if [ ! -f scripts/serena_stats_emit.py ]; then
+          if [ ! -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/serena_stats_emit.py" ]; then
             echo "::notice::serena_stats_emit.py is unavailable; skipping Serena stats emission."
             exit 0
           fi
@@ -1060,10 +1088,10 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"
+          PYTHONDONTWRITEBYTECODE=1 python3 "${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/serena_stats_emit.py" "${serena_stat_args[@]}"
 
       - name: Record validation candidate
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1076,7 +1104,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          source scripts/memory_helpers.sh
+          source "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/memory_helpers.sh"
           memory_bootstrap --require memory_record_candidate
 
           issue_number="${TRACKING_ISSUE}"
@@ -1142,7 +1170,7 @@ jobs:
             --issue-number "${issue_number}"
 
       - name: Upload validation artifacts
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         uses: actions/upload-artifact@v6
         with:
           name: ai-validation-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1184,7 +1212,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record validation run end
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1197,7 +1225,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          source scripts/memory_helpers.sh
+          source "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/memory_helpers.sh"
           memory_bootstrap --require memory_record_run_event
 
           issue_number="${TRACKING_ISSUE}"
@@ -1245,7 +1273,7 @@ jobs:
             --metadata-json "${metadata_json}"
 
       - name: Force orchestrate poll after validation finalization
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1258,7 +1286,7 @@ jobs:
             exit 0
           fi
 
-          bash scripts/orchestrate_force_tick.sh \
+          bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/orchestrate_force_tick.sh" \
             --repo "${{ github.repository }}" \
             --tracking-issue "${TRACKING_ISSUE}" \
             --issue "${TRACKING_ISSUE}" \
@@ -1267,7 +1295,7 @@ jobs:
             --run-id "${{ github.run_id }}"
 
       - name: Run workspace before_remove hook
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         run: |
           set -euo pipefail
           : "${VALIDATE_HOOK_HELPER:?Trusted validation hook helper is unavailable}"

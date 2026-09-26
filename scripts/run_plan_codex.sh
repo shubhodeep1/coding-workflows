@@ -243,7 +243,7 @@ EOF
 } > "${CODEX_PROMPT_FILE}"
 
 # Update progress comment to signal model invocation is starting
-if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
+if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ] && [ -n "${GH_TOKEN:-}" ]; then
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \
     -X PATCH \
     -f body="<!-- ai:plan-progress -->⏳ Planning in progress — invoking model (${MODEL_EDITOR})…" \
@@ -270,7 +270,21 @@ for attempt in $(seq 1 "${max_attempts}"); do
     attempt_model="${MODEL_EDITOR_FALLBACK}"
     echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
   fi
-  if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+  sandbox_helper="scripts/untrusted_process_sandbox.sh"
+  if [ ! -x "${sandbox_helper}" ]; then
+    echo "::error::Required untrusted-process sandbox is unavailable: ${sandbox_helper}"
+    exit 1
+  fi
+  if "${sandbox_helper}" \
+      --role plan \
+      --workspace "$(pwd)" \
+      --config-format codex \
+      --config "${CODEX_HOME:-${HOME}/.codex}" \
+      --runtime-dir "${RUNTIME_DIR}" \
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
+        --skip-git-repo-check --model "${attempt_model}" --sandbox read-only \
+      < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" \
+      2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
     if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
       echo "Codex planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
@@ -285,7 +299,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     sleep_secs=$((10 * (2 ** (attempt - 1))))
     echo "Retrying in ${sleep_secs}s..."
     # Update progress comment on retry to keep E2E inactivity timer alive
-    if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
+    if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ] && [ -n "${GH_TOKEN:-}" ]; then
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \
         -X PATCH \
         -f body="<!-- ai:plan-progress -->⏳ Planning in progress — model attempt ${attempt} failed, retrying (${attempt}/${max_attempts})…" \

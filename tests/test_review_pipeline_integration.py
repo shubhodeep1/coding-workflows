@@ -94,7 +94,8 @@ def _install_mock_opencode(mock_bin_dir: Path, *, consolidator_fixture: str | No
 	config_writer.write_text(
 		"#!/usr/bin/env bash\nset -euo pipefail\n"
 		"config_path=''\nwhile [ $# -gt 0 ]; do if [ \"$1\" = '--config-path' ]; then config_path=\"$2\"; shift 2; else shift; fi; done\n"
-		"mkdir -p \"$(dirname \"${config_path}\")\"\nprintf '{}\\n' > \"${config_path}\"\n",
+		"mkdir -p \"$(dirname \"${config_path}\")\"\n"
+		"printf '%s\\n' '{\"model\":\"openrouter/openai/gpt-5.6-sol\",\"provider\":{\"openrouter\":{\"models\":{\"openai/gpt-5.6-sol\":{}}}}}' > \"${config_path}\"\n",
 		encoding="utf-8",
 	)
 	config_writer.chmod(0o755)
@@ -124,8 +125,10 @@ def _run_stage_chain(
 			"FLOOR_TAGS_FILE": str(runtime_dir / "floor_tags.txt"),
 			"CONSOLIDATOR_RAW_FILE": str(runtime_dir / "consolidator_raw.txt"),
 			"REVIEW_LEDGER_ENABLED": "1",
-			"REVIEW_LEDGER_PATH": str(runtime_dir / "review_issue_ledger.txt"),
-		},
+				"REVIEW_LEDGER_PATH": str(runtime_dir / "review_issue_ledger.txt"),
+				"OPENROUTER_API_KEY": "synthetic-test-provider-token",
+				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
+			},
 		cwd=workspace_dir,
 	)
 	if mock_bin_dir is not None:

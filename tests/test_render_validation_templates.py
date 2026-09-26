@@ -100,6 +100,131 @@ def _directory_file_map(root: Path) -> dict[str, str]:
 	}
 
 
+def test_manifest_only_check_rejects_invalid_yaml_and_unknown_family(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	for content, expected in (("type: [invalid\n", 1), ("type: unknown\nslots: {}\n", 1),
+	                          (yaml.safe_dump(_manifest_payload("node-runtime")), 0)):
+		manifest.write_text(content, encoding="utf-8")
+		result = subprocess.run(
+			["python3", str(SCRIPT_PATH), "--check-manifest", "--manifest", str(manifest), "--schema", str(SCHEMA_PATH)],
+			capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, cwd=tmp_path,
+		)
+		assert result.returncode == expected
+	assert not (tmp_path / "validation").exists()
+
+
+def test_manifest_rejects_aliases_unknown_fields_and_excessive_nodes(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	base = yaml.safe_dump(_manifest_payload("python-mongo-flask"))
+	for content, expected in (
+		("type: python-mongo-flask\nslots: {project_name: demo, canary_tools: [curl]}\nextra: &a [a, b]\nunused: [*a, *a]\n", "aliases"),
+		("type: python-mongo-flask\nslots: {project_name: demo, canary_tools: [curl]}\nextra: &loop [*loop]\n", "aliases"),
+		("type: python-mongo-flask\nslots: {project_name: demo, canary_tools: [curl]}\nextra: 1\n", "Additional properties"),
+		("type: python-mongo-flask\nslots: {project_name: demo, canary_tools: [curl], unexpected: 1}\n", "Additional properties"),
+		("type: python-mongo-flask\nslots: {project_name: demo, canary_tools: [curl]}\nextra: " + "[" * 70 + "x" + "]" * 70 + "\n", "node or depth limit"),
+		(base + "\nservices:\n" + "  - x\n" * 10001, "node or depth limit"),
+	):
+		manifest.write_text(content, encoding="utf-8")
+		result = _run_renderer(manifest, tmp_path / "validation")
+		assert result.returncode != 0
+		assert expected in result.stderr
+	manifest.write_text(base, encoding="utf-8")
+	assert _run_renderer(manifest, tmp_path / "validation").returncode == 0
+	known_slots = _manifest_payload("python-mongo-flask")
+	known_slots["slots"].update({"health_path": "/health", "mongo_db_name": "app", "mongo_image": "mongo:7", "test_host_header": "app.local.test", "requirements_file": "requirements.txt"})
+	_write_yaml(manifest, known_slots)
+	assert _run_renderer(manifest, tmp_path / "validation").returncode == 0
+
+
+def test_manifest_rejects_host_shell_and_environment_controls(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	for family, mutation in (
+		("python-repo-checks", {"entry": "python3 $(touch marker)"}),
+		("node-runtime", {"entry": 'package.json"; touch marker'}),
+		("node-runtime", {"env_overrides": {"BASH_ENV": "malicious.sh"}}),
+		("node-runtime", {"env_overrides": {"APP_SERVICE": "--privileged"}}),
+		("python-mongo-repo-checks", {"custom_tests": ["echo 'x'\nvolumes: [/run/docker.sock]"]}),
+	):
+		payload = _manifest_payload(family)
+		payload.update(mutation)
+		_write_yaml(manifest, payload)
+		result = _run_renderer(manifest, tmp_path / "validation")
+		assert result.returncode != 0, (family, result.stdout)
+	assert not (tmp_path / "marker").exists()
+
+
+def test_host_health_probe_manifest_restrictions(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	for family in ("node-runtime", "node-hardhat-solidity", "python-mongo-flask", "python-mongo-repo-checks", "python-repo-checks"):
+		for override in ({"CURL_HOME": "/workspace"}, {"curl_ca_bundle": "/workspace/ca.pem"},
+				{"HTTP_PROXY": "http://127.0.0.1:8888"}, {"http_proxy": "http://127.0.0.1:8888"},
+				{"SSL_CERT_FILE": "/workspace/cert"}, {"SSLKEYLOGFILE": "/workspace/tls-keys"}):
+			payload = _manifest_payload(family)
+			payload["env_overrides"] = override
+			_write_yaml(manifest, payload)
+			assert _run_renderer(manifest, tmp_path / "out").returncode != 0, (family, override)
+		for url in ("https://example.invalid/app", "http://169.254.169.254:80/",
+				"http://localhost:8080/health", "http://127.1:8080/", "http://127.0.0.1/",
+				"http://127.0.0.1:0/", "http://127.0.0.1:65536/",
+				"http://127.0.0.1:8080@evil.invalid/", "http://user@127.0.0.1:8080/",
+				"http://127.0.0.1:8080/#frag", "http://127.0.0.1:8080/\n", "http://127.0.0.1:8080\\@evil.invalid/"):
+			payload = _manifest_payload(family)
+			payload["env_overrides"] = {"APP_URL": url}
+			_write_yaml(manifest, payload)
+			result = _run_renderer(manifest, tmp_path / "out")
+			assert result.returncode != 0, (family, url)
+		for url in ("", "http://127.0.0.1:8080/health", "https://127.0.0.1:443/"):
+			payload = _manifest_payload(family)
+			payload["env_overrides"] = {"APP_URL": url}
+			_write_yaml(manifest, payload)
+			result = _run_renderer(manifest, tmp_path / "out")
+			assert result.returncode == 0, (family, url, result.stderr)
+
+
+def test_verify_output_root_refuses_extra_or_modified_test(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	output = tmp_path / "validation"
+	_write_yaml(manifest, _manifest_payload("python-repo-checks"))
+	assert _run_renderer(manifest, output).returncode == 0
+	verify = ["python3", str(SCRIPT_PATH), "--manifest", str(manifest), "--schema", str(SCHEMA_PATH),
+		"--templates-root", str(TEMPLATES_ROOT), "--output-root", str(output), "--verify-output-root"]
+	assert subprocess.run(verify, capture_output=True).returncode == 0
+	(output / "tests" / "custom.sh").write_text("echo injected\n", encoding="utf-8")
+	assert subprocess.run(verify, capture_output=True).returncode != 0
+	(output / "tests" / "custom.sh").unlink()
+	(output / "tests" / "40_repo_checks.sh").write_text("echo injected\n", encoding="utf-8")
+	assert subprocess.run(verify, capture_output=True).returncode != 0
+
+
+def test_renderer_rejects_output_root_symlink(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	_write_yaml(manifest, _manifest_payload("python-repo-checks"))
+	outside = tmp_path / "outside"
+	outside.mkdir()
+	(tmp_path / "validation").symlink_to(outside, target_is_directory=True)
+	result = _run_renderer(manifest, tmp_path / "validation")
+	assert result.returncode != 0
+	assert not list(outside.iterdir())
+	(tmp_path / "validation").unlink()
+	(tmp_path / "validation").mkdir()
+	(tmp_path / "validation/tests").symlink_to(outside, target_is_directory=True)
+	result = _run_renderer(manifest, tmp_path / "validation")
+	assert result.returncode != 0
+	assert not list(outside.iterdir())
+
+
+def test_renderer_rejects_symlinked_template_tree(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	_write_yaml(manifest, _manifest_payload("python-mongo-flask"))
+	root = tmp_path / "templates"
+	(root / "_shared").mkdir(parents=True)
+	(root / "python-mongo-flask").mkdir()
+	(root / "python-mongo-flask" / "malicious.j2").symlink_to(TEMPLATES_ROOT / "_shared" / "tests" / "00_canary.sh.j2")
+	result = _run_renderer(manifest, tmp_path / "out", templates_root=root)
+	assert result.returncode != 0
+	assert "symlink" in result.stderr.lower()
+
+
 def test_renderer_happy_path_creates_expected_files() -> None:
 	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
 		temp_root = Path(td)
@@ -257,7 +382,8 @@ def test_renderer_json_pointer_escapes_special_characters() -> None:
 		result = _run_renderer(manifest_path, output_root)
 		assert result.returncode != 0
 		assert "Manifest validation failed" in result.stderr
-		assert "bad~1key~0name" in result.stderr
+		assert "/slots: Additional properties are not allowed" in result.stderr
+		assert "bad/key~name" in result.stderr
 
 
 def test_renderer_fails_invalid_schema_with_actionable_error() -> None:

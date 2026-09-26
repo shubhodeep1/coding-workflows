@@ -52,6 +52,32 @@ trap on_step_exit EXIT
 exec 3>&2
 exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
+IMPLEMENT_VALIDATOR_OUTPUT_DIR="${POST_AGENT_ARTIFACT_DIR:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}}/validator-output-implement"
+mkdir -p "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}"
+
+run_implement_validator_python() {
+  local sandbox_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh"
+  local validator_entry="${1:-}"
+  if [ -n "${validator_entry}" ] && [[ "${validator_entry}" != -* ]]; then
+    if [ -f "${validator_entry}" ]; then
+      shift
+      set -- "$(cd "$(dirname "${validator_entry}")" && pwd -P)/$(basename "${validator_entry}")" "$@"
+    elif [ -f "scripts/$(basename "${validator_entry}")" ]; then
+      shift
+      set -- "${PWD}/scripts/$(basename "${validator_entry}")" "$@"
+    fi
+  fi
+  if [ -x "${sandbox_helper}" ]; then
+    bash "${sandbox_helper}" \
+      --role validator --workspace "${PWD}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+      --writable-output-dir "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}" \
+      -- /usr/bin/python3 -I -S "$@"
+    return $?
+  fi
+  echo "::error::Implement validator sandbox is unavailable." >&2
+  return 1
+}
+
 # Remove workflow-generated/fetched artifacts BEFORE checking for
 # changes so they don't cause false-positive "file changes" detection.
 # Restore pre_assembled_static.txt from HEAD when the consumer tracks it;
@@ -470,33 +496,61 @@ fi
 # Mirror of the destructive-commit guard above, for scope drift:
 # reject when the staged change set includes paths the issue's
 # files_touched allowlist does not cover. Operates on the same real
-# index that was just staged for the destructive guard. Fails OPEN —
-# no allowlist, master toggle off, or a missing helper all
-# log-and-allow. On a violation the commit is neither created nor
+# index that was just staged for the destructive guard. Ordinary issues fail
+# open without an allowlist or when the master toggle is off. Generated
+# security advisories fail closed on helper/metadata problems and cannot use
+# either scope bypass. On a violation the commit is neither created nor
 # pushed; the "Destructive-commit guard — label + alert on rejection"
 # step labels the issue ai:scope-blocked and alerts.
-if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+generated_security_advisory="${GENERATED_SECURITY_ADVISORY:-false}"
+if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${generated_security_advisory}" != "true" ]; then
   echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
 else
   scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
   if [ -n "${scope_staged}" ]; then
-    scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
-    scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+    scope_staged_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-staged.XXXXXX")"
+    scope_allowlist_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-allowlist.XXXXXX")"
     printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
     scope_violations=""
     scope_rc=0
-    if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+    scope_guard_path="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"
+    if [ "${generated_security_advisory}" = "true" ]; then
+      issue_body_actual_sha256="$(sha256sum "${ISSUE_BODY_FILE:-}" 2>/dev/null | awk '{print $1}')"
+      scope_guard_actual_sha256="$(sha256sum "${scope_guard_path}" 2>/dev/null | awk '{print $1}')"
+      if ! [[ "${ISSUE_BODY_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+        || ! [[ "${SCOPE_GUARD_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+        || [ "${issue_body_actual_sha256}" != "${ISSUE_BODY_EXPECTED_SHA256}" ] \
+        || [ "${scope_guard_actual_sha256}" != "${SCOPE_GUARD_EXPECTED_SHA256}" ]; then
+        scope_rc=30
+      fi
+    fi
+    if [ "${scope_rc}" -eq 0 ] && [ -f "${scope_guard_path}" ]; then
+      scope_validator_cmd=(
+        bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/untrusted_process_sandbox.sh"
+        --role validator --workspace "${WORKSPACE_PATH:-${PWD}}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}"
+        --writable-output-dir "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}"
+        -- /usr/bin/python3 -I -S
+      )
       set +e
-      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+      scope_violations="$("${scope_validator_cmd[@]}" "${scope_guard_path}" \
         --issue-body-file "${ISSUE_BODY_FILE:-}" \
         --staged-file "${scope_staged_file}" \
-        --allowlist-out "${scope_allowlist_file}")"
+        --allowlist-out "${scope_allowlist_file}" \
+        --issue-author-association "${ISSUE_AUTHOR_ASSOCIATION:-}" \
+        --issue-author-login "${ISSUE_AUTHOR_LOGIN:-}" \
+        --generated-advisory-mode auto)"
       scope_rc=$?
       set -e
-    else
-      scope_rc=127
+    elif [ "${scope_rc}" -eq 0 ]; then
+      if [ "${generated_security_advisory}" = "true" ]; then scope_rc=30; else scope_rc=127; fi
     fi
     rm -f "${scope_staged_file}"
+    if [ "${generated_security_advisory}" = "true" ]; then
+      case "${scope_rc}" in
+        0|20|30) ;;
+        *) scope_rc=30 ;;
+      esac
+    fi
     case "${scope_rc}" in
       0)
         echo "files_touched scope guard: all staged paths fall within the issue allowlist."
@@ -507,7 +561,7 @@ else
       20)
         scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
         scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
-        if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+        if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ] && [ "${generated_security_advisory}" != "true" ]; then
           echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
           printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
         else
@@ -526,6 +580,21 @@ else
           rm -f "${scope_allowlist_file}"
           exit 1
         fi
+        ;;
+      30)
+        echo "::error::Refusing to commit: generated security advisory metadata, authorship, or exact path scope is invalid."
+        {
+          echo "scope_violation_blocked=generated-security-advisory"
+          echo "scope_violation_count=1"
+          echo 'scope_violation_files<<__SVF_EOF__'
+          echo '<generated-security-advisory-metadata>'
+          echo '__SVF_EOF__'
+          echo 'scope_violation_allowlist<<__SVA_EOF__'
+          sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true
+          echo '__SVA_EOF__'
+        } >> "$GITHUB_OUTPUT"
+        rm -f "${scope_allowlist_file}"
+        exit 1
         ;;
       *)
         echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
@@ -603,7 +672,8 @@ if [ -z "$(git diff --cached --name-only)" ]; then
   echo "did_commit=false" >> "$GITHUB_OUTPUT"
   exit 0
 fi
-git commit -m "AI implementation for issue #${ISSUE_NUMBER}"
+bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/trusted_git_write.sh" \
+  commit --repo . --message "AI implementation for issue #${ISSUE_NUMBER}"
 
 # >>> ai:scope label post-commit verifier >>>
 # Optional defense-in-depth for per-issue scope-lock labels. When enabled and
@@ -615,16 +685,16 @@ git commit -m "AI implementation for issue #${ISSUE_NUMBER}"
 if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ] && [ -n "${ISSUE_SCOPE_LOCK_GLOB:-}" ]; then
   scope_committed="$(git diff-tree --no-commit-id --name-only --diff-filter=ACMRD -r --root --no-renames HEAD || true)"
   if [ -n "${scope_committed}" ]; then
-    scope_committed_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-committed.XXXXXX")"
-    scope_glob_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-glob.XXXXXX")"
-    scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+    scope_committed_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-committed.XXXXXX")"
+    scope_glob_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-glob.XXXXXX")"
+    scope_allowlist_file="$(mktemp "${IMPLEMENT_VALIDATOR_OUTPUT_DIR}/implement-scope-allowlist.XXXXXX")"
     printf '%s\n' "${scope_committed}" > "${scope_committed_file}"
     printf '%s\n' "${ISSUE_SCOPE_LOCK_GLOB}" > "${scope_glob_file}"
     scope_violations=""
     scope_rc=0
     if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
       set +e
-      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+      scope_violations="$(run_implement_validator_python "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
         --staged-file "${scope_committed_file}" \
         --allowlist-file "${scope_glob_file}" \
         --allowlist-out "${scope_allowlist_file}")"

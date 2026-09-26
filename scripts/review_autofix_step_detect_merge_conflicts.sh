@@ -37,7 +37,7 @@ git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main
 # commit step (caller repos delete fetched scripts before committing)
 # or wiped by git clean -ffdx above.
 # Re-stage any missing scripts from checked-out support source.
-for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh cost_audit.py codex_helpers.sh codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh watchdog_helpers.sh check_external_branch_advance.sh workspace_safety_check.sh; do
+for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh cost_audit.py codex_helpers.sh codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh post_agent_workspace_guard.py summarize_reviewer_consensus.sh watchdog_helpers.sh check_external_branch_advance.sh workspace_safety_check.sh; do
   if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
     mkdir -p "${SUPPORT_SCRIPTS_DIR}"
     src="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/${f}"

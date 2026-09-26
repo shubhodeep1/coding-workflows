@@ -63,6 +63,8 @@ def _write_exec(path: Path) -> None:
 def _run_discover_tests(workspace: Path, *, include_synthesised: str | None) -> subprocess.CompletedProcess[str]:
 	function_text = _extract_shell_function(VALIDATE_DRIVER, "discover_tests")
 	env = os.environ.copy()
+	for variable in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(variable, None)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["TEST_DIR"] = "validation/tests"
 	env["HELPER_PATTERN"] = "_*.sh"
@@ -149,6 +151,96 @@ def test_discover_tests_excludes_only_synthesised_scripts_when_disabled() -> Non
 		]
 		assert "validation/tests/_helper.sh" not in result.stdout
 		assert "validation/tests/synth_round_4_issue.sh" not in result.stdout
+
+
+def _run_driver_with_stubbed_probe(workspace: Path, url: str | None, ports: str, *, via_env_file: bool = False) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+	bin_dir = workspace / "bin"
+	bin_dir.mkdir(parents=True)
+	compose_file = workspace / "validation" / "docker-compose.test.yml"
+	compose_file.parent.mkdir(parents=True)
+	compose_file.write_text("services: {app: {image: busybox}}\n", encoding="utf-8")
+	test_file = workspace / "validation" / "tests" / "00_canary.sh"
+	_write_exec(test_file)
+	with test_file.open("a", encoding="utf-8") as handle:
+		handle.write("printf '1..1\\nok 1 - canary\\n'\n")
+	docker_stub = bin_dir / "docker"
+	docker_stub.write_text('''#!/usr/bin/env bash
+if [ "$1" = "inspect" ]; then
+    case "$3" in
+        '{{json .NetworkSettings.Ports}}') printf '%s\\n' "${DOCKER_PORTS}" ;;
+        '{{.State.Running}}') echo true ;;
+        '{{.State.Status}}') echo running ;;
+        *) echo healthy ;;
+    esac
+elif [[ "$*" == *"ps -q"* ]]; then
+    echo selected-app-container
+fi
+''', encoding="utf-8")
+	docker_stub.chmod(0o755)
+	curl_stub = bin_dir / "curl"
+	curl_stub.write_text('''#!/usr/bin/env bash
+printf '%s\\n' "$@" >> "${CURL_LOG}"
+printf 'proxy=%s curl_home=%s\\n' "${HTTP_PROXY-unset}" "${CURL_HOME-unset}" > "${CURL_ENV_LOG}"
+''', encoding="utf-8")
+	curl_stub.chmod(0o755)
+	curl_log = workspace / "curl_calls"
+	curl_env_log = workspace / "curl_env"
+	env_file = workspace / "validation" / "validate.env"
+	if via_env_file and url is not None:
+		env_file.write_text(f"APP_URL={url}\n", encoding="utf-8")
+	env = os.environ.copy()
+	for variable in ("APP_URL", "BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(variable, None)
+	env.update({
+		"PATH": f"{bin_dir}:{env['PATH']}", "VALIDATE_ENV_FILE": str(env_file),
+		"COMPOSE_FILE": str(compose_file), "DOCKER_PORTS": ports,
+		"CURL_LOG": str(curl_log), "CURL_ENV_LOG": str(curl_env_log),
+		"CURL_HOME": str(workspace), "HTTP_PROXY": "http://proxy.invalid:1234",
+		"HEALTH_TIMEOUT": "2", "HEALTH_POLL_INTERVAL": "1", "PYTHONDONTWRITEBYTECODE": "1",
+	})
+	if url is not None and not via_env_file:
+		env["APP_URL"] = url
+	result = subprocess.run(["bash", str(VALIDATE_DRIVER)], cwd=workspace, env=env,
+		capture_output=True, text=True, timeout=15)
+	return result, curl_log, curl_env_log
+
+
+def test_driver_refuses_untrusted_urls_and_unverified_bindings(tmp_path: Path) -> None:
+	loopback_ports = '{"8000/tcp":[{"HostIp":"127.0.0.1","HostPort":"8080"}]}'
+	for index, url in enumerate(("http://169.254.169.254:80/", "http://localhost:8080/",
+			"http://127.0.0.1:8080@evil.invalid/", "http://127.0.0.1:8080/#frag",
+			"http://127.0.0.1:8080/\n")):
+		result, curl_log, _ = _run_driver_with_stubbed_probe(tmp_path / f"url{index}", url, loopback_ports,
+			via_env_file=(index == 0))
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "preflight_app_url" in result.stdout
+		assert not curl_log.exists()
+	for index, ports in enumerate(("", "null", "{", '{"8000/tcp":[{"HostIp":"0.0.0.0","HostPort":"8080"}]}',
+			'{"8000/tcp":[{"HostIp":"127.0.0.1","HostPort":"8081"}]}',
+			'{"8000/udp":[{"HostIp":"127.0.0.1","HostPort":"8080"}]}')):
+		result, curl_log, _ = _run_driver_with_stubbed_probe(tmp_path / f"port{index}",
+			"http://127.0.0.1:8080/health", ports)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "preflight_app_url_binding" in result.stdout
+		assert not curl_log.exists()
+
+
+def test_driver_probes_only_selected_loopback_binding_without_curl_config(tmp_path: Path) -> None:
+	ports = '{"8000/tcp":[{"HostIp":"127.0.0.1","HostPort":"8080"}]}'
+	result, curl_log, curl_env_log = _run_driver_with_stubbed_probe(tmp_path / "valid",
+		"http://127.0.0.1:8080/health", ports, via_env_file=True)
+	assert result.returncode == 0, result.stdout + result.stderr
+	args = curl_log.read_text(encoding="utf-8").splitlines()
+	assert args[0] == "-q"
+	assert args[args.index("--proto") + 1] == "=http,https"
+	assert args[args.index("--noproxy") + 1] == "*"
+	assert "--location" not in args and "-L" not in args
+	assert args[-1] == "http://127.0.0.1:8080/health"
+	assert curl_env_log.read_text(encoding="utf-8").strip() == "proxy=unset curl_home=unset"
+	for index, url in enumerate((None, "")):
+		result, curl_log, _ = _run_driver_with_stubbed_probe(tmp_path / f"disabled{index}", url, "")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert not curl_log.exists()
 
 
 def main() -> int:
