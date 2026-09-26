@@ -174,6 +174,37 @@ def test_gate_queues_younger_overlapping_pr(tmp_path: Path) -> None:
 	assert "pulls/4077/files" not in log_text
 
 
+def test_gate_bypasses_queue_for_smoke_test_pr(tmp_path: Path) -> None:
+	# Issue #4542: a release smoke-test PR that overlaps an older open
+	# ai/issue-* PR on the same canary path was queued like any other PR,
+	# soft-exited via AUTOFIX_STALE_BASE_SKIP, and left the canary bait
+	# marker in place — which the release smoke check then reported as
+	# "editor failed to remove it". IS_SMOKE_TEST (exported earlier in
+	# review_autofix.yml's "Detect smoke test and tune LLM settings" step)
+	# must let the smoke PR proceed unqueued while an otherwise identical
+	# ordinary PR still queues normally.
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4540, "ai/issue-4539"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["tests/e2e_smoke_canary.txt"])
+	_write_files(fixtures, 4540, ["tests/e2e_smoke_canary.txt"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4540", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4539",
+		IS_SMOKE_TEST="true",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_GATE pr=4540 base=main result=smoke_test_bypass action=continue" in result.stdout
+	assert "AUTOFIX_MERGE_QUEUED" not in env_out
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert "labels[]=ai:merge-queued" not in log_text
+	assert "POST repos/acme/consumer/issues/4540/comments" not in log_text
+	# The smoke bypass short-circuits before any file-overlap lookup runs.
+	assert "pulls" not in log_text
+
+
 def test_gate_continues_when_older_pr_is_disjoint_or_younger(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	(fixtures / "pulls.json").write_text(json.dumps([
