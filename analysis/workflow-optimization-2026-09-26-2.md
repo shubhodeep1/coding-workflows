@@ -194,3 +194,46 @@ No `TODO`, `FIXME`, or `HACK` markers were found in the scoped workflow and scri
 | Code modularization | Three Semble callers, two prompt wrappers, `review_autofix.yml`, shared helper/staging files; tests | Medium |
 | Expression size reduction | `implement.yml`, a trusted extracted script, support-script registry; tests | Medium |
 | Medium/Low fixes | Answer/retro comment paths, sweep fork path, auto-merge helper, poller diagnostics, release workflow; tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-26)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is verified for direct implementation; `NEEDS_VERIFICATION` requires the stated checks; `RISKY_SKIP` must not be auto-implemented because a protected API behavior may change. Counts below are source-path estimates, not measured requests.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — RISKY_SKIP.** **Calls:** `.github/workflows/clarify.yml:581` and `.github/workflows/clarify.yml:583-598`. **Current → proposed:** two GETs → one on the successful, semantic-cache-enabled path; retain the first GET as fallback if the full-history fetch fails. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`. **Evidence:** both reads request ascending, creation-sorted comments; the first retains 50 for the prompt, while the second paginates at 100 per page for thread history. **Proposed fix:** in “Fetch issue comments,” derive the bounded `ISSUE_COMMENTS_FILE` and `THREAD_HISTORY_FILE` from one validated full-history response when semantic caching is enabled; preserve the cache-bypass sentinel and legacy prompt fetch on failure. **Safety rationale:** the second call uses `--paginate`, and replacing the first read can change page-boundary and failure behavior. **Downstream signal:** Do not auto-implement; manually test 0, 50, 51, and more than 100 comments, a failed later page, and concurrent new comments before considering this change.
+
+- **MERGE-002 — RISKY_SKIP.** **Calls:** `scripts/orchestrate_poll_process.sh:13935` and `scripts/orchestrate_poll_process.sh:13936`, in `execute_stall_recovery_action`. **Current → proposed:** two GETs → one on the successful `close_and_reissue` path. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_num}`. **Evidence:** consecutive reads select `.title` and `.body` from the same issue before constructing the replacement. **Proposed fix:** capture one issue JSON snapshot in `execute_stall_recovery_action` and extract both fields, retaining targeted legacy lookups if the snapshot cannot be confirmed. **Safety rationale:** this is an explicit stall-recovery path, and the current independent reads have different partial-failure behavior. **Downstream signal:** Do not auto-implement; manually review concurrent issue edits and test failure of either field lookup before changing recovery behavior.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings. The inspected discarded GET bodies served existence, freshness, or permission decisions; they were not proven dead.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — The calls are inside `orchestrate_poll_process.sh`; review final-merge race and independent-failure semantics before combining them.
+- API-002: RISKY_SKIP — The marker lookup paginates; review page completeness and selected-comment behavior manually.
+- API-003: RISKY_SKIP — The proposed change alters a retry/backoff path, including its failure diagnostics.
+- BATCH-001: RISKY_SKIP — Blocker-state reads are in the poller; preserve unknown-state deferral and per-item fallback.
+- BATCH-002: RISKY_SKIP — The existing changed-file fetch paginates and has a per-run cache contract.
+- BATCH-003: NEEDS_VERIFICATION — Verify trusted-author filtering, comment ordering, and incomplete-connection fallback before substituting GraphQL.
+
+### Summary Counts
+
+Counts include the two net-new findings and six Section 2 cross-references.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | BATCH-003 |
+| RISKY_SKIP | 7 | MERGE-001, MERGE-002, API-001, API-002, API-003, BATCH-001, BATCH-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
