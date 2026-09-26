@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=error; raw_status=codex_failure; summary=Validation process did not produce validation_status.json.; failure_summary=Missing status artifact. Check validate_process.sh output and uploaded artifacts.",
+  "fingerprint": "8763bedb03ee6e60dabb726bce0ec9e535788ebcf77c499e278bdc82d15ae0f3",
+  "lineage": {
+    "issue_number": 3965,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36235618528",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36235618528",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260926102700_db5d429848",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3965,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36235618528"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation process did not produce validation_status.json.",
+  "timestamps": {
+    "created_at": "2026-09-26T10:27:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
