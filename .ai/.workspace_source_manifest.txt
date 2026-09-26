@@ -10,6 +10,7 @@
 .claude/commands/apply-url.md
 .claude/commands/audit-plans.md
 .claude/commands/claude-issue-dispatch.md
+.claude/commands/claude-issue-pickup.md
 .claude/commands/deploy-activate.md
 .claude/commands/implement-issue-claude.md
 .claude/commands/implement-plan-ai.md
@@ -46,6 +47,7 @@
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
 .github/workflows/claude-issue-intake.yml
+.github/workflows/claude-issue-queue-watchdog.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml
@@ -145,6 +147,7 @@ analysis/workflow-optimization-2026-09-23.md
 analysis/workflow-optimization-2026-09-24-2.md
 analysis/workflow-optimization-2026-09-24.md
 analysis/workflow-optimization-2026-09-25.md
+analysis/workflow-optimization-2026-09-26-2.md
 analysis/workflow-optimization-2026-09-26.md
 changelog.d/.gitkeep
 changelog.d/3576-security-audit-uncapped-followups.md
@@ -180,10 +183,15 @@ changelog.d/4470-trusted-security-audit-exclusions.md
 changelog.d/4472-resolver-symlink-touched-set.md
 changelog.d/4476-pipeline-failure-guards.md
 changelog.d/4481-validation-renderer-dependency-preflight.md
+changelog.d/4507-wire-overlay-core-test-into-ci.md
+changelog.d/4512-validate-renderer-import-isolation.md
+changelog.d/4525-claude-issue-fail-closed.md
+changelog.d/4548-checker-blocked-issue-wait.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
 changelog.d/implement-plan-failed-run-blocks.md
+changelog.d/implement-plan-one-checker-per-project.md
 changelog.d/noop-sweep-fingerprint-cap-skip.md
 changelog.d/post-push-pr-status-check-in.md
 changelog.d/review-autofix-workflow-size-limit.md
@@ -404,6 +412,7 @@ scripts/clarify_openrouter_broker.py
 scripts/clarify_sandbox/Dockerfile
 scripts/claude_issue_handoff.sh
 scripts/claude_issue_intake.sh
+scripts/claude_issue_queue_watchdog.sh
 scripts/claude_issue_route.py
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
