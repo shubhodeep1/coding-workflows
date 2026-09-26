@@ -33,6 +33,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"orchestrate.yml": "Project bootstrap workflow has no integration-branch metadata at checkout time.",
 	"orchestrate_poll.yml": "Poller handles multiple tracking issues per run; a single checkout integration ref is undefined.",
 	"review_autofix.yml": "PR review/autofix operates on PR refs rather than orchestrator integration metadata.",
+	"review_autofix_sweep.yml": "The claude-pr-catch-all job checks out the default branch for scripts/claude_pr_sweep.py and the consumer registry; it reads PR state over the API and never checks out an issue or integration ref.",
 	"security-audit.yml": "Scheduled/manual default-branch security audit is a source-repo maintenance workflow, not an orchestrator issue-phase checkout path.",
 	"sync_ai_labels.yml": "Repository label-sync maintenance manages ai:* labels and does not execute orchestrator issue phases.",
 	"test-and-mark-stable.yml": "Release test workflow checks specific refs/tags and is outside orchestrator phase execution.",
