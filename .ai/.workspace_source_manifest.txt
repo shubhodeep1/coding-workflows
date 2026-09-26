@@ -24,6 +24,7 @@
 .claude/hooks/pr_watch_guard.py
 .claude/hooks/session-start.sh
 .claude/scripts/check_in_status.py
+.claude/scripts/stale_routines.py
 .claude/settings.json
 .gitattributes
 .github/ISSUE_TEMPLATE/structured-task.yml
@@ -169,6 +170,8 @@ changelog.d/4438-implement-plan-claude-fixer-project-branch.md
 changelog.d/4439-audit-plans-implement-plan-claude-gate.md
 changelog.d/4440-implement-plan-auto-decisions.md
 changelog.d/4443-claude-issue-implementer.md
+changelog.d/4447-resolver-scope-retry.md
+changelog.d/4450-check-in-hand-back-to-pushing-session.md
 changelog.d/4451-pin-security-audit-support.md
 changelog.d/4452-validate-target-ref-sandbox.md
 changelog.d/4453-claude-fixer-verdict-verification.md
@@ -209,6 +212,7 @@ docs/completed/orchestrator-validation-resilience-plan.md
 docs/completed/sub-issue-test-runs-spike.md
 docs/completed/symphony-inspired-improvements-plan.md
 docs/deploy-activation/README.md
+docs/deploy-activation/pr-4443.md
 docs/gsd-future-improvements.md
 docs/hardenaireviewprompt.md
 docs/how-it-works.md
@@ -838,6 +842,7 @@ tests/test_session_start_extract_repo_slug.py
 tests/test_setup_serena_toml.py
 tests/test_slop_scan_local.py
 tests/test_smoke_alert_silencing_contract.py
+tests/test_stale_routines.py
 tests/test_stall_freshness_branch_fallback.py
 tests/test_stall_loop_and_churn_fixes.py
 tests/test_stall_recovery_pr_lookup.py
@@ -933,6 +938,7 @@ workflow-templates/.claude/hooks/pr_merge_status_guard.py
 workflow-templates/.claude/hooks/pr_watch_guard.py
 workflow-templates/.claude/hooks/session-start.sh
 workflow-templates/.claude/scripts/check_in_status.py
+workflow-templates/.claude/scripts/stale_routines.py
 workflow-templates/.claude/settings.json
 workflow-templates/CLAUDE.md
 workflow-templates/ai-cancel-on-pr-close.yml
