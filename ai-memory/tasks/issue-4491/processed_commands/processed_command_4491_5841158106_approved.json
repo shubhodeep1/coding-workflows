@@ -5,13 +5,34 @@
   "entry_id": "processed_command_4491_5841158106_approved",
   "issue_number": 4491,
   "metadata": {
+    "branch": "ai/issue-4491",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      ".github/workflows/validate.yml",
+      "changelog.d/4491-validation-fixer-review-isolation.md",
+      "docs/how-it-works.md",
+      "scripts/review_autofix_step_claude_fixer_handoff.sh",
+      "scripts/self_heal_validation.sh",
+      "scripts/stage_workflow_support.sh",
+      "scripts/untrusted_process_sandbox.sh",
+      "scripts/validate_process.sh",
+      "tests/test_agent_process_isolation.py",
+      "tests/test_review_autofix_claude_fixer_mode.py",
+      "tests/test_validate_target_ref_input.py"
+    ],
+    "issue_number": 4491,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4491",
+    "pr_number": 4492,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4492",
+    "run_attempt": "1",
+    "run_id": "36202088601",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36202088601"
   },
   "run_attempt": 1,
   "run_id": "36202088601",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-25T23:45:50Z",
+  "status": "completed",
+  "timestamp": "2026-09-26T00:02:18Z",
   "workflow": "implement"
 }
