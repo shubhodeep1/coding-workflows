@@ -554,10 +554,14 @@ def entries():
 
 
 def merge_state():
-    state = []
-    for name in ("index", "MERGE_HEAD"):
-        path = Path(os.fsdecode(git("rev-parse", "--git-path", name).strip()))
-        state.append(hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None)
+    # Compare staged entries (mode, object id, stage, path, and the -v tag
+    # for assume-unchanged/skip-worktree/unmerged), never the raw index file:
+    # read-only Git commands such as `git status` rewrite index stat metadata
+    # without changing any entry (issue #4552). ls-files never writes the
+    # index, so measuring it cannot change it. MERGE_HEAD stays byte-exact.
+    state = [hashlib.sha256(git("ls-files", "-s", "-v", "-z")).hexdigest()]
+    path = Path(os.fsdecode(git("rev-parse", "--git-path", "MERGE_HEAD").strip()))
+    state.append(hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None)
     return state
 
 
@@ -632,6 +636,10 @@ try:
 except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
     # Do not echo paths or untrusted exception text into workflow commands.
     print(f"::error::Resolver scope {action} failed closed ({type(exc).__name__}).", file=sys.stderr)
+    if type(exc) is ValueError:
+        # Every ValueError raised above carries a fixed literal message, so
+        # it is safe to log; other exception text may carry paths.
+        print(f"Resolver scope {action} failure reason: {exc}", file=sys.stderr)
     sys.exit(2)
 PY
 }

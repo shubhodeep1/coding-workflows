@@ -50,6 +50,7 @@ orchestrator/project-2840 stack, plus run 25629086684 / PR #2865.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import os
@@ -714,6 +715,103 @@ def test_scope_feedback_is_available_for_generic_resolver() -> None:
 		assert retry.read_text().endswith(prompt.read_text())
 
 
+def _conflicted_merge_scope_fixture(tmp: Path) -> tuple[Path, dict[str, str]]:
+	"""A real in-progress merge with an unmerged conflict.txt (stages 1/2/3)."""
+	repo = tmp / "repo"
+	repo.mkdir()
+	git = ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid"]
+	subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+	(repo / "conflict.txt").write_text("base\n", encoding="utf-8")
+	(repo / "outside.txt").write_text("base\n", encoding="utf-8")
+	subprocess.run([*git, "add", "--", "conflict.txt", "outside.txt"], check=True)
+	subprocess.run([*git, "commit", "-qm", "base"], check=True)
+	subprocess.run([*git, "checkout", "-qb", "side"], check=True)
+	(repo / "conflict.txt").write_text("side\n", encoding="utf-8")
+	subprocess.run([*git, "commit", "-qam", "side"], check=True)
+	subprocess.run([*git, "checkout", "-q", "main"], check=True)
+	(repo / "conflict.txt").write_text("main\n", encoding="utf-8")
+	subprocess.run([*git, "commit", "-qam", "main"], check=True)
+	merge = subprocess.run([*git, "merge", "side"], capture_output=True, text=True, check=False)
+	assert merge.returncode != 0, merge.stdout + merge.stderr
+	allowed = tmp / "conflicted_paths.txt"
+	allowed.write_text("conflict.txt\n", encoding="utf-8")
+	return repo, {
+		"RESOLVER_SCOPE_SNAPSHOT_DIR": str(tmp / "snapshot"),
+		"RESOLVER_SCOPE_VIOLATIONS_FILE": str(tmp / "violations.txt"),
+		"CONFLICTED_PATHS_FILE": str(allowed),
+	}
+
+
+def _raw_index_sha(repo: Path) -> str:
+	return hashlib.sha256((repo / ".git" / "index").read_bytes()).hexdigest()
+
+
+def test_scope_check_tolerates_index_metadata_refresh() -> None:
+	"""Issue #4552: `git status` rewrites index stat data, not staged entries."""
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _conflicted_merge_scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		before = _raw_index_sha(repo)
+		stat = (repo / "outside.txt").stat()
+		os.utime(repo / "outside.txt", ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+		(repo / "conflict.txt").write_text("resolved\n", encoding="utf-8")
+		subprocess.run(["git", "status", "--short"], cwd=repo, capture_output=True, check=True)
+		subprocess.run(["git", "diff", "--check"], cwd=repo, capture_output=True, check=False)
+		# The raw index bytes changed, so the old byte-level check would fail.
+		assert _raw_index_sha(repo) != before
+		result = _scope_action(repo, env, "check")
+		assert result.returncode == 0, result.stderr
+		assert Path(env["RESOLVER_SCOPE_VIOLATIONS_FILE"]).read_text() == ""
+
+
+def test_scope_check_rejects_model_staging_with_safe_reason() -> None:
+	"""Issue #4552: `git add` of a conflicted path still fails closed."""
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _conflicted_merge_scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "conflict.txt").write_text("resolved\n", encoding="utf-8")
+		subprocess.run(["git", "add", "--", "conflict.txt"], cwd=repo, check=True)
+		result = _scope_action(repo, env, "check")
+		assert result.returncode == 2
+		assert "::error::Resolver scope check failed closed (ValueError)." in result.stderr
+		assert (
+			"Resolver scope check failure reason: merge index or MERGE_HEAD changed during resolver attempt"
+			in result.stderr
+		)
+		assert "conflict.txt" not in result.stderr
+		assert _scope_action(repo, env, "restore").returncode == 2
+
+
+def test_scope_check_rejects_index_flag_changes() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _conflicted_merge_scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		subprocess.run(["git", "update-index", "--assume-unchanged", "outside.txt"], cwd=repo, check=True)
+		assert _scope_action(repo, env, "check").returncode == 2
+		subprocess.run(["git", "update-index", "--no-assume-unchanged", "outside.txt"], cwd=repo, check=True)
+		assert _scope_action(repo, env, "check").returncode == 0
+		(repo / ".git" / "MERGE_HEAD").write_text("0" * 40 + "\n", encoding="utf-8")
+		assert _scope_action(repo, env, "check").returncode == 2
+
+
+def test_scope_reason_is_printed_only_for_fixed_value_errors() -> None:
+	src = _resolve_script_text()
+	fn = src[src.index("_resolver_scope_state() {"):src.index("\n}\n", src.index("_resolver_scope_state() {"))]
+	assert "if type(exc) is ValueError:" in fn
+	assert 'print(f"::error::Resolver scope {action} failed closed ({type(exc).__name__}).", file=sys.stderr)' in fn
+	assert not re.search(r"raise ValueError\((?!\")", fn), "scope ValueError messages must stay literal"
+	assert 'git("ls-files", "-s", "-v", "-z")' in fn
+	assert '"index", "MERGE_HEAD"' not in fn
+
+
+def test_conflict_resolver_prompt_forbids_index_changes() -> None:
+	text = (REPO_ROOT / "prompts" / "conflict-resolver.txt").read_text(encoding="utf-8")
+	assert "Do not stage, unstage, commit, or otherwise change the Git index or merge" in text
+	for command in ("`git add`", "`git rm`", "`git reset`", "`git commit`", "`git update-index`"):
+		assert command in text
+	assert "The workflow\n  verifies your edits and stages them itself" in text
+
+
 def main() -> int:
 	test_dependency_fallback_prefers_main_then_script_ref_checkout()
 	test_dependency_fallback_gates_workspace_scripts_and_fails_closed()
@@ -733,6 +831,11 @@ def main() -> int:
 	test_scope_snapshot_restore_and_index_fail_closed()
 	test_scope_symlink_restore_preserves_preexisting_target()
 	test_scope_feedback_is_available_for_generic_resolver()
+	test_scope_check_tolerates_index_metadata_refresh()
+	test_scope_check_rejects_model_staging_with_safe_reason()
+	test_scope_check_rejects_index_flag_changes()
+	test_scope_reason_is_printed_only_for_fixed_value_errors()
+	test_conflict_resolver_prompt_forbids_index_changes()
 	print(
 		"OK: review_conflict_resolve outcome-aware retry-prelude "
 		"contract holds (validation + timeout preludes, "
