@@ -31,6 +31,11 @@
 #   MERGE_TRAIN_ALLOW_WORKFLOW_EDITS       default true; forwarded on dispatch
 # Env (gate):
 #   PR_NUMBER, BASE_BRANCH, TARGET_BRANCH  required (TARGET_BRANCH = PR head ref)
+#   IS_SMOKE_TEST                          optional (true/1/yes/on); a smoke-test
+#                                          PR always proceeds unqueued — it exists
+#                                          to exercise the editor, so a queued
+#                                          soft-exit would leave its canary intact
+#                                          and fail the release smoke check
 #   PR_DIFF_FILE                           optional; parsed for this PR's paths
 #   GITHUB_ENV                             receives AUTOFIX_MERGE_QUEUED=true and
 #                                          AUTOFIX_STALE_BASE_SKIP=true when queued
@@ -311,6 +316,19 @@ _mt_gate() {
 		_mt_log "MERGE_TRAIN_GATE pr=${pr} head=${head} result=not_ai_issue_branch action=continue"
 		return 0
 	fi
+	# A smoke-test PR exists to exercise the reviewer/editor path itself: a
+	# successful *queued* run (soft-exit via AUTOFIX_STALE_BASE_SKIP) leaves
+	# the canary file untouched and the release smoke test misreads that as
+	# "editor failed to remove it" (issue #4542). review_autofix.yml's
+	# "Detect smoke test and tune LLM settings" step exports IS_SMOKE_TEST
+	# before this gate runs, so it is already in this process's environment.
+	# Bypass queuing for smoke PRs only; ordinary PRs still queue normally.
+	case "$(printf '%s' "${IS_SMOKE_TEST:-false}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on)
+			_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=smoke_test_bypass action=continue"
+			return 0
+			;;
+	esac
 	local own_files="" prs_json blockers=""
 	if ! _mt_own_files_into own_files "${pr}"; then
 		_mt_warn "merge-train gate: could not list changed files for PR #${pr}; fail-open (not queued)."

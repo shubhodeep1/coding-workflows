@@ -122,7 +122,7 @@ standalone issue.
 
 1. **Phase 1 — smoke-test bypass in the merge-train gate.**
    - Files: `scripts/review_merge_train.sh`, `tests/test_review_merge_train.py`, `README.md`, `changelog.d/4542-merge-train-smoke-test-bypass.md`.
-   - Done condition: `_mt_gate` returns `result=smoke_test_bypass action=continue` and skips all queuing when `IS_SMOKE_TEST` is truthy, verified by a new regression test (`test_gate_bypasses_queue_for_smoke_test_pr`) that pins an older PR overlapping the same canary path; the full `tests/test_review_merge_train.py` suite (21 → 22 tests) passes.
+   - Done condition: `_mt_gate` returns `result=smoke_test_bypass action=continue` and skips all queuing when `IS_SMOKE_TEST` is truthy, verified by a new regression test (`test_gate_bypasses_queue_for_smoke_test_pr`) that pins an older PR overlapping the same canary path; the full `tests/test_review_merge_train.py` suite (20 → 21 tests) passes.
    - Rollback: revert the single commit; the gate reverts to queuing every overlapping PR including smoke PRs (the pre-fix, buggy-but-previously-shipped behavior).
    - Independently mergeable / complete / production-safe at merge: yes — this is a single self-contained bash change with its own test coverage and doc update; nothing else depends on it landing first, and the repo is fully functional (if still exposed to the original bug) both before and after.
 
@@ -142,7 +142,7 @@ standalone issue.
 None — no MongoDB collection is touched.
 
 ## Tests
-- Unit/behavioral: `python3 -m pytest tests/test_review_merge_train.py` — all 22 tests (21 existing + 1 new) pass. The new test drives `scripts/review_merge_train.sh gate` through the existing fake-`gh` harness with `IS_SMOKE_TEST=true` and an older overlapping PR, and asserts `result=smoke_test_bypass`, no `ai:merge-queued` label/comment, no `AUTOFIX_MERGE_QUEUED`/`AUTOFIX_STALE_BASE_SKIP`, and zero `pulls` API calls logged (the bypass returns before any lookup).
+- Unit/behavioral: `python3 -m pytest tests/test_review_merge_train.py` — all 21 tests (20 existing + 1 new) pass. The new test drives `scripts/review_merge_train.sh gate` through the existing fake-`gh` harness with `IS_SMOKE_TEST=true` and an older overlapping PR, and asserts `result=smoke_test_bypass`, no `ai:merge-queued` label/comment, no `AUTOFIX_MERGE_QUEUED`/`AUTOFIX_STALE_BASE_SKIP`, and zero `pulls` API calls logged (the bypass returns before any lookup).
 - No e2e test is added here: the repo's own release pipeline (`test-and-mark-stable.yml`'s smoke-test phases) is the end-to-end proof that a real smoke PR now gets reviewed instead of queued, and re-running that pipeline is outside this plan's scope (it runs on its own release schedule).
 
 ## Risks & Mitigations
