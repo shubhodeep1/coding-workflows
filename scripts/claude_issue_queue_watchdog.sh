@@ -6,9 +6,10 @@
 # coding-workflows. It catches queued Claude issues that nobody picked up:
 # the Claude issue pickup session (.claude/commands/claude-issue-pickup.md)
 # normally closes each `ai:claude-issue-queue` issue within about an hour, so
-# an item older than CLAUDE_ISSUE_QUEUE_STALE_HOURS means the pickup relay has
-# stopped (its session failed, was archived, or its next-wake trigger was
-# deleted) or create_session keeps failing.
+# an item older than CLAUDE_ISSUE_QUEUE_STALE_HOURS means the pickup has
+# stopped (its session failed or was archived, its `Claude issue pickup: hourly`
+# trigger was deleted, or it hit the session depth limit) or create_session
+# keeps failing.
 #
 # For each stale item not yet flagged it adds `ai:claude-issue-queue-stale`
 # (with GITHUB_TOKEN, so no workflow reacts), then sends one Telegram ERROR
@@ -82,5 +83,5 @@ while IFS=$'\t' read -r number title age; do
 	LINES+=$'\n'"- #${number} ${title} (${age}h)"
 done < <(jq -r '.[] | [.number, .title, .age_hours] | @tsv' "${STALE_FILE}")
 
-tg_send_msg "Claude issue queue: ${STALE_COUNT} item(s) waiting over ${STALE_HOURS}h in ${SELF_REPO}:${LINES}"$'\n'"The pickup relay has likely stopped. Restart it from an interactive cloud session in Auto mode: /claude-issue-pickup start — restart"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+tg_send_msg "Claude issue queue: ${STALE_COUNT} item(s) waiting over ${STALE_HOURS}h in ${SELF_REPO}:${LINES}"$'\n'"The pickup has likely stopped. Restart it from a new cloud session opened in the app, in Auto mode: /claude-issue-pickup start — restart"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 exit 0

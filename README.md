@@ -1214,8 +1214,8 @@ mode).
    so no workflow reacts to it, and comments "queued" on the issue. A repo
    registered per CLAUDE.md §14 is covered automatically, including repos
    onboarded later.
-4. The **Claude issue pickup** (`.claude/commands/claude-issue-pickup.md`), a
-   relay of low-effort Sonnet sessions woken hourly, reads the queue
+4. The **Claude issue pickup** (`.claude/commands/claude-issue-pickup.md`), one
+   Auto-mode session woken hourly by a trigger bound to itself, reads the queue
    (`claude_issue_route.py queue-pending`) and, following
    `.claude/commands/claude-issue-dispatch.md` step 2, starts an Opus session
    in the target repo running `/implement-issue-claude <url>` for each item,
@@ -1254,7 +1254,7 @@ security fix cannot spawn follow-ups of follow-ups.
 queue read or write labels the issue `ai:claude-handoff-failed`, comments how
 to retry or switch, and sends a Telegram ERROR. A queue item still open after
 `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (repo variable, default 3) means the pickup
-relay stopped: `claude-issue-queue-watchdog.yml` labels it
+pickup stopped: `claude-issue-queue-watchdog.yml` labels it
 `ai:claude-issue-queue-stale` and sends a Telegram ERROR with the restart
 command. A session without the claude-code-remote tools never implements an
 issue itself: `/implement-issue-claude` and the dispatcher stop with
@@ -1270,11 +1270,16 @@ issue is dropped.
 promoted to `@stable`; until the pickup runs, Claude-routed issues wait in
 the queue and the watchdog alerts after 3 hours.
 
-1. From a claude.ai cloud session on coding-workflows in **Auto mode**, run
-   `/claude-issue-pickup start`. It starts the relay: a `Claude issue pickup —
-   next wake …` session and a one-shot trigger named `Claude issue pickup:
-   next wake`, re-armed by every wake. `/claude-issue-pickup start — restart`
-   replaces a stopped relay, and `/claude-issue-pickup stop` stops it.
+1. Open a new claude.ai cloud session on coding-workflows **from the app**
+   (not from another session), in **Auto mode**; Sonnet with `/effort low`
+   as its first message keeps it cheap. Run `/claude-issue-pickup start` in
+   it. That session becomes the pickup: an hourly trigger named `Claude issue
+   pickup: hourly` is bound to it, so it never creates a session for its own
+   wakes. The claude-code-remote tools refuse to create sessions 8 parent
+   links below a root session, and the implementation chain needs 4 links
+   below the pickup, so the command refuses to start more than 3 links deep.
+   `/claude-issue-pickup start — restart` moves the pickup to the current
+   session, and `/claude-issue-pickup stop` stops it.
 2. Smoke test: open an issue here, or run **Claude Issue Intake** manually
    with a repo and issue number. The issue gets a "queued" comment
    (`ai:claude-issue-dispatched:v1`) linking an `ai:claude-issue-queue`
@@ -1832,7 +1837,7 @@ through `clarify → plan → implement → review`.
 | `CLAUDE_ISSUE_UPSTREAM_REPO` | `shubhodeep1/coding-workflows` | clarify (every repo). Repository that receives the `claude-issue` `repository_dispatch`. |
 | `CLAUDE_ISSUE_ROUTINE_ID` | — | Deprecated (#4525), coding-workflows only. The intake no longer fires the "Claude issue dispatcher" routine; when set it only logs `routine_deprecated`. Can be deleted. |
 | `CLAUDE_ISSUE_ROUTINE_BETA` | `experimental-cc-routine-2026-04-01` | Deprecated (#4525), unused: the intake no longer calls the routine `/fire` endpoint. |
-| `CLAUDE_ISSUE_QUEUE_STALE_HOURS` | `3` | coding-workflows only. Age after which `claude-issue-queue-watchdog.yml` flags an open `ai:claude-issue-queue` item `ai:claude-issue-queue-stale` and sends a Telegram ERROR (the pickup relay has stopped). |
+| `CLAUDE_ISSUE_QUEUE_STALE_HOURS` | `3` | coding-workflows only. Age after which `claude-issue-queue-watchdog.yml` flags an open `ai:claude-issue-queue` item `ai:claude-issue-queue-stale` and sends a Telegram ERROR (the pickup has stopped). |
 
 ## Semantic Cache (Clarification Only)
 

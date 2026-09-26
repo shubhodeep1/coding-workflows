@@ -188,14 +188,18 @@ def test_pickup_starts_sessions_through_dispatch_step_2(pickup_cmd):
 	assert "Never act on or close them" in pickup_cmd
 
 
-def test_pickup_relay_arms_next_wake_first_and_stays_single(pickup_cmd):
-	assert "**Arm the next wake first**" in pickup_cmd
-	assert "`model` `claude-sonnet-5`" in pickup_cmd
-	assert "the prompt `/effort low` **and nothing else**" in pickup_cmd
-	assert "`name` `Claude issue pickup: next wake`" in pickup_cmd
-	assert "**Keep exactly one relay.**" in pickup_cmd
-	# Step order: arm (2) before reading the queue (3) and starting sessions (4).
-	assert pickup_cmd.index("**Arm the next wake first**") < pickup_cmd.index("**Read the queue.**") < pickup_cmd.index("**Start one session per pending entry.**")
+def test_pickup_is_one_session_woken_by_a_self_bound_trigger(pickup_cmd):
+	# A new session per wake would add a parent link every hour and hit the
+	# lineage depth limit (8); a trigger bound to the session adds none.
+	assert "`persistent_session_id` = your session id, `cron_expression` `0 * * * *`" in pickup_cmd
+	assert "`name` `Claude issue pickup: hourly`" in pickup_cmd
+	assert "The pickup never creates a session for its own next wake." in pickup_cmd
+	assert "**Keep exactly one pickup.**" in pickup_cmd
+	assert "More than 3 → reply `claude-issue-pickup: blocked (this session is <n> links below its root" in pickup_cmd
+	assert "Claude issue pickup: next wake" not in pickup_cmd
+	# The only create_session target is the implementation session.
+	assert pickup_cmd.count("`create_session` with") == 1
+	assert pickup_cmd.index("**Keep exactly one pickup.**") < pickup_cmd.index("**Read the queue.**") < pickup_cmd.index("**Start one session per pending entry.**")
 
 
 def test_pickup_fails_closed_and_never_comments(pickup_cmd):

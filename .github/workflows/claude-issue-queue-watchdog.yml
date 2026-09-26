@@ -8,7 +8,7 @@ name: Claude Issue Queue Watchdog
 # session (.claude/commands/claude-issue-pickup.md) wakes hourly, starts the
 # implementation session for each item, and closes it. When an item is still
 # open after CLAUDE_ISSUE_QUEUE_STALE_HOURS (repo variable, default 3), the
-# pickup relay has stopped: scripts/claude_issue_queue_watchdog.sh labels the
+# pickup has stopped: scripts/claude_issue_queue_watchdog.sh labels the
 # item `ai:claude-issue-queue-stale` and sends one Telegram ERROR with the
 # restart command. It never starts sessions itself (Actions cannot).
 

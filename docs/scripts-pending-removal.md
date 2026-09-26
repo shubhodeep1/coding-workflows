@@ -213,7 +213,7 @@ Copy this block when adding a new entry:
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
 - **Owner:** @shubhodeep1
 
-### `.claude/commands/claude-issue-pickup.md` (Claude issue pickup relay)
+### `.claude/commands/claude-issue-pickup.md` (Claude issue pickup session)
 
 - **Introduced in:** #4531 (2026-09-26)
 - **Type:** supervisor
@@ -221,7 +221,7 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - A replacement start path is live: an issue routed to Claude gets its `/implement-issue-claude` session (progress comment `<!-- ai:claude-issue-progress:v1 -->` plus a `claude/implement-plan-issue-<N>-*` branch) without an `ai:claude-issue-queue` item.
   - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=open"` returns `[]` (nothing is waiting for the pickup).
-  - `/claude-issue-pickup stop` reports its trigger deleted, and `list_triggers` shows no `Claude issue pickup: next wake` trigger.
+  - `/claude-issue-pickup stop` reports its trigger deleted, and `list_triggers` shows no `Claude issue pickup: hourly` trigger.
   - `scripts/claude_issue_intake.sh` no longer opens queue issues (`rg -n 'queue-issue' scripts/claude_issue_intake.sh` returns nothing).
 - **Owner:** @shubhodeep1
 
@@ -229,7 +229,7 @@ Copy this block when adding a new entry:
 
 - **Introduced in:** #4531 (2026-09-26)
 - **Type:** long-running
-- **Removal trigger:** together with the Claude issue pickup relay above (it only watches that relay's queue).
+- **Removal trigger:** together with the Claude issue pickup above (it only watches the pickup's queue).
 - **Removal preflight checks:**
   - The pickup entry above has been removed, i.e. its preflight checks passed.
   - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=all&per_page=1"` shows no queue item created after the removal of the queue path.

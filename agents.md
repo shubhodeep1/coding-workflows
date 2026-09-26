@@ -226,9 +226,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `[claude-issue-queue] <repo>#<N>`, body = marker + fixed-key payload, no
     issue prose), opened with the job's `GITHUB_TOKEN` so no workflow reacts;
     an open item for the same target is reused. The **Claude issue pickup**
-    (`/claude-issue-pickup`), a relay of Auto-mode low-effort Sonnet sessions
-    each woken once by a one-shot trigger `Claude issue pickup: next wake`,
-    arms the next wake first, reads the queue with
+    (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 3,
+    woken hourly by the cron trigger `Claude issue pickup: hourly` bound to
+    itself (no new session per wake, so no lineage-depth growth), reads the
+    queue with
     `claude_issue_route.py queue-pending --fetch-repo` (one REST read; only
     items by `github-actions[bot]` for registered repos; ≤ 10 per wake),
     starts one Opus session per target issue via `claude-issue-dispatch.md`
