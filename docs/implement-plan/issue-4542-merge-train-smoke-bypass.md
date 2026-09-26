@@ -3,19 +3,19 @@
 - Plan: docs/plans/issue-4542-merge-train-smoke-bypass-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Source issue: shubhodeep1/coding-workflows#4542
-- Project branch: claude/implement-plan-issue-4542-merge-train-smoke-bypass   Final PR: pending (opened after phase 1 lands)
+- Project branch: claude/implement-plan-issue-4542-merge-train-smoke-bypass   Final PR: #4543 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: n/a (base stable)
-- Waiting on: none yet — phase 1 PR not opened
+- Waiting on: PR #4544
 - Stage model: claude-sonnet-5 (dispatcher's claude-code-remote MCP tools — create_session/get_session/send_later/create_trigger/list_sessions/archive_session — are not exposed in this session; see Notes)
 - Permission mode: Auto
 - Check-in: none — no claude-code-remote MCP tools available in this session (see Notes)
 - Last updated: 2026-09-26
-- Last note: Project branch opened from origin/stable with plan + log; phase 1 implementation ready to push as its own PR next.
+- Last note: Phase 1 PR #4544 opened against the project branch (#4543, draft, into stable); the review-autofix workflow runs on it independently of this session. No checker armed — see Notes.
 
 ## Phases
-1. [ ] Phase 1 — smoke-test bypass in the merge-train gate (`scripts/review_merge_train.sh`, `tests/test_review_merge_train.py`, `README.md`, `changelog.d/4542-merge-train-smoke-test-bypass.md`)
+1. [ ] Phase 1 — smoke-test bypass in the merge-train gate (`scripts/review_merge_train.sh`, `tests/test_review_merge_train.py`, `README.md`, `changelog.d/4542-merge-train-smoke-test-bypass.md`) — PR #4544 open (waiting)
 
 ## Conformance
 (not yet run — runs once phase 1 merges)
