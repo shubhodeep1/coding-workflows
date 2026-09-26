@@ -506,6 +506,36 @@ def test_issues_done_only_when_all_closed_or_merged(monkeypatch, capsys):
 	assert out["done"] is True
 
 
+@pytest.mark.parametrize("label", checker.BLOCKING_LABELS)
+def test_issues_blocked_label_on_open_issue_ends_the_wait(monkeypatch, capsys, label):
+	_stub(monkeypatch, {
+		"repos/o/r/issues/1": {"state": "closed", "labels": []},
+		"repos/o/r/issues/2": {"state": "open", "labels": [{"name": "ai:security"}, {"name": label}]},
+		"repos/o/r/issues/3": {"state": "open", "labels": []},
+	})
+	code, out = _run(["--issues", "1,2,3"], capsys)
+	assert code == 0
+	assert out["done"] is True and out["state"] == "blocked"
+	assert f"#2 ({label})" in out["reason"] and "#3" not in out["reason"]
+
+
+def test_issues_blocking_label_ignored_once_closed_or_merged(monkeypatch, capsys):
+	_stub(monkeypatch, {
+		"repos/o/r/issues/1": {"state": "closed", "labels": [{"name": "ai:review-blocked"}]},
+		"repos/o/r/issues/2": {"state": "open", "labels": [{"name": "ai:merged"}, {"name": "ai:needs-human"}]},
+	})
+	_, out = _run(["--issues", "1,2"], capsys)
+	assert out["done"] is True and out["state"] == "resolved"
+
+
+def test_command_doc_describes_blocked_issue_wait():
+	for path in (ROOT / ".claude" / "commands" / "implement-plan-claude.md",
+		ROOT / "workflow-templates" / ".claude" / "commands" / "implement-plan-claude.md"):
+		text = path.read_text(encoding="utf-8")
+		assert "- *Issue list* — every issue is closed or labelled `ai:merged`; or an issue still open" in text
+		assert "the checker reports a follow-up blocked (`state: blocked`" in text
+
+
 def test_read_failure_exits_2_with_error(monkeypatch, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/7": checker.ReadError("HTTP 403")})
 	code, out = _run(["--pr", "7"], capsys)
