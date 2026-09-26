@@ -5,13 +5,27 @@
   "entry_id": "processed_command_4512_5842859118_approved",
   "issue_number": 4512,
   "metadata": {
+    "branch": "ai/issue-4512",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/validate.yml",
+      "changelog.d/4512-validate-renderer-import-isolation.md",
+      "scripts/validate_process.sh",
+      "tests/test_validate_process_template_mode.py",
+      "tests/test_validate_workflow_validate_bootstrap.py"
+    ],
+    "issue_number": 4512,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4512",
+    "pr_number": 4516,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/4516",
+    "run_attempt": "1",
+    "run_id": "36215599942",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36215599942"
   },
   "run_attempt": 1,
   "run_id": "36215599942",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-26T03:43:53Z",
+  "status": "completed",
+  "timestamp": "2026-09-26T03:57:47Z",
   "workflow": "implement"
 }
