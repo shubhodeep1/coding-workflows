@@ -39,7 +39,10 @@ failed (the JSON then carries `error` and `done` is false).
   * Run: `status` is `completed` (any conclusion). `state` is `completed`
     only for a `success` conclusion and `failed` for any other, so a checker
     routes a failed run to its block stage.
-  * Issues: every issue is closed or labelled ai:merged.
+  * Issues: every issue is closed or labelled ai:merged (`state` resolved);
+    or an issue still open without ai:merged carries ai:review-blocked /
+    ai:review-autofix-failed / ai:needs-human (`state` blocked), because its
+    pipeline gave up and the issue will not close on its own.
 
 API budget (CLAUDE.md §15): REST only, never GraphQL. PR mode issues 1 call
 (`pulls/N`), one call per 100 check runs when the PR is not conflicted, and
@@ -343,10 +346,19 @@ def check_run(repo: str, run_id: int) -> dict:
 
 def check_issues(repo: str, numbers: list[int]) -> dict:
 	pending = []
+	blocked_issues = []
 	for number in numbers:
 		issue = gh_api(f"repos/{repo}/issues/{number}")
-		if issue.get("state") != "closed" and MERGED_ISSUE_LABEL not in _label_names(issue):
+		issue_labels = _label_names(issue)
+		if issue.get("state") != "closed" and MERGED_ISSUE_LABEL not in issue_labels:
 			pending.append(number)
+			issue_blocking = [name for name in issue_labels if name in BLOCKING_LABELS]
+			if issue_blocking:
+				blocked_issues.append(f"#{number} ({', '.join(issue_blocking)})")
+	# A follow-up whose pipeline gave up never closes on its own; wake the
+	# block stage instead of waiting silently until the safety net.
+	if blocked_issues:
+		return {"done": True, "state": "blocked", "reason": "issues blocked: " + ", ".join(blocked_issues)}
 	if pending:
 		return {"done": False, "state": "open", "reason": "issues still open: " + ", ".join(f"#{n}" for n in pending)}
 	return {"done": True, "state": "resolved", "reason": "every issue closed or ai:merged: " + ", ".join(f"#{n}" for n in numbers)}

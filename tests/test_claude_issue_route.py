@@ -242,9 +242,20 @@ def stubs(tmp_path):
 	_write_stub(
 		bin_dir / "gh",
 		f"""printf '%s\\n' "$*" >> "{log}"
+printf '%s|%s\\n' "${{GH_TOKEN:-}}" "$*" >> "{tmp_path}/gh_tokens.log"
 if [ -n "${{GH_STUB_FAIL_DISPATCH:-}}" ] && [[ "$*" == *dispatches* ]]; then
   echo "HTTP 404: Not Found" >&2
   exit 1
+fi
+if [[ "$*" == *"issues?labels=ai:claude-issue-queue"* ]]; then
+  [ -z "${{GH_STUB_FAIL_QUEUE_READ:-}}" ] || {{ echo "HTTP 500" >&2; exit 1; }}
+  printf '%s' "${{GH_STUB_QUEUE_JSON:-[]}}"
+  exit 0
+fi
+if [[ "$*" == *"coding-workflows/issues -f title="* ]]; then
+  [ -z "${{GH_STUB_FAIL_QUEUE_CREATE:-}}" ] || {{ echo "HTTP 403" >&2; exit 1; }}
+  printf '%s\\n' "${{GH_STUB_QUEUE_NUMBER:-77}}"
+  exit 0
 fi
 exit 0
 """,
@@ -328,34 +339,53 @@ def _intake_env(stubs, payload, **extra):
 	return {
 		**stubs["env"],
 		"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
-		"GH_TOKEN": "x",
+		"GH_TOKEN": "pat-token",
 		"CLAUDE_ISSUE_PAYLOAD_FILE": str(payload_file),
-		"CLAUDE_ISSUE_ROUTINE_ID": "trig_01ABC",
-		"CLAUDE_ISSUE_ROUTINE_TOKEN": "sk-test-secret",
-		"CLAUDE_ISSUE_RETRY_DELAYS": "0",
+		"CLAUDE_ISSUE_QUEUE_TOKEN": "gha-token",
+		"RUN_URL": "https://github.com/shubhodeep1/coding-workflows/actions/runs/123",
 		**extra,
 	}
 
 
-def test_intake_fires_routine_and_comments(stubs):
-	env = _intake_env(
-		stubs,
-		_payload(repo="shubhodeep1/digital_pa", issue_number=9),
-		CURL_STUB_BODY='{"claude_code_session_id":"session_1","claude_code_session_url":"https://claude.ai/code/session_1"}',
-	)
+def test_intake_queues_issue_with_github_token_and_comments(stubs):
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_QUEUE_NUMBER="88")
 	result = _run("claude_issue_intake.sh", env)
 	assert result.returncode == 0, result.stderr + result.stdout
-	args = (stubs["tmp"] / "curl_args.log").read_text()
-	assert "https://api.anthropic.com/v1/claude_code/routines/trig_01ABC/fire" in args
-	# The token only travels in the header file, never on the command line or stdout.
-	assert "sk-test-secret" not in args
-	assert "sk-test-secret" not in result.stdout + result.stderr
-	assert not list((stubs["tmp"] / "rt").glob("fire_headers.txt"))
-	body = json.loads((stubs["tmp"] / "rt" / "fire_body.json").read_text())
-	assert "issue: 9" in body["text"]
+	assert "CLAUDE_ISSUE_INTAKE queued repo=shubhodeep1/digital_pa issue=9 trigger=opened queue_issue=88" in result.stdout
+	tokens = (stubs["tmp"] / "gh_tokens.log").read_text().splitlines()
+	create = [line for line in tokens if "coding-workflows/issues -f title=" in line]
+	assert len(create) == 1
+	# The queue issue is opened with GITHUB_TOKEN so no workflow reacts to it.
+	assert create[0].startswith("gha-token|")
+	assert "title=[claude-issue-queue] shubhodeep1/digital_pa#9" in create[0]
 	calls = stubs["log"].read_text()
-	assert "repos/shubhodeep1/digital_pa/issues/9/comments" in calls
-	assert "https://claude.ai/code/session_1" in calls
+	assert "-f labels[]=ai:claude-issue-queue --jq .number" in calls
+	# The body carries only the fixed-key payload.
+	assert "```text\nclaude_issue.v1\nrepo: shubhodeep1/digital_pa\nissue: 9\n" in calls
+	# The target-issue comment still goes through GH_PAT and keeps its marker.
+	comment = [line for line in tokens if "repos/shubhodeep1/digital_pa/issues/9/comments" in line]
+	assert len(comment) == 1 and comment[0].startswith("pat-token|")
+	assert "ai:claude-issue-dispatched:v1" in comment[0]
+	assert "https://github.com/shubhodeep1/coding-workflows/issues/88" in stubs["log"].read_text()
+	# No routine is fired any more.
+	assert not (stubs["tmp"] / "curl_args.log").exists()
+
+
+def test_intake_reuses_open_queue_item(stubs):
+	existing = [{"number": 55, "title": "[claude-issue-queue] shubhodeep1/digital_pa#9", "user": {"login": "github-actions[bot]"}}]
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="reclarify"), GH_STUB_QUEUE_JSON=json.dumps(existing))
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "already_queued repo=shubhodeep1/digital_pa issue=9 trigger=reclarify queue_issue=55" in result.stdout
+	assert "-f title=" not in stubs["log"].read_text()
+
+
+def test_intake_ignores_same_title_from_other_author(stubs):
+	spoof = [{"number": 55, "title": "[claude-issue-queue] shubhodeep1/digital_pa#9", "user": {"login": "someone"}}]
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_QUEUE_JSON=json.dumps(spoof))
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "queue_issue=77" in result.stdout
 
 
 def test_intake_rejects_unregistered_repo(stubs):
@@ -363,40 +393,181 @@ def test_intake_rejects_unregistered_repo(stubs):
 	result = _run("claude_issue_intake.sh", env)
 	assert result.returncode == 1
 	assert "reason=invalid_payload" in result.stdout
-	assert not (stubs["tmp"] / "curl_args.log").exists()
+	assert "-f title=" not in (stubs["log"].read_text() if stubs["log"].exists() else "")
 
 
-def test_intake_without_routine_config_marks_issue(stubs):
-	env = _intake_env(stubs, _payload(repo="shubhodeep1/coding-workflows", issue_number=4), CLAUDE_ISSUE_ROUTINE_ID="")
+def test_intake_without_queue_token_marks_issue(stubs):
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/coding-workflows", issue_number=4), CLAUDE_ISSUE_QUEUE_TOKEN="")
 	result = _run("claude_issue_intake.sh", env)
 	assert result.returncode == 1
-	assert "reason=routine_not_configured" in result.stdout
+	assert "reason=queue_not_configured" in result.stdout
 	assert "labels[]=ai:claude-handoff-failed" in stubs["log"].read_text()
 
 
-def test_intake_does_not_retry_client_errors(stubs):
-	env = _intake_env(
-		stubs,
-		_payload(repo="shubhodeep1/coding-workflows", issue_number=4),
-		CURL_STUB_CODE="401",
-		CLAUDE_ISSUE_RETRY_DELAYS="0 0 0",
-	)
+@pytest.mark.parametrize("failure", ["GH_STUB_FAIL_QUEUE_READ", "GH_STUB_FAIL_QUEUE_CREATE"])
+def test_intake_queue_failure_marks_issue(stubs, failure):
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/coding-workflows", issue_number=4), **{failure: "1"})
 	result = _run("claude_issue_intake.sh", env)
 	assert result.returncode == 1
-	assert "reason=fire_failed" in result.stdout
-	assert "HTTP 401 after 1 attempt(s)" in result.stdout
+	assert "reason=queue_failed" in result.stdout
+	assert "labels[]=ai:claude-handoff-failed" in stubs["log"].read_text()
 
 
-def test_intake_retries_server_errors(stubs):
-	env = _intake_env(
-		stubs,
-		_payload(repo="shubhodeep1/coding-workflows", issue_number=4),
-		CURL_STUB_CODE="503",
-		CLAUDE_ISSUE_RETRY_DELAYS="0 0",
-	)
+def test_intake_logs_deprecated_routine_id_without_firing(stubs):
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/coding-workflows", issue_number=4), CLAUDE_ISSUE_ROUTINE_ID="trig_01ABC", CLAUDE_ISSUE_ROUTINE_TOKEN="sk-test-secret")
 	result = _run("claude_issue_intake.sh", env)
-	assert result.returncode == 1
-	assert "HTTP 503 after 3 attempt(s)" in result.stdout
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "notice routine_deprecated" in result.stdout
+	assert "sk-test-secret" not in result.stdout + result.stderr
+	assert not (stubs["tmp"] / "curl_args.log").exists()
+
+
+# --- queue parsing (pickup) and staleness (watchdog) -----------------------------------------
+
+
+def _validated(repo="shubhodeep1/digital_pa", number=9, trigger="opened"):
+	return {
+		"repo": repo,
+		"issue_number": number,
+		"issue_url": f"https://github.com/{repo}/issues/{number}",
+		"trigger": trigger,
+		"skip_security_pass": False,
+	}
+
+
+def _queue_item(number, validated=None, author="github-actions[bot]", created="2026-09-26T00:00:00Z", labels=("ai:claude-issue-queue",), body=None, title=None):
+	validated = validated or _validated()
+	rendered = route.build_queue_issue(validated, "https://github.com/shubhodeep1/coding-workflows/actions/runs/1")
+	return {
+		"number": number,
+		"title": rendered["title"] if title is None else title,
+		"body": rendered["body"] if body is None else body,
+		"user": {"login": author},
+		"labels": [{"name": name} for name in labels],
+		"state": "open",
+		"created_at": created,
+	}
+
+
+REGISTRY_ALLOWED = ["shubhodeep1/digital_pa", "shubhodeep1/coding-workflows"]
+
+
+def test_parse_fire_text_round_trips():
+	validated = _validated(trigger="reclarify")
+	assert route.parse_fire_text(route.build_fire_text(validated)) == validated
+
+
+@pytest.mark.parametrize(
+	"mutate",
+	[
+		lambda t: t.replace("claude_issue.v1", "claude_issue.v2"),
+		lambda t: t + "extra: line\n",
+		lambda t: t.replace("trigger: opened", "trigger: evil"),
+		lambda t: t.replace("url: https://github.com/shubhodeep1/digital_pa/issues/9", "url: https://evil.example/9"),
+		lambda t: t.replace("issue: 9", "issue: 09"),
+		lambda t: t + "repo: other/repo\n",
+		lambda t: t.replace("skip_security_pass: false\n", ""),
+	],
+)
+def test_parse_fire_text_rejects(mutate):
+	with pytest.raises(ValueError):
+		route.parse_fire_text(mutate(route.build_fire_text(_validated())))
+
+
+def test_queue_issue_carries_no_prose_and_drops_bad_run_url():
+	rendered = route.build_queue_issue(_validated(), "https://evil.example/x")
+	assert rendered["label"] == "ai:claude-issue-queue"
+	assert "Intake run:" not in rendered["body"]
+	assert rendered["body"].startswith("<!-- ai:claude-issue-queue:v1 -->\n")
+
+
+def test_queue_pending_groups_duplicates_and_ignores_untrusted():
+	issues = [
+		_queue_item(12, _validated(trigger="reclarify")),
+		_queue_item(10),
+		_queue_item(11, _validated(repo="shubhodeep1/coding-workflows", number=3)),
+		_queue_item(13, author="mallory"),
+		_queue_item(14, _validated(repo="stranger/repo", number=1)),
+		_queue_item(15, body="<!-- ai:claude-issue-queue:v1 -->\nno payload"),
+		_queue_item(16, title="[claude-issue-queue] shubhodeep1/digital_pa#99"),
+		{"number": 17, "pull_request": {}, "labels": [{"name": "ai:claude-issue-queue"}]},
+	]
+	out = route.queue_pending(issues, REGISTRY_ALLOWED)
+	assert [(e["repo"], e["issue_number"]) for e in out["pending"]] == [("shubhodeep1/digital_pa", 9), ("shubhodeep1/coding-workflows", 3)]
+	first = out["pending"][0]
+	assert [q["number"] for q in first["queue_issues"]] == [10, 12]
+	assert first["trigger"] == "opened"
+	assert first["fire_text"] == route.build_fire_text(_validated())
+	assert {i["queue_issue"]: i["reason"].split(":")[0] for i in out["ignored"]} == {
+		13: "untrusted_author",
+		14: "repo_not_registered",
+		15: "no_payload",
+		16: "title_mismatch",
+	}
+	assert out["remaining"] == 0
+
+
+def test_queue_pending_accepts_crlf_bodies_and_limits():
+	items = [_queue_item(n, _validated(number=n)) for n in range(1, 5)]
+	items[0]["body"] = items[0]["body"].replace("\n", "\r\n")
+	out = route.queue_pending(items, REGISTRY_ALLOWED, limit=3)
+	assert [e["issue_number"] for e in out["pending"]] == [1, 2, 3]
+	assert out["remaining"] == 1
+
+
+def test_queue_stale_flags_old_trusted_items_once():
+	from datetime import datetime, timezone
+
+	now = datetime(2026, 9, 26, 6, 0, tzinfo=timezone.utc)
+	issues = [
+		_queue_item(1, created="2026-09-26T01:00:00Z"),
+		_queue_item(2, created="2026-09-26T05:00:00Z"),
+		_queue_item(3, created="2026-09-26T00:00:00Z", labels=("ai:claude-issue-queue", "ai:claude-issue-queue-stale")),
+		_queue_item(4, created="2026-09-25T00:00:00Z", author="mallory"),
+	]
+	stale = route.queue_stale(issues, now, 3)
+	assert [(s["number"], s["age_hours"]) for s in stale] == [(1, 5.0)]
+
+
+def test_cli_queue_pending_and_stale(tmp_path):
+	issues_file = tmp_path / "q.json"
+	issues_file.write_text(json.dumps([_queue_item(10)]))
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	out = _cli("queue-pending", "--issues-json", str(issues_file), "--registry", str(registry))
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout)["pending"][0]["issue_url"] == "https://github.com/shubhodeep1/digital_pa/issues/9"
+	out = _cli("queue-stale", "--issues-json", str(issues_file), "--stale-hours", "3", "--now", "2026-09-26T04:00:00Z")
+	assert out.returncode == 0, out.stderr
+	assert [s["number"] for s in json.loads(out.stdout)] == [10]
+	issues_file.write_text("{}")
+	assert _cli("queue-pending", "--issues-json", str(issues_file), "--registry", str(registry)).returncode == 2
+
+
+def _watchdog_env(stubs, queue):
+	return {
+		**stubs["env"],
+		"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
+		"GH_TOKEN": "gha-token",
+		"GH_STUB_QUEUE_JSON": json.dumps(queue),
+	}
+
+
+def test_watchdog_labels_stale_items_and_exits_zero(stubs):
+	queue = [_queue_item(21, created="2020-01-01T00:00:00Z"), _queue_item(22, created="2999-01-01T00:00:00Z")]
+	result = _run("claude_issue_queue_watchdog.sh", _watchdog_env(stubs, queue))
+	assert result.returncode == 0, result.stderr + result.stdout
+	calls = stubs["log"].read_text()
+	assert "repos/shubhodeep1/coding-workflows/issues/21/labels -f labels[]=ai:claude-issue-queue-stale" in calls
+	assert "issues/22/labels" not in calls
+	assert "CLAUDE_ISSUE_QUEUE_WATCHDOG checked open=2 newly_stale=1" in result.stdout
+
+
+def test_watchdog_fails_open_on_read_error(stubs):
+	env = {**_watchdog_env(stubs, []), "GH_STUB_FAIL_QUEUE_READ": "1"}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0
+	assert "warn queue_read_failed" in result.stdout
 
 
 # --- workflow wiring (no-clash contract) ---------------------------------------------------
@@ -405,7 +576,9 @@ def test_intake_retries_server_errors(stubs):
 def test_clarify_routes_before_codex_and_stages_scripts():
 	text = CLARIFY.read_text()
 	assert "claude_issue_route.py claude_issue_handoff.sh; do" in text
-	assert "AI_ISSUE_IMPLEMENTER: ${{ vars.AI_ISSUE_IMPLEMENTER || 'claude' }}" in text
+	# Unset must reach the router as "" so the routed comment says `default`.
+	assert "AI_ISSUE_IMPLEMENTER: ${{ vars.AI_ISSUE_IMPLEMENTER || '' }}" in text
+	assert route.route_issue(_issue(), "") == {"implementer": "claude", "reason": "default", "skip_security_pass": False}
 	assert "reason=claude_routed outcome=handoff" in text
 	steps = yaml.safe_load(text)["jobs"]["clarify"]["steps"]
 	names = [step["name"] for step in steps]
@@ -433,11 +606,42 @@ def test_intake_workflow_triggers_and_secret_binding():
 	assert triggers["repository_dispatch"]["types"] == ["claude-issue"]
 	assert set(triggers["workflow_dispatch"]["inputs"]) == {"repo", "issue_number"}
 	env = workflow["jobs"]["intake"]["env"]
-	assert env["CLAUDE_ISSUE_ROUTINE_TOKEN"] == "${{ secrets.CLAUDE_ISSUE_ROUTINE_TOKEN }}"
-	assert workflow["permissions"] == {"contents": "read"}
+	# The queue is written with GITHUB_TOKEN; the routine token is no longer bound (#4525).
+	assert env["CLAUDE_ISSUE_QUEUE_TOKEN"] == "${{ github.token }}"
+	assert "CLAUDE_ISSUE_ROUTINE_TOKEN" not in env
+	assert workflow["permissions"] == {"contents": "read", "issues": "write"}
 	run_text = INTAKE_WF.read_text()
 	# External payload is env-bound, never interpolated into run: bodies.
 	assert "${{ github.event.client_payload" not in "".join(
 		step.get("run", "") for step in workflow["jobs"]["intake"]["steps"]
 	)
 	assert "CLIENT_PAYLOAD_JSON: ${{ toJson(github.event.client_payload) }}" in run_text
+
+
+def test_watchdog_workflow_is_hourly_and_scoped():
+	workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "claude-issue-queue-watchdog.yml").read_text())
+	triggers = workflow[True] if True in workflow else workflow["on"]
+	assert triggers["schedule"] == [{"cron": "17 * * * *"}]
+	assert workflow["permissions"] == {"contents": "read", "issues": "write"}
+	job = workflow["jobs"]["watchdog"]
+	assert job["if"] == "github.repository == 'shubhodeep1/coding-workflows'"
+	assert job["env"]["GH_TOKEN"] == "${{ github.token }}"
+	assert "bash scripts/claude_issue_queue_watchdog.sh" in job["steps"][-1]["run"]
+
+
+def test_queue_labels_are_in_the_contract():
+	labels = json.loads(CONTRACT.read_text())["labels"]
+	assert route.QUEUE_LABEL in labels and route.QUEUE_STALE_LABEL in labels
+
+
+def test_cli_queue_pending_fetches_with_one_gh_read(stubs, tmp_path):
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	env = {**stubs["env"], "GH_STUB_QUEUE_JSON": json.dumps([_queue_item(10)])}
+	cmd = [sys.executable, str(ROOT / "scripts" / "claude_issue_route.py"), "queue-pending", "--fetch-repo", "shubhodeep1/coding-workflows", "--registry", str(registry)]
+	out = subprocess.run(cmd, capture_output=True, text=True, env=env)
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout)["pending"][0]["issue_number"] == 9
+	assert stubs["log"].read_text().splitlines() == ["api repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=open&per_page=100"]
+	env["GH_STUB_FAIL_QUEUE_READ"] = "1"
+	assert subprocess.run(cmd, capture_output=True, text=True, env=env).returncode == 3

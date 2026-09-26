@@ -25,11 +25,14 @@ project's final PR. A log that sits on the default branch without a
 `Project branch:` line belongs to a project that started before the project
 branch existed; that project finishes straight on the default branch.
 
-Each stage (a phase, a review round, a blocked-PR fix, a conformance audit,
-a security or validation read, the completion PR, the final merge, a
-`/verify-activation` cycle) runs in its own session titled
-`implement-plan <slug> — <stage>`, started by an hourly low-effort Sonnet
-checker session once the previous stage's wait is over.
+Each stage (a phase, a review round, a conformance audit, a security or
+validation read, the completion PR, the final merge, a `/verify-activation`
+cycle) runs in its own session titled `implement-plan <slug> — <stage>`,
+started by an hourly low-effort Sonnet checker session once the previous
+stage's wait is over. A blocked-PR fix is the exception: the checker hands
+a blocked, closed, or stuck PR back to the stage session that armed that
+wait, which fixes it in place (a fresh `… — blocked PR` session only when
+the hand-back fails).
 
 Each log ends with a `## Lessons` section: one line per surprise a stage hit
 (`- [source:<source>] <lesson> (files: <path>, …)`). When a PR from a

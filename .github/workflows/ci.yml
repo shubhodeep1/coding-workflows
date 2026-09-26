@@ -421,6 +421,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status.py
 
+      - name: Stale Routine sweep tests (CLAUDE.md §26.G)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stale_routines.py
+
       - name: /implement-plan-claude command contract tests
         run: |
           set -euo pipefail
