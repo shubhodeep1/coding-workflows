@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:481-510 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A conflicted `claude/*` PR with no hand-off comment is reported as `open` instead of as a due conflict.\n  WHY: In `--hand-back` mode, neither the checker nor the hourly sweep wakes a fixer for this conflict; severity was reported as MAJOR by the reviewer.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Provide a coherent task description for both bundled changes, including the Claude-fixer expansion.\n  expected_change_site: PR description\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR title/PR description empty; no linked issue for the Claude-fixer expansion; `scripts/review_conflict_resolve.sh`, `prompts/conflict-resolver.txt`, `tests/test_review_conflict_resolve_retry_prelude_render.py`; `claude_pr_sweep.py`, `check_in_status.py`\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/check_in_status.py\n  Line or code reference: check_pr_hand_back, lines 481-510\n  Problem: When a claude/* PR has mergeable_state == \"ditty\" (conflicted) but no hand-off comment exists yet, _check_claude_fixer_pr returns None. The function then skips the check-runs block at line 487 (because conficted=True makes `due is None and not conflicted` False) and falls through to line 509-510 which returns `open`. A genuinely conflicted claude/* PR with no hand-off comment is never handed back as a due conflict.\n  Why it fails at runtime: If a claude/* PR becomes conflicted after the review workflow already completed (e.g., base branch moved forward between runs) or a force-push creates new conflicts, no new hand-off comment is posted until a new review workflow runs. With no hand-off and no live claim, check_pr_hand_back returns state=\"open\" at line 510 regardless of age or active-runs. The \u00a726 checker and the hourly sweep both call -han-back mode, so neither will ever wake a fixer or start a fresh session for this genuinely conflicted PR. The PR stays open and unreviewed until something else pushes to it or a review workflow is re-dispatched by another mechanism. The old check_pr path (lines 226-252) handled this case by falling through to the age/active-rans check after _check_claude_fixer_pr returned None.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: (cross-cutting)\n  Line or code reference: PR title/PR description empty; no linked issue for the Claude-fixer expansion\n  Problem: Two unrelated fixes ship together with no single coherent task description; reviewer must reconstruct intent from CLAUDE.md/agents.md prose\n  Why it fails at runtime: It does not fail at runtime, but the empty PR description means the catch-all dispatch behavior (claude_pr_sweep.py claiming heads then firing routines, the --hand-back mode changing \u00a726 from terminal-only to due-fix-aware) is documented only in the diff itself, leaving operators with no single artifact explaining the user-visible change set\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8510dcd1264b9e9242626891641a332bd6a33998117c5dccb814f5e0078c7caa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36245092784",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36245092784",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260926134509_2808d5ca2d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36245092784"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-26T13:45:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
