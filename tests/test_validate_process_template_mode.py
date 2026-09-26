@@ -66,7 +66,7 @@ def test_template_mode_selection_contract_present() -> None:
 	# helper (env -i with a pinned PATH/LANG/PYTHONDONTWRITEBYTECODE, -I -B),
 	# not a bare local python3_bin variable.
 	assert "if ! validate_run_isolated_python -- -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then" in text
-	assert 'renderer_summary="$(validate_run_isolated_python -- "${renderer_script}" \\' in text
+	assert 'renderer_summary="$(PATH="${renderer_path}" validate_run_isolated_python -- "${renderer_script}" \\' in text
 	assert 'Template renderer requires python3 >= 3.9' in text
 	assert 'Template rendering is now the only supported harness generation path.' in text
 

@@ -2090,6 +2090,52 @@ EOF
 	chmod +x validation/validate.sh
 }
 
+# The renderer runs through validate_run_isolated_python (python3 -I under
+# env -i), which ignores user site-packages. A validate.yml that installs
+# the renderer dependencies with `pip install --user` (main's, while it
+# validates this branch's scripts) therefore leaves them invisible, and the
+# renderer exits 14 with "Missing dependency 'PyYAML'". When the isolated
+# interpreter cannot import them, install them once per process into a
+# private venv outside RUNTIME_DIR (which is uploaded as the run artifact)
+# and record its bin directory in VALIDATION_RENDERER_DEPS_VENV_BIN for the
+# caller to prepend to PATH. Call it directly, not in $(...), so the venv
+# is reused by a later rerender. Leaves the variable empty when the
+# dependencies are already importable; returns 1 when the venv cannot be
+# prepared, leaving the renderer to fail with its own diagnostic.
+VALIDATION_RENDERER_DEPS_VENV_BIN=""
+ensure_validation_renderer_python_deps()
+{
+	local deps_venv_dir=""
+	local deps_pip_env_name=""
+	local -a deps_pip_env=()
+
+	if [ -n "${VALIDATION_RENDERER_DEPS_VENV_BIN}" ]; then
+		return 0
+	fi
+	if validate_run_isolated_python -- -c 'import yaml, jsonschema, jinja2' >/dev/null 2>&1; then
+		return 0
+	fi
+	deps_venv_dir="${RUNNER_TEMP:-/tmp}/validate-renderer-deps-venv-${GITHUB_RUN_ID:-local}-$$"
+	printf '%s\n' "Renderer dependencies (pyyaml, jsonschema, jinja2) are not importable by the isolated python3; installing them into ${deps_venv_dir}." >> "${GENERATE_LOG_FILE}"
+	rm -rf -- "${deps_venv_dir}"
+	# Only the package download needs the network: pass the runner's proxy,
+	# package-index and CA settings to pip, and nothing else.
+	for deps_pip_env_name in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy NO_PROXY no_proxy \
+		PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_TRUSTED_HOST PIP_CERT SSL_CERT_FILE REQUESTS_CA_BUNDLE; do
+		if [ -n "${!deps_pip_env_name:-}" ]; then
+			deps_pip_env+=("${deps_pip_env_name}=${!deps_pip_env_name}")
+		fi
+	done
+	if ! validate_run_isolated_python -- -m venv "${deps_venv_dir}" >> "${GENERATE_LOG_FILE}" 2>&1 \
+		|| ! env -i HOME="${HOME:-}" PATH="${PATH:-/usr/bin:/bin}" TMPDIR="${TMPDIR:-/tmp}" LANG="C.UTF-8" LC_ALL="C.UTF-8" PYTHONDONTWRITEBYTECODE="1" "${deps_pip_env[@]}" \
+			"${deps_venv_dir}/bin/python" -I -B -m pip install --disable-pip-version-check --quiet pyyaml jsonschema jinja2 >> "${GENERATE_LOG_FILE}" 2>&1 \
+		|| ! PATH="${deps_venv_dir}/bin:${PATH}" validate_run_isolated_python -- -c 'import yaml, jsonschema, jinja2' >> "${GENERATE_LOG_FILE}" 2>&1; then
+		printf '%s\n' "Could not prepare the renderer dependency venv at ${deps_venv_dir}." >> "${GENERATE_LOG_FILE}"
+		return 1
+	fi
+	VALIDATION_RENDERER_DEPS_VENV_BIN="${deps_venv_dir}/bin"
+}
+
 run_template_validation_harness_renderer()
 {
 	local manifest_path=".ai/validate.yml"
@@ -2097,6 +2143,7 @@ run_template_validation_harness_renderer()
 	local schema_path="${_validate_script_dir}/templates/slot_manifest.schema.json"
 	local templates_root="workflow-templates/validation-harness"
 	local renderer_summary=""
+	local renderer_path="${PATH}"
 
 	HARNESS_GENERATOR_MODE="templates"
 
@@ -2124,14 +2171,19 @@ run_template_validation_harness_renderer()
 		printf 'python3 -V: %s\n' "$(validate_run_isolated_python -- -V 2>&1 || echo 'failed')"
 		validate_run_isolated_python -- -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))' 2>&1 \
 			|| printf '(python3 -c probe failed)\n'
-		printf '--- end python3 environment probe ---\n'
+		printf '%s\n' '--- end python3 environment probe ---'
 	} >> "${GENERATE_LOG_FILE}" 2>&1
 	if ! validate_run_isolated_python -- -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
 		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(validate_run_isolated_python -- -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
 		return 17
 	fi
 
-	if ! renderer_summary="$(validate_run_isolated_python -- "${renderer_script}" \
+	ensure_validation_renderer_python_deps || true
+	if [ -n "${VALIDATION_RENDERER_DEPS_VENV_BIN}" ]; then
+		renderer_path="${VALIDATION_RENDERER_DEPS_VENV_BIN}:${PATH}"
+	fi
+
+	if ! renderer_summary="$(PATH="${renderer_path}" validate_run_isolated_python -- "${renderer_script}" \
 		--manifest "${manifest_path}" \
 		--schema "${schema_path}" \
 		--templates-root "${templates_root}" \
