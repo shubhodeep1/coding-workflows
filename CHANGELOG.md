@@ -793,6 +793,12 @@ Project #3965 finished its one-issue plan on 2026-09-03 and then spent sixteen d
 
 What this means for operators: a security-pass project that reaches the exhaustion judge a third time no longer gets a further fix cycle; its remaining findings become non-blocking advisories filed after the merge, and the project completes. Follow-ups that were already parked in `ai:blocked` re-enter planning when the integration branch lands on the default branch, with a `🔓 Security-pass advisory follow-ups re-planned` comment on the tracking issue. A human is still needed only for a project-wide `fail` verdict (`ai:security-pass-failed`), which the judge reserves for findings the automated pipeline cannot land.
 
+- **Validation stops before template rendering when renderer dependencies are unavailable.**
+
+The reusable validate workflow now confirms that PyYAML, jsonschema, and Jinja2 can be imported by the Python interpreter used for validation. If dependency installation fails or imports are unavailable, validation reports the existing harness-error outcome without invoking the template renderer. The tracking-issue comment includes the preflight diagnostic, while the workflow still collects status and artifacts.
+
+What this means for operators: missing renderer dependencies produce a clear failure report rather than an attempted render with a misleading Python environment probe.
+
 ### For contributors
 
 State gains `security_pass_followups_merge_checked` (issue numbers, deduped, last 100; follow-ups the filer creates after the merge are added at creation); the judge diagnostics JSON gains `max_keep_fixing_rounds` and `keep_fixing_available`, and `prompts/mode-judge-security-pass-exhaustion.txt` carries the matching rule. Converted decisions keep the judge's justification behind the prefix `[keep_fixing capped after <c> judge round(s); converted to advisory follow-up]`, and the accept-all judge comment says how many were converted.

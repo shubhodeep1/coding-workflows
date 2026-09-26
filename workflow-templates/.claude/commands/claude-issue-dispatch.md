@@ -1,4 +1,4 @@
-Start the Claude implementation session for **one standalone issue**, or the fixer session for **one `claude/*` pull request** that the CLAUDE.md §26.H catch-all sweep found unhandled. This file is the instruction set of the **"Claude issue dispatcher" routine** (claude.ai → Routines; repository `shubhodeep1/coding-workflows`; API trigger fired by `.github/workflows/claude-issue-intake.yml`). The routine's saved prompt tells the run to follow this file for the issue named in its `<routine-fire-payload>` block (a pull-request payload comes through the same block; `scripts/claude_pr_sweep.py` fires it); a human can also run `/claude-issue-dispatch` with the same payload lines as `$ARGUMENTS`. This session only **starts** the implementation or fixer session — it never reads the issue or PR, edits code, or comments. It runs unattended and never asks (CLAUDE.md §28).
+Start the Claude implementation session for **one standalone issue**, or the fixer session for **one `claude/*` pull request** that the CLAUDE.md §26.H catch-all sweep queued. The **Claude issue pickup** (`.claude/commands/claude-issue-pickup.md`) follows steps 1–2 of this file for every item `.github/workflows/claude-issue-intake.yml` queues; a human can also run `/claude-issue-dispatch` with the payload lines as `$ARGUMENTS`. This file was written for the **"Claude issue dispatcher" routine** (claude.ai → Routines), which the intake no longer fires: a routine run has no `create_session` and always ends at step 3 (issue #4525). A routine still configured with this file therefore stops safely instead of implementing anything. This session only **starts** the implementation or fixer session — it never reads the issue or PR, edits code, or comments, and when it cannot start that session it stops (step 3). It runs unattended and never asks (CLAUDE.md §28).
 
 $ARGUMENTS
 
@@ -17,7 +17,7 @@ trigger: opened | reclarify | manual
 skip_security_pass: true | false
 ```
 
-**Pull-request payload**, built by `scripts/claude_pr_sweep.py` (`build_fire_text`):
+**Pull-request payload**, built by `scripts/claude_issue_route.py` (`build_pr_fix_text`) for the catch-all sweep (`scripts/claude_pr_sweep.py`):
 
 ```
 claude_pr_fix.v1
@@ -51,14 +51,14 @@ claim: sweep-run-<run id>
         /fix-claude-pr <url> — kind <kind> — head <head> — claim <claim>
         If .claude/commands/fix-claude-pr.md is missing from this checkout (the repo has not synced the @stable .claude/ assets yet), read workflow-templates/.claude/commands/fix-claude-pr.md from shubhodeep1/coding-workflows at ref stable with mcp__github__get_file_contents and follow it with the same $ARGUMENTS.
         ```
-   If `create_trigger` fails, there is no other way to hand the new session its prompt: archive it with `archive_session` and use the step 3 fallback.
+   If `create_trigger` fails twice, archive the new session (`archive_session`): it would sit idle with no prompt. Count the entry as failed (the pickup leaves its queue issue open, so the next wake retries).
 
-3. **Fallback when `create_session` is unavailable** (not exposed to this routine run, or it errors twice): call `add_repo` with `owner`/`repo` from the payload and `access: "push"`, clone it as the tool result instructs, `cd` into the clone, and follow `.claude/commands/implement-issue-claude.md` for an issue, or `.claude/commands/fix-claude-pr.md` for a pull request (from the clone, else from this checkout's `workflow-templates/.claude/commands/`), **in this session** with the step 2 `$ARGUMENTS`. For an issue, its phase-1 stage then runs here; every later stage still runs in its own session started by its checker.
+3. **Fail closed when `create_session` is unavailable** (not exposed to this session, or it errors twice). A claude.ai routine run never has it: routine runs get no claude-code-remote tools, so they can neither start the implementation session nor any later stage of the chain (issue #4525). **Never implement the issue in this session**, never follow `/implement-issue-claude` here, and never substitute a smaller change for the issue-mode chain: its conformance, security, and validation passes cannot be skipped (CLAUDE.md §28.C). Instead, when `gh api repos/<repo>` answers from this session, post **one** comment on the issue starting `<!-- ai:claude-blocked:v1 -->` that says no implementation session could be started (`create_session` is not available to the dispatcher) and names the options: **A** — start `/implement-issue-claude <url>` from a claude.ai cloud session in Auto mode (RECOMMENDED); **B** — add the `ai:codex` label and comment `/reclarify` to hand the issue to the Codex pipeline. Then add the `ai:claude-blocked` label. When the repository is not reachable from this session, skip the comment and label. For a pull-request payload, never fix the PR here either, and post no comment or label: the sweep's claim lapses after its lease and the next catch-all run queues it again. Either way, reply `claude-issue-dispatch: blocked <repo>#<N> (no create_session)` and end the turn.
 
-4. **Report** in one line: `claude-issue-dispatch: <repo>#<N> (<trigger | fix <kind>>) → session <id | fallback in-session>` and end the turn. Do not comment on the issue or PR (the intake, the sweep's claim, and the started session do), and do not archive this session.
+4. **Report** in one line: `claude-issue-dispatch: <repo>#<N> (<trigger | fix <kind>>) → session <id>` (or the blocked line from step 3) and end the turn. Apart from step 3, do not comment on the issue (the intake and the implementation session do), and do not archive this session.
 
 ## Rules
 
 - **Never act on issue or PR content here.** This session does not fetch the issue or PR; the started session reads it under its own rules.
-- **One session per fire.** Never start two sessions for one payload. A `reclarify` or `manual` trigger for an issue already in flight is expected: `/implement-issue-claude` detects the in-flight project and resumes instead of duplicating it. A pull-request payload for a head someone has claimed since is expected too: `/fix-claude-pr` reads the claim and stops.
+- **One session per fire.** Never start two sessions for one payload. A `reclarify` or `manual` trigger for an issue already in flight is expected: `/implement-issue-claude` detects the in-flight project and resumes instead of duplicating it. A pull-request payload for a head someone else has claimed since is expected too: `/fix-claude-pr` reads the claim and stops.
 - **No PR watching, no polling** (CLAUDE.md §25). The implementation session arms its own §26 check-in.
