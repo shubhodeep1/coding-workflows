@@ -184,7 +184,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `WORKFLOW_HEAL_PR_RECONCILE_ENABLED`) closes the heal PRs stacked on its
     head branch and their heal issues (source unmerged), or merges its final
     head and its base into their heal branches (fast-forward push, no force)
-    and re-points them at its base (source merged). Reporters wrap
+    and re-points them at its base (source merged). A heal PR is either the
+    Codex `ai/issue-<issue>` PR or a Claude issue-mode project's final PR
+    (head `claude/implement-plan-issue-<issue>-<topic>`, found by listing the
+    open PRs based on the source head / base, at most two calls per run);
+    closing a Claude project's final PR also closes its inner PRs (based on
+    the project branch), and the project's stage sessions follow the final
+    PR's re-pointed base. `heal_fix_branch_issue` links a failing heal-fix PR
+    to its heal issue through either branch shape, so a Claude heal fix whose
+    own review keeps failing still reaches the lineage cap. Reporters wrap
     the report as `client_payload: {schema_version, report}` (GitHub caps
     `client_payload` at 10 top-level properties); the intake unwraps it and
     accepts the flat shape too, and a rejected dispatch logs `detail=` with
@@ -237,7 +245,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `ai:claude` and no `ai:codex`. Failures label `ai:claude-handoff-failed`
     (handoff / intake) or `ai:claude-blocked` (a CLAUDE.md §28.C stop, asked
     on the issue). Issue-mode sessions auto-decide every question, start-up
-    checks included (CLAUDE.md §28.A).
+    checks included (CLAUDE.md §28.A). Workflow failure heal issues
+    (`ai:workflow-heal`) route like any standalone issue: a `Target branch:`
+    of `stable` or a source PR's head branch becomes the project's base (a
+    deleted one falls back to the default branch), and they skip their own
+    security pass. `base-self-inflicted` heals on an `orchestrator/project-<N>`
+    base carry `ai:orchestrator-managed` (plus `Integration branch:`), so
+    they always stay on Codex; on any other base they route normally.
     Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for

@@ -1225,6 +1225,28 @@ router. Automation-produced issues (`ai:security`, `ai:check-triage`,
 `ai:workflow-heal`) go to Claude too, but skip their own security pass so a
 security fix cannot spawn follow-ups of follow-ups.
 
+**Workflow failure heal issues.** A heal issue's `Target branch:` line is
+the Claude project's base:
+- `stable`: the fix merges into `stable` and ships through the 6-hourly
+  `auto-release-stable.yml` release, as the Codex hotfix path did;
+- a source PR's head branch (a review/autofix failure in this repo): the fix
+  lands on that PR.
+
+If the named branch is gone, the base falls back to the default branch.
+
+The final PR carries `Fixes #N` only into the default branch; into any other
+base, the project closes the heal issue itself and labels it `ai:merged`.
+
+When a heal's source PR closes, `heal-pr-reconcile` handles the Claude project
+like a Codex heal PR:
+- source closed unmerged: the final PR, its inner PRs and the heal issue are
+  closed;
+- source merged: the project branch absorbs the merge, the final PR is
+  re-pointed at the source PR's base, and the project follows it.
+
+`base-self-inflicted` heals on an `orchestrator/project-<N>` base are
+orchestrator-managed and stay on Codex.
+
 **Switching.**
 
 | To … | Do |
