@@ -247,3 +247,57 @@ No actionable SC2086 finding or `TODO`/`FIXME`/`HACK` marker was confirmed in th
 | Code modularization | ~9–11: five phase/release workflows, two wrappers, shared scripts and tests | Large |
 | Expression size reduction | ~3–5: implement/validate workflows, extracted script or manifest and tests | Medium |
 | Medium/Low fixes | ~4–6: poller, merge-train, triage and support-staging scripts plus tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-26)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is ready for implementation; `NEEDS_VERIFICATION` requires the stated checks; `RISKY_SKIP` must not be auto-implemented because a specified safety trigger applies. Counts below are logical calls, not underlying requests or retries.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001 — Reuse the full comment history for the bounded clarify prompt — `RISKY_SKIP`**  
+**Calls:** `.github/workflows/clarify.yml:511-512` and `.github/workflows/clarify.yml:514-529`, in the **Fetch issue comments** step.  
+**Count:** With semantic cache enabled, 2 logical reads → 1 on a successful full-history fetch; retain a bounded fallback read if that fetch fails. With cache disabled, 1 → 1.  
+**Endpoint:** `GET /repos/{repo}/issues/{issue}/comments`, currently requested with `per_page=50` and, separately, `per_page=100` plus `--paginate --slurp`.  
+**Evidence:** The first response fills `ISSUE_COMMENTS_FILE`; the second reads the same sorted comments to fill `THREAD_HISTORY_FILE`. Their pagination and failure behavior differ.  
+**Proposed fix:** In the **Fetch issue comments** step, when semantic cache is enabled, derive the bounded first 50 JSON comments and formatted history from one complete paginated response. Preserve the current bounded-only path when disabled and the cache-bypass sentinel on full-history failure.  
+**Safety rationale:** `RISKY_SKIP`: one call is paginated, and reordering the reads could change which API failure stops the step versus triggers cache bypass.  
+**Downstream signal:** Do not auto-implement. Manually test more than 100 comments, both fetch-failure orderings, the first-50 prompt boundary, and the existing cache-bypass warning before approving a change.
+
+**MERGE-002 — Combine the two close-sweep label inventories — `RISKY_SKIP`**  
+**Calls:** `scripts/orchestrate_poll_process.sh:3898-3903` and `scripts/orchestrate_poll_process.sh:3904-3909`, in `close_merged_issues_sweep`.  
+**Count:** 2 logical list calls → potentially 1 when both result sets fit a single batched response; preserve per-class fallback when they do not.  
+**Endpoints:** Open-issue lists filtered separately by `ai:merged` and `ai:ready-to-merge`.  
+**Evidence:** Both calls request `number,labels` with `--limit 200`; the sweep then combines them, giving `merged_label` precedence when both labels occur (`scripts/orchestrate_poll_process.sh:3911-3925`).  
+**Proposed fix:** Consider one aliased GraphQL fetch for the two label classes, following `_fetch_candidate_issue_details_graphql` in the same script. Return both arrays to `close_merged_issues_sweep`; inspect each connection’s pagination and retain separate legacy reads on an incomplete class.  
+**Safety rationale:** `RISKY_SKIP`: this is inside `orchestrate_poll_process.sh`; the separate capped queries and fail-open `[]` results also encode distinct snapshot and failure behavior.  
+**Downstream signal:** Do not auto-implement. Manually verify per-class 200-item coverage, partial GraphQL failures, concurrent label transitions, `merged_label` precedence, and preservation of the sweep’s count log at `:3933`.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- BATCH-001: `RISKY_SKIP` — The existing `pulls/{n}/files` read is paginated (`scripts/review_merge_train.sh:123-136`); manually verify complete connections and per-PR REST fallback before replacing it.
+- BATCH-002: `RISKY_SKIP` — Comment reads are paginated, and marker retirement, label deletion, and dispatch intervene before the released-marker lookup (`scripts/review_merge_train.sh:464-486`); an earlier snapshot may be stale.
+- API-001: `NEEDS_VERIFICATION` — Verify a repository-and-label-keyed cache treats confirmed “already exists” as success, never caches a failed create, and preserves required diagnostics (`scripts/label_helpers.sh:143-176,193-196`).
+
+### Summary Counts
+
+*Counts cover net-new findings above; cross-references are excluded.*
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 2 | MERGE-001, MERGE-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
