@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "Changes across review autofix, hooks, and orchestration have used sandboxing or trusted post-processing boundaries, with dedicated isolation and workflow-contract tests. When modifying agent execution or poller behavior, identify which steps handle untrusted data and keep privileged processing outside that boundary.",
+  "fingerprint": "2adb65355280304b41e647d1da23f7376f4d0aa63e78667700ad5d890cafc638",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36225804431",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36225804431",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4489",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4491",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4502",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4503",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4511",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4490",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4492",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4504",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4505",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4514"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260926071319_6232dfc82c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Preserve explicit trust boundaries and process isolation in workflow automation.",
+  "timestamps": {
+    "created_at": "2026-09-26T07:13:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
