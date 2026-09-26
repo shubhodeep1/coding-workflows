@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Orchestrator changes commonly cross the state library, poll process, and GitHub Actions workflow. When changing state authentication or recovery behavior, verify end-to-end polling and recovery contracts rather than testing only the state helper.",
+  "fingerprint": "dde866cefd03432ee422f24cb1cdcdbcd7fb2c5489b6f3ed313ba109235c38d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36243782557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36243782557",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4502",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4503",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4506",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4511",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4512",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4504",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4505",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4510",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4514",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4516"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260926130719_73eeb71107",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep orchestrator state, polling, authentication, and workflow contracts consistent.",
+  "timestamps": {
+    "created_at": "2026-09-26T13:07:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
