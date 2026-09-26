@@ -153,6 +153,34 @@ def test_manifest_rejects_host_shell_and_environment_controls(tmp_path: Path) ->
 	assert not (tmp_path / "marker").exists()
 
 
+def test_host_health_probe_manifest_restrictions(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	for family in ("node-runtime", "node-hardhat-solidity", "python-mongo-flask", "python-mongo-repo-checks", "python-repo-checks"):
+		for override in ({"CURL_HOME": "/workspace"}, {"curl_ca_bundle": "/workspace/ca.pem"},
+				{"HTTP_PROXY": "http://127.0.0.1:8888"}, {"http_proxy": "http://127.0.0.1:8888"},
+				{"SSL_CERT_FILE": "/workspace/cert"}, {"SSLKEYLOGFILE": "/workspace/tls-keys"}):
+			payload = _manifest_payload(family)
+			payload["env_overrides"] = override
+			_write_yaml(manifest, payload)
+			assert _run_renderer(manifest, tmp_path / "out").returncode != 0, (family, override)
+		for url in ("https://example.invalid/app", "http://169.254.169.254:80/",
+				"http://localhost:8080/health", "http://127.1:8080/", "http://127.0.0.1/",
+				"http://127.0.0.1:0/", "http://127.0.0.1:65536/",
+				"http://127.0.0.1:8080@evil.invalid/", "http://user@127.0.0.1:8080/",
+				"http://127.0.0.1:8080/#frag", "http://127.0.0.1:8080/\n", "http://127.0.0.1:8080\\@evil.invalid/"):
+			payload = _manifest_payload(family)
+			payload["env_overrides"] = {"APP_URL": url}
+			_write_yaml(manifest, payload)
+			result = _run_renderer(manifest, tmp_path / "out")
+			assert result.returncode != 0, (family, url)
+		for url in ("", "http://127.0.0.1:8080/health", "https://127.0.0.1:443/"):
+			payload = _manifest_payload(family)
+			payload["env_overrides"] = {"APP_URL": url}
+			_write_yaml(manifest, payload)
+			result = _run_renderer(manifest, tmp_path / "out")
+			assert result.returncode == 0, (family, url, result.stderr)
+
+
 def test_verify_output_root_refuses_extra_or_modified_test(tmp_path: Path) -> None:
 	manifest = tmp_path / "validate.yml"
 	output = tmp_path / "validation"

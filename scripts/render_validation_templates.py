@@ -338,13 +338,20 @@ def validate_rendered_shell_inputs(manifest: dict[str, Any]) -> None:
 				if any(char in value for char in "'\"$`\\\r\n"):
 					raise ManifestValidationError(f"{field_name} contains unsafe YAML or shell syntax")
 	for override_name in manifest.get("env_overrides", {}):
-		if (override_name in {"BASH_ENV", "BASHOPTS", "SHELLOPTS", "ENV", "PATH", "HOME", "IFS", "CDPATH",
+		if (override_name.upper() in {"BASH_ENV", "BASHOPTS", "SHELLOPTS", "ENV", "PATH", "HOME", "IFS", "CDPATH",
 				"SHELL", "TMPDIR", "PROMPT_COMMAND", "PS4", "TEST_DIR", "LOG_DIR", "CANARY_PATTERN",
 				"HELPER_PATTERN", "VALIDATION_INCLUDE_SYNTHESISED", "NODE_OPTIONS", "JAVA_TOOL_OPTIONS",
-				"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}
-				or override_name.startswith(("LD_", "DYLD_", "GH_", "GITHUB_", "GIT_", "DOCKER_", "COMPOSE_",
-					"VALIDATE_", "PYTHON", "BASH", "RUBY", "PERL", "XDG_", "SSH_", "AWS_", "PIP_", "UV_"))):
+				"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "CURL_HOME", "CURL_CA_BUNDLE",
+				"CURL_SSL_BACKEND", "SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE"}
+				or override_name.upper().startswith(("LD_", "DYLD_", "GH_", "GITHUB_", "GIT_", "DOCKER_", "COMPOSE_",
+					"VALIDATE_", "PYTHON", "BASH", "RUBY", "PERL", "XDG_", "SSH_", "AWS_", "PIP_", "UV_", "CURL_"))):
 			raise ManifestValidationError(f"env_overrides cannot control host execution: {override_name}")
+	app_url_override = manifest.get("env_overrides", {}).get("APP_URL")
+	if app_url_override:
+		# A host-side probe must never accept a manifest-selected network destination.
+		url_match = re.fullmatch(r"https?://127\.0\.0\.1:([1-9][0-9]{0,4})(?:/[A-Za-z0-9_./~%?&=+:-]*)?", app_url_override)
+		if url_match is None or int(url_match.group(1)) > 65535:
+			raise ManifestValidationError("APP_URL must be an HTTP(S) URL on 127.0.0.1 with a valid explicit port")
 	app_service_override = manifest.get("env_overrides", {}).get("APP_SERVICE")
 	if app_service_override is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", app_service_override):
 		raise ManifestValidationError("APP_SERVICE must be a literal service name")

@@ -211,7 +211,7 @@ def test_node_runtime_env_overrides_flow_into_validate_env_and_compose() -> None
 		payload = _manifest_payload()
 		payload["env_overrides"] = {
 			"APP_SERVICE": "custom-app",
-			"APP_URL": "https://example.invalid/app",
+			"APP_URL": "http://127.0.0.1:8080/app",
 			"NODE_ENV": "test",
 			"NPM_CONFIG_CACHE": "${HOME}/.npm-cache",
 		}
@@ -226,12 +226,12 @@ def test_node_runtime_env_overrides_flow_into_validate_env_and_compose() -> None
 		assert 'APP_SERVICE="app"' in env_text, env_text
 		assert 'APP_SERVICE="custom-app"' in env_text, env_text
 		assert env_text.find('APP_SERVICE="custom-app"') > env_text.find('APP_SERVICE="app"'), env_text
-		assert 'APP_URL="https://example.invalid/app"' in env_text, env_text
+		assert 'APP_URL="http://127.0.0.1:8080/app"' in env_text, env_text
 		assert 'NODE_ENV="test"' in env_text, env_text
 		assert 'NPM_CONFIG_CACHE="\\${HOME}/.npm-cache"' in env_text, env_text
 
 		assert 'APP_SERVICE: "custom-app"' in compose_text, compose_text
-		assert 'APP_URL: "https://example.invalid/app"' in compose_text, compose_text
+		assert 'APP_URL: "http://127.0.0.1:8080/app"' in compose_text, compose_text
 		assert 'NODE_ENV: "test"' in compose_text, compose_text
 		assert 'NPM_CONFIG_CACHE: "$${HOME}/.npm-cache"' in compose_text, compose_text
 		assert '${APP_SERVICE:-app}' not in compose_text, compose_text
