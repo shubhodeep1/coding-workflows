@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4491,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4491\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4492\",\"pr_number\":4492,\"branch\":\"ai/issue-4491\",\"run_id\":\"36202088601\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/36202088601\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\".github/workflows/validate.yml\",\"changelog.d/4491-validation-fixer-review-isolation.md\",\"docs/how-it-works.md\",\"scripts/review_autofix_step_claude_fixer_handoff.sh\",\"scripts/self_heal_validation.sh\",\"scripts/stage_workflow_support.sh\",\"scripts/untrusted_process_sandbox.sh\",\"scripts/validate_process.sh\",\"tests/test_agent_process_isolation.py\",\"tests/test_review_autofix_claude_fixer_mode.py\",\"tests/test_validate_target_ref_input.py\"]}",
+  "fingerprint": "d27a83ca22961a21e9910e9f6200f68f51b80c1ca062cc58ed38826670eb616e",
+  "lineage": {
+    "issue_number": 4491,
+    "parent_ids": [],
+    "pr_number": 4492,
+    "run_id": "36202088601",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36202088601",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4492"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260926000125_271b6f2646",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4491,
+    "level": "run",
+    "pr_number": 4492,
+    "run_id": "36202088601"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4491: https://github.com/shubhodeep1/coding-workflows/pull/4492",
+  "timestamps": {
+    "created_at": "2026-09-26T00:01:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
