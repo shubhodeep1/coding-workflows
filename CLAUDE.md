@@ -1534,9 +1534,11 @@ After an interactive Claude Code session pushes work and a pull request
 exists for it, the session **arms an hourly status check-in for that pull
 request** and keeps it armed until the PR is terminal (merged, or closed
 without merging). The check-in runs in a small Sonnet checker session at
-low effort, reads the PR's state and nothing else, and when the PR is terminal reports
-the next steps, or says the pushing session can be closed because there
-are none. This section applies in this repo
+low effort that reads the PR's state and nothing else. When the PR is
+terminal the checker hands the verdict back to the pushing session, which
+still holds the context, and that session writes the action-needed report:
+the next steps, or that it can be closed because there are none. This
+section applies in this repo
 and in every consumer repo that receives this file via the `@stable` sync.
 
 The check-in is the scheduled self check-in §25.C allows, not the PR
@@ -1565,45 +1567,71 @@ CI or review events, and never touches the PR. §25 and its
 
 ### B) How to arm
 
-Waking the session that pushed costs its whole conversation on every
-check. The check-in therefore runs in its own small **Sonnet checker
-session at low effort**, and the pushing session is never woken:
+Waking the session that pushed costs its whole conversation, so the hourly
+reads run in a small **Sonnet checker session at low effort** and never
+wake the pushing session. The pushing session is woken once, when the PR
+is terminal, because the report (§26.D) needs the context only it holds:
 
-1. Call `create_session` (Claude Code Remote MCP server) with
-   `source_url` = the repository, `model: claude-sonnet-5`,
-   `permission_mode` = this session's mode, `title` =
-   `PR #<n> status check-in`, and the prompt `/effort low` **and nothing
-   else**. `create_session` takes no effort parameter, and `/effort low`
-   only takes effect when it is the whole prompt: followed by more text in
-   the same prompt it is not applied (verified 2026-09-25 with
+0. Run the stale Routine sweep (§26.G).
+1. Create the **hand-back Routine**: `create_trigger` (Claude Code Remote
+   MCP server) with `persistent_session_id` = this session's id (Bash:
+   `echo "session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}"`), `run_once_at`
+   = now + 7 days, `name` = `PR #<n> hand-back` (Routine names are capped
+   at 60 characters, so the PR URL in the prompt is what identifies it),
+   `initiation: own_followup`, and `prompt` = `CLAUDE.md §26 hand-back
+   for PR #<n> (<PR URL>). Continue with CLAUDE.md §26.D in this
+   session.` The prompt never changes and carries no verdict: the Routine
+   fires either because the checker pulled it forward on a terminal PR or
+   because the checker stopped renewing it for 7 days (a dead-man's
+   switch), and §26.D reads the PR state itself in both cases.
+2. Call `create_session` with `source_url` = the repository,
+   `model: claude-sonnet-5`, `permission_mode` = this session's mode,
+   `title` = `PR #<n> status check-in`, and the prompt `/effort low` **and
+   nothing else**. `create_session` takes no effort parameter, and
+   `/effort low` only takes effect when it is the whole prompt: followed by
+   more text in the same prompt it is not applied (verified 2026-09-25 with
    `get_session`, whose `session_context.effort_level` reads `low` only in
    the two-step form). The level lasts for the whole session, so every
    later wake of the checker runs at low effort too.
-2. Call `create_trigger` with `persistent_session_id` = the checker's
+3. Call `create_trigger` with `persistent_session_id` = the checker's
    session id, `run_once_at` = two minutes from now, `name` =
    `PR #<n> status check-in: instructions`, `initiation: own_followup`,
    and a standalone prompt that names the repository, the PR number and
-   URL, the §26.C steps, and the **next steps for each terminal state**,
-   written now by the pushing session, which still has the context: what
-   remains if the PR merges (follow-up work, a release or consumer sync it
-   waits on, an action the user must take, or "none — the pushing session
-   can be closed"), and what to ask if it is closed without merging. The
-   one-shot trigger disables itself after it fires.
-3. Report the checker's session id and the trigger id in this session's
-   reply.
+   URL, the §26.C steps, the hand-back trigger id, this session's id, and
+   **fallback next steps** for each terminal state, written now while the
+   context is at hand: what remains if the PR merges (follow-up work, a
+   release or consumer sync it waits on, an action the user must take, or
+   "none — the pushing session can be closed"), and what to ask if it is
+   closed without merging. The checker uses them only when the hand-back
+   fails (§26.C step 5). The one-shot trigger disables itself after it
+   fires.
+4. Report the checker's session id, the instructions trigger id, and the
+   hand-back trigger id in this session's reply.
+
+The hand-back is a **scheduled** fire: a Routine fired on its schedule
+runs in the session it is bound to, and a fire into an archived session
+fails with `ended_reason: auto_disabled_session_gone`. `fire_trigger` is
+never used for it, because a manual fire ignores the binding and starts a
+fresh session with no repository and no context (verified 2026-09-25).
+The checker changes only the Routine's `run_once_at`, never its prompt:
+`update_trigger` tells models not to rewrite a prompt because another
+session asks, and checkers asked to put the verdict in the prompt refused
+(observed 2026-09-25).
 
 A session started by a Routine with `create_new_session_on_fire` has no
 MCP tools and no repository, so it cannot run the check; `create_session`
 gives the checker both, and the checker re-arms itself with `send_later`.
 A checker only runs unattended in Auto mode, so it inherits it only when
 this session is in Auto mode; otherwise it waits on a permission prompt
-at every re-arm. Outside Auto mode the claude-code-remote write tools
-(`send_later`, `create_session`, `archive_session`, and the trigger tools)
-ask on every call whatever `permissions.allow` says, and Haiku 4.5 cannot
-run in Auto mode, which is why the checker is Sonnet.
+at every re-arm and at the hand-back. Outside Auto mode the
+claude-code-remote write tools (`send_later`, `create_session`,
+`archive_session`, and the trigger tools) ask on every call whatever
+`permissions.allow` says, and Haiku 4.5 cannot run in Auto mode, which is
+why the checker is Sonnet.
 
 When `create_session` is not available (a local CLI, desktop, or IDE
-session without the Claude Code Remote MCP server), arm `send_later` into
+session without the Claude Code Remote MCP server), skip the hand-back
+Routine and arm `send_later` into
 this session with `delay_minutes: 60`, `initiation: own_followup`, and a
 message that restates §26.C; on each wake, delegate the check to a Sonnet
 subagent (the Agent tool with `model: "sonnet"`; the Agent tool takes no
@@ -1621,21 +1649,71 @@ so once in the report and stop; do not poll in a loop.
    of the PR (§15) and prints one JSON line: `done`, `state` (`merged` /
    `closed` / `open`), and `reason`. The script decides; the model does not
    interpret the PR.
-2. **Not terminal** → call `send_later` with `delay_minutes: 60` and
-   `initiation: own_followup` into the checker session, and end the turn.
+2. **Not terminal** → renew the dead-man's switch (`update_trigger` on the
+   hand-back trigger id with only `run_once_at` = now + 7 days), call
+   `send_later` with `delay_minutes: 60`, `initiation: own_followup`, and
+   `name` = `PR #<n> status check-in` into the checker session, and end
+   the turn.
    No message to the user, no PR comment, no CI, review, comment,
    conflict, or branch work. A red check or an open review thread does not
    change this: fixing CI or addressing comments happens only when the
    user asks for it directly, under §12.
-3. **Read failed** (exit 2) → re-arm the same way; after three consecutive
-   failures, report the failure once (§26.D, with the error as the state)
-   and keep re-arming.
-4. **Terminal** → stop re-arming and continue with §26.D.
+3. **Read failed** (exit 2) → call `send_later` the same way but do not
+   renew the hand-back Routine. A read that keeps failing therefore lets
+   the dead-man's switch fire within 7 days, and the pushing session looks
+   into it (§26.D).
+4. **Terminal** → stop re-arming and **hand back**: `update_trigger` on the
+   hand-back trigger id with only `run_once_at` = now + 1 minute (never
+   the prompt), noting the time of the update. Then
+   call `send_later` with `delay_minutes: 10` and
+   `name` = `PR #<n> status check-in: hand-back check` into the checker
+   session, and end the turn. The checker writes no report and sends no
+   notification.
+5. **Hand-back check** (the 10-minute wake) → `get_trigger` on the
+   hand-back trigger id:
+   - `last_run.status` is `ROUTINE_RUN_STATUS_SUCCEEDED`, `last_run.fired_at`
+     is after the update, and `last_run.session_id` is the pushing
+     session (`cse_<x>` for `session_<x>`) → rename this session
+     (`set_session_title`) to
+     `PR #<n> <merged | closed> — handed to <pushing session id>` and end
+     the turn. (Usually the pushing session has already renamed and
+     archived the checker before this check runs.)
+   - Not fired yet → re-arm the 10-minute check; after the third such
+     check, fall back.
+   - `last_run.status` is `ROUTINE_RUN_STATUS_FAILED`, `ended_reason` is
+     `auto_disabled_session_gone`, the trigger is not found, or
+     `update_trigger` failed at step 4 → **fall back**: write the §26.D
+     report in this session from the fallback next steps in the prompt,
+     delete the hand-back Routine (`delete_trigger`, ignoring not-found),
+     rename this session with the §26.D title plus
+     ` (pushing session unreachable)`, and send the §26.D
+     `PushNotification`.
 
 ### D) What to report when the PR is terminal
 
-The checker writes the report in its own session, from the next steps the
-pushing session gave it:
+When the hand-back wakes the pushing session, it first runs
+`PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py
+--repo <owner>/<repo> --pr <n> --terminal-only` itself (the Routine
+carries no verdict). Then, in this order, it renames the checker (its id
+is in this session's arming report) to
+`PR #<n> <state> — handed to <this session's id>` and archives it
+(`archive_session`), and only then deletes the fired Routine
+(`delete_trigger`, ignoring not-found). The order matters: the checker's
+10-minute check (§26.C step 5) reads a missing Routine as a failed
+hand-back, so the checker must be gone before the Routine is. The wake
+itself proves the hand-back arrived, so that check is no longer needed;
+its leftover reminder is removed by the sweep.
+
+- **Terminal** → write the report below and finish as described after it.
+- **Still open** → the checker stopped renewing the Routine for 7 days.
+  Re-arm from §26.B step 1: a new hand-back Routine, then a fresh checker
+  with its id.
+- **Read failed** → say so in one line and re-arm the same way, so the
+  next wake retries.
+
+The pushing session writes the report (the checker writes it only in the
+§26.C step 5 fallback), in that session, where the user already looks for
+the task's outcome:
 
 - which terminal state the PR reached (merged, with the merge commit, or
   closed without merging, with when);
@@ -1644,15 +1722,17 @@ pushing session gave it:
 - when no next steps exist, say plainly that the pushing session can be
   closed safely.
 
-Then it renames itself (`set_session_title`, with its own id from
+Then it runs the stale Routine sweep (§26.G), renames itself
+(`set_session_title`, with its own id from
 `session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}` in Bash rather than a
 `get_session` call) to
 `PR #<n> merged — <no action needed | action needed>` or
 `PR #<n> closed — decision needed`, and sends one `PushNotification` (one
 line, under 200 characters) with the terminal state and whether action is
 needed, since the user is unlikely to be watching hours after the push.
-It sends it only on the terminal check-in, never on a non-terminal one,
-and it does not archive itself: its report is what the user opens.
+It sends it only for a terminal verdict, never on a non-terminal
+check-in, and it does not archive itself: its report is what the user
+opens.
 
 ### E) Enforcement
 
@@ -1681,6 +1761,39 @@ The unattended pipelines read `unattended_system_instructions.md` and
 never see this file. §26 says nothing about the orchestrator's PR
 lifecycle handling (`ai-issue-pr-status.yml`, the stall poller, the
 review pipeline) — those keep their own policies.
+
+### G) Stale Routine sweep
+
+Fired one-shot reminders, Routines whose session is gone, and hand-backs
+for PRs that finished long ago accumulate across sessions unless something
+deletes them. The Routines API lives on claude.ai, not GitHub, so the
+sweep runs in the sessions that create them, never in Actions:
+
+- **When**: before arming a check-in (§26.B step 0), after the terminal
+  report (§26.D), and wherever `/implement-plan-claude` arms a wait.
+- **How**: `list_triggers` with `include_completed: true` and
+  `limit: 100`. The result is usually too large for the context and the
+  harness saves it to a file: pass that file as is. Otherwise write the
+  `data` array (only `id`, `name`, `enabled`, `ended_reason`, and
+  `derived_state.prompt` are needed) to a file in the scratchpad. Run
+  `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/stale_routines.py
+  --triggers <file>`; call `delete_trigger` on every id in its `delete`
+  list, ignoring not-found. The script decides; the model does not pick
+  Routines to delete. Later pages are left for later sweeps.
+- **What it deletes**: only Routines these flows create, matched by name
+  (`PR #<n> status check-in…`, `PR #<n> hand-back`, and
+  `implement-plan <slug>: …`), and only when they have ended
+  (`ended_reason` set) or are a hand-back (its prompt reads `… hand-back
+  for …` and names the PR URL) whose PR merged or closed more than 24
+  hours ago. A Routine the user paused, and every Routine with any
+  other name, is never deleted.
+- **Budget and failure**: one REST read per distinct enabled hand-back PR
+  (§15); a failed read keeps that Routine and lists it under `errors`. A
+  sweep that fails as a whole is reported in one line and never blocks
+  the arming or the report.
+
+`tests/test_stale_routines.py` covers the rules and runs in its own
+`ci.yml` step.
 
 ---
 

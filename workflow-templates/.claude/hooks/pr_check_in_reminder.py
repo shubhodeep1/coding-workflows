@@ -29,8 +29,11 @@ whitespace-only input is treated as an empty object and allowed silently.
 
 The reminder is the §26 mechanism, not a §25 subscription: it tells the
 session to start a Sonnet checker session (`create_session`, re-armed with
-`send_later`), never to subscribe to PR activity, and the §25 guard keeps
-blocking `subscribe_pr_activity`.
+`send_later`) that hands a terminal PR back through a scheduled
+Routine bound to the pushing session (`create_trigger` /
+`update_trigger`) so the pushing session writes the report, never to
+subscribe to PR activity, and the §25 guard keeps blocking
+`subscribe_pr_activity`.
 """
 
 from __future__ import annotations
@@ -68,17 +71,26 @@ REMINDER = (
 	"unless one is already armed for that PR, /implement-plan-claude or "
 	"/implement-issue-claude opened it (its own checker is the check-in), "
 	"or the user opted out for this "
-	"task: call create_session with a Sonnet model and the prompt "
-	"`/effort low` alone (text after it in the same prompt stops it from "
-	"applying), then create_trigger with persistent_session_id = that "
-	"session and run_once_at two minutes out, whose prompt names the "
-	"repository, the PR number and URL, the §26 check-in steps (run "
-	".claude/scripts/check_in_status.py --terminal-only; re-arm with "
-	"send_later delay_minutes=60 while the PR is open; on merged or closed, "
-	"report the next steps, say whether the pushing session can be closed, "
-	"and send one PushNotification), and the next steps for each terminal "
-	"state. Without create_session, use send_later into this session and a "
-	"Sonnet subagent for the read. Never subscribe to PR activity (§25)."
+	"task: run the stale Routine sweep (.claude/scripts/stale_routines.py, "
+	"§26.G); create_trigger a hand-back Routine bound to this session "
+	"(persistent_session_id = this session, run_once_at = now + 7 days, name "
+	"\"PR #<n> hand-back\", the PR URL in its prompt); call create_session "
+	"with a Sonnet model and the prompt `/effort low` alone (text after it in "
+	"the same prompt stops it from applying), then create_trigger with "
+	"persistent_session_id = that session and run_once_at two minutes out, "
+	"whose prompt names the repository, the PR number and URL, the hand-back "
+	"trigger id, this session's id, the §26 check-in steps (run "
+	".claude/scripts/check_in_status.py --terminal-only; while the PR is "
+	"open, update_trigger the hand-back 7 days ahead and re-arm with "
+	"send_later delay_minutes=60; on merged or closed, update_trigger the "
+	"hand-back's run_once_at to 1 minute out, never its prompt, so this "
+	"session re-reads the PR state, writes the action-needed report, "
+	"renames itself, and sends one PushNotification, then confirm delivery "
+	"with get_trigger 10 minutes later), and fallback next steps the checker "
+	"reports itself only if the hand-back fails. Never use fire_trigger for "
+	"the hand-back: it starts a fresh session instead of waking this one. "
+	"Without create_session, use send_later into this session and a Sonnet "
+	"subagent for the read. Never subscribe to PR activity (§25)."
 )
 
 
