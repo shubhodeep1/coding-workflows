@@ -152,6 +152,88 @@ def test_validate_workflow_passes_template_default_env() -> None:
 	assert "if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'" in wf
 
 
+def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup() -> None:
+	wf = _workflow_text()
+	step_match = re.search(
+		r"      - name: Install Python dependencies for validation renderer\n(?P<body>.*?)(?=      - name: |\Z)",
+		wf, re.DOTALL,
+	)
+	assert step_match is not None
+	step = step_match.group("body")
+	assert "          BASH_ENV: ''\n" in step
+	assert 'if [ -f "scripts/render_validation_templates.py" ]; then' in step
+	assert 'cd "${RUNTIME_DIR}/renderer-empty"' in step
+	script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir)
+		workspace = root / "workspace"
+		runtime_dir = root / "runtime"
+		bin_dir = root / "bin"
+		for directory in (workspace / "scripts", runtime_dir, bin_dir):
+			directory.mkdir(parents=True)
+		(workspace / "scripts" / "render_validation_templates.py").touch()
+		startup_file = root / "shell-startup"
+		startup_marker = root / "sourced-startup"
+		import_marker = root / "imported-yaml"
+		startup_file.write_text(f"touch {startup_marker}\n", encoding="utf-8")
+		(workspace / "yaml.py").write_text(
+			f"from pathlib import Path\nPath({str(import_marker)!r}).touch()\n"
+			f"Path({str(startup_file)!r}).write_text('compromised')\n",
+			encoding="utf-8",
+		)
+		# One shim stands in for the host python3 and the renderer venv's python:
+		# every call must be isolated (-I) and must not see the workspace. The venv
+		# origin probe itself is exercised against a real venv in
+		# test_renderer_isolated_imports_ignore_workspace_shadows_and_reject_external_origins.
+		python_shim = bin_dir / "python3"
+		python_shim.write_text(
+			"#!/bin/sh\n"
+			"[ \"$1\" = -I ] || exit 11\n"
+			"\"$REAL_PYTHON3\" -I -c '"
+			"import importlib, importlib.util, os, pathlib, sys; "
+			"workspace = pathlib.Path(os.environ[\"GITHUB_WORKSPACE\"]).resolve(); "
+			"assert pathlib.Path.cwd() != workspace; "
+			"assert all(pathlib.Path(p or os.getcwd()).resolve() != workspace for p in sys.path); "
+			"assert all(not (spec := importlib.util.find_spec(name)) or "
+			"not spec.origin or pathlib.Path(spec.origin).resolve() != workspace / (name + \".py\") "
+			"for name in (\"pip\", \"yaml\", \"jsonschema\", \"jinja2\")); "
+			"[importlib.import_module(name) for name in (\"yaml\", \"jsonschema\", \"jinja2\") "
+			"if importlib.util.find_spec(name)]' || exit 15\n"
+			"case \"$2\" in\n"
+			"  -m)\n"
+			"    case \"$3\" in\n"
+			"      venv) mkdir -p \"$4/bin\" && cp \"$0\" \"$4/bin/python\" && exit 0;;\n"
+			"      pip) [ \"$4\" = --isolated ] || exit 12; exit 0;;\n"
+			"    esac\n"
+			"    exit 12;;\n"
+			"  -c) case \"$3\" in *'import yaml, jsonschema, jinja2'*) exit 0;; esac; exit 13;;\n"
+			"esac\n"
+			"exit 14\n",
+			encoding="utf-8",
+		)
+		python_shim.chmod(0o755)
+		env = os.environ.copy()
+		env.update({
+			"BASH_ENV": "",  # Step env overrides the prior workspace-directed BASH_ENV.
+			"GITHUB_WORKSPACE": str(workspace),
+			"PATH": f"{bin_dir}:{os.environ['PATH']}",
+			"PYTHONHOME": str(workspace),
+			"PYTHONPATH": str(workspace),
+			"REAL_PYTHON3": sys.executable,
+			"RUNTIME_DIR": str(runtime_dir),
+		})
+		result = subprocess.run(
+			["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
+			cwd=workspace, env=env, capture_output=True, text=True, timeout=30,
+		)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert (runtime_dir / "renderer-empty").is_dir()
+		assert (runtime_dir / "renderer-venv" / "bin" / "python").exists()
+		assert not startup_marker.exists()
+		assert not import_marker.exists()
+		assert startup_file.read_text(encoding="utf-8") == f"touch {startup_marker}\n"
+
+
 def test_renderer_dependency_preflight_blocks_rendering() -> None:
 	process_text = VALIDATE_PROCESS.read_text(encoding="utf-8")
 	function_text = process_text.split("run_template_validation_harness_renderer()\n{", 1)[1].split("\n}\n", 1)[0]
@@ -411,6 +493,7 @@ def main() -> int:
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
 	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()
 	test_validate_workflow_passes_template_default_env()
+	test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 	test_renderer_dependency_preflight_blocks_rendering()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	test_validate_workflow_bootstraps_codex_heartbeat_support()

@@ -750,6 +750,8 @@ jobs:
         id: renderer_dependencies
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
+          # Do not source the workspace-directed shell startup file in this host-side step.
+          BASH_ENV: ''
         run: |
           set -euo pipefail
 

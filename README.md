@@ -1039,9 +1039,15 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
 > interactive session start a small low-effort Sonnet checker session for every
 > pull request it pushes; the checker runs `.claude/scripts/check_in_status.py`
-> every hour (re-armed with `send_later`), and once the PR merges or closes it
-> reports the next steps (or that the pushing session can be closed) without
-> waking the pushing session. It never subscribes to PR activity and never
+> every hour (re-armed with `send_later`) without waking the pushing session.
+> Once the PR merges or closes, the checker pulls forward a scheduled Routine
+> bound to the pushing session, which re-reads the PR state and, since it
+> holds the context, reports the next steps (or that it can be closed). The
+> checker reports them itself only when that hand-back fails.
+> `.claude/scripts/stale_routines.py` sweeps the Routines these check-ins
+> leave behind (fired reminders, dead-session Routines, finished hand-backs)
+> each time one is armed or reported, and never touches any other Routine.
+> It never subscribes to PR activity and never
 > acts on CI or review comments. The same sync ships the `settings.json`
 > permission allowlist for the tools these commands call. Nothing to
 > configure in the consumer.
@@ -1258,6 +1264,15 @@ the handoff.
    URL, and generate a token.
 3. In coding-workflows, set repository variable `CLAUDE_ISSUE_ROUTINE_ID` to
    that id and secret `CLAUDE_ISSUE_ROUTINE_TOKEN` to the token.
+
+   **Rotating the token.** Regenerate it from the routine's API trigger modal
+   (Routines → Claude issue dispatcher → Edit → API trigger → Regenerate) —
+   the old token stops working immediately — then update the secret with
+   `gh secret set CLAUDE_ISSUE_ROUTINE_TOKEN -R shubhodeep1/coding-workflows`
+   and paste the new value at the interactive prompt, so it never lands in
+   shell history. Until the secret is updated, intake runs fail with
+   HTTP 401 and issues get `ai:claude-handoff-failed`; comment `/reclarify`
+   on them once the secret is current.
 4. Smoke test: open an issue here, or run **Claude Issue Intake** manually
    with a repo and issue number. The issue should get an "intake fired"
    comment with the dispatcher session link, and then a progress comment from
