@@ -85,7 +85,10 @@ def test_issue_command_hands_off_to_plan_chain(issue_cmd):
 def test_issue_command_builds_on_the_named_branch(issue_cmd):
 	assert "`extract_integration_branch` from `scripts/resolve_integration_ref.sh`" in issue_cmd
 	assert "`Integration branch:` line, else its `Target branch:` line, else the default branch" in issue_cmd
-	assert "a missing branch is a hard blocker" in issue_cmd
+	# A named branch that no longer exists falls back to the default branch.
+	assert "A named branch that no longer exists" in issue_cmd
+	assert "falls back to the default branch: record it as an auto-decision" in issue_cmd
+	assert "a missing branch is a hard blocker" not in issue_cmd
 
 
 def test_issue_closes_only_when_the_project_merged(issue_cmd):
@@ -141,3 +144,24 @@ def test_issue_label_and_comment_tools_are_allowlisted():
 	settings = (ROOT / ".claude" / "settings.json").read_text()
 	for tool in ("mcp__github__issue_write", "mcp__github__add_issue_comment", "mcp__github__update_issue_comment"):
 		assert f'"{tool}"' in settings
+
+
+def test_final_pr_base_is_authoritative_in_issue_mode(plan_cmd, issue_cmd):
+	# workflow_failure_heal_pr_reconcile.sh re-points a heal project's final PR
+	# when its source PR merges; the chain must follow it.
+	assert "**The final PR's base is the source of truth.**" in plan_cmd
+	assert "every stage reads F's current `base` and `state`" in plan_cmd
+	assert "`scripts/workflow_failure_heal_pr_reconcile.sh`" in plan_cmd
+	assert "never move it back" in plan_cmd
+	assert "the final PR's base as read in step 11a" in plan_cmd
+	assert "After step 3a the final PR's base is authoritative" in issue_cmd
+
+
+def test_abandoned_heal_project_stops(plan_cmd, issue_cmd):
+	assert "the project is abandoned: update the progress comment" in plan_cmd
+	assert "arm no checker, delete the safety net, report, and stop" in plan_cmd
+	assert "the project was abandoned" in issue_cmd
+
+
+def test_missing_base_falls_back_in_plan_command(plan_cmd):
+	assert "a named branch that no longer exists falls back to the default branch (recorded as an auto-decision)" in plan_cmd
