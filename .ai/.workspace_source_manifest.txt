@@ -190,6 +190,7 @@ changelog.d/4481-validation-renderer-dependency-preflight.md
 changelog.d/4484-authenticate-orchestrator-state.md
 changelog.d/4489-orchestrator-recovery-auth.md
 changelog.d/4491-validation-fixer-review-isolation.md
+changelog.d/4506-validation-trust-boundaries.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md

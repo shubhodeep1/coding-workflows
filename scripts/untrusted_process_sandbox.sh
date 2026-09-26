@@ -29,7 +29,7 @@ done
 [ "$#" -gt 0 ] || { echo "untrusted_process_sandbox: command is required" >&2; exit 2; }
 case "${role}" in
 	plan|implement|implement-repair|diagnose|reviewer|editor|resolver|judge|judge-fix|summary|audit) ;;
-	validator|workspace-guard) ;;
+	validator|workspace-guard|serena-bootstrap) ;;
 	*) echo "untrusted_process_sandbox: invalid role" >&2; exit 2 ;;
 esac
 workspace="$(cd "${workspace}" && pwd -P)"
@@ -41,6 +41,12 @@ case "${role}" in
 			echo "untrusted_process_sandbox: isolated roles require /usr/bin/python3 -I -S" >&2; exit 2;
 		}
 		[ -z "${config_format}" ] && [ -z "${config_path}" ] || exit 2
+		;;
+	serena-bootstrap)
+		provider_required=false
+		[ "${1:-}" = bash ] && [[ "${2:-}" = /*/scripts/setup_serena.sh ]] && [ "$#" -eq 2 ] &&
+			[ -f "${2}" ] && [ ! -L "${2}" ] && [ -z "${config_format}" ] && [ -z "${config_path}" ] &&
+			[ -z "${guard_action}" ] && [ -n "${writable_output_dir}" ] || exit 2
 		;;
 	*)
 		case "${config_format}" in opencode|codex) ;; *) echo "untrusted_process_sandbox: invalid config format" >&2; exit 2 ;; esac
@@ -66,9 +72,14 @@ if [ "${provider_required}" = false ]; then
 		[ -z "${guard_action}" ] || exit 2
 	fi
 	if [ -n "${writable_output_dir}" ]; then
-		[ "${role}" = validator ] && [ -d "${writable_output_dir}" ] && [ ! -L "${writable_output_dir}" ] || exit 2
+		case "${role}" in validator|serena-bootstrap) ;; *) exit 2 ;; esac
+		[ -d "${writable_output_dir}" ] && [ ! -L "${writable_output_dir}" ] || exit 2
 		writable_output_dir="$(cd "${writable_output_dir}" && pwd -P)"
-		case "${writable_output_dir}/" in "${runtime_dir}/"*) ;; *) echo "untrusted_process_sandbox: validator output must be inside artifact directory" >&2; exit 2 ;; esac
+		case "${writable_output_dir}/" in "${runtime_dir}/"*) ;; *) echo "untrusted_process_sandbox: isolated output must be inside artifact directory" >&2; exit 2 ;; esac
+		if [ "${role}" = serena-bootstrap ]; then
+			[ "$(stat -c %a "${writable_output_dir}")" = 700 ] || exit 1
+			[ ! -L "${workspace}/.serena" ] && [ ! -L "${workspace}/.serena/project.yml" ] || exit 1
+		fi
 	fi
 fi
 
@@ -276,6 +287,11 @@ else
 	sandbox_runtime="${sandbox_dir}/runtime"
 	mkdir -p "${sandbox_home}" "${sandbox_runtime}"
 fi
+if [ "${role}" = serena-bootstrap ]; then
+	sandbox_home="${writable_output_dir}/home"
+	[ ! -L "${sandbox_home}" ] || exit 1
+	mkdir -p "${sandbox_home}"
+fi
 
 safe_git_config="${sandbox_dir}/gitconfig"
 : > "${safe_git_config}"
@@ -345,9 +361,15 @@ while IFS= read -r -d '' nested_git_entry; do
 	fi
 done < <(find "${workspace}" -xdev -name .git -print0 2>/dev/null)
 
+sandbox_tool_path="$([ "${provider_required}" = true ] && printf '%s' "${PATH}" || printf '/usr/local/bin:/usr/bin:/bin')"
+if [ "${role}" = serena-bootstrap ] && [ -d "${host_home}/.local/bin" ] && [ ! -L "${host_home}/.local/bin" ]; then
+	# An already installed pinned binary is reusable read-only; installation
+	# still cannot open the unit's network boundary.
+	sandbox_tool_path="${host_home}/.local/bin:${sandbox_tool_path}"
+fi
 common_env=(
 	"HOME=${sandbox_home}"
-	"PATH=$([ "${provider_required}" = true ] && printf '%s' "${PATH}" || printf '/usr/bin:/bin')"
+	"PATH=${sandbox_tool_path}"
 	"LANG=${LANG:-C.UTF-8}"
 	"LC_ALL=${LC_ALL:-C.UTF-8}"
 	"NO_COLOR=1"
@@ -366,6 +388,11 @@ if [ "${provider_required}" = true ]; then
 	common_env+=("SANDBOX_PROVIDER_TOKEN=sandbox-proxy")
 else
 	common_env+=("POST_AGENT_ARTIFACT_DIR=${runtime_dir}")
+fi
+if [ "${role}" = serena-bootstrap ]; then
+	common_env+=("GITHUB_WORKSPACE=${workspace}" "GITHUB_ENV=${writable_output_dir}/result.env"
+		"SERENA_ENABLED=true" "SERENA_FALLBACK_TARGET=validate"
+		"SERENA_FALLBACK_PHASE=${SERENA_FALLBACK_PHASE:-general}")
 fi
 if [ "${role}" = workspace-guard ] && [ -n "${GIT_DIR:-}" ]; then
 	# The writable workspace can be a copy without .git; only the guard needs
@@ -458,6 +485,9 @@ sandbox_io_read_max="${UNTRUSTED_SANDBOX_IO_READ_BANDWIDTH_MAX:-100M}"
 sandbox_io_write_max="${UNTRUSTED_SANDBOX_IO_WRITE_BANDWIDTH_MAX:-50M}"
 sandbox_limit_nofile="${UNTRUSTED_SANDBOX_LIMIT_NOFILE:-4096}"
 sandbox_runtime_max_sec="${UNTRUSTED_SANDBOX_RUNTIME_MAX_SEC:-7200}"
+if [ "${role}" = serena-bootstrap ]; then
+	sandbox_runtime_max_sec="${UNTRUSTED_SANDBOX_SERENA_RUNTIME_MAX_SEC:-300}"
+fi
 sandbox_stop_timeout_sec="${UNTRUSTED_SANDBOX_STOP_TIMEOUT_SEC:-30}"
 validate_positive_integer "${sandbox_tasks_max}" "TasksMax"
 validate_resource_size "${sandbox_memory_max}" "MemoryMax"
@@ -522,7 +552,7 @@ systemd_properties=(
 	--property=OOMPolicy=kill
 	--property="TimeoutStopSec=${sandbox_stop_timeout_sec}"
 	--property=IPAddressDeny=any
-	--property="InaccessiblePaths=${credential_inaccessible_entry}-/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh"
+	--property="InaccessiblePaths=${credential_inaccessible_entry}-/var/run/docker.sock -/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -${runner_command_files} -${host_home}/.config/gh -${host_home}/.git-credentials -${host_home}/.ssh -${host_home}/.codex"
 	--property=ReadOnlyPaths=/
 	--property="ReadWritePaths=${sandbox_dir}${runtime_write_paths[*]:+ ${runtime_write_paths[*]}}"
 )
@@ -545,10 +575,15 @@ case "${role}" in
 			systemd_properties+=(--property="ReadWritePaths=${writable_output_dir}")
 		fi
 		;;
+	serena-bootstrap)
+		# A symlink in the checkout cannot turn this into a support write:
+		# the rest of the filesystem remains read-only in the unit.
+		systemd_properties+=(--property="ReadWritePaths=${workspace} ${writable_output_dir}")
+		;;
 esac
 for protected_git_path in "${git_metadata_paths[@]:-}"; do
 	[ -n "${protected_git_path}" ] || continue
-	if [ "${provider_required}" = true ] || [ "${role}" = validator ]; then
+	if [ "${provider_required}" = true ] || [ "${role}" = validator ] || [ "${role}" = serena-bootstrap ]; then
 		systemd_properties+=(--property="InaccessiblePaths=${protected_git_path}")
 	else
 		systemd_properties+=(--property="ReadOnlyPaths=${protected_git_path}")
@@ -585,7 +620,7 @@ sandbox_unit_rc=0
 "${systemd_run[@]}" --wait --pipe --collect --service-type=exec \
 	--unit="${sandbox_unit_name}" \
 	"${systemd_properties[@]}" \
-	--working-directory="$([ "${provider_required}" = true ] && printf '%s' "${workspace}" || printf '%s' "${sandbox_runtime}")" \
+	--working-directory="$([ "${provider_required}" = true ] || [ "${role}" = serena-bootstrap ] && printf '%s' "${workspace}" || printf '%s' "${sandbox_runtime}")" \
 	env -i "${common_env[@]}" "$@" || sandbox_unit_rc=$?
 if [ "${sandbox_unit_rc}" -eq 226 ]; then
 	# 226 is systemd's EXIT_NAMESPACE: the unit failed while building its mount

@@ -245,6 +245,69 @@ def test_finalize_ignores_manifest_entries_outside_workspace(tmp_path: Path) -> 
 	assert sibling_path.read_text(encoding="utf-8") == "keep\n"
 
 
+def test_finalize_rejects_restored_symlinks_before_writing(tmp_path: Path) -> None:
+	source = tmp_path / "source"
+	workspace = tmp_path / "runner-temp" / "workspaces" / "issue-7"
+	private = tmp_path / "private"
+	source.mkdir()
+	workspace.mkdir(parents=True)
+	private.mkdir()
+	(private / "protected.txt").write_text("safe\n", encoding="utf-8")
+	(source / "nested").mkdir()
+	(source / "nested" / "protected.txt").write_text("tampered\n", encoding="utf-8")
+	(workspace / "nested").symlink_to(private, target_is_directory=True)
+	result = _run_helper("finalize", tmp_path, WORKSPACE_SOURCE_PATH=str(source), WORKSPACE_PATH=str(workspace))
+	assert result.returncode != 0
+	assert (private / "protected.txt").read_text(encoding="utf-8") == "safe\n"
+
+	(workspace / "nested").unlink()
+	(workspace / ".ai").mkdir()
+	(workspace / ".ai" / "validate-hints-cache").symlink_to(private, target_is_directory=True)
+	result = _run_helper("finalize", tmp_path, WORKSPACE_SOURCE_PATH=str(source), WORKSPACE_PATH=str(workspace), WORKSPACE_REUSE_ENABLED="true", WORKSPACE_CACHE_RESTORE_STATE="exact")
+	assert result.returncode != 0
+	assert (private / "protected.txt").read_text(encoding="utf-8") == "safe\n"
+	(workspace / ".ai" / "validate-hints-cache").unlink()
+	(workspace / ".ai").rmdir()
+	(workspace / ".ai").symlink_to(private, target_is_directory=True)
+	result = _run_helper("finalize", tmp_path, WORKSPACE_SOURCE_PATH=str(source), WORKSPACE_PATH=str(workspace))
+	assert result.returncode != 0
+	assert not (private / ".workspace_source_manifest.txt").exists()
+
+	(workspace / ".ai").unlink()
+	(workspace / ".ai").mkdir()
+	(workspace / ".ai" / ".workspace_source_manifest.txt").symlink_to(private / "protected.txt")
+	result = _run_helper("finalize", tmp_path, WORKSPACE_SOURCE_PATH=str(source), WORKSPACE_PATH=str(workspace))
+	assert result.returncode != 0
+	assert (private / "protected.txt").read_text(encoding="utf-8") == "safe\n"
+
+
+def test_finalize_ignores_checkout_python_module(tmp_path: Path) -> None:
+	source = tmp_path / "source"
+	workspace = tmp_path / "runner-temp" / "workspaces" / "issue-7"
+	source.mkdir()
+	workspace.mkdir(parents=True)
+	(source / "pathlib.py").write_text("raise RuntimeError('import hijack')\n", encoding="utf-8")
+	result = _run_helper("finalize", tmp_path, WORKSPACE_SOURCE_PATH=str(source), WORKSPACE_PATH=str(workspace))
+	assert result.returncode == 0, result.stderr
+	assert (workspace / "pathlib.py").exists()
+
+
+def test_finalize_rejects_prior_manifest_through_restored_symlink(tmp_path: Path) -> None:
+	source = tmp_path / "source"
+	workspace = tmp_path / "runner-temp" / "workspaces" / "issue-7"
+	private = tmp_path / "private"
+	source.mkdir()
+	workspace.mkdir(parents=True)
+	private.mkdir()
+	(private / "target").write_text("safe", encoding="utf-8")
+	(workspace / "nested").symlink_to(private, target_is_directory=True)
+	(workspace / ".ai").mkdir()
+	(workspace / ".ai" / ".workspace_source_manifest.txt").write_text("nested/target\n", encoding="utf-8")
+	result = _run_helper("finalize", tmp_path, WORKSPACE_SOURCE_PATH=str(source), WORKSPACE_PATH=str(workspace))
+	assert result.returncode != 0
+	assert (private / "target").read_text(encoding="utf-8") == "safe"
+
+
 def test_implement_workflow_stages_workspace_helper_and_orders_restore_keys() -> None:
 	stage_block = _step_run_text(IMPLEMENT_WORKFLOW, "Stage workflow support files")
 	assert "workspace_init.sh" in stage_block

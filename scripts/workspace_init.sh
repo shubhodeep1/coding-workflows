@@ -123,7 +123,7 @@ assert_workspace_path_under_root()
 	local workspace_root="$1"
 	local workspace_path="$2"
 
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace_root}" "${workspace_path}" <<'PY'
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -S - "${workspace_root}" "${workspace_path}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -210,6 +210,7 @@ command_metadata()
 	if ! assert_workspace_path_under_root "${workspace_root}" "${workspace_path}"; then
 		fail "resolved workspace path escapes ${workspace_root}: ${workspace_path}"
 	fi
+	[ ! -L "${workspace_path}" ] || fail "workspace path is a symlink"
 
 	cache_restore_state="$(resolve_restore_state \
 		"${workspace_reuse_enabled}" \
@@ -269,7 +270,7 @@ materialize_source_tree()
 	local workspace_path="$2"
 	local manifest_path="${workspace_path}/.ai/.workspace_source_manifest.txt"
 
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${source_path}" "${workspace_path}" "${manifest_path}" <<'PY'
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -S - "${source_path}" "${workspace_path}" "${manifest_path}" <<'PY'
 from __future__ import annotations
 
 import os
@@ -284,6 +285,17 @@ excluded_roots = {'.git', '.codex-workflow-src', '.codex-workflow-src-main'}
 
 if source == workspace:
     raise SystemExit("source and workspace paths must differ")
+
+
+def check_workspace_target(relpath: str) -> Path:
+    """Never traverse a restored symlink while writing or removing a path."""
+    target = workspace / relpath
+    current = workspace
+    for part in Path(relpath).parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise SystemExit(f"symlinked workspace parent: {current}")
+    return target
 
 
 def prune_empty_parents(target: Path) -> None:
@@ -339,12 +351,21 @@ def remove_path(target: Path) -> None:
 current_relpaths = iter_source_relpaths()
 current_set = set(current_relpaths)
 previous_set: set[str] = set()
+if manifest_path.is_symlink() or (workspace / '.ai').is_symlink():
+    raise SystemExit('symlinked workspace manifest or .ai directory')
+if (source / '.ai').is_symlink() or (source / '.ai/.workspace_source_manifest.txt').is_symlink():
+    raise SystemExit('symlinked source .ai directory or manifest')
 if manifest_path.exists():
     previous_set = {
         line.strip()
         for line in manifest_path.read_text(encoding='utf-8').splitlines()
         if line.strip() and is_safe_relpath(line.strip())
     }
+
+# Preflight every destination before mutating a cached workspace. The manifest
+# itself and its parent are untrusted cache contents too.
+for relpath in current_set | previous_set:
+    check_workspace_target(relpath)
 
 for relpath in sorted(previous_set - current_set, key=lambda item: (item.count('/'), item), reverse=True):
     remove_path(workspace / relpath)
@@ -381,6 +402,12 @@ command_finalize()
 	[ -n "${source_path}" ] || fail "WORKSPACE_SOURCE_PATH or GITHUB_WORKSPACE is required"
 	[ -n "${workspace_path}" ] || fail "WORKSPACE_PATH is required"
 	[ -d "${source_path}" ] || fail "source path does not exist: ${source_path}"
+	[ ! -L "${workspace_path}" ] && [ ! -L "${workspace_path}/.ai" ] && \
+		[ ! -L "${workspace_path}/.ai/.workspace_source_manifest.txt" ] && \
+		[ ! -L "${workspace_path}/.ai/validate-hints-cache" ] && \
+		[ ! -L "${workspace_path}/.ai/review_runtime" ] && \
+		[ ! -L "${workspace_path}/validation" ] && \
+		[ ! -L "${workspace_path}/.serena" ] || fail "workspace cache or manifest is a symlink"
 
 	if ! assert_workspace_path_under_root "${workspace_root}" "${workspace_path}"; then
 		fail "resolved workspace path escapes ${workspace_root}: ${workspace_path}"
@@ -389,6 +416,7 @@ command_finalize()
 	mkdir -p "${workspace_path}"
 
 	if truthy "${workspace_reuse_enabled}" && [ "${cache_restore_state}" != "exact" ]; then
+		# Cleanup must not follow a restored .ai symlink into a private tree.
 		clean_stale_workspace_state "${workspace_path}"
 	fi
 
