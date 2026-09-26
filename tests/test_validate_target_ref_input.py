@@ -234,8 +234,10 @@ def test_custom_validation_wrapper_fails_closed(tmp_path: Path):
 	custom = tmp_path / "validation/validate.sh"
 	custom.write_text("#!/bin/bash\necho custom\n", encoding="utf-8")
 	env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+	env["_validate_script_dir"] = str(tmp_path / "scripts")
 	env.pop("BASH_ENV", None)
 	result = subprocess.run(["bash", "-c", function + "ensure_validate_wrapper"], cwd=tmp_path,
 		env=env, capture_output=True, text=True)
 	assert result.returncode != 0
+	assert "Custom validation wrapper cannot execute on the host" in result.stderr
 	assert custom.read_text(encoding="utf-8") == "#!/bin/bash\necho custom\n"

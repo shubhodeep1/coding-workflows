@@ -180,6 +180,28 @@ def test_private_memory_python_ignores_target_sibling_modules(tmp_path: Path) ->
 	assert '{"ok": true}' in result.stdout
 
 
+def test_validate_wrapper_rejects_missing_or_mismatched_trusted_driver(tmp_path: Path) -> None:
+	process = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	function = "ensure_validate_wrapper()\n{" + process.split("ensure_validate_wrapper()\n{", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+	checkout = tmp_path / "checkout"
+	private = tmp_path / "private/scripts"
+	(checkout / "scripts").mkdir(parents=True)
+	private.mkdir(parents=True)
+	(checkout / "scripts/validate_driver.sh").write_text("verified\n", encoding="utf-8")
+	env = {**os.environ, "_validate_script_dir": str(private)}
+	env.pop("BASH_ENV", None)
+	def invoke() -> subprocess.CompletedProcess[str]:
+		return subprocess.run(["bash", "-c", function + "ensure_validate_wrapper"], cwd=checkout,
+			env=env, capture_output=True, text=True)
+
+	assert invoke().returncode != 0
+	assert not (checkout / "validation/validate.sh").exists()
+	(private / "validate_driver.sh").write_text("verified\n", encoding="utf-8")
+	assert invoke().returncode == 0
+	(checkout / "scripts/validate_driver.sh").write_text("untrusted\n", encoding="utf-8")
+	assert invoke().returncode != 0
+
+
 def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf

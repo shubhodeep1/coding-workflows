@@ -543,6 +543,32 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 			assert snippet not in text, f"unexpected {snippet!r} in {relative_path}"
 
 
+def test_stall_guard_excludes_checkout_modules_with_credential_present(tmp_path: Path) -> None:
+	marker = tmp_path / "imported"
+	(tmp_path / "selectors.py").write_text(f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+	output = tmp_path / "output"
+	env = _stall_guard_test_env()
+	env.update({"GH_TOKEN": "sentinel", "PYTHONPATH": str(tmp_path), "CODEX_HEARTBEAT_ENABLED": "false"})
+	result = subprocess.run(["bash", str(STALL_GUARD_SCRIPT), "--phase", "validate_self_heal",
+		"--stdout-file", str(output), "--", "python3", "-I", "-c", "print('ok')"],
+		cwd=tmp_path, env=env, capture_output=True, text=True, timeout=20)
+	assert result.returncode == 0, result.stderr
+	assert output.read_text(encoding="utf-8") == "ok\n"
+	assert not marker.exists()
+
+
+def test_sandbox_preparation_and_self_heal_use_isolated_python_and_stall_guard() -> None:
+	sandbox = (REPO_ROOT / "scripts/untrusted_process_sandbox.sh").read_text(encoding="utf-8")
+	for snippet in ('python3 -I - "${config_format}"', 'python3 -I -c', 'python3 -I "${proxy_script}"',
+			'python3 -I - "${config_path}"', 'python3 -I - "${sandbox_config}/config.toml"'):
+		assert snippet in sandbox
+	self_heal = (REPO_ROOT / "scripts/self_heal_validation.sh").read_text(encoding="utf-8")
+	launcher = self_heal.split("run_self_heal_codex()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert '-- "${self_heal_model_command[@]}"' in launcher
+	assert 'SELF_HEAL_STALL_STATE="$(read_codex_stall_guard_state' in launcher
+	assert launcher.count('bash "${SELF_HEAL_SCRIPT_DIR}/untrusted_process_sandbox.sh"') == 1
+
+
 def main() -> int:
 	test_codex_stall_guard_observe_only_records_event_idle_without_killing_child()
 	test_codex_stall_guard_kill_mode_terminates_idle_child_and_returns_nonzero()

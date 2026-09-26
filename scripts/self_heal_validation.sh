@@ -308,6 +308,16 @@ build_self_heal_serena_tool_hints()
 run_self_heal_codex()
 {
 	local stderr_tmp="$1"
+	local stall_status_file=""
+	local rc=0
+	local -a self_heal_model_command=(
+		bash "${SELF_HEAL_SCRIPT_DIR}/untrusted_process_sandbox.sh"
+		--role judge --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}"
+		--config-format codex --config "${HOME}/.codex"
+		--hide-workspace-instructions --
+		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true
+		exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access
+	)
 
 	SELF_HEAL_STALL_STATE=""
 	if [ ! -f "${SELF_HEAL_SCRIPT_DIR}/untrusted_process_sandbox.sh" ] ||
@@ -317,13 +327,20 @@ run_self_heal_codex()
 		echo "self-heal: authorized head or isolated model launcher is unavailable" >&2
 		return 2
 	fi
-	bash "${SELF_HEAL_SCRIPT_DIR}/untrusted_process_sandbox.sh" \
-		--role judge --workspace "${PWD}" --runtime-dir "${RUNTIME_DIR}" \
-		--config-format codex --config "${HOME}/.codex" \
-		--hide-workspace-instructions -- \
-		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
-		exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access \
-		< "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
+	if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+		stall_status_file="$(mktemp "${RUNTIME_DIR}/self-heal-stall.XXXXXXXX")"
+		"${CODEX_STALL_GUARD_HELPER}" \
+			--phase validate_self_heal \
+			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
+			--stderr-file "${stderr_tmp}" \
+			--status-file "${stall_status_file}" \
+			-- "${self_heal_model_command[@]}" \
+				< "${SELF_HEAL_PROMPT_FILE}" || rc=$?
+		SELF_HEAL_STALL_STATE="$(read_codex_stall_guard_state "${stall_status_file}" || true)"
+		rm -f -- "${stall_status_file}"
+		return "${rc}"
+	fi
+	"${self_heal_model_command[@]}" < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
 }
 
 # Ensure the patches ledger exists.

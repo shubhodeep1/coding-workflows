@@ -1195,7 +1195,8 @@ when the bounded fix-cycle budget is exhausted.
 - Validation stages its renderer, memory and optional Semble helpers from the
   verified private support tree even on non-explicit runs. Inline host Python
   uses isolated imports; hook snapshot/replay and self-heal never execute
-  checkout-adjacent modules. Self-heal has no host-model fallback. Before the
+  checkout-adjacent modules. Self-heal has no host-model fallback and uses the
+  idle-stall guard around its credentialless sandbox. Before the
   validation driver runs, the renderer verifies every generated asset and
   refuses extra or modified host-side test scripts and custom harnesses. The
   driver receives no GitHub credentials or runner command files; generated

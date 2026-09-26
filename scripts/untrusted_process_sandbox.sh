@@ -163,7 +163,7 @@ sandbox_config="${sandbox_dir}/agent-config"
 if [ "${provider_required}" = true ]; then
 proxy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/model_provider_proxy.py"
 [ -r "${proxy_script}" ] || { echo "untrusted_process_sandbox: provider proxy is unavailable" >&2; exit 1; }
-python3 - "${config_format}" "${config_path}" "${proxy_policy_file}" "$@" <<'PY'
+python3 -I - "${config_format}" "${config_path}" "${proxy_policy_file}" "$@" <<'PY'
 import json
 import re
 import sys
@@ -198,7 +198,7 @@ if not models:
 	raise SystemExit("trusted model configuration produced an empty allowlist")
 Path(output_path).write_text(json.dumps({"models": sorted(models)}) + "\n", encoding="utf-8")
 PY
-mapfile -t proxy_allowed_models < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["models"]))' "${proxy_policy_file}")
+mapfile -t proxy_allowed_models < <(python3 -I -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["models"]))' "${proxy_policy_file}")
 proxy_args=()
 for proxy_allowed_model in "${proxy_allowed_models[@]}"; do
 	proxy_args+=(--allowed-model "${proxy_allowed_model}")
@@ -207,7 +207,7 @@ if [ "${UNTRUSTED_PROCESS_SANDBOX_TEST_MODE:-}" = 1 ]; then
 	proxy_host="127.0.0.2"
 	proxy_port="1"
 else
-	PYTHONDONTWRITEBYTECODE=1 python3 "${proxy_script}" \
+	PYTHONDONTWRITEBYTECODE=1 python3 -I "${proxy_script}" \
 		--credential-file "${credential_file}" \
 		--ready-file "${ready_file}" \
 		--max-requests "${MODEL_PROVIDER_PROXY_MAX_REQUESTS:-64}" \
@@ -225,8 +225,8 @@ else
 		sleep 0.05
 	done
 	[ -s "${ready_file}" ] || { echo "untrusted_process_sandbox: provider proxy did not become ready" >&2; exit 1; }
-	proxy_host="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["host"])' "${ready_file}")"
-	proxy_port="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "${ready_file}")"
+	proxy_host="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["host"])' "${ready_file}")"
+	proxy_port="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "${ready_file}")"
 fi
 proxy_url="http://${proxy_host}:${proxy_port}/api/v1"
 
@@ -234,7 +234,7 @@ sandbox_home="${sandbox_dir}/home"
 sandbox_runtime="${sandbox_dir}/runtime"
 mkdir -p "${sandbox_home}" "${sandbox_runtime}"
 if [ "${config_format}" = opencode ]; then
-	python3 - "${config_path}" "${sandbox_config}" "${proxy_url}" <<'PY'
+	python3 -I - "${config_path}" "${sandbox_config}" "${proxy_url}" <<'PY'
 import json, sys
 source, destination, proxy_url = sys.argv[1:]
 payload = json.load(open(source, encoding="utf-8"))
@@ -250,7 +250,7 @@ else
 	[ -r "${config_path}/config.toml" ] \
 		|| { echo "untrusted_process_sandbox: Codex config.toml is unavailable" >&2; exit 1; }
 	install -m 0600 "${config_path}/config.toml" "${sandbox_config}/config.toml"
-	python3 - "${sandbox_config}/config.toml" "${proxy_url}" "${sandbox_config}/model-catalog.json" <<'PY'
+	python3 -I - "${sandbox_config}/config.toml" "${proxy_url}" "${sandbox_config}/model-catalog.json" <<'PY'
 import re, shutil, sys
 from pathlib import Path
 path, proxy_url, sandbox_catalog = sys.argv[1:]
