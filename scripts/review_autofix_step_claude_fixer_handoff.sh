@@ -4,11 +4,13 @@
 # own shell, so the step's if:, env: and continue-on-error: stay in the
 # workflow; edit those there.
 #
-# Claude-fixer mode (gate output `claude_fixer`, PR head ref starting with
-# `claude/implement-plan-`): the reviewer panel runs exactly as for every PR,
-# but the GPT editor, the conflict resolver and the push / re-trigger tail do
-# not. The /implement-plan-claude session that owns the PR fixes the findings
-# instead, and this step is the hand-off:
+# Claude-fixer mode (gate output `claude_fixer`, every PR-backed `claude/*`
+# head): the reviewer panel runs exactly as for every PR, but the GPT editor,
+# the conflict resolver and the push / re-trigger tail do not. The Claude
+# session that owns the PR fixes the findings instead (the /implement-plan-claude
+# stage session, or under CLAUDE.md §26 the session that pushed the PR, a
+# `/fix-claude-pr` session, or the catch-all sweep's session), and this step
+# is the hand-off:
 #
 #   * pre-review content conflict (AUTOFIX_PRE_REVIEW_RESOLVE=true)
 #       -> one comment carrying `kind=conflict` and the unmerged paths;
@@ -23,7 +25,8 @@
 # The hand-off marker is
 #   <!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->
 # and .claude/scripts/check_in_status.py reads it (plus the session's
-# `ai:claude-fixer-verdict:v1` reply) to start the next stage session.
+# `ai:claude-fixer-verdict:v1` reply) to start the next stage session or to
+# hand the round back to the session that pushed the PR (--hand-back).
 #
 # Inputs (environment): PR_NUMBER, GH_TOKEN, GITHUB_REPOSITORY, HEAD_SHA,
 # HEAD_REF, CLAUDE_FIXER_ROUND_INDEX (consecutive [ai-autofix] /
@@ -68,7 +71,7 @@ if [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" = "true" ]; then
     echo "## Review round ${claude_fixer_round}: merge conflict, handed to the Claude session"
     echo
     echo "The head \`${HEAD_SHA}\` conflicts with its base branch, so the reviewer panel did not run ([workflow run](${claude_fixer_run_url}))."
-    echo "Claude-fixer mode skips the GPT conflict resolver: the \`/implement-plan-claude\` session merges the base branch into \`${HEAD_REF:-the head branch}\`, resolves the conflict keeping both sides' intent, commits it as \`[claude-merge-resolve] <summary>\`, and pushes. The push starts the next review round."
+    echo "Claude-fixer mode skips the GPT conflict resolver: the Claude session that owns this PR merges the base branch into \`${HEAD_REF:-the head branch}\`, resolves the conflict keeping both sides' intent, commits it as \`[claude-merge-resolve] <summary>\`, and pushes. The push starts the next review round."
     if [ -n "${AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED:-}" ]; then
       echo
       echo "Unmerged paths: \`${AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED//,/\`, \`}\`"
@@ -176,7 +179,7 @@ fi
     echo "Ledger SHA-256: \`${claude_fixer_ledger_digest}\`."
   fi
   echo
-  echo "Claude-fixer mode: the GPT editor did not run. The \`/implement-plan-claude\` session judges each finding against the code, then either"
+  echo "Claude-fixer mode: the GPT editor did not run. The Claude session that owns this PR judges each finding against the code, then either"
   echo "- fixes the valid ones in **one** commit whose subject starts with \`[claude-autofix]\` and pushes it (the push starts the next review round; the commits count toward \`MAX_AUTOFIX_ITERATIONS\` like \`[ai-autofix]\` ones), or"
   echo "- when nothing valid is left, has the dedicated fixer bot (not GH_PAT or a human) post a separate comment listing rejections and ending with both \`ai:claude-fixer-verdict:v1\` and \`ai:claude-fixer-verdict:v2\` markers for this head, round and ledger SHA-256, then dispatches this workflow with \`claude_fixer_converged_head=${HEAD_SHA}\`. That dispatch re-runs the reviewers; only a clean review with a fresh ready check snapshot can enable auto-merge. If the bot cannot post, leave the PR blocked."
   echo

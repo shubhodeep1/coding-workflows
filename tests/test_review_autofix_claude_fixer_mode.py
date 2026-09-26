@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Contract for review_autofix.yml Claude-fixer mode.
 
-`claude/implement-plan-*` PRs (opened by /implement-plan-claude) keep the
-reviewer panel, but the GPT editor, conflict resolver, push / re-trigger tail
+Every PR-backed `claude/*` head (/implement-plan-claude stages and any
+session's PR under CLAUDE.md §26) keeps the reviewer panel, but the GPT editor, conflict resolver, push / re-trigger tail
 and review-blocked judge do not run: the findings (or the pre-review
 conflict) are handed to the Claude session that owns the PR, and a
 `claude_fixer_converged_head` dispatch re-reviews a bot-authenticated ledger
@@ -120,7 +120,8 @@ def test_gate_exports_fixer_outputs_and_mode():
 	assert outputs["claude_fixer_converged"] == "${{ steps.evaluate.outputs.claude_fixer_converged }}"
 	assert outputs["claude_fixer_verify"] == "${{ steps.evaluate.outputs.claude_fixer_verify }}"
 	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
-	assert "claude/implement-plan-*) CLAUDE_FIXER=\"true\" ;;" in gate_run
+	assert "claude/*) CLAUDE_FIXER=\"true\" ;;" in gate_run
+	assert "claude/implement-plan-*) CLAUDE_FIXER" not in gate_run
 	assert 'SKIP_REASON="claude_fixer_awaiting_session"' in gate_run
 	assert 'CLAUDE_FIXER_VERIFY="true"' in gate_run
 	assert "${{" not in gate_run.split("# ----- Claude-fixer mode", 1)[1].split("# ----- Terminal same-head skip", 1)[0]
@@ -540,6 +541,23 @@ def test_gate_marks_fixer_prs_and_runs_the_first_round():
 		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[], event_name="pull_request")
 	assert proc.returncode == 0, proc.stderr
 	assert out["claude_fixer"] == "true" and out["should_run"] == "true" and out["claude_fixer_converged"] == "false"
+
+
+def test_gate_marks_every_claude_head_as_a_fixer_pr():
+	"""CLAUDE.md §26: a session's ad-hoc claude/* PR is fixed by Claude too."""
+	for head_ref in ("claude/quirky-wozniak-e9t88m", "claude/verify-activation-demo-fix-1"):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=head_ref, comments=[], event_name="pull_request")
+		assert proc.returncode == 0, proc.stderr
+		assert out["claude_fixer"] == "true" and out["should_run"] == "true", head_ref
+
+
+def test_gate_kill_switch_returns_claude_heads_to_the_gpt_path():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref="claude/quirky-wozniak-e9t88m", comments=[], event_name="pull_request",
+			extra_env={"CLAUDE_FIXER_ENABLED": "false"})
+	assert proc.returncode == 0, proc.stderr
+	assert out["claude_fixer"] == "false"
 
 
 def test_gate_leaves_other_prs_alone():
