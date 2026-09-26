@@ -176,3 +176,65 @@ def test_checker_starts_with_effort_low_then_one_shot_instructions(text):
 	assert "**hourly check-in by a low-effort Sonnet checker session**" in text
 	assert "3-hourly" not in text
 	assert "every 3h" not in text
+
+
+def test_one_checker_per_project_keeps_the_chain_shallow(text):
+	# claude-code-remote refuses create_session / send_later / create_trigger
+	# 8 parent links below a root; a checker per stage added two links per
+	# hand-off and stalled a project at its fourth security cycle.
+	assert "**One checker per project, so the session chain stays shallow.**" in text
+	assert "`title` = `implement-plan <slug> — checker`" in text
+	assert "**Reuse it** when it is not archived" in text
+	assert "`title` = `implement-plan <slug> — waiting:" not in text
+	assert "archives the previous stage session and the checker" not in text
+	assert "that session archives this one and the checker" not in text
+	assert "do **not** archive it here, because every later wait reuses it" in text
+
+
+def test_zombie_checkers_are_cleaned_up(text):
+	assert "### Zombie-checker cleanup" in text
+	assert "Then run the [Zombie-checker cleanup](#zombie-checker-cleanup)" in text
+	assert "`implement-plan <slug> — waiting:` (the older one-checker-per-wait design)" in text
+	assert "archive it right after the new one is created, so a project never has two" in text
+	assert "**Clear its stale check-ins.**" in text
+	assert "archive the project checker (the project has no more waits), and stop" in text
+	assert "report, archive the project checker, and archive this session" in text
+
+
+def test_checker_ignores_superseded_waits(text):
+	assert "the wake is stale: reply `stale check-in` and end the turn without re-arming" in text
+	assert 'message "Check-in for wait <stage session id>:' in text
+	assert "end the turn without re-arming: the next stage hands you its own wait" in text
+
+
+def test_depth_limit_refusal_is_loud_not_a_session_local_cron(text):
+	assert "**Refused at the depth limit.**" in text
+	assert "do **not** fall back to `CronCreate` or any other session-local loop" in text
+	assert "[Fallbacks](#fallbacks) apply only when the tools are missing, not when they refuse." in text
+
+
+def test_every_started_session_runs_opus_at_high_effort(text):
+	"""Q2/Q14: stages, /deploy-activate and fixers start as Opus 5.5 with `/effort high` alone."""
+	assert "The **stage model** is always `claude-opus-5-5` at high effort" in text
+	assert "the prompt `/effort high` **and nothing else**" in text
+	assert "`name` = `implement-plan <slug>: stage start`" in text
+	assert "model claude-opus-5-5, permission_mode <mode>" in text
+	assert "and the prompt `/effort high` and nothing else; (b) create_trigger" in text
+	assert "model <stage model>" not in text and "`model` = the stage model" not in text
+
+
+def test_stage_sessions_claim_before_fixing(text):
+	"""Q22: a stage session claims the PR head so the §26.H sweep never duplicates it."""
+	assert "### Claims" in COMMAND.read_text(encoding="utf-8")
+	assert ".claude/scripts/claude_fix_claim.py post" in text
+	assert "[Claim the head](#claims) (`--kind review` for findings, `--kind conflict` for a conflict)" in text
+	assert "[claim the head](#claims) (`--kind blocked`, or `--kind ci` for a stuck PR)" in text
+	assert "the §26.H hand-back cap does not apply to its PRs" in text
+
+
+def test_issue_mode_follows_a_base_branch_that_merged(text):
+	"""Q27: a stranded issue-mode project moves onto the branch its base merged into."""
+	assert "**A base branch that merges moves the project.**" in text
+	assert '`gh api "repos/<owner>/<repo>/pulls?state=closed&head=<owner>:<issue base>"`' in text
+	assert "retarget the final PR (`mcp__github__update_pull_request` with `base` = `<new base>`)" in text
+	assert "a move onto the default branch switches the final PR's body to `Fixes #<N>`" in text

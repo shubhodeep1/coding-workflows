@@ -50,7 +50,9 @@ orchestrator/project-2840 stack, plus run 25629086684 / PR #2865.
 
 from __future__ import annotations
 
+import os
 import re
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -490,6 +492,228 @@ def test_reasoning_default_lowered_to_high() -> None:
 	)
 
 
+def _attempt_state_function() -> str:
+	match = re.search(
+		r"^_resolver_attempt_state\(\)\n\{\n.*?\n\}\n",
+		_resolve_script_text(),
+		flags=re.DOTALL | re.MULTILINE,
+	)
+	assert match is not None
+	return match.group(0)
+
+
+def _run_attempt_fixture(tmp_path: Path, actions: str) -> subprocess.CompletedProcess[str]:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	git_env = {key: value for key, value in os.environ.items() if key not in (
+		"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+		"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "BASH_ENV", "ENV",
+	)}
+	subprocess.run(["git", "init", "-q", str(repo)], check=True, env=git_env)
+	(repo / "allowed.txt").write_text("baseline\n", encoding="utf-8")
+	(repo / "outside.txt").write_text("tracked\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "allowed.txt", "outside.txt"], check=True, env=git_env)
+	(repo / "existing-untracked.txt").write_text("untracked\n", encoding="utf-8")
+	state_dir = tmp_path / "attempt-state"
+	conflicts = tmp_path / "conflicts.txt"
+	conflicts.write_text("allowed.txt\n", encoding="utf-8")
+	program = (
+		"set -euo pipefail\n"
+		f"RESOLVER_ATTEMPT_TREE_DIR={str(state_dir)!r}\n"
+		f"CONFLICTED_PATHS_FILE={str(conflicts)!r}\n"
+		f"CHECK_RESOLVER_DIFF={str(REPO_ROOT / 'scripts/check_resolver_diff.sh')!r}\n"
+		f"{_attempt_state_function()}\n"
+		f"{actions}\n"
+	)
+	return subprocess.run(["bash", "-c", program], cwd=repo, text=True, capture_output=True, env=git_env)
+
+
+def test_out_of_scope_attempt_restores_before_retry(tmp_path: Path) -> None:
+	result = _run_attempt_fixture(tmp_path, """
+	_resolver_attempt_state capture
+	rm allowed.txt
+	printf 'drift\\n' > outside.txt
+	chmod +x outside.txt
+	printf 'overwritten\\n' > existing-untracked.txt
+	printf 'new\\n' > new-untracked.txt
+	ln -s outside.txt outside-link
+	if _resolver_attempt_state check; then exit 30; fi
+	_resolver_attempt_state restore
+	test "$(cat allowed.txt)" = baseline
+	test "$(cat outside.txt)" = tracked
+	test ! -x outside.txt
+	test "$(cat existing-untracked.txt)" = untracked
+	test ! -e new-untracked.txt
+	test ! -L outside-link
+	printf 'resolved\\n' > allowed.txt
+	_resolver_attempt_state check
+	printf 'allowed.txt\\n' > touched.txt
+	# The accepted output must still pass the production final hard gate.
+	"$CHECK_RESOLVER_DIFF" --conflicted-set "$CONFLICTED_PATHS_FILE" --touched-set touched.txt --repo-root "$PWD"
+	""")
+	# The touched-set fixture is created only after the attempt check.
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outside.txt" in result.stdout
+	assert "new-untracked.txt" in result.stdout
+	assert "check_resolver_diff: touched=1 conflicted=1" in result.stdout
+
+
+def test_unsafe_attempt_restore_stops_before_second_attempt(tmp_path: Path) -> None:
+	result = _run_attempt_fixture(tmp_path, """
+	_resolver_attempt_state capture
+	printf 'drift\\n' > outside.txt
+	if _resolver_attempt_state check; then exit 30; fi
+	git add outside.txt
+	if _resolver_attempt_state restore; then exit 31; fi
+	echo 'restore refused; no second attempt or commit'
+	""")
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "resolver changed the merge index" in result.stderr
+	assert "restore refused; no second attempt or commit" in result.stdout
+	assert (tmp_path / "repo" / "outside.txt").read_text() == "drift\n"
+
+
+def test_scope_check_precedes_retry_success_and_preserves_final_guard() -> None:
+	src = _resolve_script_text()
+	assert src.index('_resolver_attempt_state check || _scope_status=$?') < src.index(
+		'echo "Conflict resolver succeeded on attempt ${attempt} (soft validation passed)."'
+	)
+	assert 'if ! "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \\' in src
+	assert 'if ! _restore_attempt_base; then' in src
+
+
+def _scope_fixture(tmp: Path) -> tuple[Path, dict[str, str]]:
+	repo = tmp / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	for name in ("conflict.txt", "outside.txt"):
+		(repo / name).write_text("base\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "--", "conflict.txt", "outside.txt"], check=True)
+	subprocess.run(
+		["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+		check=True,
+	)
+	(repo / "conflict.txt").write_text("pre-attempt merge conflict\n", encoding="utf-8")
+	(repo / "previously-untracked.txt").write_text("keep me\n", encoding="utf-8")
+	allowed = tmp / "conflicted_paths.txt"
+	allowed.write_text("conflict.txt\n", encoding="utf-8")
+	return repo, {
+		"RESOLVER_SCOPE_SNAPSHOT_DIR": str(tmp / "snapshot"),
+		"RESOLVER_SCOPE_VIOLATIONS_FILE": str(tmp / "violations.txt"),
+		"CONFLICTED_PATHS_FILE": str(allowed),
+	}
+
+
+def _scope_action(repo: Path, env: dict[str, str], action: str) -> subprocess.CompletedProcess[str]:
+	src = _resolve_script_text()
+	start = src.index("_resolver_scope_state() {")
+	end = src.index("\n}\n", start) + 2
+	clean_env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")}
+	return subprocess.run(
+		["bash", "-c", src[start:end] + f"\n_resolver_scope_state {action}\n"],
+		cwd=repo, env={**clean_env, **env}, capture_output=True, text=True, check=False,
+	)
+
+
+def test_scope_retry_restores_full_attempt_and_keeps_final_gate() -> None:
+	src = _resolve_script_text()
+	loop = src[src.index('attempt=1\nwhile '):src.index('\ndone\n', src.index('attempt=1\nwhile '))]
+	assert loop.index("_resolver_scope_state capture") < loop.index('"${resolver_opencode_cmd[@]}"')
+	assert loop.index("_resolver_scope_state check") < loop.index('if [ "${_codex_exit}" -ne 0 ]; then')
+	assert loop.index("_resolver_scope_state check") < loop.index('if [ "${_marker_count}" -eq 0 ]')
+	assert "_resolver_scope_state restore || ! _resolver_scope_state verify" in loop
+	assert '"${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh"' in src
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "conflict.txt").write_text("bad resolution\n", encoding="utf-8")
+		(repo / "outside.txt").write_text("unauthorized\n", encoding="utf-8")
+		(repo / "outside.txt").chmod(0o755)
+		(repo / "previously-untracked.txt").unlink()
+		(repo / "new-untracked.txt").write_text("new\n", encoding="utf-8")
+		assert _scope_action(repo, env, "check").returncode == 1
+		assert set(Path(env["RESOLVER_SCOPE_VIOLATIONS_FILE"]).read_text().splitlines()) == {
+			"outside.txt", "previously-untracked.txt", "new-untracked.txt",
+		}
+		assert _scope_action(repo, env, "restore").returncode == 0
+		assert _scope_action(repo, env, "verify").returncode == 0
+		assert (repo / "conflict.txt").read_text() == "pre-attempt merge conflict\n"
+		assert (repo / "outside.txt").read_text() == "base\n"
+		assert (repo / "outside.txt").stat().st_mode & 0o111 == 0
+		assert (repo / "previously-untracked.txt").read_text() == "keep me\n"
+		assert not (repo / "new-untracked.txt").exists()
+		(repo / "outside.txt").chmod(0o755)
+		assert _scope_action(repo, env, "check").returncode == 1
+		assert _scope_action(repo, env, "restore").returncode == 0
+		assert _scope_action(repo, env, "verify").returncode == 0
+		# A clean second attempt is still subject to the unchanged final gate.
+		(repo / "conflict.txt").write_text("good resolution\n", encoding="utf-8")
+		assert _scope_action(repo, env, "check").returncode == 0
+		touched = Path(directory) / "touched.txt"
+		touched.write_text("conflict.txt\n", encoding="utf-8")
+		result = subprocess.run(
+			["bash", str(REPO_ROOT / "scripts/check_resolver_diff.sh"),
+			 "--conflicted-set", env["CONFLICTED_PATHS_FILE"], "--touched-set", str(touched), "--repo-root", str(repo)],
+			env={key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")},
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+
+
+def test_scope_snapshot_restore_and_index_fail_closed() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		Path(env["CONFLICTED_PATHS_FILE"]).unlink()
+		assert _scope_action(repo, env, "capture").returncode != 0
+		Path(env["CONFLICTED_PATHS_FILE"]).write_text("conflict.txt\n")
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "outside.txt").write_text("unauthorized\n")
+		assert _scope_action(repo, env, "check").returncode == 1
+		(Path(env["RESOLVER_SCOPE_SNAPSHOT_DIR"]) / "files/outside.txt").unlink()
+		assert _scope_action(repo, env, "restore").returncode != 0
+		assert _scope_action(repo, env, "verify").returncode != 0
+		assert _scope_action(repo, env, "capture").returncode == 0
+		subprocess.run(["git", "add", "--", "outside.txt"], cwd=repo, check=True)
+		assert _scope_action(repo, env, "check").returncode == 2
+		assert _scope_action(repo, env, "restore").returncode == 2
+
+
+def test_scope_symlink_restore_preserves_preexisting_target() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		(repo / "previously-untracked.txt").unlink()
+		(repo / "previously-untracked.txt").symlink_to("outside.txt")
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "previously-untracked.txt").unlink()
+		(repo / "previously-untracked.txt").write_text("replaced link\n")
+		assert _scope_action(repo, env, "check").returncode == 1
+		assert _scope_action(repo, env, "restore").returncode == 0
+		assert _scope_action(repo, env, "verify").returncode == 0
+		assert (repo / "previously-untracked.txt").is_symlink()
+		assert (repo / "previously-untracked.txt").readlink() == Path("outside.txt")
+
+
+def test_scope_feedback_is_available_for_generic_resolver() -> None:
+	src = _resolve_script_text()
+	fn = src[src.index("_build_retry_prompt() {"):src.index("\n}\n", src.index("_build_retry_prompt() {")) + 2]
+	assert fn.index('if [ "${_failure_kind}" = "scope" ]') < fn.index('if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]')
+	assert '_retry_prompt_outcome="scope-prelude"' in fn
+	assert '"${_prev_attempt_failure_kind:-validation}"' in src
+	with tempfile.TemporaryDirectory() as directory:
+		prompt = Path(directory) / "original.txt"
+		retry = Path(directory) / "retry.txt"
+		prompt.write_text("Only resolve the merge conflict.\n", encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", fn + '\n_build_retry_prompt 1 /nonexistent /nonexistent scope; printf "%s" "${_retry_prompt_outcome}"'],
+			env={**os.environ, "IS_INTEGRATION_SYNC": "false", "CONFLICT_RESOLVER_PROMPT_FILE": str(prompt),
+			     "RESOLVER_RETRY_PROMPT_FILE": str(retry)}, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout == "scope-prelude"
+		assert "outside the captured conflicted-paths set" in retry.read_text()
+		assert retry.read_text().endswith(prompt.read_text())
+
+
 def main() -> int:
 	test_dependency_fallback_prefers_main_then_script_ref_checkout()
 	test_dependency_fallback_gates_workspace_scripts_and_fails_closed()
@@ -504,6 +728,11 @@ def main() -> int:
 	test_build_retry_prompt_sets_retry_prompt_outcome()
 	test_retry_loop_reads_retry_prompt_outcome_for_log_dispatch()
 	test_reasoning_default_lowered_to_high()
+	test_scope_check_precedes_retry_success_and_preserves_final_guard()
+	test_scope_retry_restores_full_attempt_and_keeps_final_gate()
+	test_scope_snapshot_restore_and_index_fail_closed()
+	test_scope_symlink_restore_preserves_preexisting_target()
+	test_scope_feedback_is_available_for_generic_resolver()
 	print(
 		"OK: review_conflict_resolve outcome-aware retry-prelude "
 		"contract holds (validation + timeout preludes, "

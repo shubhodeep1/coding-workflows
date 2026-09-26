@@ -88,9 +88,12 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. **Orchestrator integration PRs (head ref matching `ORCH_INTEGRATION_BRANCH_PATTERN`, default `^orchestrator/project-`) are unconditionally excluded** even when this is `true`: the orchestrator's `finalize_integration_merge_if_needed` handles their merge synchronously once the project is genuinely complete (all waves merged AND the default branch contains the integration tip). Without this exception, an integration-conflict self-healing dispatch could let review_autofix ship the integration branch partway through the project — stranding subsequent wave PRs on the integration branch with no path to default. The PR-metadata fetch fails closed: a transient API error suppresses auto-merge for that cycle (next sync event retries). See shubhodeep1/binance-blessings#135 for the regression case that motivated the exclusion. **forward-merge fallback PRs (head ref matching `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml` when the automated stable→main merge hits conflict or branch protection) auto-merge via a real merge commit instead of a squash** — gated by `FORWARD_MERGE_FALLBACK_AUTO_MERGE` (default `true`; see its own row). These PRs MUST land as a 2-parent merge commit so `stable`'s tip stays reachable from `main`; `gh pr merge --squash --auto` (the regular auto-merge call) silently strips that ancestry, after which `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check refuses the next promote run with the "squash/rebase strips ancestry" error (see `.github/workflows/promote-main-to-stable.yml:115-126` and the CAUTION banner injected into every fallback PR body at `.github/workflows/forward-merge-stable-to-main.yml:265-270`). So the forward-merge branch instead calls `gh pr merge --merge --auto` — the unattended equivalent of the manual "Create a merge commit", which preserves ancestry. The `^auto/forward-merge-stable-` pattern is hard-coded — the branch prefix is owned by the forward-merge workflow and never varies per repo. Both the codex-agent "Enable auto-merge on PR" step and the `deterministic-skip-merge` sibling job apply this merge-commit path, so a small forward-merge fallback that happens to fall under `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS` cannot short-circuit to a squash merge via the deterministic-skip path either. Every reviewed or deterministic-skip auto-merge request is bound with `--match-head-commit` to the head that was reviewed or evaluated by the gate; an unavailable head fails closed, and a concurrent push is rejected so its `synchronize` run can evaluate the new head. **Limitation:** when required checks are pending, GitHub may retain an already-enabled auto-merge setting across later pushes; re-verifying that later head remains separate hardening work. |
 | `FORWARD_MERGE_FALLBACK_AUTO_MERGE` | No | `true` | review_autofix | Controls how forward-merge fallback PRs (head ref `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml`) are merged when review passes with no changes needed. When `true` (default), `review_autofix.yml` enables auto-merge with a **real merge commit** (`gh pr merge --merge --auto`) so `stable`'s commits stay reachable from `main` and `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check keeps passing. Requires "Allow merge commits" **and** "Allow auto-merge" in repo settings; if either is off the enable call logs a `::warning::` and the PR is left for a manual "Create a merge commit". Applies to **both** flavours of fallback PR — conflict-resolved (body: "failed due to merge conflicts", resolved unattended by `[ai-merge-resolve]`) and branch-protection (body: "could not push directly"). Set to any non-`true` value to restore the previous behaviour of leaving every forward-merge fallback PR for a manual merge commit. Independent of `ENABLE_AUTO_MERGE`, but `ENABLE_AUTO_MERGE=false` still disables all auto-merge including this path. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `5` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and hands control to the per-PR review-blocked judge. The judge then decides `merge`, `fix` (push a `[judge-fix]` commit which resets the autofix counter — capped at `MAX_REVIEW_BLOCKED_RETRIES`), `merge_with_followup` (merge as-is and open a follow-up issue tracking the deferred gap — preferred over `close_and_reissue` at IS_FINAL when the PR is shippable), or `close_and_reissue`. If the judge step is skipped or fails to handle the PR (`judge_handled != 'true'`), the linked issues are labelled `ai:review-blocked` and a review-blocked comment is posted on the PR. Applies uniformly to every PR mode (orchestrator intermediate, orchestrator final, non-orchestrator). The retrigger guard's PR mode classifier (`orch_intermediate` / `orch_final` / `other`, gated by `ORCH_PR_AUTOFIX_FLOW_ENABLED`) is now used only for observability and the orchestrator-level judge cap bypass on `orch_final`; it no longer overrides the per-PR autofix cap. See [Orchestrator PR autofix flow](#orchestrator-pr-autofix-flow). |
-| `CLAUDE_FIXER_ENABLED` | No | `true` | review_autofix | Claude-fixer mode for `claude/implement-plan-*` PRs: the reviewer panel hands findings and conflicts to the Claude session instead of the GPT editor or resolver. A zero-findings run auto-merges only with a fresh `ready`, same-head check-run snapshot; other rounds require a `[claude-autofix]` push or a dedicated bot's ledger-bound verdict. At the iteration cap or when independent verification still finds issues, the PR is labelled `ai:review-blocked`. Set to `false` to use the GPT editor path. |
-| `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` | No | (empty) | checker | Exact account login that posts review workflow hand-off comments using `GH_PAT`. Supply it in the `/implement-plan-claude` checker environment from trusted configuration, not from PR comments or the checker's own `gh` identity (which may differ). Empty disables comment-based hand-offs; the checker still detects an unhandled merge conflict with no active run. The checker requires an exact issued head/round/ledger (for findings), a matching successfully completed review run, and no queued or active branch run before waking a review round. |
+| `CLAUDE_FIXER_ENABLED` | No | `true` | review_autofix | Claude-fixer mode for every PR-backed `claude/*` PR (`/implement-plan-claude` stages and any Claude session's PR, CLAUDE.md §26.H): the reviewer panel hands findings and conflicts to the Claude session instead of the GPT editor or resolver. A zero-findings run auto-merges only with a fresh `ready`, same-head check-run snapshot; other rounds require a `[claude-autofix]` push or a dedicated bot's ledger-bound verdict. At the iteration cap or when independent verification still finds issues, the PR is labelled `ai:review-blocked`. Set to `false` to use the GPT editor path. |
+| `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` | No | (empty) | checker / `claude-pr-catch-all` | Exact account login that posts review workflow hand-off comments using `GH_PAT`. Supply it in the `/implement-plan-claude` and §26 checker environments from trusted configuration; the `claude-pr-catch-all` sweep job reads this repo variable and, when it is empty, uses the `GH_PAT` account's own login, not from PR comments or the checker's own `gh` identity (which may differ). Empty disables comment-based hand-offs; the checker still detects an unhandled merge conflict with no active run. The checker requires an exact issued head/round/ledger (for findings), a matching successfully completed review run, and no queued or active branch run before waking a review round. |
 | `CLAUDE_FIXER_VERDICT_BOT_LOGIN` | No | (empty) | review_autofix / checker | Dedicated GitHub App bot login (e.g. `fixer[bot]`), distinct from the GH_PAT account. Empty disables verdict-based convergence. The bot must post with privately provisioned Issues or Pull requests write credentials; a Claude Code Web session's `gh` authorization header may be replaced by its proxy, so verify bot authorship before dispatch. A v1 head-only verdict never authorizes merge: the workflow matches the bot's v2 verdict to the latest workflow-owned v2 hand-off's head, round and SHA-256 ledger digest, then re-runs reviewers on that head. Only a clean result and fresh `ready`, same-head check snapshot enable auto-merge. Configure the same login in the Sonnet checker environment so forged human verdicts cannot dismiss its hand-off. |
+| `CLAUDE_PR_SWEEP_MIN_AGE_HOURS` | No | `2` | `claude-pr-catch-all` | How long a Claude fix on a `claude/*` PR (conflict, failed check, review hand-off, block label) must have been due, with no live claim, before the hourly catch-all sweep in `review_autofix_sweep.yml` starts a fresh `/fix-claude-pr` session for it. See [Claude fixes every claude/* PR](#claude-fixes-every-claude-pr). |
+| `CLAUDE_FIX_CLAIM_LEASE_HOURS` | No | `3` | `claude-pr-catch-all` / sessions | How long an `ai:claude-fix-claim` comment on a PR's current head keeps other fixers (the §26 checker's hand-back and the sweep) away. A push moves the head and ends the claim early. Sessions read the same variable from their environment and default to `3`. |
+| `CLAUDE_FIX_HAND_BACK_CAP` | No | `3` | `claude-pr-catch-all` / sessions | Conflict, CI, and block fixes allowed per PR (counted per distinct head and kind) before the fixer posts a `hold` claim, notifies, and asks instead of fixing again. Review rounds are bounded by `MAX_AUTOFIX_ITERATIONS` instead. |
 | `ORCH_PR_AUTOFIX_FLOW_ENABLED` | No | `true` | review_autofix, orchestrate_poll | Master switch for the orchestrator-aware PR autofix flow. When `true`, `review_autofix.yml`'s retrigger guard classifies the PR (`orch_intermediate` / `orch_final` / `other`) by base/head branch (used for observability and the orchestrator-side cap bypass on `orch_final`); `orchestrate_poll_process.sh` bypasses the `MAX_JUDGE_CYCLES` cap while the integration→default-branch final PR is open and pending merge so the final PR can run unlimited 5-autofix→judge cycles until mergeable. The per-PR autofix loop itself uses `MAX_AUTOFIX_ITERATIONS` uniformly across every mode. Set to `false` to force `orch_pr_mode` to stay at `other` for every PR (head/base never inspected) and disable the orchestrator-side cap bypass (`MAX_JUDGE_CYCLES=25` then applies to the final-PR loop too). See [Orchestrator PR autofix flow](#orchestrator-pr-autofix-flow). |
 | `ORCH_INTEGRATION_BRANCH_PATTERN` | No | `^orchestrator/project-` | review_autofix | POSIX-extended regex used by the retrigger guard to identify orchestrator integration branches (head ref) and orchestrator-targeted bases. Defaults match the orchestrator's conventional branch naming (`orchestrator/project-<TRACKING_ISSUE_NUMBER>` set by `.github/workflows/orchestrate.yml`). Override only if you have customised the orchestrator branch naming. |
 | `CHECK_RUNS_AUTOFIX_ENABLED` | No | `true` | review_autofix | When `true` (default), the workflow snapshots failed and incomplete GitHub check-runs on the PR head SHA into `${PR_CHECK_RUNS_CONTEXT_FILE}` and feeds it to reviewers + editor so CI / lint failures are detected and fixed on every run. The "Collect PR check-run failures" step in `.github/workflows/review_autofix.yml` calls `gh_retry gh api --paginate --slurp "repos/{repo}/commits/{sha}/check-runs?per_page=100"` once per poll iteration; this is one *logical* snapshot attempt, but it may consume multiple underlying GitHub API requests (one per pagination page, plus up to `GH_RETRY_MAX_ATTEMPTS` retries on transient failures), so operators sizing rate-limit budgets should treat the per-iteration cost as ≥1 requests rather than exactly one. Reviewers see the file as a numbered context section, and the editor prompt elevates failed entries to the top of the WILL_FIX priority order (see `scripts/review_apply_fixes.sh` "CI / LINT CHECK-RUN FAILURES" block). Fail-open: an unrecoverable API failure writes a sentinel file (`collection_status: api_error`) and the autofix pipeline continues — reviewers/editor are explicitly told to treat the absence-of-failures signal as unknown rather than confirmed-passing. Set to `false` to disable check-run collection entirely (the file still gets written with `collection_status: disabled` and zero counts so preflight always passes). |
@@ -1047,10 +1050,20 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
 > interactive session start a small low-effort Sonnet checker session for every
 > pull request it pushes; the checker runs `.claude/scripts/check_in_status.py`
-> every hour (re-armed with `send_later`), and once the PR merges or closes it
-> reports the next steps (or that the pushing session can be closed) without
-> waking the pushing session. It never subscribes to PR activity and never
-> acts on CI or review comments. The same sync ships the `settings.json`
+> every hour (re-armed with `send_later`) without waking the pushing session.
+> Once the PR merges or closes, the checker pulls forward a scheduled Routine
+> bound to the pushing session, which re-reads the PR state and, since it
+> holds the context, reports the next steps (or that it can be closed). The
+> checker reports them itself only when that hand-back fails. On a
+> `claude/*` PR the checker also hands a due fix (merge conflict, failed
+> check, review hand-off, block label) back to the pushing session, which
+> fixes it with `/fix-claude-pr` (see
+> [Claude fixes every claude/* PR](#claude-fixes-every-claude-pr)).
+> `.claude/scripts/stale_routines.py` sweeps the Routines these check-ins
+> leave behind (fired reminders, dead-session Routines, finished hand-backs)
+> each time one is armed or reported, and never touches any other Routine.
+> It never subscribes to PR activity, and the checker itself never fixes
+> anything. The same sync ships the `settings.json`
 > permission allowlist for the tools these commands call. Nothing to
 > configure in the consumer.
 
@@ -1114,7 +1127,7 @@ not delete wrappers that are already present in `.github/workflows/`.
 
 ### 3. Open an issue
 
-Create a new issue describing a feature or bug fix. The pipeline kicks off automatically:
+Create a new issue describing a feature or bug fix. By default a standalone issue is implemented by **Claude Code** (see [Claude issue implementer](#claude-issue-implementer)); the steps below describe the Codex pipeline, which runs when the repo sets `AI_ISSUE_IMPLEMENTER=codex` or the issue carries `ai:codex`:
 
 1. **Clarify** evaluates whether the issue has enough detail. If not, it comments with clarification questions. If required input is external and non-synthesizable (for example branch/SHA/credential/external URL), it emits a `BLOCKED: <reason>` handoff that labels the issue `ai:blocked` and pauses auto-answer loops until a human supplies the missing input.
 2. Once the issue is clear, comment `/answer` to trigger **Plan** generation. A plan whose pre-execution self-check reports `PLAN_SELF_CHECK: BLOCKER:` with `STATUS: NOT_CLEAR` and no Q-ID clarification block takes the same `ai:blocked` handoff as a `BLOCKED:` line — the issue is labeled `ai:blocked`, a "Planning blocked: human input required" comment names the first blocker line, and auto-answer/stall-recovery loops pause until a human resolves the blocker and replies `/answer`. Plans that pose Q-ID questions (or carry a `NEEDS_CLARIFICATION` status) alongside blockers reopen clarification as before.
@@ -1164,6 +1177,8 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
 | `workflow-log-analysis.yml` | `workflow_dispatch` (typically called from comprehensive-test-and-release / test-and-mark-stable smoke gates) | Periodic Codex audit of workflow runs (analyze, deep-audit, api-redundancy passes); see [`probably_unnecessary_but_read_if_stuck.md`](probably_unnecessary_but_read_if_stuck.md) for the runbook |
 | `check_failure_triage.yml` | `check_run.completed` (failure) | LLM diagnoses a failing PR check and opens an `ai:check-triage` issue for the pipeline to fix. On by default; disable via `CHECK_FAILURE_TRIAGE_ENABLED=false`; see "Check Failure Triage Phase" below |
+| `claude-issue-intake.yml` | coding-workflows only: `repository_dispatch` (`claude-issue`), `workflow_dispatch` | Queues a standalone issue routed to Claude by `clarify.yml` as an `ai:claude-issue-queue` issue for the Claude issue pickup; see "Claude issue implementer" |
+| `claude-issue-queue-watchdog.yml` | coding-workflows only: `schedule` (hourly, :17), `workflow_dispatch` | Labels queue items nobody picked up within `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (default 3) `ai:claude-issue-queue-stale` and sends a Telegram ERROR; see "Claude issue implementer" |
 | `workflow_failure_heal.yml` | `issues.labeled`, `pull_request.labeled` (human-needed escalation labels) | Reports an `ai:needs-human` / terminal-latch escalation to coding-workflows, whose `workflow-failure-heal-intake.yml` diagnoses the failed runs and opens an `ai:workflow-heal` issue for the pipeline to fix (in coding-workflows for workflow defects, in the consumer for consumer defects). On by default; disable via `WORKFLOW_HEAL_ENABLED=false`; see "Workflow Failure Heal" below |
 
 <!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
@@ -1180,6 +1195,172 @@ raising the guard. `review_autofix.yml` already sources five step bodies from
 `review_autofix_step_*.sh` files under `scripts/` this way. The procedure, including the
 script resolution order that keeps consumer repos and older PR branches
 working, is in `agents.md` under "Workflow file size limit".
+
+### Claude issue implementer
+
+Standalone issues — anything the AI orchestrator does not manage — are
+implemented by **Claude Code** by default, in every repository that runs
+`ai-clarify.yml` (every install profile). Claude runs the same staged process
+as `/implement-plan-claude`, sized to one issue. It writes a single-phase plan
+and runs the project-mode chain: project branch and draft final PR, the phase
+PR with Claude-fixer review rounds, conformance, security pass, runtime
+validation, completion, the final merge (which closes the issue),
+verify-activation, and `/deploy-activate` when needed. Nobody is at the
+keyboard, so every question, start-up checks included, is auto-decided and
+recorded as an `AD-<n>` entry for review at the end (CLAUDE.md §28 issue
+mode).
+
+**Flow.** One routine serves every repository; nothing is configured per repo.
+
+1. `clarify.yml` runs on every issue open and `/reclarify`.
+   `scripts/claude_issue_route.py` picks the implementer. First match wins:
+   orchestrator-managed (label or `Managed by: AI Orchestrator` body line),
+   tracking / security-audit / retro issues, and `[E2E …]` release-gate
+   fixtures always go to Codex. Otherwise an `ai:codex` label means Codex, an
+   `ai:claude` label means Claude, and failing both the repo variable
+   `AI_ISSUE_IMPLEMENTER` decides (default `claude`).
+2. A Claude route skips Codex clarify, claims the issue with `ai:claude`, and
+   `scripts/claude_issue_handoff.sh` sends a `claude-issue`
+   `repository_dispatch` to coding-workflows with `GH_PAT`.
+3. `claude-issue-intake.yml` (coding-workflows only) validates the repo
+   against `.github/ai/consumer_repos.json` plus coding-workflows, then queues
+   the issue as one `ai:claude-issue-queue` issue in coding-workflows
+   (`scripts/claude_issue_intake.sh`), opened with the job's `GITHUB_TOKEN`
+   so no workflow reacts to it, and comments "queued" on the issue. A repo
+   registered per CLAUDE.md §14 is covered automatically, including repos
+   onboarded later.
+4. The **Claude issue pickup** (`.claude/commands/claude-issue-pickup.md`), one
+   Auto-mode session woken hourly by a trigger bound to itself, reads the queue
+   (`claude_issue_route.py queue-pending`) and, following
+   `.claude/commands/claude-issue-dispatch.md` step 2, starts an Opus session
+   in the target repo running `/implement-issue-claude <url>` for each item,
+   then closes the queue issue. An issue therefore waits up to about an hour
+   before its session starts. A claude.ai routine cannot do this step: a
+   routine run gets no claude-code-remote tools (`create_session`,
+   `send_later`), so it can start neither the implementation session nor any
+   later stage (issue #4525). That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
+   as `/implement-plan-claude` in issue mode. The project is built on the
+   branch the issue names in an `Integration branch:` / `Target branch:` line:
+   a security follow-up on its project's branch, a heal issue on `stable` or
+   a pull request's branch. Otherwise it is built on the default branch.
+   Every PR uses `Refs #N` except the final PR. Into the default branch it
+   carries `Fixes #N`; into any other branch, the final-merge stage closes the
+   issue and labels it `ai:merged`. Verify-activation and `/deploy-activate`
+   run only for projects based on the default branch.
+
+**No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
+poller's standalone stall recovery skip issues that carry `ai:claude` without
+`ai:codex` (`AI_PHASE_GATE_V1 … reason=claude_routed`,
+`STALL_SKIP … reason=claude_routed`). Orchestrator issues never reach the
+router. Automation-produced issues (`ai:security`, `ai:check-triage`,
+`ai:workflow-heal`) go to Claude too, but skip their own security pass so a
+security fix cannot spawn follow-ups of follow-ups.
+
+**Switching.**
+
+| To … | Do |
+| --- | --- |
+| Send every new issue in a repo to Codex | Set repo variable `AI_ISSUE_IMPLEMENTER=codex` |
+| Move one issue to Codex | Add `ai:codex`, then comment `/reclarify` (the `ai:claude` claim is released) |
+| Send one issue to Claude in a `codex` repo | Add `ai:claude`, then comment `/reclarify` |
+| Retry a failed handoff or resume a blocked issue | Comment `/reclarify` |
+
+**Failure modes.** A rejected dispatch, an unregistered repo, or a failed
+queue read or write labels the issue `ai:claude-handoff-failed`, comments how
+to retry or switch, and sends a Telegram ERROR. A queue item still open after
+`CLAUDE_ISSUE_QUEUE_STALE_HOURS` (repo variable, default 3) means the pickup
+pickup stopped: `claude-issue-queue-watchdog.yml` labels it
+`ai:claude-issue-queue-stale` and sends a Telegram ERROR with the restart
+command. A session without the claude-code-remote tools never implements an
+issue itself: `/implement-issue-claude` and the dispatcher stop with
+`ai:claude-blocked` instead (CLAUDE.md §28.C). A Claude session that must stop (CLAUDE.md §28.C: an
+exhausted cap, a failed security or validation run, an ask-first operation,
+a missing base branch) comments once on the issue, labels it
+`ai:claude-blocked`, and sends a push notification; answer there and comment
+`/reclarify` to resume. If `claude_issue_route.py`
+itself errors, clarify falls back to the Codex pipeline with a warning, so no
+issue is dropped.
+
+**One-time setup (coding-workflows owner).** Do this before the change is
+promoted to `@stable`; until the pickup runs, Claude-routed issues wait in
+the queue and the watchdog alerts after 3 hours.
+
+1. Open a new claude.ai cloud session on coding-workflows **from the app**
+   (not from another session), in **Auto mode**; Sonnet with `/effort low`
+   as its first message keeps it cheap. Run `/claude-issue-pickup start` in
+   it. That session becomes the pickup: an hourly trigger named `Claude issue
+   pickup: hourly` is bound to it, so it never creates a session for its own
+   wakes. The claude-code-remote tools refuse to create sessions 8 parent
+   links below a root session, and the implementation chain needs 4 links
+   below the pickup, so the command refuses to start more than 3 links deep.
+   `/claude-issue-pickup start — restart` moves the pickup to the current
+   session, and `/claude-issue-pickup stop` stops it.
+2. Smoke test: open an issue here, or run **Claude Issue Intake** manually
+   with a repo and issue number. The issue gets a "queued" comment
+   (`ai:claude-issue-dispatched:v1`) linking an `ai:claude-issue-queue`
+   issue. Within about an hour the pickup closes that queue issue with a
+   `Dispatched:` session link, and the implementation session posts its
+   progress comment, writes `docs/plans/issue-<N>-*-plan.md`, and opens the
+   project branch and draft final PR.
+
+The "Claude issue dispatcher" routine and its `CLAUDE_ISSUE_ROUTINE_ID` /
+`CLAUDE_ISSUE_ROUTINE_TOKEN` settings are deprecated: the intake no longer
+fires the routine (it only logs `routine_deprecated` when the variable is
+set) and no longer binds the token. You can delete the routine, the variable
+and the secret. A routine still configured with
+`.claude/commands/claude-issue-dispatch.md` stops at its step 3 without
+implementing anything.
+
+Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`, `CLAUDE_ISSUE_QUEUE_WATCHDOG`.
+
+### Claude fixes every claude/* PR
+
+Every PR-backed `claude/*` head runs in **Claude-fixer mode**
+(`review_autofix.yml`, gate case `claude/*)`, kill switch
+`CLAUDE_FIXER_ENABLED=false`): the reviewer panel still reviews, but the
+GPT editor, conflict resolver, and review-blocked judge never run on it. A
+Claude session fixes it instead (CLAUDE.md §26 and §26.H):
+
+1. **The pushing session.** Its §26 Sonnet checker runs
+   `.claude/scripts/check_in_status.py --hand-back` every hour. When a fix is
+   due (a block label, a review hand-off for the current head, a merge
+   conflict, or a failed check with no workflow run queued, running, or
+   pending) it pulls the pushing session's hand-back Routine forward, and
+   that session follows `/fix-claude-pr` in place: it claims the head, fixes,
+   verifies, pushes, and registers a new hand-back with the same checker.
+   A PR has one checker; other interested sessions register with it as
+   subscribers.
+2. **A fresh fixer when the pushing session is gone.** The checker starts
+   an Opus 5.5 session at high effort running `/fix-claude-pr <url>`.
+3. **The hourly catch-all.** The `claude-pr-catch-all` job of
+   `review_autofix_sweep.yml` (cron `17 * * * *`) checks this repo and every
+   repo in `.github/ai/consumer_repos.json`. A fix that has been due for
+   `CLAUDE_PR_SWEEP_MIN_AGE_HOURS` (default 2) with no live claim becomes
+   one `ai:claude-issue-queue` item (payload `claude_pr_fix.v1`, opened with
+   the job's `GITHUB_TOKEN`), and the job claims the head for it. The Claude
+   issue pickup session starts one `/fix-claude-pr` session per item on its
+   next hourly wake. This also covers
+   `claude/*` PRs that never had a checker. `/implement-plan-claude` PRs keep
+   their chain's 6-hour window for failed checks.
+
+**Claims** (`.claude/scripts/claude_fix_claim.py`) stop two fixers racing:
+one PR comment ending in
+`<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`,
+counted only from owners, members, and collaborators, live for
+`CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3) on the current head. After
+`CLAUDE_FIX_HAND_BACK_CAP` (default 3) conflict, CI, and block fixes on one
+PR, the fixer posts a `hold` claim, sends one push notification, and asks;
+nothing touches a held head until someone pushes or the fixer resumes.
+
+Setup: the catch-all needs the Claude issue pickup session to be running
+(`/claude-issue-pickup start`, see [Claude issue implementer](#claude-issue-implementer)),
+since a claude.ai routine run cannot start sessions (#4525), and `GH_PAT`
+with `repo` scope on every registered consumer (§14). The queue watchdog
+flags its items like any other queue item when the pickup stops.
+
+Stable log prefix: `CLAUDE_PR_SWEEP` (`start`, `skip`, `dry_run`,
+`queued`, `already_queued`, `claim`, `report_only`, `queue_failed`,
+`queue_read_failed`, `read_failed`, `list_failed`, `end`).
 
 ### Check Failure Triage Phase
 
@@ -1478,6 +1659,7 @@ through `clarify → plan → implement → review`.
 | `ORCHESTRATOR_STATE_SIGNING_KEY` | orchestrate, orchestrate_poll | Independent signing secret; required before new projects or poller mutations, never supplied to the decomposer. |
 | `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, memory_maintenance | OpenRouter API key for LLM access and AI memory keyword extraction |
 | `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Telegram bot token (optional; also used for message cleanup) |
+| `CLAUDE_ISSUE_ROUTINE_TOKEN` | none (deprecated) | Formerly the API token of the "Claude issue dispatcher" routine. Since #4525 the intake queues issues for the Claude issue pickup and no longer binds this secret; it can be deleted. Never needed in consumer repos. |
 
 ## Required Variables
 
@@ -1719,6 +1901,11 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-6-sol`) | coding-workflows only. Diagnosis model for the workflow failure heal intake. |
 | `THINKING_LEVEL_WORKFLOW_HEAL` | `high` | coding-workflows only. Reasoning effort for the heal diagnosis call. |
 | `VERBOSITY_WORKFLOW_HEAL` | `low` | coding-workflows only. Codex verbosity for the heal diagnosis call. |
+| `AI_ISSUE_IMPLEMENTER` | `claude` | clarify (every repo). Who implements standalone (non-orchestrator) issues: `claude` hands them to the Claude issue implementer, `codex` keeps the clarify → plan → implement pipeline. Any other value warns and uses `claude`. Per-issue `ai:codex` / `ai:claude` labels win; orchestrator issues and `[E2E …]` fixtures always stay on Codex. See "Claude issue implementer". |
+| `CLAUDE_ISSUE_UPSTREAM_REPO` | `shubhodeep1/coding-workflows` | clarify (every repo). Repository that receives the `claude-issue` `repository_dispatch`. |
+| `CLAUDE_ISSUE_ROUTINE_ID` | — | Deprecated (#4525), coding-workflows only. The intake no longer fires the "Claude issue dispatcher" routine; when set it only logs `routine_deprecated`. Can be deleted. |
+| `CLAUDE_ISSUE_ROUTINE_BETA` | `experimental-cc-routine-2026-04-01` | Deprecated (#4525), unused: the intake no longer calls the routine `/fire` endpoint. |
+| `CLAUDE_ISSUE_QUEUE_STALE_HOURS` | `3` | coding-workflows only. Age after which `claude-issue-queue-watchdog.yml` flags an open `ai:claude-issue-queue` item `ai:claude-issue-queue-stale` and sends a Telegram ERROR (the pickup has stopped). |
 
 ## Semantic Cache (Clarification Only)
 
@@ -1995,6 +2182,14 @@ run reviews the merged head. Nothing else changes: the same resolver, the same
 `[ai-merge-resolve]` commit shape. The old order (reviewers → editor → detect →
 resolve) is what let the editor's commit itself collide with a base that moved
 during the 35–96 minute reviewer pass (coding-workflows #4031 round 2).
+
+In this repository, `scripts/review_conflict_resolve.sh` checks each resolver
+attempt against a pre-attempt worktree and merge-index snapshot. If an attempt
+edits outside the captured conflicted paths, the runner logs the paths, restores
+and verifies the full pre-attempt state, then retries with scope-specific feedback
+within the existing attempt limit. An unsafe or unverifiable restore stops the
+run without committing; the final `check_resolver_diff.sh` gate still runs on an
+accepted attempt. Consumer-repository resolver runs keep their existing path.
 
 **Merge train** (`MERGE_TRAIN_ENABLED`, default `true`;
 `scripts/review_merge_train.sh`). Runs as the `Merge-train gate` step just
