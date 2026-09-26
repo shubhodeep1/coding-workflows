@@ -405,7 +405,9 @@ def test_intake_retries_server_errors(stubs):
 def test_clarify_routes_before_codex_and_stages_scripts():
 	text = CLARIFY.read_text()
 	assert "claude_issue_route.py claude_issue_handoff.sh; do" in text
-	assert "AI_ISSUE_IMPLEMENTER: ${{ vars.AI_ISSUE_IMPLEMENTER || 'claude' }}" in text
+	# Unset must reach the router as "" so the routed comment says `default`.
+	assert "AI_ISSUE_IMPLEMENTER: ${{ vars.AI_ISSUE_IMPLEMENTER || '' }}" in text
+	assert route.route_issue(_issue(), "") == {"implementer": "claude", "reason": "default", "skip_security_pass": False}
 	assert "reason=claude_routed outcome=handoff" in text
 	steps = yaml.safe_load(text)["jobs"]["clarify"]["steps"]
 	names = [step["name"] for step in steps]

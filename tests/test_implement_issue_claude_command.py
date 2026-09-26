@@ -141,3 +141,33 @@ def test_issue_label_and_comment_tools_are_allowlisted():
 	settings = (ROOT / ".claude" / "settings.json").read_text()
 	for tool in ("mcp__github__issue_write", "mcp__github__add_issue_comment", "mcp__github__update_issue_comment"):
 		assert f'"{tool}"' in settings
+
+
+# --- fail closed without claude-code-remote tools (issue #4525) --------------------------
+
+
+def test_dispatcher_fails_closed_without_create_session(dispatch_cmd):
+	# A routine run has no create_session; the old fallback implemented the issue in-session.
+	assert "**Fail closed when `create_session` is unavailable**" in dispatch_cmd
+	assert "**Never implement the issue in this session**" in dispatch_cmd
+	assert "`<!-- ai:claude-blocked:v1 -->`" in dispatch_cmd
+	assert "`claude-issue-dispatch: blocked <repo>#<N> (no create_session)`" in dispatch_cmd
+	assert "every later stage still runs in its own session started by its checker" not in dispatch_cmd
+	assert "fallback in-session" not in dispatch_cmd
+	assert "`add_repo`" not in dispatch_cmd
+
+
+def test_issue_command_requires_session_tools(issue_cmd):
+	assert "**The chain needs the claude-code-remote tools**" in issue_cmd
+	assert "stop before any other step" in issue_cmd
+	assert "never replace the chain, its conformance audit, security pass, or validation with a smaller change" in issue_cmd
+
+
+def test_plan_command_issue_mode_has_no_toolless_fallback(plan_cmd):
+	assert "- **Session tools are required.** The [Fallbacks](#fallbacks)" in plan_cmd
+	assert "Not in [Issue Mode](#issue-mode): there the project stops instead" in plan_cmd
+
+
+def test_section_28_never_auto_decides_the_chain_away(claude_md):
+	assert "**Whether to run the chain at all.**" in claude_md
+	assert "never records one as an auto-decision" in claude_md
