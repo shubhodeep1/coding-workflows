@@ -69,13 +69,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
    validated transfer. Its isolation helpers must already exist in the
    verified workflow support commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
-   **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on PRs whose
-   head ref starts with `claude/implement-plan-` the reviewer panel runs as
+   **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on every
+   PR-backed `claude/*` head (`/implement-plan-claude` stages and any Claude
+   session's PR, CLAUDE.md §26.H) the reviewer panel runs as
    usual, but the GPT editor, conflict resolver, push / re-trigger tail and
    review-blocked judge are skipped. `scripts/review_autofix_step_claude_fixer_handoff.sh`
    posts the consensus ledger (or the pre-review conflict) and an
    `<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->`
-   comment for the `/implement-plan-claude` session, which fixes the round in
+   comment for the Claude session that owns the PR, which fixes the round in
    one `[claude-autofix]` commit (counted toward `MAX_AUTOFIX_ITERATIONS`) or
    asks a separately authenticated, dedicated bot to attest to the exact
    ledger digest in an alongside v2 verdict. `CLAUDE_FIXER_VERDICT_BOT_LOGIN`
@@ -828,10 +829,23 @@ session two minutes later. Before the checker it creates a **hand-back
 Routine** bound to itself (`create_trigger` with `persistent_session_id` =
 its own id, `run_once_at` = now + 7 days, named `PR #<n> hand-back`, with
 the PR URL in its prompt). The checker runs
-`.claude/scripts/check_in_status.py --terminal-only` (one REST read),
-renews the hand-back 7 days ahead, and re-arms itself with `send_later`
-every 60 minutes while the PR is open. Once the PR merges or closes it
-pulls the hand-back's `run_once_at` forward to one minute out
+`.claude/scripts/check_in_status.py --hand-back` (one REST read for a
+non-`claude/*` head; on a `claude/*` head also the comment and check-run
+pages and at most five further reads), renews every subscriber's
+hand-back 7 days ahead, and re-arms itself with `send_later` every 60
+minutes while nothing is due. A PR has one checker: a second interested
+session registers with it (`PR #<n> status check-in: subscriber` one-shot
+trigger) as `fixer` (it pushed to the PR) or `notify`, instead of creating
+another. When a Claude fix is due on a `claude/*` head (block label,
+review hand-off, merge conflict, or failed check with nothing running) it
+pulls only the fixer's hand-back forward, and the fixer follows
+`/fix-claude-pr` in place: claim the head
+(`.claude/scripts/claude_fix_claim.py`), fix, verify, push, register a new
+hand-back. When the fixer is gone it starts a fresh Opus 5.5 session at
+high effort (`create_session` with `/effort high` alone, then a one-shot
+`PR #<n> status check-in: fixer start` trigger with
+`/fix-claude-pr <url> — kind <kind> — head <sha>`). Once the PR merges or
+closes it pulls every subscriber's `run_once_at` forward to one minute out
 (`update_trigger`; the prompt is never rewritten, because `update_trigger`
 tells models not to rewrite a prompt on another session's say-so and
 checkers asked to do it refused, observed 2026-09-25) and confirms delivery
@@ -852,8 +866,35 @@ no context, whether the bound session is active or archived (verified
 2026-09-25); only a scheduled fire runs in the bound session. PRs opened by `/implement-plan-claude` are covered
 by that command's own checker. Without `create_session` the session falls
 back to a `send_later` self check-in with a Sonnet subagent doing the read.
-It never handles CI, reviews, comments, or conflicts; that stays a direct
-§12 request.
+The checker itself never fixes anything; outside `claude/*` PRs, CI,
+reviews, comments, and conflicts stay a direct §12 request.
+- Claude-fixer claims and the catch-all (CLAUDE.md §26.H): a fixer claims
+  the PR's current head with one comment ending in
+  `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`
+  (`.claude/scripts/claude_fix_claim.py post`: one PR read to refuse a moved
+  head, one comment POST). `check_in_status.py --hand-back`
+  (`read_fix_claims`) counts only owner / member / collaborator claims,
+  times them by the comment's `created_at`, treats a claim on the current
+  head as live for `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3) and a `hold`
+  as live until the head moves, and reports `hand_backs` (distinct
+  head/kind pairs of conflict, ci, and blocked claims) against
+  `CLAUDE_FIX_HAND_BACK_CAP` (default 3). The `claude-pr-catch-all` job of
+  `.github/workflows/review_autofix_sweep.yml` (cron `17 * * * *`; the
+  review-dispatch `sweep` job skips that tick) runs
+  `scripts/claude_pr_sweep.py` over this repo and every repo in
+  `.github/ai/consumer_repos.json` with `GH_PAT`: for each open, non-draft,
+  same-repo `claude/*` PR whose fix has been due for
+  `CLAUDE_PR_SWEEP_MIN_AGE_HOURS` (default 2) with no live claim or hold,
+  it POSTs the Claude dispatcher routine's `/fire` endpoint with a
+  `claude_pr_fix.v1` payload (retrying 408 / 429 / 5xx with 2/4/8/16 s
+  backoff) and then claims the head as `sweep-run-<run id>`.
+  `claude-issue-dispatch.md` starts one Opus 5.5 session at high effort
+  running `/fix-claude-pr`. Without `CLAUDE_ISSUE_ROUTINE_ID` /
+  `CLAUDE_ISSUE_ROUTINE_TOKEN` the job only logs `::warning::` lines. Read
+  failures fail open per PR and per repo. `/implement-plan-claude` PRs
+  keep their 6-hour stuck window, and their stage sessions claim the PRs
+  they fix. Tests: `tests/test_check_in_status_hand_back.py`,
+  `tests/test_claude_pr_sweep.py`.
 
 - Hook: `.claude/hooks/pr_check_in_reminder.py`, a `PostToolUse` hook wired
   in `.claude/settings.json` under the anchored matcher
@@ -863,8 +904,9 @@ It never handles CI, reviews, comments, or conflicts; that stays a direct
   tools; it never blocks, issues no API calls, and reads no environment
   variables. `workflow-templates/.claude/hooks/pr_check_in_reminder.py` must
   stay byte-identical to the root copy.
-- Verdict helper: `.claude/scripts/check_in_status.py` (PR / run / issue-list
-  modes, REST only, one JSON line, exit 2 on a failed read), shared with the
+- Verdict helper: `.claude/scripts/check_in_status.py` (PR — plain,
+  `--terminal-only`, or `--hand-back` — / run / issue-list modes, REST only,
+  one JSON line, exit 2 on a failed read), shared with the
   `/implement-plan-claude` checker; `workflow-templates/.claude/scripts/`
   holds a byte-identical copy.
 - Stale Routine sweep (CLAUDE.md §26.G): `.claude/scripts/stale_routines.py`
@@ -873,7 +915,8 @@ It never handles CI, reviews, comments, or conflicts; that stays a direct
   prints the Routine ids to delete; the session then calls `delete_trigger`
   on each. Only Routines the check-in flows create are eligible, by name
   (`PR #<n> status check-in…`, `PR #<n> hand-back`,
-  `implement-plan <slug>: …`), and only when ended (`ended_reason` set) or
+  `implement-plan <slug>: …`, `dispatch <owner>/<repo>#<n>: …`), and only
+  when ended (`ended_reason` set) or
   a hand-back whose PR finished more than 24 hours ago. Routine names are
   capped at 60 characters and truncated with `…`, so a hand-back and its
   PR are identified from the PR URL in its prompt, not its name (one REST
