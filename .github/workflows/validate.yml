@@ -748,12 +748,36 @@ jobs:
 
       - name: Install Python dependencies for validation renderer
         id: renderer_dependencies
+        env:
+          RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
         run: |
           set -euo pipefail
 
           if [ -f "scripts/render_validation_templates.py" ]; then
-            python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
-            python3 -c 'import yaml, jsonschema, jinja2'
+            : "${RUNTIME_DIR:?Trusted validation runtime is unavailable}"
+            mkdir -m 700 "${RUNTIME_DIR}/renderer-empty"
+            cd "${RUNTIME_DIR}/renderer-empty"
+            python3 -I -m venv "${RUNTIME_DIR}/renderer-venv"
+            "${RUNTIME_DIR}/renderer-venv/bin/python" -I -m pip --isolated install --disable-pip-version-check --quiet pyyaml jsonschema jinja2
+            "${RUNTIME_DIR}/renderer-venv/bin/python" -I -c '
+          import importlib.util
+          import pathlib
+          import sys
+          import sysconfig
+          environment = pathlib.Path(sys.argv[1]).resolve()
+          if pathlib.Path(sys.prefix).resolve() != environment:
+              raise SystemExit("Renderer interpreter is not the isolated environment")
+          roots = [pathlib.Path(sysconfig.get_path(key)).resolve() for key in ("purelib", "platlib")]
+          if not all(root.is_relative_to(environment) for root in roots):
+              raise SystemExit("Renderer package paths are not in the isolated environment")
+          for name in ("yaml", "jsonschema", "jinja2"):
+              spec = importlib.util.find_spec(name)
+              if spec is None or spec.origin is None or not any(pathlib.Path(spec.origin).resolve().is_relative_to(root) for root in roots):
+                  raise SystemExit("Renderer dependency origin is not in the isolated environment: " + name)
+              if spec.submodule_search_locations and not all(any(pathlib.Path(location).resolve().is_relative_to(root) for root in roots) for location in spec.submodule_search_locations):
+                  raise SystemExit("Renderer dependency search path is not in the isolated environment: " + name)
+          import yaml, jsonschema, jinja2
+          ' "${RUNTIME_DIR}/renderer-venv"
           else
             echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
           fi
