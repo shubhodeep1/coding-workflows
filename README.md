@@ -1254,9 +1254,10 @@ security fix cannot spawn follow-ups of follow-ups.
 queue read or write labels the issue `ai:claude-handoff-failed`, comments how
 to retry or switch, and sends a Telegram ERROR. A queue item still open after
 `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (repo variable, default 3) means the pickup
-pickup stopped: `claude-issue-queue-watchdog.yml` labels it
+stopped: `claude-issue-queue-watchdog.yml` labels it
 `ai:claude-issue-queue-stale` and sends a Telegram ERROR with the restart
-command. A session without the claude-code-remote tools never implements an
+command, `/claude-issue-pickup start — restart`, to run from a new cloud
+session opened in the app, in Auto mode. A session without the claude-code-remote tools never implements an
 issue itself: `/implement-issue-claude` and the dispatcher stop with
 `ai:claude-blocked` instead (CLAUDE.md §28.C). A Claude session that must stop (CLAUDE.md §28.C: an
 exhausted cap, a failed security or validation run, an ask-first operation,
