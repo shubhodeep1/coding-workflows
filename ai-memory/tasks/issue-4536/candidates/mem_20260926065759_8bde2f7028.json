@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: The complete change is a one-line replacement; no shortcut or broader change is warranted. This follows \u00a76 Core Priorities: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\nPlanning ref: `f017dd7cb7a01ca351962ac36baa579d3843f09b` on `orchestrator/project-4535`; it matches the integration-branch metadata. No clarification questions were required; `/answer` confirmed continuation.\n\n## Automation\n- Modify only an existing file. The existing `.github/workflows/implement.yml` `/approved` path performs implementation; no new script, scheduler wiring, supervisor, or database gate is needed.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` only. Line 1 already reads exactly `status: ok`. Replace line 2, currently `run_id: 26151428977`, with exactly `decompose-run: 36224773465`. Preserve line 3 and all other trailing content unchanged.\n\n## Functions or modules to implement\n- None.\n\n## Data structures affected\n- The canary\u2019s second text line only.\n\n## API/interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Replace only the second line\n- **Chosen:** Make the requested literal replacement without rewriting the file.\n- **Alternatives considered:** Regenerate the file or change its trailing metadata.\n- **Why:** A localized edit preserves unrelated content and satisfies the exact-line requirement.\n\n## Security considerations\nNo new trust boundary, endpoint, authorization surface, or external input is introduced. Treat the issue-supplied value as a literal for this canary only; do not execute it or use it as a credential.\n\n## Risks and edge cases\nThe current second line uses `run_id:`, not `decompose-run:`. Replace the whole line rather than retaining the old key. Do not remove the trailing `updated-by: ai-pipeline` line.\n\n## Testing considerations\nVerify lines 1 and 2 by exact string comparison. Check the diff to confirm only `tests/e2e_smoke_canary.txt` changed and its trailing content is preserved.\n\nPLAN_SELF_CHECK: PASS  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1e21e64fd227ab5c23c9d8892543acee08a6d7efa155280f4690818471ca7f4c",
+  "lineage": {
+    "issue_number": 4536,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36225086775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36225086775",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4536"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260926065759_8bde2f7028",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4536,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36225086775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4536",
+  "timestamps": {
+    "created_at": "2026-09-26T06:57:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
