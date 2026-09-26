@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4550-readme-pickup-restart-command-plan.md
 - Source issue: shubhodeep1/coding-workflows#4550
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
-- Project branch: claude/implement-plan-issue-4550-readme-pickup-restart-command   Final PR: (pending)
+- Project branch: claude/implement-plan-issue-4550-readme-pickup-restart-command   Final PR: #4554 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-26
-- Last note: project branch opened; implementing phase 1.
+- Last note: phase 1 implemented (README Failure modes names `/claude-issue-pickup start — restart`); phase PR opened, waiting on review_autofix.
 
 ## Phases
-1. [ ] Phase 1 — name `/claude-issue-pickup start — restart` in README "Failure modes"
+1. [ ] Phase 1 — name `/claude-issue-pickup start — restart` in README "Failure modes"   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -23,6 +23,7 @@
 ## Validation
 
 ## Completion
+- Final PR #4554 draft
 
 ## Activation
 
