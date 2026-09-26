@@ -587,6 +587,86 @@ def test_scope_snapshot_restore_and_index_fail_closed() -> None:
 		assert _scope_action(repo, env, "restore").returncode == 2
 
 
+def _scope_and_scratch_source() -> str:
+	src = _resolve_script_text()
+	start = src.index("_resolver_scope_state() {")
+	scope_end = src.index("\n}\n", start) + 2
+	scratch_start = src.index("_resolver_prepare_scratch_index() {", scope_end)
+	scratch_end = src.index("\n}\n", scratch_start) + 2
+	return src[start:scope_end] + "\n" + src[scratch_start:scratch_end]
+
+
+def _run_scope_script(repo: Path, env: dict[str, str], script: str) -> subprocess.CompletedProcess[str]:
+	clean_env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")}
+	return subprocess.run(
+		["bash", "-c", _scope_and_scratch_source() + "\n" + script + "\n"],
+		cwd=repo, env={**clean_env, **env}, capture_output=True, text=True, check=False,
+	)
+
+
+def test_scope_state_git_index_isolation_prevents_false_positive_and_still_guards_worktree() -> None:
+	# Issue #4545: a model attempt that stages its (in-scope, conflict-
+	# marker-free) resolution before the trusted stage_resolver_touched_
+	# path_or_fail step changes the real Git index, and the post-attempt
+	# check fails closed even though the content change is entirely
+	# within the conflicted set. Reproduce that false positive first, with
+	# no isolation.
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		assert _run_scope_script(repo, env, "_resolver_scope_state capture").returncode == 0
+		(repo / "conflict.txt").write_text("resolved without conflict markers\n", encoding="utf-8")
+		result = _run_scope_script(repo, env, "git add -- conflict.txt\n_resolver_scope_state check")
+		assert result.returncode == 2, (
+			"expected the unisolated model-staged attempt to fail closed "
+			f"(reproducing #4545); got returncode={result.returncode} "
+			f"stderr={result.stderr!r}"
+		)
+
+	# With _resolver_prepare_scratch_index + GIT_INDEX_FILE isolation, the
+	# same staging lands on the disposable copy only: the real index stays
+	# byte-identical and the attempt is accepted.
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		env = {**env, "RESOLVER_SCRATCH_INDEX": str(Path(directory) / "scratch_index")}
+		real_index_rel = subprocess.run(
+			["git", "-C", str(repo), "rev-parse", "--git-path", "index"],
+			capture_output=True, text=True, check=True,
+		).stdout.strip()
+		real_index = repo / real_index_rel if not Path(real_index_rel).is_absolute() else Path(real_index_rel)
+		assert _run_scope_script(repo, env, "_resolver_scope_state capture").returncode == 0
+		index_before = real_index.read_bytes()
+		(repo / "conflict.txt").write_text("resolved without conflict markers\n", encoding="utf-8")
+		result = _run_scope_script(
+			repo, env,
+			'_resolver_prepare_scratch_index\n'
+			'GIT_INDEX_FILE="${RESOLVER_SCRATCH_INDEX}" git add -- conflict.txt\n'
+			'_resolver_scope_state check',
+		)
+		assert result.returncode == 0, result.stderr
+		assert real_index.read_bytes() == index_before, (
+			"the real index must stay byte-identical: the isolated `git add` "
+			"should only have written RESOLVER_SCRATCH_INDEX"
+		)
+		assert Path(env["RESOLVER_SCRATCH_INDEX"]).is_file()
+
+	# Isolation only scopes the index: an out-of-scope worktree edit is
+	# still rejected exactly as before isolation was introduced.
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		env = {**env, "RESOLVER_SCRATCH_INDEX": str(Path(directory) / "scratch_index")}
+		assert _run_scope_script(repo, env, "_resolver_scope_state capture").returncode == 0
+		(repo / "conflict.txt").write_text("resolved without conflict markers\n", encoding="utf-8")
+		(repo / "outside.txt").write_text("unauthorized edit\n", encoding="utf-8")
+		result = _run_scope_script(
+			repo, env,
+			'_resolver_prepare_scratch_index\n'
+			'GIT_INDEX_FILE="${RESOLVER_SCRATCH_INDEX}" git add -- conflict.txt\n'
+			'_resolver_scope_state check',
+		)
+		assert result.returncode == 1, result.stderr
+		assert Path(env["RESOLVER_SCOPE_VIOLATIONS_FILE"]).read_text().splitlines() == ["outside.txt"]
+
+
 def test_scope_symlink_restore_preserves_preexisting_target() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		repo, env = _scope_fixture(Path(directory))
@@ -639,6 +719,7 @@ def main() -> int:
 	test_reasoning_default_lowered_to_high()
 	test_scope_retry_restores_full_attempt_and_keeps_final_gate()
 	test_scope_snapshot_restore_and_index_fail_closed()
+	test_scope_state_git_index_isolation_prevents_false_positive_and_still_guards_worktree()
 	test_scope_symlink_restore_preserves_preexisting_target()
 	test_scope_feedback_is_available_for_generic_resolver()
 	print(

@@ -496,6 +496,7 @@ RESOLVER_FP_BASELINE_STATE_FILE="${RUNTIME_DIR}/resolver_fp_baseline_state.json"
 RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact.json"
 RESOLVER_SCOPE_SNAPSHOT_DIR="${RUNTIME_DIR}/resolver_scope_snapshot"
 RESOLVER_SCOPE_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_scope_violations.txt"
+RESOLVER_SCRATCH_INDEX="${RUNTIME_DIR}/resolver_scratch_index"
 
 # Source-repo only: the final touched-set gate compares against the prepare
 # step's pre-resolver tree. Snapshot each attempt as well, since the allowlist
@@ -633,6 +634,23 @@ except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
     print(f"::error::Resolver scope {action} failed closed ({type(exc).__name__}).", file=sys.stderr)
     sys.exit(2)
 PY
+}
+
+# Source-repo only: give the model attempt a disposable copy of the real
+# merge index via GIT_INDEX_FILE, so a model-issued `git add`/`git commit`
+# (observed staging conflict-marker-free content ahead of the trusted
+# stage_resolver_touched_path_or_fail step) writes to the scratch copy
+# instead of mutating the real index that _resolver_scope_state's
+# merge_state() snapshot/check compares against. The real index and
+# MERGE_HEAD are never touched here; only the scratch file is created,
+# seeded from the real index's current bytes, or removed on failure.
+_resolver_prepare_scratch_index() {
+  local real_index
+  real_index="$(git rev-parse --git-path index)" || return 1
+  rm -f "${RESOLVER_SCRATCH_INDEX}"
+  if [ -f "${real_index}" ]; then
+    cp -- "${real_index}" "${RESOLVER_SCRATCH_INDEX}" || return 1
+  fi
 }
 
 # Snapshot every in-scope file (the resolver's allowlist, which
@@ -2034,6 +2052,10 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       echo "::error::Cannot capture resolver attempt baseline; refusing to invoke model."
       exit 1
     fi
+    if ! _resolver_prepare_scratch_index; then
+      echo "::error::Cannot prepare isolated Git index for resolver attempt; refusing to invoke model."
+      exit 1
+    fi
   fi
 
   emit_conflict_resolver_substate "BuildingPrompt" "${attempt}"
@@ -2084,6 +2106,15 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
     emit_conflict_resolver_substate "InitializingSession" "${attempt}"
     emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
+    # Source-repo only: scope the model's Git index to the disposable
+    # copy _resolver_prepare_scratch_index seeded above, so a model-
+    # issued `git add`/`git commit` cannot change the real index that
+    # the post-attempt scope check compares against. Unset again right
+    # after the attempt so every later step (scope check, staging,
+    # commit) uses the real index as before.
+    if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+      export GIT_INDEX_FILE="${RESOLVER_SCRATCH_INDEX}"
+    fi
     if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
       timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
         "${CODEX_STALL_GUARD_HELPER}" \
@@ -2103,6 +2134,10 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
         "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" > "${tmp_output}" \
         || _codex_exit=$?
+    fi
+    if [ -n "${GIT_INDEX_FILE:-}" ]; then
+      unset GIT_INDEX_FILE
+      rm -f "${RESOLVER_SCRATCH_INDEX}"
     fi
   fi
   resolver_clean_output="${tmp_output}.ansi-clean"
