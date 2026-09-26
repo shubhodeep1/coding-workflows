@@ -904,13 +904,17 @@ reviews, comments, and conflicts stay a direct §12 request.
   `.github/ai/consumer_repos.json` with `GH_PAT`: for each open, non-draft,
   same-repo `claude/*` PR whose fix has been due for
   `CLAUDE_PR_SWEEP_MIN_AGE_HOURS` (default 2) with no live claim or hold,
-  it POSTs the Claude dispatcher routine's `/fire` endpoint with a
-  `claude_pr_fix.v1` payload (retrying 408 / 429 / 5xx with 2/4/8/16 s
-  backoff) and then claims the head as `sweep-run-<run id>`.
-  `claude-issue-dispatch.md` starts one Opus 5.5 session at high effort
-  running `/fix-claude-pr`. Without `CLAUDE_ISSUE_ROUTINE_ID` /
-  `CLAUDE_ISSUE_ROUTINE_TOKEN` the job only logs `::warning::` lines. Read
-  failures fail open per PR and per repo. `/implement-plan-claude` PRs
+  it opens one `ai:claude-issue-queue` item (title
+  `[claude-issue-queue] fix <repo>#<n>`, a `claude_pr_fix.v1` block built by
+  `scripts/claude_issue_route.py` `build_pr_fix_queue_issue`) with the
+  job's `GITHUB_TOKEN` (`CLAUDE_PR_SWEEP_QUEUE_TOKEN`, job permission
+  `issues: write`), skips PRs that already have an open item, and then
+  claims the head as `sweep-run-<run id>`. `queue-pending` returns these
+  as `item_type: pr_fix` entries, and the Claude issue pickup starts one
+  Opus 5.5 session at high effort running `/fix-claude-pr` per entry
+  (`claude-issue-dispatch.md` step 2). Without the queue token, or when the
+  queue read fails, the job only logs `::warning::` lines. Read failures
+  fail open per PR and per repo. `/implement-plan-claude` PRs
   keep their 6-hour stuck window, and their stage sessions claim the PRs
   they fix. Tests: `tests/test_check_in_status_hand_back.py`,
   `tests/test_claude_pr_sweep.py`.

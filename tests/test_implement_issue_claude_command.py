@@ -3,7 +3,6 @@ issue mode of /implement-plan-claude, and the CLAUDE.md §28 issue-mode scope.""
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -131,10 +130,7 @@ def test_dispatcher_starts_every_session_at_high_effort(dispatch_cmd):
 
 
 def test_dispatcher_pr_payload_keys_match_the_sweep(dispatch_cmd):
-	spec = importlib.util.spec_from_file_location("claude_pr_sweep", ROOT / "scripts" / "claude_pr_sweep.py")
-	sweep = importlib.util.module_from_spec(spec)
-	spec.loader.exec_module(sweep)
-	text = sweep.build_fire_text("o/r", 3, "a" * 40, "ci", "sweep-run-5")
+	text = route.build_pr_fix_text("o/r", 3, "a" * 40, "ci", "sweep-run-5")
 	assert text.splitlines()[0] == "claude_pr_fix.v1"
 	for line in text.splitlines()[1:]:
 		key = line.split(":", 1)[0]
@@ -235,3 +231,10 @@ def test_pickup_tools_are_allowlisted():
 	for tool in ("create_session", "create_trigger", "list_triggers", "delete_trigger", "archive_session", "get_session", "set_session_title"):
 		assert f"mcp__Claude_Code_Remote__{tool}" in allow
 	assert "mcp__github__issue_write" in allow
+
+
+def test_pickup_starts_fixer_sessions_for_pr_fix_items(pickup_cmd):
+	"""Q25: the catch-all's claude_pr_fix.v1 queue items become /fix-claude-pr sessions."""
+	assert "`item_type` `pr_fix`" in pickup_cmd
+	assert "title `PR <repo>#<N> — fix <kind>`" in pickup_cmd
+	assert "`/fix-claude-pr` re-reads the PR and stops when the fix is no longer due" in pickup_cmd

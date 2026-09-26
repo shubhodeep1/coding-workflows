@@ -1327,9 +1327,11 @@ Claude session fixes it instead (CLAUDE.md §26 and §26.H):
 3. **The hourly catch-all.** The `claude-pr-catch-all` job of
    `review_autofix_sweep.yml` (cron `17 * * * *`) checks this repo and every
    repo in `.github/ai/consumer_repos.json`. A fix that has been due for
-   `CLAUDE_PR_SWEEP_MIN_AGE_HOURS` (default 2) with no live claim starts one
-   `/fix-claude-pr` session through the Claude dispatcher routine (payload
-   `claude_pr_fix.v1`), and the job claims the head for it. This also covers
+   `CLAUDE_PR_SWEEP_MIN_AGE_HOURS` (default 2) with no live claim becomes
+   one `ai:claude-issue-queue` item (payload `claude_pr_fix.v1`, opened with
+   the job's `GITHUB_TOKEN`), and the job claims the head for it. The Claude
+   issue pickup session starts one `/fix-claude-pr` session per item on its
+   next hourly wake. This also covers
    `claude/*` PRs that never had a checker. `/implement-plan-claude` PRs keep
    their chain's 6-hour window for failed checks.
 
@@ -1342,14 +1344,15 @@ counted only from owners, members, and collaborators, live for
 PR, the fixer posts a `hold` claim, sends one push notification, and asks;
 nothing touches a held head until someone pushes or the fixer resumes.
 
-Setup: the catch-all needs the same `CLAUDE_ISSUE_ROUTINE_ID` variable and
-`CLAUDE_ISSUE_ROUTINE_TOKEN` secret as the Claude issue implementer, and
-`GH_PAT` with `repo` scope on every registered consumer (§14). Without the
-routine it logs each due PR as a `::warning::` and starts nothing.
+Setup: the catch-all needs the Claude issue pickup session to be running
+(`/claude-issue-pickup start`, see [Claude issue implementer](#claude-issue-implementer)),
+since a claude.ai routine run cannot start sessions (#4525), and `GH_PAT`
+with `repo` scope on every registered consumer (§14). The queue watchdog
+flags its items like any other queue item when the pickup stops.
 
 Stable log prefix: `CLAUDE_PR_SWEEP` (`start`, `skip`, `dry_run`,
-`started`, `claim`, `report_only`, `fire_failed`, `read_failed`,
-`list_failed`, `end`).
+`queued`, `already_queued`, `claim`, `report_only`, `queue_failed`,
+`queue_read_failed`, `read_failed`, `list_failed`, `end`).
 
 ### Check Failure Triage Phase
 
