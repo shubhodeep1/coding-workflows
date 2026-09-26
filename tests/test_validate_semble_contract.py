@@ -302,12 +302,12 @@ def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:
 	assert 'ensure_serena_bootstrap()' in text
 	assert 'if ! env_is_truthy "${SERENA_ENABLED:-false}"; then\n    emit_serena_fallback "${serena_phase}" "disabled"\n    clear_stale_serena_codex_config' in text
 	assert 'echo "::notice::scripts/setup_serena.sh is unavailable; validation will continue without Serena."\n    emit_serena_fallback "${serena_phase}" "setup-failure"\n    clear_stale_serena_codex_config' in text
-	assert 'SERENA_FALLBACK_TARGET="validate" SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" bash scripts/setup_serena.sh' in text
+	assert 'SERENA_FALLBACK_TARGET="validate" SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" bash "${_validate_script_dir}/setup_serena.sh"' in text
 	assert 'echo "::warning::scripts/setup_serena.sh exited non-zero; validation will continue without Serena."\n    emit_serena_fallback "${serena_phase}" "setup-failure"\n    clear_stale_serena_codex_config' in text
 	assert 'DISCOVER_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "discover" || true)"' in text
-	assert 'SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-discover.txt' in text
+	assert 'SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "${VALIDATE_TRUSTED_SUPPORT_ROOT}/prompts/mode-validate-discover.txt"' in text
 	assert 'DIAGNOSE_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "diagnose" || true)"' in text
-	assert 'SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-diagnose.txt' in text
+	assert 'SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash "${_validate_script_dir}/render_prompt.sh" "${VALIDATE_TRUSTED_SUPPORT_ROOT}/prompts/mode-validate-diagnose.txt"' in text
 	assert 'ensure_serena_bootstrap "${phase}"' in text
 	assert 'ensure_serena_bootstrap "discover"' in text
 	assert 'ensure_serena_bootstrap "diagnose"' in text
@@ -321,7 +321,7 @@ def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:
 
 def test_validate_process_includes_discover_and_diagnose_semble_hooks() -> None:
 	text = _validate_process_text()
-	assert 'if source scripts/semble_helpers.sh; then' in text
+	assert 'if source "${_validate_script_dir}/semble_helpers.sh"; then' in text
 	assert 'build_validate_discover_semble_query()' in text
 	assert 'build_validate_diagnose_semble_query()' in text
 	assert 'append_validate_semble_context()' in text

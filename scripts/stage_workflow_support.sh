@@ -528,21 +528,17 @@ bootstrap_support_roots()
 	SUPPORT_PRIMARY_ROOT=""
 	SUPPORT_MAIN_ROOT=""
 
-	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
-		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
-	elif checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
+	# Validation never uses the target checkout as executable support, even
+	# when the target and workflow live in the same repository.
+	if [[ "${ORIGINAL_SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] &&
+	   checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
 		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
-	elif [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/primary"; then
-		echo "::warning::Support checkout ref ${ORIGINAL_SCRIPT_REF} is unavailable; using main."
-		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
-		RESOLVED_SCRIPT_REF="main"
 	else
-		echo "::error::Failed to stage workflow support files from ${WORKFLOW_SOURCE_REPO} (${ORIGINAL_SCRIPT_REF} and main fallback)." >&2
+		echo "::error::Failed to stage immutable validation support from ${WORKFLOW_SOURCE_REPO}." >&2
 		exit 1
 	fi
-	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
-	   [ "$(git -C "${SUPPORT_PRIMARY_ROOT}" rev-parse HEAD 2>/dev/null)" != "${ORIGINAL_SCRIPT_REF}" ]; then
-		echo "::error::Explicit validation support checkout is not the verified commit." >&2
+	if [ "$(git -C "${SUPPORT_PRIMARY_ROOT}" rev-parse HEAD 2>/dev/null)" != "${ORIGINAL_SCRIPT_REF}" ]; then
+		echo "::error::Validation support checkout is not the verified commit." >&2
 		exit 1
 	fi
 
@@ -558,6 +554,18 @@ copy_from_ref_or_local()
 	local require_remote="${3:-false}"
 	local allow_main_fallback="${4:-true}"
 	local source_path=""
+	if [ "${TARGET_NAME:-}" = "validate" ]; then
+		# The verified SHA is the only permitted source of executable support.
+		allow_main_fallback="false"
+		local target_parent="${target_path}"
+		while [ "${target_parent}" != "." ]; do
+			if [ -L "${target_parent}" ]; then
+				echo "::error::Unsafe validation support destination ${repo_path}" >&2
+				return 1
+			fi
+			target_parent="$(dirname -- "${target_parent}")"
+		done
+	fi
 	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		require_remote="true"
 		allow_main_fallback="false"
@@ -889,6 +897,54 @@ run_overlay_loader()
 stage_validate_support()
 {
 	local repo_path require_remote_when_external model_catalog_path serena_template_path
+	# Compare every target template to the pinned manifest before any staging
+	# can overwrite it. The renderer subsequently reads only the private copy.
+	local trusted_root="${RUNNER_TEMP:?}/validate-support-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
+	PYTHONDONTWRITEBYTECODE=1 python3 - "${MANIFEST_PATH}" "${REPO_ROOT}" "${SUPPORT_PRIMARY_ROOT}" "${trusted_root}" <<'PY'
+import json
+import pathlib
+import shutil
+import sys
+
+manifest_path, target_path, source_path, private_path = map(pathlib.Path, sys.argv[1:])
+manifest = json.loads(manifest_path.read_text())
+prefix = pathlib.PurePosixPath('workflow-templates/validation-harness')
+listed = set()
+for entry in manifest['optional_copy_files']:
+	path = pathlib.PurePosixPath(entry)
+	if path == prefix or prefix not in path.parents or path.suffix != '.j2' or '..' in path.parts or entry != str(path) or entry in listed:
+		raise SystemExit('::error::Unsafe validation template manifest entry')
+	listed.add(entry)
+for entry in sorted(listed):
+	source = source_path / entry
+	if source.is_symlink() or not source.is_file():
+		raise SystemExit(f'::error::Missing verified validation template: {entry}')
+source_templates = source_path / prefix
+if {item.relative_to(source_path).as_posix() for item in source_templates.rglob('*.j2')} != listed:
+	raise SystemExit('::error::Verified template tree differs from validation manifest')
+target_root = target_path / prefix
+if (target_path / 'workflow-templates').is_symlink():
+	raise SystemExit('::error::Untrusted validation template parent')
+if target_root.exists() or target_root.is_symlink():
+	for item in (target_root, *target_root.rglob('*')):
+		rel = item.relative_to(target_path).as_posix()
+		if item.is_symlink() or (item.is_file() and (rel not in listed or item.read_bytes() != (source_path / rel).read_bytes())) or (not item.is_file() and not item.is_dir()):
+			raise SystemExit(f'::error::Untrusted validation template: {rel}')
+if private_path.exists() or private_path.is_symlink():
+	raise SystemExit('::error::Validation support directory already exists')
+private_path.mkdir(mode=0o700)
+for entry in ('scripts', 'prompts', 'ai-memory', 'workflow-templates/validation-harness'):
+	source = source_path / entry
+	if not source.is_dir() or source.is_symlink():
+		raise SystemExit(f'::error::Missing verified validation support: {entry}')
+	for item in source.rglob('*'):
+		if item.is_symlink():
+			raise SystemExit(f'::error::Symlink in verified validation support: {entry}')
+	shutil.copytree(source, private_path / entry, dirs_exist_ok=True)
+PY
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		echo "VALIDATE_TRUSTED_SUPPORT_ROOT=${trusted_root}" >> "${GITHUB_ENV}"
+	fi
 	if [ -n "${GITHUB_ENV:-}" ]; then
 		echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" >> "$GITHUB_ENV"
 		echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" >> "$GITHUB_ENV"

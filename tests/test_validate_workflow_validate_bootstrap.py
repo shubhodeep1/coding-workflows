@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import subprocess
 import sys
@@ -142,7 +143,88 @@ def test_validate_workflow_passes_template_default_env() -> None:
 	assert "id: renderer_dependencies" in wf
 	assert "python3 -c 'import yaml, jsonschema, jinja2'" in wf
 	assert "VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}" in wf
-	assert "if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'" in wf
+	assert "steps.workspace_after_create_hook.outcome == 'success' && steps.workspace_before_run_hook.outcome == 'success'" in wf
+
+
+def test_validate_prerequisites_and_credential_free_failure_tail() -> None:
+	import yaml
+
+	steps = yaml.safe_load(_workflow_text())["jobs"]["validate"]["steps"]
+	by_name = {step["name"]: step for step in steps}
+	condition = by_name["Run validation process"]["if"]
+	for step_id in (
+		"verified_checkout", "runtime", "support_files", "workspace_meta",
+		"workspace_state", "workspace_contents", "workspace_after_create_hook",
+		"workspace_before_run_hook",
+	):
+		assert f"steps.{step_id}.outcome == 'success'" in condition
+		assert f"steps.{step_id}.outcome != 'failure'" not in condition
+	assert "always()" not in condition
+	for step_name in ("Run workspace after_run hook", "Emit Serena stats", "Record validation candidate", "Record validation run end", "Force orchestrate poll after validation finalization", "Run workspace before_remove hook", "Upload validation artifacts"):
+		assert "steps.validate_run.outcome != 'skipped'" in by_name[step_name]["if"]
+	collector = by_name["Collect validation status"]
+	assert collector["if"] == "always()"
+	assert "GH_TOKEN" not in collector.get("env", {})
+	assert "${RUNNER_TEMP}/validate-status-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in collector["run"]
+	assert 'bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/validate_process.sh"' in by_name["Run validation process"]["run"]
+
+
+def test_bootstrap_failure_status_without_runtime_or_credentials(tmp_path: Path) -> None:
+	import yaml
+
+	steps = yaml.safe_load(_workflow_text())["jobs"]["validate"]["steps"]
+	collector = next(step for step in steps if step["name"] == "Collect validation status")
+	output = tmp_path / "output"
+	env = {key: value for key, value in os.environ.items() if key not in ("GH_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "BASH_ENV")}
+	env.update({"RUNTIME_DIR": "", "RUNNER_TEMP": str(tmp_path), "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(output)})
+	result = subprocess.run(["bash", "-c", collector["run"]], cwd=tmp_path, env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert "status=error" in output.read_text(encoding="utf-8")
+	assert (tmp_path / "validate-status-123-1" / "validation_status.json").is_file()
+
+
+def test_validate_template_inventory_rejects_untrusted_entries(tmp_path: Path) -> None:
+	staging = _helper_text()
+	program = staging.split('python3 - "${MANIFEST_PATH}" "${REPO_ROOT}" "${SUPPORT_PRIMARY_ROOT}" "${trusted_root}" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
+	manifest = {"optional_copy_files": []}
+	source = tmp_path / "source"
+	target = tmp_path / "target"
+	source.mkdir()
+	target.mkdir()
+	for directory in ("scripts", "prompts", "ai-memory"):
+		(source / directory).mkdir()
+	for family in ("_shared", "node-runtime"):
+		rel = f"workflow-templates/validation-harness/{family}/example.j2"
+		manifest["optional_copy_files"].append(rel)
+		asset = source / rel
+		asset.parent.mkdir(parents=True, exist_ok=True)
+		asset.write_text("trusted", encoding="utf-8")
+	manifest_file = tmp_path / "manifest.json"
+	manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+	def check() -> int:
+		private = tmp_path / "private"
+		if private.exists():
+			import shutil
+			shutil.rmtree(private)
+		return subprocess.run([sys.executable, "-c", program, str(manifest_file), str(target), str(source), str(private)], capture_output=True, text=True).returncode
+	assert check() == 0
+	for family in ("_shared", "node-runtime"):
+		asset = target / f"workflow-templates/validation-harness/{family}/example.j2"
+		asset.parent.mkdir(parents=True, exist_ok=True)
+		asset.write_text("trusted", encoding="utf-8")
+		assert check() == 0
+		asset.write_text("tampered", encoding="utf-8")
+		assert check() != 0
+		asset.unlink()
+		asset.symlink_to(source / manifest["optional_copy_files"][0])
+		assert check() != 0
+		asset.unlink()
+		extra = asset.parent / "extra.j2"
+		extra.write_text("{{ 1 + 1 }}", encoding="utf-8")
+		assert check() != 0
+		extra.unlink()
+	(source / manifest["optional_copy_files"][0]).unlink()
+	assert check() != 0
 
 
 def test_renderer_dependency_preflight_blocks_rendering() -> None:
@@ -178,7 +260,7 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 				"  exit 1\n"
 				"fi\n"
 				"case \"$1\" in\n"
-				"  scripts/render_validation_templates.py) touch renderer-invoked; exit 0;;\n"
+				"  */scripts/render_validation_templates.py) touch renderer-invoked; exit 0;;\n"
 				"esac\n"
 				"exec \"$REAL_PYTHON3\" \"$@\"\n",
 				encoding="utf-8",
@@ -190,6 +272,7 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 				"REAL_PYTHON3": sys.executable,
 				"IMPORTS_AVAILABLE": imports_available,
 				"GENERATE_LOG_FILE": str(root / "renderer.log"),
+				"VALIDATE_TRUSTED_SUPPORT_ROOT": str(root),
 			})
 			env.pop("BASH_ENV", None)
 			if setup_ready:
