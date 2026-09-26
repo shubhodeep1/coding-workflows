@@ -738,6 +738,22 @@ if [ "${CLASSIFICATION}" = "already-fixed" ]; then
 	fi
 fi
 
+# A deterministic failure (the identical-failure cap tripped, or an earlier
+# heal of this lineage merged a fix and it came back) is never `transient`:
+# a re-run cannot clear it, and a `transient` verdict opens no issue. File it
+# as `inconclusive` with a note instead (PR #4443: six identical failures,
+# then a generation-2 heal that only added a retry).
+if [ "${CLASSIFICATION}" = "transient" ] \
+	&& [ "$(python3 "${HEAL_PY}" is-deterministic --payload-json "${PAYLOAD_FILE}" --gen "${GEN}" 2>/dev/null || echo false)" = "true" ]; then
+	log "classification_remapped from=transient to=inconclusive reason=deterministic_failure source=${SOURCE_LABEL} fp=${FP} gen=${GEN}"
+	CLASSIFICATION="inconclusive"
+	{
+		echo "> **Heal intake note:** the diagnosis below classified this failure as \`transient\`, but it is deterministic (the same fingerprint repeated, or it came back after an earlier heal of this lineage). A re-run cannot clear it, so it was filed as \`inconclusive\`. Find the deterministic cause; a retry is not an accepted fix."
+		echo
+		cat "${DIAG_FILE}"
+	} > "${DIAG_FILE}.tmp" && mv "${DIAG_FILE}.tmp" "${DIAG_FILE}"
+fi
+
 # A self-inflicted token is routed as such only when the ownership computed
 # above backs it (a crash file in the PR or base diff, or, with no crash file,
 # pipeline files the PR changes); otherwise (routing disabled, consumer report,

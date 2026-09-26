@@ -193,6 +193,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
     `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
     `WORKFLOW_HEAL`.
+    A report whose failure reason is `identical_failure_cap`, or a generation
+    > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
+    intake never files it as `transient` (remaps to `inconclusive`,
+    `classification_remapped … reason=deterministic_failure`), and its issue
+    body forbids retry / backoff / re-run fixes and requires a regression test
+    that reproduces the failure. The review/autofix failure comment names the
+    failed step (one jobs-API call matched on `RUNNER_NAME`) and the first
+    specific `::error::` line of the captured stage stderr (including the
+    resolver's, `resolver_stage_stderr.txt`), redacted
+    (`failure-headline`, log prefix `AUTOFIX_FAILURE_HEADLINE`).
 15. **Claude issue implementer** (`clarify.yml` route step,
     `scripts/claude_issue_route.py`, `scripts/claude_issue_handoff.sh`,
     `claude-issue-intake.yml`, `scripts/claude_issue_intake.sh`,
@@ -902,8 +912,11 @@ committing the corresponding file:
   `before_run`, `after_run`, and `before_remove`; missing files are a no-op.
   Validate's four hooks run from trusted support in a tokenless, network-disabled
   container against a bounded, screened workspace copy, never the host checkout
-  or its `.git`. Isolation/transfer errors stop validation even for nonfatal
-  hooks. An explicit `validate.yml` `target_ref` requires exactly one open
+  or its `.git`. Only non-executable, simple-name `.txt` data under
+  `validation/hook-output/<hook>/` may be replayed to the host; it must not be
+  sourced or executed. Any other changed or deleted path rejects the entire
+  replay as an isolation/transfer failure, stopping validation even for
+  nonfatal hooks. An explicit `validate.yml` `target_ref` requires exactly one open
   trusted-author same-repo project PR targeting the default branch; checkout
   pins and verifies that PR's SHA without persisting checkout credentials.
   Empty `target_ref` retains integration/default selection.
@@ -1423,6 +1436,7 @@ and shipped:
 - `opencode_agent_failure`
 - `CLAUDE_ISSUE_HANDOFF`
 - `CLAUDE_ISSUE_INTAKE`
+- `AUTOFIX_FAILURE_HEADLINE`
 - `MODEL_CATALOG_BACKFILL`
 - `AUTOFIX_GATE_CLAUDE_FIXER`
 - `AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED`
@@ -1615,6 +1629,7 @@ LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
 LOG_PREFIX.name=CLAUDE_ISSUE_HANDOFF
 LOG_PREFIX.name=CLAUDE_ISSUE_INTAKE
+LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
 LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF

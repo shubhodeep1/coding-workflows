@@ -144,6 +144,7 @@ analysis/workflow-optimization-2026-09-23.md
 analysis/workflow-optimization-2026-09-24-2.md
 analysis/workflow-optimization-2026-09-24.md
 analysis/workflow-optimization-2026-09-25.md
+analysis/workflow-optimization-2026-09-26.md
 changelog.d/.gitkeep
 changelog.d/3576-security-audit-uncapped-followups.md
 changelog.d/4305-editor-checksum-and-gate-retry-queueing.md
@@ -168,6 +169,14 @@ changelog.d/4438-implement-plan-claude-fixer-project-branch.md
 changelog.d/4439-audit-plans-implement-plan-claude-gate.md
 changelog.d/4440-implement-plan-auto-decisions.md
 changelog.d/4443-claude-issue-implementer.md
+changelog.d/4451-pin-security-audit-support.md
+changelog.d/4452-validate-target-ref-sandbox.md
+changelog.d/4453-claude-fixer-verdict-verification.md
+changelog.d/4469-validate-hook-output-boundary.md
+changelog.d/4470-trusted-security-audit-exclusions.md
+changelog.d/4472-resolver-symlink-touched-set.md
+changelog.d/4476-pipeline-failure-guards.md
+changelog.d/4481-validation-renderer-dependency-preflight.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
@@ -674,6 +683,7 @@ tests/test_ci_poll_test_sharding.py
 tests/test_ci_shared_shell_block_guard.py
 tests/test_clarify_informal_detect.py
 tests/test_claude_issue_route.py
+tests/test_claude_md_section_numbers.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
 tests/test_codex_stall_guard_poller.py
@@ -844,6 +854,7 @@ tests/test_test_and_mark_stable_phantom_review_run_filter.py
 tests/test_test_and_mark_stable_phase7_unconflict.py
 tests/test_test_and_mark_stable_plan_polling_guard.py
 tests/test_test_and_mark_stable_review_blocked_budget.py
+tests/test_touched_set_symlink_aware.py
 tests/test_transcript_archive.sh
 tests/test_truncate_to_utf8_byte_cap.py
 tests/test_update_repo_tree.py
