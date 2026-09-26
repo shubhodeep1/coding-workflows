@@ -25,10 +25,18 @@
 # `<!-- workflow-failure-heal:source=<repo>#<source PR> -->`, whose PR's head
 # is `ai/issue-<issue>` and whose base is the source PR's head branch (or,
 # after a merge, the source base GitHub already re-pointed it to).
+# A heal issue built by the Claude issue implementer (/implement-plan-claude
+# "Issue Mode") has no ai/issue-<issue> branch: its fix lives on the project
+# branch claude/implement-plan-issue-<issue>-<topic>, and its final PR (head =
+# that branch, base = the source PR's head) is the heal PR. It is reconciled
+# the same way, with the project branch as the heal branch; closing it also
+# closes the project's open inner PRs (based on the project branch).
 #
 # API budget (CLAUDE.md §15): one paginated GET of the open heal issues, one
-# GET of the open PRs per matching heal issue, then the writes for each heal
-# PR acted on. Nothing else in this path already holds that data. Git reads
+# GET of the open PRs per matching heal issue, at most two paginated GETs of the
+# open PRs based on the source PR's head / base (Claude final PRs, shared by
+# every heal issue), one GET of a Claude project's inner PRs when it is closed,
+# then the writes for each heal PR acted on. Nothing else in this path already holds that data. Git reads
 # and the (fast-forward) push go through the git remote.
 #
 # Required env: GH_TOKEN, REPOSITORY, SOURCE_PR_NUMBER, SOURCE_PR_MERGED,
@@ -236,6 +244,94 @@ _Workflow failure heal PR reconcile._"
 	return 0
 }
 
+# One heal PR: close it with its issue when the source PR closed unmerged, or
+# move it onto the source PR's base when the source PR merged. CLAUDE_PROJECT
+# is the heal fix's Claude issue-mode project branch (empty for ai/issue-<N>):
+# every close then also closes the project's open inner PRs (based on it).
+_reconcile_heal_pr()
+{
+	local heal_pr="$1" heal_branch="$2" heal_head_sha="$3" heal_base="$4" heal_issue="$5" claude_project="${6:-}"
+	if [ "${heal_base}" != "${HEAD_REF}" ] && ! { [ "${MERGED}" = "true" ] && [ "${heal_base}" = "${BASE_REF}" ]; }; then
+		# Not stacked on the closed PR (e.g. it targets stable): leave it.
+		log "skip reason=unrelated_base heal_pr=${heal_pr} base=${heal_base} source_pr=${SOURCE_PR}"
+		return 0
+	fi
+	if [ "${MERGED}" != "true" ]; then
+		_close_heal "${heal_pr}" "${heal_issue}" "source_closed_unmerged" \
+			"Closing without merging: source pull request #${SOURCE_PR} closed without merging. This branch carries #${SOURCE_PR}'s commits, so it is not re-pointed at \`${BASE_REF}\`: that would re-propose changes that were not merged."
+		[ -z "${claude_project}" ] || _close_claude_inner_prs "${claude_project}" "source_closed_unmerged"
+		return 0
+	fi
+	if _retarget_heal "${heal_pr}" "${heal_branch}" "${heal_head_sha}" "${heal_base}"; then
+		return 0
+	fi
+	if [ "${RETARGET_FAIL_REASON}" = "heal_branch_moved" ] || [ "${RETARGET_FAIL_REASON}" = "push_state_unknown" ]; then
+		# Do not close when remote state is unknown or the branch moved.
+		log "warn reconcile_incomplete heal_pr=${heal_pr} reason=${RETARGET_FAIL_REASON} source_pr=${SOURCE_PR}"
+		echo "::warning::WORKFLOW_HEAL_PR_RECONCILE reconcile_incomplete heal_pr=${heal_pr} reason=${RETARGET_FAIL_REASON} source_pr=${SOURCE_PR}"
+		log "skip reason=${RETARGET_FAIL_REASON} heal_pr=${heal_pr} source_pr=${SOURCE_PR}"
+		return 0
+	fi
+	_close_heal "${heal_pr}" "${heal_issue}" "source_merged_${RETARGET_FAIL_REASON}" \
+		"Closing without merging: source pull request #${SOURCE_PR} merged into \`${BASE_REF}\`, but this fix could not be moved onto \`${BASE_REF}\` (\`${RETARGET_FAIL_REASON}\`)."
+	[ -z "${claude_project}" ] || _close_claude_inner_prs "${claude_project}" "source_merged_${RETARGET_FAIL_REASON}"
+	return 0
+}
+
+# A Claude issue-mode heal project (/implement-plan-claude "Issue Mode") ships
+# its phase, conformance-fix and completion PRs into its project branch and
+# only the final PR into the heal target. Once the final PR is closed, those
+# inner PRs can no longer land anywhere: close them too (one listing per
+# project, then one close per inner PR). The project's stage sessions read the
+# closed final PR and closed issue and stop.
+_close_claude_inner_prs()
+{
+	local project_branch="$1" reason="$2" inner_file inner_pr
+	inner_file="${WORK_DIR}/claude_inner_$(printf '%s' "${project_branch}" | tr '/' '_').json"
+	if ! gh_retry gh api --method GET "repos/${REPO}/pulls" -f state=open -f base="${project_branch}" -f per_page=100 > "${inner_file}" 2>/dev/null \
+		|| ! jq -e 'type == "array"' "${inner_file}" >/dev/null 2>&1; then
+		log "warn claude_inner_pr_lookup_failed project_branch=${project_branch} source_pr=${SOURCE_PR}"
+		return 0
+	fi
+	while IFS= read -r inner_pr; do
+		[[ "${inner_pr}" =~ ^[1-9][0-9]*$ ]] || continue
+		_comment "${inner_pr}" "Closing without merging: the Claude project this pull request belongs to (\`${project_branch}\`) was closed because its source pull request #${SOURCE_PR} closed (\`${reason}\`).
+
+---
+_Workflow failure heal PR reconcile._"
+		if gh_retry gh api --method PATCH "repos/${REPO}/pulls/${inner_pr}" -f state=closed >/dev/null 2>&1; then
+			log "closed_inner inner_pr=${inner_pr} project_branch=${project_branch} source_pr=${SOURCE_PR} reason=${reason}"
+		else
+			log "warn inner_pr_close_failed inner_pr=${inner_pr} project_branch=${project_branch}"
+		fi
+	done < <(jq -r '.[] | .number' "${inner_file}")
+	return 0
+}
+
+# Claude issue-mode heal fixes live on claude/implement-plan-issue-<N>-<topic>,
+# a name the reconcile cannot derive, so their final PRs are found by base:
+# the open PRs based on the source PR's head (and, after a merge, on its base,
+# where GitHub may already have re-pointed them). At most two listings per
+# run, shared by every heal issue (CLAUDE.md §15).
+CLAUDE_PULLS_FILE="${WORK_DIR}/claude_heal_pulls.json"
+printf '[]' > "${CLAUDE_PULLS_FILE}"
+_claude_bases=("${HEAD_REF}")
+if [ "${MERGED}" = "true" ] && [ "${BASE_REF}" != "${HEAD_REF}" ]; then
+	_claude_bases+=("${BASE_REF}")
+fi
+for _claude_base in "${_claude_bases[@]}"; do
+	_claude_part="${WORK_DIR}/claude_heal_pulls_part.json"
+	if gh_retry gh api --paginate --method GET "repos/${REPO}/pulls" -f state=open -f base="${_claude_base}" -f per_page=100 \
+		--jq '[.[] | select((.head.ref // "") | startswith("claude/implement-plan-issue-"))]' 2>/dev/null \
+		| jq -c -s 'add // []' > "${_claude_part}" 2>/dev/null \
+		&& jq -e 'type == "array"' "${_claude_part}" >/dev/null 2>&1; then
+		jq -c -s 'add | unique_by(.number)' "${CLAUDE_PULLS_FILE}" "${_claude_part}" > "${CLAUDE_PULLS_FILE}.tmp" 2>/dev/null \
+			&& mv -f "${CLAUDE_PULLS_FILE}.tmp" "${CLAUDE_PULLS_FILE}"
+	else
+		log "warn claude_heal_pr_lookup_failed base=${_claude_base} source_pr=${SOURCE_PR}"
+	fi
+done
+
 for heal_issue in "${HEAL_ISSUES[@]}"; do
 	[[ "${heal_issue}" =~ ^[1-9][0-9]*$ ]] || continue
 	heal_branch="ai/issue-${heal_issue}"
@@ -243,34 +339,23 @@ for heal_issue in "${HEAL_ISSUES[@]}"; do
 	if ! gh_retry gh api --method GET "repos/${REPO}/pulls" -f state=open -f head="${REPO%%/*}:${heal_branch}" -f per_page=10 > "${PULLS_FILE}" 2>/dev/null \
 		|| ! jq -e 'type == "array"' "${PULLS_FILE}" >/dev/null 2>&1; then
 		log "warn heal_pr_lookup_failed heal_issue=${heal_issue} source_pr=${SOURCE_PR}"
-		continue
+	else
+		while IFS=$'\t' read -r heal_pr heal_head_ref heal_head_sha heal_base; do
+			[[ "${heal_pr}" =~ ^[1-9][0-9]*$ ]] || continue
+			[ "${heal_head_ref}" = "${heal_branch}" ] || continue
+			heal_head_sha="$(printf '%s' "${heal_head_sha}" | tr '[:upper:]' '[:lower:]')"
+			_reconcile_heal_pr "${heal_pr}" "${heal_branch}" "${heal_head_sha}" "${heal_base}" "${heal_issue}"
+		done < <(jq -r '.[] | [(.number|tostring), (.head.ref // ""), (.head.sha // ""), (.base.ref // "")] | @tsv' "${PULLS_FILE}")
 	fi
+	# The heal issue's Claude project: its final PR's head is the project
+	# branch claude/implement-plan-issue-<issue>-<topic> in this repository.
 	while IFS=$'\t' read -r heal_pr heal_head_ref heal_head_sha heal_base; do
 		[[ "${heal_pr}" =~ ^[1-9][0-9]*$ ]] || continue
-		[ "${heal_head_ref}" = "${heal_branch}" ] || continue
+		[[ "${heal_head_ref}" =~ ^claude/implement-plan-issue-${heal_issue}-[a-z0-9][a-z0-9-]*$ ]] || continue
+		_valid_branch "${heal_head_ref}" || continue
 		heal_head_sha="$(printf '%s' "${heal_head_sha}" | tr '[:upper:]' '[:lower:]')"
-		if [ "${heal_base}" != "${HEAD_REF}" ] && ! { [ "${MERGED}" = "true" ] && [ "${heal_base}" = "${BASE_REF}" ]; }; then
-			# Not stacked on the closed PR (e.g. it targets stable): leave it.
-			log "skip reason=unrelated_base heal_pr=${heal_pr} base=${heal_base} source_pr=${SOURCE_PR}"
-			continue
-		fi
-		if [ "${MERGED}" != "true" ]; then
-			_close_heal "${heal_pr}" "${heal_issue}" "source_closed_unmerged" \
-				"Closing without merging: source pull request #${SOURCE_PR} closed without merging. This branch carries #${SOURCE_PR}'s commits, so it is not re-pointed at \`${BASE_REF}\`: that would re-propose changes that were not merged."
-			continue
-		fi
-		if _retarget_heal "${heal_pr}" "${heal_branch}" "${heal_head_sha}" "${heal_base}"; then
-			continue
-		fi
-		if [ "${RETARGET_FAIL_REASON}" = "heal_branch_moved" ] || [ "${RETARGET_FAIL_REASON}" = "push_state_unknown" ]; then
-			# Do not close when remote state is unknown or the branch moved.
-			log "warn reconcile_incomplete heal_pr=${heal_pr} reason=${RETARGET_FAIL_REASON} source_pr=${SOURCE_PR}"
-			echo "::warning::WORKFLOW_HEAL_PR_RECONCILE reconcile_incomplete heal_pr=${heal_pr} reason=${RETARGET_FAIL_REASON} source_pr=${SOURCE_PR}"
-			log "skip reason=${RETARGET_FAIL_REASON} heal_pr=${heal_pr} source_pr=${SOURCE_PR}"
-			continue
-		fi
-		_close_heal "${heal_pr}" "${heal_issue}" "source_merged_${RETARGET_FAIL_REASON}" \
-			"Closing without merging: source pull request #${SOURCE_PR} merged into \`${BASE_REF}\`, but this fix could not be moved onto \`${BASE_REF}\` (\`${RETARGET_FAIL_REASON}\`)."
-	done < <(jq -r '.[] | [(.number|tostring), (.head.ref // ""), (.head.sha // ""), (.base.ref // "")] | @tsv' "${PULLS_FILE}")
+		log "claude_heal_pr heal_pr=${heal_pr} project_branch=${heal_head_ref} heal_issue=${heal_issue} base=${heal_base} source_pr=${SOURCE_PR}"
+		_reconcile_heal_pr "${heal_pr}" "${heal_head_ref}" "${heal_head_sha}" "${heal_base}" "${heal_issue}" "${heal_head_ref}"
+	done < <(jq -r --arg repo "${REPO}" '.[] | select((.head.repo.full_name // "") == $repo) | [(.number|tostring), (.head.ref // ""), (.head.sha // ""), (.base.ref // "")] | @tsv' "${CLAUDE_PULLS_FILE}")
 done
 exit 0

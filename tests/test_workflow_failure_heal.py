@@ -619,8 +619,15 @@ def _sourced_heal_issue(number: int, *, state: str, fp: str, source: str, gen: i
 
 def test_heal_fix_branch_issue() -> None:
 	assert heal.heal_fix_branch_issue("ai/issue-4411") == 4411
-	for branch in (None, "", "main", "ai/issue-", "ai/issue-12-retry", "orchestrator/project-12", "xai/issue-12"):
-		assert heal.heal_fix_branch_issue(branch) is None
+	# The Claude issue implementer's project branch and its phase / fix branches.
+	assert heal.heal_fix_branch_issue("claude/implement-plan-issue-4465-fix-resolver-scope") == 4465
+	assert heal.heal_fix_branch_issue("claude/implement-plan-issue-4465-fix-resolver-scope-phase-1") == 4465
+	for branch in (
+		None, "", "main", "ai/issue-", "ai/issue-12-retry", "orchestrator/project-12", "xai/issue-12",
+		"claude/implement-plan-issue-12", "claude/implement-plan-issue-x-12", "claude/implement-plan-heal-12-x",
+		"claude/implement-plan-issue-12-", "claude/implement-plan-issue-12-Bad", "claude/gifted-einstein-nnfrmt",
+	):
+		assert heal.heal_fix_branch_issue(branch) is None, branch
 
 
 def test_budget_decision_keys_review_failures_on_source_pr() -> None:

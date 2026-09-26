@@ -180,6 +180,10 @@ _REPO_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
 _ORCHESTRATOR_BRANCH_RE = re.compile(r"^orchestrator/project-([0-9]+)$")
 # The implement pipeline's branch for issue N; a PR on it is the fix PR for N.
 _HEAL_FIX_BRANCH_RE = re.compile(r"^ai/issue-([0-9]+)$")
+# The Claude issue implementer builds heal issue N on the project branch
+# claude/implement-plan-issue-<N>-<topic> and its phase / fix / completion
+# branches (claude/implement-plan-issue-<N>-<topic>-phase-1, …).
+_CLAUDE_HEAL_FIX_BRANCH_RE = re.compile(r"^claude/implement-plan-issue-([0-9]+)-[a-z0-9][a-z0-9-]*$")
 # `source=` marker value of a heal issue filed from an issue / PR report.
 _SOURCE_KEY_RE = re.compile(r"^(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#[0-9]+$")
 # `bash: /path/to/scripts/<name>: line N: ...` (a shell guard or syntax error
@@ -790,8 +794,15 @@ def orchestrator_tracking_issue(branch: Any) -> int | None:
 
 
 def heal_fix_branch_issue(branch: Any) -> int | None:
-	"""Return ``N`` for the implement pipeline's ``ai/issue-<N>`` branch, else None."""
-	match = _HEAL_FIX_BRANCH_RE.match(str(branch or ""))
+	"""Return ``N`` for a branch that implements issue ``N``, else None.
+
+	Recognises the Codex implement pipeline's ``ai/issue-<N>`` and the Claude
+	issue implementer's ``claude/implement-plan-issue-<N>-<topic>[-…]``, so a
+	heal fix PR whose own review keeps failing continues its heal issue's
+	lineage (and reaches the cap) whichever implementer built it.
+	"""
+	text = str(branch or "")
+	match = _HEAL_FIX_BRANCH_RE.match(text) or _CLAUDE_HEAL_FIX_BRANCH_RE.match(text)
 	return _positive_int(match.group(1)) if match else None
 
 
