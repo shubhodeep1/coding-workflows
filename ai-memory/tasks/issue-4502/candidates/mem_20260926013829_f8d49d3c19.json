@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `dcb7e12c531b84b49a3766ee8b1209ca3706af24`; it matches the issue\u2019s integration-branch metadata. The `/answer` was auto-posted because no clarification questions were needed.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `test_validate_workflow_contains_thread_reuse_bootstrap`  \nScope-mode justification: This is a stale assertion, not a workflow defect. Updating the existing contract test is the complete fix; it needs no new dependency or interface. Under `unattended_system_instructions.md` \u00a76, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed, so retaining a check for trusted staging is preferable to merely removing the failing assertions.\n\n## Automation and execution\n- **Change type:** Modify an existing test only; no new script.\n- **Entry points:** `.github/workflows/ci.yml` runs the test on its CI path; `.github/workflows/test-and-mark-stable.yml` runs it in the release gate, which accepts `workflow_dispatch`. No new wiring is needed.\n- **Supervisor / database gate / removal registry:** Not applicable.\n\n## Files likely to change\n- `tests/test_codex_thread_reuse_core.py` only.\n\n## Functions or modules to implement\n- In `test_validate_workflow_contains_thread_reuse_bootstrap`, replace both obsolete staging assertions with a positive check for the `WORKFLOW_SUPPORT_REF=\"${support_sha}\"` invocation of `\"${helper_stage_dir}/scripts/stage_workflow_support.sh\"` and a negative check rejecting the former target-worktree helper path. Retain the thread-reuse asset assertions.\n- Follow the existing trusted-bootstrap contract pattern in `tests/test_validate_workflow_validate_bootstrap.py`.\n\n## Data structures affected\nNone.\n\n## API/interface changes\nNone. Do not change `.github/workflows/validate.yml` or its staging behavior.\n\n## Decisions\n### D1 \u2014 Correct the contract, not the workflow\n- **Chosen:** Assert the SHA-bound trusted-checkout invocation and reject the obsolete worktree invocation.\n- **Alternatives considered:** Restore the old invocation or delete the bootstrap assertions.\n- **Why:** The current workflow invokes the trusted helper at `.github/workflows/validate.yml:452`; either alternative would weaken the trust-boundary check.\n\n## Security considerations\nThe boundary is between trusted workflow-support checkout code and the validation target worktree. The regression test must reject execution of the staging helper from the target worktree. No endpoint, authorization rule, external input parser, credential handling, or money mutation changes.\n\n## Risks and edge cases\n- Keep the positive assertion tied to both `support_sha` and `helper_stage_dir`; checking only the helper filename could admit an unsafe invocation.\n- The issue\u2019s account of the stale assertions agrees with the current test and workflow. The reported failing commit is not available in the local checkout, so its contents were not independently inspected here.\n\n## Testing considerations\n1. Reproduce the named test failure against the reported head `b8e027c2992f64a26b7a7e11e35e86cf700fd9bf` after obtaining that commit; record the result in the PR.\n2. Run the corrected named test and `tests/test_codex_thread_reuse_core.py` on the implementation head; record the passing result in the PR.\n3. Run the adjacent trusted-bootstrap contract test. Do not claim a reported-head reproduction if that commit remains unavailable.\n\n## Pre-execution self-check\nThe file, assertion sites, replacement workflow invocation, and existing automated test entry points are identified. No clarification or integration-ref blocker remains.\n\nPLAN_SELF_CHECK: WARNING: The reported failing commit is absent locally; the implementer must obtain it before claiming the requested before/after reproduction.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5178c59e9c0a73cf116d37d8d015ab69914d8bda4b3e71baa4590f2930acc442",
+  "lineage": {
+    "issue_number": 4502,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36208819230",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36208819230",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4502"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260926013829_f8d49d3c19",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4502,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36208819230"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4502",
+  "timestamps": {
+    "created_at": "2026-09-26T01:38:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
