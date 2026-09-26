@@ -1912,6 +1912,13 @@ This is an explicit carve-out from §0 and §2 (including §2's
   performs them; a project that needs one lists it as an operator step,
   and `/deploy-activate` walks the human through it.
 - A question with no option that satisfies §28.B's hard rules.
+- **Whether to run the chain at all.** The stages, the conformance audit, the
+  security pass, and validation are the project, not options. A session that
+  cannot run them (no claude-code-remote tools to start stage sessions and
+  checkers, as in a claude.ai routine run; issue #4525) stops as a failure
+  escalation above. It never ships a smaller substitute, such as a direct edit
+  without the plan, the project branch, and those passes, and never records
+  one as an auto-decision.
 
 ### D) Recording
 

@@ -415,7 +415,9 @@ jobs:
           # Standalone issues default to the Claude issue implementer; set the
           # repo variable to `codex` to keep the Codex clarify → plan →
           # implement pipeline. Per-issue `ai:codex` / `ai:claude` labels win.
-          AI_ISSUE_IMPLEMENTER: ${{ vars.AI_ISSUE_IMPLEMENTER || 'claude' }}
+          # Unset stays "" so claude_issue_route.py applies the default and
+          # reports reason `default` (not `repo_var`).
+          AI_ISSUE_IMPLEMENTER: ${{ vars.AI_ISSUE_IMPLEMENTER || '' }}
         run: |
           set -euo pipefail
           LABELS_CSV="$(jq -r '[(.labels // [])[]?.name] | join(",")' "${ISSUE_META_FILE}")"

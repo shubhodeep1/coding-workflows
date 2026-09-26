@@ -3,36 +3,40 @@
 # claude_issue_intake.sh
 #
 # Driven by .github/workflows/claude-issue-intake.yml in coding-workflows. It
-# turns one `claude-issue` payload into one run of the "Claude issue
-# dispatcher" routine on claude.ai:
+# turns one `claude-issue` payload into one queued item for the Claude issue
+# pickup session:
 #
 #   1. Validates the payload with scripts/claude_issue_route.py: schema, repo
 #      slug, issue number, trigger, and that the repo is registered in
 #      .github/ai/consumer_repos.json (or is this repo).
-#   2. POSTs the routine's /fire endpoint with fixed-key fire text (repo, issue,
-#      url, trigger, skip_security_pass). No issue prose is forwarded.
-#   3. Comments the started dispatcher session URL on the issue.
+#   2. Opens one `ai:claude-issue-queue` issue in this repo with the fixed-key
+#      payload (no issue prose), using the workflow's GITHUB_TOKEN so no
+#      workflow reacts to it. An open queue issue for the same target issue is
+#      reused, never duplicated.
+#   3. Comments on the target issue that it is queued.
+#
+# The pickup session (.claude/commands/claude-issue-pickup.md) starts the Opus
+# `/implement-issue-claude` session for each queue issue with create_session
+# and closes it. The intake used to fire the "Claude issue dispatcher"
+# routine instead, but a routine run gets no claude-code-remote tools and so
+# cannot start that session (issue #4525). CLAUDE_ISSUE_ROUTINE_ID and
+# CLAUDE_ISSUE_ROUTINE_TOKEN are still accepted and ignored (deprecated).
 #
 # Every failure after the payload names a well-formed repo + issue marks that
 # issue `ai:claude-handoff-failed`, comments how to retry or switch to Codex,
 # sends a Telegram ERROR, and exits 1 so the run is visibly red. All stable
-# log lines are prefixed CLAUDE_ISSUE_INTAKE. The routine token is only ever
-# read from the environment and written to a 0600 header file; it is never
-# echoed.
+# log lines are prefixed CLAUDE_ISSUE_INTAKE.
 #
 # Required env (set by the workflow):
 #   GITHUB_REPOSITORY             this repo (coding-workflows)
 #   GH_TOKEN                      GH_PAT: comments / labels on the target issue
 #   CLAUDE_ISSUE_PAYLOAD_FILE     claude_issue.v1 payload JSON
-#   CLAUDE_ISSUE_ROUTINE_ID       routine trigger id (trig_…)
-#   CLAUDE_ISSUE_ROUTINE_TOKEN    routine API token
+#   CLAUDE_ISSUE_QUEUE_TOKEN      the workflow's GITHUB_TOKEN (issues: write on this repo)
 #
 # Optional env (have defaults):
-#   CLAUDE_ISSUE_ROUTINE_BETA     anthropic-beta header (default experimental-cc-routine-2026-04-01)
-#   CLAUDE_ISSUE_FIRE_URL_BASE    default https://api.anthropic.com/v1/claude_code/routines
 #   CLAUDE_ISSUE_REGISTRY         default .github/ai/consumer_repos.json
 #   CLAUDE_ISSUE_ROUTE_PY         default scripts/claude_issue_route.py
-#   CLAUDE_ISSUE_RETRY_DELAYS     space-separated backoff seconds (default "2 4 8 16")
+#   CLAUDE_ISSUE_ROUTINE_ID       deprecated, ignored (logged when set)
 #   RUN_URL, RUNTIME_DIR
 
 set -euo pipefail
@@ -51,12 +55,9 @@ type tg_send_msg >/dev/null 2>&1 || tg_send_msg() { return 0; }
 
 PAYLOAD_FILE="${CLAUDE_ISSUE_PAYLOAD_FILE:?CLAUDE_ISSUE_PAYLOAD_FILE required}"
 SELF_REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY required}"
-ROUTINE_ID="${CLAUDE_ISSUE_ROUTINE_ID:-}"
-ROUTINE_BETA="${CLAUDE_ISSUE_ROUTINE_BETA:-experimental-cc-routine-2026-04-01}"
-FIRE_URL_BASE="${CLAUDE_ISSUE_FIRE_URL_BASE:-https://api.anthropic.com/v1/claude_code/routines}"
+QUEUE_TOKEN="${CLAUDE_ISSUE_QUEUE_TOKEN:-}"
 REGISTRY="${CLAUDE_ISSUE_REGISTRY:-.github/ai/consumer_repos.json}"
 ROUTE_PY="${CLAUDE_ISSUE_ROUTE_PY:-scripts/claude_issue_route.py}"
-RETRY_DELAYS="${CLAUDE_ISSUE_RETRY_DELAYS:-2 4 8 16}"
 RUN_URL="${RUN_URL:-}"
 RUNTIME_DIR="${RUNTIME_DIR:-$(mktemp -d)}"
 mkdir -p "${RUNTIME_DIR}"
@@ -105,71 +106,51 @@ RAW_REPO="${REPO}"
 RAW_ISSUE="${ISSUE_NUMBER}"
 log "validated repo=${REPO} issue=${ISSUE_NUMBER} trigger=${TRIGGER}"
 
-# --- 2. Fire the routine ------------------------------------------------------------
+# --- 2. Queue for the pickup session ----------------------------------------------------
 
-if ! [[ "${ROUTINE_ID}" =~ ^trig_[A-Za-z0-9]+$ ]]; then
-	fail "routine_not_configured" "repository variable CLAUDE_ISSUE_ROUTINE_ID is missing or not a trig_… id"
+if [ -n "${CLAUDE_ISSUE_ROUTINE_ID:-}" ]; then
+	log "notice routine_deprecated detail=CLAUDE_ISSUE_ROUTINE_ID is set but no longer used; the pickup session starts implementation sessions"
 fi
-if [ -z "${CLAUDE_ISSUE_ROUTINE_TOKEN:-}" ]; then
-	fail "routine_not_configured" "secret CLAUDE_ISSUE_ROUTINE_TOKEN is not set"
+if [ -z "${QUEUE_TOKEN}" ]; then
+	fail "queue_not_configured" "CLAUDE_ISSUE_QUEUE_TOKEN (the workflow GITHUB_TOKEN) is not set"
 fi
 
-FIRE_BODY_FILE="${RUNTIME_DIR}/fire_body.json"
-python3 "${ROUTE_PY}" fire-body --validated-json "${VALIDATED_FILE}" > "${FIRE_BODY_FILE}"
+QUEUE_FILE="${RUNTIME_DIR}/queue_issue.json"
+python3 "${ROUTE_PY}" queue-issue --validated-json "${VALIDATED_FILE}" --run-url "${RUN_URL}" > "${QUEUE_FILE}"
+QUEUE_TITLE="$(jq -r '.title' "${QUEUE_FILE}")"
+QUEUE_LABEL="$(jq -r '.label' "${QUEUE_FILE}")"
 
-HEADER_FILE="${RUNTIME_DIR}/fire_headers.txt"
-(
-	umask 077
-	{
-		printf 'Authorization: Bearer %s\n' "${CLAUDE_ISSUE_ROUTINE_TOKEN}"
-		printf 'anthropic-beta: %s\n' "${ROUTINE_BETA}"
-		printf 'anthropic-version: 2023-06-01\n'
-		printf 'Content-Type: application/json\n'
-	} > "${HEADER_FILE}"
-)
-trap 'rm -f "${HEADER_FILE}"' EXIT
+# One read of the open queue (≤ 100 items; the pickup drains it hourly) to
+# reuse an open item for the same target issue instead of duplicating it.
+OPEN_QUEUE_FILE="${RUNTIME_DIR}/open_queue.json"
+if ! GH_TOKEN="${QUEUE_TOKEN}" gh_retry gh api "repos/${SELF_REPO}/issues?labels=${QUEUE_LABEL}&state=open&per_page=100" > "${OPEN_QUEUE_FILE}" 2> "${RUNTIME_DIR}/queue_read_error.txt"; then
+	fail "queue_failed" "could not read the open queue: $(head -c 200 "${RUNTIME_DIR}/queue_read_error.txt" | tr '\n' ' ')"
+fi
+QUEUE_NUMBER="$(jq -r --arg t "${QUEUE_TITLE}" '[.[]? | select(.title == $t and (.user.login // "") == "github-actions[bot]") | .number] | first // empty' "${OPEN_QUEUE_FILE}" 2>/dev/null || true)"
 
-FIRE_URL="${FIRE_URL_BASE}/${ROUTINE_ID}/fire"
-RESPONSE_FILE="${RUNTIME_DIR}/fire_response.json"
-HTTP_CODE="000"
-attempt=0
-for delay in "" ${RETRY_DELAYS}; do
-	if [ -n "${delay}" ]; then
-		log "retry attempt=$((attempt + 1)) after_seconds=${delay} last_http=${HTTP_CODE}"
-		sleep "${delay}"
+if [ -n "${QUEUE_NUMBER}" ]; then
+	log "already_queued repo=${REPO} issue=${ISSUE_NUMBER} trigger=${TRIGGER} queue_issue=${QUEUE_NUMBER}"
+else
+	GH_TOKEN="${QUEUE_TOKEN}" ensure_label_exists "${QUEUE_LABEL}" "${SELF_REPO}" || true
+	if ! QUEUE_NUMBER="$(GH_TOKEN="${QUEUE_TOKEN}" gh_retry gh api "repos/${SELF_REPO}/issues" \
+		-f title="${QUEUE_TITLE}" \
+		-f body="$(jq -r '.body' "${QUEUE_FILE}")" \
+		-f "labels[]=${QUEUE_LABEL}" \
+		--jq '.number' 2> "${RUNTIME_DIR}/queue_create_error.txt")" || ! [[ "${QUEUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+		fail "queue_failed" "could not open the queue issue: $(head -c 200 "${RUNTIME_DIR}/queue_create_error.txt" | tr '\n' ' ')"
 	fi
-	attempt=$((attempt + 1))
-	HTTP_CODE="$(curl -sS -o "${RESPONSE_FILE}" -w '%{http_code}' -X POST \
-		-H @"${HEADER_FILE}" \
-		--data-binary @"${FIRE_BODY_FILE}" \
-		"${FIRE_URL}" 2> "${RUNTIME_DIR}/curl_error.txt" || echo "000")"
-	case "${HTTP_CODE}" in
-		2??) break ;;
-		000|408|429|5??) continue ;;
-		*) break ;;
-	esac
-done
-rm -f "${HEADER_FILE}"
-
-case "${HTTP_CODE}" in
-	2??) ;;
-	*)
-		DETAIL="HTTP ${HTTP_CODE} after ${attempt} attempt(s): $(head -c 200 "${RESPONSE_FILE}" 2>/dev/null | tr '\n' ' ') $(head -c 100 "${RUNTIME_DIR}/curl_error.txt" 2>/dev/null | tr '\n' ' ')"
-		fail "fire_failed" "${DETAIL}"
-		;;
-esac
-
-SESSION_URL="$(jq -r '.claude_code_session_url // empty' "${RESPONSE_FILE}" 2>/dev/null || true)"
-SESSION_ID="$(jq -r '.claude_code_session_id // empty' "${RESPONSE_FILE}" 2>/dev/null || true)"
-log "fired repo=${REPO} issue=${ISSUE_NUMBER} trigger=${TRIGGER} http=${HTTP_CODE} session=${SESSION_ID:-unknown}"
+	log "queued repo=${REPO} issue=${ISSUE_NUMBER} trigger=${TRIGGER} queue_issue=${QUEUE_NUMBER}"
+fi
+QUEUE_URL="https://github.com/${SELF_REPO}/issues/${QUEUE_NUMBER}"
 
 # --- 3. Record on the issue -----------------------------------------------------------
 
 BODY="<!-- ai:claude-issue-dispatched:v1 -->
-🤖 Claude issue dispatcher started (trigger \`${TRIGGER}\`). It opens the implementation session for this issue in \`${REPO}\`."
-[ -z "${SESSION_URL}" ] || BODY+=$'\n\n'"Dispatcher session: ${SESSION_URL}"
+🤖 Queued for the Claude issue pickup (trigger \`${TRIGGER}\`). Within about an hour it starts the Claude session that implements this issue in \`${REPO}\`, and that session posts its progress here.
+
+Queue item: ${QUEUE_URL}"
 [ -z "${RUN_URL}" ] || BODY+=$'\n'"Intake run: ${RUN_URL}"
 gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || \
 	log "warn dispatched_comment_failed repo=${REPO} issue=${ISSUE_NUMBER}"
-tg_send_msg "Claude issue dispatcher fired for ${REPO}#${ISSUE_NUMBER} (${TRIGGER})."$'\n'"Session: ${SESSION_URL:-unknown}" "DEBUG" >/dev/null 2>&1 || true
+tg_send_msg "Claude issue queued for ${REPO}#${ISSUE_NUMBER} (${TRIGGER})."$'\n'"Queue item: ${QUEUE_URL}" "DEBUG" >/dev/null 2>&1 || true
 exit 0
