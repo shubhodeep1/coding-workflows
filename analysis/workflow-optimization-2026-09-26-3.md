@@ -119,3 +119,139 @@ Order end-to-end work by **deterministic CI blockers**, **review/validation fail
 | Serena `validate` | 0 / 0 | 2 disabled-path | 0 / 0 / 0 | Disabled is distinct from a failed probe |
 
 The assembled context adds two Semble query occurrences / 12,038 bytes beyond downloaded-log raw counts; their distinct target/events cannot be independently verified here. Recent orchestrate-poll summaries (`36239872879`, `36240296879`, `36241535360`) say Semble was enabled but unavailable; log availability **reason and target** once per run to distinguish an unavailable rollout from the test-only fallbacks. **Other MCP servers observed:** none in validated sampled runtime events.
+
+## Deep Audit — Workflows & Scripts (2026-09-26)
+
+### Section 1: Bug & Correctness Sweep
+
+**BUG-001** — `.github/workflows/test-and-mark-stable.yml:4721-4743`  
+**Severity:** High · **Category:** `bug`  
+**Description:** The child-issue discovery loop runs under `set -euo pipefail`. When the API initially returns no children, `grep -c .` prints `0` but exits 1; the `CHILD_COUNT=$(...)` assignment therefore ends the step before its 90-second retry and diagnostic path. This empty-input exit behavior was reproduced without changing files.  
+**Recommended fix:** Count with `jq` from the already-fetched array, or explicitly tolerate `grep`’s no-match status. Add a contract test where the first poll is empty and a later poll returns two children.
+
+**BUG-002** — `.github/workflows/review_autofix_sweep.yml:159-205`  
+**Severity:** High · **Category:** `bug`  
+**Description:** Each active-run API failure is discarded with `|| true`. `jq` can then produce an empty active-run map from an incomplete snapshot, allowing the dispatch loop at lines 250-297 to treat an active review as absent. *Inference:* a transient failed status read can create a duplicate dispatch.  
+**Recommended fix:** Track whether every status snapshot completed. On failure, use a targeted, rate-limit-aware active-run lookup before dispatch; never interpret an incomplete snapshot as proof that no run exists.
+
+**BUG-003** — `scripts/claude_issue_route.py:493-513`  
+**Severity:** Medium · **Category:** `bug`  
+**Description:** Pickup reads only the first `per_page=100` open queue issues. Intake and watchdog make the same one-page assumption at `scripts/claude_issue_intake.sh:123-129` and `scripts/claude_issue_queue_watchdog.sh:59-68`. With more than 100 open queue items, later pages cannot be picked up, deduplicated, or flagged stale. Actual backlog size is unverified. **[NEEDS VERIFICATION]**  
+**Recommended fix:** Paginate the queue into one complete array for all three callers, retaining the pickup’s separate per-wake work limit. Test with a matching item on page two.
+
+**BUG-004** — `.github/workflows/review_autofix_sweep.yml:250-265`  
+**Severity:** Medium · **Category:** `bug`  
+**Description:** Active runs are matched to a PR by `head_ref`. For a fork PR, lines 280-297 deliberately dispatch on the repository’s default ref instead, so that dispatch will not appear under the fork’s `head_ref` in the next snapshot. *Inference:* successive sweeps can dispatch the same fork PR again while its review is active. **[NEEDS VERIFICATION]**  
+**Recommended fix:** Match fork dispatches by PR number using an authoritative active-run check, or exclude fork PRs from periodic dispatch until that check exists. Test consecutive sweeps with an active fork review.
+
+**BUG-005** — `scripts/workflow_failure_heal_intake.sh:210-254`  
+**Severity:** Medium · **Category:** `bug`  
+**Description:** Heal intake requests one jobs page with `per_page=100`, then searches only that page for failed jobs. *Inference:* a failed job on a later page would be omitted from the diagnosis evidence. Whether affected runs exceed 100 jobs is unverified. **[NEEDS VERIFICATION]**  
+**Recommended fix:** Paginate the jobs response and validate the assembled `.jobs` array before applying `MAX_FAILED_JOBS`. Test a failure on the second page.
+
+**SEC-001** — `scripts/gh_helpers.sh:621-633`  
+**Severity:** Medium · **Category:** `security`  
+**Description:** On invalid JSON, `gh_api_json_to_file` prints the first 50 raw response lines to Actions logs. The helper reads issue and PR API payloads; *inference:* a malformed response containing private body text could expose that text to log readers. **[NEEDS VERIFICATION]**  
+**Recommended fix:** Log endpoint class, status, response length, and a non-content digest instead of response bytes. Retain the response in the runner-local diagnostic file only for the call’s lifetime.
+
+**SEC-002** — `scripts/gh_helpers.sh:439-461`  
+**Severity:** High · **Category:** `security`  
+**Description:** `gh_retry` prints `$*` on command failure. A caller passes comment content as a command argument at `.github/workflows/plan.yml:1442-1443`; a failed request can therefore put that content in logs. The corresponding final-error path is at `scripts/gh_helpers.sh:488-490`.  
+**Recommended fix:** Replace command-argument logging in `gh_retry`, `gh_retry_to_file`, and `gh_api_json_to_file` with a sanitized command name, endpoint template, status, and attempt count. Do not log `-f body=...` values or `--input` contents.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are **logical calls on the cited path**, before pagination and retry amplification.
+
+**BATCH-001** — `scripts/ai_labels.py:440-462`  
+**Severity:** Medium · **Category:** `api-batching`  
+**Description:** `cmd_sync_labels` makes one label GET per contract entry: **58 GETs** for this repository’s `.github/ai/label_contract.v1.json:1-279`, before conditional writes. Proposed count: **one paginated repository-label list GET** when all labels fit one page, plus the unchanged conditional writes; otherwise one GET per page. No existing GraphQL issue-label helper directly covers repository label metadata.  
+**Recommended fix:** Extend Python’s `_github_api_request` path to list labels once, index them by normalized name, and preserve the existing 422-conflict re-read at lines 520-538. Fall back to an individual GET if the list is incomplete or unavailable.
+
+**BATCH-002** — `scripts/orchestrate_poll_process.sh:15706-15731`  
+**Severity:** Medium · **Category:** `api-batching`  
+**Description:** Each standalone-stall cycle lists issues separately for seven phase labels: **7 list calls**, plus the existing marker query. Proposed normal-path count: **1 aliased GraphQL label search**, plus the unchanged marker query. Search pagination and parity with the current `--limit 1000` need validation. **[NEEDS VERIFICATION]**  
+**Recommended fix:** Extend the aliased-search pattern in `_fetch_standalone_marker_issues_graphql` at lines 14593-14640. Retain targeted paginated REST fallback when any alias is incomplete or the batch fails.
+
+**API-001** — `.github/workflows/review_autofix_sweep.yml:145-165`  
+**Severity:** Low · **Category:** `api-redundancy`  
+**Description:** The snapshot makes **3 status-filtered calls for each of 2 workflows: 6 logical calls**. One unfiltered, paginated runs snapshot per workflow could make this **2 calls when each fits one page**, with statuses filtered locally. On a busy workflow, unfiltered pagination might cost more; that tradeoff is unmeasured. **[NEEDS VERIFICATION]**  
+**Recommended fix:** Trial a complete, rate-limit-aware paginated snapshot and measure underlying requests before switching. Preserve `pending` handling, stale-queued rules, and BUG-002’s complete-snapshot requirement; the existing cycle-local `active_review_runs` map remains the reuse pattern.
+
+**API-002** — `scripts/gh_helpers.sh:610-653`  
+**Severity:** Medium · **Category:** `api-redundancy`  
+**Description:** Unlike `gh_retry` at lines 455-465, `gh_api_json_to_file` does not classify permanent failures. With its default budget it can make **5 calls for one deterministic 404 or 422**, plus sleep after the final attempt; the proposed count is **1 call** for a classified permanent failure.  
+**Recommended fix:** Reuse `_is_gh_permanent_failure` before backoff, and sleep only when another attempt remains. Keep retries for transient responses and invalid successful JSON.
+
+**BATCH-003** — `scripts/orchestrate_poll_process.sh:15539-15616`  
+**Severity:** Medium · **Category:** `api-batching`  
+**Description:** An eligible staged-support latch can incur **up to 4 reads per issue**: comments and events, then fresh labels and events before mutation. For *N* eligible issues, batching only the initial comments/events would change the upper-bound read count from **4N to `ceil(N/25) + 2N`**, retaining both fresh revalidation reads. GraphQL event and comment pagination must preserve the existing actor/time guard. **[NEEDS VERIFICATION]**  
+**Recommended fix:** Extend `_fetch_candidate_issue_details_graphql` with the required label-event fields and a documented completeness flag. Fall back to the current per-issue REST reads on incomplete batches; do not batch away the fresh checks at lines 15611-15620.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+**DUP-001** — `.github/workflows/workflow-log-analysis.yml:1530-1745`  
+**Severity:** Medium · **Category:** `duplication`  
+**Description:** The deep-audit pass and API-redundancy pass at lines 2034-2247 repeat tracking-issue validation, failure-event/comment construction, prompt preparation, and section validation. Their decoded `run:` bodies have 215 and 213 lines, with approximately **82.7% line-sequence similarity**.  
+**Recommended fix:** Put the common execution and failure-reporting path in `scripts/workflow_log_analysis_pass.sh`, with an interface such as `run_pass <phase> <prompt_file> <report_file> <tracking_issue>`. Update both workflow steps, preserving their phase-specific headings, markers, outputs, and fail-closed section checks.
+
+**DUP-002** — `scripts/orchestrate_poll_process.sh:2843-2895`  
+**Severity:** Low · **Category:** `duplication`  
+**Description:** This process-local `ensure_label_exists` and `scripts/label_helpers.sh:155-189` both select label metadata, attempt creation, and interpret already-exists errors. `scripts/check_failure_triage.sh:235-241` separately implements two label creations. The poller’s `_ENSURED_LABELS_CACHE` is a meaningful difference, not code to discard.  
+**Recommended fix:** Keep `ensure_label_exists <label> [repo]` owned by `scripts/label_helpers.sh`; make the poller’s cache a thin wrapper and update triage to call the shared helper. Preserve metadata fallback and existing failure behavior.
+
+**DUP-003** — `scripts/check_failure_triage.sh:58-79`  
+**Severity:** Low · **Category:** `duplication`  
+**Description:** Its `_safe_gh_jq` fallback repeats the capture/return behavior of `scripts/gh_helpers.sh:564-594`. The fallback is conditional on support loading, so simply deleting it would change old-ref behavior.  
+**Recommended fix:** Keep `_safe_gh_jq <endpoint> [--jq filter]` in `gh_helpers.sh` as the canonical implementation. Stage that helper as required for triage, retaining an explicitly versioned compatibility shim for older support refs until they no longer need it.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+The 52 workflows contain **225 interpolated `run:` blocks**. Counts below use YAML-decoded, static block text; runtime substitutions can change the expanded length. Non-interpolated blocks were excluded.
+
+**EXPR-001** — `.github/workflows/implement.yml:986-1342`  
+**Severity:** Medium · **Category:** `expression-limit`  
+**Description:** “Stage workflow support files” contains **16,985 static characters** and three `${{ }}` interpolations: **4,015 characters of nominal headroom** below the stated 21,000-character limit. It exceeds the requested 15,000-character warning threshold.  
+**Recommended fix:** Extract the staging body into a verified support script under `scripts/`, pass `github.repository` through step `env:`, and preserve the staged-support ledger and missing-file gates. Register the new script in the existing support and inventory contracts.
+
+No other interpolated `run:` block reaches 15,000 static characters; the next largest is `.github/workflows/implement.yml:3223-3530` at **14,392**. No workflow exceeds **800 KB**. A separate, stricter repository contract matters here: `tests/test_workflow_file_size_limit.py:24-27` guards at **480,000 bytes** and documents a **512,000-byte** observed execution limit, rather than the prompt’s 1 MB assumption. `.github/workflows/review_autofix.yml:1-7460` is **451,362 bytes**, leaving **28,638 bytes** before that guard. Its largest `run:` body, lines 460-1511, has no `${{ }}` interpolation and is **not** an expression-limit finding.
+
+### Section 5: Cross-Cutting Concerns
+
+**DEAD-001** — `scripts/orchestrate_poll_process.sh:13173-13180`  
+**Severity:** Low · **Category:** `dead-code`  
+**Description:** `read_standalone_state_json` fetches and parses comments, but a repository-wide search of workflows, scripts, and tests found only its definition. Its parsing helper remains separately used by the cached-comments path.  
+**Recommended fix:** Verify there are no externally sourced callers; then deprecate the wrapper before removal under CLAUDE.md §6’s identifier-compatibility rule. Keep `_extract_standalone_state_json_from_comments`.
+
+**CONSIST-001** — `scripts/claude_issue_route.py:493-512`  
+**Severity:** Medium · **Category:** `consistency`  
+**Description:** Queue pickup invokes `gh api` once through `subprocess.run`, without transient retry, while the queue watchdog uses `gh_retry` at `scripts/claude_issue_queue_watchdog.sh:59-64` and Python label sync retries selected failures at `scripts/ai_labels.py:225-238`. *Inference:* a transient queue-read failure can defer pickup until another wake.  
+**Recommended fix:** Give `fetch_open_queue` bounded 429/5xx/network retries with backoff, then combine that change with BUG-003’s pagination. Do not retry permanent validation or authentication failures.
+
+**SHELL-001** — `scripts/orchestrate_poll_process.sh:9262-9267`  
+**Severity:** Low · **Category:** `shellcheck`  
+**Description:** ShellCheck reports SC2155 for `local now_epoch="$(date +%s)"`: declaration succeeds even if `date` fails, masking the command’s exit status.  
+**Recommended fix:** Declare `now_epoch` separately, check the assignment’s status, and skip the staleness alert with a diagnostic if the clock read fails.
+
+No `TODO`, `FIXME`, or `HACK` markers were found in the audited workflow and script files. Read-only ShellCheck scanning found no SC2086 or SC2046 warning in repository scripts; reported single-item-loop and literal Git-revision warnings were not treated as runtime defects.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, BUG-002, SEC-002 |
+| Medium | 11 | BUG-003, BUG-004, BUG-005, SEC-001, BATCH-001, BATCH-002, API-002, BATCH-003, DUP-001, EXPR-001, CONSIST-001 |
+| Low | 5 | API-001, DUP-002, DUP-003, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/review_autofix_sweep.yml`, `scripts/gh_helpers.sh`, regression tests | Medium |
+| API call optimization | `scripts/ai_labels.py`, `scripts/orchestrate_poll_process.sh`, `scripts/gh_helpers.sh`, `.github/workflows/review_autofix_sweep.yml`, tests | Large |
+| Code modularization | `.github/workflows/workflow-log-analysis.yml`, `scripts/label_helpers.sh`, `scripts/check_failure_triage.sh`, shared scripts and tests | Large |
+| Expression size reduction | `.github/workflows/implement.yml`, one staged script, support registries and tests | Medium |
+| Medium/Low fixes | Queue and heal scripts, `scripts/workspace_init.sh`-independent shell checks, targeted regression tests | Medium |
