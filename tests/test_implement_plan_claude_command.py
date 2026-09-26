@@ -176,3 +176,38 @@ def test_checker_starts_with_effort_low_then_one_shot_instructions(text):
 	assert "**hourly check-in by a low-effort Sonnet checker session**" in text
 	assert "3-hourly" not in text
 	assert "every 3h" not in text
+
+
+def test_one_checker_per_project_keeps_the_chain_shallow(text):
+	# claude-code-remote refuses create_session / send_later / create_trigger
+	# 8 parent links below a root; a checker per stage added two links per
+	# hand-off and stalled a project at its fourth security cycle.
+	assert "**One checker per project, so the session chain stays shallow.**" in text
+	assert "`title` = `implement-plan <slug> — checker`" in text
+	assert "**Reuse it** when it is not archived" in text
+	assert "`title` = `implement-plan <slug> — waiting:" not in text
+	assert "archives the previous stage session and the checker" not in text
+	assert "that session archives this one and the checker" not in text
+	assert "do **not** archive it here, because every later wait reuses it" in text
+
+
+def test_zombie_checkers_are_cleaned_up(text):
+	assert "### Zombie-checker cleanup" in text
+	assert "Then run the [Zombie-checker cleanup](#zombie-checker-cleanup)" in text
+	assert "`implement-plan <slug> — waiting:` (the older one-checker-per-wait design)" in text
+	assert "archive it right after the new one is created, so a project never has two" in text
+	assert "**Clear its stale check-ins.**" in text
+	assert "archive the project checker (the project has no more waits), and stop" in text
+	assert "report, archive the project checker, and archive this session" in text
+
+
+def test_checker_ignores_superseded_waits(text):
+	assert "the wake is stale: reply `stale check-in` and end the turn without re-arming" in text
+	assert 'message "Check-in for wait <stage session id>:' in text
+	assert "end the turn without re-arming: the next stage hands you its own wait" in text
+
+
+def test_depth_limit_refusal_is_loud_not_a_session_local_cron(text):
+	assert "**Refused at the depth limit.**" in text
+	assert "do **not** fall back to `CronCreate` or any other session-local loop" in text
+	assert "[Fallbacks](#fallbacks) apply only when the tools are missing, not when they refuse." in text
