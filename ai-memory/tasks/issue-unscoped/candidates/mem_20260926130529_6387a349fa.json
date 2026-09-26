@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Validation changes span workflow bootstrap, template-mode processing, renderer imports, and dependency preflight. When modifying this path, test the workflow contract as well as the standalone process/template behavior so setup assumptions and import boundaries stay aligned.",
+  "fingerprint": "50932dcbd65ddf1b0e20edc92b350486d67b30ced36d6e6b33c637e05328068e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36243782557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36243782557",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4502",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4503",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4506",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4511",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4512",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4504",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4505",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4510",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4514",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4516"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260926130529_6387a349fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Test validation bootstrap and renderer behavior across both workflow and template modes.",
+  "timestamps": {
+    "created_at": "2026-09-26T13:05:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
