@@ -135,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
 		default="validation",
 		help="Output root where rendered files are written",
 	)
+	parser.add_argument("--check-manifest", action="store_true", help="Validate manifest and family without rendering")
 	return parser
 
 
@@ -291,6 +292,9 @@ def _resolve_output_rel_path(family: FamilySpec, output_rel: Path) -> Path:
 def collect_templates(templates_root: Path, family: FamilySpec) -> list[TemplateSpec]:
 	if not templates_root.exists() or not templates_root.is_dir():
 		raise TemplateCollectionError(f"Templates root is missing or not a directory: {templates_root}")
+	# Jinja's loader follows symlinks; reject them even for direct invocations.
+	if templates_root.is_symlink() or any(path.is_symlink() for path in templates_root.rglob("*")):
+		raise TemplateCollectionError("Template tree contains a symlink")
 
 	template_dir_order = ["_shared", family.relative_dir]
 	if family.relative_dir == "_shared":
@@ -440,6 +444,8 @@ def main(argv: list[str] | None = None) -> int:
 		schema = load_schema(schema_path)
 		validate_manifest(manifest, schema)
 		family = resolve_family(manifest)
+		if args.check_manifest:
+			return 0
 		template_specs = collect_templates(templates_root, family)
 		context = build_render_context(manifest, family)
 		context.setdefault("output_root_name", output_root.name or "validation")

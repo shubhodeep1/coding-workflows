@@ -219,6 +219,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify authorized checkout
+        id: verified_checkout
         env:
           VALIDATE_AUTHORIZED_SHA: ${{ steps.authorized_target.outputs.sha }}
         run: |
@@ -251,6 +252,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: Fetch workflow support files
+        id: support_files
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
@@ -511,6 +513,7 @@ jobs:
             bash scripts/workspace_init.sh metadata
 
       - name: Finalize workspace contents
+        id: workspace_contents
         run: |
           set -euo pipefail
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
@@ -753,7 +756,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -f "scripts/render_validation_templates.py" ]; then
+          if [ -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/render_validation_templates.py" ]; then
             python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
             python3 -c 'import yaml, jsonschema, jinja2'
           else
@@ -898,7 +901,7 @@ jobs:
 
       - name: Run validation process
         id: validate_run
-        if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'
+        if: steps.verified_checkout.outcome == 'success' && steps.runtime.outcome == 'success' && steps.support_files.outcome == 'success' && steps.workspace_meta.outcome == 'success' && steps.workspace_state.outcome == 'success' && steps.workspace_contents.outcome == 'success' && steps.workspace_after_create_hook.outcome == 'success' && steps.workspace_before_run_hook.outcome == 'success'
         continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
@@ -922,7 +925,7 @@ jobs:
           ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
-          bash scripts/validate_process.sh
+          bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/validate_process.sh"
 
       - name: Run workspace after_run hook
         if: always() && steps.validate_run.outcome != 'skipped'
@@ -963,6 +966,13 @@ jobs:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
         run: |
           set -euo pipefail
+
+          # Setup can fail before it publishes a runtime directory. Status
+          # collection is credential-free and must not touch the checkout.
+          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ]; then
+            RUNTIME_DIR="${RUNNER_TEMP}/validate-status-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            mkdir -p "${RUNTIME_DIR}"
+          fi
 
           STATUS_FILE_PATH="${RUNTIME_DIR}/validation_status.json"
           METADATA_FILE_PATH="${RUNTIME_DIR}/validation_metadata.json"
@@ -1011,14 +1021,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Emit Serena stats
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
         run: |
           set -euo pipefail
 
-          if [ ! -f scripts/serena_stats_emit.py ]; then
+          if [ ! -f "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/serena_stats_emit.py" ]; then
             echo "::notice::serena_stats_emit.py is unavailable; skipping Serena stats emission."
             exit 0
           fi
@@ -1037,10 +1047,10 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"
+          PYTHONDONTWRITEBYTECODE=1 python3 "${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/serena_stats_emit.py" "${serena_stat_args[@]}"
 
       - name: Record validation candidate
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1053,7 +1063,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          source scripts/memory_helpers.sh
+          source "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/memory_helpers.sh"
           memory_bootstrap --require memory_record_candidate
 
           issue_number="${TRACKING_ISSUE}"
@@ -1119,7 +1129,7 @@ jobs:
             --issue-number "${issue_number}"
 
       - name: Upload validation artifacts
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         uses: actions/upload-artifact@v6
         with:
           name: ai-validation-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1161,7 +1171,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record validation run end
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1174,7 +1184,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          source scripts/memory_helpers.sh
+          source "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/memory_helpers.sh"
           memory_bootstrap --require memory_record_run_event
 
           issue_number="${TRACKING_ISSUE}"
@@ -1222,7 +1232,7 @@ jobs:
             --metadata-json "${metadata_json}"
 
       - name: Force orchestrate poll after validation finalization
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1235,7 +1245,7 @@ jobs:
             exit 0
           fi
 
-          bash scripts/orchestrate_force_tick.sh \
+          bash "${VALIDATE_TRUSTED_SUPPORT_ROOT:?}/scripts/orchestrate_force_tick.sh" \
             --repo "${{ github.repository }}" \
             --tracking-issue "${TRACKING_ISSUE}" \
             --issue "${TRACKING_ISSUE}" \
@@ -1244,7 +1254,7 @@ jobs:
             --run-id "${{ github.run_id }}"
 
       - name: Run workspace before_remove hook
-        if: always()
+        if: always() && steps.validate_run.outcome != 'skipped'
         run: |
           set -euo pipefail
           : "${VALIDATE_HOOK_HELPER:?Trusted validation hook helper is unavailable}"

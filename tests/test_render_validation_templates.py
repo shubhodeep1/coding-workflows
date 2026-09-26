@@ -100,6 +100,31 @@ def _directory_file_map(root: Path) -> dict[str, str]:
 	}
 
 
+def test_manifest_only_check_rejects_invalid_yaml_and_unknown_family(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	for content, expected in (("type: [invalid\n", 1), ("type: unknown\nslots: {}\n", 1),
+	                          (yaml.safe_dump(_manifest_payload("node-runtime")), 0)):
+		manifest.write_text(content, encoding="utf-8")
+		result = subprocess.run(
+			["python3", str(SCRIPT_PATH), "--check-manifest", "--manifest", str(manifest), "--schema", str(SCHEMA_PATH)],
+			capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, cwd=tmp_path,
+		)
+		assert result.returncode == expected
+	assert not (tmp_path / "validation").exists()
+
+
+def test_renderer_rejects_symlinked_template_tree(tmp_path: Path) -> None:
+	manifest = tmp_path / "validate.yml"
+	_write_yaml(manifest, _manifest_payload("python-mongo-flask"))
+	root = tmp_path / "templates"
+	(root / "_shared").mkdir(parents=True)
+	(root / "python-mongo-flask").mkdir()
+	(root / "python-mongo-flask" / "malicious.j2").symlink_to(TEMPLATES_ROOT / "_shared" / "tests" / "00_canary.sh.j2")
+	result = _run_renderer(manifest, tmp_path / "out", templates_root=root)
+	assert result.returncode != 0
+	assert "symlink" in result.stderr.lower()
+
+
 def test_renderer_happy_path_creates_expected_files() -> None:
 	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
 		temp_root = Path(td)
