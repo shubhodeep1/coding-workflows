@@ -107,6 +107,21 @@ jobs:
 
       # Renamed from "Fire the Claude issue dispatcher routine" (#4525, operator-approved).
       - name: Queue the issue for the Claude issue pickup
+        env:
+          # The queue item is recorded here and uploaded below; the pickup
+          # starts nothing this run's artifact does not list (issue #4621).
+          CLAUDE_ISSUE_QUEUE_BINDING_FILE: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
         run: |
           set -euo pipefail
           bash scripts/claude_issue_intake.sh
+
+      # Runs even when a later intake step failed, so a queue item this run
+      # opened is never left without its binding (issue #4621).
+      - name: Upload the queue binding for the Claude issue pickup
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: claude-issue-queue-binding
+          path: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
+          if-no-files-found: ignore
+          retention-days: 30

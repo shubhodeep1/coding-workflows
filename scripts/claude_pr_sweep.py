@@ -31,6 +31,7 @@ Batching contract (CLAUDE.md §15):
           1 compare read when that run was triggered by an older push than
           the head it reviewed, and 3 active-run reads); per queued fixer,
           1 queue-issue POST and the claim (1 PR read + 1 comment POST);
+          the queue binding is a local file write (no call);
   output  one `CLAUDE_PR_SWEEP` log line per decision plus a summary line;
   failure fail open per PR and per repo: a read error is logged and the
           sweep moves on; nothing is retried in a tight loop. A failed queue
@@ -41,6 +42,14 @@ Queue issues are opened with the workflow's GITHUB_TOKEN
 only author the pickup trusts; reads and claims use `GH_TOKEN` (GH_PAT).
 Without the queue token the sweep only reports: each due PR is logged as
 `::warning::` and nothing is queued.
+
+Each queue issue it opens is also recorded (number, title, payload) in this
+run's binding file (`CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE`, default
+`<RUNNER_TEMP or the temp dir>/claude-issue-queue-binding/claude_issue_queue_binding.json`),
+which the workflow uploads as the `claude-issue-queue-binding` artifact. The
+pickup starts nothing that artifact does not list unchanged, so an edited
+queue issue is refused (issue #4621). The "already queued" dedupe still
+counts every open trusted item, bound or not, so a PR is never queued twice.
 """
 
 from __future__ import annotations
@@ -164,8 +173,30 @@ def queue_pr_fix(self_repo: str, token: str, repo: str, number: int, head: str, 
 	return created.get("number") if isinstance(created, dict) else None
 
 
+def bind_pr_fix(binding_file: str, self_repo: str, run_id: str, queue_number: int | None, repo: str, number: int,
+	head: str, kind: str, claim: str, run_url: str) -> None:
+	"""Record one queued PR fix in this run's binding file (issue #4621); log, never raise."""
+	if not binding_file:
+		return
+	if not isinstance(queue_number, int) or not re.fullmatch(r"[1-9][0-9]{0,19}", run_id or ""):
+		print(f"::warning::CLAUDE_PR_SWEEP binding_skipped repo={repo} pr=#{number} queue_issue={queue_number} "
+			"reason=no_queue_number_or_run_id (the pickup refuses unbound items)")
+		return
+	try:
+		item = claude_issue_route.build_pr_fix_queue_issue(repo, number, head, kind, claim, run_url)
+		claude_issue_route.append_queue_binding(
+			binding_file, self_repo, run_id, queue_number, item["title"], claude_issue_route.queue_payload_text(item["body"]),
+		)
+	except (OSError, ValueError) as exc:
+		print(f"::warning::CLAUDE_PR_SWEEP binding_failed repo={repo} pr=#{number} queue_issue={queue_number} error={exc} "
+			"(the pickup refuses unbound items)")
+		return
+	log(f"bound repo={repo} pr=#{number} queue_issue={queue_number} run_id={run_id}")
+
+
 def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: bool, self_repo: str, queue_token: str,
-	run_id: str, run_url: str = "", allowed: list[str] | None = None, queue=queue_pr_fix, queued=queued_pr_fixes) -> dict:
+	run_id: str, run_url: str = "", allowed: list[str] | None = None, queue=queue_pr_fix, queued=queued_pr_fixes,
+	binding_file: str = "") -> dict:
 	"""Decide and act for every candidate PR; returns the summary counters."""
 	claimant = f"sweep-run-{run_id}" if re.fullmatch(r"[0-9]{1,20}", run_id or "") else "sweep-run-local"
 	summary = {"repos": 0, "candidates": 0, "due": 0, "queued": 0, "already_queued": 0, "reported": 0, "skipped": 0, "errors": 0}
@@ -226,6 +257,7 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 			summary["queued"] += 1
 			already.add((repo.lower(), number))
 			log(f"queued repo={repo} pr=#{number} state={state} kind={kind} head={head[:12]} queue_issue={queue_number}")
+			bind_pr_fix(binding_file, self_repo, run_id, queue_number, repo, number, head, kind, claimant, run_url)
 			try:
 				_, result = claude_fix_claim.post_claim(repo, number, head, kind, claimant)
 				log(f"claim repo={repo} pr=#{number} posted={result.get('posted')} reason={json.dumps(result.get('reason', ''))}")
@@ -255,6 +287,9 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 		run_id=run_id,
 		run_url=run_url,
 		allowed=claude_issue_route.load_allowed_repos(Path(args.registry), args.self_repo),
+		binding_file=os.environ.get("CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE", "") or str(
+			Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / "claude-issue-queue-binding" / claude_issue_route.QUEUE_BINDING_FILENAME
+		),
 	)
 	log("end " + " ".join(f"{key}={value}" for key, value in summary.items()))
 	return 0
