@@ -1,29 +1,35 @@
 # Implement-Plan Log — Verify automation provenance before an issue-mode project skips its security pass
 
-- Plan: docs/plans/issue-4623-verify-security-pass-skip-plan.md
+- Plan: docs/completed/issue-4623-verify-security-pass-skip-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4623 (https://github.com/shubhodeep1/coding-workflows/issues/4623)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4623-verify-security-pass-skip   Final PR: #4635 draft
-- Status: IN_PROGRESS
-- Stage: conformance 1/3
-- Activation: not started
-- Waiting on: the conformance fix PR from `claude/implement-plan-issue-4623-verify-security-pass-skip-conformance-fix-1`
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: the completion PR from `claude/implement-plan-issue-4623-verify-security-pass-skip-complete`
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01FJKco7zdoJ1ez3JY6t8ui9   safety net and hand-back armed by the conformance 1/3 stage session session_014KhfWCPquLipwzCXr1V527 (ids in its report)
+- Check-in: checker session_01FJKco7zdoJ1ez3JY6t8ui9   safety net and hand-back armed by the validation 1/3 — read result stage session session_01SARmvgqzWfhviH8nmWHwjd (ids in its report)
 - Last updated: 2026-09-27
-- Last note: conformance run 1: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS); one plan-text divergence (Implementation Step 3's header suffix `, verified`) fixed in the conformance fix PR as AD-7
+- Last note: validation cycle 1 passed (run 36356008779, 10/10 tests) after conformance run 2 was CONFORMANT with no findings; plan moved to docs/completed/ in the completion PR, final PR #4635 is marked ready once it merges
 
 ## Phases
 1. [x] Phase 1 — verified security-pass skip (`.claude/scripts/security_pass_skip.py`, commands, allowlist, tests, docs, changelog)   — PR #4645 merged 2026-09-27 (1b872850d28f); review rounds: 3; interventions: 0
 
 ## Conformance
-- Run 1 — 2026-09-27: CONFORMANT (Implemented COMPLETE; Correctness CONCERNS: 1 EVIDENCE-BASED concern, plan Implementation Step 3 named a `, verified` header suffix the command does not write and the phase PR did not record) — conformance fix PR from `claude/implement-plan-issue-4623-verify-security-pass-skip-conformance-fix-1` (pre-security)
+- Run 1 — 2026-09-27: CONFORMANT (Implemented COMPLETE; Correctness CONCERNS: 1 EVIDENCE-BASED concern, plan Implementation Step 3 named a `, verified` header suffix the command does not write and the phase PR did not record) — conformance fix PR #4663 (pre-security), merged by hand 2026-09-27 (squash e0e49e8) after the human answered Q1: B on #4623 and commented /reclarify
+- Run 2 — 2026-09-27: CONFORMANT (Implemented COMPLETE, Correctness PASS, no findings) — no fixes (pre-security)
 
 ## Security pass
+- Skipped: plan header `Security pass: skip (ai:security: automation-produced issue)` (AD-6)
 
 ## Validation
+- Cycle 1 — run 36356008779 2026-09-27 (target_ref: project branch; validated the authorized head 68eec15): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 289s), no fix issues
 
 ## Completion
+- Completion PR (this log update) — doc moved to docs/completed/issue-4623-verify-security-pass-skip-plan.md
+- Merged PRs into the project branch: #4645 (phase 1/1, merged 2026-09-27), #4663 (conformance fix 1, merged 2026-09-27)
+- Final PR #4635 draft (marked ready in stage final-merge 1/1)
 
 ## Activation
 
@@ -47,3 +53,4 @@
 - Draft final PR #4635 opened 2026-09-27.
 - Local verification: `tests/test_orchestrate_poll_process.py` (446 tests) runs >40 min on this container's Python 3.11 and was not finished when the PR opened; CI's sharded Python 3.12 run is authoritative for it. `tests/test_workflow_retro.py` cannot be collected on Python 3.11 (pre-existing, unrelated).
 - Conformance run 1 found Implementation Step 3's `, verified` header suffix unimplemented and unrecorded; the plan text now matches the command (AD-7). The check CLI verified live on 2026-09-27: #4623 → skip (`ai:security`), #4653 and #4580 → skip (`ai:workflow-heal`), #3576 → run (no skip label), a missing issue → exit 2.
+- Project branch synced with main at 68eec15 on 2026-09-27 (after #4663 merged), and at ca73830 in the validation 1/3 read stage. Main's #4672, merged after validation, is a docs-only change to another plan, so the validated code is unchanged.
