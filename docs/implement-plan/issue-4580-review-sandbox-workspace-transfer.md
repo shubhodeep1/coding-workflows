@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4580-review-sandbox-workspace-transfer-plan.md
 - Source issue: shubhodeep1/coding-workflows#4580
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-orchestrator-sync-contract-list-union-security-fix-1 (was ai/issue-4568)
-- Project branch: claude/implement-plan-issue-4580-review-sandbox-workspace-transfer   Final PR: #4585 draft
+- Project branch: claude/implement-plan-issue-4580-review-sandbox-workspace-transfer   Final PR: #4585 ready — review rounds: 1
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-orchestrator-sync-contract-list-union-security-fix-1)
-- Waiting on: completion PR (this PR)
+- Waiting on: PR #4585 (final PR, review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_011n7LVKDJEuhGwymWCYTy23
 - Last updated: 2026-09-27
-- Last note: completion PR opened; plan moved to docs/completed/; final-merge next.
+- Last note: final-merge review round 1: fixed WORKSPACE_PATH leaking into the pytest session (tests/conftest.py); rejected 2 findings.
 
 ## Phases
 1. [x] Phase 1 — transfer review-editor edits into the per-PR workspace (WORKSPACE_PATH) instead of the checkout   — PR #4589 merged 2026-09-27; review rounds: 0; interventions: 0
@@ -31,8 +31,9 @@
 - Skipped — Q1: A (human, 2026-09-27): validate.yml binds target_ref only to a final PR into the default branch, and this issue-mode project's final PR #4585 targets a non-default base. The change reaches main with project 3965, whose chain runs its own validation.
 
 ## Completion
-- Completion PR (this PR) — doc moved to docs/completed/issue-4580-review-sandbox-workspace-transfer-plan.md
-- Final PR #4585 draft (base retargeted to claude/implement-plan-orchestrator-sync-contract-list-union-security-fix-1)
+- Completion PR #4612 merged 2026-09-27 — doc moved to docs/completed/issue-4580-review-sandbox-workspace-transfer-plan.md
+- Final PR #4585 ready — review rounds: 1 (base retargeted to claude/implement-plan-orchestrator-sync-contract-list-union-security-fix-1)
+  - Round 1 (2026-09-27, head f0a654ae9642): fixed — WORKSPACE_PATH inherited by the legacy sandbox test (tests/conftest.py strips it; nested-pytest regression in tests/test_pytest_git_env_isolation.py); rejected — unquoted workspace read (already quoted, newline-checked in prepare), host Git dir validation (only the trusted prepare step passes it, realpath-resolved).
 
 ## Activation
 
@@ -47,6 +48,7 @@
 - [source:plan-deviation] An issue-mode project whose issue base is not the default branch cannot be validated with target_ref, because validate.yml binds it only to a final PR into the default branch; settle validation when the plan is written. (files: .github/workflows/validate.yml)
 - [source:plan-deviation] An issue base that is another PR's head can be closed unmerged and superseded; check the base PR's state at every stage, not only whether it merged. (files: .claude/commands/implement-plan-claude.md)
 - [source:plan-deviation] A helper that copies files back from an isolated copy must target the directory the commit step's Git work tree points at (WORKSPACE_PATH in review_autofix.yml), not GITHUB_WORKSPACE. (files: scripts/review_untrusted_sandbox.sh, scripts/review_untrusted_workspace.py)
+- [source:intervention] When a script under test starts reading a workflow-exported variable (WORKSPACE_PATH, GIT_DIR, staged-support ledgers), add it to tests/conftest.py's session strip list in the same change, or tests that copy os.environ inherit the editor's live value. (files: tests/conftest.py, scripts/workspace_init.sh)
 
 ## Notes
 - 2026-09-27 validation blocker: asked Q1 on #4580 (validate.yml `-f "base=${VALIDATE_DEFAULT_BRANCH}"` binding); answered Q1: A (skip validation) by the human in the conformance stage session.
