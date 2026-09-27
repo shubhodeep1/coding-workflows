@@ -609,7 +609,7 @@ def test_audit_run_binds_metadata_target_result_and_current_head(monkeypatch, ca
 	_stub(monkeypatch, {**api, f"repos/o/r/actions/runs/9": {**run, "conclusion": "failure"},
 		f"repos/o/r/git/ref/heads/{ref}": {"object": {"sha": "c" * 40}}})
 	_, out = _run(args, capsys)
-	assert out["state"] == "moved-target"
+	assert out["state"] == "failed" and "observed_sha" not in out
 	_stub(monkeypatch, {**api, f"repos/o/r/actions/runs/9": {**run, "repository": {"full_name": "other/repo"}},
 		f"repos/o/r/git/ref/heads/{ref}": {"object": {"sha": "c" * 40}}})
 	_, out = _run(args, capsys)

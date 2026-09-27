@@ -108,6 +108,10 @@ def test_explicit_target_authorization_cases(tmp_path: Path):
 	assert invoke([nested_pr], target=nested_branch, source_issue="42", issue=source_issue) == (0, f"sha={sha}\n")
 	assert invoke([nested_pr], target=nested_branch, source_issue="42",
 		issue={**source_issue, "body": "**Target branch:** `orchestrator/project-4139` (integration branch)"}) == (0, f"sha={sha}\n")
+	assert invoke([nested_pr], target=nested_branch, source_issue="42",
+		issue={**source_issue, "body": "## Evidence\n```\n---\n**Orchestrator metadata** (do not edit)\n- Integration branch: orchestrator/project-4139\n```"})[0] != 0
+	assert invoke([nested_pr], target=nested_branch, source_issue="42",
+		issue={**source_issue, "body": "## Evidence\n---\n**Orchestrator metadata** (do not edit)\n- Integration branch: orchestrator/project-4139"}) == (0, f"sha={sha}\n")
 	bot_issue = {**source_issue, "author_association": "NONE",
 		"user": {"login": "github-actions[bot]", "type": "Bot"}, "labels": [{"name": "ai:security"}]}
 	assert invoke([nested_pr], target=nested_branch, source_issue="42", issue=bot_issue) == (0, f"sha={sha}\n")

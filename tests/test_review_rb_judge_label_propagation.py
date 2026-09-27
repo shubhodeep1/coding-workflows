@@ -1725,6 +1725,7 @@ set -euo pipefail
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
+run_review_rb_validator_python() {{ /usr/bin/python3 -I -S "$@"; }}
 sleep() {{ :; }}
 source "{pr_checks_lib_path}"
 
@@ -1899,6 +1900,7 @@ def _run_merge_with_followup(
 		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
 		state["_ensure_labels"] = labels_file.read_text(encoding="utf-8").strip().splitlines()
 		state["_stdout"] = proc.stdout
+		state["_stderr"] = proc.stderr
 		state["_github_output"] = github_output.read_text(encoding="utf-8")
 		return state
 
@@ -2458,7 +2460,7 @@ def test_merge_with_followup_derives_lineage_from_pr_base_branch_fallback() -> N
 
 
 def test_merge_with_followup_ignores_default_branch_sentinel() -> None:
-	"""Explicit default-branch metadata suppresses a matching PR-base fallback."""
+	"""A stale default-branch sentinel cannot override the verified PR base."""
 	state = _run_merge_with_followup(
 		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
 		first_issue_body=(
@@ -2468,9 +2470,8 @@ def test_merge_with_followup_ignores_default_branch_sentinel() -> None:
 		pr_base_ref="orchestrator/project-249",
 	)
 	body = _followup_body_from_state(state)
-	assert "- Tracking issue: #4001" in body, body
-	assert "Integration branch:" not in body, body
-	assert "follow-up will resolve to the default branch" in state["_stdout"]
+	assert "- Tracking issue: #249" in body, body
+	assert "- Integration branch: orchestrator/project-249" in body, body
 
 
 def test_merge_with_followup_honors_custom_integration_branch_pattern() -> None:
@@ -2487,8 +2488,7 @@ def test_merge_with_followup_honors_custom_integration_branch_pattern() -> None:
 
 
 def test_merge_with_followup_parent_metadata_wins_over_pr_base_branch() -> None:
-	"""Both sources present and disagreeing → the parent's own metadata
-	is authoritative (user decision: metadata first, base-branch fallback)."""
+	"""A mismatched parent declaration cannot replace the independently verified PR base."""
 	parent_body = (
 		"Body\n\n- Tracking issue: #4001\n- Integration branch: orchestrator/project-4001\n"
 	)
@@ -2498,9 +2498,21 @@ def test_merge_with_followup_parent_metadata_wins_over_pr_base_branch() -> None:
 		pr_base_ref="orchestrator/project-9999",
 	)
 	body = _followup_body_from_state(state)
-	assert "- Tracking issue: #4001" in body, body
-	assert "- Integration branch: orchestrator/project-4001" in body, body
-	assert "project-9999" not in body, body
+	assert "- Tracking issue: #9999" in body, body
+	assert "- Integration branch: orchestrator/project-9999" in body, body
+	assert "project-4001" not in body, body
+
+
+def test_merge_with_followup_ignores_fenced_tracking_lineage() -> None:
+	parent_body = "## Evidence\n```\n- Tracking issue: #4001\n- Integration branch: orchestrator/project-4001\n```\n"
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"], first_issue_body=parent_body,
+		pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #249" in body, body
+	assert "- Integration branch: orchestrator/project-249" in body, body
+	assert "project-4001" not in body, body
 
 
 def test_merge_with_followup_ignores_sibling_issue_lineage() -> None:

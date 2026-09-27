@@ -861,6 +861,11 @@ security-audit wait whose project head advanced returns `moved-target` with
 the observed SHA; the Claude checker re-dispatches at the freshly read head
 within the existing five-cycle limit, instead of treating drift as a failed
 audit or a clean pass.
+An unreadable triage origin PR fails closed, while a verified fork PR is skipped.
+Tracking lineage and branch metadata are accepted only from the leading issue
+metadata or an unfenced, separator-delimited `**Orchestrator metadata** (do not
+edit)` footer; follow-up lineage must match the independently fetched PR base.
+An audit run with a failed conclusion remains failed even if its target moved.
 
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
 pushes a branch and a pull request exists for it, the session starts a

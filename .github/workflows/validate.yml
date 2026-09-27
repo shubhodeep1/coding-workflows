@@ -210,11 +210,13 @@ jobs:
               def authoritative_lines:
                 (.body | split("\n")) as $body |
                 ($body | map(test(if $body[0] | startswith("## Project:") then
-                  "^## (?!Project:)|^### Wave|^```|^~~~" else "^## |^```|^~~~|^---$" end)) | index(true) // length) as $end |
+                  "^## (?!Project:)|^#{3,6} |^# |^```|^~~~" else "^#{1,6} |^```|^~~~|^---$" end)) | index(true) // length) as $end |
+                ($body | map(. == "**Orchestrator metadata** (do not edit)") | index(true)) as $footer |
                 ($body[:$end] +
-                  (if ($body | map(startswith("**Orchestrator metadata**")) | index(true)) != null then
-                    ($body | map(startswith("**Orchestrator metadata**")) | index(true)) as $footer |
-                    $body[($footer + 1):] | .[:(map(test("^## |^```|^~~~|^---$")) | index(true) // length)]
+                  (if $footer != null and
+                    ([$body[:$footer][] | select(length > 0)] | last) == "---" and
+                    ([$body[:$footer][] | select(test("^(```|~~~)"))] | length) % 2 == 0 then
+                    $body[($footer + 1):] | .[:(map(test("^#{1,6} |^```|^~~~|^---$")) | index(true) // length)]
                    else [] end));
               def branches($label):
                 [authoritative_lines[] |

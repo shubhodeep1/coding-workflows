@@ -2780,14 +2780,16 @@ def extract_integration_branch(body: str) -> str:
 		return ""
 	lines = body.splitlines()
 	if lines and lines[0].startswith("## Project:"):
-		boundary = next((idx for idx, line in enumerate(lines[1:], 1) if re.match(r"^(?:## |### Wave|```|~~~)", line)), len(lines))
+		boundary = next((idx for idx, line in enumerate(lines[1:], 1) if re.match(r"^(?:#{1,6} |```|~~~)", line)), len(lines))
 	else:
-		boundary = next((idx for idx, line in enumerate(lines) if re.match(r"^(?:## |```|~~~|---$)", line)), len(lines))
+		boundary = next((idx for idx, line in enumerate(lines) if re.match(r"^(?:#{1,6} |```|~~~|---$)", line)), len(lines))
 	metadata = lines[:boundary]
-	footer = next((idx for idx, line in enumerate(lines) if line.startswith("**Orchestrator metadata**")), None)
+	footer = next((idx for idx, line in enumerate(lines) if line == "**Orchestrator metadata** (do not edit)" and
+		next((previous for previous in reversed(lines[:idx]) if previous.strip()), "") == "---" and
+		sum(bool(re.match(r"^(?:```|~~~)", previous)) for previous in lines[:idx]) % 2 == 0), None)
 	if footer is not None:
 		start = footer + 1
-		end = next((idx for idx in range(start, len(lines)) if re.match(r"^(?:## |```|~~~|---$)", lines[idx])), len(lines))
+		end = next((idx for idx in range(start, len(lines)) if re.match(r"^(?:#{1,6} |```|~~~|---$)", lines[idx])), len(lines))
 		metadata += lines[start:end]
 	# The triage header is verified against its originating PR only by
 	# resolve_integration_ref; this text-only parser never trusts its evidence.
@@ -2805,7 +2807,20 @@ def extract_tracking_issue_number(body: str) -> int | None:
 	"""Extract the first tracking-issue number from markdown body text."""
 	if not body:
 		return None
-	match = TRACKING_ISSUE_LINE_RE.search(body)
+	lines = body.splitlines()
+	if lines and lines[0].startswith("## Project:"):
+		boundary = next((idx for idx, line in enumerate(lines[1:], 1) if re.match(r"^(?:#{1,6} |```|~~~)", line)), len(lines))
+	else:
+		boundary = next((idx for idx, line in enumerate(lines) if re.match(r"^(?:#{1,6} |```|~~~|---$)", line)), len(lines))
+	metadata = lines[:boundary]
+	footer = next((idx for idx, line in enumerate(lines) if line == "**Orchestrator metadata** (do not edit)" and
+		next((previous for previous in reversed(lines[:idx]) if previous.strip()), "") == "---" and
+		sum(bool(re.match(r"^(?:```|~~~)", previous)) for previous in lines[:idx]) % 2 == 0), None)
+	if footer is not None:
+		start = footer + 1
+		end = next((idx for idx in range(start, len(lines)) if re.match(r"^(?:#{1,6} |```|~~~|---$)", lines[idx])), len(lines))
+		metadata += lines[start:end]
+	match = TRACKING_ISSUE_LINE_RE.search("\n".join(metadata))
 	if not match:
 		return None
 	return int(match.group(1))

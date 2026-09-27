@@ -297,6 +297,17 @@ def test_force_tick_resolves_tracking_issue_from_pr_branch_refs() -> None:
 	assert record["dispatch_status"] == "sent"
 
 
+def test_force_tick_ignores_diagnostic_tracking_issue() -> None:
+	_, work_repo = _create_repo()
+	body = "## Evidence\n```\nTracking issue: #3042\n```\n"
+	result, runs_file = _run_force_tick(
+		work_repo, {88: body}, pull_requests={88: {"body": body, "head_ref": "ai/issue-88", "base_ref": "main"}},
+		args=["--issue", "88", "--reason", "review-post-merge", "--source-workflow", "review_autofix", "--run-id", "9001"],
+	)
+	assert result.returncode == 0, result.stderr
+	assert _workflow_runs(runs_file) == []
+
+
 def test_force_tick_second_call_inside_cooldown_noops() -> None:
 	_, work_repo = _create_repo()
 	issue_bodies = {

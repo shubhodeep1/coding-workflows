@@ -16,15 +16,17 @@ lines = body.splitlines()
 # Only the preamble and the explicit orchestrator metadata footer are
 # branch declarations. A quoted check log or fenced diagnostic is not.
 if lines and lines[0].startswith("## Project:"):
-	boundary = next((i for i, line in enumerate(lines[1:], 1) if re.match(r"^(?:## |### Wave|```|~~~)", line)), len(lines))
+	boundary = next((i for i, line in enumerate(lines[1:], 1) if re.match(r"^(?:#{1,6} |```|~~~)", line)), len(lines))
 else:
-	boundary = next((i for i, line in enumerate(lines) if re.match(r"^(?:## |```|~~~|---$)", line)), len(lines))
+	boundary = next((i for i, line in enumerate(lines) if re.match(r"^(?:#{1,6} |```|~~~|---$)", line)), len(lines))
 metadata = lines[:boundary]
 
-footer = next((i for i, line in enumerate(lines) if line.startswith("**Orchestrator metadata**")), None)
+footer = next((i for i, line in enumerate(lines) if line == "**Orchestrator metadata** (do not edit)" and
+	next((previous for previous in reversed(lines[:i]) if previous.strip()), "") == "---" and
+	sum(bool(re.match(r"^(?:```|~~~)", previous)) for previous in lines[:i]) % 2 == 0), None)
 if footer is not None:
 	start = footer + 1
-	end = next((i for i in range(start, len(lines)) if re.match(r"^(?:## |```|~~~|---$)", lines[i])), len(lines))
+	end = next((i for i in range(start, len(lines)) if re.match(r"^(?:#{1,6} |```|~~~|---$)", lines[i])), len(lines))
 	metadata += lines[start:end]
 body = "\n".join(metadata)
 pattern = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE)
@@ -55,6 +57,20 @@ import re
 import sys
 
 body = sys.stdin.read()
+lines = body.splitlines()
+if lines and lines[0].startswith("## Project:"):
+	boundary = next((i for i, line in enumerate(lines[1:], 1) if re.match(r"^(?:#{1,6} |```|~~~)", line)), len(lines))
+else:
+	boundary = next((i for i, line in enumerate(lines) if re.match(r"^(?:#{1,6} |```|~~~|---$)", line)), len(lines))
+metadata = lines[:boundary]
+footer = next((i for i, line in enumerate(lines) if line == "**Orchestrator metadata** (do not edit)" and
+	next((previous for previous in reversed(lines[:i]) if previous.strip()), "") == "---" and
+	sum(bool(re.match(r"^(?:```|~~~)", previous)) for previous in lines[:i]) % 2 == 0), None)
+if footer is not None:
+	start = footer + 1
+	end = next((i for i in range(start, len(lines)) if re.match(r"^(?:#{1,6} |```|~~~|---$)", lines[i])), len(lines))
+	metadata += lines[start:end]
+body = "\n".join(metadata)
 pattern = re.compile(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", re.MULTILINE)
 match = pattern.search(body)
 if not match:
@@ -96,7 +112,7 @@ resolve_ref() {
 		fi
 		# Triage prose is a model/log product. Only the machine header and an
 		# independent PR read may select a non-default base.
-		if ! origin_pr="$(printf '%s' "${child_body}" | sed -n '2s/^<!-- check-failure-triage:origin-pr=\([1-9][0-9]*\) base=[A-Za-z0-9][A-Za-z0-9._/-]* -->$/\1/p')" ||
+		if ! origin_pr="$(printf '%s' "${child_body}" | tr -d '\r' | sed -n '2s/^<!-- check-failure-triage:origin-pr=\([1-9][0-9]*\) base=[A-Za-z0-9][A-Za-z0-9._/-]* -->$/\1/p')" ||
 		   [ -z "${origin_pr}" ]; then
 			if [[ "${child_body}" == '<!-- check-failure-triage:fp='* ]] &&
 			   printf '%s' "${child_body}" | grep -q 'check-failure-triage:origin-pr='; then
@@ -106,8 +122,8 @@ resolve_ref() {
 			printf '\n' # Legacy triage issues have no independently bound base.
 			return 0
 		fi
-		origin_base="$(printf '%s' "${child_body}" | sed -n '2s/^<!-- check-failure-triage:origin-pr=[1-9][0-9]* base=\([A-Za-z0-9][A-Za-z0-9._/-]*\) -->$/\1/p')"
-		if ! [[ "${child_body}" =~ ^'<!-- check-failure-triage:fp='[0-9a-f]{64}' -->' ]] ||
+		origin_base="$(printf '%s' "${child_body}" | tr -d '\r' | sed -n '2s/^<!-- check-failure-triage:origin-pr=[1-9][0-9]* base=\([A-Za-z0-9][A-Za-z0-9._/-]*\) -->$/\1/p')"
+		if ! [[ "${child_body}" =~ ^'<!-- check-failure-triage:fp='[0-9a-f]{64}' -->'($'\r')?$'\n' ]] ||
 		   [ "$(printf '%s\n' "${child_body}" | grep -c 'check-failure-triage:fp=' || true)" != 1 ] ||
 		   [ "$(printf '%s\n' "${child_body}" | grep -c 'check-failure-triage:origin-pr=' || true)" != 1 ] ||
 		   ! git check-ref-format --branch "${origin_base}" >/dev/null 2>&1 ||

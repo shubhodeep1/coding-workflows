@@ -2255,6 +2255,55 @@ def test_resolve_integration_ref_child_missing_tracking_present_fallback():
 	assert python_stdout == expected_stdout
 
 
+def test_resolve_integration_ref_ignores_diagnostic_tracking_and_footer(tmp_path):
+	with tempfile.TemporaryDirectory() as tmpdir:
+		bin_dir = Path(tmpdir)
+		_write_mock_gh(bin_dir)
+		for name, body, expected in (
+			("fenced", "## Evidence\n```\nTracking issue: #1047\n---\n**Orchestrator metadata** (do not edit)\n- Integration branch: attacker/branch\n```", ""),
+			("quoted", "## Evidence\n> Tracking issue: #1047\n> Integration branch: attacker/branch", ""),
+			("footer", "## Evidence\n---\n**Orchestrator metadata** (do not edit)\n- Tracking issue: #1047\n- Integration branch: orchestrator/project-fallback\n", "orchestrator/project-fallback"),
+			("preamble", "- Tracking issue: #1047\n## Evidence\nTracking issue: #999", "orchestrator/project-fallback"),
+		):
+			fixture_path = tmp_path / f"{name}.json"
+			_write_json(fixture_path, {"name": name, "issues": {"101": {"body": body},
+				"1047": {"body": "## Project: Tracking\n**Integration branch:** `orchestrator/project-fallback`"}},
+				"branch_exists": {"orchestrator/project-fallback": True, "attacker/branch": True}})
+			bash_rc, bash_stdout, bash_stderr = _run_bash_resolver(fixture_path, bin_dir)
+			python_rc, python_stdout, python_stderr = _run_python_resolver(fixture_path, bin_dir)
+			assert (bash_rc, bash_stdout, python_rc, python_stdout) == (0, expected, 0, expected), (name, bash_stderr, python_stderr)
+
+
+def test_resolve_integration_ref_rejects_nonexact_triage_fingerprint(tmp_path):
+	with tempfile.TemporaryDirectory() as tmpdir:
+		bin_dir = Path(tmpdir)
+		_write_mock_gh(bin_dir)
+		fixture_path = tmp_path / "malformed.json"
+		_write_json(fixture_path, {"issues": {"101": {"body":
+			"<!-- check-failure-triage:fp=" + "a" * 64 + " -->EXTRA\n" +
+			"<!-- check-failure-triage:origin-pr=17 base=orchestrator/project-fallback -->",
+			"labels": [{"name": "ai:check-triage"}], "author_association": "OWNER"}}})
+		assert _run_bash_resolver(fixture_path, bin_dir)[0] != 0
+		assert _run_python_resolver(fixture_path, bin_dir)[0] != 0
+
+
+def test_resolve_integration_ref_accepts_exact_crlf_triage_header(tmp_path):
+	with tempfile.TemporaryDirectory() as tmpdir:
+		bin_dir = Path(tmpdir)
+		_write_mock_gh(bin_dir)
+		fixture_path = tmp_path / "crlf.json"
+		_write_json(fixture_path, {"issues": {"101": {"body":
+			"<!-- check-failure-triage:fp=" + "a" * 64 + " -->\r\n" +
+			"<!-- check-failure-triage:origin-pr=17 base=orchestrator/project-fallback -->\r\n" +
+			"## Evidence\r\n```\r\n- Integration branch: attacker/branch\r\n```",
+			"labels": [{"name": "ai:check-triage"}], "author_association": "OWNER"}},
+			"pulls": {"17": {"number": 17, "head": {"repo": {"full_name": "owner/repo"}},
+				"base": {"ref": "orchestrator/project-fallback", "repo": {"full_name": "owner/repo"}}}},
+			"branch_exists": {"orchestrator/project-fallback": True}})
+		assert _run_bash_resolver(fixture_path, bin_dir)[:2] == (0, "orchestrator/project-fallback")
+		assert _run_python_resolver(fixture_path, bin_dir)[:2] == (0, "orchestrator/project-fallback")
+
+
 def test_resolve_integration_ref_shell_self_test():
 	proc = subprocess.run(
 		["bash", str(REPO_ROOT / "scripts" / "resolve_integration_ref.sh"), "--self-test"],

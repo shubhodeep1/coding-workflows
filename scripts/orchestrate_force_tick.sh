@@ -48,7 +48,16 @@ import re
 import sys
 
 body = sys.argv[1]
-match = re.search(r"(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)", body, re.MULTILINE)
+lines = body.splitlines()
+boundary = next((i for i, line in enumerate(lines) if re.match(r"^(?:#{1,6} |```|~~~|---$)", line)), len(lines))
+metadata = lines[:boundary]
+footer = next((i for i, line in enumerate(lines) if line == "**Orchestrator metadata** (do not edit)" and
+	next((previous for previous in reversed(lines[:i]) if previous.strip()), "") == "---" and
+	sum(bool(re.match(r"^(?:```|~~~)", previous)) for previous in lines[:i]) % 2 == 0), None)
+if footer is not None:
+	end = next((i for i in range(footer + 1, len(lines)) if re.match(r"^(?:#{1,6} |```|~~~|---$)", lines[i])), len(lines))
+	metadata += lines[footer + 1:end]
+match = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", "\n".join(metadata), re.MULTILINE)
 if match:
 	print(match.group(1))
 PY
@@ -82,7 +91,7 @@ if sys.argv[1]:
 		payload = {}
 
 branch_re = re.compile(r"^orchestrator/project-(\d+)$")
-body_re = re.compile(r"(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)")
+body_re = re.compile(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", re.MULTILINE)
 
 for ref in (
 	((payload.get("head") or {}).get("ref") or "").strip(),
@@ -94,7 +103,16 @@ for ref in (
 		raise SystemExit(0)
 
 body = payload.get("body") or ""
-match = body_re.search(body)
+lines = body.splitlines()
+boundary = next((i for i, line in enumerate(lines) if re.match(r"^(?:#{1,6} |```|~~~|---$)", line)), len(lines))
+metadata = lines[:boundary]
+footer = next((i for i, line in enumerate(lines) if line == "**Orchestrator metadata** (do not edit)" and
+	next((previous for previous in reversed(lines[:i]) if previous.strip()), "") == "---" and
+	sum(bool(re.match(r"^(?:```|~~~)", previous)) for previous in lines[:i]) % 2 == 0), None)
+if footer is not None:
+	end = next((i for i in range(footer + 1, len(lines)) if re.match(r"^(?:#{1,6} |```|~~~|---$)", lines[i])), len(lines))
+	metadata += lines[footer + 1:end]
+match = body_re.search("\n".join(metadata))
 if match:
 	print(match.group(1))
 PY

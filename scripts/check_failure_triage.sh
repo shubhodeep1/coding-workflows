@@ -152,14 +152,12 @@ PR_JSON_FILE="${RUNTIME_DIR}/pr_payload.json"
 if gh_api_json_to_file "${PR_JSON_FILE}" gh api "repos/${REPO}/pulls/${PR_NUMBER}"; then
 	PR_JSON="$(cat "${PR_JSON_FILE}")"
 else
-	log "warn pr_fetch_failed pr=${PR_NUMBER}; proceeding with minimal context"
-	printf '{}' > "${PR_JSON_FILE}"
-	PR_JSON='{}'
+	log "error pr_fetch_failed pr=${PR_NUMBER}; cannot verify origin"
+	exit 1
 fi
 if ! printf '%s' "${PR_JSON}" | jq -e . >/dev/null 2>&1; then
-	log "warn pr_fetch_invalid_json pr=${PR_NUMBER}; proceeding with minimal context"
-	printf '{}' > "${PR_JSON_FILE}"
-	PR_JSON='{}'
+	log "error pr_fetch_invalid_json pr=${PR_NUMBER}; cannot verify origin"
+	exit 1
 fi
 PR_STATE="$(printf '%s' "${PR_JSON}" | jq -r '.state // ""')"
 HEAD_REF="$(printf '%s' "${PR_JSON}" | jq -r '.head.ref // ""')"
@@ -173,17 +171,17 @@ if [ -n "${PR_STATE}" ] && [ "${PR_STATE}" != "open" ]; then
 	log "skip reason=pr_not_open pr=${PR_NUMBER} state=${PR_STATE}"
 	exit 0
 fi
-if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] ||
-   [ "$(printf '%s' "${PR_JSON}" | jq -r '.number // ""')" != "${PR_NUMBER}" ] ||
-   [ "${PR_STATE}" != "open" ] ||
-   [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ] || [ "${BASE_REPO_FULL_NAME}" != "${REPO}" ] ||
-   [ -z "${BASE_REF}" ] || ! git check-ref-format --branch "${BASE_REF}" >/dev/null 2>&1; then
-	log "error pr_identity_or_base_unverified pr=${PR_NUMBER}"
-	exit 1
-fi
 if [ -n "${HEAD_REPO_FULL_NAME}" ] && [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ]; then
 	log "skip reason=fork_pr pr=${PR_NUMBER} head_repo=${HEAD_REPO_FULL_NAME}"
 	exit 0
+fi
+if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] ||
+   [ "$(printf '%s' "${PR_JSON}" | jq -r '.number // ""')" != "${PR_NUMBER}" ] ||
+   [ "${PR_STATE}" != "open" ] ||
+	[ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ] || [ "${BASE_REPO_FULL_NAME}" != "${REPO}" ] ||
+   [ -z "${BASE_REF}" ] || ! git check-ref-format --branch "${BASE_REF}" >/dev/null 2>&1; then
+	log "error pr_identity_or_base_unverified pr=${PR_NUMBER}"
+	exit 1
 fi
 printf '%s' "${PR_JSON}" | jq -r '.body // ""' > "${RUNTIME_DIR}/pr_body.txt" 2>/dev/null || : > "${RUNTIME_DIR}/pr_body.txt"
 

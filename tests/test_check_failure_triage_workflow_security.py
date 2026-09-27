@@ -24,6 +24,8 @@ def test_generated_triage_base_is_bound_to_fetched_pr_before_diagnosis():
 	assert 'check-ref-format --branch "${BASE_REF}"' in script
 	assert 'echo "<!-- ${MARKER_PREFIX}origin-pr=${PR_NUMBER} base=${BASE_REF} -->"' in script
 	assert script.index('origin-pr=${PR_NUMBER} base=${BASE_REF}') < script.index('cat "${DIAG_FILE}"')
+	assert script.index('log "error pr_fetch_failed') < script.index('BASE_REF=')
+	assert script.index('log "skip reason=fork_pr') < script.index('log "error pr_identity_or_base_unverified')
 
 
 def _workflow() -> dict:
