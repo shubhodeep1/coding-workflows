@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T02:08:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a plan's Approach says to rewrap edited Markdown lines, check every touched line's width against the paragraph before shipping; a sentence rewrite that appends to an existing line leaves an overlong line the plan did not ask for.",
+  "phase": "implement_plan",
+  "pr_number": 4575,
+  "record_id": "lesson-implement-plan-faa5bb457d6cf282e8569bc0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4550-readme-pickup-restart-command",
+    "file:README.md"
+  ]
+}
