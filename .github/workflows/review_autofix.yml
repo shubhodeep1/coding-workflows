@@ -1457,10 +1457,40 @@ jobs:
                 fi
               fi
 
-              if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
+              # Claude-fixer PRs: a workflow hand-off already issued for this
+              # head means reviewers posted findings the owning session has
+              # not answered. reopened / ready_for_review events arrive on the
+              # same head, so without this check they would skip straight past
+              # those findings to auto-merge. Run the review instead (the
+              # pre-#4609 behaviour). Evaluated only when every other check
+              # still allows the skip; the lookup is gate_fetch_marker_comments
+              # (shared, at most one GET /user plus one paginated comments
+              # call), and a failed lookup also runs the review (fail closed).
+              CLAUDE_HANDOFF_SKIP_SUPPRESSED="false"
+              if [ "${candidate_skip}" = "true" ] && [ "${CLAUDE_FIXER}" = "true" ] \
+                && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
                 && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ] \
                 && [ "${FILES_SKIP_SUPPRESSED}" != "true" ] \
                 && [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ]; then
+                gate_fetch_marker_comments
+                if [ "${gate_marker_fetch_state}" != "ok" ] || ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+                  CLAUDE_HANDOFF_SKIP_SUPPRESSED="true"
+                  echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_handoff_unverified pr=${PR_NUMBER} fetch_state=${gate_marker_fetch_state} head_sha=${pr_head_sha_gate:-unknown} candidate=${candidate_skip_reason}"
+                elif jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
+                    any(.[]; .author_login == $author and
+                      ((.body // "") | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\\n")) and
+                      ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->$"))))
+                  ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
+                  CLAUDE_HANDOFF_SKIP_SUPPRESSED="true"
+                  echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_pending_handoff pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} candidate=${candidate_skip_reason}"
+                fi
+              fi
+
+              if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${FILES_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${CLAUDE_HANDOFF_SKIP_SUPPRESSED}" != "true" ]; then
                 DETERMINISTIC_SKIP="true"
                 DET_SKIP_REASON="${candidate_skip_reason}"
                 SHOULD_RUN="false"

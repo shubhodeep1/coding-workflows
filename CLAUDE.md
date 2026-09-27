@@ -1885,8 +1885,9 @@ sweep runs in the sessions that create them, never in Actions:
   only after a clean review with fresh, ready checks. A `claude/*` PR that
   qualifies for the deterministic doc-only or small-diff skip takes it like
   any other PR (`ai:review-skipped`, head-bound auto-merge, no review), except
-  on a `claude_fixer_converged_head` verification run. So a Claude session
-  must fix these PRs: the pushing session through its §26 hand-back, a
+  on a `claude_fixer_converged_head` verification run or while a hand-off
+  for the current head is pending. Every `claude/*` PR that gets a hand-off
+  or a block must be fixed by a Claude session: the pushing session through its §26 hand-back, a
   fresh `/fix-claude-pr` session when that session is gone, the
   `/implement-plan-claude` chain for its own PRs, or the sweep below.
 - **Claims stop duplicate fixers.** Before any fix, the fixer claims the

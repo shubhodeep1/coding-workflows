@@ -1320,9 +1320,12 @@ passes the protected-path, conflict and `/files` checks is labelled
 `ai:review-skipped` and auto-merged on its gate-observed head with no
 reviewer panel and no hand-off. The one exception is an accepted
 `claude_fixer_converged_head` dispatch, which always re-runs the reviewer
-panel. A dispatch on a head that already has a hand-off still waits on the
-session (`claude_fixer_awaiting_session`); the next push is evaluated for the
-skip. Who fixes a PR that does get a hand-off:
+panel. A head that already has a hand-off never takes the skip: a dispatch
+on it still waits on the session (`claude_fixer_awaiting_session`), and a
+`reopened` or `ready_for_review` event on it runs the reviewer panel
+(`AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_pending_handoff`, or
+`reason=claude_fixer_handoff_unverified` when the comment lookup fails). The
+next push is evaluated for the skip. Who fixes a PR that does get a hand-off:
 
 1. **The pushing session.** Its §26 Sonnet checker runs
    `.claude/scripts/check_in_status.py --hand-back` every hour. When a fix is

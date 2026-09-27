@@ -624,6 +624,35 @@ def test_gate_docs_only_claude_pr_with_a_pending_handoff_still_waits_on_the_sess
 	assert out["deterministic_skip"] == "false"
 
 
+def test_gate_same_head_pull_request_event_with_a_pending_handoff_reviews_instead_of_skipping():
+	"""reopened / ready_for_review arrive on an unchanged head: they must not skip past posted findings."""
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref="claude/sharp-franklin-1hrznc-11", comments=[_c(HANDOFF)], event_name="pull_request",
+			files=DOCS_FILES, pr_overrides={"changed_files": 2})
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_pending_handoff pr=42" in proc.stdout
+	assert out["deterministic_skip"] == "false" and out["should_run"] == "true"
+
+
+def test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref="claude/sharp-franklin-1hrznc-11", comments=None, event_name="pull_request",
+			files=DOCS_FILES, pr_overrides={"changed_files": 2})
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_handoff_unverified pr=42" in proc.stdout
+	assert out["deterministic_skip"] == "false" and out["should_run"] == "true"
+
+
+def test_gate_handoff_for_an_older_head_does_not_block_the_skip():
+	old_head = "d" * 40
+	stale = HANDOFF.replace(HEAD, old_head)
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref="claude/sharp-franklin-1hrznc-11", comments=[_c(stale)], event_name="pull_request",
+			files=DOCS_FILES, pr_overrides={"changed_files": 2})
+	assert proc.returncode == 0, proc.stderr
+	assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "docs_only"
+
+
 def test_gate_verified_convergence_on_a_docs_only_head_still_reviews():
 	"""#4453: an accepted verdict re-runs the reviewer panel; it never takes the skip."""
 	with tempfile.TemporaryDirectory() as td:
