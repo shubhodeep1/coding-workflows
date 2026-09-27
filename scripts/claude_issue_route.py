@@ -777,9 +777,9 @@ def evaluate_producer_run(run: Any, repo: str, default_branch: str) -> tuple[str
 
 	Trusted means: a run of this repository, not from a fork, of the intake or
 	sweep workflow file, triggered by one of that producer's events, on the
-	default branch. A ``workflow_dispatch`` run must also have its head commit
-	on the default branch; ``fetch_queue_bindings`` checks that separately,
-	because a tag can carry the default branch's name.
+	default branch. The run's head commit must also be on the default branch;
+	``fetch_queue_bindings`` checks that separately for every event, because
+	``head_branch`` is only a name and a tag can carry the default branch's.
 	"""
 	if not isinstance(run, dict):
 		return "", "run record missing"
@@ -993,8 +993,9 @@ def fetch_queue_bindings(
 	1 ``actions/artifacts?name=<binding artifact>`` listing (100 newest),
 	shared by every run id. Per run id: 1 ``actions/runs/<id>`` read only when
 	the listings missed it, 1 ``actions/runs/<id>/artifacts`` read only when
-	the artifact listing missed it, 1 ``compare/<head sha>...<default>`` read
-	only for a ``workflow_dispatch`` run, and 1 artifact zip download.
+	the artifact listing missed it, 1
+	``compare/<head sha>...refs/heads/<default>`` read, and 1 artifact zip
+	download.
 	Fail-open per call: a failed listing falls back to the per-run reads, and
 	a failed per-run read marks only that run ``unavailable``, so its items
 	are ignored this wake and retried on the next. Nothing is retried in a
@@ -1048,16 +1049,18 @@ def _fetch_one_binding(read: Any, repo: str, branch: str, run_id: str, run: Any,
 		return {"state": "untrusted", "reason": f"run {run_id}: {reason}"}
 	if run.get("status") != "completed":
 		return {"state": "pending", "reason": f"run {run_id} is {run.get('status')}"}
-	if run.get("event") == "workflow_dispatch":
-		head_sha = run.get("head_sha") or ""
-		if not PR_FIX_HEAD_RE.match(head_sha):
-			return {"state": "untrusted", "reason": f"run {run_id}: head sha missing"}
-		try:
-			status = read(f"repos/{repo}/compare/{head_sha}...{branch}?per_page=1", jq=".status")
-		except RuntimeError as exc:
-			return {"state": "unavailable", "reason": f"run {run_id} compare: {exc}"}
-		if status not in ("identical", "ahead"):
-			return {"state": "untrusted", "reason": f"run {run_id}: workflow_dispatch head is not on {branch}"}
+	# Every producer event, not only workflow_dispatch: head_branch is a name,
+	# so the head commit itself must be reachable from the default branch. The
+	# fully qualified ref keeps a tag of the same name out of the comparison.
+	head_sha = run.get("head_sha") or ""
+	if not PR_FIX_HEAD_RE.match(head_sha):
+		return {"state": "untrusted", "reason": f"run {run_id}: head sha missing"}
+	try:
+		status = read(f"repos/{repo}/compare/{head_sha}...refs/heads/{branch}?per_page=1", jq=".status")
+	except RuntimeError as exc:
+		return {"state": "unavailable", "reason": f"run {run_id} compare: {exc}"}
+	if status not in ("identical", "ahead"):
+		return {"state": "untrusted", "reason": f"run {run_id}: {run.get('event')} head is not on {branch}"}
 	if artifact is None:
 		try:
 			listing = read(f"repos/{repo}/actions/runs/{run_id}/artifacts?name={QUEUE_BINDING_ARTIFACT}&per_page=100")

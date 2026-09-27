@@ -129,6 +129,13 @@ QUEUE_FILE="${RUNTIME_DIR}/queue_issue.json"
 python3 "${ROUTE_PY}" queue-issue --validated-json "${VALIDATED_FILE}" --run-url "${RUN_URL}" > "${QUEUE_FILE}"
 QUEUE_TITLE="$(jq -r '.title' "${QUEUE_FILE}")"
 QUEUE_LABEL="$(jq -r '.label' "${QUEUE_FILE}")"
+# The body is read once and checked here: a `$(jq ...)` inside a gh argument
+# is exempt from `set -e`, so a missing, empty, or NUL-carrying body (bash
+# drops NUL bytes) would otherwise be written and then fail the pickup's
+# binding check with no trace in this run (issue #4621).
+if ! QUEUE_BODY="$(jq -er '.body | select(type == "string" and length > 0 and (contains("\u0000") | not))' "${QUEUE_FILE}" 2>/dev/null)"; then
+	fail "queue_failed" "the rendered queue issue body is missing, empty, or not writable text"
+fi
 
 # One read of the open queue (≤ 100 items; the pickup drains it hourly) to
 # reuse an open item for the same target issue instead of duplicating it.
@@ -143,7 +150,7 @@ if [ -n "${QUEUE_NUMBER}" ]; then
 	# item bound by an earlier run, never bound, or edited since is healed by
 	# the next intake for its target (issue #4621).
 	if ! GH_TOKEN="${QUEUE_TOKEN}" gh_retry gh api -X PATCH "repos/${SELF_REPO}/issues/${QUEUE_NUMBER}" \
-		-f body="$(jq -r '.body' "${QUEUE_FILE}")" \
+		-f body="${QUEUE_BODY}" \
 		--jq '.number' > /dev/null 2> "${RUNTIME_DIR}/queue_update_error.txt"; then
 		fail "queue_failed" "could not rewrite queue issue #${QUEUE_NUMBER}: $(head -c 200 "${RUNTIME_DIR}/queue_update_error.txt" | tr '\n' ' ')"
 	fi
@@ -152,7 +159,7 @@ else
 	GH_TOKEN="${QUEUE_TOKEN}" ensure_label_exists "${QUEUE_LABEL}" "${SELF_REPO}" || true
 	if ! QUEUE_NUMBER="$(GH_TOKEN="${QUEUE_TOKEN}" gh_retry gh api "repos/${SELF_REPO}/issues" \
 		-f title="${QUEUE_TITLE}" \
-		-f body="$(jq -r '.body' "${QUEUE_FILE}")" \
+		-f body="${QUEUE_BODY}" \
 		-f "labels[]=${QUEUE_LABEL}" \
 		--jq '.number' 2> "${RUNTIME_DIR}/queue_create_error.txt")" || ! [[ "${QUEUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
 		fail "queue_failed" "could not open the queue issue: $(head -c 200 "${RUNTIME_DIR}/queue_create_error.txt" | tr '\n' ' ')"

@@ -1326,8 +1326,9 @@ that queued it:
   `Intake run:` / `Sweep run:` line. It starts the item only when that run
   is a completed run of this repository's `claude-issue-intake.yml`
   (`repository_dispatch`, `workflow_dispatch`) or `review_autofix_sweep.yml`
-  (`schedule`, `workflow_dispatch`) on the default branch (a
-  `workflow_dispatch` head commit must be on the default branch), and when
+  (`schedule`, `workflow_dispatch`) on the default branch (its head commit
+  must be reachable from `refs/heads/<default branch>`, whatever the event),
+  and when
   the run's artifact lists the item with the same title and payload. The
   whole body must also be the producer's own rendering of that payload and
   run, so no text added to a queue issue ever reaches the pickup.
@@ -1338,8 +1339,9 @@ that queued it:
   item blocks re-queueing its PR until someone closes it. Items queued
   before this change carry no binding and are refused the same way.
 - API cost per wake: the queue read, then, when items are open, the default
-  branch, two producer run listings, one artifact listing, and one artifact
-  download per producer run, with per-run fallbacks
+  branch, two producer run listings, one artifact listing, and one compare
+  read plus one artifact download per completed producer run, with per-run
+  fallbacks
   (`fetch_queue_bindings` in `scripts/claude_issue_route.py`).
 
 Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE` (adds

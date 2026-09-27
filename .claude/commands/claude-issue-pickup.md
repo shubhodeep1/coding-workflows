@@ -36,7 +36,7 @@ $ARGUMENTS
    - **`— wake.`**: delete every enabled `Claude issue pickup: hourly` trigger whose `persistent_session_id` is not your own session (a second pickup started by mistake), so pickups converge to this one. If none targets your own session, you were woken by a stale trigger: report `claude-issue-pickup: not the active pickup` and end the turn.
    - **`stop`**: delete every such trigger, archive each `persistent_session_id` that is not your own session, report `stopped: <n> trigger(s)` and end the turn.
 
-2. **Read the queue.** Run exactly this (CLAUDE.md §15: one queue read, and when items are open, about four shared binding reads plus one artifact download per producer run, as `fetch_queue_bindings` documents):
+2. **Read the queue.** Run exactly this (CLAUDE.md §15: one queue read, and when items are open, about four shared binding reads plus one compare read and one artifact download per completed producer run, as `fetch_queue_bindings` documents):
    ```
    PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py queue-pending --fetch-repo shubhodeep1/coding-workflows --registry .github/ai/consumer_repos.json
    ```

@@ -424,6 +424,29 @@ def test_intake_binding_failure_marks_issue(stubs):
 	assert "labels[]=ai:claude-handoff-failed" in stubs["log"].read_text()
 
 
+@pytest.mark.parametrize("reuse", [False, True])
+def test_intake_refuses_an_empty_queue_body_before_writing(stubs, reuse):
+	# A `$(jq ...)` inside a gh argument is exempt from `set -e`: an empty or
+	# missing body must fail here, never be written (review of PR #4639).
+	wrapper = stubs["tmp"] / "route_no_body.py"
+	wrapper.write_text(
+		"import json, runpy, sys\n"
+		"if sys.argv[1] == 'queue-issue':\n"
+		"    print(json.dumps({'title': '[claude-issue-queue] shubhodeep1/digital_pa#9', 'label': 'ai:claude-issue-queue', 'body': ''}))\n"
+		"    sys.exit(0)\n"
+		f"sys.argv[0] = {str(ROOT / 'scripts' / 'claude_issue_route.py')!r}\n"
+		"runpy.run_path(sys.argv[0], run_name='__main__')\n"
+	)
+	existing = [{"number": 55, "title": "[claude-issue-queue] shubhodeep1/digital_pa#9", "user": {"login": "github-actions[bot]"}}] if reuse else []
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), CLAUDE_ISSUE_ROUTE_PY=str(wrapper), GH_STUB_QUEUE_JSON=json.dumps(existing))
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "reason=queue_failed" in result.stdout and "body is missing, empty" in result.stdout
+	calls = stubs["log"].read_text()
+	assert "-X PATCH" not in calls and "-f title=" not in calls
+	assert not (stubs["tmp"] / "binding").exists()
+
+
 def test_intake_ignores_same_title_from_other_author(stubs):
 	spoof = [{"number": 55, "title": "[claude-issue-queue] shubhodeep1/digital_pa#9", "user": {"login": "someone"}}]
 	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_QUEUE_JSON=json.dumps(spoof))
@@ -701,6 +724,7 @@ def test_cli_queue_pending_fetches_the_queue_and_its_bindings(tmp_path):
 		"api repos/shubhodeep1/coding-workflows/actions/workflows/claude-issue-intake.yml/runs?per_page=100",
 		"api repos/shubhodeep1/coding-workflows/actions/workflows/review_autofix_sweep.yml/runs?per_page=100",
 		"api repos/shubhodeep1/coding-workflows/actions/artifacts?name=claude-issue-queue-binding&per_page=100",
+		f"api repos/shubhodeep1/coding-workflows/compare/{'a' * 40}...refs/heads/main?per_page=1 --jq .status",
 		"api repos/shubhodeep1/coding-workflows/actions/artifacts/501/zip",
 	]
 	# An edited item is refused through the CLI too.
@@ -781,6 +805,7 @@ case "$2" in
   *"claude-issue-intake.yml/runs"*) cat "{runs}" ;;
   *"review_autofix_sweep.yml/runs"*) echo '{{"workflow_runs": []}}' ;;
   *"actions/artifacts?name="*) cat "{artifacts}" ;;
+  *"/compare/"*"...refs/heads/main?per_page=1") echo ahead ;;
   *"/zip") cat "{zip_file}" ;;
   "repos/shubhodeep1/coding-workflows") echo main ;;
   *) echo "HTTP 404" >&2; exit 1 ;;
@@ -943,6 +968,7 @@ def test_fetch_queue_bindings_uses_the_listings_and_one_download_per_run():
 		f"{BASE}/actions/artifacts?name=claude-issue-queue-binding&per_page=100": {"artifacts": [
 			{"id": 501, "name": route.QUEUE_BINDING_ARTIFACT, "expired": False, "size_in_bytes": 400, "workflow_run": {"id": 1}},
 		]},
+		f"{BASE}/compare/{'a' * 40}...refs/heads/main?per_page=1": "ahead",
 		f"{BASE}/actions/artifacts/501/zip": _binding_zip({10: item}),
 	}
 	result = route.fetch_queue_bindings("shubhodeep1/coding-workflows", ["1", "2"], "main", gh_read=_fake_reader(responses, calls))
@@ -952,6 +978,7 @@ def test_fetch_queue_bindings_uses_the_listings_and_one_download_per_run():
 		f"{BASE}/actions/workflows/claude-issue-intake.yml/runs?per_page=100",
 		f"{BASE}/actions/workflows/review_autofix_sweep.yml/runs?per_page=100",
 		f"{BASE}/actions/artifacts?name=claude-issue-queue-binding&per_page=100",
+		f"{BASE}/compare/{'a' * 40}...refs/heads/main?per_page=1 --jq .status",
 		f"{BASE}/actions/artifacts/501/zip",
 	]
 	assert route.fetch_queue_bindings("shubhodeep1/coding-workflows", [], gh_read=_fake_reader({}, calls)) == {"repo": "shubhodeep1/coding-workflows", "runs": {}}
@@ -964,7 +991,7 @@ def test_fetch_queue_bindings_falls_back_per_run_and_checks_dispatch_heads():
 	responses = {
 		f"{BASE}": "main",
 		f"{BASE}/actions/runs/7": dispatch,
-		f"{BASE}/compare/{'c' * 40}...main?per_page=1": "ahead",
+		f"{BASE}/compare/{'c' * 40}...refs/heads/main?per_page=1": "ahead",
 		f"{BASE}/actions/runs/7/artifacts?name=claude-issue-queue-binding&per_page=100": {"artifacts": [
 			{"id": 9, "name": route.QUEUE_BINDING_ARTIFACT, "expired": False, "size_in_bytes": 300, "workflow_run": {"id": 7}},
 		]},
@@ -973,11 +1000,34 @@ def test_fetch_queue_bindings_falls_back_per_run_and_checks_dispatch_heads():
 	result = route.fetch_queue_bindings("shubhodeep1/coding-workflows", ["7"], gh_read=_fake_reader(responses, calls))
 	assert result["runs"]["7"]["state"] == "ok"
 	assert calls[0] == f"{BASE} --jq .default_branch"
-	assert f"{BASE}/compare/{'c' * 40}...main?per_page=1 --jq .status" in calls
+	assert f"{BASE}/compare/{'c' * 40}...refs/heads/main?per_page=1 --jq .status" in calls
 	# A workflow_dispatch head that is not on the default branch (a tag named like it) is refused.
-	responses[f"{BASE}/compare/{'c' * 40}...main?per_page=1"] = "diverged"
+	responses[f"{BASE}/compare/{'c' * 40}...refs/heads/main?per_page=1"] = "diverged"
 	result = route.fetch_queue_bindings("shubhodeep1/coding-workflows", ["7"], "main", gh_read=_fake_reader(responses, []))
 	assert result["runs"]["7"] == {"state": "untrusted", "reason": "run 7: workflow_dispatch head is not on main"}
+
+
+@pytest.mark.parametrize(
+	("path", "event"),
+	[
+		(".github/workflows/claude-issue-intake.yml", "repository_dispatch"),
+		(".github/workflows/review_autofix_sweep.yml", "schedule"),
+	],
+)
+def test_fetch_queue_bindings_checks_the_head_of_every_producer_event(path, event):
+	# head_branch is only a name: a repository_dispatch or schedule run whose
+	# head commit is not on the default branch is refused like a dispatch one.
+	responses = {
+		f"{BASE}/actions/runs/7": _producer_run(7, path=path, event=event, head_sha="d" * 40),
+		f"{BASE}/compare/{'d' * 40}...refs/heads/main?per_page=1": "diverged",
+	}
+	calls = []
+	record = route.fetch_queue_bindings("shubhodeep1/coding-workflows", ["7"], "main", gh_read=_fake_reader(responses, calls))["runs"]["7"]
+	assert record == {"state": "untrusted", "reason": f"run 7: {event} head is not on main"}
+	assert not any(call.endswith("/zip") for call in calls)
+	responses[f"{BASE}/actions/runs/7"] = _producer_run(7, path=path, event=event, head_sha="")
+	record = route.fetch_queue_bindings("shubhodeep1/coding-workflows", ["7"], "main", gh_read=_fake_reader(responses, []))["runs"]["7"]
+	assert record == {"state": "untrusted", "reason": "run 7: head sha missing"}
 
 
 @pytest.mark.parametrize(
@@ -985,6 +1035,8 @@ def test_fetch_queue_bindings_falls_back_per_run_and_checks_dispatch_heads():
 	[
 		(lambda r: r.update({f"{BASE}/actions/runs/7": RuntimeError("HTTP 502")}), "unavailable", "HTTP 502"),
 		(lambda r: r.update({f"{BASE}/actions/runs/7": _producer_run(7, branch="evil")}), "untrusted", "not on the default branch"),
+		(lambda r: r.update({f"{BASE}/compare/{'a' * 40}...refs/heads/main?per_page=1": RuntimeError("HTTP 502")}), "unavailable", "compare"),
+		(lambda r: r.update({f"{BASE}/compare/{'a' * 40}...refs/heads/main?per_page=1": "behind"}), "untrusted", "head is not on main"),
 		(lambda r: r.update({f"{BASE}/actions/runs/7/artifacts?name=claude-issue-queue-binding&per_page=100": {"artifacts": []}}), "missing", "has no claude-issue-queue-binding artifact"),
 		(lambda r: r[f"{BASE}/actions/runs/7/artifacts?name=claude-issue-queue-binding&per_page=100"]["artifacts"][0].update({"expired": True}), "missing", "expired"),
 		(lambda r: r[f"{BASE}/actions/runs/7/artifacts?name=claude-issue-queue-binding&per_page=100"]["artifacts"][0].update({"size_in_bytes": 10**7}), "untrusted", "size"),
@@ -998,6 +1050,7 @@ def test_fetch_queue_bindings_falls_back_per_run_and_checks_dispatch_heads():
 def test_fetch_queue_bindings_fails_closed_per_run(mutate, state, reason_part):
 	responses = {
 		f"{BASE}/actions/runs/7": _producer_run(7),
+		f"{BASE}/compare/{'a' * 40}...refs/heads/main?per_page=1": "identical",
 		f"{BASE}/actions/runs/7/artifacts?name=claude-issue-queue-binding&per_page=100": {"artifacts": [
 			{"id": 9, "name": route.QUEUE_BINDING_ARTIFACT, "expired": False, "size_in_bytes": 300, "workflow_run": {"id": 7}},
 		]},

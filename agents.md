@@ -234,8 +234,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     and uploads it as the `claude-issue-queue-binding` artifact
     (`if: always()`, 30 days); the pickup starts an item only when the run
     named by its `Intake run:` / `Sweep run:` line is a completed
-    default-branch run of that producer workflow and event (a
-    `workflow_dispatch` head must be on the default branch) and its artifact
+    default-branch run of that producer workflow and event (for every event,
+    its head commit must be on `refs/heads/<default branch>`) and its artifact
     lists the item unchanged, and the body must be exactly the producer's
     rendering of that payload and run, so an edited queue issue is refused (#4621;
     fails closed: `unbound`, `binding_mismatch`, `binding_untrusted`,
