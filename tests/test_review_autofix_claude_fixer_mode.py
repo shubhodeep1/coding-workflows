@@ -631,6 +631,7 @@ def test_gate_same_head_pull_request_event_with_a_pending_handoff_reviews_instea
 			files=DOCS_FILES, pr_overrides={"changed_files": 2})
 	assert proc.returncode == 0, proc.stderr
 	assert "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_pending_handoff pr=42" in proc.stdout
+	assert "claude_handoff_suppressed=true" in proc.stdout
 	assert out["deterministic_skip"] == "false" and out["should_run"] == "true"
 
 
@@ -638,6 +639,15 @@ def test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails():
 	with tempfile.TemporaryDirectory() as td:
 		proc, out = _run_gate(Path(td), head_ref="claude/sharp-franklin-1hrznc-11", comments=None, event_name="pull_request",
 			files=DOCS_FILES, pr_overrides={"changed_files": 2})
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_handoff_unverified pr=42" in proc.stdout
+	assert out["deterministic_skip"] == "false" and out["should_run"] == "true"
+
+
+def test_gate_claude_pr_skip_fails_closed_when_the_head_sha_is_invalid():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref="claude/sharp-franklin-1hrznc-11", comments=[], event_name="pull_request",
+			files=DOCS_FILES, pr_overrides={"changed_files": 2, "head": {"ref": "claude/sharp-franklin-1hrznc-11", "sha": "not-a-sha"}})
 	assert proc.returncode == 0, proc.stderr
 	assert "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_handoff_unverified pr=42" in proc.stdout
 	assert out["deterministic_skip"] == "false" and out["should_run"] == "true"
@@ -651,6 +661,7 @@ def test_gate_handoff_for_an_older_head_does_not_block_the_skip():
 			files=DOCS_FILES, pr_overrides={"changed_files": 2})
 	assert proc.returncode == 0, proc.stderr
 	assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "docs_only"
+	assert "claude_handoff_suppressed=false" in proc.stdout
 
 
 def test_gate_verified_convergence_on_a_docs_only_head_still_reviews():

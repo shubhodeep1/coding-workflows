@@ -1497,7 +1497,7 @@ jobs:
                 SKIP_REASON="deterministic_skip_${candidate_skip_reason}"
               fi
 
-              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-unavailable} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED} files_suppressed=${FILES_SKIP_SUPPRESSED} protected_suppressed=${PROTECTED_SKIP_SUPPRESSED}"
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-unavailable} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED} files_suppressed=${FILES_SKIP_SUPPRESSED} protected_suppressed=${PROTECTED_SKIP_SUPPRESSED} claude_handoff_suppressed=${CLAUDE_HANDOFF_SKIP_SUPPRESSED}"
             fi
           fi
 
