@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T05:44:42Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An env var exported around an agent CLI reaches the CLI's own child processes too, not just the model's tool calls: OpenCode's session snapshot runs `git` with the inherited environment, so a `GIT_INDEX_FILE` meant for the model also redirected OpenCode's snapshot `git add`. Check the agent runtime's own subprocesses (or disable the feature, e.g. `\"snapshot\": false`) before scoping git env vars to an agent run.",
+  "phase": "implement_plan",
+  "pr_number": 4606,
+  "record_id": "lesson-implement-plan-a47f8ced66387650e81f385f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4545-resolver-index-isolation",
+    "file:scripts/review_conflict_resolve.sh"
+  ]
+}

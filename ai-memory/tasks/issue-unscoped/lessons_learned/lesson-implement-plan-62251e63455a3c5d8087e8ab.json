@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T05:44:42Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a helper writes a temporary file and renames it into place, remove the temporary file in a `finally` guarded by a sentinel cleared right after `os.replace`, not in the `except` for the expected errors: any other exception otherwise leaves it behind.",
+  "phase": "implement_plan",
+  "pr_number": 4606,
+  "record_id": "lesson-implement-plan-62251e63455a3c5d8087e8ab",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4545-resolver-index-isolation",
+    "file:scripts/review_conflict_resolve.sh"
+  ]
+}
