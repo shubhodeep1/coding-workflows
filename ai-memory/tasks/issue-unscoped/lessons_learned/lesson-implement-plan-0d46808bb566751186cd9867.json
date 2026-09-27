@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-27T07:23:30Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a script renders one of several prompt templates (e.g. a generic and an `orchestrator/project-*` variant), a rule added for a behaviour both variants share must land in every template, pinned by a test that reads each one.",
+  "phase": "implement_plan",
+  "pr_number": 4616,
+  "record_id": "lesson-implement-plan-0d46808bb566751186cd9867",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4545-resolver-index-isolation",
+    "file:prompts/conflict-resolver.txt",
+    "file:prompts/integration-sync-conflict-resolver.txt",
+    "file:scripts/review_conflict_prepare.sh"
+  ]
+}
