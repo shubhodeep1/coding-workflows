@@ -670,7 +670,7 @@ def _cmd_pr_fix_queue_issue(args: argparse.Namespace) -> int:
 def _cmd_arm_check_in_request(args: argparse.Namespace) -> int:
 	try:
 		text = Path(args.arguments_file).read_text(encoding="utf-8")
-	except OSError as exc:
+	except (OSError, UnicodeDecodeError) as exc:
 		print(f"cannot read arguments file: {exc}", file=sys.stderr)
 		return 2
 	allowed = load_allowed_repos(Path(args.registry), args.self_repo)

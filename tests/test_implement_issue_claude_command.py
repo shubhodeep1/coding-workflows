@@ -233,6 +233,10 @@ def test_pickup_arms_check_ins_for_deep_sessions(pickup_cmd):
 	assert "`model` `claude-sonnet-5`, `permission_mode` `auto`, `title` = the script's `checker_title`, and the prompt `/effort low` and nothing else" in pickup_cmd
 	assert "`persistent_session_id` = the script's `requester`" in pickup_cmd
 	assert "so no free text passes through the pickup" in pickup_cmd
+	# The depth-limit notification is spelled out, not cross-referenced.
+	assert "step 3.3" not in pickup_cmd
+	assert pickup_cmd.count("`Claude issue pickup: session depth limit — run /claude-issue-pickup start — restart from a new app session`") == 2
+	assert "so the Bash result shows the stderr line" in pickup_cmd
 	assert pickup_cmd.index("**Report.**") < pickup_cmd.index("**Arm a check-in**") < pickup_cmd.index("## Rules")
 
 

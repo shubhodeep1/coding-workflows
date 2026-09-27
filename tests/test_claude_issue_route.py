@@ -590,6 +590,17 @@ def test_cli_arm_check_in_request(tmp_path):
 	assert "repo not registered" in out.stderr
 	out = _cli("arm-check-in-request", "--arguments-file", str(tmp_path / "missing.txt"), "--registry", str(registry))
 	assert out.returncode == 2
+	# Invalid UTF-8 is a refusal (exit 2), never a traceback (exit 1).
+	args_file.write_bytes(b"\xff\xfe")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "cannot read arguments file" in out.stderr
+	# An unreadable or malformed registry leaves only the self repo allowed; still a clean refusal.
+	args_file.write_text(ARM_REQUEST + "\n", encoding="utf-8")
+	registry.write_text("{not json", encoding="utf-8")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "repo not registered" in out.stderr
 
 
 def test_cli_queue_pending_and_stale(tmp_path):
