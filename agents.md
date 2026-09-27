@@ -893,7 +893,7 @@ reviews, comments, and conflicts stay a direct §12 request.
   session is at lineage depth 8 (limit 8)`), so a checker must sit at depth
   6 or less for its fresh fixer to still work. Before creating a checker the
   session counts its depth *d* with `get_session` along `parent_session_id`
-  (at most 8 calls). At *d* ≤ 5 it creates the checker itself. At *d* 6 or 7
+  (at most 8 calls; a walk that cannot finish counts as depth 6). At *d* ≤ 5 it creates the checker itself. At *d* 6 or 7
   it sends the Claude issue pickup a one-shot `PR #<n> status check-in: arm
   request` trigger with arguments `— arm-check-in <owner>/<repo>#<n> for
   <session id>`. The pickup parses them offline with `claude_issue_route.py

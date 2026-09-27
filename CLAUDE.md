@@ -1629,7 +1629,9 @@ terminal report (§26.D):
    5) lands at depth 7 or less, where it can still register and re-arm.
    Follow `parent_session_id` upward with `get_session`, starting from this
    session, until a session has none, and count the links (at most 8
-   calls). Call that count *d*:
+   calls). If a `get_session` call fails, retry it once; if it fails
+   again, the count is unknown and would only err low, so treat *d* as 6.
+   Call that count *d*:
    - *d* ≤ 5 → step 2.
    - *d* is 6 or 7 → **ask the Claude issue pickup to create the checker**.
      The pickup is one long-lived session at depth 1 or less

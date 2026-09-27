@@ -24,7 +24,7 @@ $ARGUMENTS
      > - **B** — Stop; start the pickup later from a session in Auto mode
 
      In `— wake.` and `— arm-check-in` mode a non-Auto mode means the pickup was started wrong: reply `claude-issue-pickup: blocked (<mode> mode)` and end the turn; the watchdog alerts once queue items age.
-   - **Depth** (`start` mode only). Follow `parent_session_id` upward with `get_session` until a session has none, counting the links (at most 8 calls). More than 1 → reply `claude-issue-pickup: blocked (this session is <n> links below its root; start the pickup from a session you open in the app)` and end the turn.
+   - **Depth** (`start` mode only). Follow `parent_session_id` upward with `get_session` until a session has none, counting the links (at most 8 calls). A `get_session` call that fails twice leaves the depth unknown: reply `claude-issue-pickup: blocked (cannot read session lineage: <error>)` and end the turn, since a short count would pass a pickup that sits too deep. More than 1 → reply `claude-issue-pickup: blocked (this session is <n> links below its root; start the pickup from a session you open in the app)` and end the turn.
    - **Fresh code** (`— wake.` and `— arm-check-in` mode). When `git status --porcelain` is empty, run `git fetch origin main` and `git checkout -B main origin/main`, so the wake reads the current command file and scripts.
    - **Mode `— arm-check-in`** → skip steps 1–4 and go to step 5.
 

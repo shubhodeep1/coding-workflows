@@ -216,6 +216,7 @@ def test_pickup_is_one_session_woken_by_a_self_bound_trigger(pickup_cmd):
 	assert "More than 1 → reply `claude-issue-pickup: blocked (this session is <n> links below its root" in pickup_cmd
 	assert "More than 3 →" not in pickup_cmd
 	assert "**at depth 1 or less**" in pickup_cmd
+	assert "reply `claude-issue-pickup: blocked (cannot read session lineage: <error>)`" in pickup_cmd
 	assert "Claude issue pickup: next wake" not in pickup_cmd
 	# create_session targets: the implementation / fixer session (step 3) and
 	# the §26 checker of an `— arm-check-in` request (step 5).
@@ -245,6 +246,8 @@ def test_claude_md_26b_depth_check_routes_deep_sessions_to_the_pickup():
 	claude_md = _flat(ROOT / "CLAUDE.md")
 	assert "1c. **Depth check** before creating a checker." in claude_md
 	assert "*d* ≤ 5 → step 2." in claude_md
+	# A failed lineage walk must never under-count into the create-it-yourself branch.
+	assert "if it fails again, the count is unknown and would only err low, so treat *d* as 6." in claude_md
 	assert "*d* is 6 or 7 → **ask the Claude issue pickup to create the checker**." in claude_md
 	assert "`name` = `PR #<n> status check-in: arm request`" in claude_md
 	assert "`— arm-check-in <owner>/<repo>#<n> for <this session's id>`" in claude_md
