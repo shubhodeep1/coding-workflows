@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T22:27:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a plan quotes an output format that another part of the same plan freezes under \u00a76, reconcile the two before implementing and record the one that wins as a plan deviation, so the conformance audit does not flag the plan text.",
+  "phase": "implement_plan",
+  "pr_number": 4663,
+  "record_id": "lesson-implement-plan-7f17176b68dd4b8c7f7a3146",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4623-verify-security-pass-skip",
+    "file:docs/plans/issue-4623-verify-security-pass-skip-plan.md",
+    "file:.claude/commands/implement-issue-claude.md"
+  ]
+}
