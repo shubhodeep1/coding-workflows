@@ -245,8 +245,12 @@ def test_issue_mode_archives_stopped_stage_sessions(text):
 	assert "`implement-plan <slug> — <stage> — blocked on issue`" in text
 	assert "**Issue-mode resume without a `— resume.` block**" in text
 	assert "**Issue mode: stopped stage sessions.**" in text
-	assert "when the source issue no longer carries `ai:claude-blocked`" in text
-	assert "Never archive this session itself, and skip one whose `status_bucket` is `working`" in text
+	assert "no longer carries `ai:claude-blocked`" in text
+	assert "Never archive this session itself (compare against the id step 0 recorded, `session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}`)" in text
+	assert "whose `status_bucket` in the `list_sessions` result is `working`" in text
+	# Issue mode and the issue come from the plan header, never the slug.
+	assert "Issue mode is decided by the plan header alone: it carries a `Source issue: <owner>/<repo>#<N>` line" in text
+	assert "the source issue (the `<owner>/<repo>#<N>` on the plan header's `Source issue:` line)" in text
 	# Failure paths: a failed rename is surfaced, a failed label read archives nothing.
 	assert "`Stopped session: <session id> (rename failed; archive it by hand after the resume)`" in text
 	assert "If that read fails, archive nothing: treat the label as still present" in text
