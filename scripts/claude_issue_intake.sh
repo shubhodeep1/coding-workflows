@@ -116,6 +116,15 @@ reject()
 	exit 1
 }
 
+# The last 300 bytes of an error file on one line, cut to whole UTF-8
+# characters (Telegram refuses a message that is not valid UTF-8).
+# gh_retry_to_file writes its retry warnings first and the final attempt's
+# error last, so the head of the file can hide the error that decided.
+error_tail()
+{
+	python3 -c 'import sys; data = open(sys.argv[1], "rb").read()[-300:]; sys.stdout.write(" ".join(data.decode("utf-8", "ignore").split()))' "$1" 2>/dev/null || true
+}
+
 # --- 1. Validate ----------------------------------------------------------------
 
 VALIDATED_FILE="${RUNTIME_DIR}/validated.json"
@@ -164,7 +173,7 @@ for dispatcher_login in "${DISPATCHER_LOGINS[@]}"; do
 		reject "dispatcher_not_authorized" "dispatcher login ${dispatcher_login} is not a user login"
 	fi
 	if ! gh_retry_to_file "${RUNTIME_DIR}/permission.txt" gh api "repos/${REPO}/collaborators/${dispatcher_login}/permission" --jq '.permission' 2> "${RUNTIME_DIR}/permission_error.txt"; then
-		reject "authorization_read_failed" "could not read ${dispatcher_login}'s permission on ${REPO}: $(head -c 200 "${RUNTIME_DIR}/permission_error.txt" | tr '\n' ' ')"
+		reject "authorization_read_failed" "could not read ${dispatcher_login}'s permission on ${REPO}: $(error_tail "${RUNTIME_DIR}/permission_error.txt")"
 	fi
 	jq --arg login "${dispatcher_login}" --arg perm "$(tr -d '[:space:]' < "${RUNTIME_DIR}/permission.txt")" '. + {($login): $perm}' "${PERMISSIONS_FILE}" > "${PERMISSIONS_FILE}.tmp"
 	mv "${PERMISSIONS_FILE}.tmp" "${PERMISSIONS_FILE}"
@@ -172,7 +181,7 @@ done
 
 TARGET_ISSUE_FILE="${RUNTIME_DIR}/target_issue.json"
 if ! gh_retry_to_file "${TARGET_ISSUE_FILE}" gh api "repos/${REPO}/issues/${ISSUE_NUMBER}" 2> "${RUNTIME_DIR}/target_issue_error.txt"; then
-	reject "authorization_read_failed" "could not read ${REPO}#${ISSUE_NUMBER}: $(head -c 200 "${RUNTIME_DIR}/target_issue_error.txt" | tr '\n' ' ')"
+	reject "authorization_read_failed" "could not read ${REPO}#${ISSUE_NUMBER}: $(error_tail "${RUNTIME_DIR}/target_issue_error.txt")"
 fi
 
 AUTHORIZE_FILE="${RUNTIME_DIR}/authorize.json"
@@ -185,16 +194,16 @@ authorize_target_call()
 		"$@" > "${AUTHORIZE_FILE}" 2> "${RUNTIME_DIR}/authorize_error.txt"
 }
 if ! authorize_target_call; then
-	reject "authorization_read_failed" "authorize-target failed: $(head -c 200 "${RUNTIME_DIR}/authorize_error.txt" | tr '\n' ' ')"
+	reject "authorization_read_failed" "authorize-target failed: $(error_tail "${RUNTIME_DIR}/authorize_error.txt")"
 fi
 if [ "$(jq -r '.needs_comments' "${AUTHORIZE_FILE}")" = "true" ]; then
 	TARGET_COMMENTS_FILE="${RUNTIME_DIR}/target_comments.json"
 	if ! gh_retry_to_file "${RUNTIME_DIR}/target_comments_pages.json" gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2> "${RUNTIME_DIR}/target_comments_error.txt" || \
 		! jq -s 'add // []' "${RUNTIME_DIR}/target_comments_pages.json" > "${TARGET_COMMENTS_FILE}" 2>> "${RUNTIME_DIR}/target_comments_error.txt"; then
-		reject "authorization_read_failed" "could not read the comments of ${REPO}#${ISSUE_NUMBER}: $(head -c 200 "${RUNTIME_DIR}/target_comments_error.txt" | tr '\n' ' ')"
+		reject "authorization_read_failed" "could not read the comments of ${REPO}#${ISSUE_NUMBER}: $(error_tail "${RUNTIME_DIR}/target_comments_error.txt")"
 	fi
 	if ! authorize_target_call --comments-json "${TARGET_COMMENTS_FILE}"; then
-		reject "authorization_read_failed" "authorize-target failed: $(head -c 200 "${RUNTIME_DIR}/authorize_error.txt" | tr '\n' ' ')"
+		reject "authorization_read_failed" "authorize-target failed: $(error_tail "${RUNTIME_DIR}/authorize_error.txt")"
 	fi
 fi
 AUTHORIZE_REASON="$(jq -r '.reason' "${AUTHORIZE_FILE}")"

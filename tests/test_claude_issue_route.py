@@ -669,6 +669,19 @@ def test_intake_refuses_without_writing_to_the_target(stubs, extra, reason):
 	assert _target_writes(stubs) == []
 
 
+def test_intake_read_failure_detail_keeps_the_final_error(stubs):
+	# gh_retry_to_file logs its retry warnings first; the detail must still
+	# carry the final attempt's summary and API error.
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_FAIL_PERMISSION="1", GH_RETRY_MAX_ATTEMPTS="2")
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	rejected = [line for line in result.stdout.splitlines() if line.startswith("CLAUDE_ISSUE_INTAKE rejected reason=authorization_read_failed")]
+	assert len(rejected) == 1
+	assert "failed after 2 attempts" in rejected[0]
+	assert rejected[0].endswith("HTTP 502")
+	assert _target_writes(stubs) == []
+
+
 def test_intake_queues_untrusted_author_vouched_by_trusted_reclarify(stubs):
 	comments_pages = json.dumps([_comment(body="hi", association="NONE", login="stranger")]) + json.dumps([_comment(body="/reclarify", association="OWNER")])
 	env = _intake_env(

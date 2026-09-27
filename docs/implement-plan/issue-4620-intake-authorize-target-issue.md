@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4620-intake-authorize-target-issue   Final PR: #4633 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (opened right after this commit; the — resume. block carries its number)
+- Waiting on: PR #4637
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-27
-- Last note: phase 1 implemented and verified (149 tests in tests/test_claude_issue_route.py + tests/test_implement_issue_claude_command.py pass; ruff, yamllint, actionlint, shellcheck clean) by session_01NBLHb1ZnPwLW1njQTFnP7D
+- Last note: review round 1 on PR #4637 (head 2bbbb3eac982): 1 finding fixed (read-failure reject detail now keeps the final error), 4 rejected with reasons, by session_01GKsq8aUgJkC4NT5ke2zciB
 
 ## Phases
-1. [ ] Phase 1 — intake authorizes the target issue and dispatcher   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — intake authorizes the target issue and dispatcher   — PR #4637 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -35,6 +35,7 @@
 - AD-5 [plan, 2026-09-27] Add a second author gate inside `/implement-issue-claude`? — Picked: A — no; the intake is the only producer of queue items the pickup trusts (`github-actions[bot]`), so one gate there closes the path. Alternatives: B — also gate in the command file. Why: §5 minimal change; a human running the command by hand chooses the issue themselves, and the command file ships to every consumer repo. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:intervention] When a shell step reports a `gh_retry_to_file` failure, quote the tail of the captured stderr, not the head: the helper writes its retry warnings first and the final attempt's error last, so a head cut can hide the error that decided. (files: scripts/gh_helpers.sh, scripts/claude_issue_intake.sh)
 
 ## Notes
 - Security pass skipped per plan header (ai:security follow-up).
