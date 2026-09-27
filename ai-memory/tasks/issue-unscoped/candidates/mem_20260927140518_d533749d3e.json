@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:1115-1117 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: The strict prefix character class in `_SUMMARISER_EMPTY_STDOUT_RE` can fail to recognize a summariser run whose prefix contains characters outside `[A-Za-z0-9_.-]`, omitting empty-stdout evidence.\n  WHY: An unrecognized prefix can leave the failure fingerprint inconclusive; severity disagreement: Gemini rated this MAJOR, while Minimax and Grok rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:1115 | severity=MAJOR | confidence=3\n  PROBLEM: The regex `_SUMMARISER_EMPTY_STDOUT_RE` uses a strict character class `[A-Za-z0-9_.-]{1,40}` to capture the summariser prefix.\n  WHY: The plan implied a broader capture (e.g., plan suggested `(?P<prefix>[^)]*)`), and if a future summariser run uses a prefix containing characters not included in the strict class (e.g., '+'), the regex will not match. This would result in the empty-stdout condition being ignored, regressing to the original issue where such failures remain undiagnosed and the failure fingerprint remains inconclusive.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:~1117 | severity=NIT | confidence=2\n  PROBLEM: The prefix character class `[A-Za-z0-9_.-]{1,40}` is stricter than the plan's intended `(?P<prefix>[^)]*)`. While current prefixes `pass1` and `review` match this class, a future prefix containing characters outside this set (e.g., a plus sign or special character) would silently fail to be recognised.\n  WHY: A summariser run with an unrecognized prefix would produce no `summariser_empty_stdout` line, causing `dominant_rc` to exclude the summariser code contribution from empty-stdout events and regress to the pre-fix evidence gap (`reviewers_failed=true` with `dominant_rc=unknown`).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/workflow_failure_heal.py:1117 | severity=NIT | confidence=3\n  PROBLEM: The regex is stricter than the plan's `[^)]*`; a future prefix may not match.\n  WHY: A future prefix miss is possible.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal.py:line 1117, `_SUMMARISER_EMPTY_STDOUT_RE` prefix character class\n  PROBLEM: The prefix character class `[A-Za-z0-9_.-]{1,40}` is stricter than the plan's `[^)]*`. The actual prefixes (`pass1`, `review`) match, but a future prefix containing a character outside this set (e.g. `pass-1b`) would silently fail to produce a `summariser_empty_stdout` line, regressing to the pre-fix evidence gap.\n  WHY: This is defense-in-depth; the stricter class prevents matching unexpected content in untrusted logs, but it is worth aligning with the plan's `[^)]*` or widening slightly.\n  Suggested minimal fix: Change `[A-Za-z0-9_.-]{1,40}` to `[^)]{1,40}` to match the plan's intent while keeping the length bound.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2911317b3ecf27965eb9dad1303b265d70a07ddab914e1e481e6aecb2fe13a8e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4658,
+    "run_id": "36323427681",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36323427681",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927140518_d533749d3e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4658,
+    "run_id": "36323427681"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T14:05:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
