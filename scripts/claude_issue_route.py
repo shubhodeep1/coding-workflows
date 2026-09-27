@@ -152,6 +152,11 @@ QUEUE_PRODUCERS: dict[str, dict[str, Any]] = {
 	},
 }
 QUEUE_BINDING_DEFERRED = "deferred"
+# The pickup reads the producer runs of this many times its start limit of
+# targets. Items that fail the binding stay open for the watchdog, so with a
+# window of only `limit` targets, `limit` stuck ones would take every read of
+# every wake and defer the bound items behind them forever.
+QUEUE_BINDING_SCAN_FACTOR = 3
 RUN_URL_PARTS_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/([0-9]{1,20})$")
 
 
@@ -692,8 +697,10 @@ def queue_binding_run_ids(
 
 	Only the runs named by the queue issues of the first ``limit`` targets
 	(before the binding check) are returned, deduplicated in queue order, so
-	one wake never reads more runs than it can start targets for. Items of a
-	later target whose run is not fetched are deferred to the next wake.
+	the reads per wake stay bounded. The pickup CLI passes
+	``QUEUE_BINDING_SCAN_FACTOR`` times its start limit, so a few items that
+	stay unbound cannot hold back a bound item behind them. Items of a later
+	target whose run is not fetched are deferred to the next wake.
 	"""
 	result = queue_pending(issues, allowed_repos, trusted_author, limit)
 	run_ids: list[str] = []
@@ -981,7 +988,8 @@ def fetch_queue_bindings(
 	"""Read and check the producer-run binding for each run id (issue #4621).
 
 	Input: the queue repository and the run ids from ``queue_binding_run_ids``
-	(at most one per target the pickup may start this wake). Output:
+	(the runs named by the first ``QUEUE_BINDING_SCAN_FACTOR`` × limit
+	targets, 30 by default). Output:
 	``{"repo": repo, "runs": {"<run id>": record}}`` for ``queue_pending``,
 	where a record is ``{"state": "ok", "item_type", "items"}`` or
 	``{"state": "pending" | "missing" | "untrusted" | "unavailable", "reason"}``.
@@ -1114,9 +1122,12 @@ def _cmd_queue_pending(args: argparse.Namespace) -> int:
 	allowed = load_allowed_repos(Path(args.registry), args.self_repo)
 	# The binding check always runs (issue #4621): fetched for --fetch-repo,
 	# read from --bindings-json otherwise. Without either, no run is known and
-	# every item is deferred, so nothing unverified is ever started.
+	# every item is deferred, so nothing unverified is ever started. The run
+	# window is wider than the start limit (QUEUE_BINDING_SCAN_FACTOR), so
+	# stuck unbound items cannot defer every bound item behind them.
 	if args.fetch_repo:
-		run_ids = queue_binding_run_ids(issues, allowed, queue_repo, args.trusted_author, args.limit)
+		scan_limit = max(args.limit, 0) * QUEUE_BINDING_SCAN_FACTOR
+		run_ids = queue_binding_run_ids(issues, allowed, queue_repo, args.trusted_author, scan_limit)
 		bindings = fetch_queue_bindings(queue_repo, run_ids, args.default_branch)
 	elif args.bindings_json:
 		bindings = _read_json(args.bindings_json)

@@ -1344,7 +1344,10 @@ that queued it:
   branch, two producer run listings, one artifact listing, and one compare
   read plus one artifact download per completed producer run, with per-run
   fallbacks
-  (`fetch_queue_bindings` in `scripts/claude_issue_route.py`).
+  (`fetch_queue_bindings` in `scripts/claude_issue_route.py`). It reads the
+  runs of the first 30 targets (three times the 10 it starts per wake), so
+  up to 20 stuck items that stay open cannot hold back a bound item queued
+  after them.
 
 Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE` (adds
 `bound` and `warn binding_skipped`), `CLAUDE_ISSUE_QUEUE_WATCHDOG`.
