@@ -53,7 +53,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -870,9 +869,37 @@ def test_scope_isolated_model_commit_still_fails_closed() -> None:
 		)
 		assert result.returncode == 2, result.stdout + result.stderr
 		assert "Resolver scope check failed closed (ValueError)" in result.stderr
+		assert "Reason code: index_drift." in result.stderr
 		assert real_index.read_bytes() == index_before
 		assert not merge_head.exists()
 		assert git("rev-parse", "HEAD").stdout != head_before
+
+
+def test_scope_failure_reason_codes_are_enumerated_and_path_free() -> None:
+	# Issue #4545: the fail-closed error carries a reason code from a fixed
+	# table, so index drift and an unsafe path are told apart without
+	# printing untrusted path text.
+	src = _resolve_script_text()
+	start = src.index("_resolver_scope_state() {")
+	body = src[start:src.index("\n}\n", start)]
+	raised = set(re.findall(r'raise ValueError\("([^"]+)"\)', body))
+	table_src = body[body.index("scope_failure_reasons = {"):]
+	table_src = table_src[:table_src.index("\n    }\n")]
+	table = dict(re.findall(r'^\s+"([^"]+)": "([^"]+)",$', table_src, re.MULTILINE))
+	assert raised, "no ValueError messages found in _resolver_scope_state"
+	assert raised == set(table), (sorted(raised - set(table)), sorted(set(table) - raised))
+	codes = list(table.values()) + ["unclassified", "git_command_failed", "manifest_incomplete", "os_error"]
+	assert len(codes) == len(set(codes))
+	assert all(re.fullmatch(r"[a-z_]+", code) for code in codes)
+	assert "Reason code: {scope_failure_reason}." in body
+
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		(repo / "leaky\tsecret-name.txt").write_text("x\n", encoding="utf-8")
+		result = _scope_action(repo, env, "capture")
+		assert result.returncode == 2, result.stdout + result.stderr
+		assert "Resolver scope capture failed closed (ValueError). Reason code: unsafe_path." in result.stderr
+		assert "leaky" not in result.stderr and "secret-name" not in result.stderr
 
 
 def _disable_opencode_snapshot_source() -> str:
@@ -1027,6 +1054,7 @@ def main() -> int:
 	test_scope_state_git_index_isolation_prevents_false_positive_and_still_guards_worktree()
 	test_scope_index_isolation_wiring_scoped_to_model_attempt()
 	test_scope_isolated_model_commit_still_fails_closed()
+	test_scope_failure_reason_codes_are_enumerated_and_path_free()
 	test_scope_index_isolation_disables_opencode_snapshot()
 	test_resolver_prompts_forbid_staging_and_committing()
 	test_scope_symlink_restore_preserves_preexisting_target()

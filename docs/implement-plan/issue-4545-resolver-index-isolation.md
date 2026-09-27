@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4545-resolver-index-isolation-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4545
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
-- Project branch: claude/implement-plan-issue-4545-resolver-index-isolation   Final PR: #4546 draft
+- Project branch: claude/implement-plan-issue-4545-resolver-index-isolation   Final PR: #4546 ready (review rounds: 1)
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: pending verify-activation
-- Waiting on: completion PR (the PR carrying this log update)
+- Waiting on: PR #4546 (final PR, review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01JsrP995pg78hMZus9cKyvh (project checker); safety net and hand-back trigger ids are in the validation 1/3 read-result stage session's report (session_0168sBnsHwsaWqsKV14excF1) and the next `— resume.` block
 - Last updated: 2026-09-27
-- Last note: validation cycle 1 passed (10/10 tests) against the project branch after the third conformance fix (#4616) merged; completion PR moves the plan to docs/completed/; final PR #4546 is marked ready once it merges.
+- Last note: final-merge review round 1 (head 2496108): fixed the duplicate `import os` and added the issue's enumerated scope-failure reason code (AD-4); rejected the brace-heuristic comment suggestion; the red `lint` check was one orchestrate-poll test this project does not touch (passes locally 3/3, green on main); main merged into the project branch.
 
 ## Phases
 1. [x] Phase 1 — Git index isolation for the resolver's model attempt   — PR #4547 merged 2026-09-26
@@ -31,7 +31,7 @@
 ## Completion
 - Completion PR (this log update) — doc moved to docs/completed/issue-4545-resolver-index-isolation-plan.md
 - Merged PRs: phase 1 #4547, conformance fixes #4591, #4606, #4616
-- Final PR #4546 draft (marked ready in the final-merge stage)
+- Final PR #4546 ready — review rounds: 1 (round 1, 2026-09-27: duplicate `import os` removed; enumerated scope-failure reason code added per AD-4; brace-heuristic comment suggestion rejected, as a future bare `}` fails the test loudly)
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-26] The issue's suggested fix names a specific mechanism (`GIT_INDEX_FILE`, keep the real-index check, forbid staging in the prompt). Should the plan adopt it as-is, or design an alternative isolation mechanism?
@@ -43,7 +43,10 @@
 
 - AD-3 [conformance 2/3, 2026-09-27] OpenCode 1.18.23's session snapshot runs `git --git-dir <snapshot> --work-tree <checkout> add` with the inherited environment, so under the `GIT_INDEX_FILE` isolation it stages the conflicted files (markers included) into the scratch index and the model no longer sees them as unmerged. How should the conformance fix handle it? — Picked: A — set `"snapshot": false` in the resolver's own generated OpenCode config, source repo only (`_resolver_disable_opencode_snapshot` in `scripts/review_conflict_resolve.sh`, between the config writer and `opencode_require_bootstrap`). Alternatives: B — add a `--snapshot on|off` option to the shared `scripts/write_opencode_config.sh` and pass `off` from the resolver (interface change to a consumer-synced helper; a stale fallback writer would reject the flag and fail the resolver); C — drop the `GIT_INDEX_FILE` isolation and restore the real index bytes after each attempt (reverses AD-1); D — leave it and document the degraded model view. Why: §5 smallest change in one file, scoped exactly to where the isolation applies, no new interface on a shared helper; the resolver never uses OpenCode's snapshot/undo. Applied in: conformance fix PR 2 (branch `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-2`). Status: pending review
 
+- AD-4 [final-merge — review round 1, 2026-09-27] Issue #4545's suggested fix also asked for "a safe, enumerated reason code to the scope error so a future failure distinguishes index drift from unsafe paths without printing untrusted path text"; the plan adopted the rest of that fix but silently omitted this item, and five of six reviewers flagged the gap on the final PR. Implement it now or reject it as outside the plan? — Picked: A — add the reason code in `_resolver_scope_state`'s fail-closed handler from a fixed table keyed by the function's own constant `ValueError` messages (other exception types get fixed codes; anything else is `unclassified`), appended after the unchanged `failed closed (<type>).` text so existing greps and tests still match, pinned by a test. Alternatives: B — reject as out of plan scope (§5), leaving the issue's requested diagnostic unimplemented and the consensus finding unanswered; C — a custom exception class carrying the code (changes the printed type name the existing message and test rely on). Why: the issue asked for it, AD-1 said the issue's fix was adopted as specified, and it is a small, backward-compatible change in one function. Applied in: final PR #4546, review round 1 commit. Status: pending review
+
 ## Notes
+- 2026-09-27 (final-merge — review round 1): `main` merged into the project branch (clean merge, `[claude-merge-resolve]`, bringing in #4601 and #4655); `main` still does not carry #4555. The `lint` check on head 2496108 failed in `test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable` (orchestrate-poll shard 0, empty assertion message), in code this project does not touch; it passes locally 3/3 and `main` CI is green, and the round's push re-runs CI.
 - 2026-09-27 (validation 1/3 — read result, session_0168sBnsHwsaWqsKV14excF1): the conformance cap was reached after run 3 (#4616 merged 2026-09-27). The user answered Q1: A in session_01EYwbdnixE7BFRb4vnepxcA: no fourth conformance run, proceed to validation. Validation cycle 1 was dispatched as run 36313414689 (target_ref: project branch) and completed with conclusion success, status=pass. The `conformance 3/3 — fix check` stage (#4646, merged after this decision) was not run for this project because the user's decision predates it. The project branch was synced with `main` (clean merge, `[claude-merge-resolve]` 9cec62f, bringing in #4582, #4554, #4647, #4646); `main` still does not carry #4555.
 - 2026-09-27 (conformance 3/3): the project branch was synced with `main` (clean merge, `[claude-merge-resolve]` d90ebb7, bringing in #4592). `main` still did not carry #4555.
 - Permission mode: this session's mode was not explicitly queryable via `get_session` (no claude-code-remote MCP tools present); proceeding under CLAUDE.md §28.A's issue-mode rule that start-up-check questions are recorded, not asked, and the session's actual harness permission mode governs what actually executes (no ask-first operation beyond routine writes was attempted).
@@ -54,6 +57,7 @@
 - 2026-09-27 (user decision Q28: A): PR #4555 (issue #4552, project `claude/implement-plan-issue-4552-resolver-scope-staged-entries`) fixes the same resolver path by comparing staged entries instead of raw index bytes, and should merge after #4546. This project does not modify #4555, its branch, or issue #4552. If `main` already carries #4555 at a later sync, merge `main` in and keep both fixes. At the 2026-09-27 sync `main` did not carry it yet.
 
 ## Lessons
+- [source:intervention] When an issue's suggested fix lists several items, a plan that adopts it "as specified" must carry every item into its implementation steps or name the dropped ones under Non-goals; a silently omitted item (here, an enumerated error reason code) resurfaces as a consensus task gap in the final whole-project review. (files: scripts/review_conflict_resolve.sh)
 - [source:conformance] When isolating a model's Git state with `GIT_INDEX_FILE`, state in comments and docs that only the index is isolated: `git commit` still moves `HEAD` and removes `MERGE_HEAD`, and cleanup must be keyed to what the block itself exported, not to whether the variable happens to be set. (files: scripts/review_conflict_resolve.sh, agents.md)
 - [source:conformance] An env var exported around an agent CLI reaches the CLI's own child processes too, not just the model's tool calls: OpenCode's session snapshot runs `git` with the inherited environment, so a `GIT_INDEX_FILE` meant for the model also redirected OpenCode's snapshot `git add`. Check the agent runtime's own subprocesses (or disable the feature, e.g. `"snapshot": false`) before scoping git env vars to an agent run. (files: scripts/review_conflict_resolve.sh)
 - [source:intervention] When a helper writes a temporary file and renames it into place, remove the temporary file in a `finally` guarded by a sentinel cleared right after `os.replace`, not in the `except` for the expected errors: any other exception otherwise leaves it behind. (files: scripts/review_conflict_resolve.sh)

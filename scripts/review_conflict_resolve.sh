@@ -692,7 +692,41 @@ try:
             raise ValueError("unknown resolver scope action")
 except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
     # Do not echo paths or untrusted exception text into workflow commands.
-    print(f"::error::Resolver scope {action} failed closed ({type(exc).__name__}).", file=sys.stderr)
+    # The reason code comes only from this fixed table, keyed by the exact
+    # ValueError messages raised above (issue #4545), so a failure says
+    # whether the index drifted or a path was unsafe without printing path
+    # text; any other ValueError (a JSON or relative_to error, whose text can
+    # carry paths) is reported as "unclassified".
+    scope_failure_reasons = {
+        "conflicted-paths snapshot missing": "conflicted_paths_missing",
+        "resolver snapshot copy mismatch": "snapshot_copy_mismatch",
+        "resolver worktree or index changed during snapshot": "changed_during_snapshot",
+        "merge index or MERGE_HEAD changed during resolver attempt": "index_drift",
+        "unsafe resolver path in worktree": "unsafe_path",
+        "symlink parent in resolver path": "symlink_parent",
+        "unsupported resolver path type": "unsupported_path_type",
+        "invalid conflicted-paths snapshot": "invalid_conflicted_paths",
+        "resolver snapshot content mismatch": "snapshot_content_mismatch",
+        "symlink parent blocks resolver restore": "restore_symlink_parent",
+        "directory blocks resolver restore": "restore_directory",
+        "resolver worktree restore did not match snapshot": "restore_mismatch",
+        "unknown resolver scope action": "unknown_action",
+    }
+    if type(exc) is ValueError:
+        scope_failure_reason = scope_failure_reasons.get(str(exc), "unclassified")
+    elif isinstance(exc, subprocess.CalledProcessError):
+        scope_failure_reason = "git_command_failed"
+    elif isinstance(exc, KeyError):
+        scope_failure_reason = "manifest_incomplete"
+    elif isinstance(exc, OSError):
+        scope_failure_reason = "os_error"
+    else:
+        scope_failure_reason = "unclassified"
+    print(
+        f"::error::Resolver scope {action} failed closed ({type(exc).__name__}). "
+        f"Reason code: {scope_failure_reason}.",
+        file=sys.stderr,
+    )
     sys.exit(2)
 PY
 }
