@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T11:24:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Fixes to one credential-exposure path kept surfacing an adjacent one in the next cycle (hooks, then hook replay, then preflight imports, then import shadowing), so the pass ran into the 5-cycle cap; when a finding touches a trust boundary, audit every other entry point that crosses the same boundary in the same fix.",
+  "phase": "implement_plan",
+  "pr_number": 4582,
+  "record_id": "lesson-implement-plan-d52c41b3b267aa2634a00847",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:heal-deterministic-autofix-failures",
+    "file:.github/workflows/validate.yml",
+    "file:scripts/validate_process.sh"
+  ]
+}

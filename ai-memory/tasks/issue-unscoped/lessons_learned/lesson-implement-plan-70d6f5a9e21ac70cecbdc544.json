@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-09-27T11:24:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Workflows that run PR- or branch-controlled code (support scripts, build files, workspace hooks, Python imports) in a step that also holds GH_PAT or other secrets were the dominant finding class across all five audit cycles; run such code tokenless and without network, or pin it to the default branch, before exposing a credential in the same job.",
+  "phase": "implement_plan",
+  "pr_number": 4582,
+  "record_id": "lesson-implement-plan-70d6f5a9e21ac70cecbdc544",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:heal-deterministic-autofix-failures",
+    "file:.github/workflows/review_autofix.yml",
+    "file:.github/workflows/validate.yml",
+    "file:.github/workflows/security-audit.yml",
+    "file:scripts/run_workspace_hook.sh",
+    "file:scripts/validate_process.sh"
+  ]
+}
