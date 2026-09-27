@@ -673,6 +673,8 @@ def _cmd_arm_check_in_request(args: argparse.Namespace) -> int:
 	except (OSError, UnicodeDecodeError) as exc:
 		print(f"cannot read arguments file: {exc}", file=sys.stderr)
 		return 2
+	# Never raises: an unreadable or malformed registry yields only the self
+	# repo, so any other repo is refused below with exit 2.
 	allowed = load_allowed_repos(Path(args.registry), args.self_repo)
 	try:
 		print(json.dumps(parse_arm_check_in_request(text, allowed)))
