@@ -1206,8 +1206,14 @@ your own judgement.
    pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
    send a POST). Keep `gh api` calls out of loops, `$(...)`, `$VAR` paths,
    file redirects, and heredoc scripts, and edit a PR's title or body with
-   `mcp__github__update_pull_request`. Reads and §23.B routine writes are
-   approved without a prompt when the command holds only them plus the safe
+   `mcp__github__update_pull_request`. Post or edit an issue or PR comment
+   with `mcp__github__add_issue_comment` / `mcp__github__update_issue_comment`,
+   never with `gh api … --input <file>`, `-F body=@<file>`, or a heredoc that
+   builds the JSON body: file-backed fields always prompt under §23.H, a
+   heredoc holding `{"` trips Claude Code's own shell check, and an
+   unattended session then stalls at a prompt nobody answers. Reads and
+   §23.B routine writes are approved without a prompt when the command
+   holds only them plus the safe
    helpers §23.H lists (`cd`, `sleep`, `echo`, `2>&1`, pipes into `head`,
    `tail`, `wc -l`, `sort`); beside anything else the guard leaves the
    decision to the allow list or the Auto-mode classifier.
@@ -1755,7 +1761,7 @@ hand-back trigger id, a session id, and a role. There is at most one
    a `claude/*` head `kind`, `head_sha`, `claim`, and the hand-back counts
    (§26.H). The script decides; the model does not interpret the PR. It
    uses REST only (§15): one PR read, plus on a `claude/*` head the
-   comment and check-run pages and at most five further reads.
+   comment and check-run pages and at most six further reads.
 2. **Not done** (`open`, `claimed`, `held`, or waiting on a run) → renew
    the dead-man's switch on every subscriber's Routine (`update_trigger`
    with only `run_once_at` = now + 7 days), call `send_later` with

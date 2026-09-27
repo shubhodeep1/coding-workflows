@@ -853,7 +853,7 @@ its own id, `run_once_at` = now + 7 days, named `PR #<n> hand-back`, with
 the PR URL in its prompt). The checker runs
 `.claude/scripts/check_in_status.py --hand-back` (one REST read for a
 non-`claude/*` head; on a `claude/*` head also the comment and check-run
-pages and at most five further reads), renews every subscriber's
+pages and at most six further reads), renews every subscriber's
 hand-back 7 days ahead, and re-arms itself with `send_later` every 60
 minutes while nothing is due. A PR has one checker: a second interested
 session registers with it (`PR #<n> status check-in: subscriber` one-shot
