@@ -1,29 +1,34 @@
 # Implement-Plan Log — Claude issue intake authorizes the target issue and its dispatcher
 
-- Plan: docs/plans/issue-4620-intake-authorize-target-issue-plan.md
+- Plan: docs/completed/issue-4620-intake-authorize-target-issue-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4620
-- Repo: shubhodeep1/coding-workflows   Default branch: main
+- Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
 - Project branch: claude/implement-plan-issue-4620-intake-authorize-target-issue   Final PR: #4633 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
-- Activation: not started
-- Waiting on: PR #4637
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_016k76j8mrNr5YTgGxjRTT7q (project checker)
 - Last updated: 2026-09-27
-- Last note: review round 1 on PR #4637 (head 2bbbb3eac982): 1 finding fixed (read-failure reject detail now keeps the final error), 4 rejected with reasons, by session_01GKsq8aUgJkC4NT5ke2zciB
+- Last note: validation cycle 1 passed (10/10 tests) on project-branch head 193e287; completion PR moves the plan to docs/completed/; final PR #4633 is marked ready once it merges.
 
 ## Phases
-1. [ ] Phase 1 — intake authorizes the target issue and dispatcher   — PR #4637 open (waiting); review rounds: 1; interventions: 0
+1. [x] Phase 1 — intake authorizes the target issue and dispatcher   — PR #4637 merged 2026-09-27 (squash 1dd20d0, merged by a human per Q1: A on #4620); review rounds: 2; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-27: CONFORMANT — no fixes (pre-security)
 
 ## Security pass
 - Skipped: plan header `Security pass: skip (ai:security: automation-produced issue)`
 
 ## Validation
+- Cycle 1 — run 36323096060 2026-09-27 (target_ref: project branch, head 193e287): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 277s); no fixes
 
 ## Completion
+- Completion PR (this log update) — doc moved to docs/completed/issue-4620-intake-authorize-target-issue-plan.md
+- Merged PRs: phase 1 #4637
+- Final PR #4633 draft (marked ready in the final-merge stage)
 
 ## Activation
 
@@ -41,3 +46,5 @@
 - Security pass skipped per plan header (ai:security follow-up).
 - The Claude Code Web proxy refuses `repos/<repo>/collaborators/<login>/permission` (HTTP 403), so the permission read was verified only against stubs and GitHub's documented shape; the intake runs it in Actions with GH_PAT, outside the proxy.
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4620#issuecomment-5854273112
+- Project branch synced with main 2026-09-27 (193e287, clean merge).
+- Validation 1/3 — read result (session_01HpEvuimseWjo6JnShFEURj): run 36323096060 success, status=pass, validated the project branch at 193e287 (the authorized draft final PR head); project branch already contained main; opened the completion PR.
