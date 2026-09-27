@@ -1940,11 +1940,13 @@ depend on it.
   Since #4545, the model's own attempt also gets an isolated `GIT_INDEX_FILE`
   pointed at a disposable copy of the real index (`_resolver_prepare_scratch_index`,
   seeded after the worktree/merge-index snapshot and torn down right after the
-  attempt): a model-issued `git add` / `git commit` — the prompt now explicitly
-  forbids staging or committing, but the isolation is what actually contains it —
-  lands on that scratch copy instead of mutating the real index the post-attempt
-  check compares against, so it can no longer trip the "merge index changed"
-  fail-closed path on a resolution that never touched an out-of-scope path.
+  attempt): a model-issued `git add` — the prompt now explicitly forbids staging
+  or committing, but the isolation is what actually contains it — lands on that
+  scratch copy instead of mutating the real index the post-attempt check compares
+  against, so it can no longer trip the "merge index changed" fail-closed path on
+  a resolution that never touched an out-of-scope path. Only the index is
+  isolated: a model-issued `git commit` still moves `HEAD` and removes
+  `MERGE_HEAD`, and the unchanged check still fails that attempt closed.
   Trusted staging (`stage_resolver_touched_path_or_fail`, run after the model
   exits and with the isolation env unset) is unaffected and remains the only
   path that commits to the real index.
