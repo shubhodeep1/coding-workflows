@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T10:49:00Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A trust check on a GitHub Actions run must not rely on `head_branch`, which is only a name a tag can share: verify `head_sha` with `compare/<sha>...refs/heads/<default>` for every event, using the fully qualified ref so the comparison cannot resolve to a tag.",
+  "phase": "implement_plan",
+  "pr_number": 4639,
+  "record_id": "lesson-implement-plan-2aba1d1b91cc85e5f7027275",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4621-bind-claude-queue-payloads",
+    "file:scripts/claude_issue_route.py"
+  ]
+}

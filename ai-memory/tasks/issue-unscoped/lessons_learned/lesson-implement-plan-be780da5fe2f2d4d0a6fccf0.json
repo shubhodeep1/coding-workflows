@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T10:49:00Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In a `set -e` bash script, `$(jq ...)` used as a command argument is exempt from `set -e`, so a missing field is written as `null` or empty; read such values once into a checked variable before writing them anywhere.",
+  "phase": "implement_plan",
+  "pr_number": 4639,
+  "record_id": "lesson-implement-plan-be780da5fe2f2d4d0a6fccf0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4621-bind-claude-queue-payloads",
+    "file:scripts/claude_issue_intake.sh"
+  ]
+}

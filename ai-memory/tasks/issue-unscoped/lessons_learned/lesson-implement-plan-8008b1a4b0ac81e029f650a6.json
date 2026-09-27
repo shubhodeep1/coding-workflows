@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T10:49:00Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a trust check binds a GitHub issue body to automation, compare the whole body against the producer's canonical rendering, not only the payload block, or text added around the payload still reaches the model that reads the body.",
+  "phase": "implement_plan",
+  "pr_number": 4639,
+  "record_id": "lesson-implement-plan-8008b1a4b0ac81e029f650a6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4621-bind-claude-queue-payloads",
+    "file:scripts/claude_issue_route.py"
+  ]
+}
