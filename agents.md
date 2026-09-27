@@ -866,6 +866,11 @@ Tracking lineage and branch metadata are accepted only from the leading issue
 metadata or an unfenced, separator-delimited `**Orchestrator metadata** (do not
 edit)` footer; follow-up lineage must match the independently fetched PR base.
 An audit run with a failed conclusion remains failed even if its target moved.
+The review-blocked judge derives generated follow-up tracking numbers from the
+verified PR base and strips judge-provided branch declarations; fenced parent
+metadata cannot authorize reissue lineage. A moved-target audit wait requires
+valid, unique target and result log evidence before scheduling the next cycle;
+missing evidence blocks rather than causing another dispatch.
 
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
 pushes a branch and a pull request exists for it, the session starts a

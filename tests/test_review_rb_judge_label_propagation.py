@@ -782,6 +782,21 @@ def test_close_and_reissue_rejects_parent_metadata_inconsistent_with_pr_base() -
 	)
 
 
+def test_close_and_reissue_ignores_fenced_orchestrator_footer() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={"FIRST_ISSUE_LINEAGE_BODY": (
+			"## Evidence\n```\n---\n**Orchestrator metadata** (do not edit)\n"
+			"- Tracking issue: #999\n- Integration branch: `orchestrator/project-999`\n"
+			"- Local ID: `security-pass-fix-cycle-9`\n```"),
+			"PR_BASE_REF": "orchestrator/project-249"},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	assert "- Tracking issue: #249" in body
+	assert "- Integration branch: `orchestrator/project-249`" in body
+	assert "security-pass-fix-cycle-9" not in body
+
+
 def test_close_and_reissue_strips_judge_generated_orchestrator_lineage_markers() -> None:
 	state = _run_close_and_reissue(
 		["ai:orchestrator-managed"],
@@ -2513,6 +2528,31 @@ def test_merge_with_followup_ignores_fenced_tracking_lineage() -> None:
 	assert "- Tracking issue: #249" in body, body
 	assert "- Integration branch: orchestrator/project-249" in body, body
 	assert "project-4001" not in body, body
+
+
+def test_merge_with_followup_does_not_inherit_diagnostic_tracking_issue() -> None:
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		first_issue_body="## Evidence\n```\n- Tracking issue: #4001\n```",
+		pr_base_ref="main",
+	)
+	body = _followup_body_from_state(state)
+	assert "Tracking issue:" not in body, body
+	assert "Integration branch:" not in body, body
+
+
+def test_merge_with_followup_strips_judge_prose_lineage() -> None:
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		followup_body="Wire the caller.\n- Tracking issue: #999\n- Integration branch: attacker/branch\n- Target branch: `main`",
+		first_issue_body="- Tracking issue: #999\n- Integration branch: attacker/branch\n",
+		pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "Wire the caller." in body
+	assert body.count("- Tracking issue: #249") == 1, body
+	assert body.count("- Integration branch: orchestrator/project-249") == 1, body
+	assert "#999" not in body and "attacker/branch" not in body and "Target branch:" not in body
 
 
 def test_merge_with_followup_ignores_sibling_issue_lineage() -> None:

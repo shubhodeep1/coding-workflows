@@ -624,6 +624,13 @@ def test_audit_run_binds_metadata_target_result_and_current_head(monkeypatch, ca
 			checker.subprocess.CompletedProcess(args, 0, payload, ""))
 		_, out = _run(args, capsys)
 		assert out["state"] == "failed"
+	_stub(monkeypatch, {**api, f"repos/o/r/git/ref/heads/{ref}": {"object": {"sha": "c" * 40}}})
+	for bad_log in (log + log, log.replace(sha, "c" * 40), log.replace("findings=1", "no-findings=1")):
+		monkeypatch.setattr(checker.subprocess, "run", lambda *args, payload=bad_log, **kwargs:
+			checker.subprocess.CompletedProcess(args, 0, payload, ""))
+		_, out = _run(args, capsys)
+		assert out["state"] == "failed" and "observed_sha" not in out
+	assert SCRIPT_PATH.read_bytes() == TEMPLATE_SCRIPT_PATH.read_bytes()
 
 
 def test_command_doc_describes_blocked_issue_wait():
