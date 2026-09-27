@@ -423,7 +423,15 @@ def parse_pr_fix_text(text: str) -> dict[str, Any]:
 
 
 def build_pr_fix_queue_issue(repo: str, pr_number: int, head: str, kind: str, claim: str, run_url: str = "") -> dict[str, Any]:
-	"""Render the queue issue for one pull-request fix (fixed keys and the sweep run URL only)."""
+	"""Render the queue issue for one pull-request fix (fixed keys and the sweep run URL only).
+
+	The rendering is part of the pickup's binding check: ``queue_binding_verdict``
+	re-renders the body and requires an exact match, so any change here makes
+	every open item queued by the previous version ``binding_mismatch``: the
+	pickup never starts it, the watchdog flags it, and the sweep does not queue
+	that pull request again while the item is open. ``tests/test_claude_issue_route.py``
+	pins the exact output; change both together, on purpose.
+	"""
 	text = build_pr_fix_text(repo, pr_number, head, kind, claim)
 	lines = [
 		QUEUE_MARKER,
@@ -447,6 +455,13 @@ def build_queue_issue(validated: dict[str, Any], run_url: str = "") -> dict[str,
 
 	Only fixed keys and the intake run URL are written: no issue prose, so a
 	queue issue can never carry instructions to the pickup session.
+
+	The rendering is part of the pickup's binding check: ``queue_binding_verdict``
+	re-renders the body and requires an exact match, so any change here makes
+	every open item queued by the previous version ``binding_mismatch`` until
+	``/reclarify`` rewrites it (the watchdog flags it meanwhile).
+	``tests/test_claude_issue_route.py`` pins the exact output; change both
+	together, on purpose.
 	"""
 	text = build_fire_text(validated)
 	lines = [

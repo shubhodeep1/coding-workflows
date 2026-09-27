@@ -548,6 +548,50 @@ def test_queue_issue_carries_no_prose_and_drops_bad_run_url():
 	assert rendered["body"].startswith("<!-- ai:claude-issue-queue:v1 -->\n")
 
 
+def test_queue_issue_renderings_are_pinned():
+	# queue_binding_verdict compares a queue body with a fresh rendering, so a
+	# renderer change strands every item queued before it. Update these only on purpose.
+	issue_item = route.build_queue_issue(_validated(), "https://github.com/shubhodeep1/coding-workflows/actions/runs/1")
+	assert issue_item["title"] == "[claude-issue-queue] shubhodeep1/digital_pa#9"
+	assert issue_item["body"] == (
+		"<!-- ai:claude-issue-queue:v1 -->\n"
+		"Queued by the Claude issue intake for https://github.com/shubhodeep1/digital_pa/issues/9. "
+		"The Claude issue pickup session (`.claude/commands/claude-issue-pickup.md`) starts the "
+		"implementation session and closes this issue. Do not edit.\n"
+		"\n"
+		"```text\n"
+		"claude_issue.v1\n"
+		"repo: shubhodeep1/digital_pa\n"
+		"issue: 9\n"
+		"url: https://github.com/shubhodeep1/digital_pa/issues/9\n"
+		"trigger: opened\n"
+		"skip_security_pass: false\n"
+		"```\n"
+		"\n"
+		"Intake run: https://github.com/shubhodeep1/coding-workflows/actions/runs/1\n"
+	)
+	pr_item = route.build_pr_fix_queue_issue("o/r", 7, "b" * 40, "ci", "sweep-run-123", "https://github.com/o/self/actions/runs/123")
+	assert pr_item["title"] == "[claude-issue-queue] fix o/r#7"
+	assert pr_item["body"] == (
+		"<!-- ai:claude-issue-queue:v1 -->\n"
+		"Queued by the CLAUDE.md \u00a726.H catch-all sweep for https://github.com/o/r/pull/7. "
+		"The Claude issue pickup session (`.claude/commands/claude-issue-pickup.md`) starts one "
+		"`/fix-claude-pr` session and closes this issue. Do not edit.\n"
+		"\n"
+		"```text\n"
+		"claude_pr_fix.v1\n"
+		"repo: o/r\n"
+		"pr: 7\n"
+		"url: https://github.com/o/r/pull/7\n"
+		"head: " + "b" * 40 + "\n"
+		"kind: ci\n"
+		"claim: sweep-run-123\n"
+		"```\n"
+		"\n"
+		"Sweep run: https://github.com/o/self/actions/runs/123\n"
+	)
+
+
 def test_queue_pending_groups_duplicates_and_ignores_untrusted():
 	issues = [
 		_queue_item(12, _validated(trigger="reclarify")),

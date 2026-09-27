@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4621-bind-claude-queue-payloads-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4621
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4621-bind-claude-queue-payloads   Final PR: #4636 draft
+- Project branch: claude/implement-plan-issue-4621-bind-claude-queue-payloads   Final PR: #4636 ready
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round
 - Activation: pending verify-activation
-- Waiting on: completion PR (claude/implement-plan-issue-4621-bind-claude-queue-payloads-complete)
+- Waiting on: PR #4636 (final PR into main)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01HuPy8SJxGNHdJhSC3PfGv4 (reused for every wait)   safety net and hand-back: the ids are in the completion stage's report (armed after the PR opened)
+- Check-in: checker session_01HuPy8SJxGNHdJhSC3PfGv4 (reused for every wait)   safety net and hand-back: the ids are in the final-merge review-round stage's report (armed after the push)
 - Last updated: 2026-09-27
-- Last note: validation cycle 1 passed (run 36324854460, 10/10 tests on 163878f); completion PR moves the plan to docs/completed/, then the final PR #4636 is marked ready (stage final-merge 1/1)
+- Last note: final PR #4636 review round 1 (head 0d369e6): the one consensus NIT (renderer drift strands bound items) fixed per AD-9 with renderer docstrings and a golden test; the cancelled CI `lint` was its 45-minute timeout, re-run by the push
 
 ## Phases
 1. [x] Phase 1 — bind queue items to their producing run and verify the binding at pickup   — PR #4639 merged 2026-09-27; review rounds: 1; interventions: 0
@@ -33,9 +33,9 @@
 - Cycle 1 — run 36324854460 2026-09-27 (target_ref: claude/implement-plan-issue-4621-bind-claude-queue-payloads, validated 163878f): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 289s); no fix issues
 
 ## Completion
-- Completion PR (branch claude/implement-plan-issue-4621-bind-claude-queue-payloads-complete) — doc moved to docs/completed/issue-4621-bind-claude-queue-payloads-plan.md
+- Completion PR #4661 merged 2026-09-27 — doc moved to docs/completed/issue-4621-bind-claude-queue-payloads-plan.md
 - Merged PRs into the project branch: #4639 (phase 1/1, merged 2026-09-27), #4649 (conformance fix 1, merged 2026-09-27)
-- Final PR #4636 draft — marked ready in stage final-merge 1/1
+- Final PR #4636 ready (marked ready 2026-09-27 in stage final-merge 1/1) — review rounds: 1
 
 ## Activation
 
@@ -48,6 +48,7 @@
 - AD-6 [phase 1/1 — review round 1, 2026-09-27] Reviewers asked for the default-branch head check on `repository_dispatch` runs too, which GitHub always runs on the default branch. Apply it? — Picked: A — check the head commit of every producer run (`repository_dispatch`, `schedule`, `workflow_dispatch`) with one compare read against `refs/heads/<default>`. Alternatives: B — keep it for `workflow_dispatch` only, as AD-4 planned, and reject the finding; C — extend it to every event but keep comparing against the bare branch name. Why: §1 security first, at one REST read per completed producer run; the fully qualified ref also keeps a same-named tag out of the comparison, which the bare name did not. Widens AD-4 and the plan's API budget (plan line 71). Applied in: PR #4639. Status: pending review
 - AD-7 [conformance 1/3, 2026-09-27] Once 10 queue targets are stuck unbound, they take every producer-run read of a wake and defer the bound items behind them forever. How should the pickup choose which runs to read? — Picked: A — read the runs of the first 3 × limit targets (30). Alternatives: B — read the runs of every target in the 100-item queue read (up to about 100 runs per wake); C — keep the first-`limit` window and document that an operator must close stuck items. Why: a one-line change with a bounded §15 budget, and the watchdog alerts on every stuck item long before 20 pile up. Applied in: PR #4649. Status: pending review
 - AD-8 [conformance 1/3 — review round 1, 2026-09-27] The reviewer panel asked PR #4649 to ship its own changelog fragment instead of editing phase 1's `changelog.d/4621-bind-claude-queue-payloads.md` (CLAUDE.md §20.B). How? — Picked: A — add `changelog.d/4649-pickup-binding-read-window.md` describing the 30-target read window as its own `changed` entry, and restore the `4621` fragment to its phase-1 text. Alternatives: B — add the new fragment and keep the `4621` edit, stating the window twice; C — reject the finding, since neither fragment has reached `main` and both ship together in #4636 (rejection needs the dedicated verdict bot, which this web session cannot post as, so the PR would block). Why: §20.B's literal rule is met with no loss of accuracy, and the new entry states the behaviour rather than narrating an unreleased fix (§20.F). Applied in: PR #4649. Status: pending review
+- AD-9 [final-merge — review round 1, 2026-09-27] The reviewer panel (2 of 6) flagged that the pickup's exact whole-body comparison makes any change to `build_queue_issue` / `build_pr_fix_queue_issue` strand every already-bound open item as `binding_mismatch`. How? — Picked: A — keep the exact comparison, state the contract on both renderers, and pin their exact output in a golden test so a renderer change fails CI and is made on purpose. Alternatives: B — normalise more (blank lines, whitespace) before comparing; C — reject the finding as the intended fail-closed behaviour of AD-3 (rejection needs the dedicated verdict bot, which this web session cannot post as, so the PR would block). Why: §1 keeps the exact match, and until now every test rendered and verified with the same code, so a renderer change passed CI silently. Applied in: PR #4636 (review round 1 commit). Status: pending review
 
 ## Lessons
 - [source:plan-deviation] When a trust check binds a GitHub issue body to automation, compare the whole body against the producer's canonical rendering, not only the payload block, or text added around the payload still reaches the model that reads the body. (files: scripts/claude_issue_route.py)
@@ -56,6 +57,7 @@
 - [source:intervention] In a `set -e` bash script, `$(jq ...)` used as a command argument is exempt from `set -e`, so a missing field is written as `null` or empty; read such values once into a checked variable before writing them anywhere. (files: scripts/claude_issue_intake.sh)
 - [source:conformance] An item that fails closed and stays open must not share a fixed per-wake read window with the items behind it: size the window above the start limit (or skip known-bad items), or a handful of stuck items starve the whole queue. (files: scripts/claude_issue_route.py)
 - [source:intervention] A follow-up PR on a project branch (conformance, validation, or review fix) that changes observable behaviour ships its own `changelog.d/<pr>-<slug>.md` fragment; editing an earlier phase's fragment, even one not yet on the default branch, is flagged by the review panel under CLAUDE.md §20.B. (files: changelog.d/)
+- [source:intervention] When a verifier compares untrusted text with a fresh rendering from the producer's own function, pin that function's exact output in a golden test: round-trip tests render and verify with the same code, so they pass on any renderer change that silently invalidates every item already in flight. (files: scripts/claude_issue_route.py, tests/test_claude_issue_route.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue pickup's dispatch trigger; permission mode auto.
@@ -65,3 +67,4 @@
 - Conformance 1/3 (2026-09-27): merged `main` into the project branch (0a0c369, docs-only, clean). The pickup budget in the plan (runs of the first `limit` targets) is widened to 3 × limit by AD-7.
 - Conformance 1/3 review round 1 (PR #4649, head af0676b9467c, ledgers 943acd8d… and df476940…): both review runs on the head reported the same single task gap (no fragment of its own, 6 of 6 reviewers); fixed per AD-8. Its evidence that editing the fragment "retroactively rewrites PR #4639's entry" does not hold: project-branch fragments reach `main` only through the final PR.
 - Validation 1/3 (2026-09-27, session_014PqWQykxyzqGwNVKkABfqV): read `validation_status.json` from artifact `ai-validation-36324854460-1` (status=pass) and confirmed from the run log that the checkout was the authorized project-branch head 163878f; no validation-fix PR, so no conformance re-run was due.
+- Final-merge review round 1 (PR #4636, head 0d369e647d4b, ledger 57b572b6…, session_01CoRrbdshiv3PpUoFracZgK): one consensus NIT, fixed per AD-9. The hand-off's failing `lint` check was CI run 36330726347 cancelled at the job's 45-minute `timeout-minutes` in "Orchestrate poll process unit tests"; the job runs 40–45 minutes on every branch (main's run for 6e00a6e was cancelled the same way), so it is not this project's code. The review-round push re-runs it.
