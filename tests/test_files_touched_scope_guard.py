@@ -143,6 +143,44 @@ def test_incident_project_244_issue_254() -> None:
 	]
 
 
+def test_review_blocked_reissue_new_output_paths_allow_only_declared_files() -> None:
+	# Heal #4665: #4664's spot-fix reissue footer now also carries the new
+	# files the judge declared in new_output_paths.  They commit; an unrelated
+	# staged path, and a sibling of a new fixture, still block.
+	body = "\n".join(
+		[
+			"Complete the follow-up.",
+			"",
+			"---",
+			"**Review-blocked reissue metadata**",
+			"- Replaces: #4605 (PR #4607 closed — approach rework)",
+			"- Type: review-blocked-reissue",
+			"- prior_pr_baseline_branch: ai/reissue-baseline/pr-4607-4399da144a29-36333125977-1",
+			"- files_touched:",
+			"  - scripts/resolve_integration_ref.sh",
+			"  - tests/fixtures/integration_ref_resolver/mixed_fence_tilde_footer.json",
+			"  - changelog.d/4605-security-issue-base-binding.md",
+			"",
+		]
+	)
+	staged = [
+		"scripts/resolve_integration_ref.sh",
+		"tests/fixtures/integration_ref_resolver/mixed_fence_tilde_footer.json",
+		"changelog.d/4605-security-issue-base-binding.md",
+		"tests/fixtures/integration_ref_resolver/undeclared_sibling.json",
+		"scripts/unrelated.sh",
+	]
+	status, allow, oos = guard.evaluate(body, staged)
+	assert status == guard.STATUS_OUT_OF_SCOPE
+	assert "changelog.d/4605-security-issue-base-binding.md" in allow
+	assert oos == [
+		"tests/fixtures/integration_ref_resolver/undeclared_sibling.json",
+		"scripts/unrelated.sh",
+	]
+	status, _allow, oos = guard.evaluate(body, staged[:3])
+	assert status == guard.STATUS_IN_SCOPE, oos
+
+
 def test_leading_dot_slash_normalized_both_sides() -> None:
 	status, _allow, _oos = guard.evaluate(_body("./src/"), ["./src/x.ts"])
 	assert status == guard.STATUS_IN_SCOPE

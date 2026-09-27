@@ -618,6 +618,13 @@ def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:
 	assert '"line_start": <integer>' in prompt
 	assert '"line_end": <integer>' in prompt
 	assert '"symptom": "<brief grounded gap>"' in prompt
+	# Heal #4665: the judge can declare new files a spot-fix follow-up must
+	# create, in both the runtime prompt and its include-based template.
+	template = (REPO_ROOT / "prompts" / "_templates" / "mode-judge-review-blocked.txt").read_text(encoding="utf-8")
+	for text in (prompt, template):
+		assert '"new_output_paths": ["<repo-relative path of a new file the spot-fix follow-up must create>"],' in text
+		assert "- new_output_paths: optional;" in text
+		assert "list its exact repo-relative path in\n  `new_output_paths`" in text
 
 
 def test_review_autofix_wires_reissue_preserve_baseline_flag_default_true() -> None:
@@ -937,6 +944,225 @@ def test_close_and_reissue_spot_fix_keeps_judge_files_when_pr_file_listing_fails
 	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
 	assert body.rstrip().endswith("- files_touched:\n  - src/app.py"), body
 	assert "REISSUE_FILES_TOUCHED_UNION pr=42 judge_files=1 pr_files_added=0 pr_files_skipped=0 total=1" in state["_stdout"]
+
+
+def _spot_fix_payload_with_new_outputs(new_output_paths: object) -> dict:
+	return {
+		"action": "close_and_reissue",
+		"reissue_mode": "spot-fix",
+		"justification": "Approach is correct; the follow-up adds regressions and a fragment.",
+		"remaining_issues": [
+			{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+		],
+		"new_output_paths": new_output_paths,
+		"new_issue": {
+			"title": "Reissue: surgical follow-up",
+			"body": "Patch the gap, add the new fixture regressions and the changelog fragment.",
+		},
+	}
+
+
+def test_close_and_reissue_spot_fix_adds_declared_new_output_paths_to_files_touched() -> None:
+	"""Regression for #4664 / heal #4665.
+
+	The reissue of #4605 (PR #4607) had to add a changelog fragment and four
+	new mixed-fence fixtures.  None of them existed at the closed PR head, so
+	neither the judge-cited files nor the closed PR's changed files could
+	carry them, and implement.yml's files_touched scope guard refused all five
+	and latched ai:scope-blocked.  The judge now declares such files in
+	``new_output_paths`` and they are appended after the other two sources.
+	"""
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload=_spot_fix_payload_with_new_outputs(
+			[
+				"tests/fixtures/integration_ref_resolver/mixed_fence_tilde_footer.json",
+				"changelog.d/4605-security-issue-base-binding.md",
+			]
+		),
+		reissue_preserve_baseline_enabled="1",
+		repo_files={
+			"src/app.py": "print('hello')\n",
+			"tests/test_app.py": "print('test')\n",
+			"tests/fixtures/integration_ref_resolver/existing.json": "{}\n",
+		},
+		api_responses={
+			"pulls/42/files": [
+				{"filename": "src/app.py"},
+				{"filename": "tests/test_app.py"},
+			],
+		},
+	)
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	footer = body[body.index("- files_touched:"):]
+	assert footer.rstrip() == textwrap.dedent(
+		"""\
+		- files_touched:
+		  - src/app.py
+		  - tests/test_app.py
+		  - tests/fixtures/integration_ref_resolver/mixed_fence_tilde_footer.json
+		  - changelog.d/4605-security-issue-base-binding.md"""
+	).rstrip(), footer
+	assert "REISSUE_FILES_TOUCHED_UNION pr=42 judge_files=1 pr_files_added=1 pr_files_skipped=0 total=2" in state["_stdout"]
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=2 added=2 skipped=0 total=4" in state["_stdout"]
+	assert "REISSUE_MODE requested_raw=spot-fix effective=spot-fix" in state["_stdout"]
+	assert len([call for call in state.get("api_calls", []) if "pulls/42/files" in " ".join(call)]) == 1, (
+		"new_output_paths validation must not add GitHub API calls (§15)"
+	)
+
+
+def _run_new_output_rejection_case(declared: list) -> dict:
+	return _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload=_spot_fix_payload_with_new_outputs(declared),
+		reissue_preserve_baseline_enabled="1",
+		repo_files={
+			"src/app.py": "print('hello')\n",
+			"README.md": "hello\n",
+			"tests/fixtures/existing.json": "{}\n",
+		},
+		api_responses={"pulls/42/files": [{"filename": "src/app.py"}]},
+	)
+
+
+def _assert_new_output_footer_and_skips(state: dict, expected_tail: list[str], skips: list[tuple]) -> None:
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	footer = body[body.index("- files_touched:"):]
+	expected = ["- files_touched:", "  - src/app.py"] + [f"  - {path}" for path in expected_tail]
+	assert footer.rstrip() == "\n".join(expected), footer
+	assert "prior_pr_baseline_branch: ai/reissue-baseline/pr-42-" in body, (
+		"a rejected new_output_paths entry must never discard the preserved baseline"
+	)
+	stdout = state["_stdout"]
+	for skip in skips:
+		if len(skip) == 2:
+			index, reason = skip
+			line = f"::notice::Skipping judge new_output_paths entry {index}: {reason}."
+		else:
+			index, path, reason = skip
+			line = f"::notice::Skipping judge new_output_paths entry {index} ({path}): {reason}."
+		assert line in stdout, stdout
+	assert "REISSUE_MODE requested_raw=spot-fix effective=spot-fix" in stdout
+
+
+def test_close_and_reissue_spot_fix_rejects_unsafe_new_output_paths() -> None:
+	"""Unsafe, glob, or directory-shaped declarations are skipped, and a path
+	that fails the validator is never echoed."""
+	state = _run_new_output_rejection_case(
+		[
+			"../escape.json",
+			".git/config",
+			"a//b.json",
+			123,
+			"line\nbreak.json",
+			"tests/fixtures/*.json",
+			"tests/fixtures/new_dir/",
+			"tests/fixtures/new_case.json",
+		]
+	)
+	_assert_new_output_footer_and_skips(
+		state,
+		["tests/fixtures/new_case.json"],
+		[
+			(1, "invalid_path"),
+			(2, "invalid_path"),
+			(3, "invalid_path"),
+			(4, "invalid_path"),
+			(5, "invalid_path"),
+			(6, "tests/fixtures/*.json", "glob"),
+			(7, "tests/fixtures/new_dir/", "directory"),
+		],
+	)
+	stdout = state["_stdout"]
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=8 added=1 skipped=7 total=2" in stdout
+	assert "../escape.json" not in stdout, "paths that fail the validator must never be echoed"
+	assert ".git/config" not in stdout
+
+
+def test_close_and_reissue_spot_fix_new_output_paths_never_exempt_existing_paths_and_are_capped() -> None:
+	"""No existing file or directory can enter the allowlist this way,
+	duplicates collapse, and only the first 10 declarations are read."""
+	state = _run_new_output_rejection_case(
+		[
+			"tests/fixtures",
+			"README.md",
+			"src/app.py",
+			"tests/fixtures/new_case.json",
+			"tests/fixtures/new_case.json",
+			"tests/fixtures/new_2.json",
+			"tests/fixtures/new_3.json",
+			"tests/fixtures/new_4.json",
+			"tests/fixtures/new_5.json",
+			"tests/fixtures/new_6.json",
+			"tests/fixtures/over_cap.json",
+		]
+	)
+	_assert_new_output_footer_and_skips(
+		state,
+		[
+			"tests/fixtures/new_case.json",
+			"tests/fixtures/new_2.json",
+			"tests/fixtures/new_3.json",
+			"tests/fixtures/new_4.json",
+			"tests/fixtures/new_5.json",
+			"tests/fixtures/new_6.json",
+		],
+		[
+			(1, "tests/fixtures", "exists_at_head"),
+			(2, "README.md", "exists_at_head"),
+			(3, "src/app.py", "duplicate"),
+			(5, "tests/fixtures/new_case.json", "duplicate"),
+			(11, "over_cap"),
+		],
+	)
+	stdout = state["_stdout"]
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=11 added=6 skipped=5 total=7" in stdout
+
+
+def test_close_and_reissue_without_new_output_paths_keeps_the_body_unchanged() -> None:
+	"""A judge on the old contract (no field, or an empty / non-array field)
+	must produce exactly today's footer and no new log line."""
+	footers = []
+	for new_output_paths in (None, [], "changelog.d/not-a-list.md"):
+		payload = _spot_fix_payload_with_new_outputs(new_output_paths)
+		if new_output_paths is None:
+			payload.pop("new_output_paths")
+		state = _run_close_and_reissue(
+			["ai:orchestrator-managed"],
+			judge_payload=payload,
+			reissue_preserve_baseline_enabled="1",
+			repo_files={"src/app.py": "print('hello')\n"},
+			api_responses={"pulls/42/files": [{"filename": "src/app.py"}]},
+		)
+		body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+		assert body.rstrip().endswith("- files_touched:\n  - src/app.py"), body
+		assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS" not in state["_stdout"]
+		assert "new_output_paths entry" not in state["_stdout"]
+		footers.append(body[body.index("- files_touched:"):])
+	assert len(set(footers)) == 1
+
+
+def test_close_and_reissue_redo_ignores_new_output_paths() -> None:
+	payload = _spot_fix_payload_with_new_outputs(["changelog.d/4665-x.md"])
+	payload["reissue_mode"] = "redo"
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload=payload,
+		reissue_preserve_baseline_enabled="1",
+		repo_files={"src/app.py": "print('hello')\n"},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	assert "files_touched:" not in body
+	assert "changelog.d/4665-x.md" not in body
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS" not in state["_stdout"]
+
+
+def test_reissue_new_outputs_log_prefix_is_registered() -> None:
+	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	assert "- `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`" in agents_text
+	assert "LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS" in agents_text
 
 
 def test_close_and_reissue_spot_fix_lowercases_baseline_branch_sha_prefix() -> None:
