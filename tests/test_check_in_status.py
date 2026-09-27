@@ -312,7 +312,8 @@ def test_fixer_stale_or_forged_comment_does_not_supersede_or_answer(monkeypatch,
 @pytest.mark.parametrize("run_change", [
 	{"repository": {"full_name": "other/repo"}},
 	{"path": ".github/workflows/unrelated.yml@main"},
-	{"head_sha": "b" * 40},
+	{"head_sha": None},
+	{"head_sha": "not-a-sha"},
 	{"head_branch": "claude/other"},
 	{"id": 99},
 	{"html_url": "https://github.com/o/r/actions/runs/99"},
@@ -325,6 +326,38 @@ def test_fixer_handoff_waits_for_verified_successful_run(monkeypatch, capsys, ru
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is False and out["state"] == "open"
 	assert calls[-1] == f"repos/o/r/actions/runs/{FIXER_RUN_ID}"
+
+
+def _compare_path(run_head):
+	return f"repos/o/r/compare/{run_head}...{FIXER_HEAD}?per_page=1"
+
+
+def test_fixer_handoff_run_triggered_by_an_older_push_is_a_review_round(monkeypatch, capsys):
+	# PR #4594: two quick pushes; the run triggered by the first reviewed the second.
+	older = "b" * 40
+	responses = {**_fixer_responses(head_sha=older), _compare_path(older): {"status": "ahead", "ahead_by": 1, "behind_by": 0}}
+	calls = _stub_fixer(monkeypatch, responses, [_comment(_handoff())])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "review-round"
+	assert calls[2:4] == [f"repos/o/r/actions/runs/{FIXER_RUN_ID}", _compare_path(older)]
+
+
+@pytest.mark.parametrize("status", ["diverged", "behind", "identical", None])
+def test_fixer_handoff_run_off_the_reviewed_history_keeps_waiting(monkeypatch, capsys, status):
+	other = "b" * 40
+	responses = {**_fixer_responses(head_sha=other), _compare_path(other): {"status": status}}
+	calls = _stub_fixer(monkeypatch, responses, [_comment(_handoff())])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and out["state"] == "open"
+	assert calls[-1] == _compare_path(other)
+
+
+def test_fixer_handoff_compare_read_failure_is_retryable(monkeypatch, capsys):
+	older = "b" * 40
+	responses = {**_fixer_responses(head_sha=older), _compare_path(older): checker.ReadError("HTTP 404")}
+	_stub_fixer(monkeypatch, responses, [_comment(_handoff())])
+	code, out = _run(["--pr", "7"], capsys)
+	assert code == 2 and out["done"] is False and "404" in out["error"]
 
 
 def test_fixer_handoff_run_read_failure_is_retryable(monkeypatch, capsys):
