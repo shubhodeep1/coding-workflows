@@ -1755,7 +1755,7 @@ hand-back trigger id, a session id, and a role. There is at most one
    a `claude/*` head `kind`, `head_sha`, `claim`, and the hand-back counts
    (§26.H). The script decides; the model does not interpret the PR. It
    uses REST only (§15): one PR read, plus on a `claude/*` head the
-   comment and check-run pages and at most five further reads.
+   comment and check-run pages and at most six further reads.
 2. **Not done** (`open`, `claimed`, `held`, or waiting on a run) → renew
    the dead-man's switch on every subscriber's Routine (`update_trigger`
    with only `run_once_at` = now + 7 days), call `send_later` with
