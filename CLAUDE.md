@@ -1945,8 +1945,10 @@ sweep runs in the sessions that create them, never in Actions:
   PR's current head with `.claude/scripts/claude_fix_claim.py post` (one
   comment ending in `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict
   | ci | review | blocked | hold> by=<session id | sweep-run-<id>> -->`).
-  Only claims by an owner, member, or collaborator count, timed by the
-  comment's own `created_at`. A claim on the current head is live for
+  Only claims by an owner, member, or collaborator count, and only when
+  posted as the PR's author or as `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` (the
+  sweep's `GH_PAT` account), so no other collaborator can forge a claim or
+  a hold (issue #4622). A claim is timed by the comment's own `created_at`. A claim on the current head is live for
   `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3); a push moves the head and
   ends it. While a live claim or a hold exists, `check_in_status.py
   --hand-back` reports `claimed` / `held`, so neither the checker nor the

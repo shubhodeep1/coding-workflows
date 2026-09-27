@@ -892,8 +892,10 @@ reviews, comments, and conflicts stay a direct §12 request.
   `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`
   (`.claude/scripts/claude_fix_claim.py post`: one PR read to refuse a moved
   head, one comment POST). `check_in_status.py --hand-back`
-  (`read_fix_claims`) counts only owner / member / collaborator claims,
-  times them by the comment's `created_at`, treats a claim on the current
+  (`read_fix_claims`) counts only owner / member / collaborator claims
+  posted as the PR's author or as `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`
+  (`_fix_claim_trusted_logins`, case-insensitive; neither known → no claim
+  counts; issue #4622), times them by the comment's `created_at`, treats a claim on the current
   head as live for `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3) and a `hold`
   as live until the head moves, and reports `hand_backs` (distinct
   head/kind pairs of conflict, ci, and blocked claims) against
