@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/claude-fixer-unattended-convergence-plan.md:Phase 2, judge merge path | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When Phase 2 lands before Phase 1 and all findings are ruled invalid while checks are still running, the judge exits without posting a marker, allowing the sweep to repeatedly re-hand the finding to Claude and create a ping-pong loop.\n  WHY: There is no terminating condition for the all-invalid, checks-still-running loop when Phase 1 is absent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/plans/claude-fixer-unattended-convergence-plan.md:Phase 2, judge merge path: \"still running \u2192 post the Phase 1 checks-pending marker if Phase 1 is present, else exit and leave the hand-off for the sweep\" | severity=MAJOR | confidence=3\n  PROBLEM: When Phase 2 lands before Phase 1, the judge exits without posting any marker after all findings are ruled invalid and checks are still running. The PR already carries a kind=findings hand-off from before the judge ran. The sweep's next 30-minute dispatch re-reads the hand-off and re-hands it to Claude, who already judged all findings invalid. This creates a ping-pong loop: Claude rejects \u2192 judge runs \u2192 checks still running \u2192 judge exits \u2192 sweep picks up \u2192 Claude rejects \u2192 ...\n  WHY: No terminating condition for the all-invalid-still-running-checks loop when Phase 1 is absent.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "db640243702ffca6cadef67f13b8c52d54c1ac1df3a0bf4f8073bc571689089b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36315462237",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36315462237",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927113521_f6dedb5494",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36315462237"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T11:35:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
