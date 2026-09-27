@@ -141,6 +141,23 @@ implementing chain must not re-open them.
 - **Alternatives considered:** exclude them by a label or branch rule.
 - **Why:** it is a safety net that never acts while a live claim exists.
 
+### D11 — A BLOCKED stop on a held PR still arms the checker
+
+- **Chosen:** a `/implement-plan-claude` stage that stops at
+  `Status: BLOCKED` because one of its PRs is held still hands that PR's wait
+  to the project checker (polled at the held backoff, D6), so the chain
+  resumes on its own once the PR merges or the hold lifts. Added to Phase 3
+  on 2026-09-27.
+- **Alternatives considered:** a separate PR against
+  `implement-plan-claude.md` (conflicts with Phase 3's edits to the same
+  file); no change, relying on the judge and the supervising session.
+- **Why:** observed on this project: after the operator merged the held
+  phase 1 PR #4651, nothing started phase 2, because the checker hands every
+  wait to the stage it starts and the BLOCKED stage armed none. In plan mode
+  no `/reclarify` exists to resume it, so the chain waited until the
+  supervising session started phase 2 by hand. Holds remain possible after the
+  judge ships (security or data-loss at the cap, conflict decisions).
+
 ## Context
 
 Observed on 2026-09-27 in `shubhodeep1/coding-workflows`: 11 open `claude/*`
@@ -451,6 +468,21 @@ Workflow side:
   rejected with reason), including for a hold that is not about findings (state
   the blocker and the evidence). A hold with no reasoning comment on the head
   is a rule violation.
+- `implement-plan-claude.md` (D11): a stage that stops at `Status: BLOCKED`
+  while one of the project's PRs is held (a hold of any reason: all findings
+  rejected, a security or data-loss hold at the judge cap, a conflict
+  decision, a cap-reached hold) still **arms the project checker's wait on
+  that PR** before it ends, exactly as step 7 arms a normal wait: next stage on
+  merge = the stage that follows that PR's merge, next stage on a review
+  hand-off = the review round, next stage on a block = the blocked-PR stage.
+  The BLOCKED ask stays (a human may still merge by hand); only the automatic
+  resume is added. The checker treats `held` as not done and re-arms at
+  `retry_after_minutes`. Once the PR merges (by a human or the judge), or the
+  hold lifts and a hand-off appears, the checker starts that next stage.
+  In issue mode a `/reclarify` can start the same stage: a stage session whose
+  stage the progress log already records as started by another live session
+  (`Stage:` plus the stage session id the checker records) reports that and
+  ends without acting, so two resumes never both run.
 
 ### Phase 4: session janitor
 
@@ -531,7 +563,11 @@ each id (ignore not-found), and append `archived <k>` to its one-line report.
    `changelog.d/`.
    Done when: `check_in_status.py --hand-back` emits `retry_after_minutes` 180
    for `held` and 60 otherwise (env override and clamp tested); the docs carry
-   the never-ask and reasoning-before-hold rules verbatim in each place.
+   the never-ask and reasoning-before-hold rules verbatim in each place;
+   `implement-plan-claude.md` (+ twin) makes every BLOCKED stop on a held PR
+   arm the project checker's wait on that PR, and says how a stage started by
+   both `/reclarify` and the checker ends the duplicate (D11), with the
+   command-doc tests asserting both.
    Rollback: revert the PR (checkers default to 60 when the field is absent).
 4. **Session janitor.** Files: `.claude/scripts/stale_sessions.py` [new],
    `tests/test_stale_sessions.py` [new], `.claude/commands/claude-issue-pickup.md`,
@@ -603,7 +639,11 @@ default to 60 minutes without the new field; Phase 4 touches only the pickup.
 2. CLAUDE.md §26.B step 3 / §26.C preamble and step 2; implement-plan checker
    prompt block; fixer reasoning-before-hold rule in both command docs (+
    twins).
-3. Tests + agents.md + README + changelog fragment.
+3. `implement-plan-claude.md` (+ twin): the D11 rule. Every place that stops at
+   `Status: BLOCKED` with a held PR (step 7 Blocked rule, step 7a no-valid-
+   finding branch, the cap stops) first arms the wait per the Check-in Loop's
+   "Arming the wait", then stops; add the duplicate-resume guard to step 0.
+4. Tests + agents.md + README + changelog fragment.
 
 ### Phase 4
 
