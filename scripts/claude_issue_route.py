@@ -25,6 +25,10 @@ Shell drivers:
     claude-code-remote tools (issue #4525).
   * ``scripts/claude_issue_queue_watchdog.sh`` flags queue issues nobody picked
     up (``queue-stale``).
+  * A session too deep in the session lineage to create its own CLAUDE.md
+    §26 checker asks the pickup for one with a one-shot trigger; the pickup
+    parses that request with ``arm-check-in-request`` (CLAUDE.md §26.B step
+    1c).
 
 Routing order (first match wins):
 
@@ -556,6 +560,51 @@ def queue_stale(
 	return stale
 
 
+# CLAUDE.md §26.B step 1c: the arguments a deep session sends the pickup.
+ARM_CHECK_IN_REQUEST_RE = re.compile(
+	r"^— arm-check-in (?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?P<pr>[1-9][0-9]{0,9}) "
+	r"for (?P<requester>session_[A-Za-z0-9]{10,64})$"
+)
+
+
+def parse_arm_check_in_request(text: str, allowed_repos: list[str]) -> dict[str, Any]:
+	"""Parse one ``— arm-check-in <owner>/<repo>#<n> for <session id>`` line.
+
+	Input: the pickup's ``$ARGUMENTS`` text and the allowed repositories
+	(``load_allowed_repos``). Output: the fixed fields the pickup uses to
+	create the checker and wake the requester; nothing in the output is copied
+	from the request except the validated slug, number, and session id.
+	Raises ValueError on anything else: more than one line, another format,
+	or an unregistered repository. Pure; no API calls.
+	"""
+	lines = [line.strip() for line in (text or "").strip().splitlines() if line.strip()]
+	if len(lines) != 1:
+		raise ValueError("expected exactly one arguments line")
+	match = ARM_CHECK_IN_REQUEST_RE.match(lines[0])
+	if not match:
+		raise ValueError("arguments are not '— arm-check-in <owner>/<repo>#<n> for session_<id>'")
+	repo = match.group("repo")
+	allowed = {slug.lower() for slug in allowed_repos if isinstance(slug, str)}
+	if repo.lower() not in allowed:
+		raise ValueError(f"repo not registered: {repo}")
+	number = int(match.group("pr"))
+	pr_url = f"https://github.com/{repo}/pull/{number}"
+	return {
+		"repo": repo,
+		"pr_number": number,
+		"pr_url": pr_url,
+		"source_url": f"https://github.com/{repo}",
+		"requester": match.group("requester"),
+		"checker_title": f"PR #{number} status check-in",
+		"ready_trigger_name": f"PR #{number} status check-in: checker ready",
+		"ready_prompt": (
+			f"CLAUDE.md §26.B step 1c: the Claude issue pickup created checker <checker id> "
+			f"for PR #{number} ({pr_url}). Continue with CLAUDE.md §26.B steps 3–4 for that "
+			f"checker in this session."
+		),
+	}
+
+
 def _read_json(path: str) -> Any:
 	return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -612,6 +661,21 @@ def _cmd_queue_issue(args: argparse.Namespace) -> int:
 def _cmd_pr_fix_queue_issue(args: argparse.Namespace) -> int:
 	try:
 		print(json.dumps(build_pr_fix_queue_issue(args.repo, args.pr, args.head, args.kind, args.claim, args.run_url)))
+	except ValueError as exc:
+		print(str(exc), file=sys.stderr)
+		return 2
+	return 0
+
+
+def _cmd_arm_check_in_request(args: argparse.Namespace) -> int:
+	try:
+		text = Path(args.arguments_file).read_text(encoding="utf-8")
+	except OSError as exc:
+		print(f"cannot read arguments file: {exc}", file=sys.stderr)
+		return 2
+	allowed = load_allowed_repos(Path(args.registry), args.self_repo)
+	try:
+		print(json.dumps(parse_arm_check_in_request(text, allowed)))
 	except ValueError as exc:
 		print(str(exc), file=sys.stderr)
 		return 2
@@ -730,6 +794,12 @@ def main(argv: list[str] | None = None) -> int:
 	p_stale.add_argument("--now", default="")
 	p_stale.add_argument("--trusted-author", default=QUEUE_TRUSTED_AUTHOR)
 	p_stale.set_defaults(func=_cmd_queue_stale)
+
+	p_arm = sub.add_parser("arm-check-in-request", help="parse a pickup — arm-check-in request (CLAUDE.md §26.B step 1c)")
+	p_arm.add_argument("--arguments-file", required=True)
+	p_arm.add_argument("--registry", required=True)
+	p_arm.add_argument("--self-repo", default=DEFAULT_UPSTREAM_REPO)
+	p_arm.set_defaults(func=_cmd_arm_check_in_request)
 
 	args = parser.parse_args(argv)
 	return args.func(args)

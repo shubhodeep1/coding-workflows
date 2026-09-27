@@ -207,6 +207,12 @@ def test_checker_ignores_superseded_waits(text):
 	assert "end the turn without re-arming: the next stage hands you its own wait" in text
 
 
+def test_stage_sessions_start_no_side_sessions(text):
+	"""A stage's side session and its §26 checker add two links (PR #4601's checker hit depth 8)."""
+	assert "- **No side sessions.** A stage session calls `create_session` only where this command says so: the project checker, the next stage, the `/deploy-activate` session, and a fixer." in text
+	assert "When a separate fix is wanted, file it as a GitHub issue: the Claude issue route starts it from the pickup, at depth 2 or less." in text
+
+
 def test_depth_limit_refusal_is_loud_not_a_session_local_cron(text):
 	assert "**Refused at the depth limit.**" in text
 	assert "do **not** fall back to `CronCreate` or any other session-local loop" in text

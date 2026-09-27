@@ -210,11 +210,45 @@ def test_pickup_is_one_session_woken_by_a_self_bound_trigger(pickup_cmd):
 	assert "`name` `Claude issue pickup: hourly`" in pickup_cmd
 	assert "The pickup never creates a session for its own next wake." in pickup_cmd
 	assert "**Keep exactly one pickup.**" in pickup_cmd
-	assert "More than 3 → reply `claude-issue-pickup: blocked (this session is <n> links below its root" in pickup_cmd
+	# Depth 1 leaves room below the pickup for the whole issue chain plus a
+	# §26 checker and its fresh fixer (PR #4601's checker hit depth 8 from a
+	# depth-3 pickup, 2026-09-27).
+	assert "More than 1 → reply `claude-issue-pickup: blocked (this session is <n> links below its root" in pickup_cmd
+	assert "More than 3 →" not in pickup_cmd
+	assert "**at depth 1 or less**" in pickup_cmd
 	assert "Claude issue pickup: next wake" not in pickup_cmd
-	# The only create_session target is the implementation session.
-	assert pickup_cmd.count("`create_session` with") == 1
+	# create_session targets: the implementation / fixer session (step 3) and
+	# the §26 checker of an `— arm-check-in` request (step 5).
+	assert pickup_cmd.count("`create_session` with") == 2
 	assert pickup_cmd.index("**Keep exactly one pickup.**") < pickup_cmd.index("**Read the queue.**") < pickup_cmd.index("**Start one session per pending entry.**")
+
+
+def test_pickup_arms_check_ins_for_deep_sessions(pickup_cmd):
+	"""CLAUDE.md §26.B step 1c: the pickup creates the checker, the requester writes its instructions."""
+	assert "**`— arm-check-in <owner>/<repo>#<n> for <session id>`**" in pickup_cmd
+	assert "- **Mode `— arm-check-in`** → skip steps 1–4 and go to step 5." in pickup_cmd
+	assert "5. **Arm a check-in** (`— arm-check-in` mode only)." in pickup_cmd
+	assert "scripts/claude_issue_route.py arm-check-in-request --arguments-file <that file> --registry .github/ai/consumer_repos.json" in pickup_cmd
+	assert "never through the shell" in pickup_cmd
+	assert "`model` `claude-sonnet-5`, `permission_mode` `auto`, `title` = the script's `checker_title`, and the prompt `/effort low` and nothing else" in pickup_cmd
+	assert "`persistent_session_id` = the script's `requester`" in pickup_cmd
+	assert "so no free text passes through the pickup" in pickup_cmd
+	assert pickup_cmd.index("**Report.**") < pickup_cmd.index("**Arm a check-in**") < pickup_cmd.index("## Rules")
+
+
+def test_claude_md_26b_depth_check_routes_deep_sessions_to_the_pickup():
+	claude_md = _flat(ROOT / "CLAUDE.md")
+	assert "1c. **Depth check** before creating a checker." in claude_md
+	assert "*d* ≤ 5 → step 2." in claude_md
+	assert "*d* is 6 or 7 → **ask the Claude issue pickup to create the checker**." in claude_md
+	assert "`name` = `PR #<n> status check-in: arm request`" in claude_md
+	assert "`— arm-check-in <owner>/<repo>#<n> for <this session's id>`" in claude_md
+	assert "*d* ≥ 8, no pickup trigger exists, or any claude-code-remote call in this section is refused with `lineage depth` → skip steps 2–3." in claude_md
+	assert "Never fall back to `CronCreate` or another session-local loop" in claude_md
+	assert "2. Otherwise (*d* ≤ 5) call `create_session`" in claude_md
+	# Step numbers stay stable (§6): 1c sits between 1b and 2.
+	assert claude_md.index("1b. **Register with an existing checker**") < claude_md.index("1c. **Depth check**") < claude_md.index("2. Otherwise (*d* ≤ 5)")
+	assert "(a checker armed before the §26.B step 1c depth check existed)" in claude_md
 
 
 def test_pickup_fails_closed_and_never_comments(pickup_cmd):
@@ -228,6 +262,7 @@ def test_pickup_tools_are_allowlisted():
 
 	allow = _json.loads((ROOT / ".claude" / "settings.json").read_text())["permissions"]["allow"]
 	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py queue-pending *)" in allow
+	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py arm-check-in-request *)" in allow
 	for tool in ("create_session", "create_trigger", "list_triggers", "delete_trigger", "archive_session", "get_session", "set_session_title"):
 		assert f"mcp__Claude_Code_Remote__{tool}" in allow
 	assert "mcp__github__issue_write" in allow

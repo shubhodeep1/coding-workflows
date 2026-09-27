@@ -227,7 +227,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `[claude-issue-queue] <repo>#<N>`, body = marker + fixed-key payload, no
     issue prose), opened with the job's `GITHUB_TOKEN` so no workflow reacts;
     an open item for the same target is reused. The **Claude issue pickup**
-    (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 3,
+    (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 1,
     woken hourly by the cron trigger `Claude issue pickup: hourly` bound to
     itself (no new session per wake, so no lineage-depth growth), reads the
     queue with
@@ -887,6 +887,25 @@ by that command's own checker. Without `create_session` the session falls
 back to a `send_later` self check-in with a Sonnet subagent doing the read.
 The checker itself never fixes anything; outside `claude/*` PRs, CI,
 reviews, comments, and conflicts stay a direct §12 request.
+- Session depth (CLAUDE.md §26.B step 1c): the claude-code-remote tools
+  refuse `create_session`, `create_trigger`, `update_trigger`, and
+  `send_later` from a session 8 parent links below its root (`caller
+  session is at lineage depth 8 (limit 8)`), so a checker must sit at depth
+  6 or less for its fresh fixer to still work. Before creating a checker the
+  session counts its depth *d* with `get_session` along `parent_session_id`
+  (at most 8 calls). At *d* ≤ 5 it creates the checker itself. At *d* 6 or 7
+  it sends the Claude issue pickup a one-shot `PR #<n> status check-in: arm
+  request` trigger with arguments `— arm-check-in <owner>/<repo>#<n> for
+  <session id>`. The pickup parses them offline with `claude_issue_route.py
+  arm-check-in-request` (registered repos only), creates the checker one
+  link below itself, and wakes the requester with `PR #<n> status check-in:
+  checker ready`, which names the checker; the requester then sends the
+  instructions itself. At *d* ≥ 8, with no pickup, or on any `lineage
+  depth` refusal, no checker is armed: the session keeps its hand-back
+  Routine (the 7-day dead-man's switch), relies on the §26.H sweep, and
+  sends one `PushNotification`. A checker whose fresh fixer is refused for
+  depth notifies and leaves the fix to the sweep. Incident: the PR #4601
+  checker was created at depth 8 on 2026-09-27 and could not re-arm.
 - Claude-fixer claims and the catch-all (CLAUDE.md §26.H): a fixer claims
   the PR's current head with one comment ending in
   `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`
