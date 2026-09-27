@@ -1,16 +1,17 @@
 # Implement-Plan Log — Isolate the conflict resolver's model attempt from the real Git index
 
-- Plan: docs/plans/issue-4545-resolver-index-isolation-plan.md
-- Repo: shubhodeep1/coding-workflows   Default branch: main
+- Plan: docs/completed/issue-4545-resolver-index-isolation-plan.md (moved from docs/plans/ in the completion PR)
+- Source issue: shubhodeep1/coding-workflows#4545
+- Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
 - Project branch: claude/implement-plan-issue-4545-resolver-index-isolation   Final PR: #4546 draft
-- Status: IN_PROGRESS
-- Stage: conformance 3/3
-- Activation: not started (base is main; steps 12–13 run after the final merge)
-- Waiting on: conformance fix 3 PR (branch `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-3`; the conformance cap is reached, so its merge stops the chain at `Status: BLOCKED` and asks on the issue before validation)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01JsrP995pg78hMZus9cKyvh; safety net and hand-back trigger ids are in the conformance 3/3 stage session's report (session_01FdassCB4HTb3RgH6dz8hG7) and the next `— resume.` block
+- Check-in: checker session_01JsrP995pg78hMZus9cKyvh (project checker); safety net and hand-back trigger ids are in the validation 1/3 read-result stage session's report (session_0168sBnsHwsaWqsKV14excF1) and the next `— resume.` block
 - Last updated: 2026-09-27
-- Last note: Conformance run 3/3 (2026-09-27): CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED CONCERN): `prompts/integration-sync-conflict-resolver.txt`, rendered on `orchestrator/project-*` heads and run through the same isolated model attempt, lacked the staging/committing prohibition; fixed in conformance fix PR 3 with a regression test.
+- Last note: validation cycle 1 passed (10/10 tests) against the project branch after the third conformance fix (#4616) merged; completion PR moves the plan to docs/completed/; final PR #4546 is marked ready once it merges.
 
 ## Phases
 1. [x] Phase 1 — Git index isolation for the resolver's model attempt   — PR #4547 merged 2026-09-26
@@ -18,7 +19,19 @@
 ## Conformance
 - Run 1 — 2026-09-27: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 3 EVIDENCE-BASED CONCERN findings, no BLOCKER) — fix PR from `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-1` (pre-security; security pass is skipped per the plan header) — #4591 merged 2026-09-27
 - Run 2 — 2026-09-27: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED CONCERN, no BLOCKER) — fix PR #4606 (pre-security); review rounds: 1 (round 1: temporary-file cleanup moved into a `finally`) — #4606 merged 2026-09-27
-- Run 3 — 2026-09-27: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED CONCERN, no BLOCKER: the integration-sync resolver prompt lacked the staging/committing rule) — fix PR from `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-3` (pre-security). This is the third and last conformance run the cap allows: re-auditing the merged fix would be a fourth run, so the next stage stops at `Status: BLOCKED` and asks on the issue.
+- Run 3 — 2026-09-27: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED CONCERN, no BLOCKER: the integration-sync resolver prompt lacked the staging/committing rule) — fix PR #4616 (pre-security); review rounds: 0 — #4616 merged 2026-09-27. This was the third and last conformance run the cap allows.
+- Cap reached after run 3 — 2026-09-27: no fourth conformance run and no fix check; the user answered Q1: A in session_01EYwbdnixE7BFRb4vnepxcA (proceed to validation). Validation ran on the project branch head that carries #4616 (see `## Validation`).
+
+## Security pass
+- Skipped per the plan header (`Security pass: skip`, source issue labelled `ai:workflow-heal`).
+
+## Validation
+- Cycle 1 — run 36313414689 2026-09-27 (target_ref: project branch, pinned head 21ef397): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 284s); no fixes
+
+## Completion
+- Completion PR (this log update) — doc moved to docs/completed/issue-4545-resolver-index-isolation-plan.md
+- Merged PRs: phase 1 #4547, conformance fixes #4591, #4606, #4616
+- Final PR #4546 draft (marked ready in the final-merge stage)
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-26] The issue's suggested fix names a specific mechanism (`GIT_INDEX_FILE`, keep the real-index check, forbid staging in the prompt). Should the plan adopt it as-is, or design an alternative isolation mechanism?
@@ -31,6 +44,7 @@
 - AD-3 [conformance 2/3, 2026-09-27] OpenCode 1.18.23's session snapshot runs `git --git-dir <snapshot> --work-tree <checkout> add` with the inherited environment, so under the `GIT_INDEX_FILE` isolation it stages the conflicted files (markers included) into the scratch index and the model no longer sees them as unmerged. How should the conformance fix handle it? — Picked: A — set `"snapshot": false` in the resolver's own generated OpenCode config, source repo only (`_resolver_disable_opencode_snapshot` in `scripts/review_conflict_resolve.sh`, between the config writer and `opencode_require_bootstrap`). Alternatives: B — add a `--snapshot on|off` option to the shared `scripts/write_opencode_config.sh` and pass `off` from the resolver (interface change to a consumer-synced helper; a stale fallback writer would reject the flag and fail the resolver); C — drop the `GIT_INDEX_FILE` isolation and restore the real index bytes after each attempt (reverses AD-1); D — leave it and document the degraded model view. Why: §5 smallest change in one file, scoped exactly to where the isolation applies, no new interface on a shared helper; the resolver never uses OpenCode's snapshot/undo. Applied in: conformance fix PR 2 (branch `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-2`). Status: pending review
 
 ## Notes
+- 2026-09-27 (validation 1/3 — read result, session_0168sBnsHwsaWqsKV14excF1): the conformance cap was reached after run 3 (#4616 merged 2026-09-27). The user answered Q1: A in session_01EYwbdnixE7BFRb4vnepxcA: no fourth conformance run, proceed to validation. Validation cycle 1 was dispatched as run 36313414689 (target_ref: project branch) and completed with conclusion success, status=pass. The `conformance 3/3 — fix check` stage (#4646, merged after this decision) was not run for this project because the user's decision predates it. The project branch was synced with `main` (clean merge, `[claude-merge-resolve]` 9cec62f, bringing in #4582, #4554, #4647, #4646); `main` still does not carry #4555.
 - 2026-09-27 (conformance 3/3): the project branch was synced with `main` (clean merge, `[claude-merge-resolve]` d90ebb7, bringing in #4592). `main` still did not carry #4555.
 - Permission mode: this session's mode was not explicitly queryable via `get_session` (no claude-code-remote MCP tools present); proceeding under CLAUDE.md §28.A's issue-mode rule that start-up-check questions are recorded, not asked, and the session's actual harness permission mode governs what actually executes (no ask-first operation beyond routine writes was attempted).
 - Security pass: skipped per the plan header (`ai:workflow-heal` label on the source issue).
