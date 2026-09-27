@@ -105,6 +105,30 @@ fi
 
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VALIDATE_SUPPORT_ROOT="${SUPPORT_ROOT_DIR:-$(cd "${_validate_script_dir}/.." && pwd)}"
+# Immutable-support locations. This branch's validate.yml exports them from
+# its support bundle; a caller that predates the bundle (main's validate.yml
+# runs this branch's checkout while the branch is being validated) does not,
+# and the Codex launcher (model_provider_broker_write_isolated_codex_launcher),
+# prompt resolution and self_heal_validation.sh then stop on the missing
+# variable before writing validation_status.json. Default them to the tree
+# this script runs from: the same trust as the script itself.
+validate_support_defaults_applied=""
+if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
+  SUPPORT_ROOT_DIR="${VALIDATE_SUPPORT_ROOT}"
+  validate_support_defaults_applied="${validate_support_defaults_applied} SUPPORT_ROOT_DIR"
+fi
+if [ -z "${SUPPORT_SCRIPTS_DIR:-}" ]; then
+  SUPPORT_SCRIPTS_DIR="${_validate_script_dir}"
+  validate_support_defaults_applied="${validate_support_defaults_applied} SUPPORT_SCRIPTS_DIR"
+fi
+if [ -z "${SUPPORT_PROMPTS_DIR:-}" ]; then
+  SUPPORT_PROMPTS_DIR="${VALIDATE_SUPPORT_ROOT}/prompts"
+  validate_support_defaults_applied="${validate_support_defaults_applied} SUPPORT_PROMPTS_DIR"
+fi
+export SUPPORT_ROOT_DIR SUPPORT_SCRIPTS_DIR SUPPORT_PROMPTS_DIR
+if [ -n "${validate_support_defaults_applied}" ]; then
+  echo "VALIDATE_SUPPORT_DEFAULTS applied=${validate_support_defaults_applied# } root=${SUPPORT_ROOT_DIR}"
+fi
 VALIDATION_TRUSTED_DRIVER="${_validate_script_dir}/validate_driver.sh"
 export VALIDATION_TRUSTED_DRIVER
 # shellcheck source=/dev/null
