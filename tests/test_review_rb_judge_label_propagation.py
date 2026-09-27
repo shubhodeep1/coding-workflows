@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -423,6 +424,7 @@ def _run_close_and_reissue(
 	enable_xpg_echo: bool = False,
 	extra_env: dict[str, str] | None = None,
 	api_responses: dict[str, object] | None = None,
+	path_prefix: str | None = None,
 ) -> dict:
 	"""Run the close_and_reissue branch with FIRST_ISSUE_LABELS_JSON
 	pre-seeded to ``parent_label_set`` and return the captured gh
@@ -431,7 +433,9 @@ def _run_close_and_reissue(
 	``extra_env`` adds or overrides harness environment variables (for
 	example ``FIRST_ISSUE_LINEAGE_BODY`` / ``PR_BASE_REF``);
 	``api_responses`` seeds the mock ``gh api`` substring-matched
-	responses (for example ``{"pulls/42/files": [...]}``)."""
+	responses (for example ``{"pulls/42/files": [...]}``);
+	``path_prefix`` is a directory put on ``PATH`` ahead of the mock
+	``gh`` (for example a ``git`` shim that makes one lookup fail)."""
 	branch = _extract_close_and_reissue_branch()
 
 	with tempfile.TemporaryDirectory(prefix="test_review_rb_judge_") as td:
@@ -491,7 +495,7 @@ def _run_close_and_reissue(
 		judge_json = json.dumps(judge_payload)
 
 		env = {
-			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"PATH": f"{path_prefix + ':' if path_prefix else ''}{bin_dir}:{os.environ.get('PATH', '')}",
 			"MOCK_GH_STATE_FILE": str(gh_state_file),
 			"ENSURE_LABELS_FILE": str(labels_file),
 			"REPOSITORY": "owner/repo",
@@ -1121,9 +1125,66 @@ def test_close_and_reissue_spot_fix_new_output_paths_never_exempt_existing_paths
 	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=11 added=6 skipped=5 total=7" in stdout
 
 
+def test_close_and_reissue_spot_fix_new_output_path_lookup_failure_fails_closed() -> None:
+	"""PR #4668 review round 1: a failed existence lookup at the closed head
+	(an unreadable object, a partial clone that cannot fetch, a bad SHA) must
+	never read as "absent", or an existing path could enter the allowlist.
+	The entry is skipped as ``lookup_failed`` and the other entries still
+	go through."""
+	real_git = shutil.which("git")
+	assert real_git, "git is required for this harness"
+	with tempfile.TemporaryDirectory(prefix="test_rb_git_shim_") as shim_td:
+		shim = Path(shim_td) / "git"
+		shim.write_text(
+			"#!/usr/bin/env bash\n"
+			'case " $* " in\n'
+			'  *" ls-tree "*" tests/fixtures/lookup_fails.json "*)\n'
+			'    echo "fatal: simulated tree read failure" >&2\n'
+			"    exit 128\n"
+			"    ;;\n"
+			"esac\n"
+			f'exec "{real_git}" "$@"\n',
+			encoding="utf-8",
+		)
+		shim.chmod(0o755)
+		state = _run_close_and_reissue(
+			["ai:orchestrator-managed"],
+			judge_payload=_spot_fix_payload_with_new_outputs(
+				["tests/fixtures/lookup_fails.json", "tests/fixtures/new_case.json"]
+			),
+			reissue_preserve_baseline_enabled="1",
+			repo_files={
+				"src/app.py": "print('hello')\n",
+				"README.md": "hello\n",
+				"tests/fixtures/existing.json": "{}\n",
+			},
+			api_responses={"pulls/42/files": [{"filename": "src/app.py"}]},
+			path_prefix=shim_td,
+		)
+	_assert_new_output_footer_and_skips(
+		state,
+		["tests/fixtures/new_case.json"],
+		[(1, "tests/fixtures/lookup_fails.json", "lookup_failed")],
+	)
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=2 added=1 skipped=1 total=2" in state["_stdout"]
+
+
+def test_new_output_existence_check_uses_literal_pathspecs() -> None:
+	"""`git ls-tree` reads its path arguments as pathspecs, so a declared
+	path such as ``:(top)README.md`` would be matched as ``README.md``.  The
+	existence check must read the declared path literally and from the tree
+	root, and never via ``git cat-file -e``, which cannot tell a failed read
+	from a missing path."""
+	branch = _extract_close_and_reissue_branch()
+	block = branch[branch.index("# New output paths:"):branch.index("REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=")]
+	assert 'git --literal-pathspecs ls-tree --full-tree --name-only "${RB_HEAD_SHA}" -- "${RB_NEW_OUTPUT_PATH}"' in block
+	assert "cat-file -e" not in block
+
+
 def test_close_and_reissue_without_new_output_paths_keeps_the_body_unchanged() -> None:
 	"""A judge on the old contract (no field, or an empty / non-array field)
-	must produce exactly today's footer and no new log line."""
+	must produce exactly today's footer and no new log line.  A field that is
+	present but not an array only adds one notice naming its type."""
 	footers = []
 	for new_output_paths in (None, [], "changelog.d/not-a-list.md"):
 		payload = _spot_fix_payload_with_new_outputs(new_output_paths)
@@ -1140,6 +1201,9 @@ def test_close_and_reissue_without_new_output_paths_keeps_the_body_unchanged() -
 		assert body.rstrip().endswith("- files_touched:\n  - src/app.py"), body
 		assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS" not in state["_stdout"]
 		assert "new_output_paths entry" not in state["_stdout"]
+		notice = "::notice::Ignoring judge new_output_paths: expected an array, got string."
+		assert (notice in state["_stdout"]) == isinstance(new_output_paths, str), state["_stdout"]
+		assert "not-a-list" not in state["_stdout"], "a malformed field's value must never be echoed"
 		footers.append(body[body.index("- files_touched:"):])
 	assert len(set(footers)) == 1
 

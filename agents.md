@@ -829,9 +829,10 @@ fail-open on a failed `pulls/<n>/files` listing), then with the new files the
 judge declares in `new_output_paths` (`REISSUE_FILES_TOUCHED_NEW_OUTPUTS`).
 A declared path is kept only when it passes the path validator, carries no
 glob character or trailing `/`, is not `.git`, and does not exist at the
-closed head; at most 10 are read, and a rejected one is skipped, never a
-fallback to `redo`. Incident: #4664's reissue needed a new changelog fragment
-and four new fixtures that neither source could list (heal #4665).
+closed head (a failed lookup there skips it too); at most 10 are read,
+and a rejected one is skipped, never a fallback to `redo`. Incident: #4664's
+reissue needed a new changelog fragment and four new fixtures that neither
+source could list (heal #4665).
 Before that block is appended, canonical tracking-issue, integration-branch,
 and local-ID lines are removed from the judge-generated issue prose, so only
 the PR-base-validated block can supply successor-adoption lineage. Incident:

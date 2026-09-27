@@ -2668,12 +2668,24 @@ print(m.group(1) if m else "")
       # validator, must not name `.git`, must carry no glob metacharacter or
       # trailing `/` (files_touched_scope_guard.py reads those as globs and
       # directory prefixes), and must not exist at the closed head, so no
-      # existing file or directory is ever exempted this way.  Only the first
-      # 10 declarations are read.  A rejected entry is skipped with its reason
-      # (the path is echoed only once it passed the validator), never a reason
-      # to fall back to redo.  No API call.
+      # existing file or directory is ever exempted this way.  The existence
+      # check is a literal-pathspec `git ls-tree` of the closed head: empty
+      # output with exit 0 is the only proof of absence, so a failed lookup
+      # skips the entry (`lookup_failed`) instead of reading as "new".  Only
+      # the first 10 declarations are read.  A rejected entry is skipped with
+      # its reason (the path is echoed only once it passed the validator),
+      # never a reason to fall back to redo.  A field that is present but not
+      # an array declares nothing and logs one notice.  No API call.
       if [ "${RB_EFFECTIVE_REISSUE_MODE}" = "spot-fix" ] && [ -n "${RB_BASELINE_BRANCH}" ] && [ "${#RB_REISSUE_FILES[@]}" -gt 0 ]; then
         RB_NEW_OUTPUT_MAX=10
+        RB_NEW_OUTPUT_FIELD_TYPE="$(printf '%s' "${JUDGE_JSON}" | jq -r '.new_output_paths | type' 2>/dev/null || true)"
+        case "${RB_NEW_OUTPUT_FIELD_TYPE}" in
+          array|null)
+            ;;
+          *)
+            echo "::notice::Ignoring judge new_output_paths: expected an array, got ${RB_NEW_OUTPUT_FIELD_TYPE:-unreadable JSON}."
+            ;;
+        esac
         mapfile -t RB_NEW_OUTPUT_CANDIDATES < <(
           printf '%s' "${JUDGE_JSON}" | jq -r '
             if (.new_output_paths | type) == "array" then
@@ -2716,7 +2728,9 @@ print(m.group(1) if m else "")
             if [ -z "${RB_NEW_OUTPUT_REASON}" ]; then
               if [ -n "${RB_NEW_OUTPUT_SEEN["${RB_NEW_OUTPUT_PATH}"]+x}" ]; then
                 RB_NEW_OUTPUT_REASON="duplicate"
-              elif git cat-file -e "${RB_HEAD_SHA}:${RB_NEW_OUTPUT_PATH}" >/dev/null 2>&1; then
+              elif ! RB_NEW_OUTPUT_AT_HEAD="$(git --literal-pathspecs ls-tree --full-tree --name-only "${RB_HEAD_SHA}" -- "${RB_NEW_OUTPUT_PATH}" 2>/dev/null)"; then
+                RB_NEW_OUTPUT_REASON="lookup_failed"
+              elif [ -n "${RB_NEW_OUTPUT_AT_HEAD}" ]; then
                 RB_NEW_OUTPUT_REASON="exists_at_head"
               fi
             fi
