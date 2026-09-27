@@ -152,8 +152,9 @@ master picks up every open PR again because it keeps no state of its own.
     5 more) once per PR per hour.
   - `stale_routines.py` read budget is unchanged.
   - The pickup revival adds 0 GitHub calls. It uses claude.ai
-    `list_triggers` (already called in pickup step 1) plus one
-    `list_sessions`.
+    `list_triggers` with `enabled: true` (already called in pickup step 1),
+    plus one `list_triggers` with `enabled: false` (to see dormant ticks)
+    and one `list_sessions`.
 - **§18.C supervisor.** The master is a long-running supervisor. Its
   lifecycle and wiring are specified in Approach §A.7, and its registry
   entry in P4.
@@ -367,7 +368,12 @@ delay. The master never claims, so it ignores no claims. The sweep's
    marker is less than 6h old, output `dormant: true`.
 6. **Stale sweep.** Call `stale_routines.classify` on the ended file and
    output its `delete` ids as `stale_delete`, so the master runs §26.G
-   every tick with no extra reads beyond its own PR-read cache.
+   every tick with no extra reads beyond its own PR-read cache. The call
+   is wrapped: if `classify` raises (for example on a malformed entry),
+   the script outputs `stale_delete: []`, adds `stale sweep failed:
+   <exception>` to `errors`, and still prints the rest of the action list
+   with exit 0. The sweep is best-effort, the same as §26.G's "a failed
+   sweep never blocks"; the renewals must never be lost because of it.
 
 Output schema, exit codes (0 verdict / 2 unreadable input), and the API
 budget are documented in the module docstring, per §15 "document the
@@ -381,15 +387,33 @@ batching contract".
    pushed, else `notify`. There is no subscriber message: the master
    discovers the Routine on its next tick.
 2. **Ensure a live master** with
-   `check_in_master.py --ensure --repo <r> --enabled <file> --sessions <list_sessions file>`.
-   The sessions file comes from one `list_sessions` call with
-   `mine: true`, `limit: 100`. The script outputs one of:
+   `check_in_master.py --ensure --repo <r> --enabled <file> --disabled <file> --sessions <list_sessions file>`.
+   The inputs come from three claude.ai reads:
+   - `--enabled`: `list_triggers` with `enabled: true`, `limit: 100`;
+   - `--disabled`: `list_triggers` with `enabled: false`, `limit: 100`,
+     following `next_cursor` up to 5 pages. This is the only listing that
+     contains a **dormant** master's tick Routine, because dormancy sets
+     `enabled: false` (A.3 step 3);
+   - `--sessions`: `list_sessions` with `mine: true`, `limit: 100`.
+
+   A dormant tick is a recurring (`cron_expression` non-empty) Routine
+   named `PR status master: <repo>`, with `enabled: false`, **no**
+   `ended_reason`, and a `persistent_session_id` that `--sessions` shows
+   as a non-archived, non-failed session. A disabled tick that has an
+   `ended_reason` (for example `auto_disabled_session_gone`), or whose
+   session is archived, failed, or missing, is not a dormant master. It
+   counts as no master. When several dormant ticks qualify, the oldest
+   `created_at` wins, ties broken by `id` (keeper rule). The script
+   outputs one of:
    - `ok` — the tick is enabled and bound to a non-archived session, or a
      non-archived session titled `<owner>/<repo> PR status master` was
      created ≤10 min ago (a creation still in progress, possibly by
      another subscriber woken at the same moment);
-   - `enable <trig id>` — the master exists and is dormant, so call
-     `update_trigger` with `enabled: true`;
+   - `enable <trig id>` — the master exists and is dormant; `<trig id>` is
+     the dormant tick's id from `--disabled`. Call `update_trigger` on it
+     with `enabled: true`. If that call fails, the session reports it in
+     one line; the next arming session, a subscriber's switch, or the
+     pickup retries;
    - `create` — no master, or it is archived or failed. Create it in
      three calls:
      1. a master session (Sonnet, `/effort low` two-step start, title
@@ -452,9 +476,11 @@ batching contract".
   archived subscriber fires into nothing (`auto_disabled_session_gone`),
   which is expected.
 - **Pickup (A):** a new pickup step, `1b. Revive PR status masters`, reuses
-  the `list_triggers` result of pickup step 1 (it lists
-  `enabled: true`) and adds one `list_sessions` call. It then runs
-  `check_in_master.py --revive-scan --enabled <file> --sessions <file>`,
+  the `list_triggers` result of pickup step 1 (it lists `enabled: true`).
+  It adds one `list_triggers` call with `enabled: false` (following
+  `next_cursor` up to 5 pages, so dormant ticks are visible) and one
+  `list_sessions` call. It then runs
+  `check_in_master.py --revive-scan --enabled <file> --disabled <file> --sessions <file>`,
   which, for every repo with at least one enabled master-owned hand-back,
   outputs `ok` / `enable` / `create` (A.5 step 2 rules). The pickup is at
   depth ≤3, so a master it creates is at ≤4 and the master's fresh fixers
@@ -645,7 +671,15 @@ run in a stage session because it needs claude-code-remote tools.
      `.github/ai/consumer_repos.json` plus coding-workflows;
    - `--ensure` / `--revive-scan` outputs, including an archived or failed
      master session → `create`;
-   - the stale-sweep pass-through.
+   - dormant-master revival: a disabled recurring tick in `--disabled`
+     (no `ended_reason`, live session) → `enable` with **that** tick's id,
+     never `create`; a disabled tick with `ended_reason` set, or whose
+     session is archived or missing → `create`; two dormant ticks → the
+     keeper's id; the same dormant tick absent from `--disabled` (the old
+     enabled-only input) → `create`, which documents why the input is
+     required;
+   - the stale-sweep pass-through, and `classify` raising → `stale_delete:
+     []`, an `errors` entry, the renewals still printed, exit 0.
 
    `check_pr_hand_back` is stubbed; there is no network.
 6. Extend `tests/test_stale_routines.py` for rules (a) to (c), and add a
@@ -679,7 +713,9 @@ run in a stage session because it needs claude-code-remote tools.
 ### P3
 
 1. In `claude-issue-pickup.md`, insert step `1b` after step 1:
-   - save the step-1 `list_triggers` result to a file;
+   - save the step-1 `list_triggers` result (`enabled: true`) to a file;
+   - call `list_triggers` with `enabled: false`, `limit: 100` (up to 5
+     pages) and save it as the `--disabled` file;
    - call `list_sessions` (`mine: true`, `limit: 100`);
    - run `check_in_master.py --gate`, then `--revive-scan`;
    - execute `enable` / `create` (A.5 step 2, with `source_url` =
@@ -780,7 +816,10 @@ run in the implementing account):**
   `created_at`, `next_run_at`, `enabled`, `ended_reason` and `last_run`
   (`status`, `fired_at`, `finished_at`, `session_id`) are present, that
   the `enabled` filter and `next_cursor` pagination work, and record the
-  ordering.
+  ordering. Also check that a recurring Routine disabled with
+  `update_trigger` (`enabled: false`, a dormant tick) appears in
+  `list_triggers` with `enabled: false` and no `ended_reason`, **without**
+  `include_completed`, since `--ensure` and `--revive-scan` rely on that.
 - **P-5 Rename and enable.** `update_trigger` with `name`, and
   `enabled: false`/`true`, works on a Routine created by **another**
   session of the same account, and on a recurring Routine. `update_trigger`
