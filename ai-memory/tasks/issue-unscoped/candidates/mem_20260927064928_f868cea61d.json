@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:35 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The workspace path read from `${root}/workspace` is read without quoting, which could cause issues if it contains shell-special characters or newlines.\n  WHY: If `realpath` somehow returns a path that requires splitting or globbing, this expansion could fail.\n- tests/conftest.py:74-95 | severity=high | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: `WORKSPACE_PATH` is not stripped from the pytest environment, so the legacy test can inherit the real runner workspace and have `prepare` reject it against the test's temporary `RUNNER_TEMP`.\n  WHY: The implement workflow's editor environment carries `WORKSPACE_PATH`; `test_review_host_python_launches_are_isolated_and_broker_keeps_credential` inherits it via `os.environ.copy()`, and the new realpath validation can fail with \"Review workspace path rejected.\"\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Existing sandbox behaviour is unchanged when no workspace is active: the legacy test `test_review_host_python_launches_are_isolated_and_broker_keeps_credential` still passes.\"\n  expected_change_site: tests/test_model_provider_broker.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff introduces new tests for the active workspace, but does not include explicit verification or confirmation that the existing `test_review_host_python_launches_are_isolated_and_broker_keeps_credential` test in `tests/test_model_provider_broker.py` remains passing as per the plan's goals.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_sandbox.sh:35 | severity=low | confidence=[4]\n  PROBLEM: The workspace path read from `${root}/workspace` is read without quoting in the assignment `workspace=\"$(< \"${root}/workspace\")\"`, which could lead to issues if the path contains shell-special characters or newlines (though `realpath` should produce a clean path, quoting is defensive).\n  WHY: If `realpath` somehow returns a path that requires splitting or globbing, this expansion could fail.\n- scripts/review_untrusted_workspace.py:114-118 | severity=low | confidence=[2]\n  PROBLEM: The code handles the optional Git directory argument but does not perform any validation on the path other than `is_dir()`.\n  WHY: If an attacker could control this argument, they could potentially specify a `.git` directory outside of the allowed repository tree (though the caller `scripts/review_untrusted_sandbox.sh` seems to control this carefully by resolving the checkout path).\n- TASK_GAP\n  Requirement: \"Existing sandbox behaviour is unchanged when no workspace is active: the legacy test `test_review_host_python_launches_are_isolated_and_broker_keeps_credential` still passes.\"\n  Expected change site: tests/test_model_provider_broker.py\n  Evidence of absence: The PR diff introduces new tests for the active workspace, but does not include explicit verification or confirmation that the existing `test_review_host_python_launches_are_isolated_and_broker_keeps_credential` test in `tests/test_model_provider_broker.py` remains passing as per the plan's goals.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/conftest.py:74-95 | severity=high | confidence=[4]\n  PROBLEM: The \"Activate workspace shell context\" step in review_autofix.yml (line 2844), implement.yml (line 1398), and validate.yml (line 567) exports GIT_DIR, GIT_WORK_TREE, and WORKSPACE_PATH into $GITHUB_ENV together. The conftest strips GIT_DIR and GIT_WORK_TREE from os.environ for the whole pytest session to prevent the editor's inherited environment from rebinding sandbox tests to the live checkout (documented for the #4092 incident). This PR makes review_untrusted_sandbox.sh prepare read and validate WORKSPACE_PATH against ${RUNNER_TEMP}/workspaces, but WORKSPACE_PATH is not in the conftest strip list. The existing test test_review_host_python_launches_are_isolated_and_broker_keeps_credential (tests/test_model_provider_broker.py:425) builds its env via env = os.environ.copy(), so when pytest runs inside the implement.yml editor (where WORKSPACE_PATH is set and the editor runs pytest for validation, as documented in the conftest docstring), the inherited WORKSPACE_PATH points at the real runner workspace while the test sets RUNNER_TEMP to its own short_dir. The new realpath -e validation in prepare (scripts/review_untrusted_sandbox.sh:30-33) resolves ${RUNNER_TEMP}/workspaces to /invalid (the test's temp dir has no workspaces subdir), the dirname check fails, and prepare exits 1 with \"Review workspace path rejected\".\n  WHY: The implement workflow's editor environment carries WORKSPACE_PATH (set by the same \"Activate workspace shell context\" step that sets GIT_DIR/GIT_WORK_TREE). When the editor runs pytest tests/test_model_provider_broker.py to validate its change, the existing test inherits WORKSPACE_PATH via os.environ.copy(), the new prepare validation rejects it because the test's RUNNER_TEMP doesn't match the real runner's workspaces root, and the test fails. This is the same class of environment-leak regression the conftest was created to prevent.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e04784da20f4f252dc3a9512a3a34486d209d11fb3197a9ace5d9f488942ec8d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4585,
+    "run_id": "36300689548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36300689548",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927064928_f868cea61d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4585,
+    "run_id": "36300689548"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T06:49:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
