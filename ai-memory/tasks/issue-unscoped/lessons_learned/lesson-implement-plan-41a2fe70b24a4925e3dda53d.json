@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T15:34:56Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a regex copies a captured field from a log into heal evidence, bound its character class and pin it with a test to the producer's accepted values, rather than widening it to `[^)]*`: the same log can carry untrusted model stderr.",
+  "phase": "implement_plan",
+  "pr_number": 4658,
+  "record_id": "lesson-implement-plan-41a2fe70b24a4925e3dda53d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4653-summariser-empty-stdout-evidence",
+    "file:scripts/workflow_failure_heal.py",
+    "file:scripts/summarize_reviewer_consensus.sh"
+  ]
+}
