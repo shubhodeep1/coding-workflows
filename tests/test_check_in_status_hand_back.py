@@ -291,6 +291,14 @@ def test_without_a_pr_author_only_the_workflow_account_counts(monkeypatch, capsy
 	assert out["state"] == "claimed" and out["claim"]["by"] == "sweep-run-5"
 
 
+def test_trusted_logins_tolerate_a_non_object_pr(monkeypatch):
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "Workflow-Bot")
+	for pr in (None, [], "PR-Author"):
+		assert checker._fix_claim_trusted_logins(pr) == ("workflow-bot",)
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "")
+	assert checker._fix_claim_trusted_logins(None) == ()
+
+
 def test_no_trusted_login_counts_no_claim(monkeypatch, capsys):
 	pr = _pr(labels=[{"name": "ai:review-blocked"}])
 	pr["user"] = None

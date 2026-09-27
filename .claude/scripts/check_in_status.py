@@ -396,10 +396,11 @@ def _fix_claim_trusted_logins(pr: dict) -> tuple[str, ...]:
 	`GH_PAT` login the catch-all sweep posts its reservations with. Any other
 	collaborator's claim or hold is ignored. No API calls: `pr` is the
 	`pulls/N` object the caller already fetched. Empty when neither is known,
-	so no claim counts (fail closed).
+	so no claim counts (fail closed); a `pr` that is not an object counts only
+	the workflow account's claims.
 	"""
 	logins = []
-	author = pr.get("user")
+	author = pr.get("user") if isinstance(pr, dict) else None
 	if isinstance(author, dict) and isinstance(author.get("login"), str) and author["login"]:
 		logins.append(author["login"].casefold())
 	workflow_login = os.environ.get("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "").strip()
