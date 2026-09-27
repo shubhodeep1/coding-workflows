@@ -7,11 +7,11 @@
 - Status: IN_PROGRESS
 - Stage: final-merge — review round
 - Activation: pending verify-activation
-- Waiting on: PR #4632 (final PR, review round 2)
+- Waiting on: PR #4632 (final PR, review round 3)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01GWqGBroosei1DkAcn377y3 (project checker, reused)
 - Last updated: 2026-09-27
-- Last note: final-merge resumed on the owner's Q1: A answer — main merged into the project branch at 12d4f99, then one [claude-autofix] commit sets CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN explicitly in the two tests round 1's reviewers misread, so round 2 runs on a new head.
+- Last note: final-merge review round 2 (head 9efe92c): the two line-length nits in CLAUDE.md §26.H and agents.md were fixed by rewrapping; the cap-state task gap was rejected (AD-2). One [claude-autofix] commit starts round 3.
 
 ## Phases
 1. [x] Phase 1 — restrict claim authors to the PR author and the workflow account   — PR #4644 merged 2026-09-27; review rounds: 1; interventions: 0
@@ -27,7 +27,7 @@
 
 ## Completion
 - PR #4659 merged 2026-09-27 — doc moved to docs/completed/issue-4622-trusted-fix-claim-authors-plan.md
-- Final PR #4632 ready — review rounds: 2 (round 1 on fafc37a: 3 findings, all rejected as false positives; round 2 after the Q1: A autofix commit)
+- Final PR #4632 ready — review rounds: 3 (round 1 on fafc37a: 3 findings, all rejected as false positives; round 2 on 9efe92c: 2 line-length nits fixed, 1 task gap rejected per AD-2; round 3 after the round 2 autofix commit)
 
 ## Activation
 
@@ -47,3 +47,4 @@
 - Issue progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4622#issuecomment-5854270496
 - 2026-09-27 final-merge review round 1 (head fafc37a): all 3 findings rejected as false positives (https://github.com/shubhodeep1/coding-workflows/pull/4632#issuecomment-5857879664); convergence needed a dedicated-bot verdict this session cannot post, so the head was held and Q1 asked on the issue (https://github.com/shubhodeep1/coding-workflows/issues/4622#issuecomment-5857881698).
 - 2026-09-27 Q1 answered by the owner: A (https://github.com/shubhodeep1/coding-workflows/issues/4622#issuecomment-5860414886). Resumed in session session_01JqR7ctkXcMwSibYZ3vRHoq: claimed head fafc37a (kind review, lifts the hold), merged main (clean), pushed one [claude-autofix] commit.
+- 2026-09-27 final-merge review round 2 (head 9efe92c), session session_018yEAaM7ydUTg85UAyLGb7m: claimed the head (kind review); fixed the CLAUDE.md:2003 and agents.md:915 line-length nits by rewrapping; rejected the task gap asking holds to require verified cap state (AD-2: `/fix-claude-pr` holds dead ends below the cap).
