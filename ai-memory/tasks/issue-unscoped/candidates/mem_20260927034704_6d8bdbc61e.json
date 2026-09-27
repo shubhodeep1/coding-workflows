@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The new compare-read behavior added to `.claude/scripts/check_in_status.py --hand-back` mode on a `claude/*` head should be reflected in the API budget summaries in CLAUDE.md \u00a726 and the matching agents.md \u00a726 paragraph, which still say \"at most five further reads\".\n  expected_change_site: `CLAUDE.md` \u00a726.C step 1 and `agents.md` \u00a726 paragraph\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  EVIDENCE: After this change the head-back worst-case read set is 1 PR read + comment pages + check-run pages + 1 head-commit read + 1 hand-off run read + 1 compare read + 3 active-run reads = 6 further reads, not 5. Neither doc was updated alongside the script docstring, README row, and sweep docstring that the PR did update.; Neither `agents.md` nor `CLAUDE.md` appears in the PR diff. The \"at most five\" was 1 head-commit + 1 hand-off run + 3 active-run = 5; with the compare read it is 6.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: The new compare-read behavior added to `.claude/scripts/check_in_status.py --hand-back` mode on a `claude/*` head should be reflected in the API budget summaries in CLAUDE.md \u00a726 and the matching agents.md \u00a726 paragraph, which still say \"at most five further reads\" (CLAUDE.md line 1703, agents.md line 853).\nExpected change site: CLAUDE.md around line 1703 and agents.md around line 853.\nEvidence of absence: After this change the head-back worst-case read set is 1 PR read + comment pages + check-run pages + 1 head-commit read + 1 hand-off run read + 1 compare read + 3 active-run reads = 6 further reads, not 5. Neither doc was updated alongside the script docstring, README row, and sweep docstring that the PR did update. The script docstring (the authoritative source, already updated) is the only place that names the new compare read.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\nRequirement: CLAUDE.md \u00a77 requires updating `README.md` / `agents.md` for behavior changes. The checker's API budget changed: the new compare read makes the worst-case \"further reads\" six, not five. The PR description states \"Call-count docs are updated in the `check_in_status.py` module docstring and the `claude_pr_sweep.py` batching contract\" and the README `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` row is updated, but two other call-count descriptions are not.\nExpected change site: `agents.md` line 853 (\"at most five further reads\") and `CLAUDE.md` line 1703 / \u00a726.C step 1 (\"at most five further reads\"), both describing the `--hand-back` checker's REST budget. The module docstring at `.claude/scripts/check_in_status.py:64-76` correctly lists \"1 compare read (same condition)\" alongside the existing reads.\nEvidence of absence: Neither `agents.md` nor `CLAUDE.md` appears in the PR diff. The \"at most five\" was 1 head-commit + 1 hand-off run + 3 active-run = 5; with the compare read it is 6. The authoritative module docstring is updated; these two high-level descriptions are now stale by one conditional read.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "22a032b07b8ab844aa985aec5305229391040e751d7df8f70a21b87b23502591",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4601,
+    "run_id": "36291513647",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36291513647",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927034704_6d8bdbc61e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4601,
+    "run_id": "36291513647"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T03:47:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
