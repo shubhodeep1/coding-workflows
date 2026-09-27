@@ -245,7 +245,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `/implement-issue-claude`: a single-phase plan
     `docs/plans/issue-<N>-<topic>-plan.md` (header `Source issue:`,
     `Base branch:` from the issue's `Integration branch:` / `Target branch:`
-    line else the default branch, `Security pass: run|skip`), then continues
+    line else the default branch, `Security pass: run|skip`; `skip` only when
+    `.claude/scripts/security_pass_skip.py` verifies the issue was created and
+    labelled at creation by the issue automation — `github-actions[bot]` or
+    the `OWNER` account — and carries its marker/tracker link; a label alone
+    or any read failure keeps `run`; see #4623), then continues
     as `/implement-plan-claude` issue mode: project branch
     `claude/implement-plan-<slug>` forked from the base branch, final PR into
     it with `Fixes #N` (default base) or an explicit close + `ai:merged` after

@@ -24,9 +24,9 @@ Security pass: skip (ai:security: automation-produced issue)
 ## Goals
 
 - G1: `Security pass: skip` is written only when `.claude/scripts/security_pass_skip.py` returns `"skip": true` for the issue.
-- G2: The script returns `skip: true` only when all of these hold for one skip label: (a) the author is `github-actions[bot]` (type `Bot`) or a `User` with `author_association` `OWNER`; (b) the label's first `labeled` timeline event was performed by the author within 120 seconds of the issue's creation; (c) the body carries that label's automation marker; (d) for `ai:security`, the body's `Refs #T` names an issue that carries `ai:security-audit`, the tracker marker, and the same author.
+- G2: The script returns `skip: true` only when all of these hold for one skip label: (a) the author is `github-actions[bot]` (type `Bot`) or a `User` with `author_association` `OWNER`; (b) the label's first `labeled` issue event was performed by the author within 120 seconds of the issue's creation, and no other account ever applied it; (c) the body carries that label's automation marker; (d) for `ai:security`, the body's `Refs #T` names an issue that carries `ai:security-audit`, the tracker marker, and the same author.
 - G3: Any other outcome, and any read failure (exit 2), makes the session write `Security pass: run`.
-- G4: The script issues at most three REST calls (issue, first timeline page, tracker) and no GraphQL (§15).
+- G4: The script issues at most three REST calls (issue, first issue-events page, tracker) and no GraphQL (§15).
 - G5: Consumer repos receive the script, the updated commands, and the allowlist entries through the `workflow-templates/.claude/` mirror.
 
 ## Non-goals
@@ -49,7 +49,7 @@ Security pass: skip (ai:security: automation-produced issue)
 
 ## Approach
 
-A standalone Python script in `.claude/scripts/` (where `check_in_status.py` and `claude_fix_claim.py` live, so consumers have it) with a pure `decide_security_pass_skip(issue, timeline, tracker_lookup)` function and a CLI `--repo <owner>/<repo> --issue <N>` that prints one JSON line `{"skip": bool, "label": str|null, "reason": str}` (exit 0), or exits 2 on a read failure. `/implement-issue-claude` step 6 runs it and writes the header from its result; `implement-plan-claude.md` Issue Mode says how the header is set. Alternatives considered: deciding in `clarify.yml` and carrying the verdict through the dispatch payload, queue, and start prompt (touches five components, and manual runs would need a second path); prose-only rules (the model would still decide from mutable data).
+A standalone Python script in `.claude/scripts/` (where `check_in_status.py` and `claude_fix_claim.py` live, so consumers have it) with a pure `decide_security_pass_skip(issue, events, fetch_tracker)` function and a CLI `--repo <owner>/<repo> --issue <N>` that prints one JSON line `{"skip": bool, "label": str|null, "reason": str}` (exit 0), or exits 2 on a read failure. `/implement-issue-claude` step 6 runs it and writes the header from its result; `implement-plan-claude.md` Issue Mode says how the header is set. Alternatives considered: deciding in `clarify.yml` and carrying the verdict through the dispatch payload, queue, and start prompt (touches five components, and manual runs would need a second path); prose-only rules (the model would still decide from mutable data).
 
 ## Phases & Merge Strategy
 
@@ -62,7 +62,7 @@ Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: `/implement-issue-
 
 ## Implementation Steps
 
-1. Create `.claude/scripts/security_pass_skip.py`: constants for the skip labels (same order as `SECURITY_PASS_SKIP_LABELS`), per-label marker regexes, the tracker label and marker, the 120-second window; the pure decision function; `gh api` fetch helpers (issue, `issues/<N>/timeline?per_page=100`, tracker issue); CLI; docstring with the §15 call budget and exit codes.
+1. Create `.claude/scripts/security_pass_skip.py`: constants for the skip labels (same order as `SECURITY_PASS_SKIP_LABELS`), per-label marker regexes, the tracker label and marker, the 120-second window; the pure decision function; `gh api` fetch helpers (issue, `issues/<N>/events?per_page=100`, tracker issue); CLI; docstring with the §15 call budget and exit codes.
 2. Copy it to `workflow-templates/.claude/scripts/security_pass_skip.py`.
 3. Edit `.claude/commands/implement-issue-claude.md` step 6: run the script; `skip: true` → `Security pass: skip (<label>: automation-produced issue, verified)`; anything else → `Security pass: run`, recording the reason in the plan's Notes when a skip label was present. Mirror to the template.
 4. Edit `.claude/commands/implement-plan-claude.md` Issue Mode "Security pass" bullet to say the header is set only by the verified check. Mirror to the template.
@@ -93,7 +93,7 @@ Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: `/implement-issue-
 
 - Org-owned consumer where the PAT user is a MEMBER: the skip never verifies and the security pass runs, which can open follow-ups of follow-ups. ACCEPTED — safe direction; every registered repo is user-owned today.
 - A write collaborator can create issues as `github-actions[bot]` from a branch workflow, or read `GH_PAT` from one. ACCEPTED — that is write access to repository secrets, outside this finding; the fix closes the label-only (triage-role) path.
-- The timeline's first page might not contain the creation-time `labeled` event on an issue with more than 100 events before it. Mitigation: events are chronological, so the creation-time event is always first; a missing event means `run`.
+- A later re-application of the label by another account could sit beyond the first 100 issue events. Mitigation: the issue-events endpoint lists label and state events only (no comments), and a full 100-event page is treated as unverifiable, so the pass runs.
 - Clock skew between `created_at` and the `labeled` event. Mitigation: 120-second window (observed gap on #4623: 1 second).
 
 ## Rollout

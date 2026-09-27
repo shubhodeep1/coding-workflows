@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4623-verify-security-pass-skip-plan.md
 - Source issue: shubhodeep1/coding-workflows#4623 (https://github.com/shubhodeep1/coding-workflows/issues/4623)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4623-verify-security-pass-skip   Final PR: pending
+- Project branch: claude/implement-plan-issue-4623-verify-security-pass-skip   Final PR: #4635 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #4645
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01FJKco7zdoJ1ez3JY6t8ui9   safety net and hand-back re-armed by the round-3 stage session session_01LBFSeYPYc9BA8zmu85Ee7j (ids in its report)
 - Last updated: 2026-09-27
-- Last note: project branch opened; phase 1 implementation starting
+- Last note: review round 3: 1 finding fixed (a labeled event dated before the issue's creation now gets its own diagnostic instead of "applied -5s after creation"), 2 rejected (agents.md parenthesis is balanced; docs/INVENTORY.md parity does not cover `.claude/`)
 
 ## Phases
-1. [ ] Phase 1 — verified security-pass skip (`.claude/scripts/security_pass_skip.py`, commands, allowlist, tests, docs, changelog)
+1. [ ] Phase 1 — verified security-pass skip (`.claude/scripts/security_pass_skip.py`, commands, allowlist, tests, docs, changelog)   — PR #4645 open (waiting); review rounds: 3; interventions: 0
 
 ## Conformance
 
@@ -35,6 +35,11 @@
 - AD-6 [plan, 2026-09-27] Does this project skip its own security pass? — Picked: A — skip: #4623 passes the new rule by hand. Alternatives: B — run it. Why: the issue is an automation-produced follow-up under both the old and the new rule; conformance, validation, and the reviewer panel still run. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:intervention] Pick the earliest GitHub event by its `created_at`, never by list position: the REST events endpoints are chronological today but reviewers treat the order as unspecified, and a position-based check breaks silently if it changes. (files: .claude/scripts/security_pass_skip.py)
+- [source:plan-deviation] Read label history from `issues/<N>/events` (label and state events only), not `issues/<N>/timeline`: the timeline mixes in comments and cross-references, so a 100-item page fills faster and hides later label events. (files: .claude/scripts/security_pass_skip.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#4623: start`); invoking session session_01WLQwN8LRQ8ih2NrbkY1ky6.
+- Phase 1 used the issue-events endpoint instead of the timeline named in the plan (plan updated in the phase PR); a non-automation author now costs one REST read instead of two.
+- Draft final PR #4635 opened 2026-09-27.
+- Local verification: `tests/test_orchestrate_poll_process.py` (446 tests) runs >40 min on this container's Python 3.11 and was not finished when the PR opened; CI's sharded Python 3.12 run is authoritative for it. `tests/test_workflow_retro.py` cannot be collected on Python 3.11 (pre-existing, unrelated).
