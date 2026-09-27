@@ -22,15 +22,18 @@ ledger_substates_enabled()
 
 resolve_ai_memory_script()
 {
-	local script_dir repo_root candidate
+	local script_dir candidate
 
 	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
+	# Trust boundary (issue #4568): the ai_memory.py child runs on the host
+	# with the job's environment, and its own directory goes on sys.path for
+	# ai_memory_lib.py. Only the workflow-set override or the copy staged next
+	# to this helper qualify; the working directory's checkout is never a
+	# candidate, so a branch cannot supply the child or its sibling modules.
 	for candidate in \
 		"${LEDGER_AI_MEMORY_SCRIPT:-}" \
-		"${script_dir}/ai_memory.py" \
-		"${repo_root}/scripts/ai_memory.py"; do
+		"${script_dir}/ai_memory.py"; do
 		[ -n "${candidate}" ] || continue
 		if [ -f "${candidate}" ]; then
 			printf '%s\n' "${candidate}"

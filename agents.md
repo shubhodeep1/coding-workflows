@@ -1156,7 +1156,10 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   `review_agents_md_materiality.sh`, `review_filter_uninteresting_files.sh`,
   `review_reject_verify.sh`, `post_review_comment.sh`, `check_resolver_diff.sh`
   and `drift_audit.sh`. The ledger's `ai_memory.py` child runs with `-I -B` and
-  adds only its own support directory to `sys.path`. A checkout-controlled
+  adds only its own support directory to `sys.path`; `ledger_emit_substate.sh`
+  takes `ai_memory.py` only from `LEDGER_AI_MEMORY_SCRIPT` or its own staged
+  directory, never from the working directory's checkout, and skips the
+  emission with a warning when neither exists. A checkout-controlled
   `pathlib.py`, `json.py` or `sitecustomize.py` in the working directory or on
   `PYTHONPATH` is never imported; `tests/test_host_python_import_isolation.py`
   pins the launches.
