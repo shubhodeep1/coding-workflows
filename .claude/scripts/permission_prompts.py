@@ -398,12 +398,13 @@ def local_repo_slug() -> str:
 
 
 def _post(path: str, body: dict) -> dict:
-	with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as payload_file:
-		json.dump(body, payload_file)
-		payload_path = payload_file.name
+	payload_file = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+	payload_path = payload_file.name
 	try:
+		with payload_file:
+			json.dump(body, payload_file)
 		proc = subprocess.run(["gh", "api", "-X", "POST", path, "--input", payload_path], capture_output=True, text=True, timeout=60)
-	except (OSError, subprocess.TimeoutExpired) as exc:
+	except (OSError, TypeError, ValueError, subprocess.TimeoutExpired) as exc:
 		raise check_in_status.ReadError(f"POST {path} failed: {exc}") from exc
 	finally:
 		Path(payload_path).unlink(missing_ok=True)

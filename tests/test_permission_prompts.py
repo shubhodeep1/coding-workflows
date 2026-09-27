@@ -310,6 +310,22 @@ def test_list_read_failure_exits_2(tmp_path, monkeypatch):
 	assert code == 2 and summary["errors"] == ["proxy 403"]
 
 
+def test_post_payload_file_is_removed_when_serialisation_fails(monkeypatch):
+	created = []
+	real = pp.tempfile.NamedTemporaryFile
+
+	def tracking(*args, **kwargs):
+		handle = real(*args, **kwargs)
+		created.append(handle.name)
+		return handle
+
+	monkeypatch.setattr(pp.tempfile, "NamedTemporaryFile", tracking)
+	monkeypatch.setattr(pp.subprocess, "run", lambda *a, **k: pytest.fail("gh must not run"))
+	with pytest.raises(pp.check_in_status.ReadError):
+		pp._post("repos/o/r/issues", {"body": object()})
+	assert len(created) == 1 and not Path(created[0]).exists()
+
+
 def test_post_failure_is_listed_and_not_recorded(tmp_path, issues, monkeypatch):
 	issues()
 
