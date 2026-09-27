@@ -1947,6 +1947,11 @@ depend on it.
   a resolution that never touched an out-of-scope path. Only the index is
   isolated: a model-issued `git commit` still moves `HEAD` and removes
   `MERGE_HEAD`, and the unchanged check still fails that attempt closed.
+  OpenCode passes its environment on to the git commands of its own session
+  snapshot, which would stage the conflicted files (markers included) into the
+  scratch copy and hide the unmerged paths from the model, so the source-repo
+  resolver also sets `"snapshot": false` in its generated OpenCode config
+  (`_resolver_disable_opencode_snapshot`, before the bootstrap check).
   Trusted staging (`stage_resolver_touched_path_or_fail`, run after the model
   exits and with the isolation env unset) is unaffected and remains the only
   path that commits to the real index.

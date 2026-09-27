@@ -481,6 +481,61 @@ if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
   opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" 1 config_generation || true
   exit 1
 fi
+
+# Source-repo only: the model attempt runs with GIT_INDEX_FILE pointed at
+# the scratch copy _resolver_prepare_scratch_index seeds, and OpenCode
+# passes its environment on to the git commands of its own session
+# snapshot (`git --git-dir <snapshot dir> --work-tree <checkout> add ...`,
+# run at the start of every session; verified against OpenCode 1.18.23).
+# Under the isolation that snapshot stages the conflicted files, conflict
+# markers included, into the scratch copy, so the model's own
+# `git status` / `git ls-files -u` stop showing the unmerged paths. The
+# resolver never uses OpenCode's snapshot/undo, so turn it off in the
+# resolver's own config instead. The real index is not involved either way.
+_resolver_disable_opencode_snapshot()
+{
+  python3 - "$1" <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+config_path = sys.argv[1]
+temporary_path = ""
+try:
+    with open(config_path, encoding="utf-8") as handle:
+        config = json.load(handle)
+    if not isinstance(config, dict):
+        raise ValueError("config is not a JSON object")
+    config["snapshot"] = False
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=os.path.dirname(os.path.abspath(config_path)),
+        prefix=".resolver_opencode.",
+        suffix=".tmp",
+        delete=False,
+    ) as temporary:
+        temporary_path = temporary.name
+        json.dump(config, temporary, indent=2, sort_keys=True)
+        temporary.write("\n")
+    os.replace(temporary_path, config_path)
+except (OSError, UnicodeError, ValueError) as exc:
+    if temporary_path:
+        try:
+            os.unlink(temporary_path)
+        except OSError:
+            pass
+    print(f"::error::Cannot disable OpenCode snapshots in {config_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] \
+  && ! _resolver_disable_opencode_snapshot "${RESOLVER_OPENCODE_CONFIG}"; then
+  opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" 1 config_generation || true
+  exit 1
+fi
 if ! opencode_require_bootstrap review_conflict_resolve writer "${MODEL_EDITOR}" \
   "${RESOLVER_OPENCODE_CONFIG}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
   exit 1

@@ -50,6 +50,7 @@ orchestrator/project-2840 stack, plus run 25629086684 / PR #2865.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import os
@@ -874,6 +875,59 @@ def test_scope_isolated_model_commit_still_fails_closed() -> None:
 		assert git("rev-parse", "HEAD").stdout != head_before
 
 
+def _disable_opencode_snapshot_source() -> str:
+	src = _resolve_script_text()
+	start = src.index("_resolver_disable_opencode_snapshot()\n{\n")
+	end = src.index("\n}\n", start) + 3
+	return src[start:end]
+
+
+def test_scope_index_isolation_disables_opencode_snapshot() -> None:
+	# Issue #4545 conformance: OpenCode's session snapshot runs
+	# `git --git-dir <snapshot> --work-tree <checkout> add` with the
+	# inherited environment, so under the GIT_INDEX_FILE isolation it
+	# staged the conflicted files (markers included) into the scratch
+	# index and hid the unmerged paths from the model. The source-repo
+	# resolver turns snapshots off in its own config, after the writer
+	# and before the bootstrap check, and never for consumer repos.
+	src = _resolve_script_text()
+	call = (
+		'if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] \\\n'
+		'  && ! _resolver_disable_opencode_snapshot "${RESOLVER_OPENCODE_CONFIG}"; then\n'
+	)
+	assert src.count(call) == 1
+	writer = src.index('if ! bash "${OPENCODE_CONFIG_WRITER_PATH}"')
+	bootstrap = src.index("if ! opencode_require_bootstrap review_conflict_resolve writer")
+	assert writer < src.index(call) < bootstrap < src.index('attempt=1\nwhile ')
+	clean_env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV")}
+	with tempfile.TemporaryDirectory() as directory:
+		config = Path(directory) / "resolver_opencode.json"
+		config.write_text('{"model": "openrouter/x/y", "share": "disabled"}\n', encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + _disable_opencode_snapshot_source()
+			 + '_resolver_disable_opencode_snapshot "$1"\n', "probe", str(config)],
+			env=clean_env, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert json.loads(config.read_text(encoding="utf-8")) == {
+			"model": "openrouter/x/y", "share": "disabled", "snapshot": False,
+		}
+		assert sorted(path.name for path in Path(directory).iterdir()) == ["resolver_opencode.json"]
+
+		# A config it cannot parse fails the step and is left untouched.
+		for broken in ("not json\n", "[]\n"):
+			config.write_text(broken, encoding="utf-8")
+			result = subprocess.run(
+				["bash", "-c", "set -euo pipefail\n" + _disable_opencode_snapshot_source()
+				 + '_resolver_disable_opencode_snapshot "$1"\n', "probe", str(config)],
+				env=clean_env, capture_output=True, text=True, check=False,
+			)
+			assert result.returncode == 1
+			assert "Cannot disable OpenCode snapshots" in result.stderr
+			assert config.read_text(encoding="utf-8") == broken
+			assert sorted(path.name for path in Path(directory).iterdir()) == ["resolver_opencode.json"]
+
+
 def test_scope_symlink_restore_preserves_preexisting_target() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		repo, env = _scope_fixture(Path(directory))
@@ -930,6 +984,7 @@ def main() -> int:
 	test_scope_state_git_index_isolation_prevents_false_positive_and_still_guards_worktree()
 	test_scope_index_isolation_wiring_scoped_to_model_attempt()
 	test_scope_isolated_model_commit_still_fails_closed()
+	test_scope_index_isolation_disables_opencode_snapshot()
 	test_scope_symlink_restore_preserves_preexisting_target()
 	test_scope_feedback_is_available_for_generic_resolver()
 	print(
