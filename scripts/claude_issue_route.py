@@ -105,6 +105,15 @@ QUEUE_PAYLOAD_BLOCK_RE = re.compile(r"```text\n(.*?)\n```", re.DOTALL)
 RUN_URL_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+$")
 FIRE_TEXT_KEYS: tuple[str, ...] = ("repo", "issue", "url", "trigger", "skip_security_pass")
 
+# Pull-request fix items (CLAUDE.md §26.H): the catch-all sweep
+# (scripts/claude_pr_sweep.py) queues one per claude/* PR whose Claude fix
+# nobody handled, in the same queue, and the pickup starts `/fix-claude-pr`.
+PR_FIX_SCHEMA_VERSION = "claude_pr_fix.v1"
+PR_FIX_TEXT_KEYS: tuple[str, ...] = ("repo", "pr", "url", "head", "kind", "claim")
+PR_FIX_KINDS: tuple[str, ...] = ("conflict", "ci", "review", "blocked")
+PR_FIX_CLAIM_RE = re.compile(r"^sweep-run-(?:[0-9]{1,20}|local)$")
+PR_FIX_HEAD_RE = re.compile(r"^[0-9a-f]{40}$")
+
 
 def _label_names(issue: dict[str, Any]) -> list[str]:
 	names: list[str] = []
@@ -301,6 +310,93 @@ def queue_title(repo: str, issue_number: int) -> str:
 	return f"{QUEUE_TITLE_PREFIX}{repo}#{issue_number}"
 
 
+def pr_fix_queue_title(repo: str, pr_number: int) -> str:
+	return f"{QUEUE_TITLE_PREFIX}fix {repo}#{pr_number}"
+
+
+def build_pr_fix_text(repo: str, pr_number: int, head: str, kind: str, claim: str) -> str:
+	"""Render the fixed-key ``claude_pr_fix.v1`` text; raise ValueError on bad input."""
+	fields = parse_pr_fix_text("\n".join([
+		PR_FIX_SCHEMA_VERSION,
+		f"repo: {repo}",
+		f"pr: {pr_number}",
+		f"url: https://github.com/{repo}/pull/{pr_number}",
+		f"head: {head}",
+		f"kind: {kind}",
+		f"claim: {claim}",
+	]))
+	return "\n".join([
+		PR_FIX_SCHEMA_VERSION,
+		f"repo: {fields['repo']}",
+		f"pr: {fields['pr_number']}",
+		f"url: {fields['pr_url']}",
+		f"head: {fields['head']}",
+		f"kind: {fields['kind']}",
+		f"claim: {fields['claim']}",
+	]) + "\n"
+
+
+def parse_pr_fix_text(text: str) -> dict[str, Any]:
+	"""Parse ``claude_pr_fix.v1`` text strictly (the rules of ``claude-issue-dispatch.md`` step 1)."""
+	lines = [line.rstrip() for line in (text or "").strip().splitlines()]
+	if not lines or lines[0] != PR_FIX_SCHEMA_VERSION:
+		raise ValueError("first line is not claude_pr_fix.v1")
+	fields: dict[str, str] = {}
+	for line in lines[1:]:
+		key, sep, value = line.partition(": ")
+		if not sep or key not in PR_FIX_TEXT_KEYS:
+			raise ValueError(f"unexpected line: {line[:80]!r}")
+		if key in fields:
+			raise ValueError(f"duplicate key: {key}")
+		fields[key] = value.strip()
+	missing = [key for key in PR_FIX_TEXT_KEYS if key not in fields]
+	if missing:
+		raise ValueError(f"missing keys: {','.join(missing)}")
+	repo = fields["repo"]
+	if not REPO_SLUG_RE.match(repo):
+		raise ValueError(f"invalid repo: {repo!r}")
+	if not re.fullmatch(r"[1-9][0-9]{0,9}", fields["pr"]):
+		raise ValueError(f"invalid pr: {fields['pr']!r}")
+	number = int(fields["pr"])
+	url = f"https://github.com/{repo}/pull/{number}"
+	if fields["url"] != url:
+		raise ValueError("url does not match repo and pr")
+	if not PR_FIX_HEAD_RE.match(fields["head"]):
+		raise ValueError("head is not a 40-character lowercase hex sha")
+	if fields["kind"] not in PR_FIX_KINDS:
+		raise ValueError(f"invalid kind: {fields['kind']!r}")
+	if not PR_FIX_CLAIM_RE.match(fields["claim"]):
+		raise ValueError(f"invalid claim: {fields['claim']!r}")
+	return {
+		"repo": repo,
+		"pr_number": number,
+		"pr_url": url,
+		"head": fields["head"],
+		"kind": fields["kind"],
+		"claim": fields["claim"],
+	}
+
+
+def build_pr_fix_queue_issue(repo: str, pr_number: int, head: str, kind: str, claim: str, run_url: str = "") -> dict[str, Any]:
+	"""Render the queue issue for one pull-request fix (fixed keys and the sweep run URL only)."""
+	text = build_pr_fix_text(repo, pr_number, head, kind, claim)
+	lines = [
+		QUEUE_MARKER,
+		(
+			f"Queued by the CLAUDE.md §26.H catch-all sweep for https://github.com/{repo}/pull/{pr_number}. "
+			"The Claude issue pickup session (`.claude/commands/claude-issue-pickup.md`) starts one "
+			"`/fix-claude-pr` session and closes this issue. Do not edit."
+		),
+		"",
+		"```text",
+		text.rstrip("\n"),
+		"```",
+	]
+	if run_url and RUN_URL_RE.match(run_url):
+		lines += ["", f"Sweep run: {run_url}"]
+	return {"title": pr_fix_queue_title(repo, pr_number), "body": "\n".join(lines) + "\n", "label": QUEUE_LABEL}
+
+
 def build_queue_issue(validated: dict[str, Any], run_url: str = "") -> dict[str, Any]:
 	"""Render the coding-workflows queue issue for one validated payload.
 
@@ -356,7 +452,9 @@ def queue_pending(
 	Output: ``{"pending": [...], "ignored": [...], "remaining": int}``. Each
 	pending entry is one target issue (duplicates from ``/reclarify`` are
 	grouped, oldest queue issue first) with its fire text and the queue issues
-	to close. Queue issues not opened by ``trusted_author``, with a malformed
+	to close, and ``item_type`` ``issue``; or one pull request to fix
+	(``item_type`` ``pr_fix``, a ``claude_pr_fix.v1`` item from the catch-all
+	sweep, duplicates grouped with the newest item's head, kind and claim). Queue issues not opened by ``trusted_author``, with a malformed
 	payload, a mismatched title, or an unregistered repo are listed under
 	``ignored`` and never acted on. At most ``limit`` entries are returned;
 	``remaining`` counts the rest for the next wake.
@@ -364,7 +462,7 @@ def queue_pending(
 	allowed = {slug.lower() for slug in allowed_repos if isinstance(slug, str)}
 	candidates = [issue for issue in issues if _is_queue_issue(issue)]
 	candidates.sort(key=lambda item: item.get("number") if isinstance(item.get("number"), int) else 0)
-	groups: dict[tuple[str, int], dict[str, Any]] = {}
+	groups: dict[tuple[Any, ...], dict[str, Any]] = {}
 	ignored: list[dict[str, Any]] = []
 	for issue in candidates:
 		number = issue.get("number")
@@ -375,6 +473,27 @@ def queue_pending(
 		match = QUEUE_PAYLOAD_BLOCK_RE.search(body)
 		if QUEUE_MARKER not in body or not match:
 			ignored.append({"queue_issue": number, "reason": "no_payload"})
+			continue
+		if match.group(1).lstrip().startswith(PR_FIX_SCHEMA_VERSION):
+			try:
+				pr_fix = parse_pr_fix_text(match.group(1))
+			except ValueError as exc:
+				ignored.append({"queue_issue": number, "reason": f"bad_payload: {exc}"})
+				continue
+			if pr_fix["repo"].lower() not in allowed:
+				ignored.append({"queue_issue": number, "reason": "repo_not_registered"})
+				continue
+			if issue.get("title") != pr_fix_queue_title(pr_fix["repo"], pr_fix["pr_number"]):
+				ignored.append({"queue_issue": number, "reason": "title_mismatch"})
+				continue
+			key = (pr_fix["repo"].lower(), "pr", pr_fix["pr_number"])
+			queued = groups.get(key, {}).get("queue_issues", [])
+			groups[key] = {
+				"item_type": "pr_fix",
+				**pr_fix,
+				"fire_text": build_pr_fix_text(pr_fix["repo"], pr_fix["pr_number"], pr_fix["head"], pr_fix["kind"], pr_fix["claim"]),
+				"queue_issues": [*queued, {"number": number, "body": body}],
+			}
 			continue
 		try:
 			validated = parse_fire_text(match.group(1))
@@ -390,7 +509,7 @@ def queue_pending(
 		key = (validated["repo"].lower(), validated["issue_number"])
 		entry = groups.get(key)
 		if entry is None:
-			entry = {**validated, "fire_text": build_fire_text(validated), "queue_issues": []}
+			entry = {"item_type": "issue", **validated, "fire_text": build_fire_text(validated), "queue_issues": []}
 			groups[key] = entry
 		entry["queue_issues"].append({"number": number, "body": body})
 	ordered = list(groups.values())
@@ -490,6 +609,15 @@ def _cmd_queue_issue(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_pr_fix_queue_issue(args: argparse.Namespace) -> int:
+	try:
+		print(json.dumps(build_pr_fix_queue_issue(args.repo, args.pr, args.head, args.kind, args.claim, args.run_url)))
+	except ValueError as exc:
+		print(str(exc), file=sys.stderr)
+		return 2
+	return 0
+
+
 def fetch_open_queue(repo: str) -> list[Any]:
 	"""One REST read of the open queue issues in ``repo`` via ``gh`` (§15).
 
@@ -577,6 +705,15 @@ def main(argv: list[str] | None = None) -> int:
 	p_queue.add_argument("--validated-json", required=True)
 	p_queue.add_argument("--run-url", default="")
 	p_queue.set_defaults(func=_cmd_queue_issue)
+
+	p_pr_fix = sub.add_parser("pr-fix-queue-issue", help="build the queue issue for one claude/* PR fix (CLAUDE.md §26.H)")
+	p_pr_fix.add_argument("--repo", required=True)
+	p_pr_fix.add_argument("--pr", type=int, required=True)
+	p_pr_fix.add_argument("--head", required=True)
+	p_pr_fix.add_argument("--kind", required=True)
+	p_pr_fix.add_argument("--claim", required=True)
+	p_pr_fix.add_argument("--run-url", default="")
+	p_pr_fix.set_defaults(func=_cmd_pr_fix_queue_issue)
 
 	p_pending = sub.add_parser("queue-pending", help="list the queued issues the pickup should start")
 	p_pending.add_argument("--issues-json", default="")
