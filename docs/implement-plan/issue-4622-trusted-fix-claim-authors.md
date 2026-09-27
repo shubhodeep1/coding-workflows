@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4622-trusted-fix-claim-authors-plan.md
 - Source issue: shubhodeep1/coding-workflows#4622
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
-- Project branch: claude/implement-plan-issue-4622-trusted-fix-claim-authors   Final PR: (opening)
+- Project branch: claude/implement-plan-issue-4622-trusted-fix-claim-authors   Final PR: #4632 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-27
-- Last note: project branch opened with the plan and this log; phase 1 starts next.
+- Last note: phase 1 implemented and verified (claim authors restricted to the PR author and CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN; 130 targeted tests + 226 related tests pass); phase 1 PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — restrict claim authors to the PR author and the workflow account
+1. [ ] Phase 1 — restrict claim authors to the PR author and the workflow account   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
