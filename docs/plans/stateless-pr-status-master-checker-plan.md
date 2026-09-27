@@ -189,14 +189,27 @@ master picks up every open PR again because it keeps no state of its own.
 | Object | Value |
 |---|---|
 | Master session title | `<owner>/<repo> PR status master` |
-| Master tick Routine | name `PR status master: <owner>/<repo>` (≤60 chars; the longest consumer, `shubhodeep1/drhyg_ecommerce_automation`, gives 56), `cron_expression: 0 * * * *` (anchored by the server to the creation minute), `persistent_session_id` = master, `initiation: own_followup`, prompt `CLAUDE.md §26.I master tick for https://github.com/<owner>/<repo>. Follow CLAUDE.md §26.I in this session.` |
+| Master tick Routine | name `PR status master: <owner>/<repo>` (≤60 chars; computed for all 13 repos in `.github/ai/consumer_repos.json` plus coding-workflows, the longest, `shubhodeep1/drhyg_ecommerce_automation`, gives 56; a P1 test asserts ≤60 for every listed repo), `cron_expression: 0 * * * *` (anchored by the server to the creation minute), `persistent_session_id` = master, `initiation: own_followup`, prompt `CLAUDE.md §26.I master tick for https://github.com/<owner>/<repo>. Follow CLAUDE.md §26.I in this session.` |
 | Master-mode hand-back Routine | name `PR #<n> hand-back` (unchanged), `run_once_at` = now + 90 min, prompt `CLAUDE.md §26 hand-back for PR #<n> (<PR URL>). Role: <fixer\|notify>. Via: master. Fallback next steps: <one paragraph, ≤600 chars>. Continue with CLAUDE.md §26.D in this session.` The prefix up to `(<PR URL>)` is byte-identical to today's, so `stale_routines.py`'s `HAND_BACK_PROMPT_PATTERN` still matches |
+| First-tick trigger | one-shot, name `PR status master: first tick` (28 chars; the repo is in its prompt, which is the tick prompt), `run_once_at` = now + 2 min. It has no `cron_expression`, so keeper election (A.4 step 1) never counts it |
 | Delivered-hand-back marker | at pull-forward the master renames the Routine to `PR #<n> hand-back: sent <state> <sha7>` (e.g. `PR #4588 hand-back: sent review-round 1a2b3c4`, ≤47 chars) |
 | Gate file | `.claude/check_in_master.json` = `{"verdict": "PENDING" \| "PASS" \| "FAIL" \| "DISABLED", "probes": "docs/probes/master-checker-probes.md", "updated": "<date>"}`, with a byte-identical `workflow-templates/.claude/check_in_master.json` |
 
-A hand-back Routine is **master-owned** only when its prompt contains both
-`Role: fixer|notify` and `Via: master`. Every other hand-back is legacy and
-belongs to its per-PR checker (G5).
+A hand-back Routine is **master-owned** only when all of these hold:
+
+- its prompt contains both `Role: fixer|notify` and `Via: master`;
+- its name is exactly `PR #<n> hand-back` (or the `… hand-back: sent …`
+  marker form), and `<n>` equals the pull number in the prompt's PR URL;
+- that URL's `<owner>/<repo>` is the master's `--repo`;
+- it has a non-empty `persistent_session_id` that is not the master's own
+  session, and an empty `cron_expression`.
+
+Anything else is ignored: a legacy hand-back (G5), an unrelated Routine
+that happens to contain the tokens, or a malformed one. The trust boundary
+is the account itself. `list_triggers` returns only Routines created by
+sessions of the master's own claude.ai account, so a Routine from another
+person can never be read, and the checks above keep an own-account Routine
+for another repo or PR from being consumed or renamed.
 
 ### A.2 Master mode gate (runtime)
 
@@ -228,41 +241,79 @@ to consumers (G6).
      `name`, never the prompt;
    - `fresh_fixer` → the §26.C step 5 two-step Opus 5.5 `/effort high`
      start plus the `PR #<n> status check-in: fixer start` trigger;
-   - `fallback_notify` → one `PushNotification` per item, plus a line in
-     the reply;
+   - `fallback_notify` → first `update_trigger` with only `name` = the
+     item's `new_name` (`… sent <state> <sha7> fb`) on the marker Routine,
+     then one `PushNotification` per item, plus a line in the reply. The
+     rename comes first so a crash between the two calls can't cause a
+     second notification. If the rename fails, skip that item's
+     notification and list it in `errors`; the next tick retries it;
    - `dedupe` → `delete_trigger` / `archive_session` on duplicate masters;
    - `stale_delete` → `delete_trigger`, ignoring not-found;
    - `dormant: true` → `update_trigger` with `enabled: false` on its own
      tick Routine.
 4. Reply in one line (`master tick <repo>: <k> PRs, renewed <r>, handed
    back <h>, fresh fixers <f>, fallbacks <b>, errors <e>`). Call
-   `set_session_title` to `<owner>/<repo> PR status master — last tick
-   <HH:MM> UTC: <k> PRs` only when `k`, `h`, `f`, `b` or `e` changed since
-   the title's numbers. End the turn. Never archive yourself, never
-   `sleep`, never fix anything, never comment on a PR.
+   `set_session_title` **on every tick**, with the value the script
+   prints in `title`: `<owner>/<repo> PR status master — last tick <HH:MM>
+   UTC: <k> PRs, <e> errors`. It is always set and never compared with an
+   earlier value, so the tick carries no memory, and the timestamp is the
+   liveness signal the Risks section relies on. End the turn. Never archive
+   yourself, never `sleep`, never fix anything, never comment on a PR.
 
 The procedure has no step that depends on earlier turns, so auto-compaction
 cannot change its outcome (G2).
+
+**Ticks never overlap within one master.** A session runs one turn at a
+time, and a Routine that fires while the master is still mid-tick is queued
+behind that turn (probe P-1 verifies this). A queued tick is simply a
+second, later tick. It starts from fresh reads and fresh files, and every
+action is idempotent against what the first tick did:
+
+- a Routine the first tick pulled forward already carries the
+  `… sent <state> <sha7>` name, and A.4 step 2 treats it as pending
+  delivery, so it is neither renewed nor pulled forward again;
+- renewals are re-computed from `next_run_at`;
+- `fb` renames make `fallback_notify` one-shot.
+
+Two masters for the same repo (created in a race) converge through keeper
+election (A.4 step 1) on their next ticks. Until then they can at worst both
+renew the same Routine, which is harmless, or both pull it forward, which is
+at most one extra wake that the fixer's claim then absorbs (Q16 accepts the
+same effect across accounts). A tick has no time limit. It makes at most
+one Bash call plus one MCP call per action, so a slow tick only delays the
+queued next one.
 
 ### A.4 `check_in_master.py --tick` decision rules (deterministic)
 
 The inputs are the two trigger files, `--repo`, and `--self`. The script
 imports `check_pr_hand_back` and `read_fix_claims` from `check_in_status.py`
 in the same directory, so there is no second implementation of the
-PR-state logic.
+PR-state logic. It calls
+`check_pr_hand_back(repo, n, stuck_hours=DEFAULT_STUCK_HOURS (6.0), min_age_hours=0.0, now, ignore_claim_by=())`,
+the same values the per-PR checker uses today (§26.C step 1). That keeps
+the 6-hour stuck window on `claude/implement-plan-*` heads and adds no age
+delay. The master never claims, so it ignores no claims. The sweep's
+`CLAUDE_PR_SWEEP_MIN_AGE_HOURS` (2h) is not applied here.
 
-1. **Own tick and duplicates.** Take the enabled Routines named
-   `PR status master: <repo>` whose prompt names this repo URL. The
+1. **Own tick and duplicates.** Take the enabled **recurring** Routines
+   (non-empty `cron_expression`) named `PR status master: <repo>` whose
+   prompt names this repo URL. The
    **keeper** is the one with the oldest `created_at`, ties broken by `id`.
    - If the keeper is not bound to `--self`, output
      `{"superseded": true}`. The master then deletes its own tick Routine,
      sets its title to `… (superseded)`, and ends.
    - Otherwise output a `dedupe` entry for every other tick (delete the
      trigger and archive its session).
-2. **Subscribers.** Collect the enabled hand-back Routines whose prompt
-   carries this repo's PR URL, `Role:` and `Via: master`, grouped by PR.
+2. **Subscribers.** Collect the enabled master-owned hand-back Routines
+   (A.1 ownership rules), grouped by PR.
    - The **fixer** is the newest `created_at` among `Role: fixer`
-     Routines. Any other fixer-role Routine is treated as notify (Q5).
+     Routines, ties broken by the lexically greatest `id` (the same kind of
+     tie-breaker as keeper election, so the choice is deterministic). Any
+     other fixer-role Routine is treated as notify (Q5).
+   - An enabled Routine already named `… hand-back: sent <state> <sha7>`
+     is a hand-back **pending delivery**. A queued or duplicate tick ran
+     after the pull-forward but before the fire, so it is neither renewed
+     nor pulled forward again.
    - Legacy (untagged) Routines are skipped (G5).
 3. **Sent markers.** Collect the ended Routines named
    `PR #<n> hand-back: sent <state> <sha7>` for this repo, with their
@@ -272,7 +323,14 @@ PR-state logic.
    `check_pr_hand_back` once. By the verdict's `state`:
    - `open` / `claimed` / `held` / waiting → `renew` every subscriber
      Routine whose `next_run_at` is before now + 90 min, setting it to
-     now + 90 min (Q17).
+     exactly now + 90 min (Q17; no jitter, so the chosen window holds).
+     When the master dies, its subscribers can therefore wake at about the
+     same moment. `--ensure` (A.5 step 2) absorbs that stampede by treating
+     a master session with the right title whose `created_at` is ≤10 min
+     old as `ok`, even before its tick Routine is visible. Any duplicates
+     that two exactly simultaneous creations still produce collapse through
+     keeper election on their first ticks, about 2 min later thanks to the
+     first-tick trigger.
    - `conflict` / `review-round` / `ci-failed` / `blocked`:
      - If a sent marker for the same `state` and `head_sha[:7]` shows
        `ROUTINE_RUN_STATUS_SUCCEEDED` into its own bound session, it was
@@ -291,12 +349,20 @@ PR-state logic.
      `… sent <state> <sha7>`. On a later tick, for a terminal sent marker
      whose `last_run` is FAILED or whose session is gone and whose role is
      `fixer`, output `fallback_notify` with the `Fallback next steps` text
-     parsed from that Routine's prompt (Q8). A PR only counts as having
-     had its fallback once: the marker's name is changed to
-     `… sent <state> <sha7> fb` in the same action.
-   - Read failure (exit-2 equivalent) → no renew, so the dead-man's switch
-     (A.6) fires within 90 min, which today's §26.C step 3 does over 7 days.
-     The failure is listed in `errors`.
+     parsed from that Routine's prompt (Q8). The item carries the marker's
+     trigger id and `new_name` = `… sent <state> <sha7> fb`, which A.3 step
+     3 applies before notifying. A marker whose name already ends in ` fb`
+     is never notified again, so each PR gets its fallback once.
+   - Read failure (exit-2 equivalent, for example a GitHub API outage) →
+     **renew anyway**, list the failure in `errors`, and take no other
+     action for that PR. The 90-min switch exists to detect a *dead
+     master*. A master that is alive but can't read GitHub must not page
+     every pushing session: a sustained outage would otherwise wake N
+     sessions every 90 min. Persistent read errors show in the master's
+     reply and title (`<e> errors`). For `claude/*` PRs the Actions
+     catch-all still acts once reads recover. This departs on purpose from
+     today's §26.C step 3, which withholds renewal on a read failure but has
+     7 days of slack; a 90-min window has none.
 5. **Dormancy.** When no subscriber is enabled for this repo and no sent
    marker is less than 6h old, output `dormant: true`.
 6. **Stale sweep.** Call `stale_routines.classify` on the ended file and
@@ -318,20 +384,45 @@ batching contract".
    `check_in_master.py --ensure --repo <r> --enabled <file> --sessions <list_sessions file>`.
    The sessions file comes from one `list_sessions` call with
    `mine: true`, `limit: 100`. The script outputs one of:
-   - `ok` — the tick is enabled and bound to a non-archived session;
+   - `ok` — the tick is enabled and bound to a non-archived session, or a
+     non-archived session titled `<owner>/<repo> PR status master` was
+     created ≤10 min ago (a creation still in progress, possibly by
+     another subscriber woken at the same moment);
    - `enable <trig id>` — the master exists and is dormant, so call
      `update_trigger` with `enabled: true`;
-   - `create` — no master, or it is archived or failed. Create a master
-     session (Sonnet, `/effort low` two-step start, title
-     `<owner>/<repo> PR status master`, `permission_mode` = this session's
-     mode), then the tick Routine (A.1), then a one-shot
-     `PR status master: <owner>/<repo> first tick` trigger 2 min out with
-     the tick prompt, so the first check doesn't wait up to an hour.
+   - `create` — no master, or it is archived or failed. Create it in
+     three calls:
+     1. a master session (Sonnet, `/effort low` two-step start, title
+        `<owner>/<repo> PR status master`, `permission_mode` = this
+        session's mode);
+     2. the tick Routine (A.1);
+     3. the one-shot `PR status master: first tick` trigger (A.1), so the
+        first check doesn't wait up to an hour.
 
-     A session only creates a master when its own depth, found by walking
-     `parent_session_id` with `get_session` (at most 8 calls, the pickup's
-     method), is **≤3**. Otherwise it relies on the pickup (A.6) and says
-     so in one line.
+     **Partial failure:**
+     - If call 1 fails, stop and report it in one line.
+     - If call 2 fails, retry it once. If it still fails, `archive_session`
+       the new master, so no master sits without a tick, and report it.
+       The next arming session, a subscriber's switch, or the pickup
+       retries the whole `create`.
+     - If call 3 fails, that doesn't matter: the tick Routine fires within
+       60 minutes anyway, and the failure is reported in one line.
+
+     None of these steps retries in a loop.
+
+     A session only creates a master when its own depth is **≤3**. The
+     depth is found by walking `parent_session_id` with `get_session`, the
+     pickup's method, and the walk stops:
+     - at the first session with no `parent_session_id` (the root; depth
+       found);
+     - on a `get_session` error;
+     - on a repeated id (a cycle, or a parent equal to the current id);
+     - after 8 calls.
+
+     Every stop other than the root means **depth unknown**, which is
+     treated as >3. When the depth is too high or unknown, the session
+     does not create a master: it relies on the pickup (A.6) and says so in
+     one line.
 3. Report the hand-back trigger id and the master's session id.
 
 ### A.6 Recreation layers (Q2: A+B, 1h window)
@@ -343,8 +434,19 @@ batching contract".
   Routine fires within ≤90 min in the subscriber session. §26.D's master
   branch then:
   1. runs `check_in_status.py --hand-back` itself;
-  2. if the PR is still open, recreates its hand-back Routine (A.5 step 1)
-     and runs A.5 step 2 (create or enable, depth ≤3).
+  2. if the PR is still open (or `claimed` / `held`), recreates its
+     hand-back Routine (A.5 step 1) and runs A.5 step 2 (create or enable,
+     depth ≤3);
+  3. if a fix is due and this session is the fixer, it follows
+     `/fix-claude-pr` in place, exactly as for a normal hand-back. That
+     command's step 7 then re-arms it and ensures the master;
+  4. if the PR is **terminal** (`merged` / `closed`), the wake *is* the
+     terminal hand-back. The session follows §26.D's terminal branch
+     unchanged: the report, self-rename, one `PushNotification`, and the
+     stale sweep. It creates no hand-back and ensures no master for this
+     PR, because nothing is left to watch; the next arm for another PR
+     ensures the master if one is needed. So a PR that ends while the
+     master is dead still gets its report within ≤90 min.
 
   A false fire caused by a very late tick finds `ok` and only re-arms. An
   archived subscriber fires into nothing (`auto_disabled_session_gone`),
@@ -469,6 +571,20 @@ run in a stage session because it needs claude-code-remote tools.
      one-shot self Routine (`implement-plan <slug>: P5 preflight`, a
      §25.C scheduled check-in) for at most 30 days, and after that stops
      at `BLOCKED`.
+   - **When the 30 days run out:** nothing has been removed yet, because
+     P5's PR is only opened after the preflight passes. The legacy per-PR
+     path stays documented and working, and master mode keeps running.
+     `BLOCKED` is a §28.C failure escalation: the stage records which
+     preflight check (a)–(e) still fails, with its observed value, in the
+     progress log and the report, sends one `PushNotification`, and asks in
+     §2 format:
+     - **A** — resume for another 30 days with a `— resume.` block
+     - **B** — drop P5, keeping legacy creation as a documented alternate
+       path
+     - **C** — fix the failing cause first
+
+     The chain can complete without P5 (option B) and still leave the
+     system in the P4 state.
 
 ## Implementation Steps
 
@@ -481,7 +597,8 @@ run in a stage session because it needs claude-code-remote tools.
    - Tabs, and opening braces are N/A in Python (§9).
    - Structured one-line JSON output with the keys `renew`,
      `pull_forward`, `fresh_fixer`, `fallback_notify`, `dedupe`,
-     `stale_delete`, `dormant`, `superseded`, `errors`.
+     `stale_delete`, `dormant`, `superseded`, `errors`, `title` (each
+     `fallback_notify` item also carries `trigger_id` and `new_name`).
    - Exit 2 on unreadable input.
 2. `stale_routines.py`:
    - (a) Add `PR status master: ` to `is_ours`.
@@ -497,14 +614,35 @@ run in a stage session because it needs claude-code-remote tools.
 5. Add `tests/test_check_in_master.py`, covering:
    - gate on/off/missing-file/malformed;
    - keeper election and superseded;
-   - role parsing and latest-fixer-wins;
-   - legacy Routines ignored;
+   - role parsing, latest-fixer-wins, and the equal-`created_at`
+     tie-breaker by `id`;
+   - the A.1 ownership rules: legacy Routines ignored, and each of these
+     rejected: a wrong repo in the URL, a name/URL PR-number mismatch, a
+     tokens-only Routine with another name, the master's own session, and
+     a recurring Routine;
+   - a first-tick one-shot never elected keeper;
    - each state → action mapping, including the sent-marker dedup,
-     FAILED → fresh_fixer, and terminal → pull_forward-all then
-     fallback_notify once (`fb` suffix);
-   - renew only when `next_run_at` < now + 90 min;
+     FAILED → fresh_fixer, an enabled `sent` Routine (pending delivery)
+     neither renewed nor pulled forward, and terminal → pull_forward-all
+     then `fallback_notify` exactly once: it carries `new_name` ending in
+     ` fb`, and a marker already ending in ` fb` gets no second item;
+   - renew only when `next_run_at` < now + 90 min, to exactly now + 90 min;
+   - `--ensure` treats a correctly titled master session created ≤10 min
+     ago as `ok` (stampede absorption);
+   - the `check_pr_hand_back` call arguments (`stuck_hours=6.0`,
+     `min_age_hours=0.0`, no ignored claims);
    - dormancy;
-   - read failure → no renew;
+   - **outage cascade**: when every PR read fails, every subscriber is
+     still renewed, `errors` lists each PR, and there are no
+     `pull_forward` / `fresh_fixer` / `fallback_notify` actions. A master
+     that is alive therefore never trips the switches during a GitHub
+     outage;
+   - idempotence: running `--tick` twice on the inputs as they stand after
+     the first run's actions yields no new `pull_forward` or
+     `fallback_notify`;
+   - `title` output format;
+   - the tick Routine name ≤60 characters for every repo in
+     `.github/ai/consumer_repos.json` plus coding-workflows;
    - `--ensure` / `--revive-scan` outputs, including an archived or failed
      master session → `create`;
    - the stale-sweep pass-through.
@@ -512,7 +650,15 @@ run in a stage session because it needs claude-code-remote tools.
    `check_pr_hand_back` is stubbed; there is no network.
 6. Extend `tests/test_stale_routines.py` for rules (a) to (c), and add a
    byte-identity assertion for the three template copies if no existing
-   test covers it.
+   test covers it. `stale_routines.py` does **not** parse the new
+   `Role:` / `Via:` / `Fallback next steps:` tokens: it treats master and
+   legacy hand-backs the same way, by name and by the unchanged
+   `HAND_BACK_PROMPT_PATTERN` prefix, whose non-greedy match takes the
+   first PR URL, which is the Routine's own. Add a test case with a
+   master-format prompt (including a fallback text that contains another
+   PR URL). It must classify exactly like the legacy prompt for the same
+   PR: an enabled master hand-back is deleted only when its PR finished
+   more than 24h ago, the same as legacy.
 7. Add a `ci.yml` step running `tests/test_check_in_master.py`, next to the
    existing `test_stale_routines.py` step (ci.yml ~L427).
 8. Add a docstring line in `check_in_status.py` naming the new caller. No
@@ -637,7 +783,11 @@ run in the implementing account):**
   ordering.
 - **P-5 Rename and enable.** `update_trigger` with `name`, and
   `enabled: false`/`true`, works on a Routine created by **another**
-  session of the same account, and on a recurring Routine.
+  session of the same account, and on a recurring Routine. `update_trigger`
+  with `name` also works on an **ended** one-shot Routine (fired,
+  `ended_reason: run_once_fired`), which the `fb` rename (A.3 step 3)
+  depends on. After the rename, the Routine still shows `last_run` and
+  stays ended: the rename must not re-enable or re-fire it.
 - **P-6 Consumer `source_url`.** `create_session` with a consumer repo's
   `source_url` from a coding-workflows session succeeds, and the new
   session can run `gh api repos/<consumer>/pulls?per_page=1`.
@@ -676,6 +826,19 @@ run in the implementing account):**
 - **Late ticks cause false dead-man's-switch fires, each costing a full
   wake of a pushing session.** The 30-min grace (Q17) and P-2's delay data
   cover this. A false fire only re-arms.
+- **A GitHub outage while the master is alive.** The master renews anyway
+  (A.4 step 4), so subscribers aren't paged. The cost is that a PR which
+  stays unreadable doesn't escalate to its pushing session the way
+  §26.C step 3's 7-day switch does today. Mitigations: `<e> errors` in the
+  master's title and reply on every tick, and the Actions catch-all for
+  `claude/*` PRs once reads recover. ACCEPTED: a 90-min window can't also
+  serve as an outage alarm without paging every subscriber.
+- **A stampede of subscribers when the master dies.** Every subscriber's
+  Routine carries the same now + 90 min, so they can wake together. This
+  is absorbed by `--ensure`'s ≤10-min "creation in progress" rule and by
+  keeper election (A.4 step 1, with a first tick about 2 min after
+  creation). The worst case is a few short-lived duplicate Sonnet sessions
+  per master death.
 - **Several accounts.**
   - Each account has its own masters, and the pickup only revives its own
     account's masters.
