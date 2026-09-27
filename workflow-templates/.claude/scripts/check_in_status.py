@@ -64,11 +64,13 @@ API budget (CLAUDE.md §15): REST only, never GraphQL. PR mode issues 1 call
 (`pulls/N`), one call per 100 check runs when the PR is not conflicted, and
 at most 3 further calls when a failure is old (head commit, queued runs,
 in-progress runs). A Claude-fixer PR adds one call per 100 PR comments, at
-most one hand-off run read, and 3 active-run reads when needed. Hand-back
-mode on a `claude/*` head issues 1 call plus one per 100 PR comments, the
-check-run pages, at most 1 head-commit read, 1 hand-off run read and 3
-active-run reads. Run mode issues 1 call. Issues mode issues one call per
-issue; the checker lists at most the few follow-ups one security cycle opens.
+most one hand-off run read (plus 1 compare read when the run was triggered
+by an older push than the head it reviewed), and 3 active-run reads when
+needed. Hand-back mode on a `claude/*` head issues 1 call plus one per 100
+PR comments, the check-run pages, at most 1 head-commit read, 1 hand-off run
+read, 1 compare read (same condition) and 3 active-run reads. Run mode
+issues 1 call. Issues mode issues one call per issue; the checker lists at
+most the few follow-ups one security cycle opens.
 Every call goes through `gh api`, which in Claude Code on the web is
 authenticated by the session's agent proxy.
 """
@@ -263,6 +265,29 @@ def _active_run_count(repo: str, head_ref: str, include_pending: bool = False) -
 	return active
 
 
+def _review_run_head_on_branch_history(repo: str, run_head_sha: object, reviewed_head_sha: str) -> bool:
+	"""True when a review run's triggering commit is the reviewed head or its ancestor.
+
+	A `pull_request` run's `head_sha` is the push that triggered it, but the
+	review workflow reviews the PR's head at the time it runs, so two quick
+	pushes leave a run triggered by the first push that reviewed the second
+	(PR #4594: run head a59fc87, hand-off head d1c6f92). Input: the run's
+	`head_sha` and the hand-off head, which the caller has already matched to
+	the current PR head. Output: True for an equal sha with no API call;
+	otherwise one compare read (`compare/<run head>...<reviewed head>`) and
+	True only for status `ahead` (the run's commit is an ancestor). A
+	diverged or behind commit, or a malformed sha on either side, is False, so the caller
+	keeps waiting; a failed read raises `ReadError` like every other read.
+	"""
+	for sha in (run_head_sha, reviewed_head_sha):
+		if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+			return False
+	if run_head_sha == reviewed_head_sha:
+		return True
+	comparison = gh_api(f"repos/{repo}/compare/{run_head_sha}...{reviewed_head_sha}?per_page=1")
+	return comparison.get("status") == "ahead"
+
+
 def _check_claude_fixer_pr(repo: str, number: int, head_sha: str, head_ref: str, conflicted: bool,
 	comments: list | None = None) -> dict | None:
 	"""Return the hand-off verdict for a Claude-fixer PR, or None to fall through.
@@ -344,15 +369,18 @@ def _check_claude_fixer_pr(repo: str, number: int, head_sha: str, head_ref: str,
 	if latest_handoff is not None and not answered:
 		kind, round_number, _, run_id, run_url, _, _ = latest_handoff
 		# This is a separate read: neither the PR nor its comment establishes
-		# the run's result, repository, workflow, or reviewed branch/head.
+		# the run's result, repository, workflow, or reviewed branch. The run's
+		# own head_sha is its triggering push, which may predate the head the
+		# hand-off reviewed, so it only has to lie on that head's history.
 		review_run = gh_api(f"repos/{repo}/actions/runs/{run_id}")
 		review_repo = review_run.get("repository")
 		review_path = review_run.get("path")
 		if (review_run.get("id") != run_id or review_run.get("html_url") != run_url
 			or not isinstance(review_repo, dict) or review_repo.get("full_name") != repo
 			or not isinstance(review_path, str) or review_path.split("@", 1)[0] not in FIXER_WORKFLOW_PATHS
-			or review_run.get("head_sha") != head_sha or review_run.get("head_branch") != head_ref
-			or review_run.get("status") != "completed" or review_run.get("conclusion") != "success"):
+			or review_run.get("head_branch") != head_ref
+			or review_run.get("status") != "completed" or review_run.get("conclusion") != "success"
+			or not _review_run_head_on_branch_history(repo, review_run.get("head_sha"), head_sha)):
 			return {"done": False, "state": "open", "reason": f"PR #{number} waiting for verified completed review run {run_id}"}
 	if conflicted:
 		active = _active_run_count(repo, head_ref, include_pending=True)
