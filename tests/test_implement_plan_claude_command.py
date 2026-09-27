@@ -247,5 +247,8 @@ def test_issue_mode_archives_stopped_stage_sessions(text):
 	assert "**Issue mode: stopped stage sessions.**" in text
 	assert "when the source issue no longer carries `ai:claude-blocked`" in text
 	assert "Never archive this session itself, and skip one whose `status_bucket` is `working`" in text
+	# Failure paths: a failed rename is surfaced, a failed label read archives nothing.
+	assert "`Stopped session: <session id> (rename failed; archive it by hand after the resume)`" in text
+	assert "If that read fails, archive nothing: treat the label as still present" in text
 	# The stop title must not collide with a stage title that is still working.
 	assert "blocked on issue" not in text.replace("— blocked on issue", "")
