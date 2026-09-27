@@ -16,7 +16,7 @@ GitHub Actions, including for Claude projects:
 
 | Role | Where the model is called today |
 |---|---|
-| Security audit | `scripts/security_audit.sh:1160-1178` (one `codex exec`, raw findings JSON), called by `security-audit.yml` (weekly `0 8 * * 0`, dispatch, `workflow_call`) and synchronously by the orchestrator poller (`scripts/orchestrate_poll_process.sh:6935-6938`, `run_security_pass_inline`) |
+| Security audit | `scripts/security_audit.sh:1160-1178` (one `codex exec`, raw findings JSON), called by `security-audit.yml` (weekly `0 8 * * 0`, dispatch, `workflow_call`) and synchronously by the orchestrator poller: `run_security_pass_inline` (defined at `scripts/orchestrate_poll_process.sh:6637`, called at `:7142`) runs `security_audit.sh` at `:6935-6938` |
 | Runtime validation | `scripts/validate_process.sh` `run_validate_codex_attempt` (`:2955-2999`): discover (`:3191`) and diagnose (`:3948`); self-heal in `scripts/self_heal_validation.sh`; Docker harness runs on the Actions runner |
 | Check-failure triage | `scripts/check_failure_triage.sh:322-337` (`codex exec` → `diagnosis.md`) |
 | Workflow-heal diagnosis | `scripts/workflow_failure_heal_intake.sh:670-687` (`codex exec` → `diagnosis.md` with `## Classification`) |
@@ -96,7 +96,16 @@ Decisions taken in the clarification round (2026-09-27):
   `CHECK_TRIAGE_ENGINE`, `WORKFLOW_HEAL_ENGINE` (values `claude` | `gpt`,
   default `claude`) and `SECURITY_PASS_CLAUDE_DEADLINE_HOURS`,
   `VALIDATION_CLAUDE_DEADLINE_HOURS`, `CHECK_TRIAGE_CLAUDE_DEADLINE_HOURS`,
-  `WORKFLOW_HEAL_CLAUDE_DEADLINE_HOURS` (default `6`); files
+  `WORKFLOW_HEAL_CLAUDE_DEADLINE_HOURS` (default `6`); env vars
+  `CLAUDE_CHECK_BUNDLE_DIR`, `CLAUDE_CHECK_RESULT_FILE`,
+  `VALIDATE_LLM_ENGINE`, `VALIDATE_SIDE_EFFECTS`; engine value
+  `claude-session`; shell function `llm_seam_run`; `claude_check.py`
+  subcommands `payload`, `marker`, `find-result`, `engine`;
+  `claude_issue_route.py` subcommand `check-queue-issue` and `item_type`
+  value `check`; `validate_process.sh` flag `--apply-result`; artifact name
+  `claude-check-<request id>`; result reasons `unsupported_kind`,
+  `network_policy`; log keys `prompt_drift`, `resume=skipped
+  reason=unknown_kind`; files
   `scripts/claude_check.py`, `scripts/llm_external_seam.sh`,
   `.github/actions/claude-check-request/action.yml`,
   `.github/workflows/claude_check_resume.yml`,
@@ -111,6 +120,13 @@ Decisions taken in the clarification round (2026-09-27):
   values only; every existing value keeps its meaning.
 - **§4.** Every new var has a default; an invalid engine value falls back to
   `claude` with a `::warning::`, an invalid deadline to `6`.
+  `CLAUDE_CHECK_BUNDLE_DIR` defaults to `${RUNNER_TEMP:-/tmp}/claude-check`;
+  `CLAUDE_CHECK_RESULT_FILE` defaults to empty (request run).
+  `VALIDATE_LLM_ENGINE` defaults to empty, meaning the engine comes from
+  `VALIDATION_ENGINE`; its only other value is `claude-session`, which only
+  `/claude-check` sets, and any other value is ignored with a `::warning::`.
+  `VALIDATE_SIDE_EFFECTS` defaults to `on`; its only other value is `off`,
+  and an invalid value falls back to `on` with a `::warning::`.
 - **§14.** The new consumer wrapper is added to the install profiles and
   reaches all 13 repos in `.github/ai/consumer_repos.json` through the
   existing sync; the intake keeps validating repos against that file.
@@ -148,9 +164,18 @@ command…>`.
   `CLAUDE_CHECK_BUNDLE_DIR`, writes `request.json`, and exits `75`.
   The calling script treats `75` as "queued": it stops before its tail and
   writes no verdict.
-- Engine `claude-session` (validation, in the session): writes the prompt
-  file, waits for the session to write the answer file (poll, bounded by the
-  phase's idle timeout), then continues in-process.
+- Engine `claude-session` (validation, in the session): a file handoff
+  through `CLAUDE_CHECK_BUNDLE_DIR/session/`. `validate_process.sh` runs on
+  the session's host, as it does on the runner today; only the generated
+  harness runs inside Docker, so no prompt has to cross a container
+  boundary. The session starts the script as a background process and
+  watches that directory. For each model call the seam writes
+  `<phase>-<n>.prompt`, then polls for `<phase>-<n>.answer`, which the
+  session writes to a temporary name and renames into place so a partial
+  answer is never read. The wait is bounded by `CODEX_STALL_TIMEOUT_SECONDS`
+  (default `600`), the same idle bound as a codex run. On timeout the seam
+  returns non-zero, and the phase takes its existing stalled-engine path.
+  Otherwise it copies the answer to `<out_file>` and continues in-process.
 
 **Lifecycle of one check.**
 
@@ -173,9 +198,11 @@ command…>`.
    - `triage`: answers with the five-section Markdown;
    - `heal`: answers with `## Classification` first, from the closed list;
    - `validation`: checks out the target ref, starts `dockerd`, runs
-     `validate_process.sh` with `VALIDATE_LLM_ENGINE=claude-session` and
-     `VALIDATE_SIDE_EFFECTS=off`, answers the discover/diagnose prompts as
-     they appear, and may repair only the generated `validation/` files,
+     `validate_process.sh` in the background with
+     `VALIDATE_LLM_ENGINE=claude-session` and `VALIDATE_SIDE_EFFECTS=off`,
+     answers each discover/diagnose prompt file as it appears (the
+     `claude-session` handoff above), and may repair only the generated
+     `validation/` files,
      up to `MAX_SELF_HEAL_ATTEMPTS` times.
 
    It then posts one result comment on the subject (marker + fenced
@@ -319,7 +346,11 @@ until a compatible Claude release exists they ship with `@stable` as today.
    `source_url` = target repo, `model: claude-opus-5-5`, `permission_mode:
    auto`, title `check <kind> <repo>#<subject>`, prompt `/effort high`
    alone; then a trigger 2 minutes out with `/claude-check <queue issue URL>`;
-   then label the item and add the `Dispatched:` line (no close).
+   then label the item and add the `Dispatched:` line (no close). Register
+   `ai:claude-check-dispatched` in `.github/ai/label_contract.v1.json` next
+   to `ai:claude-issue-queue`, and update that label's description, which
+   says the pickup closes queue items: check items are closed by the session
+   or the watchdog (D3).
 7. `.claude/commands/claude-check.md` [new] + `workflow-templates/.claude/commands/claude-check.md`
    — the unattended procedure: parse and validate the payload; confirm the
    request marker exists on the subject; download the artifact
@@ -343,7 +374,8 @@ until a compatible Claude release exists they ship with `@stable` as today.
    per expired item; the existing single queue read is reused.
 10. Tests: `tests/test_claude_check.py` [new], `tests/test_llm_external_seam.py`
     [new], `tests/test_claude_check_resume_workflow_contract.py` [new];
-    extend `tests/test_claude_issue_route.py` and the watchdog tests; add all
+    extend `tests/test_claude_issue_route.py`, `tests/test_ai_labels.py` (the
+    new label) and the watchdog tests; add all
     of them to `ci.yml` and the `validate-scripts` lists.
 11. Docs: README ("Claude checks" section: lifecycle, vars, deadlines, log
     prefix, failure modes, switch-back table); agents.md architecture item
@@ -397,9 +429,12 @@ until a compatible Claude release exists they ship with `@stable` as today.
 
 19. `scripts/validate_process.sh` — `run_validate_codex_attempt` goes
     through the seam (`validate_discover`, `validate_diagnose`).
-    - New `VALIDATE_SIDE_EFFECTS=off` skips labels, fix-up issues, comments,
-      Telegram and `dispatch_self_heal_improvements`, and still writes the
-      result files.
+    - New `VALIDATE_LLM_ENGINE` (default empty, §4): `claude-session`
+      overrides the engine resolved from `VALIDATION_ENGINE` and selects the
+      seam's file handoff (Approach).
+    - New `VALIDATE_SIDE_EFFECTS` (default `on`, §4): `off` skips labels,
+      fix-up issues, comments, Telegram and
+      `dispatch_self_heal_improvements`, and still writes the result files.
     - New `--apply-result <dir>` mode reads the session's result files and
       runs only the side-effect tail.
     - Engine `claude` in Actions → write `raw_status=claude_check_queued`
@@ -473,6 +508,7 @@ until a compatible Claude release exists they ship with `@stable` as today.
   tests listed above, `changelog.d/*`.
 - Edited: `scripts/claude_issue_route.py`, `scripts/claude_issue_intake.sh`,
   `scripts/claude_issue_queue_watchdog.sh`, `.github/workflows/claude-issue-intake.yml`,
+  `.github/ai/label_contract.v1.json`,
   `.claude/commands/claude-issue-pickup.md`, `.claude/commands/claude-issue-dispatch.md`
   (+ twin), `.claude/commands/implement-plan-claude.md` (+ twin),
   `scripts/security_audit.sh`, `.github/workflows/security-audit.yml`,
