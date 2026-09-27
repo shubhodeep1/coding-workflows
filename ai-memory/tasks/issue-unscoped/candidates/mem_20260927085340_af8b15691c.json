@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:671 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `load_allowed_repos(Path(args.registry), args.self_repo)` is outside the try/except block, so registry read or parse failures may exit with code 1 and a traceback instead of the documented exit code 2.\n  WHY: z-ai_glm-5_2 reports that `load_allowed_repos` catches `(OSError, ValueError)` at scripts/claude_issue_route.py:256-267 and that the call at scripts/claude_issue_route.py:678 is safe, contradicting this finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Provide unambiguous instructions for the pickup operator to handle lineage-depth refusals, including the notification mechanism (referencing CLAUDE.md \u00a726.B instructions consistently).\n  expected_change_site: CLAUDE.md \u00a726.C step 5 / \u00a726.B step 1c\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff in CLAUDE.md updates the logic for arming a checker, but the handler in \u00a726.C step 5 refers to fixer creation refusal by `lineage depth`. The requirement to send a `PushNotification` when `create_session` is refused is documented, but the logic in \u00a726.B step 1c seems to handle checker creation refusal, while step 5 logic handles fixer refusal. z-ai_glm-5_2 assesses these instructions as complementary, with step 1c governing new checker creation and step 5 covering an existing checker armed before the step 1c depth check.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_route.py:671 | confidence=4\n  PROBLEM: `load_allowed_repos(Path(args.registry), args.self_repo)` is called outside the try/except block.\n  WHY: If the registry file is missing, unreadable, or malformed, `load_allowed_repos` may raise an uncaught exception (e.g., FileNotFoundError), causing the script to exit with code 1 and a traceback instead of the documented exit code 2, which prevents the pickup's documented refusal branch from functioning as intended.\n- Requirement: Provide unambiguous instructions for the pickup operator to handle lineage-depth refusals, including the notification mechanism (referencing CLAUDE.md \u00a726.B instructions consistently).\n  Expected change site: CLAUDE.md \u00a726.C step 5 / \u00a726.B step 1c\n  Evidence of absence: The PR diff in CLAUDE.md updates the logic for arming a checker, but the handler in \u00a726.C step 5 refers to fixer creation refusal by `lineage depth`. The requirement to send a `PushNotification` when `create_session` is refused is documented, but the logic in \u00a726.B step 1c seems to handle checker creation refusal, while step 5 logic handles fixer refusal. The instruction \"If `create_session` is refused ... send one `PushNotification`\" in \u00a726.C step 5 is perceived as contradictory or ambiguous in context with \u00a726.B step 1c's pickup-based routing, leading to operator confusion regarding when to use the PushNotification versus the pickup mechanism.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_route.py: _cmd_arm_check_in_request, `Path(args.arguments_file).read_text(encoding=\"utf-8\")`\n  PROBLEM: The handler catches `(OSError, UnicodeDecodeError)` only; a malformed file that surfaces as `ValueError` could exit with code 1 and a traceback instead of the documented exit-code-2 contract.\n  WHY: Suggested minimal fix: extend the except clause to `(OSError, UnicodeDecodeError, ValueError)`. HARDENING_RISK_SCORE: 1.\n- .claude/commands/claude-issue-pickup.md: step 5.2\n  PROBLEM: The step hardcodes `permission_mode = auto`, differing from CLAUDE.md \u00a726.B step 2's `permission_mode = this session's mode`.\n  WHY: The hardcoded `auto` is consistent with the pickup's mode and its preflight; suggested minimal fix is to document the divergence with a one-line comment. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "11577acd26e50655411985e0cfa3384c41f936f4a9cf911c4daf1cde1b0c094e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4610,
+    "run_id": "36306335037",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36306335037",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927085340_af8b15691c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4610,
+    "run_id": "36306335037"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T08:53:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
