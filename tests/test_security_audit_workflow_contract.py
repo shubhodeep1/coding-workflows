@@ -25,6 +25,14 @@ DEFAULT_FINDINGS_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "security_audit_de
 _SANITIZED_GIT_ENV_KEYS = ("BASH_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX")
 
 
+def test_claude_audit_result_evidence_is_emitted_from_verified_checkout() -> None:
+	workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+	engine = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert workflow.index("[ \"$(git -C audit-data rev-parse HEAD 2>/dev/null)\" != \"${AUDIT_DATA_SHA}\" ]") < workflow.index(
+		'echo "SECURITY_AUDIT_TARGET: branch ${AUDIT_BRANCH} range ${audit_diff_base}..${AUDIT_DATA_SHA}"')
+	assert 'echo "security-audit: tracker=#${TRACKER_NUMBER} findings=${SURVIVING_FINDINGS_COUNT} followups_created=${FOLLOWUP_CREATE_COUNT}"' in engine
+
+
 def _write_exec(path: Path, body: str) -> None:
 	path.write_text(body, encoding="utf-8")
 	path.chmod(0o755)
