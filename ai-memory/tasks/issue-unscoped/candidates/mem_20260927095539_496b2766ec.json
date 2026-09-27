@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/claude-release-track-plan.md:452-462 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The plan incorrectly claims that cone-mode `sparse-checkout set workflow-templates/.claude` includes the sibling `workflow-templates/CLAUDE.md` symlink, so the checkout verification fails.\n  WHY: The missing symlink leaves `claude_source_sha` and `claude_source_dir` empty and forces the stable fallback, preventing the Claude-track sync from meeting G2; severity differed, with qwen_qwen3_7-plus rating it BLOCKER and the other reviewers rating it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/plans/claude-release-track-plan.md:452-462 | severity=high | confidence=[5]\n  File: docs/plans/claude-release-track-plan.md\n  Line or code reference: lines 452-456, 461-462\n  PROBLEM: The plan incorrectly claims that cone-mode `sparse-checkout set workflow-templates/.claude` includes root-level `CLAUDE.md` and sibling `workflow-templates/CLAUDE.md`.\n  WHY: The verification fails because the symlink is absent, leaving `claude_source_sha` and `claude_source_dir` empty and causing the consumer sync to fall back to `UPSTREAM_SHA`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/plans/claude-release-track-plan.md:452-462 | severity=high | confidence=[5]\n  File: docs/plans/claude-release-track-plan.md\n  Line or code reference: P2 step 10, the `claude_track_resolve` checkout block (lines ~452-462) and its preamble (lines ~403-411)\n  PROBLEM: The plan's cone-mode `sparse-checkout set workflow-templates/.claude` command cannot include root files or sibling files in `workflow-templates/`, despite claiming it includes them.\n  WHY: The verification of `workflow-templates/CLAUDE.md` therefore fails, leaving both outputs empty and forcing stable fallback; P2's documented completion condition is unreachable.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/plans/claude-release-track-plan.md:452-456 | severity=critical | confidence=[5]\n  File: docs/plans/claude-release-track-plan.md\n  Line or code reference: P2 step 10, lines 452-456 (the `sparse-checkout set` command and its parenthetical explanation)\n  PROBLEM: The plan incorrectly claims that cone-mode `sparse-checkout set workflow-templates/.claude` includes the sibling `workflow-templates/CLAUDE.md`.\n  WHY: The absent symlink makes the verification fail, leaves `claude_source_sha` and `claude_source_dir` empty, and forces consumers to use the stable source instead of the Claude track.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- docs/plans/claude-release-track-plan.md:452-462 | severity=high | confidence=[4]\n  File: docs/plans/claude-release-track-plan.md:452-462\n  Line: sparse-checkout set workflow-templates/.claude (cone mode claim)\n  PROBLEM: The plan claims the subdirectory pattern includes root `CLAUDE.md` and the `workflow-templates/CLAUDE.md` symlink, but cone mode does not.\n  WHY: The verification fails, leaving `claude_source_dir` empty and causing stable fallback on every release, breaking G2/G3.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/plans/claude-release-track-plan.md:452-462 | severity=high | confidence=[5]\n  File: docs/plans/claude-release-track-plan.md\n  Line or code reference: Step 10, the `claude_track_resolve` checkout block (lines ~452-462 of the plan file), specifically the `sparse-checkout set workflow-templates/.claude` command and the subsequent verification \"that `workflow-templates/CLAUDE.md` resolves\".\n  PROBLEM: The plan's cone-mode `sparse-checkout set workflow-templates/.claude` omits the sibling `workflow-templates/CLAUDE.md` symlink, contrary to its claim.\n  WHY: The verification fails, both outputs are left empty, and the consumer always falls back to `UPSTREAM_SHA`, defeating the P2 consumer-sync mechanism.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c6987e3d6553acdfa2c32fdd3b6877b983898cf6b23a40c537697ecc55ea48ef",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4613,
+    "run_id": "36309967608",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36309967608",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927095539_496b2766ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4613,
+    "run_id": "36309967608"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T09:55:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
