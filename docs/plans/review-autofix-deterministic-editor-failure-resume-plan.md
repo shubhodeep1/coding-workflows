@@ -3,7 +3,7 @@
 > **Status note (2026-09-22):** P1 of this plan (D1, D2, D5: the attempt
 > marker, the elapsed-time bound and the deterministic-exit routing) is
 > superseded by P2 of
-> `docs/plans/heal-deterministic-autofix-failures-plan.md`, which routes a
+> `docs/completed/heal-deterministic-autofix-failures-plan.md`, which routes a
 > PR to `ai:review-blocked` after repeated identical failures on one head
 > using a failure fingerprint instead of an elapsed-time heuristic, and
 > covers failures outside the editor step. P2 of this plan (D3, D4: the

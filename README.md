@@ -1034,10 +1034,13 @@ not delete wrappers that are already present in `.github/workflows/`.
 > and no-op.
 
 > **Interactive session hooks delivered by the `.claude/` sync:** the same
-> `Sync .claude/ assets from upstream` step ships three `PreToolUse` /
+> `Sync .claude/ assets from upstream` step ships four `PreToolUse` /
 > `PostToolUse` hooks with their `settings.json` wiring, each documented in
 > the root `CLAUDE.md` that syncs alongside them: the merged-PR commit guard
-> (`hooks/pr_merge_status_guard.py`, §21), the PR-watch guard
+> (`hooks/pr_merge_status_guard.py`, §21), the `gh api` permission guard
+> (`hooks/gh_api_write_guard.py`, §23.H: prompts only for `gh api` writes
+> that are not §23.B routine writes, replacing the former `gh api`
+> `permissions.ask` rules), the PR-watch guard
 > (`hooks/pr_watch_guard.py`, §25), and the post-push PR status check-in
 > reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
 > interactive session start a small low-effort Sonnet checker session for every
@@ -1261,10 +1264,12 @@ security fix cannot spawn follow-ups of follow-ups.
 queue read or write labels the issue `ai:claude-handoff-failed`, comments how
 to retry or switch, and sends a Telegram ERROR. A queue item still open after
 `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (repo variable, default 3) means the pickup
-pickup stopped: `claude-issue-queue-watchdog.yml` labels it
+stopped: `claude-issue-queue-watchdog.yml` labels it
 `ai:claude-issue-queue-stale` and sends a Telegram ERROR with the restart
-command. A session without the claude-code-remote tools never implements an
-issue itself: `/implement-issue-claude` and the dispatcher stop with
+command, `/claude-issue-pickup start — restart`, to run from a new cloud
+session opened in the app, in Auto mode. A session without the
+claude-code-remote tools never implements an issue itself:
+`/implement-issue-claude` and the dispatcher stop with
 `ai:claude-blocked` instead (CLAUDE.md §28.C). A Claude session that must stop (CLAUDE.md §28.C: an
 exhausted cap, a failed security or validation run, an ask-first operation,
 a missing base branch) comments once on the issue, labels it
