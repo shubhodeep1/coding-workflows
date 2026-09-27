@@ -1,17 +1,17 @@
 # Implement-Plan Log — Review sandbox: snapshot and transfer the per-PR workspace, not the checkout
 
-- Plan: docs/plans/issue-4580-review-sandbox-workspace-transfer-plan.md
+- Plan: docs/completed/issue-4580-review-sandbox-workspace-transfer-plan.md
 - Source issue: shubhodeep1/coding-workflows#4580
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-orchestrator-sync-contract-list-union-security-fix-1 (was ai/issue-4568)
 - Project branch: claude/implement-plan-issue-4580-review-sandbox-workspace-transfer   Final PR: #4585 draft
-- Status: IN_PROGRESS
-- Stage: completion
-- Activation: not started
-- Waiting on: none
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-orchestrator-sync-contract-list-union-security-fix-1)
+- Waiting on: completion PR (this PR)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_011n7LVKDJEuhGwymWCYTy23
 - Last updated: 2026-09-27
-- Last note: conformance run 1 CONFORMANT; validation skipped (Q1: A); base moved to claude/implement-plan-orchestrator-sync-contract-list-union-security-fix-1 (Q2: A) after #4572 closed unmerged; completion next.
+- Last note: completion PR opened; plan moved to docs/completed/; final-merge next.
 
 ## Phases
 1. [x] Phase 1 — transfer review-editor edits into the per-PR workspace (WORKSPACE_PATH) instead of the checkout   — PR #4589 merged 2026-09-27; review rounds: 0; interventions: 0
@@ -31,6 +31,8 @@
 - Skipped — Q1: A (human, 2026-09-27): validate.yml binds target_ref only to a final PR into the default branch, and this issue-mode project's final PR #4585 targets a non-default base. The change reaches main with project 3965, whose chain runs its own validation.
 
 ## Completion
+- Completion PR (this PR) — doc moved to docs/completed/issue-4580-review-sandbox-workspace-transfer-plan.md
+- Final PR #4585 draft (base retargeted to claude/implement-plan-orchestrator-sync-contract-list-union-security-fix-1)
 
 ## Activation
 
