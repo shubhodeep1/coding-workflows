@@ -238,3 +238,14 @@ def test_issue_mode_follows_a_base_branch_that_merged(text):
 	assert '`gh api "repos/<owner>/<repo>/pulls?state=closed&head=<owner>:<issue base>"`' in text
 	assert "retarget the final PR (`mcp__github__update_pull_request` with `base` = `<new base>`)" in text
 	assert "a move onto the default branch switches the final PR's body to `Fixes #<N>`" in text
+
+
+def test_issue_mode_archives_stopped_stage_sessions(text):
+	"""A /reclarify resume archives the stage session that stopped on the issue."""
+	assert "`implement-plan <slug> — <stage> — blocked on issue`" in text
+	assert "**Issue-mode resume without a `— resume.` block**" in text
+	assert "**Issue mode: stopped stage sessions.**" in text
+	assert "when the source issue no longer carries `ai:claude-blocked`" in text
+	assert "Never archive this session itself, and skip one whose `status_bucket` is `working`" in text
+	# The stop title must not collide with a stage title that is still working.
+	assert "blocked on issue" not in text.replace("— blocked on issue", "")

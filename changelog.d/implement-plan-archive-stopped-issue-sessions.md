@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **A `/reclarify` resume of an issue-mode `/implement-plan-claude` project now archives the stage session that stopped on the issue.** Before, every issue-mode stop that a human answered left one idle session behind that had to be archived by hand.
+
+When an issue-mode stage stops (`Status: BLOCKED`), it posts the `<!-- ai:claude-blocked:v1 -->` comment, adds `ai:claude-blocked`, and now also renames itself to `implement-plan <slug> — <stage> — blocked on issue`. The `/reclarify` resume reaches `/implement-plan-claude` through the Claude issue pickup and `/implement-issue-claude` with no `— resume.` block, so nothing used to name the stopped session, and the Zombie-checker cleanup only ran from resume hygiene. That cleanup now also runs on an issue-mode resume without a `— resume.` block, and it archives sessions with the new title once the source issue no longer carries `ai:claude-blocked`. It skips the running session itself, any session whose status is `working`, and every `… — blocked PR` or `… — blocked` stage session, which are still doing work.
+
+What this means for operators: after answering a blocked issue and commenting `/reclarify`, the stopped session disappears from the session list on its own once the project resumes. Sessions stopped before this change keep their old titles and still need archiving by hand.
