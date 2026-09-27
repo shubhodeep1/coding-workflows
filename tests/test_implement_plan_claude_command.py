@@ -238,3 +238,17 @@ def test_issue_mode_follows_a_base_branch_that_merged(text):
 	assert '`gh api "repos/<owner>/<repo>/pulls?state=closed&head=<owner>:<issue base>"`' in text
 	assert "retarget the final PR (`mcp__github__update_pull_request` with `base` = `<new base>`)" in text
 	assert "a move onto the default branch switches the final PR's body to `Fixes #<N>`" in text
+
+
+def test_third_conformance_fix_gets_a_fix_check_not_a_fourth_run(text):
+	# Issue #4545's chain stopped at "conformance 4/3": the third run opened a
+	# fix PR, and re-auditing it would have been a fourth run.
+	assert "3 conformance runs per project" in text
+	assert "the next stage is `conformance 3/3 — fix check` instead" in text
+	assert "`docs/plans/<slug>-plan.md — scope fix-check #<fix PR> — unattended`" in text
+	assert "opens no fix PR, and does not count toward the cap" in text
+	assert "**FIX-VERIFIED** → continue as **CONFORMANT with no fix PR** below" in text
+	assert "**FIX-DEFECTIVE**" in text and "never auto-decided (§28.C)" in text
+	assert "after the third run's fix PR merges, the fix check replaces it" in text
+	assert "`Outside fix-check scope`" in text
+	assert "conformance 3/3 — fix check | security-pass" in text
