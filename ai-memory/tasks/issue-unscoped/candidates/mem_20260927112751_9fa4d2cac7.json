@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:268-287\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_review_run_head_on_branch_history` can raise `AttributeError` if `gh_api` returns `None` or a non-dict instead of a comparison response.\n  WHY: The helper calls `comparison.get(\"status\")` without checking the response type, and the cited error-path test only covers `ReadError`.\n- workflow-templates/.claude/scripts/check_in_status.py:268-287\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The byte-identical template copy of `_review_run_head_on_branch_history` can raise `AttributeError` if `gh_api` returns `None` or a non-dict instead of a comparison response.\n  WHY: The helper calls `comparison.get(\"status\")` without checking the response type.\n- .claude/scripts/check_in_status.py:268-287\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_review_run_head_on_branch_history` does not validate `reviewed_head_sha` before interpolating it into the URL or using it in the equality check.\n  WHY: The current caller passes a validated PR `head_sha`, but a future caller could provide a malformed value.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: .claude/scripts/check_in_status.py\n  Location: _review_run_head_on_branch_history (lines 268-287, also byte-identical copy at workflow-templates/.claude/scripts/check_in_status.py:268-287)\n  Issue: The helper does `comparison.get(\"status\") == \"ahead\"` without first checking that `comparison` is a dict. If `gh_api` ever returns None or a non-dict (e.g., empty 204 response, proxy interception in the agent-proxy path noted in the \u00a715 contract), `comparison.get` raises AttributeError instead of returning False. The error path test only covers the explicit `ReadError` branch, not a None/unexpected-type return.\n  Suggested minimal fix: Add one defensive guard before the `.get` call:\n  ```\n  if not isinstance(comparison, dict):\n      return False\n  return comparison.get(\"status\") == \"ahead\"\n  ```\n  Estimated lines changed: 2 (added to both the root and the workflow-templates copy)\n  HARDENING_RISK_SCORE: 2\n- File: .claude/scripts/check_in_status.py\n  Location: _review_run_head_on_branch_history (lines 268-287)\n  Issue: The helper validates `run_head_sha` with a regex (good), but does not validate `reviewed_head_sha` before interpolating it into the URL or using it in the equality check. The current caller (`_check_claude_fixer_pr`) only ever passes the PR's `head_sha` (already validated by GitHub and by the hand-off marker parser), so a malformed value is not reachable today, but a future caller could trip this. The signature is `reviewed_head_sha: str`, with no runtime guard.\n  Suggested minimal fix: Mirror the run-side guard at the top of the helper:\n  ```\n  if not isinstance(reviewed_head_sha, str) or not re.fullmatch(r\"[0-9a-f]{40}\", reviewed_head_sha):\n      return False\n  ```\n  Estimated lines changed: 2 (added to both copies)\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1f1df320d2a8bb6d467821bb2e680422e1ef18e939c11fa20acc94529054077b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4601,
+    "run_id": "36314651343",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36314651343",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927112751_9fa4d2cac7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4601,
+    "run_id": "36314651343"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T11:27:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
