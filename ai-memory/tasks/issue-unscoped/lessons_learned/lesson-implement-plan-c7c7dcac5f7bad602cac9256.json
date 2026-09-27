@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T14:29:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Read label history from `issues/<N>/events` (label and state events only), not `issues/<N>/timeline`: the timeline mixes in comments and cross-references, so a 100-item page fills faster and hides later label events.",
+  "phase": "implement_plan",
+  "pr_number": 4645,
+  "record_id": "lesson-implement-plan-c7c7dcac5f7bad602cac9256",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4623-verify-security-pass-skip",
+    "file:.claude/scripts/security_pass_skip.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T14:29:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Pick the earliest GitHub event by its `created_at`, never by list position: the REST events endpoints are chronological today but reviewers treat the order as unspecified, and a position-based check breaks silently if it changes.",
+  "phase": "implement_plan",
+  "pr_number": 4645,
+  "record_id": "lesson-implement-plan-37e3b02d3df85149381d29f6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4623-verify-security-pass-skip",
+    "file:.claude/scripts/security_pass_skip.py"
+  ]
+}
