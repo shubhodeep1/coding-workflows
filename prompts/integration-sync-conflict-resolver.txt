@@ -127,6 +127,11 @@ unrelated maintenance fixes that you should layer in additively.
 - Do not modify GitHub workflow files except when they appear in the
   in-scope list above.
 - Do not access the network.
+- Do not run `git add`, `git rm --cached`, `git commit`, `git stage`, or any
+  other command that stages or commits changes, and do not otherwise write
+  to the Git index. A separate, trusted step stages and commits your file
+  edits after validating them — leave the Git index alone and only edit
+  files on disk.
 
 Edit-tool discipline (apply_patch first with fallbacks, verify-after-write,
 no `sed -i`/`perl -i`/`awk` for multi-line edits) is defined in
