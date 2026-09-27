@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_check_in_status_hand_back.py:345-350, 361-368 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The two tests expect claims from `workflow-bot` to count but do not set `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`, so the workflow account is excluded from the trusted logins.\n  WHY: Qwen rates this BLOCKER, while Grok rates it MAJOR and Gemini gives no severity; minimax_minimax-m3 and z-ai_glm-5_2 report this is a false positive because `_stub` sets the environment variable for both tests.\n- tests/test_check_in_status_hand_back.py:346 (test_the_workflow_accounts_sweep_reservation_counts), :362 (test_without_a_pr_author_only_the_workflow_account_counts) | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The two sweep-reservation tests omit `monkeypatch.setenv`, so the workflow-bot claims are not trusted.\n  WHY: Grok rates this MAJOR; minimax_minimax-m3 and z-ai_glm-5_2 report `_stub` sets the environment variable for both tests.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Added tests for forged claims, workflow reservations, no-author case, and case-insensitivity must pass with the new trusted-login filter.\n  expected_change_site: tests/test_check_in_status_hand_back.py\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The two sweep-reservation tests omit `monkeypatch.setenv`; only the case-insensitive and no-trusted tests set it.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_check_in_status_hand_back.py:345-350, 361-368 | confidence=5\n  PROBLEM: The tests expect claims from \"workflow-bot\" to be trusted, but they fail to configure the CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN environment variable.\n  WHY: The new _fix_claim_trusted_logins function relies on this environment variable to trust the workflow account. Without it, \"workflow-bot\" is not added to the trusted list, causing the claims to be ignored in the tests, contrary to their expectations.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_check_in_status_hand_back.py: test_the_workflow_accounts_sweep_reservation_counts (lines ~345-350), test_without_a_pr_author_only_the_workflow_account_counts (lines ~361-368) | severity=BLOCKER | confidence=5\n  PROBLEM: Both tests expect claims from login=\"workflow-bot\" to count, but neither test sets CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN.\n  WHY: Without that env var, _fix_claim_trusted_logins returns only the PR author's login (or an empty tuple when the PR has no user), so \"workflow-bot\" is not in the trusted set and the claims are ignored. test_the_workflow_accounts_sweep_reservation_counts asserts out[\"state\"] == \"claimed\" but the claim would be filtered out, leaving state=\"blocked\" from the label. test_without_a_pr_author_only_the_workflow_account_counts asserts out[\"state\"] == \"claimed\" but with trusted_logins=() both claims are ignored, leaving state=\"blocked\".\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_check_in_status_hand_back.py:346 (test_the_workflow_accounts_sweep_reservation_counts), :362 (test_without_a_pr_author_only_the_workflow_account_counts) | severity=MAJOR | confidence=5\n  PROBLEM: Tests expect \"workflow-bot\" claims to count but never set `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`; `_fix_claim_trusted_logins` therefore excludes them.\n  WHY: Assertions fail at runtime.\n- TASK_GAP\n  Requirement: Added tests for forged claims, workflow reservations, no-author case, and case-insensitivity must pass with the new trusted-login filter.\n  Expected change site: tests/test_check_in_status_hand_back.py\n  Evidence of absence: The two sweep-reservation tests omit `monkeypatch.setenv`; only the case-insensitive and no-trusted tests set it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "256fb436655dffc08d53d88cfbc656ba5d9f6fca2781930ae12bfb69f6ac8862",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4632,
+    "run_id": "36330828438",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36330828438",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927160400_27ccb5c6c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4632,
+    "run_id": "36330828438"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T16:04:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
