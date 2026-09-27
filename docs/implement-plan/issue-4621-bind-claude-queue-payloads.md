@@ -3,23 +3,23 @@
 - Plan: docs/plans/issue-4621-bind-claude-queue-payloads-plan.md
 - Source issue: shubhodeep1/coding-workflows#4621
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4621-bind-claude-queue-payloads   Final PR: pending (draft)
+- Project branch: claude/implement-plan-issue-4621-bind-claude-queue-payloads   Final PR: #4636 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #4639
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01HuPy8SJxGNHdJhSC3PfGv4   safety net trig_01UtctK1kJKXz8SeHpgTh5uA   hand-back trig_01LvEkBCqFeRUjSWLtM4ifYS
 - Last updated: 2026-09-27
-- Last note: project branch opened by /implement-issue-claude session session_01RMDgoU4wupVJb3BX4Zrekg
+- Last note: phase 1 implemented and PR #4639 opened against the project branch by session_01RMDgoU4wupVJb3BX4Zrekg; waiting on its review round or merge
 
 ## Phases
-1. [ ] Phase 1 — bind queue items to their producing run and verify the binding at pickup
-   - [ ] `scripts/claude_issue_route.py`: binding constants, `append_queue_binding`, `load_queue_binding`, `evaluate_producer_run`, `fetch_queue_bindings`, binding check in `queue_pending`, CLI (`add-queue-binding`, `--bindings-json`, `--default-branch`)
-   - [ ] `scripts/claude_issue_intake.sh` + `.github/workflows/claude-issue-intake.yml`: write the binding (new and reused items) and upload it
-   - [ ] `scripts/claude_pr_sweep.py` + `.github/workflows/review_autofix_sweep.yml`: write the binding and upload it
-   - [ ] `.claude/commands/claude-issue-pickup.md`, `README.md`, `agents.md`: document the binding
-   - [ ] Tests in `tests/test_claude_issue_route.py`, `tests/test_claude_pr_sweep.py`; changelog fragment
+1. [ ] Phase 1 — bind queue items to their producing run and verify the binding at pickup   — PR #4639 open (waiting); review rounds: 0; interventions: 0
+   - [x] `scripts/claude_issue_route.py`: binding constants, `append_queue_binding`, `load_queue_binding`, `evaluate_producer_run`, `fetch_queue_bindings`, binding check in `queue_pending`, CLI (`add-queue-binding`, `--bindings-json`, `--default-branch`)
+   - [x] `scripts/claude_issue_intake.sh` + `.github/workflows/claude-issue-intake.yml`: write the binding (new and reused items) and upload it
+   - [x] `scripts/claude_pr_sweep.py` + `.github/workflows/review_autofix_sweep.yml`: write the binding and upload it
+   - [x] `.claude/commands/claude-issue-pickup.md`, `README.md`, `agents.md`: document the binding
+   - [x] Tests in `tests/test_claude_issue_route.py`, `tests/test_claude_pr_sweep.py`; changelog fragment
    - Done when: the listed tests pass and both workflows parse and upload `claude-issue-queue-binding` with `if: always()`
 
 ## Conformance
@@ -41,6 +41,9 @@
 - AD-5 [plan, 2026-09-27] Should the sweep's "already queued" dedupe check bindings? — Picked: A — no; keep counting every trusted, well-formed open item. Alternatives: B — count only bound items. Why: dedupe must err toward not queueing twice. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] When a trust check binds a GitHub issue body to automation, compare the whole body against the producer's canonical rendering, not only the payload block, or text added around the payload still reaches the model that reads the body. (files: scripts/claude_issue_route.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue pickup's dispatch trigger; permission mode auto.
+- Phase 1 adds a whole-body canonical check beyond the plan's title+payload comparison (same `binding_mismatch` reason), so text added to a queue issue never reaches the pickup model.
+- Local verification: 412 tests across every file referencing the changed files passed; the full suite was not completed locally (network-bound legacy tests exceed the 25-minute local timeout, and `tests/test_workflow_retro.py` needs Python 3.12 f-strings while the container has 3.11). CI runs the full suite.
