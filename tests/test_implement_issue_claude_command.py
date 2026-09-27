@@ -231,7 +231,7 @@ def test_pickup_arms_check_ins_for_deep_sessions(pickup_cmd):
 	assert "5. **Arm a check-in** (`— arm-check-in` mode only)." in pickup_cmd
 	assert "scripts/claude_issue_route.py arm-check-in-request --arguments-file <that file> --registry .github/ai/consumer_repos.json" in pickup_cmd
 	assert "never through the shell" in pickup_cmd
-	assert "`model` `claude-sonnet-5`, `permission_mode` `auto`, `title` = the script's `checker_title`, and the prompt `/effort low` and nothing else" in pickup_cmd
+	assert "`model` `claude-sonnet-5`, `permission_mode` `auto` (the pickup's own mode, which step 0 requires; CLAUDE.md §26.B step 2 says \"this session's mode\"), `title` = the script's `checker_title`, and the prompt `/effort low` and nothing else" in pickup_cmd
 	assert "`persistent_session_id` = the script's `requester`" in pickup_cmd
 	assert "so no free text passes through the pickup" in pickup_cmd
 	# The depth-limit notification is spelled out, not cross-referenced.
@@ -256,7 +256,7 @@ def test_claude_md_26b_depth_check_routes_deep_sessions_to_the_pickup():
 	assert "2. Otherwise (*d* ≤ 5) call `create_session`" in claude_md
 	# Step numbers stay stable (§6): 1c sits between 1b and 2.
 	assert claude_md.index("1b. **Register with an existing checker**") < claude_md.index("1c. **Depth check**") < claude_md.index("2. Otherwise (*d* ≤ 5)")
-	assert "(a checker armed before the §26.B step 1c depth check existed)" in claude_md
+	assert "refused with `lineage depth` only for a checker armed before step 1c existed. There is no pickup routing here" in claude_md
 
 
 def test_pickup_fails_closed_and_never_comments(pickup_cmd):

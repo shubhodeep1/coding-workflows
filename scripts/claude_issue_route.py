@@ -669,14 +669,16 @@ def _cmd_pr_fix_queue_issue(args: argparse.Namespace) -> int:
 
 def _cmd_arm_check_in_request(args: argparse.Namespace) -> int:
 	try:
+		# ValueError covers UnicodeDecodeError and a path with a NUL byte.
 		text = Path(args.arguments_file).read_text(encoding="utf-8")
-	except (OSError, UnicodeDecodeError) as exc:
+	except (OSError, ValueError) as exc:
 		print(f"cannot read arguments file: {exc}", file=sys.stderr)
 		return 2
-	# Never raises: an unreadable or malformed registry yields only the self
-	# repo, so any other repo is refused below with exit 2.
-	allowed = load_allowed_repos(Path(args.registry), args.self_repo)
 	try:
+		# load_allowed_repos already maps an unreadable or malformed registry
+		# to the self repo only; it sits inside the try so any future error
+		# still ends in the documented exit 2, never a traceback.
+		allowed = load_allowed_repos(Path(args.registry), args.self_repo)
 		print(json.dumps(parse_arm_check_in_request(text, allowed)))
 	except ValueError as exc:
 		print(str(exc), file=sys.stderr)

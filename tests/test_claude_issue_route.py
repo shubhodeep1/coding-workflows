@@ -595,6 +595,9 @@ def test_cli_arm_check_in_request(tmp_path):
 	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
 	assert out.returncode == 2
 	assert "cannot read arguments file" in out.stderr
+	# A path with a NUL byte raises a plain ValueError in open(); still a refusal.
+	# (argv cannot carry a NUL, so this case runs in-process.)
+	assert route.main(["arm-check-in-request", "--arguments-file", str(tmp_path / "bad\x00name.txt"), "--registry", str(registry)]) == 2
 	# An unreadable or malformed registry leaves only the self repo allowed; still a clean refusal.
 	args_file.write_text(ARM_REQUEST + "\n", encoding="utf-8")
 	registry.write_text("{not json", encoding="utf-8")

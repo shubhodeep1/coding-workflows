@@ -1784,9 +1784,10 @@ hand-back trigger id, a session id, and a role. There is at most one
        `name` = `PR #<n> status check-in: fixer start`, `initiation:
        own_followup`, and `prompt` = `/fix-claude-pr <PR URL> — kind
        <kind> — head <head_sha>`. Resume step 2; the fresh session claims
-       the head and registers as the fixer. If `create_session` is refused
-       with `lineage depth` (a checker armed before the §26.B step 1c depth
-       check existed), send one `PushNotification` (`PR #<n>: fix due but
+       the head and registers as the fixer. §26.B step 1c keeps every
+       checker it creates at depth 6 or less, so this `create_session` is
+       refused with `lineage depth` only for a checker armed before step
+       1c existed. There is no pickup routing here: send one `PushNotification` (`PR #<n>: fix due but
        checker too deep to start a fixer; the §26.H sweep takes it`) and
        resume step 2. The sweep starts the fixer from the pickup.
      - **Terminal, fixer gone** → **fall back**: write the §26.D report in
