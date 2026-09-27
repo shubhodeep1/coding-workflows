@@ -7,7 +7,7 @@
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: pending verify-activation
-- Waiting on: completion PR (claude/implement-plan-issue-4622-trusted-fix-claim-authors-complete)
+- Waiting on: PR #4659 (completion)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01GWqGBroosei1DkAcn377y3 (project checker, reused)
 - Last updated: 2026-09-27
@@ -26,7 +26,7 @@
 - Cycle 1 — run 36322375907 2026-09-27 (target_ref: project branch, head 1290f3c): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 289s).
 
 ## Completion
-- Completion PR (branch claude/implement-plan-issue-4622-trusted-fix-claim-authors-complete) — doc moved to docs/completed/issue-4622-trusted-fix-claim-authors-plan.md
+- PR #4659 open — doc moved to docs/completed/issue-4622-trusted-fix-claim-authors-plan.md
 - Final PR #4632 draft (marked ready at stage final-merge)
 
 ## Activation
