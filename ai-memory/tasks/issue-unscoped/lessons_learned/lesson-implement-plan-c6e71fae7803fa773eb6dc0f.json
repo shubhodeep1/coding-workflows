@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T13:23:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a shell step reports a `gh_retry_to_file` failure, quote the tail of the captured stderr, not the head: the helper writes its retry warnings first and the final attempt's error last, so a head cut can hide the error that decided.",
+  "phase": "implement_plan",
+  "pr_number": 4637,
+  "record_id": "lesson-implement-plan-c6e71fae7803fa773eb6dc0f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4620-intake-authorize-target-issue",
+    "file:scripts/gh_helpers.sh",
+    "file:scripts/claude_issue_intake.sh"
+  ]
+}
