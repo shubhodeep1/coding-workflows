@@ -11485,17 +11485,41 @@ get_last_validation_run_info() {
   fi
 
   # Select the most recent run created after our last dispatch timestamp
+  # that belongs to this project. The validate wrappers name each run
+  # "... [tracking:N]" (run-name), so the listing above attributes runs
+  # without an extra API call. A run marked for another tracking issue is
+  # never used, and a success counts only from a run marked for this one:
+  # project #3965 was marked validated by a standalone run (tracking 0)
+  # that happened to finish after its dispatch. A run without the marker
+  # (a consumer wrapper not yet synced) may still report a failure, which
+  # at worst re-runs validation instead of skipping it.
   local selected_run
-  selected_run="$(echo "${runs_json}" | jq -c --argjson ts "${last_dispatch_ts}" '
+  local attribution_tracking="${TRACKING_NUM:-}"
+  selected_run="$(echo "${runs_json}" | jq -c --argjson ts "${last_dispatch_ts}" --arg tracking "${attribution_tracking}" '
     [.[]
       | . + {
-          _created_ts: (((.created_at // "") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0)
+          _created_ts: (((.created_at // "") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0),
+          _tracking: (((.display_title // "") | capture("\\[tracking:(?<n>[0-9]+)\\]")? | .n) // "")
         }
       | select(._created_ts >= $ts)
+      | select(
+          (._tracking != "" and $tracking != "" and ._tracking == $tracking)
+          or (._tracking == "" and (.conclusion // "") != "success")
+        )
     ]
     | sort_by(.created_at // "")
     | last // {}
   ' 2>/dev/null || echo '{}')"
+  echo "VALIDATION_RUN_ATTRIBUTION $(echo "${runs_json}" | jq -r --argjson ts "${last_dispatch_ts}" --arg tracking "${attribution_tracking}" --arg selected "$(printf '%s' "${selected_run}" | jq -r '(.id // "") | tostring' 2>/dev/null || echo '')" '
+    [.[]
+      | select(((((.created_at // "") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0)) >= $ts)
+      | (((.display_title // "") | capture("\\[tracking:(?<n>[0-9]+)\\]")? | .n) // "") as $n
+      | if $n != "" and $n != $tracking then "foreign"
+        elif $n == "" and (.conclusion // "") == "success" then "unmarked_success"
+        else "eligible" end
+    ] as $kinds
+    | "tracking=\($tracking) candidates=\($kinds | length) eligible=\([$kinds[] | select(. == "eligible")] | length) skipped_foreign=\([$kinds[] | select(. == "foreign")] | length) skipped_unmarked_success=\([$kinds[] | select(. == "unmarked_success")] | length) selected_run=\(if $selected == "" then "none" else $selected end)"
+  ' 2>/dev/null || echo "tracking=${attribution_tracking} summary=unavailable")" >&2
   if [ -z "${selected_run}" ] || [ "${selected_run}" = "null" ] || [ "${selected_run}" = "{}" ]; then
     echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":""}'
     return 0
