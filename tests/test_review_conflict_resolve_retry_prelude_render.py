@@ -758,6 +758,122 @@ def test_scope_state_git_index_isolation_prevents_false_positive_and_still_guard
 		assert Path(env["RESOLVER_SCOPE_VIOLATIONS_FILE"]).read_text().splitlines() == ["outside.txt"]
 
 
+def _index_isolation_blocks() -> tuple[str, str, str]:
+	src = _resolve_script_text()
+	loop = src[src.index('attempt=1\nwhile '):src.index('\ndone\n', src.index('attempt=1\nwhile '))]
+	export_start = loop.index("    _resolver_index_isolated=false\n")
+	export_end = loop.index("\n    fi\n", export_start) + len("\n    fi\n")
+	unset_start = loop.index('    if [ "${_resolver_index_isolated}" = "true" ]; then\n')
+	unset_end = loop.index("\n    fi\n", unset_start) + len("\n    fi\n")
+	return loop, loop[export_start:export_end], loop[unset_start:unset_end]
+
+
+def test_scope_index_isolation_wiring_scoped_to_model_attempt() -> None:
+	# Issue #4545: GIT_INDEX_FILE is exported only around the model
+	# invocation, after the scratch index is seeded, and unset (only when
+	# this block exported it) before the post-attempt scope check runs.
+	loop, export_block, unset_block = _index_isolation_blocks()
+	assert loop.index("_resolver_prepare_scratch_index") < loop.index('export GIT_INDEX_FILE="${RESOLVER_SCRATCH_INDEX}"')
+	assert loop.index('export GIT_INDEX_FILE="${RESOLVER_SCRATCH_INDEX}"') < loop.index('"${resolver_opencode_cmd[@]}"')
+	assert loop.rindex('"${resolver_opencode_cmd[@]}"') < loop.index("unset GIT_INDEX_FILE")
+	assert loop.index("unset GIT_INDEX_FILE") < loop.index("_resolver_scope_state check")
+	probe = (
+		export_block
+		+ 'printf "during=%s\\n" "${GIT_INDEX_FILE:-<unset>}"\n'
+		+ unset_block
+		+ 'printf "after=%s\\n" "${GIT_INDEX_FILE:-<unset>}"\n'
+	)
+	clean_env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "GIT_INDEX_FILE")}
+	with tempfile.TemporaryDirectory() as directory:
+		scratch = Path(directory) / "scratch_index"
+		scratch.write_bytes(b"scratch")
+		result = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + probe],
+			env={**clean_env, "IS_WORKFLOW_SOURCE_REPO": "true", "RESOLVER_SCRATCH_INDEX": str(scratch)},
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.splitlines() == [f"during={scratch}", "after=<unset>"]
+		assert not scratch.exists()
+
+		# Consumer repos never export it, so a GIT_INDEX_FILE the caller
+		# already set must survive the attempt untouched.
+		scratch.write_bytes(b"scratch")
+		inherited = str(Path(directory) / "inherited_index")
+		result = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + probe],
+			env={**clean_env, "IS_WORKFLOW_SOURCE_REPO": "false", "RESOLVER_SCRATCH_INDEX": str(scratch),
+			     "GIT_INDEX_FILE": inherited},
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.splitlines() == [f"during={inherited}", f"after={inherited}"]
+		assert scratch.read_bytes() == b"scratch"
+
+
+def test_scope_isolated_model_commit_still_fails_closed() -> None:
+	# Issue #4545: the isolation covers the index only. A model-issued
+	# `git commit` during the resolver's `git merge --no-commit` still
+	# moves HEAD and removes MERGE_HEAD; the unchanged merge_state() check
+	# must keep failing that attempt closed, while the real index stays
+	# byte-identical.
+	with tempfile.TemporaryDirectory() as directory:
+		tmp = Path(directory)
+		repo = tmp / "repo"
+		repo.mkdir()
+		identity = {
+			"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.invalid",
+			"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid",
+		}
+		git_env = {**{key: value for key, value in os.environ.items() if key not in (
+			"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "BASH_ENV", "ENV",
+		)}, **identity}
+
+		def git(*args: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(["git", "-C", str(repo), *args], env=git_env, capture_output=True, text=True, check=False)
+
+		subprocess.run(["git", "init", "-q", str(repo)], env=git_env, check=True)
+		for name in ("conflict.txt", "outside.txt"):
+			(repo / name).write_text("base\n", encoding="utf-8")
+		assert git("add", "--", "conflict.txt", "outside.txt").returncode == 0
+		assert git("commit", "-qm", "base").returncode == 0
+		assert git("checkout", "-qb", "side").returncode == 0
+		(repo / "conflict.txt").write_text("side\n", encoding="utf-8")
+		assert git("commit", "-qam", "side").returncode == 0
+		assert git("checkout", "-q", "-").returncode == 0
+		(repo / "conflict.txt").write_text("main\n", encoding="utf-8")
+		assert git("commit", "-qam", "main").returncode == 0
+		assert git("merge", "--no-commit", "--no-ff", "side").returncode != 0
+		merge_head = Path(git("rev-parse", "--absolute-git-dir").stdout.strip()) / "MERGE_HEAD"
+		assert merge_head.is_file()
+		allowed = tmp / "conflicted_paths.txt"
+		allowed.write_text("conflict.txt\n", encoding="utf-8")
+		env = {
+			**identity,
+			"RESOLVER_SCOPE_SNAPSHOT_DIR": str(tmp / "snapshot"),
+			"RESOLVER_SCOPE_VIOLATIONS_FILE": str(tmp / "violations.txt"),
+			"CONFLICTED_PATHS_FILE": str(allowed),
+			"RESOLVER_SCRATCH_INDEX": str(tmp / "scratch_index"),
+		}
+		real_index = Path(git("rev-parse", "--absolute-git-dir").stdout.strip()) / "index"
+		assert _run_scope_script(repo, env, "_resolver_scope_state capture").returncode == 0
+		index_before = real_index.read_bytes()
+		head_before = git("rev-parse", "HEAD").stdout
+		(repo / "conflict.txt").write_text("resolved\n", encoding="utf-8")
+		result = _run_scope_script(
+			repo, env,
+			'_resolver_prepare_scratch_index\n'
+			'GIT_INDEX_FILE="${RESOLVER_SCRATCH_INDEX}" git add -- conflict.txt\n'
+			'GIT_INDEX_FILE="${RESOLVER_SCRATCH_INDEX}" git commit -qm model-commit\n'
+			'_resolver_scope_state check',
+		)
+		assert result.returncode == 2, result.stdout + result.stderr
+		assert "Resolver scope check failed closed (ValueError)" in result.stderr
+		assert real_index.read_bytes() == index_before
+		assert not merge_head.exists()
+		assert git("rev-parse", "HEAD").stdout != head_before
+
+
 def test_scope_symlink_restore_preserves_preexisting_target() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		repo, env = _scope_fixture(Path(directory))
@@ -812,6 +928,8 @@ def main() -> int:
 	test_scope_retry_restores_full_attempt_and_keeps_final_gate()
 	test_scope_snapshot_restore_and_index_fail_closed()
 	test_scope_state_git_index_isolation_prevents_false_positive_and_still_guards_worktree()
+	test_scope_index_isolation_wiring_scoped_to_model_attempt()
+	test_scope_isolated_model_commit_still_fails_closed()
 	test_scope_symlink_restore_preserves_preexisting_target()
 	test_scope_feedback_is_available_for_generic_resolver()
 	print(
