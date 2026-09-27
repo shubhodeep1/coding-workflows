@@ -1882,7 +1882,10 @@ sweep runs in the sessions that create them, never in Actions:
   panel still reviews, but the GPT editor, conflict resolver, and
   review-blocked judge never run. The workflow posts a hand-off comment
   for findings, failing checks, or a pre-review conflict, and auto-merges
-  only after a clean review with fresh, ready checks. So a Claude session
+  only after a clean review with fresh, ready checks. A `claude/*` PR that
+  qualifies for the deterministic doc-only or small-diff skip takes it like
+  any other PR (`ai:review-skipped`, head-bound auto-merge, no review), except
+  on a `claude_fixer_converged_head` verification run. So a Claude session
   must fix these PRs: the pushing session through its §26 hand-back, a
   fresh `/fix-claude-pr` session when that session is gone, the
   `/implement-plan-claude` chain for its own PRs, or the sweep below.

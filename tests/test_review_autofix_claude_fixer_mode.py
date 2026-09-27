@@ -477,7 +477,7 @@ if path == "user":
 elif path.endswith("/comments"):
 	emit(state["comments"])
 elif path.endswith("/files"):
-	emit([{"filename": "scripts/big_change.sh"}])
+	emit(state.get("files") or [{"filename": "scripts/big_change.sh"}])
 elif "/pulls/" in path:
 	emit(state["pr"])
 else:
@@ -485,7 +485,7 @@ else:
 '''
 
 
-def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str = "workflow_dispatch", converged_head: str = "", extra_env: dict | None = None, marker_author: str = AUTHOR):
+def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str = "workflow_dispatch", converged_head: str = "", extra_env: dict | None = None, marker_author: str = AUTHOR, files: list[dict] | None = None, pr_overrides: dict | None = None):
 	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
@@ -498,7 +498,8 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 			{"id": i, "user": {"login": c["author_login"], "type": c["author_type"]}, "author_association": c["author_association"], "created_at": "2026-09-25T00:00:00Z", "body": c["body"]}
 			for i, c in enumerate(comments, 1)
 		],
-		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1"},
+		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1", **(pr_overrides or {})},
+		"files": files,
 	}), encoding="utf-8")
 	output_file = tmp / "out.txt"
 	output_file.write_text("", encoding="utf-8")
@@ -572,6 +573,71 @@ def test_gate_skips_dispatch_rerun_while_the_session_owns_the_round():
 		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF)])
 	assert proc.returncode == 0, proc.stderr
 	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_awaiting_session"
+
+
+DOCS_FILES = [{"filename": "docs/deploy-activation/pr-1.md", "status": "modified"}, {"filename": "notes.md", "status": "added"}]
+
+
+def test_gate_docs_only_claude_pr_takes_the_deterministic_skip():
+	"""Claude PRs get the same doc-only skip + auto-merge as every other PR."""
+	for head_ref in ("claude/sharp-franklin-1hrznc-11", FIXER_REF):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=head_ref, comments=[], event_name="pull_request",
+				files=DOCS_FILES, pr_overrides={"changed_files": 2})
+		assert proc.returncode == 0, proc.stderr
+		assert "AUTOFIX_GATE_DET_SKIP_EVAL pr=42 files=2" in proc.stdout, head_ref
+		assert out["claude_fixer"] == "true", head_ref
+		assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "docs_only", head_ref
+		assert out["should_run"] == "false" and out["skip_reason"] == "deterministic_skip_docs_only", head_ref
+		assert out["head_sha"] == HEAD
+
+
+def test_gate_small_diff_claude_pr_takes_the_deterministic_skip():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref="claude/quirky-wozniak-e9t88m", comments=[], event_name="pull_request",
+			files=[{"filename": "src/app.py", "status": "modified"}],
+			pr_overrides={"changed_files": 1, "additions": 3, "deletions": 2})
+	assert proc.returncode == 0, proc.stderr
+	assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "small_diff"
+	assert out["should_run"] == "false"
+
+
+def test_gate_claude_pr_skip_keeps_the_protected_path_and_size_guards():
+	for files, overrides in (
+		([{"filename": "CLAUDE.md", "status": "modified"}], {"changed_files": 1, "additions": 2, "deletions": 1}),
+		([{"filename": "src/app.py", "status": "modified"}], {"changed_files": 1, "additions": 40, "deletions": 2}),
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref="claude/quirky-wozniak-e9t88m", comments=[], event_name="pull_request",
+				files=files, pr_overrides=overrides)
+		assert proc.returncode == 0, proc.stderr
+		assert out["deterministic_skip"] == "false" and out["should_run"] == "true", files
+
+
+def test_gate_docs_only_claude_pr_with_a_pending_handoff_still_waits_on_the_session():
+	"""A dispatch on a head the reviewers already handed off never skips past the findings."""
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref="claude/sharp-franklin-1hrznc-11", comments=[_c(HANDOFF)],
+			files=DOCS_FILES, pr_overrides={"changed_files": 2})
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_awaiting_session"
+	assert out["deterministic_skip"] == "false"
+
+
+def test_gate_verified_convergence_on_a_docs_only_head_still_reviews():
+	"""#4453: an accepted verdict re-runs the reviewer panel; it never takes the skip."""
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(
+			Path(td),
+			head_ref=FIXER_REF,
+			comments=[_c(HANDOFF + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT)],
+			converged_head=HEAD,
+			files=DOCS_FILES,
+			pr_overrides={"changed_files": 2, "additions": 3, "deletions": 1},
+		)
+	assert proc.returncode == 0, proc.stderr
+	assert out["claude_fixer_verify"] == "true"
+	assert out["should_run"] == "true" and out["deterministic_skip"] == "false"
 
 
 def test_gate_accepts_a_verified_convergence_dispatch():

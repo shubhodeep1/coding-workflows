@@ -91,7 +91,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    with a clean check snapshot auto-merge in the run; at the cap the PR itself
    is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
-   (`claude_fixer_awaiting_session`). `[claude-intervention]` and
+   (`claude_fixer_awaiting_session`). Doc-only and small-diff `claude/*`
+   PRs take the gate's deterministic skip (`deterministic-skip-merge`, no
+   reviewer panel, no hand-off) like any other PR; only an accepted
+   `claude_fixer_converged_head` verification run (`CLAUDE_FIXER_VERIFY`)
+   is excluded, so a verdict is always followed by a fresh review. `[claude-intervention]` and
    `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`
    and `[ai-merge-resolve]`. The consolidator / floor stages live inside the
    editor step, so they do not run in this mode.

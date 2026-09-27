@@ -1094,9 +1094,14 @@ jobs:
           # `deterministic-skip-merge` sibling job, which preserves the
           # ai:ready-to-merge + auto-merge tail of the normal review path.
           # See header env-block comment for full semantics.
+          # Claude-fixer PRs (claude/* heads) take the same doc-only and
+          # small-diff routes as every other PR. Only an accepted
+          # claude_fixer_converged_head dispatch (CLAUDE_FIXER_VERIFY) is
+          # excluded: #4453 requires that verdict to be followed by a fresh
+          # reviewer-panel run, never by a skip straight to auto-merge.
           DETERMINISTIC_SKIP="false"
           DET_SKIP_REASON=""
-          if [ "${SHOULD_RUN}" = "true" ] && [ "${CLAUDE_FIXER}" != "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+          if [ "${SHOULD_RUN}" = "true" ] && [ "${CLAUDE_FIXER_VERIFY}" != "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             FORCE_REVIEW="false"
             if printf "%s" "${PR_TITLE}" | grep -Fq "[force-review]"; then
               FORCE_REVIEW="true"
@@ -1470,7 +1475,8 @@ jobs:
           # doc-only / small-diff skip path are mutually exclusive: without a
           # PR, there is nowhere to apply deterministic skip labeling /
           # auto-merge. PR-backed claude/** branches are not in this mode and
-          # follow the same deterministic-skip behavior as other PRs.
+          # follow the same deterministic-skip behavior as other PRs (except
+          # an accepted claude_fixer_converged_head dispatch, see above).
           if [ "${CLAUDE_BRANCH_REVIEW}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]; then
             echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_branch_review pr=${PR_NUMBER} prior_det_skip_reason=${DET_SKIP_REASON}"
             DETERMINISTIC_SKIP="false"
