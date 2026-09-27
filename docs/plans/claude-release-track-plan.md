@@ -57,6 +57,16 @@ Decisions taken in the clarification round (session of 2026-09-27):
 | Q31 | Gate parity check: byte-identity for `hooks/`, `.claude/scripts/`, `settings.json`, `CLAUDE.md`; commands exempt (tailored per side); template command references must resolve |
 | Q32 | Ordered phases accepted: P1 first, then P2–P4 in any order |
 
+## Automation surface (CLAUDE.md §18.E)
+
+| Item | This plan |
+|---|---|
+| New or extended scripts | New: `scripts/claude_track.py` (P1), `scripts/resolve_claude_support.sh` (P3), `scripts/review_autofix_step_claude_fixer_gate.sh` (P3, a verbatim move out of `review_autofix.yml`). Extended: `scripts/assemble_changelog.py` (P1), `scripts/stage_workflow_support.sh` (P3), `scripts/promote_main_cycle.sh` (P4). No script needs a manual run (§18.A). |
+| Scheduler / PR-push entry points | New `.github/workflows/claude-release.yml`: `push` to `main` filtered to the Claude-track paths, a daily fallback `schedule`, `workflow_dispatch`, and a dispatch from the `release` jobs of `.github/workflows/test-and-mark-stable.yml` and `.github/workflows/mark-stable.yml`. Consumers: `.github/workflows/update_workflows.yml`, triggered by `workflow-templates/ai-update-workflows.yml` (daily `0 4 * * *` cron, `coding-workflows-stable-released`, and the new `coding-workflows-claude-released` dispatch). Shared workflows: the existing support-staging steps of `review_autofix.yml`, `clarify.yml` and `issue_pr_status.yml`, which run on their existing triggers. Daily promote: the existing `cycle` job of `.github/workflows/promote-main-to-stable.yml`. |
+| Long-running supervisor (§18.C) | None new. `claude-release.yml` is an event-driven workflow with a daily backstop: each run starts, releases or skips, and exits. Restart and crash recovery come from the next push, dispatch or daily tick; concurrency group `claude-release` (no cancel) serialises runs; the kill switch is `CLAUDE_RELEASE_ENABLED`. |
+| DB gate (§18.D) | Not applicable: no database operation. |
+| §18.F registry | One entry in `docs/scripts-pending-removal.md` (P1) for `.github/workflows/claude-release.yml` + `scripts/claude_track.py`, type `supervisor` (matching the existing `scripts/auto_release_stable.sh` entry), removal trigger `permanent — review annually`. Removal preflight checks: `gh workflow view claude-release.yml -R shubhodeep1/coding-workflows` still shows the push, schedule and dispatch triggers; `git ls-remote origin refs/heads/claude-stable refs/heads/main` shows no Claude-track change on `main` since the latest `claude-v*` tag, or a replacement release path is live; `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_claude_track.py tests/test_claude_release_workflow_contract.py` exits 0. Owner: @shubhodeep1. |
+
 ## Goals
 
 - G1. Every merge to `main` that changes a Claude-track path and passes the
@@ -173,8 +183,15 @@ tests/test_review_autofix_claude_fixer_mode.py
 tests/test_claude_md_section_numbers.py
 ```
 
-`scripts/claude_track.py` is the single reader of that file (glob semantics
-via `fnmatch` with `**` support, tested) so no second glob dialect exists.
+`scripts/claude_track.py` is the single reader of that file, so no second
+glob dialect exists. It does **not** use `fnmatch` (whose `*` also matches
+`/` and which has no recursive `**`). It uses its own small matcher,
+covered by unit tests: patterns and paths are split on `/`; `**` as a whole
+segment matches zero or more segments; within a segment `*` matches any run
+of characters except `/` and `?` matches one such character; everything
+else is literal. So `.claude/**` matches `.claude/hooks/x.py`, while
+`scripts/claude_*` matches `scripts/claude_pr_sweep.py` but not
+`scripts/claude_x/y.py`.
 `changelog.d/**` and `CHANGELOG.md` are neutral: they never make a change
 "workflow" or "Claude".
 
@@ -405,10 +422,23 @@ branch and reach `main` together in the final PR.
     `claude_track_resolve` maps `UPSTREAM_SHA` to its `vX.Y.Z` tag (from the
     `git ls-remote --tags` output the step fetches once) and runs
     `claude_track.py resolve` from the upstream clone; outputs
-    `claude_source_sha`. The existing `claude_sync` and `claude_md_sync`
-    steps read from a sparse checkout of `claude_source_sha` when set, else
-    from `UPSTREAM_DIR` exactly as today. Step ids and outputs unchanged; the
-    commit body names the Claude tag.
+    `claude_source_sha` and `claude_source_dir`.
+    - Checkout: the step fetches the tag into the existing upstream clone
+      (`git -C "${TMPDIR}/upstream" fetch --force --no-tags --depth 1 origin
+      "refs/tags/<claude tag>"`), then adds a detached worktree of that exact
+      commit at `${TMPDIR}/claude-track` (`git worktree add --detach
+      "${TMPDIR}/claude-track" <claude_source_sha>`) with the same sparse
+      patterns (`workflow-templates/.claude`, `workflow-templates/CLAUDE.md`,
+      `CLAUDE.md`), and verifies `git -C "${TMPDIR}/claude-track" rev-parse
+      HEAD` equals `claude_source_sha`. Any failure leaves both outputs empty.
+    - It lives beside the stable checkout in the same `mktemp -d` directory
+      (`${TMPDIR}/upstream` is untouched and still used for wrappers and
+      scripts), so the runner's temp cleanup removes both; nothing is written
+      into the consumer's workspace.
+    - The existing `claude_sync` and `claude_md_sync` steps take their source
+      root from `claude_source_dir` when it is set, and from
+      `${TMPDIR}/upstream` exactly as today when it is empty. Step ids and
+      outputs are unchanged; the commit body names the Claude tag.
 11. `workflow-templates/ai-update-workflows.yml` — add
     `coding-workflows-claude-released` to `repository_dispatch.types`.
 12. `.claude/commands/seed-repo.md` and its template twin — copy `.claude/`
