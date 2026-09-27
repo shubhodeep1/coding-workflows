@@ -191,7 +191,10 @@ segment matches zero or more segments; within a segment `*` matches any run
 of characters except `/` and `?` matches one such character; everything
 else is literal. So `.claude/**` matches `.claude/hooks/x.py`, while
 `scripts/claude_*` matches `scripts/claude_pr_sweep.py` but not
-`scripts/claude_x/y.py`.
+`scripts/claude_x/y.py`. `**` is valid only as a whole segment, in any
+position (`a/**/b` matches `a/b` and `a/x/y/b`; `**/test_x.py` matches it at
+any depth). A pattern with `**` inside a segment (`a**b`, `x/**.py`) is
+invalid: `check` fails on it and `classify` exits non-zero rather than guess.
 `changelog.d/**` and `CHANGELOG.md` are neutral: they never make a change
 "workflow" or "Claude".
 
@@ -201,6 +204,17 @@ needs a workflow release. Initial value: the `stable` release current when
 P1 merges. A Claude release is cut only when that tag exists and its commit
 is an ancestor of the `stable` branch (G6). Consumers and workflows read the
 file at each candidate `claude-v*` tag to pick the newest compatible release.
+
+**Version order.** Every comparison in this plan ("newest", "latest", `min ≤
+workflow version`, the patch bump) is numeric, never lexical:
+`claude_track.py` parses workflow tags with `^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
+and Claude tags with `^claude-v([0-9]+)\.([0-9]+)\.([0-9]+)$` and compares the
+three captures as an integer tuple, so `v1.10.0` is newer than `v1.9.0`. A tag
+that does not match its pattern (including the peeled `^{}` lines of `git
+ls-remote`) is skipped and logged under the caller's prefix
+(`CLAUDE_TRACK_RELEASE`, `CLAUDE_TRACK_SYNC` or `CLAUDE_TRACK_SUPPORT`) with
+`skip reason=unparsed_tag`, and the order `git ls-remote` returns is never
+relied on.
 
 **Release.** `claude-release.yml` triggers on `push` to `main` filtered to the
 Claude globs (the YAML `paths:` list is pinned to the globs file by a contract
@@ -348,12 +362,14 @@ branch and reach `main` together in the final PR.
    - `requires-released --repo <slug>`: exit 0 when the required tag exists
      and its commit is an ancestor of `stable` (one `git ls-remote --tags`,
      one compare call); exit 3 (`held`) otherwise.
-   - `next-version`: newest `claude-v*` tag + 1 patch, or `claude-v1.0.0`.
+   - `next-version`: the numerically newest `claude-v*` tag (Version order)
+     + 1 patch, or `claude-v1.0.0` when none parses.
    - `resolve --workflow-version vX.Y.Z --repo <slug>`: one
-     `git ls-remote --tags origin 'claude-v*'`, newest first; for each
+     `git ls-remote --tags origin 'claude-v*'`, sorted newest first by the
+     integer tuple (Version order); for each
      candidate one shallow `git fetch` and `git show <tag>:.github/ai/claude_track_requires.json`;
-     first candidate with `min ≤ workflow version` whose commit is an
-     ancestor of `claude-stable` (one compare call) wins. Prints
+     first candidate with `min ≤ workflow version` (integer tuples) whose
+     commit is an ancestor of `claude-stable` (one compare call) wins. Prints
      `{"tag","sha","min_workflow_version"}` or exits 3 when none. Budget:
      ≤ 1 API call per candidate tried, capped at 10 candidates.
 4. `scripts/assemble_changelog.py` — `parse_fragment` also accepts an
@@ -420,17 +436,31 @@ branch and reach `main` together in the final PR.
 
 10. `.github/workflows/update_workflows.yml` — after `fetch`: new step
     `claude_track_resolve` maps `UPSTREAM_SHA` to its `vX.Y.Z` tag (from the
-    `git ls-remote --tags` output the step fetches once) and runs
+    `git ls-remote --tags` output the step fetches once; the numerically
+    newest when several point at it) and runs
     `claude_track.py resolve` from the upstream clone; outputs
     `claude_source_sha` and `claude_source_dir`.
     - Checkout: the step fetches the tag into the existing upstream clone
       (`git -C "${TMPDIR}/upstream" fetch --force --no-tags --depth 1 origin
-      "refs/tags/<claude tag>"`), then adds a detached worktree of that exact
-      commit at `${TMPDIR}/claude-track` (`git worktree add --detach
-      "${TMPDIR}/claude-track" <claude_source_sha>`) with the same sparse
-      patterns (`workflow-templates/.claude`, `workflow-templates/CLAUDE.md`,
-      `CLAUDE.md`), and verifies `git -C "${TMPDIR}/claude-track" rev-parse
-      HEAD` equals `claude_source_sha`. Any failure leaves both outputs empty.
+      "refs/tags/<claude tag>"`), then builds a sparse, detached worktree of
+      that exact commit at `${TMPDIR}/claude-track` in three explicit
+      commands, because a plain `git worktree add` either checks out the full
+      tree or (as git 2.43 does) copies the stable clone's `workflow-templates
+      scripts` patterns, depending on the runner's git:
+      `git -C "${TMPDIR}/upstream" worktree add --no-checkout --detach
+      "${TMPDIR}/claude-track" <claude_source_sha>`;
+      `git -C "${TMPDIR}/claude-track" sparse-checkout set
+      workflow-templates/.claude` (cone mode, like the stable clone: repo-root
+      files such as `CLAUDE.md` and the files directly in
+      `workflow-templates/`, such as the `CLAUDE.md` symlink, come with it; a
+      bare root-file pattern is rejected in cone mode);
+      `git -C "${TMPDIR}/claude-track" checkout --detach <claude_source_sha>`
+      (with `--no-checkout` the tree is empty until this runs). The sparse
+      patterns are per-worktree (git enables `extensions.worktreeConfig` in
+      the temp clone), so the stable checkout's patterns are unchanged. It then
+      verifies `git -C "${TMPDIR}/claude-track" rev-parse HEAD` equals
+      `claude_source_sha` and that `workflow-templates/CLAUDE.md` resolves.
+      Any failure leaves both outputs empty.
     - It lives beside the stable checkout in the same `mktemp -d` directory
       (`${TMPDIR}/upstream` is untouched and still used for wrappers and
       scripts), so the runner's temp cleanup removes both; nothing is written
@@ -526,9 +556,11 @@ branch and reach `main` together in the final PR.
 
 ## Tests
 
-- **Unit:** `test_claude_track.py` (glob semantics incl. `**`, neutral paths,
-  parity pass/fail fixtures, requires-file validation, version bump, resolve
-  ordering/hold/ancestry with a fake `gh`/`git`); `test_assemble_changelog.py`
+- **Unit:** `test_claude_track.py` (glob semantics incl. `**` in leading,
+  middle and trailing position and rejection of `**` inside a segment, neutral
+  paths, parity pass/fail fixtures, requires-file validation, version bump,
+  numeric version order across `v1.9.0`/`v1.10.0` and `claude-v1.9.0`/`claude-v1.10.0`,
+  unparsed tags skipped, resolve ordering/hold/ancestry with a fake `gh`/`git`); `test_assemble_changelog.py`
   (channel marker both orders, filter, heading insertion, default unchanged);
   `test_resolve_claude_support.py`; `test_promote_main_cycle.py`.
 - **Contract:** `test_claude_release_workflow_contract.py`;
