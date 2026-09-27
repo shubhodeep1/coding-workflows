@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-27T05:45:35Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Host-side Python launched while credentials are in the environment must run with `python3 -I -B` (under `env -i` when it needs no inherited inputs); a `python3 -` heredoc or `-m`/`-c` launch from the checkout imports the checkout's `pathlib.py`/`json.py`/`sitecustomize.py` as readily as a script launch does.",
+  "phase": "implement_plan",
+  "pr_number": 4612,
+  "record_id": "lesson-implement-plan-368b12b77f7df097c8718504",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:orchestrator-sync-contract-list-union",
+    "file:scripts/clarify_isolated_run.sh",
+    "file:scripts/review_untrusted_sandbox.sh",
+    "file:scripts/ledger_emit_substate.sh"
+  ]
+}

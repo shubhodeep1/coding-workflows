@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T05:45:35Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A support helper that locates a sibling script to run on the host must accept only an explicit workflow-set path or the copy staged next to itself; a fallback to `git rev-parse --show-toplevel`/`pwd` of the job's working directory lands in the untrusted checkout. Test such launches at runtime from a checkout that shadows the script and its imports, not by matching source text.",
+  "phase": "implement_plan",
+  "pr_number": 4612,
+  "record_id": "lesson-implement-plan-49a77e7af2e18cfdd3c53030",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:orchestrator-sync-contract-list-union",
+    "file:scripts/ledger_emit_substate.sh",
+    "file:tests/test_host_python_import_isolation.py"
+  ]
+}

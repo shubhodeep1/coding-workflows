@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T05:45:35Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A container image that runs process-supervision tests needs `procps` (pgrep) and tests that pin PATH must not resolve python3 through `/usr/bin/env` on python:*-slim images, where python3 lives in /usr/local/bin.",
+  "phase": "implement_plan",
+  "pr_number": 4612,
+  "record_id": "lesson-implement-plan-720952fdad9c93f5b02e40a5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:validation",
+    "plan:orchestrator-sync-contract-list-union",
+    "file:workflow-templates/validation-harness/python-repo-checks/Dockerfile.app.j2",
+    "file:tests/test_review_editor_process_group_termination.py"
+  ]
+}

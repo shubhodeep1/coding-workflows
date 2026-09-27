@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T05:45:35Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An issue base that is another PR's head can be closed unmerged and superseded; check the base PR's state at every stage, not only whether it merged.",
+  "phase": "implement_plan",
+  "pr_number": 4612,
+  "record_id": "lesson-implement-plan-48deaf26d705a665a73fd69f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4580-review-sandbox-workspace-transfer",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T05:45:35Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When main's reusable workflow runs a branch's scripts (validate.yml@main validating an integration branch), every env var and runtime path the branch's scripts require must default when main's workflow does not provide it; otherwise validation fails before it runs.",
+  "phase": "implement_plan",
+  "pr_number": 4612,
+  "record_id": "lesson-implement-plan-720af0773f68d8e42e307e56",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:orchestrator-sync-contract-list-union",
+    "file:scripts/validate_process.sh",
+    "file:.github/workflows/validate.yml"
+  ]
+}
