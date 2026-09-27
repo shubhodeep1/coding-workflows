@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4621-bind-claude-queue-payloads   Final PR: #4636 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 1/3 — review round
 - Activation: not started
 - Waiting on: PR #4649
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01HuPy8SJxGNHdJhSC3PfGv4   safety net trig_019RoxKJPheMQR5xqQQHA4oU   hand-back trig_01GA5PBCNAHbitonEtsbPMNv
+- Check-in: checker session_01HuPy8SJxGNHdJhSC3PfGv4   safety net trig_01ESrqLtp3dX9ztYLcoRrLK1   hand-back trig_01WtWxDrr6TagupefZsm7Hs1
 - Last updated: 2026-09-27
-- Last note: conformance run 1 (session_01H6hfE652mwJ6UnALi5fHcq): CONFORMANT; one EVIDENCE-BASED concern (stuck unbound items could starve the pickup) fixed in PR #4649 (AD-7); waiting on its review rounds or merge
+- Last note: review round 1 on PR #4649 handled by session_01Mvs4azqbwcc1TNRfwEmiFo: the one consensus finding (the fix edited phase 1's changelog fragment instead of shipping its own) fixed by AD-8; waiting on the next review round or merge
 
 ## Phases
 1. [x] Phase 1 — bind queue items to their producing run and verify the binding at pickup   — PR #4639 merged 2026-09-27; review rounds: 1; interventions: 0
@@ -23,7 +23,7 @@
    - Done when: the listed tests pass and both workflows parse and upload `claude-issue-queue-binding` with `if: always()`
 
 ## Conformance
-- Run 1 — 2026-09-27: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR #4649: the pickup read binding runs for only the first `limit` targets, so `limit` stuck unbound items (left open per AD-3) deferred every bound item behind them forever; the window is now 3 × limit (AD-7) (pre-security)
+- Run 1 — 2026-09-27: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR #4649: the pickup read binding runs for only the first `limit` targets, so `limit` stuck unbound items (left open per AD-3) deferred every bound item behind them forever; the window is now 3 × limit (AD-7) (pre-security); review rounds: 1
 
 ## Security pass
 - Skipped: `Security pass: skip (ai:security: automation-produced issue)` in the plan header
@@ -42,6 +42,7 @@
 - AD-5 [plan, 2026-09-27] Should the sweep's "already queued" dedupe check bindings? — Picked: A — no; keep counting every trusted, well-formed open item. Alternatives: B — count only bound items. Why: dedupe must err toward not queueing twice. Applied in: phase 1 PR. Status: pending review
 - AD-6 [phase 1/1 — review round 1, 2026-09-27] Reviewers asked for the default-branch head check on `repository_dispatch` runs too, which GitHub always runs on the default branch. Apply it? — Picked: A — check the head commit of every producer run (`repository_dispatch`, `schedule`, `workflow_dispatch`) with one compare read against `refs/heads/<default>`. Alternatives: B — keep it for `workflow_dispatch` only, as AD-4 planned, and reject the finding; C — extend it to every event but keep comparing against the bare branch name. Why: §1 security first, at one REST read per completed producer run; the fully qualified ref also keeps a same-named tag out of the comparison, which the bare name did not. Widens AD-4 and the plan's API budget (plan line 71). Applied in: PR #4639. Status: pending review
 - AD-7 [conformance 1/3, 2026-09-27] Once 10 queue targets are stuck unbound, they take every producer-run read of a wake and defer the bound items behind them forever. How should the pickup choose which runs to read? — Picked: A — read the runs of the first 3 × limit targets (30). Alternatives: B — read the runs of every target in the 100-item queue read (up to about 100 runs per wake); C — keep the first-`limit` window and document that an operator must close stuck items. Why: a one-line change with a bounded §15 budget, and the watchdog alerts on every stuck item long before 20 pile up. Applied in: PR #4649. Status: pending review
+- AD-8 [conformance 1/3 — review round 1, 2026-09-27] The reviewer panel asked PR #4649 to ship its own changelog fragment instead of editing phase 1's `changelog.d/4621-bind-claude-queue-payloads.md` (CLAUDE.md §20.B). How? — Picked: A — add `changelog.d/4649-pickup-binding-read-window.md` describing the 30-target read window as its own `changed` entry, and restore the `4621` fragment to its phase-1 text. Alternatives: B — add the new fragment and keep the `4621` edit, stating the window twice; C — reject the finding, since neither fragment has reached `main` and both ship together in #4636 (rejection needs the dedicated verdict bot, which this web session cannot post as, so the PR would block). Why: §20.B's literal rule is met with no loss of accuracy, and the new entry states the behaviour rather than narrating an unreleased fix (§20.F). Applied in: PR #4649. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] When a trust check binds a GitHub issue body to automation, compare the whole body against the producer's canonical rendering, not only the payload block, or text added around the payload still reaches the model that reads the body. (files: scripts/claude_issue_route.py)
@@ -49,6 +50,7 @@
 - [source:intervention] A trust check on a GitHub Actions run must not rely on `head_branch`, which is only a name a tag can share: verify `head_sha` with `compare/<sha>...refs/heads/<default>` for every event, using the fully qualified ref so the comparison cannot resolve to a tag. (files: scripts/claude_issue_route.py)
 - [source:intervention] In a `set -e` bash script, `$(jq ...)` used as a command argument is exempt from `set -e`, so a missing field is written as `null` or empty; read such values once into a checked variable before writing them anywhere. (files: scripts/claude_issue_intake.sh)
 - [source:conformance] An item that fails closed and stays open must not share a fixed per-wake read window with the items behind it: size the window above the start limit (or skip known-bad items), or a handful of stuck items starve the whole queue. (files: scripts/claude_issue_route.py)
+- [source:intervention] A follow-up PR on a project branch (conformance, validation, or review fix) that changes observable behaviour ships its own `changelog.d/<pr>-<slug>.md` fragment; editing an earlier phase's fragment, even one not yet on the default branch, is flagged by the review panel under CLAUDE.md §20.B. (files: changelog.d/)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue pickup's dispatch trigger; permission mode auto.
@@ -56,3 +58,4 @@
 - Review round 1 (PR #4639, head 2b634550c889, ledger 9e3c32a8…): fixed the producer head check (AD-6) and the intake's unchecked queue body; rejected the sweep-dedupe finding (counting unbound items is what stops the sweep queueing twice, AD-5).
 - Local verification: 412 tests across every file referencing the changed files passed; the full suite was not completed locally (network-bound legacy tests exceed the 25-minute local timeout, and `tests/test_workflow_retro.py` needs Python 3.12 f-strings while the container has 3.11). CI runs the full suite.
 - Conformance 1/3 (2026-09-27): merged `main` into the project branch (0a0c369, docs-only, clean). The pickup budget in the plan (runs of the first `limit` targets) is widened to 3 × limit by AD-7.
+- Conformance 1/3 review round 1 (PR #4649, head af0676b9467c, ledgers 943acd8d… and df476940…): both review runs on the head reported the same single task gap (no fragment of its own, 6 of 6 reviewers); fixed per AD-8. Its evidence that editing the fragment "retroactively rewrites PR #4639's entry" does not hold: project-branch fragments reach `main` only through the final PR.
