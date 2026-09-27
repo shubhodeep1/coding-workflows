@@ -1062,6 +1062,22 @@ not delete wrappers that are already present in `.github/workflows/`.
 > permission allowlist for the tools these commands call. Nothing to
 > configure in the consumer.
 
+> **Unattended helpers and permission prompt reports (CLAUDE.md §23.I):**
+> the same sync ships three allowlisted helpers that `/implement-plan-claude`
+> stage sessions use instead of hand-built shell, so they do not stop at
+> permission prompts: `.claude/scripts/dispatch_workflow.py` (dispatch an
+> allowlisted workflow and get the id of the run it started),
+> `.claude/scripts/edit_comment.py` (edit one comment in place), and
+> `.claude/scripts/permission_prompts.py`. A `PermissionRequest` /
+> `PermissionDenied` hook, `.claude/hooks/permission_prompt_logger.py`, logs
+> every prompt and Auto-mode denial a session hits to
+> `~/.claude/permission-prompts/`; at the end of each stage
+> `permission_prompts.py file` lists them in the report and, in
+> coding-workflows only, files each new pattern as an `ai:permission-prompt`
+> issue routed to the Claude issue implementer. `/implement-plan-claude` now
+> requires Auto mode, and stops before any phase that must edit `.claude/**`
+> to ask how to run it.
+
 > **Audit identity and regeneration:**
 > `scripts/security/check-npm-audit.js` matches findings on
 > `severity|package|advisoryId` (`advisoryId` prefers GHSA, then CVE).
@@ -1230,7 +1246,9 @@ mode).
    (`scripts/claude_issue_intake.sh`), opened with the job's `GITHUB_TOKEN`
    so no workflow reacts to it, and comments "queued" on the issue. A repo
    registered per CLAUDE.md §14 is covered automatically, including repos
-   onboarded later.
+   onboarded later. The run also records the queue item (number, exact
+   title and payload) in its `claude-issue-queue-binding` artifact; see
+   "Queue binding" below.
 4. The **Claude issue pickup** (`.claude/commands/claude-issue-pickup.md`), one
    Auto-mode session woken hourly by a trigger bound to itself, reads the queue
    (`claude_issue_route.py queue-pending`) and, following
@@ -1240,7 +1258,8 @@ mode).
    before its session starts. A claude.ai routine cannot do this step: a
    routine run gets no claude-code-remote tools (`create_session`,
    `send_later`), so it can start neither the implementation session nor any
-   later stage (issue #4525). That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
+   later stage (issue #4525). The pickup starts only items whose binding
+   checks out (below). That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
    as `/implement-plan-claude` in issue mode. The project is built on the
    branch the issue names in an `Integration branch:` / `Target branch:` line:
    a security follow-up on its project's branch, a heal issue on `stable` or
@@ -1321,7 +1340,46 @@ and the secret. A routine still configured with
 `.claude/commands/claude-issue-dispatch.md` stops at its step 3 without
 implementing anything.
 
-Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`, `CLAUDE_ISSUE_QUEUE_WATCHDOG`.
+**Queue binding** (issue #4621). `github-actions[bot]` opens every queue
+item, but anyone who can edit the issue can change its title and payload
+afterwards. So the creator is not enough, and each item is bound to the run
+that queued it:
+
+- The intake and the `claude-pr-catch-all` sweep job record every queue item
+  they open (the intake also records an item it reuses, after rewriting its
+  body with the fresh payload and its own run URL) in a binding file:
+  `CLAUDE_ISSUE_QUEUE_BINDING_FILE` / `CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE`,
+  default `<run temp dir>/claude-issue-queue-binding/claude_issue_queue_binding.json`.
+  The file carries the queue issue number, its exact title, and its exact
+  payload. The workflow uploads it as the `claude-issue-queue-binding`
+  artifact (`if: always()`, kept 30 days).
+- The pickup's `queue-pending --fetch-repo` follows the item's
+  `Intake run:` / `Sweep run:` line. It starts the item only when that run
+  is a completed run of this repository's `claude-issue-intake.yml`
+  (`repository_dispatch`, `workflow_dispatch`) or `review_autofix_sweep.yml`
+  (`schedule`, `workflow_dispatch`) on the default branch (its head commit
+  must be reachable from `refs/heads/<default branch>`, whatever the event),
+  and when
+  the run's artifact lists the item with the same title and payload. The
+  whole body must also be the producer's own rendering of that payload and
+  run, so no text added to a queue issue ever reaches the pickup.
+- Anything else fails closed. The item is listed under `ignored`
+  (`unbound`, `binding_mismatch`, `binding_untrusted`, `binding_pending`,
+  or `binding_unavailable`) and left open, so the watchdog flags it. An
+  issue item heals on `/reclarify`, which rewrites and re-binds it. A sweep
+  item blocks re-queueing its PR until someone closes it. Items queued
+  before this change carry no binding and are refused the same way.
+- API cost per wake: the queue read, then, when items are open, the default
+  branch, two producer run listings, one artifact listing, and one compare
+  read plus one artifact download per completed producer run, with per-run
+  fallbacks
+  (`fetch_queue_bindings` in `scripts/claude_issue_route.py`). It reads the
+  runs of the first 30 targets (three times the 10 it starts per wake), so
+  up to 20 stuck items that stay open cannot hold back a bound item queued
+  after them.
+
+Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE` (adds
+`bound` and `warn binding_skipped`), `CLAUDE_ISSUE_QUEUE_WATCHDOG`.
 
 ### Claude fixes every claude/* PR
 
@@ -1370,7 +1428,10 @@ flags its items like any other queue item when the pickup stops.
 
 Stable log prefix: `CLAUDE_PR_SWEEP` (`start`, `skip`, `dry_run`,
 `queued`, `already_queued`, `claim`, `report_only`, `queue_failed`,
-`queue_read_failed`, `read_failed`, `list_failed`, `end`).
+`queue_read_failed`, `read_failed`, `list_failed`, `bound`,
+`binding_skipped`, `binding_failed`, `end`). A queued fix is bound to the
+sweep run like an intake item (see "Queue binding" under
+[Claude issue implementer](#claude-issue-implementer)).
 
 ### Check Failure Triage Phase
 

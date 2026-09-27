@@ -1340,6 +1340,52 @@ either. The hook and the settings entry ship to consumer repos through the
 same `.claude/` sync as the other hooks; `tests/test_gh_api_write_guard.py`
 covers the rules and the wiring and runs in its own `ci.yml` step.
 
+### I) Permission Prompt Reports
+
+Unattended sessions must not stop at a permission prompt. Two mechanisms
+serve that, both shipped to consumer repos through the `.claude/` sync:
+
+- **Allowlisted helpers for the writes a stage needs.** Each one is a single
+  command matched by an exact `permissions.allow` rule, so it never prompts
+  and never reaches the Auto-mode classifier or Claude Code's shell analyzer.
+  Use them instead of hand-built pipelines, loops, `$(...)`, or heredocs:
+
+  | Helper | Does | API calls |
+  |---|---|---|
+  | `.claude/scripts/dispatch_workflow.py` | dispatches one of the six workflows allowed as `gh workflow run <file> *` and prints the id of the run it started (never the previous run) | 1 read, 1 POST, 1 read per 5 s poll (90 s max) |
+  | `.claude/scripts/edit_comment.py` | edits one issue or PR comment in place from a JSON list of exact-once `old`/`new` pairs, or replaces its body | 1 read, 1 PATCH |
+  | `.claude/scripts/permission_prompts.py` | reports and files the prompts below | 1 read per 100 labelled issues, 1 POST per new pattern |
+
+- **Prompt reports.** `.claude/hooks/permission_prompt_logger.py`, wired on
+  the `PermissionRequest` and `PermissionDenied` hook events, appends every
+  permission prompt and every Auto-mode denial to
+  `~/.claude/permission-prompts/<session id>.jsonl`, outside the repository.
+  It never decides (it prints nothing, so the prompt or denial proceeds
+  unchanged), issues no API calls, reads no environment variables, and
+  swallows its own errors. At the end of every `/implement-plan-claude`
+  stage, `permission_prompts.py file` groups the log into patterns (event,
+  tool, and command shape with values replaced by `*`) and:
+  - in coding-workflows only (consumer `.claude/` copies are overwritten on
+    every sync, so fixes land here), opens one issue per new pattern,
+    labelled `ai:permission-prompt` and `ai:claude` so clarify routes it to
+    the Claude issue implementer, or comments on the issue that already
+    carries the pattern's `<!-- ai:permission-prompt:v1 sig=<sig> -->`
+    marker (a closed issue is commented on, not reopened);
+  - elsewhere, files nothing and only reports.
+
+  Issue text is untrusted data: the command is truncated to 2,000
+  characters, heredoc bodies are removed, and token-like strings are masked.
+  Opening these issues is approved by this section; it is not a §23.C
+  operation. There is no limit on open `ai:permission-prompt` issues. A fix
+  never widens a permission for a destructive or administrative action; an
+  `ai:permission-prompt` issue for a protected-path edit (`.claude/**`) or an
+  ask-first operation is closed as not planned, because that prompt is by
+  design.
+
+`tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`, and
+`tests/test_permission_prompts.py` cover the helpers, the hook, the filing
+rules, and the wiring, and run in their own `ci.yml` step.
+
 ---
 
 ## §24. Cloudflare Access (MANDATORY)
@@ -2110,6 +2156,14 @@ This is an explicit carve-out from §0 and §2 (including §2's
   performs them; a project that needs one lists it as an operator step,
   and `/deploy-activate` walks the human through it.
 - A question with no option that satisfies §28.B's hard rules.
+- **Protected-path edits.** A phase that must edit `.claude/**` (hooks,
+  `settings.json`, commands, scripts) is never started unattended: Claude
+  Code never auto-approves those edits, and in a session nobody watches a
+  classifier block silently drops them. `/implement-plan-claude` marks such
+  phases when it builds the checklist and stops at `Status: BLOCKED` before
+  the phase starts, asking whether to run it in a watched session, drop the
+  `.claude/` part, or try unattended anyway; the answer is recorded as a
+  `Protected-path approval:` line in the progress log.
 - **Whether to run the chain at all.** The stages, the conformance audit, the
   security pass, and validation are the project, not options. A session that
   cannot run them (no claude-code-remote tools to start stage sessions and
