@@ -11493,33 +11493,40 @@ get_last_validation_run_info() {
   # that happened to finish after its dispatch. A run without the marker
   # (a consumer wrapper not yet synced) may still report a failure, which
   # at worst re-runs validation instead of skipping it.
+  # Each candidate is classified once; the selection and the
+  # VALIDATION_RUN_ATTRIBUTION counts both read that classification, so they
+  # cannot disagree. TRACKING_NUM must name the polled project: with it
+  # unset every marked run counts as foreign and only an unmarked failure
+  # can be selected, which fails closed (validation re-runs, never promotes).
   local selected_run
   local attribution_tracking="${TRACKING_NUM:-}"
-  selected_run="$(echo "${runs_json}" | jq -c --argjson ts "${last_dispatch_ts}" --arg tracking "${attribution_tracking}" '
+  local attribution_json
+  local attribution_summary
+  attribution_json="$(echo "${runs_json}" | jq -c --argjson ts "${last_dispatch_ts}" --arg tracking "${attribution_tracking}" '
     [.[]
       | . + {
           _created_ts: (((.created_at // "") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0),
           _tracking: (((.display_title // "") | capture("\\[tracking:(?<n>[0-9]+)\\]")? | .n) // "")
         }
       | select(._created_ts >= $ts)
-      | select(
-          (._tracking != "" and $tracking != "" and ._tracking == $tracking)
-          or (._tracking == "" and (.conclusion // "") != "success")
-        )
-    ]
-    | sort_by(.created_at // "")
-    | last // {}
-  ' 2>/dev/null || echo '{}')"
-  echo "VALIDATION_RUN_ATTRIBUTION $(echo "${runs_json}" | jq -r --argjson ts "${last_dispatch_ts}" --arg tracking "${attribution_tracking}" --arg selected "$(printf '%s' "${selected_run}" | jq -r '(.id // "") | tostring' 2>/dev/null || echo '')" '
-    [.[]
-      | select(((((.created_at // "") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0)) >= $ts)
-      | (((.display_title // "") | capture("\\[tracking:(?<n>[0-9]+)\\]")? | .n) // "") as $n
-      | if $n != "" and $n != $tracking then "foreign"
-        elif $n == "" and (.conclusion // "") == "success" then "unmarked_success"
-        else "eligible" end
-    ] as $kinds
-    | "tracking=\($tracking) candidates=\($kinds | length) eligible=\([$kinds[] | select(. == "eligible")] | length) skipped_foreign=\([$kinds[] | select(. == "foreign")] | length) skipped_unmarked_success=\([$kinds[] | select(. == "unmarked_success")] | length) selected_run=\(if $selected == "" then "none" else $selected end)"
-  ' 2>/dev/null || echo "tracking=${attribution_tracking} summary=unavailable")" >&2
+      | . + {
+          _attribution: (
+            if ._tracking != "" then (if $tracking != "" and ._tracking == $tracking then "eligible" else "foreign" end)
+            elif (.conclusion // "") == "success" then "unmarked_success"
+            else "eligible" end
+          )
+        }
+    ] as $candidates
+    | ([$candidates[] | select(._attribution == "eligible")] | sort_by(.created_at // "") | last // {}) as $selected
+    | {
+        selected: $selected,
+        summary: "tracking=\($tracking) candidates=\($candidates | length) eligible=\([$candidates[] | select(._attribution == "eligible")] | length) skipped_foreign=\([$candidates[] | select(._attribution == "foreign")] | length) skipped_unmarked_success=\([$candidates[] | select(._attribution == "unmarked_success")] | length) selected_run=\(($selected.id // "none") | tostring)"
+      }
+  ' 2>/dev/null || echo '')"
+  selected_run="$(printf '%s' "${attribution_json}" | jq -c '.selected // {}' 2>/dev/null || echo '{}')"
+  attribution_summary="$(printf '%s' "${attribution_json}" | jq -r '.summary // empty' 2>/dev/null || true)"
+  [ -n "${attribution_summary}" ] || attribution_summary="tracking=${attribution_tracking} summary=unavailable"
+  echo "VALIDATION_RUN_ATTRIBUTION ${attribution_summary}" >&2
   if [ -z "${selected_run}" ] || [ "${selected_run}" = "null" ] || [ "${selected_run}" = "{}" ]; then
     echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":""}'
     return 0
