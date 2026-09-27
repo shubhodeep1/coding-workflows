@@ -253,6 +253,12 @@ def test_review_handoff_from_a_run_off_the_head_history_fails_closed(monkeypatch
 	assert calls[-1] == f"repos/o/r/compare/{OTHER_HEAD}...{HEAD}?per_page=1"
 
 
+@pytest.mark.parametrize("reviewed_head", [None, "", "not-a-sha", HEAD.upper(), HEAD[:39]])
+def test_run_head_helper_rejects_a_malformed_reviewed_head_without_a_read(monkeypatch, reviewed_head):
+	monkeypatch.setattr(checker, "gh_api", lambda path: pytest.fail(f"unexpected read: {path}"))
+	assert checker._review_run_head_on_branch_history(REPO, OTHER_HEAD, reviewed_head) is False
+
+
 def test_review_handoff_for_a_head_that_is_not_the_pr_head_is_ignored(monkeypatch, capsys):
 	# The hand-off reviewed OTHER_HEAD, but the PR has moved on to HEAD.
 	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_check_runs()}

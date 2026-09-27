@@ -276,11 +276,12 @@ def _review_run_head_on_branch_history(repo: str, run_head_sha: object, reviewed
 	the current PR head. Output: True for an equal sha with no API call;
 	otherwise one compare read (`compare/<run head>...<reviewed head>`) and
 	True only for status `ahead` (the run's commit is an ancestor). A
-	diverged or behind commit, or a malformed sha, is False, so the caller
+	diverged or behind commit, or a malformed sha on either side, is False, so the caller
 	keeps waiting; a failed read raises `ReadError` like every other read.
 	"""
-	if not isinstance(run_head_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", run_head_sha):
-		return False
+	for sha in (run_head_sha, reviewed_head_sha):
+		if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+			return False
 	if run_head_sha == reviewed_head_sha:
 		return True
 	comparison = gh_api(f"repos/{repo}/compare/{run_head_sha}...{reviewed_head_sha}?per_page=1")
