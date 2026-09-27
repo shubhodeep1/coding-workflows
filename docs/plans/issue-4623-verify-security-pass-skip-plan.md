@@ -64,7 +64,7 @@ Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: `/implement-issue-
 
 1. Create `.claude/scripts/security_pass_skip.py`: constants for the skip labels (same order as `SECURITY_PASS_SKIP_LABELS`), per-label marker regexes, the tracker label and marker, the 120-second window; the pure decision function; `gh api` fetch helpers (issue, `issues/<N>/events?per_page=100`, tracker issue); CLI; docstring with the §15 call budget and exit codes.
 2. Copy it to `workflow-templates/.claude/scripts/security_pass_skip.py`.
-3. Edit `.claude/commands/implement-issue-claude.md` step 6: run the script; `skip: true` → `Security pass: skip (<label>: automation-produced issue, verified)`; anything else → `Security pass: run`, recording the reason in the plan's Notes when a skip label was present. Mirror to the template.
+3. Edit `.claude/commands/implement-issue-claude.md` step 6: run the script; `skip: true` → `Security pass: skip (<label>: automation-produced issue)` (the header format stays as the Issue Mode header block documents it, per the §6 constraint above; AD-7); anything else → `Security pass: run`, recording the reason in the plan's Notes when a skip label was present. Mirror to the template.
 4. Edit `.claude/commands/implement-plan-claude.md` Issue Mode "Security pass" bullet to say the header is set only by the verified check. Mirror to the template.
 5. Add `Bash(python3 .claude/scripts/security_pass_skip.py *)` and the `PYTHONDONTWRITEBYTECODE=1` variant to `.claude/settings.json` and `workflow-templates/.claude/settings.json`.
 6. Comment `SECURITY_PASS_SKIP_LABELS` / `route_issue` in `scripts/claude_issue_route.py` as advisory (the payload field is logged only; the session's verified check decides).
