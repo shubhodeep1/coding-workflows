@@ -4,19 +4,20 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4545-resolver-index-isolation   Final PR: #4546 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 2/3
 - Activation: not started (base is main; steps 12–13 run after the final merge)
-- Waiting on: conformance fix PR from branch `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-1` (next stage conformance 2/3 on merge)
+- Waiting on: conformance fix PR from branch `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-2` (next stage conformance 3/3 on merge)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: project checker `implement-plan issue-4545-resolver-index-isolation — checker`, armed by the conformance 1/3 stage session (session_01GqaeCivxQZjjgQYJ97pv8o) after this PR opened; ids are in that session's report and the next `— resume.` block
+- Check-in: checker session_01JsrP995pg78hMZus9cKyvh; safety net and hand-back trigger ids are in the conformance 2/3 stage session's report (session_01PJ7y4uAyRhNzNj2Dv77Czc) and the next `— resume.` block
 - Last updated: 2026-09-27
-- Last note: Conformance run 1 (2026-09-27): CONFORMANT (Implemented COMPLETE, Correctness CONCERNS); three EVIDENCE-BASED CONCERN findings fixed in the conformance fix PR; AD-2 recorded.
+- Last note: Conformance run 2 (2026-09-27): CONFORMANT (Implemented COMPLETE, Correctness CONCERNS); one EVIDENCE-BASED CONCERN (OpenCode's session snapshot inherits GIT_INDEX_FILE and stages conflicted files into the scratch index) fixed in conformance fix PR 2; AD-3 recorded. Fix PR 1 (#4591) merged 2026-09-27.
 
 ## Phases
 1. [x] Phase 1 — Git index isolation for the resolver's model attempt   — PR #4547 merged 2026-09-26
 
 ## Conformance
-- Run 1 — 2026-09-27: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 3 EVIDENCE-BASED CONCERN findings, no BLOCKER) — fix PR from `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-1` (pre-security; security pass is skipped per the plan header)
+- Run 1 — 2026-09-27: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 3 EVIDENCE-BASED CONCERN findings, no BLOCKER) — fix PR from `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-1` (pre-security; security pass is skipped per the plan header) — #4591 merged 2026-09-27
+- Run 2 — 2026-09-27: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED CONCERN, no BLOCKER) — fix PR from `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-2` (pre-security)
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-26] The issue's suggested fix names a specific mechanism (`GIT_INDEX_FILE`, keep the real-index check, forbid staging in the prompt). Should the plan adopt it as-is, or design an alternative isolation mechanism?
@@ -25,6 +26,8 @@
   - Picked: A. Why: smaller blast radius, no change to `RESOLVER_OPENCODE_WORKSPACE`'s existing design, directly addresses the confirmed root cause. Applied in: this phase's PR. Status: pending review
 
 - AD-2 [conformance 1/3, 2026-09-27] `GIT_INDEX_FILE` isolates only the index: a model-issued `git commit` during the resolver's `git merge --no-commit` still moves `HEAD` and removes `MERGE_HEAD` (the unchanged `merge_state()` check then fails the attempt closed), while the plan's Approach, the script comment, `agents.md`, and the changelog fragment said a model `git commit` is contained by the scratch copy. How should the conformance fix handle it? — Picked: A — correct the comments/docs to say only the index is isolated and a model commit still fails closed, and pin that fail-closed behaviour with a regression test. Alternatives: B — also block model commits (e.g. a rejecting `core.hooksPath` pre-commit hook via `GIT_CONFIG_*` env; bypassable with `--no-verify`, new mechanism); C — snapshot and restore `HEAD`/`MERGE_HEAD` around the attempt (changes the fail-closed contract). Why: §5 smallest change; the outcome is already safe (fail closed, as before #4545), the prompt forbids committing, and only the documentation was wrong. Applied in: conformance fix PR (branch `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-1`). Status: pending review
+
+- AD-3 [conformance 2/3, 2026-09-27] OpenCode 1.18.23's session snapshot runs `git --git-dir <snapshot> --work-tree <checkout> add` with the inherited environment, so under the `GIT_INDEX_FILE` isolation it stages the conflicted files (markers included) into the scratch index and the model no longer sees them as unmerged. How should the conformance fix handle it? — Picked: A — set `"snapshot": false` in the resolver's own generated OpenCode config, source repo only (`_resolver_disable_opencode_snapshot` in `scripts/review_conflict_resolve.sh`, between the config writer and `opencode_require_bootstrap`). Alternatives: B — add a `--snapshot on|off` option to the shared `scripts/write_opencode_config.sh` and pass `off` from the resolver (interface change to a consumer-synced helper; a stale fallback writer would reject the flag and fail the resolver); C — drop the `GIT_INDEX_FILE` isolation and restore the real index bytes after each attempt (reverses AD-1); D — leave it and document the degraded model view. Why: §5 smallest change in one file, scoped exactly to where the isolation applies, no new interface on a shared helper; the resolver never uses OpenCode's snapshot/undo. Applied in: conformance fix PR 2 (branch `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-2`). Status: pending review
 
 ## Notes
 - Permission mode: this session's mode was not explicitly queryable via `get_session` (no claude-code-remote MCP tools present); proceeding under CLAUDE.md §28.A's issue-mode rule that start-up-check questions are recorded, not asked, and the session's actual harness permission mode governs what actually executes (no ask-first operation beyond routine writes was attempted).
@@ -36,3 +39,4 @@
 
 ## Lessons
 - [source:conformance] When isolating a model's Git state with `GIT_INDEX_FILE`, state in comments and docs that only the index is isolated: `git commit` still moves `HEAD` and removes `MERGE_HEAD`, and cleanup must be keyed to what the block itself exported, not to whether the variable happens to be set. (files: scripts/review_conflict_resolve.sh, agents.md)
+- [source:conformance] An env var exported around an agent CLI reaches the CLI's own child processes too, not just the model's tool calls: OpenCode's session snapshot runs `git` with the inherited environment, so a `GIT_INDEX_FILE` meant for the model also redirected OpenCode's snapshot `git add`. Check the agent runtime's own subprocesses (or disable the feature, e.g. `"snapshot": false`) before scoping git env vars to an agent run. (files: scripts/review_conflict_resolve.sh)
