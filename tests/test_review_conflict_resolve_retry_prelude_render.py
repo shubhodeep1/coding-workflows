@@ -927,6 +927,34 @@ def test_scope_index_isolation_disables_opencode_snapshot() -> None:
 			assert config.read_text(encoding="utf-8") == broken
 			assert sorted(path.name for path in Path(directory).iterdir()) == ["resolver_opencode.json"]
 
+	# PR #4606 review round 1: a failure after the temporary file is written
+	# removes it, whether the handler catches the error (OSError fails the
+	# step with the ::error:: line) or not (RuntimeError stands in for any
+	# other exception). A sitecustomize module makes os.replace raise.
+	for raised, handled in (("OSError", True), ("RuntimeError", False)):
+		with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as hook_directory:
+			config = Path(directory) / "resolver_opencode.json"
+			original = '{"model": "openrouter/x/y"}\n'
+			config.write_text(original, encoding="utf-8")
+			(Path(hook_directory) / "sitecustomize.py").write_text(
+				"import os\n\n\n"
+				"def _failing_replace(source, target):\n"
+				f"\traise {raised}('injected os.replace failure')\n\n\n"
+				"os.replace = _failing_replace\n",
+				encoding="utf-8",
+			)
+			hook_env = dict(clean_env, PYTHONPATH=hook_directory, PYTHONDONTWRITEBYTECODE="1")
+			result = subprocess.run(
+				["bash", "-c", "set -euo pipefail\n" + _disable_opencode_snapshot_source()
+				 + '_resolver_disable_opencode_snapshot "$1"\n', "probe", str(config)],
+				env=hook_env, capture_output=True, text=True, check=False,
+			)
+			assert result.returncode != 0
+			assert "injected os.replace failure" in result.stderr
+			assert ("Cannot disable OpenCode snapshots" in result.stderr) is handled
+			assert config.read_text(encoding="utf-8") == original
+			assert sorted(path.name for path in Path(directory).iterdir()) == ["resolver_opencode.json"]
+
 
 def test_scope_symlink_restore_preserves_preexisting_target() -> None:
 	with tempfile.TemporaryDirectory() as directory:

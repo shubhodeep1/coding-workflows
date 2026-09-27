@@ -520,14 +520,19 @@ try:
         json.dump(config, temporary, indent=2, sort_keys=True)
         temporary.write("\n")
     os.replace(temporary_path, config_path)
+    # os.replace consumed the temporary file; nothing is left to remove.
+    temporary_path = ""
 except (OSError, UnicodeError, ValueError) as exc:
+    print(f"::error::Cannot disable OpenCode snapshots in {config_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+finally:
+    # Runs on every exit path, including exceptions the handler above does
+    # not catch, so a failed update never leaves the temporary file behind.
     if temporary_path:
         try:
             os.unlink(temporary_path)
         except OSError:
             pass
-    print(f"::error::Cannot disable OpenCode snapshots in {config_path}: {exc}", file=sys.stderr)
-    sys.exit(1)
 PY
 }
 

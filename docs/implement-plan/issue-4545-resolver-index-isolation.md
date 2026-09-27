@@ -4,20 +4,20 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4545-resolver-index-isolation   Final PR: #4546 draft
 - Status: IN_PROGRESS
-- Stage: conformance 2/3
+- Stage: conformance 2/3 — review round
 - Activation: not started (base is main; steps 12–13 run after the final merge)
-- Waiting on: conformance fix PR from branch `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-2` (next stage conformance 3/3 on merge)
+- Waiting on: PR #4606 (conformance fix 2; next stage conformance 3/3 on merge)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01JsrP995pg78hMZus9cKyvh; safety net and hand-back trigger ids are in the conformance 2/3 stage session's report (session_01PJ7y4uAyRhNzNj2Dv77Czc) and the next `— resume.` block
+- Check-in: checker session_01JsrP995pg78hMZus9cKyvh; safety net and hand-back trigger ids are in the conformance 2/3 — review round stage session's report (session_01T4u6ZtWkTRgGhTqcAYB5f6) and the next `— resume.` block
 - Last updated: 2026-09-27
-- Last note: Conformance run 2 (2026-09-27): CONFORMANT (Implemented COMPLETE, Correctness CONCERNS); one EVIDENCE-BASED CONCERN (OpenCode's session snapshot inherits GIT_INDEX_FILE and stages conflicted files into the scratch index) fixed in conformance fix PR 2; AD-3 recorded. Fix PR 1 (#4591) merged 2026-09-27.
+- Last note: PR #4606 review round 1 (2026-09-27): one consensus NIT (temporary-file cleanup in `_resolver_disable_opencode_snapshot`) fixed in part: the unlink now runs in a `finally` for every exit path, with a regression test; the normal-path leak claim was rejected (`os.replace` consumes the file).
 
 ## Phases
 1. [x] Phase 1 — Git index isolation for the resolver's model attempt   — PR #4547 merged 2026-09-26
 
 ## Conformance
 - Run 1 — 2026-09-27: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 3 EVIDENCE-BASED CONCERN findings, no BLOCKER) — fix PR from `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-1` (pre-security; security pass is skipped per the plan header) — #4591 merged 2026-09-27
-- Run 2 — 2026-09-27: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED CONCERN, no BLOCKER) — fix PR from `claude/implement-plan-issue-4545-resolver-index-isolation-conformance-fix-2` (pre-security)
+- Run 2 — 2026-09-27: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED CONCERN, no BLOCKER) — fix PR #4606 (pre-security); review rounds: 1 (round 1: temporary-file cleanup moved into a `finally`)
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-26] The issue's suggested fix names a specific mechanism (`GIT_INDEX_FILE`, keep the real-index check, forbid staging in the prompt). Should the plan adopt it as-is, or design an alternative isolation mechanism?
@@ -40,3 +40,4 @@
 ## Lessons
 - [source:conformance] When isolating a model's Git state with `GIT_INDEX_FILE`, state in comments and docs that only the index is isolated: `git commit` still moves `HEAD` and removes `MERGE_HEAD`, and cleanup must be keyed to what the block itself exported, not to whether the variable happens to be set. (files: scripts/review_conflict_resolve.sh, agents.md)
 - [source:conformance] An env var exported around an agent CLI reaches the CLI's own child processes too, not just the model's tool calls: OpenCode's session snapshot runs `git` with the inherited environment, so a `GIT_INDEX_FILE` meant for the model also redirected OpenCode's snapshot `git add`. Check the agent runtime's own subprocesses (or disable the feature, e.g. `"snapshot": false`) before scoping git env vars to an agent run. (files: scripts/review_conflict_resolve.sh)
+- [source:intervention] When a helper writes a temporary file and renames it into place, remove the temporary file in a `finally` guarded by a sentinel cleared right after `os.replace`, not in the `except` for the expected errors: any other exception otherwise leaves it behind. (files: scripts/review_conflict_resolve.sh)
