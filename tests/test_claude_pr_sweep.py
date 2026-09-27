@@ -220,8 +220,7 @@ def test_workflow_runs_the_catch_all_hourly_with_the_queue_token():
 	job = workflow["jobs"]["claude-pr-catch-all"]
 	assert "17 * * * *" in job["if"] and "workflow_dispatch" in job["if"]
 	assert job["permissions"] == {"contents": "read", "issues": "write"}
-	step = job["steps"][-1]
-	assert "python3 scripts/claude_pr_sweep.py" in step["run"]
+	step = next(step for step in job["steps"] if "python3 scripts/claude_pr_sweep.py" in step.get("run", ""))
 	env = step["env"]
 	assert env["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
 	assert env["CLAUDE_PR_SWEEP_QUEUE_TOKEN"] == "${{ github.token }}"
@@ -230,3 +229,55 @@ def test_workflow_runs_the_catch_all_hourly_with_the_queue_token():
 	assert env["CLAUDE_FIX_CLAIM_LEASE_HOURS"] == "${{ vars.CLAUDE_FIX_CLAIM_LEASE_HOURS || '3' }}"
 	assert env["CLAUDE_FIX_HAND_BACK_CAP"] == "${{ vars.CLAUDE_FIX_HAND_BACK_CAP || '3' }}"
 	assert "${{" not in step["run"]
+
+
+# --- queue binding (issue #4621) -------------------------------------------------------
+
+
+def test_workflow_uploads_the_queue_binding_even_after_a_failure():
+	job = yaml.safe_load(SWEEP_WF.read_text())["jobs"]["claude-pr-catch-all"]
+	step = next(step for step in job["steps"] if "python3 scripts/claude_pr_sweep.py" in step.get("run", ""))
+	upload = job["steps"][-1]
+	binding_file = step["env"]["CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE"]
+	assert binding_file == "${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json"
+	assert upload["uses"].startswith("actions/upload-artifact@") and upload["if"] == "always()"
+	assert upload["with"]["name"] == route.QUEUE_BINDING_ARTIFACT
+	assert upload["with"]["path"] == binding_file
+	assert upload["with"]["if-no-files-found"] == "ignore"
+
+
+def test_a_queued_pr_fix_is_bound_to_this_run(monkeypatch, tmp_path, capsys):
+	_setup(monkeypatch, {7: _due()})
+	binding_file = tmp_path / "binding" / route.QUEUE_BINDING_FILENAME
+	summary = _run(queue=lambda *a: 901, binding_file=str(binding_file))
+	assert summary["queued"] == 1
+	assert "CLAUDE_PR_SWEEP bound repo=o/r pr=#7 queue_issue=901 run_id=123" in capsys.readouterr().out
+	doc = json.loads(binding_file.read_text())
+	assert doc["repository"] == "o/self" and doc["run_id"] == 123
+	# The binding is exactly what the queue issue carries, so the pickup accepts it.
+	item = route.build_pr_fix_queue_issue("o/r", 7, HEAD, "ci", "sweep-run-123", "https://github.com/o/self/actions/runs/123")
+	issues = [{"number": 901, "state": "open", "title": item["title"], "body": item["body"],
+		"labels": [{"name": route.QUEUE_LABEL}], "user": {"login": "github-actions[bot]"}}]
+	record = {"state": "ok", "item_type": "pr_fix", "items": route.load_queue_binding(doc, "o/self", "123")}
+	out = route.queue_pending(issues, ["o/r"], bindings={"repo": "o/self", "runs": {"123": record}})
+	assert [entry["pr_number"] for entry in out["pending"]] == [7] and out["ignored"] == []
+
+
+def test_binding_is_skipped_loudly_without_a_run_id_or_queue_number(monkeypatch, tmp_path, capsys):
+	_setup(monkeypatch, {7: _due()})
+	binding_file = tmp_path / route.QUEUE_BINDING_FILENAME
+	summary = _run(queue=lambda *a: None, binding_file=str(binding_file))
+	assert summary["queued"] == 1 and not binding_file.exists()
+	assert "binding_skipped repo=o/r pr=#7" in capsys.readouterr().out
+	_setup(monkeypatch, {7: _due()})
+	summary = _run(queue=lambda *a: 5, run_id="", binding_file=str(binding_file))
+	assert summary["queued"] == 1 and not binding_file.exists()
+
+
+def test_a_binding_write_failure_warns_and_keeps_going(monkeypatch, tmp_path, capsys):
+	_setup(monkeypatch, {7: _due()})
+	binding_file = tmp_path / route.QUEUE_BINDING_FILENAME
+	binding_file.write_text(json.dumps({"schema_version": route.QUEUE_BINDING_SCHEMA_VERSION, "repository": "o/self", "run_id": 999, "items": []}))
+	summary = _run(queue=lambda *a: 5, binding_file=str(binding_file))
+	assert summary["queued"] == 1
+	assert "binding_failed repo=o/r pr=#7 queue_issue=5" in capsys.readouterr().out
