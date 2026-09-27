@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_claude_fixer_evidence.py:207-227\n  PROBLEM: The _changed_files function handles `gh api --paginate --slurp` output only as a list of pages, so a flat-list response would return None and cause verification to fail with `pr_files_unavailable`.\n  WHY: This is a minor defensive improvement rather than a current bug; `security_audit.sh:1665` handles both list-of-pages and flat-list cases, while the failure here is fail-closed and safe.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ac046b7e6d287d536da6cbcb939ea8e135b06cd625c220f5ad682016074c6dc8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36318300474",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36318300474",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927123019_bd8257e2d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36318300474"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T12:30:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
