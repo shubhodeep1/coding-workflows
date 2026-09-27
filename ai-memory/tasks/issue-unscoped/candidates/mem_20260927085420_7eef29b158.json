@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #4623 (security finding `mutable-label-skips-security-pass`, A05:2021 medium 9/10) requires replacing the label-only skip rule with a deterministic check that verifies the issue was created by the designated automation and is linked to its own record. The deliverable is the implementation that closes the bypass, not the plan that describes it.\n  expected_change_site: `.claude/scripts/security_pass_skip.py`, `.claude/commands/implement-issue-claude.md` step 6, `.claude/commands/implement-plan-claude.md` Issue Mode \"Security pass\" bullet, `.claude/settings.json`, tests, changelog, and `scripts/claude_issue_route.py` (as enumerated in the plan)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR DIFF contains only two new files, `docs/implement-plan/issue-4623-verify-security-pass-skip.md` (project log) and `docs/plans/issue-4623-verify-security-pass-skip-plan.md` (plan). PR_CHANGED_FILES has exactly these two paths. The plan itself enumerates the implementation deliverables in its \"Files & Modules\" section (lines 76-88 of the plan) and \"Implementation Steps\" (lines 90-97), but none of those files appear in the diff or in `LAST_RUN_DIFF` (which is empty: \"No previous AI autofix run on PR head\"). The bypass fix described as G1-G5 in the plan is therefore not delivered by this PR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Issue #4623 (security finding `mutable-label-skips-security-pass`, A05:2021 medium 9/10) requires replacing the label-only skip rule with a deterministic check that verifies the issue was created by the designated automation and is linked to its own record. The deliverable is the implementation that closes the bypass, not the plan that describes it.\n  Expected change site: New file `.claude/scripts/security_pass_skip.py` (and its `workflow-templates/.claude/scripts/` mirror), edited `.claude/commands/implement-issue-claude.md` step 6, edited `.claude/commands/implement-plan-claude.md` Issue Mode \"Security pass\" bullet, updated `.claude/settings.json` allowlist, new `tests/test_security_pass_skip.py`, extended `tests/test_implement_issue_claude_command.py`, added `changelog.d/4623-verify-security-pass-skip.md`, and `scripts/claude_issue_route.py` advisory comment \u2014 all listed under \"Files & Modules\" and \"Implementation Steps\" in the plan.\n  Evidence of absence: PR DIFF contains only two new files, `docs/implement-plan/issue-4623-verify-security-pass-skip.md` (project log) and `docs/plans/issue-4623-verify-security-pass-skip-plan.md` (plan). PR_CHANGED_FILES has exactly these two paths. The plan itself enumerates the implementation deliverables in its \"Files & Modules\" section (lines 76-88 of the plan) and \"Implementation Steps\" (lines 90-97), but none of those files appear in the diff or in `LAST_RUN_DIFF` (which is empty: \"No previous AI autofix run on PR head\"). The bypass fix described as G1-G5 in the plan is therefore not delivered by this PR.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "eb3456ac0cc8d3ea6e73f65b24284c1b4b767cc7d7bac65d4746592f62b525bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36306994356",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36306994356",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927085420_7eef29b158",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36306994356"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T08:54:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
