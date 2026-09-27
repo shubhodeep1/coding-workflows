@@ -54,6 +54,16 @@ Decisions taken in the clarification round (2026-09-27):
 | Q16 | ACCEPTED risk: consumer session network policy may block image / package pulls; preflight fails closed with a clear reason |
 | Q25 | Input by artifact; result as a marked comment on the subject; trusted only from OWNER/MEMBER/COLLABORATOR; bound to request id and head SHA; downstream tail runs in Actions |
 
+## Automation surface (CLAUDE.md §18.E)
+
+| Item | This plan |
+|---|---|
+| New or extended scripts | New: `scripts/claude_check.py`, `scripts/llm_external_seam.sh` (P1), both called only from workflows and phase scripts. Extended: `scripts/claude_issue_route.py`, `scripts/claude_issue_intake.sh`, `scripts/claude_issue_queue_watchdog.sh` (P1); `scripts/security_audit.sh`, `scripts/orchestrate_poll_process.sh` (P2); `scripts/validate_process.sh` (P3); `scripts/check_failure_triage.sh`, `scripts/workflow_failure_heal_intake.sh` (P4). No script needs a manual run (§18.A). |
+| Scheduler / PR-push entry points | Requests: each phase's existing triggers. `security-audit.yml` (cron `0 8 * * 0`, dispatch, `workflow_call`), the orchestrator poll (`orchestrate_poll.yml`, called by the `ai-orchestrate-poll.yml` cron wrapper), `validate.yml` (`workflow_call` from its existing callers), `check_failure_triage.yml` (`workflow_call` from the `check_run: completed` wrappers), `workflow-failure-heal-intake.yml` (`repository_dispatch`, `workflow_run`). Queue: `claude-issue-intake.yml` (`repository_dispatch`, new type `claude-check`) and the existing hourly Claude issue pickup session. Resume: new `claude_check_resume.yml`, called by `workflow-templates/ai-claude-check-resume.yml` (consumers) and `.github/workflows/internal-claude-check-resume.yml` (this repo), both on `issue_comment: created`, the internal one also on `workflow_dispatch`. Deadlines: the existing `claude-issue-queue-watchdog.yml` (cron `17 * * * *`). |
+| Long-running supervisor (§18.C) | None new. The existing Claude issue pickup (a `supervisor` in the registry) gains the `check` item type, and the existing watchdog gains deadline handling. The resume workflows are event-driven: each run verifies one result comment, resumes one phase run, and exits. A lost resume run is recovered by a `workflow_dispatch` replay with `comment_id` or, if none happens, by the watchdog's deadline, which fails the check closed. |
+| DB gate (§18.D) | Not applicable: no database operation. |
+| §18.F registry | One new entry in `docs/scripts-pending-removal.md` (P1). **Script path:** `.github/workflows/claude_check_resume.yml` + `.github/workflows/internal-claude-check-resume.yml` + `workflow-templates/ai-claude-check-resume.yml` + `scripts/claude_check.py` + `scripts/llm_external_seam.sh`. **Introduced in:** the P1 PR number and merge date. **Type:** `long-running`. **Removal trigger:** `permanent — review annually` (or, sooner, when every phase is back on `gpt` everywhere). **Removal preflight checks:** (1) for this repo and every repo in `.github/ai/consumer_repos.json`, `gh variable list --repo <repo>` shows `SECURITY_PASS_ENGINE`, `VALIDATION_ENGINE`, `CHECK_TRIAGE_ENGINE` and `WORKFLOW_HEAL_ENGINE` all explicitly `gpt`; (2) `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=open&per_page=100"` returns no issue whose title starts with `[claude-issue-queue] check `; (3) `rg -n 'llm_seam_run' scripts/` returns only the seam's own definition once the call sites are removed in the same PR; (4) `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.` **Owner:** @shubhodeep1. The same PR adds one preflight check to the existing `.claude/commands/claude-issue-pickup.md` entry: no open `claude_check.v1` queue item (check (2) above), because removing the pickup would strand pending checks. |
+
 ## Goals
 
 - G1. With default settings, no `codex exec` / OpenCode call is made for the
@@ -134,9 +144,8 @@ Decisions taken in the clarification round (2026-09-27):
   Steps. Result lookups reuse existing comment reads where one exists and
   run only while a request is pending.
 - **§18.** No manual steps: requests, pickup, resume and deadlines are all
-  event- or schedule-driven. `claude_check_resume.yml` and the internal
-  wrapper get a `docs/scripts-pending-removal.md` entry (`long-running`,
-  `permanent — review annually`).
+  event- or schedule-driven. Entry points, supervisors and the
+  `docs/scripts-pending-removal.md` entry are in Automation surface above.
 - **§19/§20/§23/§25/§27.** PR bodies use `Refs`; each phase ships a
   `changelog.d/` fragment; sessions never merge; no PR subscription;
   `review_autofix.yml` is untouched and the grown workflows stay far below
@@ -473,9 +482,12 @@ until a compatible Claude release exists they ship with `@stable` as today.
 ### P4 — Triage and heal
 
 25. `check_failure_triage.yml` + `scripts/check_failure_triage.sh`
-    - Add a `claude/*` head-ref skip next to the fork gate (`derive_check_name_key`
-      already fetches the PR; 0 new calls), logging `CHECK_TRIAGE_SKIP
-      reason=claude_pr` (G6).
+    - Add a `claude/*` head-ref skip in `scripts/check_failure_triage.sh`
+      next to the fork gate (`:174-177`), using `HEAD_REF` (`:165`) from the
+      PR payload the script already fetches (`:152`; 0 new calls), logging
+      `CHECK_TRIAGE_SKIP reason=claude_pr` (G6). The workflow's
+      `derive_check_name_key` job (`check_failure_triage.yml:50`), which
+      holds the workflow-level fork gate, is unchanged.
     - Engine from `vars.CHECK_TRIAGE_ENGINE`; seam at `:322-337`; request
       subject = the PR; head = `head_sha`; new input `claude_check_request`.
     - The resume job passes the original six inputs from the bundle.
