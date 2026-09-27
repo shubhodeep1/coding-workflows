@@ -73,7 +73,7 @@ def test_plan_command_issue_mode_contract(plan_cmd):
 def test_plan_command_keeps_startup_asks_outside_issue_mode(plan_cmd):
 	# #4440 behaviour: the invoking user still answers the start-up checks.
 	assert "Steps 0, 1, and 3 still ask: you are at the keyboard for them." in plan_cmd
-	assert "In [Issue Mode](#issue-mode) it is not asked either" in plan_cmd
+	assert "In [Issue Mode](#issue-mode) the check does not stop the project either" in plan_cmd
 
 
 def test_issue_command_hands_off_to_plan_chain(issue_cmd):
