@@ -91,7 +91,28 @@ Phases of the unattended pipeline (each is a separate workflow file under
    with a clean check snapshot auto-merge in the run; at the cap the PR itself
    is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
-   (`claude_fixer_awaiting_session`). `[claude-intervention]` and
+   (`claude_fixer_awaiting_session`). A clean round whose check runs are
+   still running after the refresh wait is not a hand-off
+   (`CLAUDE_FIXER_CHECKS_PENDING_ENABLED`, default on): the step posts one
+   `## Review round <n>: clean, waiting for checks` comment per head ending
+   `<!-- ai:claude-fixer-checks-pending:v1 head=<sha> round=<n> run=<run_id> -->`
+   (updated in place), and when that is the newest workflow marker on the
+   head, the review sweep's next dispatch takes the gate's merge-check path
+   (`claude_fixer_merge_check`): the retrigger guard forces
+   `max_iterations_reached=true` and `skip_judge=true`, so no reviewer or
+   judge runs, and `scripts/review_autofix_step_claude_fixer_merge_check.sh`
+   verifies the named run's evidence, then enables head-bound auto-merge on
+   green checks, hands failing checks off as `kind=findings`, or waits for
+   the next sweep. Every hand-off step outcome is also written to the
+   `claude-fixer-evidence-<run_id>-<run_attempt>` artifact (30 days);
+   `scripts/review_claude_fixer_evidence.py verify` trusts it only after
+   checking the run's repository, caller ref (default branch, or the PR head
+   at the same commit with an unchanged caller workflow), the library
+   `review_autofix.yml` ref (`main`, `stable`, or a release SHA pin), and the
+   artifact's PR and head, because every comment marker is forgeable by
+   the accounts that share the GH_PAT login. Unverified evidence or a check
+   snapshot that can never become ready falls back to a `kind=findings`
+   hand-off. `[claude-intervention]` and
    `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`
    and `[ai-merge-resolve]`. The consolidator / floor stages live inside the
    editor step, so they do not run in this mode.
@@ -1579,7 +1600,9 @@ and shipped:
 - `MODEL_CATALOG_BACKFILL`
 - `AUTOFIX_GATE_CLAUDE_FIXER`
 - `AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED`
+- `AUTOFIX_GATE_CLAUDE_FIXER_MERGE_CHECK`
 - `CLAUDE_FIXER_HANDOFF`
+- `CLAUDE_FIXER_CHECKS_PENDING`
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
@@ -1771,7 +1794,9 @@ LOG_PREFIX.name=CLAUDE_ISSUE_INTAKE
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
+LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_MERGE_CHECK
 LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
+LOG_PREFIX.name=CLAUDE_FIXER_CHECKS_PENDING
 LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
