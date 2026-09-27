@@ -1,19 +1,21 @@
-Given a GitHub issue (number / URL) — or any reference that identifies a project (PR, plan doc, feature name) — in `$ARGUMENTS`, determine three things: (1) is the project **fully implemented**, (2) is it **correct** — does the code actually do what the plan / issue specified, audited rather than assumed — and (3) is it **activated** — will it **start working automatically** on its trigger, or does something still need to be done to make it run? A project in this repo can live on one of two sides — **this consumer repo's own code/config**, or the **upstream workflow library** (`shubhodeep1/coding-workflows`) that this repo's wrappers call — and you decide which from the evidence. Diagnose, then fix: the verdict is graded against the side's ref and reported in chat, and then every **EVIDENCE-BASED** `[CONSUMER]`-side defect the audit found, plus every activation gap that is pure code in this repo, is fixed on a branch, verified, pushed, and opened as one ready-for-review PR whose body lists each issue, why it was an issue, and the fix applied (see [Fix Policy](#fix-policy)). `[UPSTREAM]`-side defects are never edited from this repo — they ship as proposed fixes routed to `/validate-consumer-issue`. Operator activation steps (repo-vars, secrets, upstream pin bumps, merges) are still enumerated, never performed. An optional trailing `— scope conformance` or `— scope activation` narrows the run to one half of the check (see [Scope](#scope)); without it the full check runs, unchanged. A trailing `— unattended` (passed by `/implement-plan-claude`) makes the run auto-decide the findings that need a decision instead of asking (see [Unattended Runs](#unattended-runs)). Whenever the project has a `/implement-plan-claude` progress log with recorded auto-decisions, the report lists them for human review, without asking again.
+Given a GitHub issue (number / URL) — or any reference that identifies a project (PR, plan doc, feature name) — in `$ARGUMENTS`, determine three things: (1) is the project **fully implemented**, (2) is it **correct** — does the code actually do what the plan / issue specified, audited rather than assumed — and (3) is it **activated** — will it **start working automatically** on its trigger, or does something still need to be done to make it run? A project in this repo can live on one of two sides — **this consumer repo's own code/config**, or the **upstream workflow library** (`shubhodeep1/coding-workflows`) that this repo's wrappers call — and you decide which from the evidence. Diagnose, then fix: the verdict is graded against the side's ref and reported in chat, and then every **EVIDENCE-BASED** `[CONSUMER]`-side defect the audit found, plus every activation gap that is pure code in this repo, is fixed on a branch, verified, pushed, and opened as one ready-for-review PR whose body lists each issue, why it was an issue, and the fix applied (see [Fix Policy](#fix-policy)). `[UPSTREAM]`-side defects are never edited from this repo — they ship as proposed fixes routed to `/validate-consumer-issue`. Operator activation steps (repo-vars, secrets, upstream pin bumps, merges) are still enumerated, never performed. An optional trailing `— scope conformance` or `— scope activation` narrows the run to one half of the check (see [Scope](#scope)); without it the full check runs, unchanged. A trailing `— scope fix-check #<PR>` instead re-checks only one merged fix PR's diff and opens no fix PR (`/implement-plan-claude` uses it after its last allowed conformance run). A trailing `— unattended` (passed by `/implement-plan-claude`) makes the run auto-decide the findings that need a decision instead of asking (see [Unattended Runs](#unattended-runs)). Whenever the project has a `/implement-plan-claude` progress log with recorded auto-decisions, the report lists them for human review, without asking again.
 
 $ARGUMENTS
 
 ## Scope
 
-`$ARGUMENTS` may end with `— scope conformance` or `— scope activation` (`--` in place of the em dash is accepted). With neither, the run is **full** scope: every step below, exactly as written. A scope only narrows what is audited, graded, and fixed; it never widens anything.
+`$ARGUMENTS` may end with `— scope conformance`, `— scope activation`, or `— scope fix-check #<PR>[, #<PR>…]` (`--` in place of the em dash is accepted). With none of them, the run is **full** scope: every step below, exactly as written. A scope only narrows what is audited, graded, and fixed; it never widens anything.
 
 | Scope | Steps run | Verdict | Step 8 fixes |
 | --- | --- | --- | --- |
 | full (default) | 1–9 | LIVE / DORMANT / INCOMPLETE | EVIDENCE-BASED `[CONSUMER]`-side Step 5 findings and `CODE-FIXABLE` Step 6 gaps |
 | `conformance` | 1–5, 7–9 (Step 6 skipped) | CONFORMANT / INCOMPLETE | EVIDENCE-BASED `[CONSUMER]`-side Step 5 findings only |
 | `activation` | 1–3, 6–9 (Steps 4–5 skipped) | LIVE / DORMANT | `CODE-FIXABLE` Step 6 gaps only |
+| `fix-check` | 1–4 and 5 narrowed to the fix PR, 7, 9 (Steps 6 and 8 skipped) | FIX-VERIFIED / FIX-DEFECTIVE | none |
 
 - **`conformance`** answers "does the merged code do what the plan says, correctly?". The verdict is **CONFORMANT** when Step 4 is COMPLETE and Step 5 is PASS or CONCERNS, and **INCOMPLETE** otherwise. It says nothing about whether the project runs: the `Activated:`, `Will it run automatically?`, and `To activate` lines are omitted from the report. `/implement-plan-claude` runs this scope before its security pass, so every conformance fix is security-audited and validated afterwards.
 - **`activation`** answers "will it run on its trigger?" for a project whose implementation and correctness an earlier `conformance` run already graded (the caller records that run; this scope does not re-audit the code). `Implemented:` and `Correctness:` are reported as `not audited (activation scope)`, and `Audit findings` / `Checks run` are omitted unless Step 6 ran a check. INCOMPLETE is not a verdict of this scope: if Step 6 shows code the project needs is missing outright (not merely dormant), stop, say a full-scope run is needed, and do not grade.
+- **`fix-check`** answers "did this fix PR fix what it claimed, without breaking anything?" for one or more merged fix PRs named after the marker. `/implement-plan-claude` runs it once, in place of a fourth conformance run, after the fix PR opened by its third and last allowed conformance run merges. The criteria are the findings the fix PR's body lists under `## Findings fixed` and `## Auto-decisions`, not the plan's acceptance criteria. The audit surface is the files that PR changed and the call sites immediately reachable from them, not the whole project. Step 4 maps each listed finding to the merged change that resolves it. Step 5 audits only the diff: a listed finding left unresolved, a defect the diff introduced, a sibling path the fix missed (see **Sibling paths** under Step 5), or a test that does not exercise the fix. It runs the checks that bear on the changed files. The verdict is **FIX-VERIFIED** when every listed finding is resolved and no EVIDENCE-BASED defect in the diff stands, and **FIX-DEFECTIVE** otherwise. Step 8 never runs: this scope opens no fix PR, so it cannot start another audit round. A defect it notices in code the fix PR did not touch is reported under `Outside fix-check scope`, never fixed, and does not change the verdict; the caller records it. `Implemented:` and `Correctness:` describe the fix PR only, and the `Activated:`, `Will it run automatically?`, and `To activate` lines are omitted.
 
 ## Unattended Runs
 
@@ -51,6 +53,7 @@ $ARGUMENTS
 
    **What to audit** — read the real code at the side's ref, never infer correctness from a diff summary or a PR description:
    - **Plan conformance** — does each criterion's implementation do what the plan *said*, or does it diverge (a weaker check, a different default, a dropped case, a `TODO` left behind, a stub that returns early)? Divergence is a finding even when the code is otherwise sound.
+   - **Sibling paths** — for every behaviour the project changes, find each other place the same code path reaches, and check the change landed there too. Two kinds are easy to miss: every template, prompt, config, or variant the code selects between (for example a generic resolver prompt and its `orchestrator/project-*` variant), and every child process that inherits an environment variable or setting exported around a subprocess (an agent CLI's own `git` calls, not only the model's tool calls). A rule, guard, or env var that reaches one of them and not the others is a finding.
    - **Security first** — injection (shell / SQL / template), secrets leaking into logs, PR bodies, or commit messages, missing authz, unsafe deserialization, an unquoted expansion in a workflow.
    - **Correctness defects** — inverted condition, wrong operator, swapped arguments, off-by-one, wrong env var / repo-var / field / index / collection name, a return path that silently skips the work.
    - **Error paths and boundaries** — unvalidated input, unchecked external / API responses, a path that fails closed where it must fail open (or the reverse), `set -euo pipefail` interactions, unhandled non-zero exits.
@@ -89,7 +92,7 @@ $ARGUMENTS
    - **DORMANT** — implemented but needs a manual step. Enumerate the **exact** steps (set repo-var `X=1`, add secret `Y`, add/adjust the wrapper workflow, bump the upstream pin to `@vA.B.C`, merge to the default branch, start a supervisor).
    - **INCOMPLETE** — not fully implemented on its side, **including a Step 5 FAIL that downgraded `Implemented:` to PARTIAL**; list what is missing or defective.
 
-   A narrowed scope uses its own verdict set instead (see [Scope](#scope)): `conformance` grades **CONFORMANT** / **INCOMPLETE** from Steps 4–5 alone; `activation` grades **LIVE** / **DORMANT** from Step 6 alone.
+   A narrowed scope uses its own verdict set instead (see [Scope](#scope)): `conformance` grades **CONFORMANT** / **INCOMPLETE** from Steps 4–5 alone; `activation` grades **LIVE** / **DORMANT** from Step 6 alone; `fix-check` grades **FIX-VERIFIED** / **FIX-DEFECTIVE** from Steps 4–5 on the fix PR's diff alone.
 
    The verdict is graded **before** any fix is applied; the fix PR from Step 8 does not upgrade it (see [Rules](#rules)).
 
@@ -107,7 +110,7 @@ $ARGUMENTS
 
 ```
 Summary: <parsed reference; project in one phrase; side ([CONSUMER]/[UPSTREAM]/[BOTH]); verdict>
-Scope: full / conformance / activation
+Scope: full / conformance / activation / fix-check <PR refs>
 
 Project: <issue #N — title>  (linked PRs: #…, merged? yes/no)
 Side: [CONSUMER] THIS_REPO@main  |  [UPSTREAM] shubhodeep1/coding-workflows@<UPSTREAM_TAG> (<short-sha>)  |  [BOTH]
@@ -122,7 +125,7 @@ Audit findings (omit only when PASS with nothing to note):
 Checks run:
 - <command> — pass / fail / could-not-run (<reason>)
 
-Fix PR: <url> (branch claude/verify-activation-<slug>, N commits) / none — <no fixable findings | all findings are [UPSTREAM] | every finding needs a decision | could not verify>
+Fix PR: <url> (branch claude/verify-activation-<slug>, N commits) / none — <no fixable findings | all findings are [UPSTREAM] | every finding needs a decision | could not verify | fix-check scope (never opens one)>
 
 Fixes applied (omit when none; always [CONSUMER]):
 - [BLOCKER|CONCERN|GAP] [CONSUMER] <file:line> — Issue: <what was wrong>. Why it is an issue: <the acceptance criterion, rule, or runtime behaviour it broke>. Fix: <what changed> (<short-sha>). Verified by: <check that now passes>.
@@ -139,6 +142,9 @@ Reply `change AD-<n> → <letter>` to change one; everything else stands.
 
 To activate (only if not already automatic — OPERATOR steps, never performed by this command):
 1. <exact step — set repo-var X=1; add secret Y; add/adjust wrapper .github/workflows/Z.yml; bump upstream pin @vA.B.C → @vA.B.D; merge to default branch>
+
+Outside fix-check scope (fix-check scope only; omit when none — never fixed, never changes the verdict):
+- [BLOCKER|CONCERN] <file:line> — <defect in code the fix PR did not touch> (EVIDENCE-BASED | HYPOTHESIS)
 
 Gaps / risks:
 - <not wired into a wrapper, defect that downgraded the verdict, repo-var default-off, unset secret, upstream pin predates the feature, cron not on default branch>
@@ -209,7 +215,7 @@ Steps 1–7 are read-only; Step 8 writes to this repo's fix branch and nothing e
 
 - **Verdict first, then fix — and the verdict is graded against the audited refs.** Steps 4–7 report the project as it stands; Step 8 then ships `[CONSUMER]`-side fixes on a branch. A fix PR does **not** upgrade the verdict: a project audited FAIL stays INCOMPLETE in this run's report, with `Fix PR:` pointing at the remedy. Re-run `/verify-activation` after the PR merges to earn the upgrade; `/deploy-activate` keeps gating on the reported verdict.
 - **`— unattended` replaces a question with a recorded pick, and does nothing else.** It auto-decides the decision items (§28), and every pick is reported as an `AD-<n>` entry. It never auto-fixes a HYPOTHESIS, an unverifiable fix, an `OPERATOR` gap, or a question with no §28-safe option. The `Auto-decisions (for review)` list is printed for the human to read, never re-asked.
-- **A scope narrows, never widens.** `— scope conformance` skips the activation check and its fixes; `— scope activation` skips the implementation and correctness audit and its fixes (see [Scope](#scope)). Without a scope the run is full, exactly as before.
+- **A scope narrows, never widens.** `— scope conformance` skips the activation check and its fixes; `— scope activation` skips the implementation and correctness audit and its fixes (see [Scope](#scope)). Without a scope the run is full, exactly as before. `— scope fix-check` audits only the named fix PRs' diffs and never opens a fix PR.
 - **Fix only this repo, and only what the evidence demonstrates.** EVIDENCE-BASED `[CONSUMER]` findings and `CODE-FIXABLE` gaps are fixed; `[UPSTREAM]` findings, HYPOTHESIS findings, naming / DB-contract / §12.D items, and `OPERATOR` gaps are reported (see [Fix Policy](#fix-policy)). An upstream defect goes to `/validate-consumer-issue` with a proposed fix. Never fix speculatively, never silently widen scope, never edit a test to pass without evidence the test is wrong, never broaden a `catch` / `except` or add a retry to mask a deterministic failure.
 - **Every fix is verified before it is pushed, and every fix is explained.** The report and the PR body carry, per fix: the issue, why it was an issue, what changed, and the check that proves it. A bare "fixed" is not acceptable.
 - **Operator activation steps are never performed by this command.** Repo-vars, secrets, default flips, upstream pin bumps, merges, workflow dispatches, supervisors, and infrastructure stay under `To activate` for the operator or `/deploy-activate`.

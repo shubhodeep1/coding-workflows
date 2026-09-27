@@ -785,7 +785,10 @@ to a session-local cron. Every stage (a
 phase, a review round, the conformance
 audit (`/verify-activation — scope conformance`, run after the last phase
 and before the security pass, and again after any Claude-written
-validation fix), a security or validation read, the completion PR, the
+validation fix; at most 3 runs, and when the third opens a fix PR that PR
+gets one narrower `/verify-activation — scope fix-check #<PR>` of its own
+diff instead of a fourth audit, blocking only when the fix itself is
+defective), a security or validation read, the completion PR, the
 final merge, a `/verify-activation — scope activation` cycle, the
 `/deploy-activate` hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
@@ -863,7 +866,7 @@ its own id, `run_once_at` = now + 7 days, named `PR #<n> hand-back`, with
 the PR URL in its prompt). The checker runs
 `.claude/scripts/check_in_status.py --hand-back` (one REST read for a
 non-`claude/*` head; on a `claude/*` head also the comment and check-run
-pages and at most five further reads), renews every subscriber's
+pages and at most six further reads), renews every subscriber's
 hand-back 7 days ahead, and re-arms itself with `send_later` every 60
 minutes while nothing is due. A PR has one checker: a second interested
 session registers with it (`PR #<n> status check-in: subscriber` one-shot
