@@ -12,6 +12,21 @@ import re
 import sys
 
 body = sys.stdin.read()
+lines = body.splitlines()
+# Only the preamble and the explicit orchestrator metadata footer are
+# branch declarations. A quoted check log or fenced diagnostic is not.
+if lines and lines[0].startswith("## Project:"):
+	boundary = next((i for i, line in enumerate(lines[1:], 1) if re.match(r"^(?:## |### Wave|```|~~~)", line)), len(lines))
+else:
+	boundary = next((i for i, line in enumerate(lines) if re.match(r"^(?:## |```|~~~|---$)", line)), len(lines))
+metadata = lines[:boundary]
+
+footer = next((i for i, line in enumerate(lines) if line.startswith("**Orchestrator metadata**")), None)
+if footer is not None:
+	start = footer + 1
+	end = next((i for i in range(start, len(lines)) if re.match(r"^(?:## |```|~~~|---$)", lines[i])), len(lines))
+	metadata += lines[start:end]
+body = "\n".join(metadata)
 pattern = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE)
 match = pattern.search(body)
 if match:
@@ -70,8 +85,50 @@ branch_exists() {
 }
 
 resolve_ref() {
-	local child_body child_branch tracking_issue tracking_body tracking_branch
-	child_body="$(get_issue_body "${ISSUE}")"
+	local child_body child_branch tracking_issue tracking_body tracking_branch child_json origin_pr origin_base origin_json
+	child_json="$(gh api "repos/${REPO}/issues/${ISSUE}")"
+	child_body="$(printf '%s' "${child_json}" | jq -r '.body // ""')"
+	if printf '%s' "${child_json}" | jq -e '(.labels // []) | any(.[]; .name == "ai:check-triage")' >/dev/null; then
+		if ! jq -e '(.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) or
+			(.user.login == "github-actions[bot]" and .user.type == "Bot")' <<< "${child_json}" >/dev/null; then
+			echo "::error::Untrusted triage issue author." >&2
+			return 1
+		fi
+		# Triage prose is a model/log product. Only the machine header and an
+		# independent PR read may select a non-default base.
+		if ! origin_pr="$(printf '%s' "${child_body}" | sed -n '2s/^<!-- check-failure-triage:origin-pr=\([1-9][0-9]*\) base=[A-Za-z0-9][A-Za-z0-9._/-]* -->$/\1/p')" ||
+		   [ -z "${origin_pr}" ]; then
+			if [[ "${child_body}" == '<!-- check-failure-triage:fp='* ]] &&
+			   printf '%s' "${child_body}" | grep -q 'check-failure-triage:origin-pr='; then
+				echo "::error::Malformed triage origin header." >&2
+				return 1
+			fi
+			printf '\n' # Legacy triage issues have no independently bound base.
+			return 0
+		fi
+		origin_base="$(printf '%s' "${child_body}" | sed -n '2s/^<!-- check-failure-triage:origin-pr=[1-9][0-9]* base=\([A-Za-z0-9][A-Za-z0-9._/-]*\) -->$/\1/p')"
+		if ! [[ "${child_body}" =~ ^'<!-- check-failure-triage:fp='[0-9a-f]{64}' -->' ]] ||
+		   [ "$(printf '%s\n' "${child_body}" | grep -c 'check-failure-triage:fp=' || true)" != 1 ] ||
+		   [ "$(printf '%s\n' "${child_body}" | grep -c 'check-failure-triage:origin-pr=' || true)" != 1 ] ||
+		   ! git check-ref-format --branch "${origin_base}" >/dev/null 2>&1 ||
+		   { child_branch="$(extract_integration_branch "${child_body}")"; [ -n "${child_branch}" ] && [ "${child_branch}" != "${origin_base}" ]; }; then
+			echo "::error::Invalid triage provenance." >&2
+			return 1
+		fi
+		origin_json="$(gh api "repos/${REPO}/pulls/${origin_pr}")" || return 1
+		if ! jq -e --argjson number "${origin_pr}" --arg repo "${REPO}" --arg base "${origin_base}" '
+			.number == $number and .head.repo.full_name == $repo and
+			.base.repo.full_name == $repo and .base.ref == $base' <<< "${origin_json}" >/dev/null; then
+			echo "::error::Triage origin PR does not match its header." >&2
+			return 1
+		fi
+		if ! branch_exists "${origin_base}"; then
+			echo "::error::Triage origin branch does not exist." >&2
+			return 1
+		fi
+		printf '%s\n' "${origin_base}"
+		return 0
+	fi
 	child_branch="$(extract_integration_branch "${child_body}")"
 	if [ -n "${child_branch}" ]; then
 		if ! branch_exists "${child_branch}"; then
@@ -207,7 +264,10 @@ def main() -> int:
 			if jq_expr == '.body // ""':
 				print(body)
 				return 0
-		print(json.dumps({"number": issue_num, "body": body}))
+		print(json.dumps({"number": issue_num, **fixture.get("issues", {}).get(str(issue_num), {}), "body": body}))
+		return 0
+	if endpoint.startswith("repos/") and "/pulls/" in endpoint:
+		print(json.dumps(fixture.get("pulls", {}).get(endpoint.rsplit("/", 1)[-1], {})))
 		return 0
 
 	if endpoint.startswith("repos/") and "/git/ref/heads/" in endpoint:

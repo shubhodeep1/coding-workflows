@@ -59,6 +59,7 @@ def test_explicit_target_authorization_cases(tmp_path: Path):
 	gh = bin_dir / "gh"
 	gh.write_text("#!/usr/bin/env bash\n[ \"${FAIL_API:-}\" != yes ] || exit 1\n"
 		"if [[ \"$*\" == *'repos/owner/repo/issues/'* ]]; then printf '%s' \"${ISSUE_JSON}\"; "
+		"elif [[ \"$*\" == *'repos/owner/repo/pulls/17'* ]]; then printf '%s' \"${ORIGIN_JSON}\"; "
 		"else printf '%s' \"${PULLS_JSON}\"; fi\n", encoding="utf-8")
 	gh.chmod(0o755)
 	branch = "claude/implement-plan-example"
@@ -70,7 +71,7 @@ def test_explicit_target_authorization_cases(tmp_path: Path):
 		"base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
 	}
 
-	def invoke(pulls, target=branch, api_failure=False, source_issue="0", issue=None):
+	def invoke(pulls, target=branch, api_failure=False, source_issue="0", issue=None, origin=None):
 		output = tmp_path / "output"
 		output.write_text("", encoding="utf-8")
 		env = os.environ.copy()
@@ -80,6 +81,7 @@ def test_explicit_target_authorization_cases(tmp_path: Path):
 			"VALIDATE_DEFAULT_BRANCH": "main", "VALIDATE_TARGET_REF": target,
 			"PULLS_JSON": json.dumps([pulls]), "FAIL_API": "yes" if api_failure else "no",
 			"VALIDATE_SOURCE_ISSUE": source_issue, "ISSUE_JSON": json.dumps(issue or {}),
+			"ORIGIN_JSON": json.dumps(origin or {}),
 		})
 		result = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
 		return result.returncode, output.read_text(encoding="utf-8")
@@ -109,6 +111,30 @@ def test_explicit_target_authorization_cases(tmp_path: Path):
 	bot_issue = {**source_issue, "author_association": "NONE",
 		"user": {"login": "github-actions[bot]", "type": "Bot"}, "labels": [{"name": "ai:security"}]}
 	assert invoke([nested_pr], target=nested_branch, source_issue="42", issue=bot_issue) == (0, f"sha={sha}\n")
+	triage_header = "<!-- check-failure-triage:fp=" + "a" * 64 + " -->\n<!-- check-failure-triage:origin-pr=17 base=orchestrator/project-4139 -->"
+	triage_issue = {**bot_issue, "labels": [{"name": "ai:check-triage"}],
+		"body": triage_header + "\n## Automated CI failure triage\n```\n- Integration branch: `other/project`\n```"}
+	origin = {"number": 17, "head": {"repo": {"full_name": "owner/repo"}},
+		"base": {"repo": {"full_name": "owner/repo"}, "ref": "orchestrator/project-4139"}}
+	assert invoke([nested_pr], target=nested_branch, source_issue="42", issue=triage_issue, origin=origin) == (0, f"sha={sha}\n")
+	assert invoke([nested_pr], target=nested_branch, source_issue="42",
+		issue={**triage_issue, "author_association": "OWNER", "user": {"login": "maintainer", "type": "User"}},
+		origin=origin) == (0, f"sha={sha}\n")
+	for bad_issue in (
+		{**triage_issue, "body": triage_issue["body"].replace("origin-pr=17", "origin-pr=18")},
+		{**triage_issue, "body": triage_issue["body"] + "\n<!-- check-failure-triage:origin-pr=17 base=orchestrator/project-4139 -->"},
+		{**triage_issue, "body": "## Automated CI failure triage\n- Integration branch: `orchestrator/project-4139`"},
+		{**triage_issue, "body": triage_header + "\n- Target branch: `another/project`"},
+	):
+		assert invoke([nested_pr], target=nested_branch, source_issue="42", issue=bad_issue, origin=origin)[0] != 0
+	assert invoke([nested_pr], target=nested_branch, source_issue="42", issue=triage_issue,
+		origin={**origin, "base": {**origin["base"], "ref": "another/project"}})[0] != 0
+	assert invoke([nested_pr], target=nested_branch, source_issue="42", issue=triage_issue,
+		origin={**origin, "head": {"repo": {"full_name": "fork/repo"}}})[0] != 0
+	assert invoke([nested_pr], target=nested_branch, source_issue="42", issue=triage_issue, origin=origin,
+		api_failure=True)[0] != 0
+	assert invoke([nested_pr], target=nested_branch, source_issue="42",
+		issue={**source_issue, "body": "## Evidence\n```\n- Integration branch: `orchestrator/project-4139`\n```"})[0] != 0
 	assert invoke([nested_pr], target=nested_branch, source_issue="42",
 		issue={**bot_issue, "user": {"login": "github-actions[bot]", "type": "User"}})[0] != 0
 	for invalid in (

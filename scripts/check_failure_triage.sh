@@ -166,10 +166,20 @@ HEAD_REF="$(printf '%s' "${PR_JSON}" | jq -r '.head.ref // ""')"
 PR_TITLE="$(printf '%s' "${PR_JSON}" | jq -r '.title // ""')"
 PR_URL="$(printf '%s' "${PR_JSON}" | jq -r '.html_url // ""')"
 HEAD_REPO_FULL_NAME="$(printf '%s' "${PR_JSON}" | jq -r '.head.repo.full_name // ""')"
+BASE_REPO_FULL_NAME="$(printf '%s' "${PR_JSON}" | jq -r '.base.repo.full_name // ""')"
+BASE_REF="$(printf '%s' "${PR_JSON}" | jq -r '.base.ref // ""')"
 [ -n "${PR_URL}" ] || PR_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/pull/${PR_NUMBER}"
 if [ -n "${PR_STATE}" ] && [ "${PR_STATE}" != "open" ]; then
 	log "skip reason=pr_not_open pr=${PR_NUMBER} state=${PR_STATE}"
 	exit 0
+fi
+if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] ||
+   [ "$(printf '%s' "${PR_JSON}" | jq -r '.number // ""')" != "${PR_NUMBER}" ] ||
+   [ "${PR_STATE}" != "open" ] ||
+   [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ] || [ "${BASE_REPO_FULL_NAME}" != "${REPO}" ] ||
+   [ -z "${BASE_REF}" ] || ! git check-ref-format --branch "${BASE_REF}" >/dev/null 2>&1; then
+	log "error pr_identity_or_base_unverified pr=${PR_NUMBER}"
+	exit 1
 fi
 if [ -n "${HEAD_REPO_FULL_NAME}" ] && [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ]; then
 	log "skip reason=fork_pr pr=${PR_NUMBER} head_repo=${HEAD_REPO_FULL_NAME}"
@@ -361,6 +371,7 @@ TITLE="CI failure: ${CHECK_NAME} on PR #${PR_NUMBER}"
 BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 {
 	echo "${FP_MARKER}"
+	echo "<!-- ${MARKER_PREFIX}origin-pr=${PR_NUMBER} base=${BASE_REF} -->"
 	echo "<!-- ${MARKER_PREFIX}gen=${GEN} -->"
 	echo "<!-- ${MARKER_PREFIX}root=${ROOT} -->"
 	echo "<!-- ${MARKER_PREFIX}pr=${PR_NUMBER} -->"

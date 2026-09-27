@@ -17,6 +17,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "check_failure_triage.yml"
 
 
+def test_generated_triage_base_is_bound_to_fetched_pr_before_diagnosis():
+	script = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
+	assert 'BASE_REF="$(printf \'%s\' "${PR_JSON}" | jq -r \'.base.ref // ""\')"' in script
+	assert '[ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ] || [ "${BASE_REPO_FULL_NAME}" != "${REPO}" ]' in script
+	assert 'check-ref-format --branch "${BASE_REF}"' in script
+	assert 'echo "<!-- ${MARKER_PREFIX}origin-pr=${PR_NUMBER} base=${BASE_REF} -->"' in script
+	assert script.index('origin-pr=${PR_NUMBER} base=${BASE_REF}') < script.index('cat "${DIAG_FILE}"')
+
+
 def _workflow() -> dict:
 	return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
 

@@ -208,6 +208,7 @@ changelog.d/4507-wire-overlay-core-test-into-ci.md
 changelog.d/4512-validate-renderer-import-isolation.md
 changelog.d/4525-claude-issue-fail-closed.md
 changelog.d/4548-checker-blocked-issue-wait.md
+changelog.d/4595-claude-security-branch-binding.md
 changelog.d/claude-fixes-every-claude-pr.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md

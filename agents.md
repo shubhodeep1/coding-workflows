@@ -853,6 +853,14 @@ source issue's declared branch must
 match the exact-one authorized final PR base. Default-base validation remains
 unchanged; consumer wrappers must not forward `source_issue` until the pinned
 reusable workflow supports it.
+For `ai:check-triage` issues the machine header binds the base and originating
+PR; validation re-reads that PR and rejects retargeted, missing or forged
+headers. Fenced/quoted diagnostic text cannot select an issue base. A legacy
+triage issue without the header resolves only to the default base. A verified
+security-audit wait whose project head advanced returns `moved-target` with
+the observed SHA; the Claude checker re-dispatches at the freshly read head
+within the existing five-cycle limit, instead of treating drift as a failed
+audit or a clean pass.
 
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
 pushes a branch and a pull request exists for it, the session starts a

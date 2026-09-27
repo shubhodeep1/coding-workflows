@@ -207,8 +207,17 @@ jobs:
             # expected PR base. An absent or ambiguous declaration fails closed.
             source_issue_json="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${VALIDATE_SOURCE_ISSUE}")" || exit 1
             authorized_base="$(jq -er --argjson issue "${VALIDATE_SOURCE_ISSUE}" '
+              def authoritative_lines:
+                (.body | split("\n")) as $body |
+                ($body | map(test(if $body[0] | startswith("## Project:") then
+                  "^## (?!Project:)|^### Wave|^```|^~~~" else "^## |^```|^~~~|^---$" end)) | index(true) // length) as $end |
+                ($body[:$end] +
+                  (if ($body | map(startswith("**Orchestrator metadata**")) | index(true)) != null then
+                    ($body | map(startswith("**Orchestrator metadata**")) | index(true)) as $footer |
+                    $body[($footer + 1):] | .[:(map(test("^## |^```|^~~~|^---$")) | index(true) // length)]
+                   else [] end));
               def branches($label):
-                [.body | split("\n")[] |
+                [authoritative_lines[] |
                   select(test("^\\s*(-\\s*)?(\\*\\*)?" + $label + ":"))] as $lines |
                 [$lines[] |
                   . as $line |
@@ -227,10 +236,31 @@ jobs:
                    (branches("Target branch")) as $target |
                    if ($integration | length) > 1 or ($target | length) > 1 then
                      error("ambiguous issue base")
+                   elif ((.labels // []) | any(.[]; .name == "ai:check-triage")) then
+                     # The diagnosis/evidence is not branch authority. The
+                     # originating PR is independently checked below.
+                     (.body | split("\n")) as $lines |
+                     if ($lines[0] | test("^<!-- check-failure-triage:fp=[0-9a-f]{64} -->$")) and
+                        ([$lines[] | select(contains("check-failure-triage:fp="))] | length) == 1 and
+                        ($lines[1] | test("^<!-- check-failure-triage:origin-pr=[1-9][0-9]* base=[A-Za-z0-9][A-Za-z0-9._/-]* -->$")) and
+                        ([$lines[] | select(contains("check-failure-triage:origin-pr="))] | length) == 1 then
+                       ($lines[1] | capture("origin-pr=(?<pr>[1-9][0-9]*) base=(?<base>[A-Za-z0-9][A-Za-z0-9._/-]*) -->$")) as $origin |
+                       if (($integration + $target) | all(. == $origin.base)) then
+                         $origin.base
+                       else error("conflicting triage base") end
+                     else error("missing or ambiguous triage provenance") end
                    elif ($integration | length) == 1 then $integration[0]
                    elif ($target | length) == 1 then $target[0]
                    else error("missing issue base") end
               end' <<< "${source_issue_json}")" || { echo "::error::Cannot authorize issue base."; exit 1; }
+            if jq -e '(.labels // []) | any(.[]; .name == "ai:check-triage")' <<< "${source_issue_json}" >/dev/null; then
+              origin_pr="$(jq -er '.body | split("\n")[1] | capture("^<!-- check-failure-triage:origin-pr=(?<pr>[1-9][0-9]*) base=[A-Za-z0-9][A-Za-z0-9._/-]* -->$").pr' <<< "${source_issue_json}")" || exit 1
+              origin_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${origin_pr}")" || exit 1
+              jq -e --argjson pr "${origin_pr}" --arg repo "${GITHUB_REPOSITORY}" --arg base "${authorized_base}" '
+                .number == $pr and .head.repo.full_name == $repo and
+                .base.repo.full_name == $repo and .base.ref == $base
+              ' <<< "${origin_json}" >/dev/null || { echo "::error::Origin PR base is not authorized."; exit 1; }
+            fi
             if [ "${authorized_base}" = "${VALIDATE_DEFAULT_BRANCH}" ] ||
                ! git check-ref-format --branch "${authorized_base}" >/dev/null 2>&1; then
               echo "::error::Invalid non-default issue base."

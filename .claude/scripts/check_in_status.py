@@ -540,8 +540,17 @@ def _audit_result(repo: str, run_id: int, run: dict, audit_ref: str, audit_sha: 
 	"""
 	if (run.get("id") != run_id or run.get("repository", {}).get("full_name") != repo or
 		run.get("path") != f".github/workflows/{audit_workflow}" or
-		run.get("event") != "workflow_dispatch" or run.get("conclusion") != "success"):
-		return {"done": True, "state": "failed", "reason": f"run {run_id} audit identity or conclusion mismatch"}
+		run.get("event") != "workflow_dispatch"):
+		return {"done": True, "state": "failed", "reason": f"run {run_id} audit identity mismatch"}
+	branch = gh_api(f"repos/{repo}/git/ref/heads/{quote(audit_ref, safe='/')}")
+	observed_sha = branch.get("object", {}).get("sha")
+	if not isinstance(observed_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", observed_sha):
+		raise ReadError(f"run {run_id} audit branch head unavailable")
+	if observed_sha != audit_sha:
+		return {"done": True, "state": "moved-target", "reason": f"run {run_id} audit target moved; re-audit required",
+			"observed_sha": observed_sha}
+	if run.get("conclusion") != "success":
+		return {"done": True, "state": "failed", "reason": f"run {run_id} audit conclusion mismatch"}
 	try:
 		proc = subprocess.run(["gh", "run", "view", str(run_id), "-R", repo, "--log"],
 			capture_output=True, text=True, timeout=120)
@@ -568,9 +577,6 @@ def _audit_result(repo: str, run_id: int, run: dict, audit_ref: str, audit_sha: 
 		return {"done": True, "state": "failed", "reason": f"run {run_id} audit target or result missing/ambiguous"}
 	if int(result[2]) > int(result[1]):
 		return {"done": True, "state": "failed", "reason": f"run {run_id} inconsistent audit counts"}
-	branch = gh_api(f"repos/{repo}/git/ref/heads/{quote(audit_ref, safe='/')}")
-	if branch.get("object", {}).get("sha") != audit_sha:
-		return {"done": True, "state": "failed", "reason": f"run {run_id} audit target moved; re-audit required"}
 	return {"done": True, "state": "completed", "reason": f"run {run_id} verified audit: findings={result[1]} followups_created={result[2]}",
 		"findings": int(result[1]), "followups_created": int(result[2]), "audited_sha": audit_sha}
 

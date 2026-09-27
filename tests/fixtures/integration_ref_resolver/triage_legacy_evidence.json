@@ -1,0 +1,13 @@
+{
+  "name": "triage_legacy_evidence",
+  "issues": {
+    "101": {
+      "body": "<!-- check-failure-triage:fp=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\n## Automated CI failure triage\n```\n- Integration branch: `attacker/branch`\n```",
+      "labels": [{"name": "ai:check-triage"}],
+      "user": {"login": "github-actions[bot]", "type": "Bot"}
+    }
+  },
+  "branch_exists": {"attacker/branch": true},
+  "expected_stdout": "",
+  "expected_exit_code": 0
+}

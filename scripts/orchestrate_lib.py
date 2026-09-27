@@ -2778,10 +2778,24 @@ def extract_integration_branch(body: str) -> str:
 	"""
 	if not body:
 		return ""
-	match = INTEGRATION_BRANCH_LINE_RE.search(body)
+	lines = body.splitlines()
+	if lines and lines[0].startswith("## Project:"):
+		boundary = next((idx for idx, line in enumerate(lines[1:], 1) if re.match(r"^(?:## |### Wave|```|~~~)", line)), len(lines))
+	else:
+		boundary = next((idx for idx, line in enumerate(lines) if re.match(r"^(?:## |```|~~~|---$)", line)), len(lines))
+	metadata = lines[:boundary]
+	footer = next((idx for idx, line in enumerate(lines) if line.startswith("**Orchestrator metadata**")), None)
+	if footer is not None:
+		start = footer + 1
+		end = next((idx for idx in range(start, len(lines)) if re.match(r"^(?:## |```|~~~|---$)", lines[idx])), len(lines))
+		metadata += lines[start:end]
+	# The triage header is verified against its originating PR only by
+	# resolve_integration_ref; this text-only parser never trusts its evidence.
+	trusted_body = "\n".join(metadata)
+	match = INTEGRATION_BRANCH_LINE_RE.search(trusted_body)
 	if match:
 		return match.group(1).strip()
-	alias_match = TARGET_BRANCH_LINE_RE.search(body)
+	alias_match = TARGET_BRANCH_LINE_RE.search(trusted_body)
 	if not alias_match:
 		return ""
 	return (alias_match.group(1) or alias_match.group(2) or "").strip()
@@ -2862,6 +2876,36 @@ def resolve_integration_ref(repo: str, issue: int) -> str:
 
 	child_payload = _gh_api_json(f"repos/{repo_name}/issues/{issue}")
 	child_body = str(child_payload.get("body", "") or "")
+	if any(label.get("name") == "ai:check-triage" for label in child_payload.get("labels", [])):
+		if (child_payload.get("author_association") not in {"OWNER", "MEMBER", "COLLABORATOR"} and
+			((child_payload.get("user") or {}).get("login") != "github-actions[bot]" or
+			 (child_payload.get("user") or {}).get("type") != "Bot")):
+			raise OrchestrateError("untrusted triage issue author")
+		lines = child_body.splitlines()
+		if len(lines) < 2 or not re.fullmatch(r"<!-- check-failure-triage:fp=[0-9a-f]{64} -->", lines[0]):
+			if "check-failure-triage:origin-pr=" in child_body:
+				raise OrchestrateError("malformed triage origin header")
+			return ""  # Legacy triage has no independently verifiable base.
+		origin = re.fullmatch(r"<!-- check-failure-triage:origin-pr=([1-9][0-9]*) base=([A-Za-z0-9][A-Za-z0-9._/-]*) -->", lines[1])
+		if origin is None and "check-failure-triage:origin-pr=" not in child_body:
+			return ""  # Pre-binding issues cannot inherit a base from logs.
+		if (origin is None or child_body.count("check-failure-triage:origin-pr=") != 1 or
+			child_body.count("check-failure-triage:fp=") != 1):
+			raise IntegrationBranchMissingError("invalid triage origin header")
+		origin_pr = _gh_api_json(f"repos/{repo_name}/pulls/{origin[1]}")
+		origin_base = origin[2]
+		declared_base = extract_integration_branch(child_body)
+		if (origin_pr.get("number") != int(origin[1]) or
+			(declared_base and declared_base != origin_base) or
+			((origin_pr.get("head") or {}).get("repo") or {}).get("full_name") != repo_name or
+			((origin_pr.get("base") or {}).get("repo") or {}).get("full_name") != repo_name or
+			(origin_pr.get("base") or {}).get("ref") != origin_base or
+			not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", origin_base) or
+			".." in origin_base or origin_base.endswith("/")):
+			raise IntegrationBranchMissingError("triage origin PR base mismatch")
+		if not _gh_ref_exists(repo_name, origin_base):
+			raise IntegrationBranchMissingError("triage origin branch is missing")
+		return origin_base
 	child_branch = extract_integration_branch(child_body)
 	if child_branch:
 		if not _gh_ref_exists(repo_name, child_branch):

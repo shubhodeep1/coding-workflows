@@ -599,11 +599,25 @@ def test_audit_run_binds_metadata_target_result_and_current_head(monkeypatch, ca
 	for broken in (
 		{"repos/o/r/actions/runs/9": {**run, "path": ".github/workflows/other.yml"}},
 		{"repos/o/r/actions/runs/9": {**run, "conclusion": "failure"}},
-		{f"repos/o/r/git/ref/heads/{ref}": {"object": {"sha": "c" * 40}}},
 	):
 		_stub(monkeypatch, {**api, **broken})
 		_, out = _run(args, capsys)
 		assert out["state"] == "failed"
+	_stub(monkeypatch, {**api, f"repos/o/r/git/ref/heads/{ref}": {"object": {"sha": "c" * 40}}})
+	_, out = _run(args, capsys)
+	assert out["state"] == "moved-target" and out["observed_sha"] == "c" * 40
+	_stub(monkeypatch, {**api, f"repos/o/r/actions/runs/9": {**run, "conclusion": "failure"},
+		f"repos/o/r/git/ref/heads/{ref}": {"object": {"sha": "c" * 40}}})
+	_, out = _run(args, capsys)
+	assert out["state"] == "moved-target"
+	_stub(monkeypatch, {**api, f"repos/o/r/actions/runs/9": {**run, "repository": {"full_name": "other/repo"}},
+		f"repos/o/r/git/ref/heads/{ref}": {"object": {"sha": "c" * 40}}})
+	_, out = _run(args, capsys)
+	assert out["state"] == "failed" and "observed_sha" not in out
+	for bad_head in ({}, {"object": {"sha": "invalid"}}, checker.ReadError("HTTP 404")):
+		_stub(monkeypatch, {**api, f"repos/o/r/git/ref/heads/{ref}": bad_head})
+		code, out = _run(args, capsys)
+		assert code == 2 and out["done"] is False
 	_stub(monkeypatch, api)
 	for bad_log in (log + log, log.replace(sha, "c" * 40), log.replace("findings=1", "no-findings=1")):
 		monkeypatch.setattr(checker.subprocess, "run", lambda *args, payload=bad_log, **kwargs:
@@ -618,6 +632,9 @@ def test_command_doc_describes_blocked_issue_wait():
 		text = path.read_text(encoding="utf-8")
 		assert "- *Issue list* — every issue is closed or labelled `ai:merged`; or an issue still open" in text
 		assert "the checker reports a follow-up blocked (`state: blocked`" in text
+		assert "`state: moved-target`" in text
+		assert "when k is 5" in text
+		assert "re-read the project branch HEAD before dispatching" in text
 
 
 def test_read_failure_exits_2_with_error(monkeypatch, capsys):

@@ -1,0 +1,20 @@
+{
+  "name": "triage_origin_mismatch",
+  "issues": {
+    "101": {
+      "body": "<!-- check-failure-triage:fp=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\n<!-- check-failure-triage:origin-pr=17 base=orchestrator/project-4139 -->\n## Automated CI failure triage\n- Integration branch: `attacker/branch`",
+      "labels": [{"name": "ai:check-triage"}],
+      "user": {"login": "github-actions[bot]", "type": "Bot"}
+    }
+  },
+  "pulls": {
+    "17": {
+      "number": 17,
+      "head": {"repo": {"full_name": "owner/repo"}},
+      "base": {"repo": {"full_name": "owner/repo"}, "ref": "attacker/branch"}
+    }
+  },
+  "branch_exists": {"orchestrator/project-4139": true, "attacker/branch": true},
+  "expected_stdout": "",
+  "expected_exit_code": 1
+}

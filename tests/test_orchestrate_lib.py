@@ -76,7 +76,10 @@ def main() -> int:
 			if jq_expr == '.body // ""':
 				print(body)
 				return 0
-		print(json.dumps({'number': issue_num, 'body': body}))
+		print(json.dumps({'number': issue_num, **fixture.get('issues', {}).get(str(issue_num), {}), 'body': body}))
+		return 0
+	if endpoint.startswith('repos/') and '/pulls/' in endpoint:
+		print(json.dumps(fixture.get('pulls', {}).get(endpoint.rsplit('/', 1)[-1], {})))
 		return 0
 	if endpoint.startswith('repos/') and '/git/ref/heads/' in endpoint:
 		ref = unquote(endpoint.split('/git/ref/heads/', 1)[1])
