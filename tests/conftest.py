@@ -59,6 +59,18 @@ editor had already produced a complete change set. The stall poller retried
 and re-issued the same failing run four times. The variables are stripped
 here for the same reason as the git ones: a helper under test must only see
 the runtime paths the test itself sets.
+
+Per-PR workspace isolation
+--------------------------
+``scripts/workspace_init.sh`` exports ``WORKSPACE_PATH`` into ``$GITHUB_ENV``
+together with ``GIT_DIR`` / ``GIT_WORK_TREE``, so the editor's pytest run
+inherits it. ``scripts/review_untrusted_sandbox.sh prepare`` accepts a
+workspace only directly under ``${RUNNER_TEMP}/workspaces`` (issue #4580), and
+a test that copies ``os.environ`` but sets its own ``RUNNER_TEMP``
+(``test_review_host_python_launches_are_isolated_and_broker_keeps_credential``)
+would have ``prepare`` reject the inherited path with
+``Review workspace path rejected``. Tests that exercise a workspace set
+``WORKSPACE_PATH`` themselves.
 """
 
 from __future__ import annotations
@@ -91,18 +103,26 @@ STAGED_SUPPORT_RUNTIME_ENV_VARS = (
 	"IMPLEMENT_STAGED_SUPPORT_RUN_DIR",
 )
 
+# Per-PR workspace path that workspace_init.sh exports into $GITHUB_ENV.
+# review_untrusted_sandbox.sh prepare validates an inherited value against
+# the test's own RUNNER_TEMP and rejects it (see the module docstring).
+WORKSPACE_RUNTIME_ENV_VARS = (
+	"WORKSPACE_PATH",
+)
+
 # Every workflow-runtime variable the session fixture strips.
-WORKFLOW_RUNTIME_ENV_VARS = REPO_PINNING_GIT_ENV_VARS + STAGED_SUPPORT_RUNTIME_ENV_VARS
+WORKFLOW_RUNTIME_ENV_VARS = REPO_PINNING_GIT_ENV_VARS + STAGED_SUPPORT_RUNTIME_ENV_VARS + WORKSPACE_RUNTIME_ENV_VARS
 
 
 @pytest.fixture(autouse=True, scope="session")
 def _isolate_repo_pinning_git_environment():
 	"""Strip workflow-runtime variables for the whole test session.
 
-	Covers the repo-pinning git variables and the staged-support ledger
-	paths. Runs once before the first test and restores the original values
-	after the last one, so a caller that launched pytest with the variables
-	set (the unattended workflows) gets its environment back unchanged.
+	Covers the repo-pinning git variables, the staged-support ledger
+	paths, and the per-PR workspace path. Runs once before the first test
+	and restores the original values after the last one, so a caller that
+	launched pytest with the variables set (the unattended workflows) gets
+	its environment back unchanged.
 	"""
 	saved_values = {}
 	for variable_name in WORKFLOW_RUNTIME_ENV_VARS:

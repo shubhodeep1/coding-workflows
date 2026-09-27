@@ -44,6 +44,7 @@ from conftest import (
 	REPO_PINNING_GIT_ENV_VARS,
 	STAGED_SUPPORT_RUNTIME_ENV_VARS,
 	WORKFLOW_RUNTIME_ENV_VARS,
+	WORKSPACE_RUNTIME_ENV_VARS,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -52,6 +53,8 @@ PROBE_TEST_SELECTION = "concurrent_prs or union_backstop"
 SENTINEL_BRANCH = "sentinel"
 STAGED_SUPPORT_PROBE_TEST_FILE = "tests/test_implement_post_codex_recovery.py"
 STAGED_SUPPORT_PROBE_TEST_SELECTION = "staged_support_workspace_restore_then_reinstall_round_trip"
+WORKSPACE_PROBE_TEST_FILE = "tests/test_model_provider_broker.py"
+WORKSPACE_PROBE_TEST_SELECTION = "review_host_python_launches_are_isolated_and_broker_keeps_credential"
 
 
 def _clean_git_env(home: Path) -> dict[str, str]:
@@ -101,6 +104,62 @@ def test_staged_support_runtime_env_vars_are_stripped_in_session() -> None:
 		assert variable_name not in os.environ, (
 			f"{variable_name} leaked into the pytest session; tests/conftest.py must strip it"
 		)
+
+
+def test_workspace_runtime_env_vars_are_stripped_in_session() -> None:
+	assert WORKSPACE_RUNTIME_ENV_VARS == ("WORKSPACE_PATH",)
+	for variable_name in WORKSPACE_RUNTIME_ENV_VARS:
+		assert variable_name in WORKFLOW_RUNTIME_ENV_VARS
+		assert variable_name not in os.environ, (
+			f"{variable_name} leaked into the pytest session; tests/conftest.py must strip it"
+		)
+
+
+def test_nested_pytest_with_workflow_workspace_env_keeps_legacy_sandbox_test_passing(tmp_path: Path) -> None:
+	"""The editor's shape after issue #4580: WORKSPACE_PATH is in its environment.
+
+	``workspace_init.sh`` exports ``WORKSPACE_PATH`` (a directory under the
+	runner's ``${RUNNER_TEMP}/workspaces``) into ``$GITHUB_ENV``. The legacy
+	sandbox test copies ``os.environ`` and sets its own ``RUNNER_TEMP``, so an
+	inherited value made ``review_untrusted_sandbox.sh prepare`` fail with
+	``Review workspace path rejected`` before the conftest stripped it.
+	"""
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _clean_git_env(home)
+
+	live_workspace = tmp_path / "runner-temp" / "workspaces" / "pr-sentinel"
+	live_workspace.mkdir(parents=True)
+	(live_workspace / "sentinel.txt").write_text("sentinel\n", encoding="utf-8")
+
+	nested_env = dict(env)
+	nested_env["WORKSPACE_PATH"] = str(live_workspace)
+
+	completed = subprocess.run(
+		[
+			sys.executable,
+			"-m",
+			"pytest",
+			"-q",
+			"-p",
+			"no:cacheprovider",
+			WORKSPACE_PROBE_TEST_FILE,
+			"-k",
+			WORKSPACE_PROBE_TEST_SELECTION,
+		],
+		cwd=str(REPO_ROOT),
+		env=nested_env,
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=300,
+	)
+	assert completed.returncode == 0, (
+		"nested pytest run failed under the workflow's WORKSPACE_PATH\n"
+		f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+	)
+	assert "1 passed" in completed.stdout, completed.stdout
+	assert sorted(path.name for path in live_workspace.iterdir()) == ["sentinel.txt"]
 
 
 def test_nested_pytest_with_workflow_staged_support_env_leaves_sentinel_ledger_untouched(tmp_path: Path) -> None:
