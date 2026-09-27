@@ -264,7 +264,7 @@ if [ "${ROUTE}" = "pr" ] && [ -n "${REVIEW_EVENT}" ]; then
 
 	pr_review_payload="$(mktemp)"
 	trap 'rm -f "${pr_review_payload}"; rm -rf "${CHUNK_DIR:-}"' EXIT
-		PYTHONDONTWRITEBYTECODE=1 python3 - "${INPUT_BODY_FILE}" "${REVIEW_EVENT}" > "${pr_review_payload}" <<'PY'
+		python3 -I -B - "${INPUT_BODY_FILE}" "${REVIEW_EVENT}" > "${pr_review_payload}" <<'PY'
 from pathlib import Path
 import json
 import os
@@ -363,7 +363,7 @@ fi
 CHUNK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/post_review_comment_chunks.XXXXXX")"
 trap 'rm -rf "${CHUNK_DIR}"' EXIT
 
-PYTHONDONTWRITEBYTECODE=1 python3 - "${INPUT_BODY_FILE}" "${CHUNK_DIR}" "${MAX_BODY}" <<'PYCHUNK'
+python3 -I -B - "${INPUT_BODY_FILE}" "${CHUNK_DIR}" "${MAX_BODY}" <<'PYCHUNK'
 import os
 import sys
 

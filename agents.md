@@ -1146,6 +1146,20 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   rewrite parser output, or persist changes through runner command-file environment
   variables. The workflow contract test rejects direct stdin, `-c`, and `-m`
   launches that omit isolated mode.
+- The helper scripts those workflows call run their host Python in isolated mode
+  too (issue #4568): the clarify source snapshot and the review-sandbox
+  snapshot/refresh/config/transfer steps (`env -i` plus `python3 -I -B`), the
+  credential-bearing clarify and review brokers (`python3 -I -B` under their
+  existing `env -i` allowlist), and the stdin/`-m`/`-c` launches in
+  `workspace_init.sh`, `run_workspace_hook.sh`, `write_guard.sh`,
+  `review_conflict_resolve.sh`, `ledger_emit_substate.sh`,
+  `review_agents_md_materiality.sh`, `review_filter_uninteresting_files.sh`,
+  `review_reject_verify.sh`, `post_review_comment.sh`, `check_resolver_diff.sh`
+  and `drift_audit.sh`. The ledger's `ai_memory.py` child runs with `-I -B` and
+  adds only its own support directory to `sys.path`. A checkout-controlled
+  `pathlib.py`, `json.py` or `sitecustomize.py` in the working directory or on
+  `PYTHONPATH` is never imported; `tests/test_host_python_import_isolation.py`
+  pins the launches.
 - Same-UID model launches run inside a private PID namespace with a fresh
   `/proc`, so danger-full-access agents retain their existing workspace file
   permissions but cannot inspect the secret-bearing workflow or broker process

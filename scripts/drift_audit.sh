@@ -43,7 +43,7 @@ export DRIFT_AUDIT_SUMMARY_FILE
 trap '[ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ] && rm -f "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || true' EXIT
 
 set +e
-python3 - <<'PY'
+python3 -I -B - <<'PY'
 from __future__ import annotations
 
 import hashlib

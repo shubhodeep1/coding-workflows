@@ -618,7 +618,7 @@ RESOLVER_SCOPE_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_scope_violations.txt"
 # retry base cannot undo an unauthorized edit to a different tracked path.
 # Keep this snapshot outside the checkout; never reset the merge index.
 _resolver_scope_state() {
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${1}" "${RESOLVER_SCOPE_SNAPSHOT_DIR}" \
+  python3 -I -B - "${1}" "${RESOLVER_SCOPE_SNAPSHOT_DIR}" \
     "${CONFLICTED_PATHS_FILE}" "${RESOLVER_SCOPE_VIOLATIONS_FILE}" <<'PY'
 import hashlib
 import json
@@ -844,7 +844,7 @@ _resolver_attempt_state()
   local _state_action="$1"
   RESOLVER_ATTEMPT_TREE_DIR="${RESOLVER_ATTEMPT_TREE_DIR}" \
   CONFLICTED_PATHS_FILE="${CONFLICTED_PATHS_FILE}" \
-  python3 - "${_state_action}" <<'PY'
+  python3 -I -B - "${_state_action}" <<'PY'
 import hashlib
 import json
 import os

@@ -55,7 +55,7 @@ build_metadata_payload()
 	LEDGER_TOKENS_TOTAL="${tokens_total}" \
 	LEDGER_TOKENS_LOG_FILE="${tokens_log_file}" \
 	LEDGER_TOKENS_LOG_MAX_BYTES="${LEDGER_TOKENS_LOG_MAX_BYTES:-}" \
-	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+	python3 -I -B - <<'PY'
 import json
 import os
 import re
@@ -257,7 +257,7 @@ emit_deduped_run_event()
 	LEDGER_ACTOR="${actor}" \
 	LEDGER_METADATA_PAYLOAD="${metadata_payload}" \
 	LEDGER_EMIT_TIMEOUT_SECONDS="${LEDGER_EMIT_TIMEOUT_SECONDS:-}" \
-	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+	python3 -I -B - <<'PY'
 import fcntl
 import hashlib
 import json
@@ -287,8 +287,17 @@ with lock_path.open("a+", encoding="utf-8") as handle:
 			print("duplicate")
 			raise SystemExit(0)
 
+	# -I keeps the working directory, PYTHONPATH and user site-packages off
+	# the child's import path; ai_memory.py's sibling modules come only from
+	# the support directory it lives in, added explicitly (issue #4568).
 	cmd = [
 		sys.executable,
+		"-I",
+		"-B",
+		"-c",
+		"import os, runpy, sys; sys.argv = sys.argv[1:]; "
+		"sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); "
+		"runpy.run_path(sys.argv[0], run_name='__main__')",
 		ai_memory_script,
 		"record-run-event",
 		"--repo-root",
