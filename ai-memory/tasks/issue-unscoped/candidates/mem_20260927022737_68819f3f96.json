@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/model_provider_broker.py:56-57 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The reviewer\u2019s suspected image-marker prefix overlap was verified not to occur because the marker includes a trailing quote.\n  WHY: The review confirmed the image_url-only payload and the cited test produce the correct image-input counts, so this report identifies no runtime defect.\n- scripts/model_provider_broker.py:593 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When an upstream response has status >= 400, the broker settles input and output token reservations to 0 and marks the request non-billable, including when partial response bytes were relayed.\n  WHY: If the provider consumed input tokens before returning the error, releasing the reservation can understate aggregate phase cost and allow more requests within the budget.\n- scripts/model_provider_broker.py:lines 289-320 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A usage-bearing SSE data line straddling the 1 MiB response-tail boundary can be skipped during token-usage extraction without a diagnostic identifying tail truncation.\n  WHY: The reservation remains fail-closed, but operators cannot distinguish a truncated usage line from an upstream response that omitted usage.\n- .github/workflows/orchestrate.yml:lines 1080-1085 | severity=high | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The workflow extracts `.marker` from the selected-comprehensive-marker output and passes that inner object as `--envelope-file`, which may not match the binding function\u2019s expected input shape.\n  WHY: If the binding function expects the full `{\"marker\": {...}}` envelope, producer_id/header checks may fail and route comprehensive-test-pending orchestration calls to the comment-binding failure path.\n- .github/workflows/issue_pr_status.yml:lines 70-81 | severity=high | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The git auth step exports GIT_CONFIG_* only for its own shell, so later steps using the clean origin URL do not inherit the auth header.\n  WHY: In private consumer repos, the later `git fetch` at line 540 can fail authentication and silently skip implement-plan lesson ingestion.\n- .github/workflows/issue_pr_status.yml:line 113 | severity=high | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The call to the removed `fetch_from_ref_or_local` function remains in the workflow.\n  WHY: Bash reports command not found, so the script is not installed and downstream lesson ingestion silently skips it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: No linked issue or PR description was provided; the prompt body explicitly states \"No linked issues found\" and the PR title/description blocks are empty.\n  expected_change_site: N/A \u2014 no requirements to compare against.\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR TITLE and DESCRIPTION blocks in the inlined input are both empty, so the reviewer cannot map PR diffs to a stated intent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/model_provider_broker.py:56-57 | severity=NIT | confidence=5\n  PROBLEM: The markers include the trailing quote, so the suspected prefix overlap between `\"type\":\"image\"` and `\"type\":\"image_url\"` does not occur.\n  WHY: The reviewer verified `_count_image_inputs` returns the correct count for an image_url-only payload and the test case at tests/test_model_provider_broker.py:926-927 confirms the counts; the concern was a false positive.\n- scripts/model_provider_broker.py:593 | severity=NIT | confidence=3\n  PROBLEM: When the upstream returns an HTTP error response (status >= 400), the broker settles both output and input token reservations to 0 and sets `billable=False`, even when partial response bytes were relayed.\n  WHY: The provider may have consumed input tokens before producing the error, so releasing the reservation can understate actual upstream charges and allow more requests within the phase budget.\n- scripts/model_provider_broker.py:lines 289-320 | severity=NIT | confidence=3\n  PROBLEM: For streamed responses, a final usage-bearing data: line straddling the 1 MiB response-tail boundary can fail JSON parsing and be skipped without a diagnostic for the truncated-line case.\n  WHY: The reservation remains fail-closed, but operators see only \"broker usage not extracted\" and cannot distinguish tail truncation from upstream omission of usage.\n- .github/workflows/orchestrate.yml:lines 1080-1085 | severity=MAJOR | confidence=2\n  PROBLEM: `jq -e '.marker' \"${_tracking_marker_selected_file}\"` extracts only the `.marker` value, then passes that sub-object to `bind-comprehensive-marker --envelope-file`, whose expected shape was not verified.\n  WHY: If `bind-comprehensive-marker` expects the full `{\"marker\": {...}}` envelope, producer_id/header checks may fail and comprehensive-test-pending orchestration may take the comment-binding failure path.\n- TASK_GAP\n  Requirement: No linked issue or PR description was provided; the prompt body explicitly states \"No linked issues found\" and the PR title/description blocks are empty.\n  Expected change site: N/A \u2014 no requirements to compare against.\n  Evidence of absence: The PR TITLE and DESCRIPTION blocks in the inlined input are both empty, so the reviewer cannot map PR diffs to a stated intent.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/issue_pr_status.yml:lines 70-81 | severity=MAJOR | confidence=4\n  PROBLEM: The step exports GIT_CONFIG_* only for the current step's shell; subsequent steps do not inherit the auth header, while origin has a clean URL and checkout credentials are not persisted.\n  WHY: The \"Ingest implement-plan lessons\" step at line 540 runs `git fetch --no-tags --quiet --depth=1 origin \"${MERGE_COMMIT_SHA}\"`, which fails for private repos and silently breaks lesson ingestion.\n- .github/workflows/issue_pr_status.yml:line 113 | severity=MAJOR | confidence=5\n  PROBLEM: The call `if fetch_from_ref_or_local \"scripts/ingest_implement_plan_lessons.py\" \"scripts/ingest_implement_plan_lessons.py\"; then` remains after the function was removed.\n  WHY: Bash reports \"command not found\" (exit 127), so the script is never installed and downstream lesson ingestion silently skips it.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "48ad1ddf84f541645d59cb6ce0f2bf027ca908e416b3bf61bf0de4c59f8de5ab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36287909349",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36287909349",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927022737_68819f3f96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36287909349"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T02:27:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
