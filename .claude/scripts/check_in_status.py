@@ -9,8 +9,10 @@ left to the model.
 Input (exactly one mode):
 
   --pr N [--terminal-only | --hand-back [--min-age-hours H]]   a pull request
-  --run ID                   a workflow run
-  --issues N[,N...]          a set of issues (e.g. ai:security follow-ups)
+  --run ID [--audit-ref REF --audit-sha SHA --audit-workflow FILE]
+                             a workflow run (optionally bound to a security audit)
+  --issues N[,N...] [--security-fix-base REF]
+                             a set of issues (optionally verified security fixes)
 
 plus `--repo OWNER/REPO` (required).
 
@@ -56,9 +58,10 @@ failed (the JSON then carries `error` and `done` is false).
     only for a `success` conclusion and `failed` for any other, so a checker
     routes a failed run to its block stage.
   * Issues: every issue is closed or labelled ai:merged (`state` resolved);
-    or an issue still open without ai:merged carries ai:review-blocked /
-    ai:review-autofix-failed / ai:needs-human (`state` blocked), because its
-    pipeline gave up and the issue will not close on its own.
+    an open issue without ai:merged carrying ai:review-blocked /
+    ai:review-autofix-failed / ai:needs-human blocks. ai:claude-blocked
+    blocks even beside ai:merged. With --security-fix-base, claimed
+    resolutions require a contained merged PR and all blocking labels win.
 
 API budget (CLAUDE.md §15): REST only, never GraphQL. PR mode issues 1 call
 (`pulls/N`), one call per 100 check runs when the PR is not conflicted, and
@@ -69,8 +72,11 @@ mode on a `claude/*` head issues 1 call plus one per 100 PR comments, the
 check-run pages, at most 1 head-commit read, 1 hand-off run read and 3
 active-run reads. Run mode issues 1 call. Issues mode issues one call per
 issue; the checker lists at most the few follow-ups one security cycle opens.
-Every call goes through `gh api`, which in Claude Code on the web is
-authenticated by the session's agent proxy.
+Opt-in audit mode adds one log read and one target branch read after the run
+finishes. Opt-in security-issue mode adds a branch head read, paginated issue
+timeline (not present in the issue response), PR reads for cross-references,
+and comparison reads for eligible merged PRs. All API reads use `gh api`,
+authenticated by the session's agent proxy on Claude Code web.
 """
 
 from __future__ import annotations
@@ -82,8 +88,10 @@ import os
 import re
 import subprocess
 import sys
+from urllib.parse import quote
 
 BLOCKING_LABELS = ("ai:review-blocked", "ai:review-autofix-failed", "ai:needs-human")
+BLOCKING_ISSUE_LABELS = (*BLOCKING_LABELS, "ai:claude-blocked")
 FAILED_CHECK_CONCLUSIONS = ("failure", "timed_out", "action_required", "startup_failure")
 MERGED_ISSUE_LABEL = "ai:merged"
 SUCCESSFUL_RUN_CONCLUSIONS = ("success",)
@@ -524,26 +532,120 @@ def check_pr_hand_back(repo: str, number: int, stuck_hours: float, min_age_hours
 	return {**verdict, "done": True}
 
 
-def check_run(repo: str, run_id: int) -> dict:
+def _audit_result(repo: str, run_id: int, run: dict, audit_ref: str, audit_sha: str, audit_workflow: str) -> dict:
+	"""Bind a completed audit's signed-by-workflow output to its dispatched run.
+
+	The run record does not contain the custom target input or surviving
+	findings. Those appear only in this run's log after its pinned checkout.
+	"""
+	if (run.get("id") != run_id or run.get("repository", {}).get("full_name") != repo or
+		run.get("path") != f".github/workflows/{audit_workflow}" or
+		run.get("event") != "workflow_dispatch" or run.get("conclusion") != "success"):
+		return {"done": True, "state": "failed", "reason": f"run {run_id} audit identity or conclusion mismatch"}
+	try:
+		proc = subprocess.run(["gh", "run", "view", str(run_id), "-R", repo, "--log"],
+			capture_output=True, text=True, timeout=120)
+	except (OSError, subprocess.TimeoutExpired) as exc:
+		raise ReadError(f"run {run_id} audit log unavailable: {exc}") from exc
+	if proc.returncode:
+		raise ReadError(f"run {run_id} audit log unavailable")
+	# gh run view prefixes each output line with job, step and timestamp.
+	# Never accept the displayed shell command (which starts with `echo`).
+	targets = []
+	results = []
+	for line in proc.stdout.splitlines():
+		message = re.sub(r"^\d{4}-\d\d-\d\dT[^ ]+ ", "", line.split("\t")[-1])
+		if message.startswith("SECURITY_AUDIT_TARGET:"):
+			targets.append(message)
+		if message.startswith("security-audit: tracker=#"):
+			results.append(message)
+	expected_target = re.fullmatch(
+		rf"SECURITY_AUDIT_TARGET: branch {re.escape(audit_ref)} range [0-9a-f]{{40}}\.\.{audit_sha}",
+		targets[0]) if len(targets) == 1 else None
+	result = re.fullmatch(r"security-audit: tracker=#[1-9][0-9]* findings=([0-9]+) followups_created=([0-9]+)",
+		results[0]) if len(results) == 1 else None
+	if not expected_target or not result:
+		return {"done": True, "state": "failed", "reason": f"run {run_id} audit target or result missing/ambiguous"}
+	if int(result[2]) > int(result[1]):
+		return {"done": True, "state": "failed", "reason": f"run {run_id} inconsistent audit counts"}
+	branch = gh_api(f"repos/{repo}/git/ref/heads/{quote(audit_ref, safe='/')}")
+	if branch.get("object", {}).get("sha") != audit_sha:
+		return {"done": True, "state": "failed", "reason": f"run {run_id} audit target moved; re-audit required"}
+	return {"done": True, "state": "completed", "reason": f"run {run_id} verified audit: findings={result[1]} followups_created={result[2]}",
+		"findings": int(result[1]), "followups_created": int(result[2]), "audited_sha": audit_sha}
+
+
+def check_run(repo: str, run_id: int, audit_ref: str | None = None, audit_sha: str | None = None,
+	audit_workflow: str | None = None) -> dict:
 	run = gh_api(f"repos/{repo}/actions/runs/{run_id}")
 	if run.get("status") == "completed":
+		if audit_ref:
+			return _audit_result(repo, run_id, run, audit_ref, audit_sha, audit_workflow)
 		conclusion = run.get("conclusion")
 		state = "completed" if conclusion in SUCCESSFUL_RUN_CONCLUSIONS else "failed"
 		return {"done": True, "state": state, "reason": f"run {run_id} completed: {conclusion}", "conclusion": conclusion}
 	return {"done": False, "state": run.get("status"), "reason": f"run {run_id} {run.get('status')}"}
 
 
-def check_issues(repo: str, numbers: list[int]) -> dict:
+def _security_fix_contained(repo: str, number: int, expected_base: str) -> bool:
+	"""Verify a timeline-linked, merged same-repo fix is in the expected base.
+
+	The issue response has labels and state but no linked PR or merge ancestry.
+	Read all timeline pages only after an issue claims resolution; an API or
+	pagination failure raises ReadError rather than treating it as a fix. The
+	timeline gives PR identity, but not its authoritative base/merge status;
+	the PR read supplies those, and only compare establishes containment.
+	"""
+	branch = gh_api(f"repos/{repo}/git/ref/heads/{quote(expected_base, safe='/')}")
+	branch_sha = branch.get("object", {}).get("sha")
+	if not isinstance(branch_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", branch_sha):
+		raise ReadError(f"security follow-up #{number}: invalid base head")
+	timeline = gh_api_list(f"repos/{repo}/issues/{number}/timeline")
+	pr_numbers = set()
+	for event in timeline:
+		if event.get("event") != "cross-referenced":
+			continue
+		source = event.get("source")
+		if isinstance(source, dict) and isinstance(source.get("issue"), dict):
+			linked_issue = source["issue"]
+			if (isinstance(linked_issue.get("number"), int) and isinstance(linked_issue.get("pull_request"), dict) and
+				(linked_issue.get("repository", {}).get("full_name") == repo or
+				linked_issue.get("repository_url") == f"https://api.github.com/repos/{repo}")):
+				pr_numbers.add(linked_issue["number"])
+	for pr_number in sorted(pr_numbers):
+		pr = gh_api(f"repos/{repo}/pulls/{pr_number}")
+		merge_sha = pr.get("merge_commit_sha")
+		if not (pr.get("number") == pr_number and pr.get("merged") is True and pr.get("merged_at") and
+			pr.get("base", {}).get("ref") == expected_base and
+			pr.get("base", {}).get("repo", {}).get("full_name") == repo and
+			pr.get("head", {}).get("repo", {}).get("full_name") == repo and
+			pr.get("author_association") in FIX_CLAIM_TRUSTED_ASSOCIATIONS and
+			isinstance(merge_sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", merge_sha)):
+			continue
+		# Compare the merge commit against the pinned head, not a mutable ref.
+		comparison = gh_api(f"repos/{repo}/compare/{merge_sha}...{branch_sha}")
+		if (comparison.get("base_commit", {}).get("sha") == merge_sha and
+			comparison.get("head_commit", {}).get("sha") == branch_sha and
+			comparison.get("status") in ("ahead", "identical")):
+			return True
+	return False
+
+
+def check_issues(repo: str, numbers: list[int], security_fix_base: str | None = None) -> dict:
 	pending = []
 	blocked_issues = []
 	for number in numbers:
 		issue = gh_api(f"repos/{repo}/issues/{number}")
 		issue_labels = _label_names(issue)
-		if issue.get("state") != "closed" and MERGED_ISSUE_LABEL not in issue_labels:
+		# A stopped issue is blocked even if somebody also added ai:merged.
+		issue_blocking = [name for name in issue_labels if name in BLOCKING_ISSUE_LABELS]
+		if (issue.get("state") != "closed" and issue_blocking and
+			(security_fix_base or MERGED_ISSUE_LABEL not in issue_labels or "ai:claude-blocked" in issue_blocking)):
+			blocked_issues.append(f"#{number} ({', '.join(issue_blocking)})")
+		elif issue.get("state") != "closed" and MERGED_ISSUE_LABEL not in issue_labels:
 			pending.append(number)
-			issue_blocking = [name for name in issue_labels if name in BLOCKING_LABELS]
-			if issue_blocking:
-				blocked_issues.append(f"#{number} ({', '.join(issue_blocking)})")
+		elif security_fix_base and not _security_fix_contained(repo, number, security_fix_base):
+			blocked_issues.append(f"#{number} (no verified merged fix in {security_fix_base})")
 	# A follow-up whose pipeline gave up never closes on its own; wake the
 	# block stage instead of waiting silently until the safety net.
 	if blocked_issues:
@@ -567,6 +669,10 @@ def build_parser() -> argparse.ArgumentParser:
 	mode.add_argument("--pr", type=int)
 	mode.add_argument("--run", type=int)
 	mode.add_argument("--issues", type=_parse_issue_list)
+	parser.add_argument("--audit-ref", help="--run: requested branch for a security audit")
+	parser.add_argument("--audit-sha", help="--run: branch commit recorded before dispatch")
+	parser.add_argument("--audit-workflow", help="--run: workflow filename used for dispatch")
+	parser.add_argument("--security-fix-base", help="--issues: verify timeline-linked fix PR merges in this branch")
 	pr_mode = parser.add_mutually_exclusive_group()
 	pr_mode.add_argument("--terminal-only", action="store_true", help="PR mode: only merged / closed count as done")
 	pr_mode.add_argument("--hand-back", action="store_true",
@@ -587,6 +693,20 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 	if args.pr is None and args.hand_back:
 		print(json.dumps({"done": False, "error": "--hand-back needs --pr"}))
 		return 2
+	if args.security_fix_base and (args.issues is None or any(number <= 0 for number in args.issues) or
+		not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo) or
+		not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", args.security_fix_base) or
+		".." in args.security_fix_base or args.security_fix_base.endswith("/")):
+		print(json.dumps({"done": False, "error": "invalid --security-fix-base"}))
+		return 2
+	if any((args.audit_ref, args.audit_sha, args.audit_workflow)) and not (
+		args.run is not None and args.run > 0 and args.audit_ref and
+		re.fullmatch(r"claude/implement-plan-[A-Za-z0-9][A-Za-z0-9._-]*", args.audit_ref) and
+		args.audit_sha and re.fullmatch(r"[0-9a-f]{40}", args.audit_sha) and
+		args.audit_workflow in ("security-audit.yml", "ai-security-audit.yml") and
+		re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo)):
+		print(json.dumps({"done": False, "error": "invalid audit run binding"}))
+		return 2
 	now = now or dt.datetime.now(dt.timezone.utc)
 	try:
 		if args.pr is not None and args.hand_back:
@@ -595,9 +715,9 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 		elif args.pr is not None:
 			verdict = check_pr(args.repo, args.pr, args.terminal_only, args.stuck_hours, now)
 		elif args.run is not None:
-			verdict = check_run(args.repo, args.run)
+			verdict = check_run(args.repo, args.run, args.audit_ref, args.audit_sha, args.audit_workflow)
 		else:
-			verdict = check_issues(args.repo, args.issues)
+			verdict = check_issues(args.repo, args.issues, args.security_fix_base)
 	except (ReadError, KeyError, TypeError, ValueError) as exc:
 		print(json.dumps({"done": False, "error": str(exc)}))
 		return 2

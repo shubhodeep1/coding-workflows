@@ -528,6 +528,90 @@ def test_issues_blocking_label_ignored_once_closed_or_merged(monkeypatch, capsys
 	assert out["done"] is True and out["state"] == "resolved"
 
 
+def test_claude_blocked_wins_over_merged_label(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/issues/2": {"state": "open", "labels": [
+		{"name": "ai:merged"}, {"name": "ai:claude-blocked"}]}})
+	_, out = _run(["--issues", "2"], capsys)
+	assert out["state"] == "blocked"
+
+
+def test_security_followup_requires_merged_contained_fix(monkeypatch, capsys):
+	base = "claude/implement-plan-parent"
+	merge_sha, head_sha = "a" * 40, "b" * 40
+	issue_path = "repos/o/r/issues/2"
+	responses = {
+		issue_path: {"state": "open", "labels": [{"name": "ai:merged"}]},
+		f"repos/o/r/git/ref/heads/{base}": {"object": {"sha": head_sha}},
+		f"{issue_path}/timeline?per_page=100&page=1": [{"event": "cross-referenced", "source": {
+			"issue": {"number": 7, "pull_request": {}, "repository_url": "https://api.github.com/repos/o/r"}}}],
+		"repos/o/r/pulls/7": {"number": 7, "merged": True, "merged_at": "t", "merge_commit_sha": merge_sha,
+			"base": {"ref": base, "repo": {"full_name": REPO}},
+			"head": {"repo": {"full_name": REPO}}, "author_association": "OWNER"},
+		f"repos/o/r/compare/{merge_sha}...{head_sha}": {"base_commit": {"sha": merge_sha},
+			"head_commit": {"sha": head_sha}, "status": "ahead"},
+	}
+	calls = _stub(monkeypatch, responses)
+	monkeypatch.setattr(checker, "gh_api_list", lambda path: responses[f"{path}?per_page=100&page=1"])
+	_, out = _run(["--issues", "2", "--security-fix-base", base], capsys)
+	assert out.get("state") == "resolved", out
+	assert f"repos/o/r/compare/{merge_sha}...{head_sha}" in calls
+	for broken in (
+		{issue_path: {"state": "open", "labels": [{"name": "ai:merged"}, {"name": "ai:claude-blocked"}]}},
+		{"repos/o/r/pulls/7": {**responses["repos/o/r/pulls/7"], "merged": False}},
+		{"repos/o/r/pulls/7": {**responses["repos/o/r/pulls/7"], "base": {"ref": "other", "repo": {"full_name": REPO}}}},
+		{f"repos/o/r/compare/{merge_sha}...{head_sha}": {"status": "diverged"}},
+		{f"{issue_path}/timeline?per_page=100&page=1": []},
+	):
+		_stub(monkeypatch, {**responses, **broken})
+		monkeypatch.setattr(checker, "gh_api_list", lambda path, data={**responses, **broken}:
+			data[f"{path}?per_page=100&page=1"])
+		_, out = _run(["--issues", "2", "--security-fix-base", base], capsys)
+		assert out["state"] == "blocked"
+	_stub(monkeypatch, {**responses, f"{issue_path}/timeline?per_page=100&page=1": checker.ReadError("unavailable")})
+	monkeypatch.setattr(checker, "gh_api_list", lambda path: (_ for _ in ()).throw(checker.ReadError("unavailable")))
+	code, out = _run(["--issues", "2", "--security-fix-base", base], capsys)
+	assert code == 2 and out["done"] is False
+
+
+def test_security_followup_closed_without_pr_blocks(monkeypatch, capsys):
+	monkeypatch.setattr(checker, "gh_api_list", lambda path: [])
+	_stub(monkeypatch, {"repos/o/r/issues/2": {"state": "closed", "labels": []},
+		"repos/o/r/git/ref/heads/claude/implement-plan-parent": {"object": {"sha": "a" * 40}},
+		"repos/o/r/issues/2/timeline?per_page=100&page=1": []})
+	_, out = _run(["--issues", "2", "--security-fix-base", "claude/implement-plan-parent"], capsys)
+	assert out.get("state") == "blocked", out
+
+
+def test_audit_run_binds_metadata_target_result_and_current_head(monkeypatch, capsys):
+	ref = "claude/implement-plan-parent"
+	sha = "b" * 40
+	run = {"id": 9, "repository": {"full_name": REPO}, "path": ".github/workflows/security-audit.yml",
+		"event": "workflow_dispatch", "status": "completed", "conclusion": "success"}
+	api = {"repos/o/r/actions/runs/9": run, f"repos/o/r/git/ref/heads/{ref}": {"object": {"sha": sha}}}
+	_stub(monkeypatch, api)
+	log = f"job\tVerify\t2026-09-27T01:00:00Z SECURITY_AUDIT_TARGET: branch {ref} range {'a' * 40}..{sha}\n"
+	log += "job\tAudit\t2026-09-27T01:01:00Z security-audit: tracker=#13 findings=1 followups_created=0\n"
+	monkeypatch.setattr(checker.subprocess, "run", lambda *args, **kwargs:
+		checker.subprocess.CompletedProcess(args, 0, log, ""))
+	args = ["--run", "9", "--audit-ref", ref, "--audit-sha", sha, "--audit-workflow", "security-audit.yml"]
+	_, out = _run(args, capsys)
+	assert out["state"] == "completed" and out["findings"] == 1 and out["followups_created"] == 0
+	for broken in (
+		{"repos/o/r/actions/runs/9": {**run, "path": ".github/workflows/other.yml"}},
+		{"repos/o/r/actions/runs/9": {**run, "conclusion": "failure"}},
+		{f"repos/o/r/git/ref/heads/{ref}": {"object": {"sha": "c" * 40}}},
+	):
+		_stub(monkeypatch, {**api, **broken})
+		_, out = _run(args, capsys)
+		assert out["state"] == "failed"
+	_stub(monkeypatch, api)
+	for bad_log in (log + log, log.replace(sha, "c" * 40), log.replace("findings=1", "no-findings=1")):
+		monkeypatch.setattr(checker.subprocess, "run", lambda *args, payload=bad_log, **kwargs:
+			checker.subprocess.CompletedProcess(args, 0, payload, ""))
+		_, out = _run(args, capsys)
+		assert out["state"] == "failed"
+
+
 def test_command_doc_describes_blocked_issue_wait():
 	for path in (ROOT / ".claude" / "commands" / "implement-plan-claude.md",
 		ROOT / "workflow-templates" / ".claude" / "commands" / "implement-plan-claude.md"):

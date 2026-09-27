@@ -57,7 +57,9 @@ def test_explicit_target_authorization_cases(tmp_path: Path):
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	gh = bin_dir / "gh"
-	gh.write_text("#!/usr/bin/env bash\n[ \"${FAIL_API:-}\" != yes ] || exit 1\nprintf '%s' \"${PULLS_JSON}\"\n", encoding="utf-8")
+	gh.write_text("#!/usr/bin/env bash\n[ \"${FAIL_API:-}\" != yes ] || exit 1\n"
+		"if [[ \"$*\" == *'repos/owner/repo/issues/'* ]]; then printf '%s' \"${ISSUE_JSON}\"; "
+		"else printf '%s' \"${PULLS_JSON}\"; fi\n", encoding="utf-8")
 	gh.chmod(0o755)
 	branch = "claude/implement-plan-example"
 	sha = "a" * 40
@@ -68,7 +70,7 @@ def test_explicit_target_authorization_cases(tmp_path: Path):
 		"base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
 	}
 
-	def invoke(pulls, target=branch, api_failure=False):
+	def invoke(pulls, target=branch, api_failure=False, source_issue="0", issue=None):
 		output = tmp_path / "output"
 		output.write_text("", encoding="utf-8")
 		env = os.environ.copy()
@@ -77,6 +79,7 @@ def test_explicit_target_authorization_cases(tmp_path: Path):
 			"GITHUB_OUTPUT": str(output), "GH_TOKEN": "placeholder",
 			"VALIDATE_DEFAULT_BRANCH": "main", "VALIDATE_TARGET_REF": target,
 			"PULLS_JSON": json.dumps([pulls]), "FAIL_API": "yes" if api_failure else "no",
+			"VALIDATE_SOURCE_ISSUE": source_issue, "ISSUE_JSON": json.dumps(issue or {}),
 		})
 		result = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
 		return result.returncode, output.read_text(encoding="utf-8")
@@ -95,6 +98,32 @@ def test_explicit_target_authorization_cases(tmp_path: Path):
 		{"author_association": "CONTRIBUTOR"},
 	):
 		assert invoke([{**pr, **edit}])[0] != 0
+	nested_branch = "claude/implement-plan-issue-42-example"
+	nested_pr = {**pr, "head": {**pr["head"], "ref": nested_branch},
+		"base": {**pr["base"], "ref": "orchestrator/project-4139"}}
+	source_issue = {"number": 42, "author_association": "OWNER", "body":
+		"- Integration branch: `orchestrator/project-4139`"}
+	assert invoke([nested_pr], target=nested_branch, source_issue="42", issue=source_issue) == (0, f"sha={sha}\n")
+	assert invoke([nested_pr], target=nested_branch, source_issue="42",
+		issue={**source_issue, "body": "**Target branch:** `orchestrator/project-4139` (integration branch)"}) == (0, f"sha={sha}\n")
+	bot_issue = {**source_issue, "author_association": "NONE",
+		"user": {"login": "github-actions[bot]", "type": "Bot"}, "labels": [{"name": "ai:security"}]}
+	assert invoke([nested_pr], target=nested_branch, source_issue="42", issue=bot_issue) == (0, f"sha={sha}\n")
+	assert invoke([nested_pr], target=nested_branch, source_issue="42",
+		issue={**bot_issue, "user": {"login": "github-actions[bot]", "type": "User"}})[0] != 0
+	for invalid in (
+		{"body": "- Integration branch: `another/project`"},
+		{"author_association": "NONE"},
+		{"number": 43},
+		{"body": "- Integration branch: `orchestrator/project-4139`\n- Integration branch: `another/project`"},
+		{"body": "- Integration branch: `bad branch`\n- Target branch: `orchestrator/project-4139`"},
+	):
+		assert invoke([nested_pr], target=nested_branch, source_issue="42", issue={**source_issue, **invalid})[0] != 0
+	assert invoke([nested_pr, nested_pr], target=nested_branch, source_issue="42", issue=source_issue)[0] != 0
+	assert invoke([{**nested_pr, "base": pr["base"]}], target=nested_branch, source_issue="42", issue=source_issue)[0] != 0
+	assert invoke([{**nested_pr, "head": {**nested_pr["head"], "repo": {"full_name": "fork/repo"}}}],
+		target=nested_branch, source_issue="42", issue=source_issue)[0] != 0
+	assert invoke([nested_pr], target=nested_branch, source_issue="41", issue=source_issue)[0] != 0
 
 
 def test_validation_hooks_use_verified_helper():
@@ -134,6 +163,9 @@ def test_wrappers_forward_target_ref():
 		assert dispatch_input["default"] == "", wrapper
 		assert dispatch_input["required"] is False, wrapper
 		assert workflow["jobs"]["validate"]["with"]["target_ref"] == "${{ inputs.target_ref || '' }}", wrapper
+		assert workflow["on"]["workflow_dispatch"]["inputs"]["source_issue"]["default"] == "0", wrapper
+		assert workflow["jobs"]["validate"]["with"]["source_issue"] == "${{ inputs.source_issue || '0' }}", wrapper
+	assert _load(REUSABLE)["on"]["workflow_call"]["inputs"]["source_issue"]["default"] == "0"
 
 
 def test_consumer_wrapper_has_no_pr_number_input():

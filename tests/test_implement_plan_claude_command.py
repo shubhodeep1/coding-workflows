@@ -41,7 +41,7 @@ def test_validation_verdict_reads_status_json_first(text):
 
 
 def test_failed_runs_block_instead_of_passing(text):
-	assert "only a `success` run has audited anything" in text
+	assert '`status=completed`, and `conclusion=success`' in text
 	assert "never continue to step 9 on your own" in text
 
 
@@ -151,6 +151,12 @@ def test_review_rounds_are_fixed_by_claude(text):
 
 def test_security_dispatch_targets_project_branch(text):
 	assert "`-f ref=claude/implement-plan-<slug>`" in text
+	assert 'workflow_run_id' in text
+	assert 'gh run list -R <owner>/<repo> --workflow=<file> -L 1' not in text
+	assert 'SECURITY_AUDIT_TARGET: branch <recorded ref> range <40hex>..<recorded SHA>' in text
+	assert '`findings=0`' in text
+	assert '`followups_created=0`' in text
+	assert '--security-fix-base <project branch>' in text
 	# The audit files every finding (no weekly cap), so no bypass input exists.
 	assert "bypass_weekly_cap" not in text
 	assert "deferred_by_weekly_cap" not in text
@@ -167,6 +173,7 @@ def test_convergence_dispatch_goes_straight_to_review_autofix_here(text):
 def test_validation_dispatch_inputs(text):
 	assert "plus `-f pr_number=0` for `internal-validate.yml` only" in text
 	assert "`-f target_ref=claude/implement-plan-<slug>`" in text
+	assert "`-f source_issue=<N>`" in text
 	assert "-f tracking_issue=0 -f pr_number=0" not in text
 
 

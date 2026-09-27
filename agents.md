@@ -839,6 +839,21 @@ carried frontmatter.
 
 ## Interactive post-push PR status check-in
 
+The `/implement-plan-claude` security wait pins each dispatch's returned
+`workflow_run_id` and the target branch SHA. Its opt-in `check_in_status.py`
+audit verdict accepts completion only for the matching repository/workflow,
+successful run, unique target/result log lines, and unmoved branch head;
+`findings=0`, not zero new follow-ups, is the clean-pass condition. Its
+`--security-fix-base` issue-list mode requires a timeline-linked, trusted,
+same-repository merged PR whose merge commit is contained in the project
+branch; `ai:claude-blocked` stops the parent wait even beside `ai:merged`.
+Issue-mode validation of a non-default base supplies `source_issue` to the
+existing explicit-target gate: a trusted-author (or labelled Actions-bot)
+source issue's declared branch must
+match the exact-one authorized final PR base. Default-base validation remains
+unchanged; consumer wrappers must not forward `source_issue` until the pinned
+reusable workflow supports it.
+
 **Interactive Claude Code sessions only** (CLAUDE.md §26). After a session
 pushes a branch and a pull request exists for it, the session starts a
 low-effort Sonnet checker session (`create_session`, titled

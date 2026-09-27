@@ -30,6 +30,11 @@ on:
         required: false
         type: string
         default: ""
+      source_issue:
+        description: Source issue number for an issue-mode project with a non-default base (0 = default-base authorization)
+        required: false
+        type: string
+        default: "0"
 permissions:
   contents: write
   issues: write
@@ -43,4 +48,5 @@ jobs:
       validation_timeout: ${{ inputs.validation_timeout || '15' }}
       alert_msg_level: ${{ inputs.alert_msg_level || '' }}
       target_ref: ${{ inputs.target_ref || '' }}
+      source_issue: ${{ inputs.source_issue || '0' }}
     secrets: inherit
