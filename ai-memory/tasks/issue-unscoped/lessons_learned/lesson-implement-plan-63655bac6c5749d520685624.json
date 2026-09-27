@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T02:38:22Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A helper that copies files back from an isolated copy must target the directory the commit step's Git work tree points at (WORKSPACE_PATH in review_autofix.yml), not GITHUB_WORKSPACE.",
+  "phase": "implement_plan",
+  "pr_number": 4589,
+  "record_id": "lesson-implement-plan-63655bac6c5749d520685624",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4580-review-sandbox-workspace-transfer",
+    "file:scripts/review_untrusted_sandbox.sh",
+    "file:scripts/review_untrusted_workspace.py"
+  ]
+}
