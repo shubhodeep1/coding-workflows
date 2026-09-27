@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T20:58:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Keep a test that pins a documented constant's value separate from the behavioural tests that use it: derive the behavioural cases from the constant and let one named pin test (listing the docs that state the value) fail on a change, or reviewers flag the hard-coded value as drift.",
+  "phase": "implement_plan",
+  "pr_number": 4636,
+  "record_id": "lesson-implement-plan-d165eac57cb26c105c36cbd9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4621-bind-claude-queue-payloads",
+    "file:tests/test_claude_issue_route.py"
+  ]
+}
