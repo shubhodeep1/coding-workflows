@@ -761,6 +761,23 @@ def test_intake_read_failure_detail_keeps_the_final_error(stubs):
 	assert _target_writes(stubs) == []
 
 
+@pytest.mark.parametrize("run_url", ["", "https://github.com/shubhodeep1/coding-workflows/actions/runs/123"])
+def test_intake_refusal_alert_names_the_run_only_when_known(stubs, run_url):
+	# A hand-driven run has no RUN_URL: the Telegram ERROR must not end in a bare "Run: ".
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_PERMISSION="read", RUN_URL=run_url, TG_BOT_SECRET="tg-secret", TG_CHAT_ID="42")
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "rejected reason=dispatcher_not_authorized" in result.stdout
+	sent = (stubs["tmp"] / "curl_args.log").read_text()
+	assert "Claude issue intake REFUSED (dispatcher_not_authorized) for shubhodeep1/digital_pa#9" in sent
+	assert "No session was queued and nothing was written to the issue." in sent
+	if run_url:
+		assert f"Run: {run_url}" in sent
+	else:
+		assert "Run:" not in sent
+	assert _target_writes(stubs) == []
+
+
 def test_intake_queues_untrusted_author_vouched_by_trusted_reclarify(stubs):
 	comments_pages = json.dumps([_comment(body="hi", association="NONE", login="stranger")]) + json.dumps([_comment(body="/reclarify", association="OWNER")])
 	env = _intake_env(

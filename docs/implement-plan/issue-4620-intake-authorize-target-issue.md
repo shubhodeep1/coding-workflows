@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4620-intake-authorize-target-issue-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4620
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
-- Project branch: claude/implement-plan-issue-4620-intake-authorize-target-issue   Final PR: #4633 draft
+- Project branch: claude/implement-plan-issue-4620-intake-authorize-target-issue   Final PR: #4633 ready
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round
 - Activation: pending verify-activation
-- Waiting on: completion PR (the PR carrying this log update)
+- Waiting on: PR #4633
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_016k76j8mrNr5YTgGxjRTT7q (project checker)
 - Last updated: 2026-09-27
-- Last note: validation cycle 1 passed (10/10 tests) on project-branch head 193e287; completion PR moves the plan to docs/completed/; final PR #4633 is marked ready once it merges.
+- Last note: final PR #4633 review round 1 — 1 finding (bare `Run: ` line in reject()'s Telegram alert when RUN_URL is empty) fixed in a [claude-autofix] commit; project branch synced with main at 79ed7ed.
 
 ## Phases
 1. [x] Phase 1 — intake authorizes the target issue and dispatcher   — PR #4637 merged 2026-09-27 (squash 1dd20d0, merged by a human per Q1: A on #4620); review rounds: 2; interventions: 0
@@ -26,9 +26,9 @@
 - Cycle 1 — run 36323096060 2026-09-27 (target_ref: project branch, head 193e287): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 277s); no fixes
 
 ## Completion
-- Completion PR (this log update) — doc moved to docs/completed/issue-4620-intake-authorize-target-issue-plan.md
-- Merged PRs: phase 1 #4637
-- Final PR #4633 draft (marked ready in the final-merge stage)
+- Completion PR #4660 merged into the project branch 2026-09-27 (squash 63dc0c2) by a human per Q2: A on #4620 — doc moved to docs/completed/issue-4620-intake-authorize-target-issue-plan.md; review rounds: 1 (0 findings; auto-merge withheld because the check snapshot timed out on a concurrent push-event review); 3 push-review findings rejected
+- Merged PRs: phase 1 #4637, completion #4660
+- Final PR #4633 ready 2026-09-27 — review rounds: 1 (round 1, head 20abf81: 1 finding fixed — reject() no longer sends a bare `Run: ` line when RUN_URL is empty)
 
 ## Activation
 
@@ -41,10 +41,13 @@
 
 ## Lessons
 - [source:intervention] When a shell step reports a `gh_retry_to_file` failure, quote the tail of the captured stderr, not the head: the helper writes its retry warnings first and the final attempt's error last, so a head cut can hide the error that decided. (files: scripts/gh_helpers.sh, scripts/claude_issue_intake.sh)
+- [source:intervention] Push-event branch reviews start when a claude/* branch has no PR yet, so pushing a branch just before opening its PR puts a second review run on the same head; the Claude-fixer ready-snapshot check waits only 300s and counts that run as incomplete, which withholds auto-merge from a clean review. (files: .github/workflows/internal-review.yml, scripts/review_autofix_step_claude_fixer_handoff.sh)
 
 ## Notes
 - Security pass skipped per plan header (ai:security follow-up).
 - The Claude Code Web proxy refuses `repos/<repo>/collaborators/<login>/permission` (HTTP 403), so the permission read was verified only against stubs and GitHub's documented shape; the intake runs it in Actions with GH_PAT, outside the proxy.
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4620#issuecomment-5854273112
 - Project branch synced with main 2026-09-27 (193e287, clean merge).
+- Project branch synced with main at 20abf81 on 2026-09-27 (conflict in the intake queue step's env block, both sides kept).
+- Project branch synced with main 2026-09-27 (79ed7ed, clean merge) in the final-merge review round 1 stage (session_01HzsrwaGiEFjBvwpoM8opjA).
 - Validation 1/3 — read result (session_01HpEvuimseWjo6JnShFEURj): run 36323096060 success, status=pass, validated the project branch at 193e287 (the authorized draft final PR head); project branch already contained main; opened the completion PR.

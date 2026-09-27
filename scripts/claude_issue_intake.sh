@@ -122,7 +122,10 @@ reject()
 	local detail="$2"
 	log "rejected reason=${reason} repo=${RAW_REPO:-none} issue=${RAW_ISSUE:-none} detail=${detail}"
 	echo "::error::Claude issue intake refused ${RAW_REPO:-?}#${RAW_ISSUE:-?} (${reason}): ${detail}"
-	tg_send_msg "Claude issue intake REFUSED (${reason}) for ${RAW_REPO:-?}#${RAW_ISSUE:-?}: ${detail}"$'\n'"No session was queued and nothing was written to the issue. Retry a legitimate issue with /reclarify."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+	local reject_tg_msg="Claude issue intake REFUSED (${reason}) for ${RAW_REPO:-?}#${RAW_ISSUE:-?}: ${detail}"$'\n'"No session was queued and nothing was written to the issue. Retry a legitimate issue with /reclarify."
+	# RUN_URL is empty on a hand-driven run; leave the line out rather than send a bare "Run: ".
+	[ -z "${RUN_URL}" ] || reject_tg_msg+=$'\n'"Run: ${RUN_URL}"
+	tg_send_msg "${reject_tg_msg}" "ERROR" >/dev/null 2>&1 || true
 	exit 1
 }
 
