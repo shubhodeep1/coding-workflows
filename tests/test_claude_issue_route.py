@@ -792,12 +792,19 @@ def test_cli_queue_pending_fetches_the_queue_and_its_bindings(tmp_path):
 	assert subprocess.run(cmd, capture_output=True, text=True, env=gh["env"]).returncode == 3
 
 
-@pytest.mark.parametrize(("stuck", "started"), [(2, True), (3, False)])
+def test_queue_binding_scan_factor_matches_the_documented_window():
+	# README.md, .claude/commands/claude-issue-pickup.md, and
+	# changelog.d/4649-pickup-binding-read-window.md state the window as the
+	# first 30 targets (3 × the pickup's limit of 10); change them with it.
+	assert route.QUEUE_BINDING_SCAN_FACTOR == 3
+
+
+@pytest.mark.parametrize(("stuck", "started"), [(route.QUEUE_BINDING_SCAN_FACTOR - 1, True), (route.QUEUE_BINDING_SCAN_FACTOR, False)])
 def test_cli_stuck_unbound_items_do_not_starve_a_bound_item(tmp_path, stuck, started):
 	# Unbound items stay open for the watchdog. With --limit 1 the pickup reads
-	# the runs of the first QUEUE_BINDING_SCAN_FACTOR (3) targets, so up to two
-	# stuck targets cannot defer the bound one behind them; a third can.
-	assert route.QUEUE_BINDING_SCAN_FACTOR == 3
+	# the runs of the first QUEUE_BINDING_SCAN_FACTOR targets, so up to
+	# QUEUE_BINDING_SCAN_FACTOR - 1 stuck targets cannot defer the bound one
+	# behind them; one more can.
 	bin_dir = tmp_path / "ghbin"
 	bin_dir.mkdir()
 	items, runs, artifacts = [], [], []
