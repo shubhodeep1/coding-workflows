@@ -1,29 +1,33 @@
 # Implement-Plan Log — Count Claude fix claims and holds only from the PR's author or the workflow account
 
-- Plan: docs/plans/issue-4622-trusted-fix-claim-authors-plan.md
+- Plan: docs/completed/issue-4622-trusted-fix-claim-authors-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4622
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
 - Project branch: claude/implement-plan-issue-4622-trusted-fix-claim-authors   Final PR: #4632 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
-- Activation: not started
-- Waiting on: PR #4644
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: PR #4659 (completion)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01GWqGBroosei1DkAcn377y3 (project checker, reused)
 - Last updated: 2026-09-27
-- Last note: review round 1 on PR #4644 — one consensus finding (`_fix_claim_trusted_logins` raised AttributeError on a non-object `pr`) fixed with an `isinstance` guard and a test; project branch synced with main.
+- Last note: validation cycle 1 (run 36322375907) passed against the project branch; project branch synced with main (README row conflict with #4601 combined); completion PR moves the plan to docs/completed/.
 
 ## Phases
-1. [ ] Phase 1 — restrict claim authors to the PR author and the workflow account   — PR #4644 open (waiting); review rounds: 1; interventions: 0
+1. [x] Phase 1 — restrict claim authors to the PR author and the workflow account   — PR #4644 merged 2026-09-27; review rounds: 1; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-27: CONFORMANT — no fixes (pre-security)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue) — plan header `Security pass: skip`.
 
 ## Validation
+- Cycle 1 — run 36322375907 2026-09-27 (target_ref: project branch, head 1290f3c): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 289s).
 
 ## Completion
+- PR #4659 open — doc moved to docs/completed/issue-4622-trusted-fix-claim-authors-plan.md
+- Final PR #4632 draft (marked ready at stage final-merge)
 
 ## Activation
 
@@ -37,5 +41,6 @@
 ## Lessons
 
 ## Notes
+- 2026-09-27 validation 1/3 stage: project branch synced with main at 9dbedb2; README `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` row conflicted with #4601 and was resolved by keeping both sentences.
 - Started by the Claude issue dispatcher (`/implement-issue-claude`, issue mode) in session session_01T3kpGgTVrJhjefULKLUUqL, permission mode auto.
 - Issue progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4622#issuecomment-5854270496
