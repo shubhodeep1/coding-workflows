@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR (linked to issue #4622, security fix `STRIDE: Spoofing`, medium) must restrict `read_fix_claims` in `.claude/scripts/check_in_status.py` so that a comment's `ai:claude-fix-claim` marker only counts when the comment author is the PR's `user.login` or the configured `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`, in addition to the existing owner/member/collaborator association check. This must propagate to the `workflow-templates/.claude/scripts/check_in_status.py` mirror (byte-identical), update docstrings in `.claude/scripts/claude_fix_claim.py` and its template mirror, add one sentence to `.claude/commands/fix-claude-pr.md` and its template mirror, add a security `changelog.d/4622-\u2026` fragment, document the rule in CLAUDE.md \u00a726.H / `agents.md` / README.md, and add tests in `tests/test_check_in_status_hand_back.py`.\n  expected_change_site: `.claude/scripts/check_in_status.py` (`read_fix_claims` and `check_pr_hand_back`), `workflow-templates/.claude/scripts/check_in_status.py` (mirror), `.claude/scripts/claude_fix_claim.py` (docstring), `workflow-templates/.claude/scripts/claude_fix_claim.py` (mirror docstring), `.claude/commands/fix-claude-pr.md` (step 4), `workflow-templates/.claude/commands/fix-claude-pr.md` (mirror), `CLAUDE.md`, `agents.md`, `README.md`, `changelog.d/4622-trusted-fix-claim-authors.md`, `tests/test_check_in_status_hand_back.py`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR diff contains only `docs/implement-plan/issue-4622-trusted-fix-claim-authors.md` and `docs/plans/issue-4622-trusted-fix-claim-authors-plan.md`; none of the implementation files listed in the plan's \"Files & Modules\" / \"Implementation Steps\" sections appear in the diff. `git diff --stat` shows `2 files changed, 248 insertions(+)` and the changed-files list contains only the two `docs/` files. The opening commit message is `docs(implement-plan): start issue-4622-trusted-fix-claim-authors` and the log's \"Last note\" reads `project branch opened with the plan and this log; phase 1 starts next` \u2014 i.e. the security fix itself has not yet landed on the project branch.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: The PR (linked to issue #4622, security fix `STRIDE: Spoofing`, medium) must restrict `read_fix_claims` in `.claude/scripts/check_in_status.py` so that a comment's `ai:claude-fix-claim` marker only counts when the comment author is the PR's `user.login` or the configured `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`, in addition to the existing owner/member/collaborator association check. This must propagate to the `workflow-templates/.claude/scripts/check_in_status.py` mirror (byte-identical), update docstrings in `.claude/scripts/claude_fix_claim.py` and its template mirror, add one sentence to `.claude/commands/fix-claude-pr.md` and its template mirror, add a security `changelog.d/4622-\u2026` fragment, document the rule in CLAUDE.md \u00a726.H / `agents.md` / README.md, and add tests in `tests/test_check_in_status_hand_back.py`.\nExpected change site: `.claude/scripts/check_in_status.py` (`read_fix_claims` and `check_pr_hand_back`), `workflow-templates/.claude/scripts/check_in_status.py` (mirror), `.claude/scripts/claude_fix_claim.py` (docstring), `workflow-templates/.claude/scripts/claude_fix_claim.py` (mirror docstring), `.claude/commands/fix-claude-pr.md` (step 4), `workflow-templates/.claude/commands/fix-claude-pr.md` (mirror), `CLAUDE.md`, `agents.md`, `README.md`, `changelog.d/4622-trusted-fix-claim-authors.md`, `tests/test_check_in_status_hand_back.py`.\nEvidence of absence: The PR diff contains only two newly-added files \u2014 `docs/implement-plan/issue-4622-trusted-fix-claim-authors.md` (41 lines, the implement-plan log) and `docs/plans/issue-4622-trusted-fix-claim-authors-plan.md` (207 lines, the plan). None of the implementation files listed in the plan's \"Files & Modules\" / \"Implementation Steps\" sections appear in the diff. `git diff --stat` shows `2 files changed, 248 insertions(+)` and the changed-files list contains only the two `docs/` files. The opening commit message is `docs(implement-plan): start issue-4622-trusted-fix-claim-authors` and the log's \"Last note\" reads `project branch opened with the plan and this log; phase 1 starts next` \u2014 i.e. the security fix itself has not yet landed on the project branch.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- `scripts/claude_pr_sweep.py:222-226` | PROBLEM: The Context section cites `scripts/claude_pr_sweep.py:222-226` for the sweep reservation posting, but the actual `claude_fix_claim.post_claim` call is at line 229. WHY: Lines 222-226 are queue error handling; the implementer should reference line 229 during phase 1.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cf95dcf6db468db8b9965d35b9d92dbff7cfb7a0e06983bf7334537add0584ce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36306916212",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36306916212",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927085229_7dbb35681e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36306916212"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T08:52:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
