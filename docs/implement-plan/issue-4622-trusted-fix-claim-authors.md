@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4622-trusted-fix-claim-authors-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4622
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
-- Project branch: claude/implement-plan-issue-4622-trusted-fix-claim-authors   Final PR: #4632 draft
-- Status: COMPLETE
-- Stage: final-merge
+- Project branch: claude/implement-plan-issue-4622-trusted-fix-claim-authors   Final PR: #4632 ready
+- Status: IN_PROGRESS
+- Stage: final-merge — review round
 - Activation: pending verify-activation
-- Waiting on: PR #4659 (completion)
+- Waiting on: PR #4632 (final PR, review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01GWqGBroosei1DkAcn377y3 (project checker, reused)
 - Last updated: 2026-09-27
-- Last note: validation cycle 1 (run 36322375907) passed against the project branch; project branch synced with main (README row conflict with #4601 combined); completion PR moves the plan to docs/completed/.
+- Last note: final-merge resumed on the owner's Q1: A answer — main merged into the project branch at 12d4f99, then one [claude-autofix] commit sets CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN explicitly in the two tests round 1's reviewers misread, so round 2 runs on a new head.
 
 ## Phases
 1. [x] Phase 1 — restrict claim authors to the PR author and the workflow account   — PR #4644 merged 2026-09-27; review rounds: 1; interventions: 0
@@ -26,8 +26,8 @@
 - Cycle 1 — run 36322375907 2026-09-27 (target_ref: project branch, head 1290f3c): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 289s).
 
 ## Completion
-- PR #4659 open — doc moved to docs/completed/issue-4622-trusted-fix-claim-authors-plan.md
-- Final PR #4632 draft (marked ready at stage final-merge)
+- PR #4659 merged 2026-09-27 — doc moved to docs/completed/issue-4622-trusted-fix-claim-authors-plan.md
+- Final PR #4632 ready — review rounds: 2 (round 1 on fafc37a: 3 findings, all rejected as false positives; round 2 after the Q1: A autofix commit)
 
 ## Activation
 
@@ -39,8 +39,11 @@
 - AD-5 [plan, 2026-09-27] Should claims from untrusted authors still count toward `hand_backs`? — Picked: A — no. Alternatives: B — count them. Why: forged counted claims would otherwise push a PR to the cap and force a real fixer into a hold. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] When a test relies on an env var its shared fixture sets, also set it in the test itself if the assertion depends on it; the reviewer panel reads tests in isolation and flags the fixture-set value as missing. (files: tests/test_check_in_status_hand_back.py)
 
 ## Notes
 - 2026-09-27 validation 1/3 stage: project branch synced with main at 9dbedb2; README `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` row conflicted with #4601 and was resolved by keeping both sentences.
 - Started by the Claude issue dispatcher (`/implement-issue-claude`, issue mode) in session session_01T3kpGgTVrJhjefULKLUUqL, permission mode auto.
 - Issue progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4622#issuecomment-5854270496
+- 2026-09-27 final-merge review round 1 (head fafc37a): all 3 findings rejected as false positives (https://github.com/shubhodeep1/coding-workflows/pull/4632#issuecomment-5857879664); convergence needed a dedicated-bot verdict this session cannot post, so the head was held and Q1 asked on the issue (https://github.com/shubhodeep1/coding-workflows/issues/4622#issuecomment-5857881698).
+- 2026-09-27 Q1 answered by the owner: A (https://github.com/shubhodeep1/coding-workflows/issues/4622#issuecomment-5860414886). Resumed in session session_01JqR7ctkXcMwSibYZ3vRHoq: claimed head fafc37a (kind review, lifts the hold), merged main (clean), pushed one [claude-autofix] commit.
