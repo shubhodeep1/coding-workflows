@@ -1034,10 +1034,13 @@ not delete wrappers that are already present in `.github/workflows/`.
 > and no-op.
 
 > **Interactive session hooks delivered by the `.claude/` sync:** the same
-> `Sync .claude/ assets from upstream` step ships three `PreToolUse` /
+> `Sync .claude/ assets from upstream` step ships four `PreToolUse` /
 > `PostToolUse` hooks with their `settings.json` wiring, each documented in
 > the root `CLAUDE.md` that syncs alongside them: the merged-PR commit guard
-> (`hooks/pr_merge_status_guard.py`, §21), the PR-watch guard
+> (`hooks/pr_merge_status_guard.py`, §21), the `gh api` permission guard
+> (`hooks/gh_api_write_guard.py`, §23.H: prompts only for `gh api` writes
+> that are not §23.B routine writes, replacing the former `gh api`
+> `permissions.ask` rules), the PR-watch guard
 > (`hooks/pr_watch_guard.py`, §25), and the post-push PR status check-in
 > reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
 > interactive session start a small low-effort Sonnet checker session for every
