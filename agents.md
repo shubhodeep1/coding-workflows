@@ -976,6 +976,50 @@ reviews, comments, and conflicts stay a direct §12 request.
   the existing `.claude/` and root `CLAUDE.md` syncs and the `/seed-repo`
   asset set.
 
+## Unattended helpers and permission prompt reports (CLAUDE.md §23.I)
+
+- Helpers, each allowlisted in `.claude/settings.json` (plain and
+  `PYTHONDONTWRITEBYTECODE=1` forms) and used by `/implement-plan-claude`
+  ([Helpers](.claude/commands/implement-plan-claude.md#helpers)):
+  - `.claude/scripts/dispatch_workflow.py --repo --workflow [--ref] [--input
+    K=V …]`: dispatches one of `DISPATCHABLE_WORKFLOWS` (kept equal to the
+    `gh workflow run <file> *` allow rules by a test), records the recent
+    `workflow_dispatch` run ids first, and polls every 5 s (90 s max) for a
+    run that was not there before. Replaces `gh workflow run` +
+    `gh run list -L 1`, which could return the previous run. Exit 0 with
+    `run_id`, 1 on a refused workflow or bad argument, 2 on a failed call or
+    timeout.
+  - `.claude/scripts/edit_comment.py --repo --comment-id (--replacements
+    FILE | --body-file FILE) [--dry-run]`: one read and one PATCH; each
+    `old` must occur exactly once or nothing is written.
+  - `.claude/scripts/permission_prompts.py report | file`: see below.
+- `.claude/hooks/permission_prompt_logger.py` on `PermissionRequest` and
+  `PermissionDenied`: appends one JSON line per event to
+  `~/.claude/permission-prompts/<session id>.jsonl` (string values over
+  8,000 characters truncated). Prints nothing, so it never changes a
+  decision; no API calls, no environment reads; every error is swallowed.
+- `permission_prompts.py file --session-label <id>` runs at the end of each
+  stage (step 14). It groups the log by event, tool, and command shape
+  (signature = 12 hex of SHA-1), and only when the local checkout is
+  `shubhodeep1/coding-workflows` reads the `ai:permission-prompt` issues
+  (one REST call per 100) and opens one issue per new pattern with labels
+  `ai:permission-prompt` + `ai:claude` (clarify routes it to the Claude issue
+  implementer) or comments on the issue carrying its
+  `<!-- ai:permission-prompt:v1 sig=… -->` marker, open or closed.
+  `filed-state.json` next to the logs keeps a later run in the same session
+  from filing the same occurrences again. No cap on open issues. Issue text
+  masks token-like strings, removes heredoc bodies, and truncates commands to
+  2,000 characters. In consumer repos it only reports.
+- `/implement-plan-claude` step 0 now refuses to run outside Auto mode
+  (except issue mode, which records the mode), and a phase touching
+  `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
+  §28.C) until a `Protected-path approval: phase <n>` line is recorded.
+- The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
+  and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
+  three scripts live under `workflow-templates/.claude/`. Tests:
+  `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`,
+  `tests/test_permission_prompts.py` (one `ci.yml` step).
+
 ---
 
 ## Repo-specific batching helpers

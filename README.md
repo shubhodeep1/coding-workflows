@@ -1059,6 +1059,22 @@ not delete wrappers that are already present in `.github/workflows/`.
 > permission allowlist for the tools these commands call. Nothing to
 > configure in the consumer.
 
+> **Unattended helpers and permission prompt reports (CLAUDE.md §23.I):**
+> the same sync ships three allowlisted helpers that `/implement-plan-claude`
+> stage sessions use instead of hand-built shell, so they do not stop at
+> permission prompts: `.claude/scripts/dispatch_workflow.py` (dispatch an
+> allowlisted workflow and get the id of the run it started),
+> `.claude/scripts/edit_comment.py` (edit one comment in place), and
+> `.claude/scripts/permission_prompts.py`. A `PermissionRequest` /
+> `PermissionDenied` hook, `.claude/hooks/permission_prompt_logger.py`, logs
+> every prompt and Auto-mode denial a session hits to
+> `~/.claude/permission-prompts/`; at the end of each stage
+> `permission_prompts.py file` lists them in the report and, in
+> coding-workflows only, files each new pattern as an `ai:permission-prompt`
+> issue routed to the Claude issue implementer. `/implement-plan-claude` now
+> requires Auto mode, and stops before any phase that must edit `.claude/**`
+> to ask how to run it.
+
 > **Audit identity and regeneration:**
 > `scripts/security/check-npm-audit.js` matches findings on
 > `severity|package|advisoryId` (`advisoryId` prefers GHSA, then CVE).
