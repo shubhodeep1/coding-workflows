@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:queue_binding_verdict | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: Canonical body reconstruction normalizes only CRLF and trailing whitespace, so formatting changes in `build_queue_issue` or `build_pr_fix_queue_issue` can produce `binding_mismatch` for previously bound items.\n  WHY: Pickup can refuse valid legacy or future-formatted queue items until re-bound via `/reclarify`; both reviewers classify this as NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_route.py | severity=NIT | confidence=3\n  PROBLEM: The canonical whole-body comparison normalises only CRLF and trailing whitespace. Any structural change to `build_queue_issue` or `build_pr_fix_queue_issue` (an extra blank line, reordered fields, a different comment, an extra trailing newline) makes the canonical diverge from the body of every item already bound by the previous version of the producer.\n  WHY: A producer-only refactor (for example, adding an explanatory comment to the queue issue body) is a benign, surface-only change. The pickup, however, will refuse every legacy item with `binding_mismatch`, forcing a `/reclarify` wave for every consumer that adopts the new producer. The fail-closed design is intentional, but the implementation is rigid enough that the only safe migration path is to keep `build_queue_issue` byte-stable across versions.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/claude_issue_route.py | severity=NIT | confidence=4\n  PROBLEM: canonical body reconstruction + rstrip() only normalizes CRLF and trailing whitespace; any formatting drift in build_queue_issue / build_pr_fix_queue_issue (extra blank line, comment, non-printable) produces binding_mismatch on previously-bound items.\n  WHY: pickup refuses valid legacy or future-formatted queue items until re-bound via /reclarify; matches the explicit fail-closed contract but creates brittle coupling between producer renderers and verifier.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d1d4a45efec7f561f655e83bd8e98e1859aafe6f85b873c2f584436962f88260",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4636,
+    "run_id": "36333572564",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36333572564",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927165416_9a5f0bde3f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4636,
+    "run_id": "36333572564"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T16:54:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
