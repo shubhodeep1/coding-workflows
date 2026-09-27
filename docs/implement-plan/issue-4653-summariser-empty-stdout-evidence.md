@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4653-summariser-empty-stdout-evidence-plan.md
 - Source issue: shubhodeep1/coding-workflows#4653
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: ai/issue-4605
-- Project branch: claude/implement-plan-issue-4653-summariser-empty-stdout-evidence   Final PR: pending
+- Project branch: claude/implement-plan-issue-4653-summariser-empty-stdout-evidence   Final PR: #4657 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (opened with this commit)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-27
-- Last note: project branch opened from ai/issue-4605; implementing phase 1.
+- Last note: phase 1 implemented and verified; phase PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — summariser empty-stdout evidence and log upload
+1. [ ] Phase 1 — summariser empty-stdout evidence and log upload   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -36,3 +36,6 @@
 
 ## Notes
 - Issue mode: start-up checks auto-decided (CLAUDE.md §28.A). Session mode: auto.
+- 2026-09-27: root cause of the inconclusive heal located in run 36317817104's job log: 10/10 `summariser (pass1): attempt N produced empty stdout` lines, unrecognised by reviewer_failure_evidence; summariser_pass1.log was never in the failure-log artifact.
+- 2026-09-27: two tests in tests/test_workflow_failure_heal.py fail on the base branch ai/issue-4605 without this change and pass on main (test_fingerprint_cap_block_labels_comments_and_reports: PR 4259 vs 4255; test_reviewers_failed_names_the_failure_before_the_editor_flags: review_autofix_step_iteration_summary.sh now requires RUNNER_TEMP). They come from PR #4607's own changes and are out of scope here.
+- 2026-09-27: review_autofix.yml is 468,516 bytes on ai/issue-4605 (§27 guard 480,000); this change adds about 200 bytes.
