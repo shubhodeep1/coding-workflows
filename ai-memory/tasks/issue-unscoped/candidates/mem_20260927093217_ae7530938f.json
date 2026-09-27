@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:1040-1051 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The default-branch `head_sha` reachability check is limited to `workflow_dispatch`, so a `repository_dispatch` run whose branch label matches the default branch can have its producer binding trusted without verifying that its commit is on that branch.\n  WHY: Reviewers rated this BLOCKER, MAJOR, and NIT; the highest reported severity is BLOCKER. deepseek_deepseek-v4-pro and z-ai_glm-5_2 dispute the finding, stating that `repository_dispatch` cannot target a tag and runs on the default branch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_issue_route.py:1051 | severity=NIT | confidence=5\n  PROBLEM: The pass 1 consensus finding about `repository_dispatch` missing the `head_sha` comparison is a false positive because GitHub always dispatches that event to the default branch.\n  WHY: `evaluate_producer_run` verifies `head_branch == default_branch`, which is sufficient for `repository_dispatch` because it cannot be triggered against a tag.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_route.py:1040-1050 | confidence=3\n  PROBLEM: _fetch_one_binding skips the head_sha comparison against the default branch for repository_dispatch runs, potentially allowing a tag that shares a name with the default branch to pass producer verification.\n  WHY: While evaluate_producer_run checks head_branch, for a repository_dispatch event, the head_branch can be ambiguous if a tag exists with the same name as the default branch. The workflow_dispatch path correctly uses the compare API to verify the SHA is on the default branch; the repository_dispatch path should similarly verify the SHA, not just the branch name.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_route.py, _fetch_one_binding at the `if run.get(\"event\") == \"workflow_dispatch\":` block (the workflow_dispatch-only head_sha/compare branch that follows the `evaluate_producer_run` call)\n  PROBLEM: The `compare/<head_sha>...<default_branch>` reachability check is gated on `run.get(\"event\") == \"workflow_dispatch\"`, so `repository_dispatch` runs (and any other event with a `head_sha`) bypass it.\n  WHY: GitHub lets a `repository_dispatch` carry any `ref` (branch or tag), and the resulting run's `head_branch` is the ref label, while `head_sha` is the commit the ref points at. The same threat model the PR explicitly documents for `workflow_dispatch` (\"a tag can carry the default branch's name\") applies verbatim to `repository_dispatch` triggered against a `main`-named tag, and the producers `claude-issue-intake.yml` and `review_autofix_sweep.yml` both accept `repository_dispatch` / `workflow_dispatch` (per `QUEUE_PRODUCERS` in scripts/claude_issue_route.py). The pickup therefore admits a queue issue produced by a run whose effective checkout is on a tag commit, not the default branch tip, even though the documentation (agents.md \"the pickup starts an item only when the run ... is a completed default-branch run of that producer workflow and event (a `workflow_dispatch` head must be on the default branch)\") and the changelog (\"checks that the run is a completed default-branch run of the right workflow and event\") claim this guarantee.\n  severity: BLOCKER\n  confidence: 5\n- scripts/claude_issue_intake.sh, reuse path, the `gh api -X PATCH ... -f body=...` call introduced for queue-item re-binding\n  PROBLEM: When a queue item is reused, the script overwrites the issue body before re-binding it, but the `gh api -f body=...` argument will silently pass null bytes and control characters into the body.\n  WHY: A future regression that produces a body containing NUL or stray CR would be accepted by `gh` and then surface as a body the pickup can never match against its canonical rendering (the binding would also differ), so the issue would `binding_mismatch` for the wrong reason and the failure mode would be hard to diagnose.\n  suggested minimal fix: validate `jq -r '.body' \"${QUEUE_FILE}\"` is non-empty and contains no NUL before the PATCH (e.g., `[[ \"${new_body}\" != *$'\\0'* && -n \"${new_body}\" ]]`); bail with the existing `queue_failed` path otherwise. Two-three lines, no behaviour change for the current producer.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_issue_route.py, `_fetch_one_binding` function, around the `workflow_dispatch` check (lines 1040-1050 in the diff) | severity=MAJOR | confidence=4\n  PROBLEM: The default-branch `head_sha` comparison via the compare API is only performed for `workflow_dispatch` runs. For `repository_dispatch` and `schedule` events, the function relies solely on `evaluate_producer_run`'s `head_branch` string check, which is vulnerable to tag confusion.\n  WHY: An attacker with write access could create a tag named after the default branch (e.g., \"main\"), then trigger a `repository_dispatch` from that tag. The run's `head_branch` would be \"main\" (passing the string check in `evaluate_producer_run`), but the actual commit would be from the tag, not the default branch. The binding artifact from such a run would be trusted, allowing an edited queue issue to be started if the attacker controls the tag's content. This is the same tag-confusion gap the compare-API check was designed to close for `workflow_dispatch`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/claude_issue_route.py:1051 | severity=MAJOR\n  PROBLEM: repository_dispatch (intake) skips default-branch verification; tag-named-default can spoof binding.\n  WHY: Extend to both events + update error msg/test.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "78121eebc0191d4644d78a32766ed9e6882cbb61732a72b58c39347a7f29a41d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4639,
+    "run_id": "36308818351",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36308818351",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927093217_ae7530938f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4639,
+    "run_id": "36308818351"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T09:32:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
