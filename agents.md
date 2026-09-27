@@ -971,9 +971,21 @@ reviews, comments, and conflicts stay a direct §12 request.
 - Permissions: `.claude/settings.json` `permissions.allow` pre-approves the
   tools the check-in and `/implement-plan-claude` call (file edits,
   `claude/*` pushes, `gh` REST and run reads, the security-audit / validate
-  dispatches, GitHub MCP and claude-code-remote tools, the helper), and
-  `permissions.ask` keeps `gh api` writes (`-X`, `--method`, `-f`/`-F`,
-  `--field`, `--raw-field`, `--input`) behind a prompt. Sessions started by
+  dispatches, GitHub MCP and claude-code-remote tools, the helper). There
+  are no `gh api` ask rules any more: `.claude/hooks/gh_api_write_guard.py`
+  (CLAUDE.md §23.H, a `PreToolUse` hook on `Bash`) forces the prompt for
+  every `gh api` write that is not a §23.B routine write to the local
+  repository (routine includes dispatching the six workflows allowed as
+  `gh workflow run <file> *`, kept equal by a test), allows reads and
+  routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
+  `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
+  to the allow list or the Auto-mode classifier beside anything else (loops,
+  `python3`, `$VAR`, file redirects). It fails closed (asks) on an unreadable payload or an
+  internal error; `tests/test_gh_api_write_guard.py` has its own `ci.yml`
+  step and `workflow-templates/.claude/hooks/` holds a byte-identical copy.
+  Do not re-add `gh api` ask rules: an ask rule prompts even when a hook
+  allows and even in Auto mode, which is what stopped unattended stage
+  sessions on `-X GET -f q=...` searches. Sessions started by
   `create_session` see the claude-code-remote tools under a generated server
   name; the one observed in this account's cloud environment,
   `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a`, is allowlisted as a whole
