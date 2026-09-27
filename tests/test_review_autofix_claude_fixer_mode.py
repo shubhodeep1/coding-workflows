@@ -16,11 +16,13 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -32,6 +34,7 @@ from review_autofix_step_scripts import (  # noqa: E402
 )
 
 HANDOFF_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_handoff.sh"
+NONBLOCKING_SCRIPT = REPO_ROOT / "scripts" / "review_claude_fixer_nonblocking.py"
 TOPOLOGY_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_merge_topology_gate.sh"
 WRAPPERS = (REPO_ROOT / "workflow-templates" / "ai-review.yml",)
 INTERNAL_REVIEW = REPO_ROOT / ".github" / "workflows" / "internal-review.yml"
@@ -291,9 +294,19 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 """
 
 
-def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False):
+def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False,
+		reviews: dict[str, str] | None = None, nonblocking_filter: str | None = None):
 	support = tmp / "support"
 	support.mkdir()
+	if nonblocking_filter == "real":
+		shutil.copy(NONBLOCKING_SCRIPT, support / NONBLOCKING_SCRIPT.name)
+	elif nonblocking_filter is not None:
+		(support / NONBLOCKING_SCRIPT.name).write_text(nonblocking_filter, encoding="utf-8")
+	reviews_dir = tmp / "previous_reviews"
+	reviews_dir.mkdir()
+	for slug, output in (reviews or {}).items():
+		(reviews_dir / f"status_review_{slug}.txt").write_text("success\n", encoding="utf-8")
+		(reviews_dir / f"review_{slug}.txt").write_text(output, encoding="utf-8")
 	calls = tmp / "calls.jsonl"
 	(support / "post_review_comment.sh").write_text(
 		f"#!/usr/bin/env bash\necho post_review_comment \"$REVIEWER_CONSENSUS_FILE\" \"$PR_NUMBER\" >> {tmp / 'posts.log'}\n",
@@ -344,6 +357,8 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		"GITHUB_ENV": str(github_env),
 		"CLAUDE_FIXER_VERIFICATION": "true" if verification else "false",
 		"REVIEWERS_SUCCESSFUL": "2",
+		"PREVIOUS_REVIEWS_DIR": str(reviews_dir),
+		"GITHUB_WORKSPACE": str(tmp),
 	}
 	proc = subprocess.run(["bash", "-c", f'source "{HANDOFF_SCRIPT}"'], env=env, capture_output=True, text=True)
 	gh_calls = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
@@ -404,6 +419,92 @@ def test_verification_with_remaining_findings_blocks_instead_of_merging():
 	assert "CLAUDE_FIXER_VERIFICATION_FAILED=true" in github_env
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert f"<!-- ai:claude-fixer-verification:v1 head={HEAD} result=unresolved -->" in calls[0]["payload"]["body"]
+
+
+LEDGER_REJECTED_SINGLETON = """=== CONSENSUS FINDINGS ===
+- README.md:1261 | severity=critical | confidence=[5]
+  flagged_by: [gemini]
+  PROBLEM: lost its leading backtick
+  WHY: the others found the backtick on README.md:1262
+=== END CONSENSUS FINDINGS ===
+
+=== CONSENSUS TASK GAPS ===
+(No task gaps reported.)
+=== END CONSENSUS TASK GAPS ===
+
+=== FINDINGS FROM gemini ===
+- README.md:1261 | severity=critical
+  PROBLEM: lost its leading backtick
+=== END FINDINGS FROM gemini ===
+
+=== FINDINGS FROM minimax ===
+(No findings reported.)
+=== END FINDINGS FROM minimax ===
+
+=== FINDINGS FROM glm ===
+(No findings reported.)
+=== END FINDINGS FROM glm ===
+"""
+REJECTING_REVIEWS = {
+	"gemini": "File: README.md\nProblem: lost its leading backtick\n",
+	"minimax": "REJECTED_FINDING: README.md:1262 | flagged_by: gemini | reason: the backtick is present\n",
+	"glm": "REJECTED_FINDING: README.md:1261 | flagged_by: gemini | reason: false positive\n",
+}
+
+
+def test_handoff_rejected_singleton_auto_merges_and_stays_visible():
+	"""Issue #4586: the #4575 shape posts the ledger, no hand-off, and merges."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, nonblocking_filter="real")
+		filtered = (tmp / "reviewer_consensus_claude_fixer.txt").read_text()
+	assert proc.returncode == 0, proc.stderr
+	assert calls == []
+	assert f"post_review_comment {tmp / 'reviewer_consensus_claude_fixer.txt'} 42" in posts
+	assert "=== NON-BLOCKING FINDINGS ===" in filtered and "rejected_by: [glm, minimax] (2 of 2 other reviewers)" in filtered
+	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
+	assert "CLAUDE_FIXER_NONBLOCKING demoted=1 successful_reviewers=3" in proc.stdout
+	assert "action=auto_merge nonblocking=1" in proc.stdout
+
+
+def test_handoff_mixed_round_hands_off_the_filtered_ledger():
+	ledger = LEDGER_REJECTED_SINGLETON.replace("=== END CONSENSUS FINDINGS ===", """- scripts/a.sh:10-12 | severity=high | confidence=4
+  flagged_by: [minimax, glm]
+  PROBLEM: unquoted expansion
+  WHY: word splitting
+=== END CONSENSUS FINDINGS ===""")
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=ledger, reviews=REJECTING_REVIEWS, nonblocking_filter="real")
+		filtered_path = tmp / "reviewer_consensus_claude_fixer.txt"
+		digest = hashlib.sha256(filtered_path.read_bytes()).hexdigest()
+	assert proc.returncode == 0, proc.stderr
+	assert f"post_review_comment {filtered_path} 42" in posts
+	body = calls[0]["payload"]["body"]
+	assert "Reviewer ledger entries: 1 (posted above)." in body
+	assert "Non-blocking entries: 1" in body
+	assert f"<!-- ai:claude-fixer-handoff:v2 head={HEAD} round=2 ledger={digest} -->" in body
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "kind=findings findings=1 ledger=ok failed_checks=none nonblocking=1" in proc.stdout
+
+
+@pytest.mark.parametrize("nonblocking_filter", [None, "import sys\nsys.exit(1)\n", "print('CLAUDE_FIXER_NONBLOCKING demoted=1 x')\n"])
+def test_handoff_without_a_working_filter_keeps_every_finding_blocking(nonblocking_filter):
+	"""A missing filter, a failing one, or one that writes no ledger falls back to the original.
+
+	A clean-looking filtered ledger left over from an earlier run must not be picked up."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		(tmp / "reviewer_consensus_claude_fixer.txt").write_text(LEDGER_EMPTY, encoding="utf-8")
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, nonblocking_filter=nonblocking_filter)
+	assert proc.returncode == 0, proc.stderr
+	assert "every ledger entry stays blocking" in proc.stdout
+	assert f"post_review_comment {tmp / 'reviewer_consensus.txt'} 42" in posts
+	body = calls[0]["payload"]["body"]
+	assert f"ledger={hashlib.sha256(LEDGER_REJECTED_SINGLETON.encode()).hexdigest()} -->" in body
+	assert "Non-blocking entries" not in body
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "kind=findings findings=2 ledger=ok failed_checks=none nonblocking=0" in proc.stdout
 
 
 def test_handoff_failed_checks_alone_are_handed_off():

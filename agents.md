@@ -87,8 +87,20 @@ Phases of the unattended pipeline (each is a separate workflow file under
    block the PR for intervention rather than another same-head verdict cycle.
    The bot's comment keeps `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`
    alongside the v2 digest marker; the session dispatches
-   `claude_fixer_converged_head=<sha>` for verification. Zero ledger entries
-   with a clean check snapshot auto-merge in the run; at the cap the PR itself
+   `claude_fixer_converged_head=<sha>` for verification. Before counting,
+   `scripts/review_claude_fixer_nonblocking.py` moves each consensus finding
+   raised by exactly one reviewer and rejected by a strict majority (at least
+   two) of the other successful pass-2 reviewers into a visible
+   `NON-BLOCKING FINDINGS` ledger block (issue #4586). Rejections are the
+   `REJECTED_FINDING: <file>:<line> | flagged_by: <slug> | reason: …` lines
+   the cross-pollination header asks for, read from the raw
+   `review_<slug>.txt` outputs of reviewers whose status is `success` and
+   matched by file, a 3-line window, and the flagger; task gaps and
+   multi-reviewer findings never move, and a missing or failing filter keeps
+   the original ledger. The filtered copy is what the step counts, digests,
+   and posts. Zero ledger entries
+   with a clean check snapshot auto-merge in the run (a round whose entries
+   are all non-blocking posts the ledger first); at the cap the PR itself
    is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
    (`claude_fixer_awaiting_session`). `[claude-intervention]` and
@@ -895,7 +907,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   (`read_fix_claims`) counts only owner / member / collaborator claims,
   times them by the comment's `created_at`, treats a claim on the current
   head as live for `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3) and a `hold`
-  as live until the head moves, and reports `hand_backs` (distinct
+  as live until the head moves (the hold comment names its reason via
+  `claude_fix_claim.py --reason`: `cap`, `review-no-verdict-bot`,
+  `conflict-decision`, `ci-outside-pr`, `workflow-failure`, `needs-human`;
+  only `cap` cites the hand-back cap, and the marker never changes), and
+  reports `hand_backs` (distinct
   head/kind pairs of conflict, ci, and blocked claims) against
   `CLAUDE_FIX_HAND_BACK_CAP` (default 3). The `claude-pr-catch-all` job of
   `.github/workflows/review_autofix_sweep.yml` (cron `17 * * * *`; the

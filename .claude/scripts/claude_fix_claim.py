@@ -7,16 +7,22 @@ current head with one comment. The §26 checker and the catch-all sweep read
 the claims through `.claude/scripts/check_in_status.py --hand-back`
 (`read_fix_claims`) and leave a claimed head alone until the head moves or
 the lease (CLAUDE_FIX_CLAIM_LEASE_HOURS, default 3) ends. A `hold` claim parks
-the head for a human decision when the hand-back cap is reached; it never
-expires while the head stays the same.
+the head for a human decision (the hand-back cap was reached, or the fixer hit
+a dead end it must not guess past); it never expires while the head stays the
+same.
 
 Usage:
 
-  claude_fix_claim.py body --head SHA --kind KIND --by ID
-  claude_fix_claim.py post --repo OWNER/REPO --pr N --head SHA --kind KIND --by ID
+  claude_fix_claim.py body --head SHA --kind KIND --by ID [--reason REASON]
+  claude_fix_claim.py post --repo OWNER/REPO --pr N --head SHA --kind KIND --by ID [--reason REASON]
 
 KIND is one of conflict, ci, review, blocked, hold. ID names the claimant:
-the session id (`session_…`) or `sweep-run-<run id>` for the sweep.
+the session id (`session_…`) or `sweep-run-<run id>` for the sweep. REASON is
+only for `--kind hold` and names why the fixer stopped, so the comment states
+the real cause (issue #4586): cap, review-no-verdict-bot, conflict-decision,
+ci-outside-pr, workflow-failure, needs-human. Only `cap` mentions the
+hand-back cap; a hold without a reason gets a neutral sentence. The marker
+line is the same for every reason.
 
 `post` makes two REST calls (CLAUDE.md §15): one read of the PR, to refuse a
 claim on a head that is no longer current or a PR that is no longer open,
@@ -48,25 +54,44 @@ KIND_LABELS = {
 	"review": "review findings",
 	"blocked": "blocked PR",
 }
+HOLD_REASONS = {
+	"cap": "This PR reached the cap of {cap} Claude hand-backs (conflict, CI, or block)",
+	"review-no-verdict-bot": ("Every review finding was judged invalid, and no dedicated fixer-verdict bot "
+		"(`CLAUDE_FIXER_VERDICT_BOT_LOGIN`) is configured to post the verdict that lets the review converge"),
+	"conflict-decision": "Both sides of the merge conflict changed the same logic, so resolving it needs a human decision",
+	"ci-outside-pr": "The failing check is not caused by this PR and no fix for it exists yet",
+	"workflow-failure": "The review workflow failed in its own infrastructure, which a PR fix cannot repair",
+	"needs-human": "The PR is labelled `ai:needs-human`",
+}
+HOLD_REASON_DEFAULT = "The fixer stopped at a decision it cannot make alone"
 CLAIMANT_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 HEAD_RE = re.compile(r"^[0-9a-f]{40}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
-def claim_body(head: str, kind: str, by: str) -> str:
-	"""Return the claim comment body; the last line is the marker the checker reads."""
+def claim_body(head: str, kind: str, by: str, *, reason: str | None = None) -> str:
+	"""Return the claim comment body; the last line is the marker the checker reads.
+
+	`reason` (a HOLD_REASONS key) is accepted only with kind `hold` and picks
+	the sentence that says why the fixer stopped; the marker never changes.
+	"""
 	if not HEAD_RE.fullmatch(head or ""):
 		raise ValueError("--head must be 40 lowercase hex characters")
 	if kind not in CLAIM_KINDS:
 		raise ValueError(f"--kind must be one of {', '.join(CLAIM_KINDS)}")
 	if not CLAIMANT_RE.fullmatch(by or ""):
 		raise ValueError("--by must be 1-80 characters of letters, digits, '_' or '-'")
+	if reason is not None and kind != "hold":
+		raise ValueError("--reason is only valid with --kind hold")
+	if reason is not None and reason not in HOLD_REASONS:
+		raise ValueError(f"--reason must be one of {', '.join(HOLD_REASONS)}")
 	lease = check_in_status._env_positive_float("CLAUDE_FIX_CLAIM_LEASE_HOURS", check_in_status.DEFAULT_FIX_CLAIM_LEASE_HOURS)
 	cap = int(check_in_status._env_positive_float("CLAUDE_FIX_HAND_BACK_CAP", check_in_status.DEFAULT_FIX_HAND_BACK_CAP))
 	if kind == "hold":
-		text = (f"**Claude fixes on hold:** this PR reached the cap of {cap} Claude hand-backs (conflict, CI, or block) "
-			f"at head `{head[:12]}`. `{by}` has asked a human how to continue. The §26 checker and the catch-all sweep "
-			"skip this head until someone pushes or that session resumes (CLAUDE.md §26.H).")
+		why = HOLD_REASONS[reason].format(cap=cap) if reason else HOLD_REASON_DEFAULT
+		text = (f"**Claude fixes on hold at head `{head[:12]}`:** {why}. `{by}` has asked a human how to continue. "
+			"The §26 checker and the catch-all sweep skip this head until someone pushes or that session resumes "
+			"(CLAUDE.md §26.H).")
 	else:
 		text = (f"**Claude fix claim:** `{by}` is fixing the {KIND_LABELS[kind]} at head `{head[:12]}`. Other Claude "
 			f"sessions and the catch-all sweep leave this PR alone until the head moves or the {lease:g}-hour lease ends "
@@ -88,13 +113,13 @@ def _gh(args: list[str]) -> str:
 	return proc.stdout
 
 
-def post_claim(repo: str, number: int, head: str, kind: str, by: str) -> tuple[int, dict]:
+def post_claim(repo: str, number: int, head: str, kind: str, by: str, *, reason: str | None = None) -> tuple[int, dict]:
 	"""Post one claim on `repo`#`number` after confirming `head` is its open head."""
 	if not REPO_RE.fullmatch(repo or ""):
 		raise ValueError("--repo must be OWNER/REPO")
 	if number <= 0:
 		raise ValueError("--pr must be a positive integer")
-	body = claim_body(head, kind, by)
+	body = claim_body(head, kind, by, reason=reason)
 	pr = check_in_status.gh_api(f"repos/{repo}/pulls/{number}")
 	if pr.get("state") != "open" or pr.get("merged"):
 		return 1, {"posted": False, "reason": f"PR #{number} is not open"}
@@ -126,6 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
 		command.add_argument("--head", required=True)
 		command.add_argument("--kind", required=True, choices=CLAIM_KINDS)
 		command.add_argument("--by", required=True)
+		command.add_argument("--reason", choices=tuple(HOLD_REASONS), default=None)
 	return parser
 
 
@@ -133,9 +159,9 @@ def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
 	try:
 		if args.command == "body":
-			sys.stdout.write(claim_body(args.head, args.kind, args.by))
+			sys.stdout.write(claim_body(args.head, args.kind, args.by, reason=args.reason))
 			return 0
-		code, result = post_claim(args.repo, args.pr, args.head, args.kind, args.by)
+		code, result = post_claim(args.repo, args.pr, args.head, args.kind, args.by, reason=args.reason)
 	except ValueError as exc:
 		print(json.dumps({"posted": False, "error": str(exc)}))
 		return 1
