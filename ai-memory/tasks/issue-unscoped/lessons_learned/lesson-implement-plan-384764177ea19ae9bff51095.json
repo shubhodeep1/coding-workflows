@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T13:23:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An item that fails closed and stays open must not share a fixed per-wake read window with the items behind it: size the window above the start limit (or skip known-bad items), or a handful of stuck items starve the whole queue.",
+  "phase": "implement_plan",
+  "pr_number": 4649,
+  "record_id": "lesson-implement-plan-384764177ea19ae9bff51095",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4621-bind-claude-queue-payloads",
+    "file:scripts/claude_issue_route.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-27T13:23:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A follow-up PR on a project branch (conformance, validation, or review fix) that changes observable behaviour ships its own `changelog.d/<pr>-<slug>.md` fragment; editing an earlier phase's fragment, even one not yet on the default branch, is flagged by the review panel under CLAUDE.md \u00a720.B.",
+  "phase": "implement_plan",
+  "pr_number": 4649,
+  "record_id": "lesson-implement-plan-afe8f975d41907bc09a7ae85",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4621-bind-claude-queue-payloads",
+    "file:changelog.d/"
+  ]
+}
